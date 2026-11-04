@@ -182,7 +182,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
   }
 }
 
-export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; startBlock: number; network: string }): Source {
+export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string }): Source {
   return {
     mode: "dataset",
     startBlock: config.startBlock,

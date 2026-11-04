@@ -10,7 +10,8 @@ import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedMoney, formatMoney } from "../src/core/format.ts"
 import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
-import { explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
+import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
+import { RULE_TEXT, differenceOf, ruleNote, whySentence } from "../src/core/rules.ts"
 
 const RESOURCES = new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/", import.meta.url)
 
@@ -300,7 +301,10 @@ describe("wording", () => {
       nothingToChart: wording.NOTHING_TO_CHART,
       reading: wording.READING,
       notAnAddress: wording.NOT_AN_ADDRESS,
+      rulesTitle: wording.RULES_TITLE,
+      rulesHelp: wording.RULES_HELP,
     },
+    manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
   }
 
   it("says the same on the Mac", () => {
@@ -345,5 +349,69 @@ describe("wording", () => {
       }
     }
     for (const text of texts) assert.doesNotMatch(text, JARGON)
+  })
+})
+
+describe("comparing pricing rules", () => {
+  const rule = (id: string, name: string) => ({ id, name, summary: "", dataset: `a/${id}@0.0.1`, hash: "a".repeat(64) })
+  const market = rule("market-price", "Market price")
+  const cautious = rule("cautious-eth", "Cautious ETH")
+  const eth = DEMO_WALLET.prices.ETH!
+  const lower = (micros: string | null) => (micros === null ? null : ((BigInt(micros) * 99n) / 100n).toString())
+  // What the fork does: everything's the same but what ETH is worth, here and in anything valued in ETH.
+  const forked = walletWith({
+    prices: { ...DEMO_WALLET.prices, ETH: { ...eth, micros: lower(eth.micros)! } },
+    legs: DEMO_WALLET.legs.map((leg) => (leg.asset === "ETH" ? { ...leg, priceMicros: lower(leg.priceMicros), costMicros: lower(leg.costMicros), proceedsMicros: lower(leg.proceedsMicros) } : leg)),
+  })
+  const reference = (eth_usd: string) => ({ block_num: 1, eth_usd, usdc_usd: "100000000" })
+  const compared = compareRules({ rule: market, wallet: walletWith({}), reference: reference("240000000000") }, { rule: cautious, wallet: forked, reference: reference("237600000000") }, "average", 1)
+  const row = (label: string) => compared.rows.find((r) => r.label === label)
+
+  it("says what ETH is worth by each rule", () => {
+    assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "2400000000", b: "2376000000", difference: "-24000000" })
+  })
+
+  it("gets each side from the same fold the app shows", () => {
+    assert.equal(row("Total PnL")?.a, portfolioOf(walletWith({}), "average").totals.pnlMicros)
+    assert.equal(row("Total PnL")?.b, portfolioOf(forked, "average").totals.pnlMicros)
+    assert.equal(row("Value")?.a, portfolioOf(walletWith({}), "average").totals.valueMicros)
+  })
+
+  it("has no difference from something unknown, and an unknown is never zero", () => {
+    assert.equal(differenceOf(null, "5"), null)
+    assert.equal(differenceOf("5", null), null)
+    assert.equal(differenceOf("5", "7"), "2")
+  })
+
+  it("lists each transaction that changed, newest first, and counts them all", () => {
+    assert.ok(compared.changedTxs > 0)
+    assert.ok(compared.transactions.every((tx) => tx.asset === "ETH" && tx.a !== tx.b))
+    const blocks = compared.transactions.map((tx) => tx.blockNum)
+    assert.deepEqual(blocks, [...blocks].sort((x, y) => y - x))
+    assert.ok(compared.why.includes(`${compared.changedTxs}`))
+  })
+
+  it("finds no difference between a rule and itself", () => {
+    const same = compareRules({ rule: market, wallet: walletWith({}), reference: reference("1") }, { rule: cautious, wallet: walletWith({}), reference: reference("1") }, "average", 1)
+    assert.equal(same.changedTxs, 0)
+    assert.deepEqual(same.transactions, [])
+    assert.ok(same.rows.every((r) => r.a === r.b))
+    assert.equal(same.why, whySentence(0))
+  })
+
+  it("says which rule is on wherever a number is explained, because a label alone can't", () => {
+    const note = ruleNote(RULE_TEXT["cautious-eth"]!)
+    const explained = explainPortfolio(walletWith({ ruleNote: note }), "average", { kind: "total", metric: "pnl" })
+    assert.ok(explained?.lines.includes(note))
+    assert.ok(!explainPortfolio(walletWith({}), "average", { kind: "total", metric: "pnl" })?.lines.includes(note))
+  })
+
+  it("sends the Mac app what it can read", () => {
+    assertMatchesFile("demo-rule-comparison.json", compared)
+  })
+
+  it("keeps the rule's words plain", () => {
+    const JARGON = /\b(fifo|legs?|proceeds|oracles?|allowlist|swaps?|dataset|onchain|weth|slippage)\b/i
+    for (const text of [...Object.values(RULE_TEXT).flatMap((t) => [t.name, t.summary]), whySentence(0), whySentence(1), whySentence(2), wording.RULES_HELP]) assert.doesNotMatch(text, JARGON, text)
   })
 })

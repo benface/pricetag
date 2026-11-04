@@ -22,6 +22,10 @@ export type WalletResponse = {
   latest: Head
   /** Transactions this wallet sent whose gas couldn't be worked out, so the fees are too low, and ETH worked out from its legs is too high. */
   gasUnknownTxs: string[]
+  /** The pricing rule this was read through, when the server has more than one. */
+  rule?: string
+  /** Set when that rule isn't the default, because the prices it shows aren't what their labels alone would say. */
+  ruleNote?: string | null
   /** What this response is meant to be shown in. Its money is always USD, and `viewWallet` converts it. */
   currency: CurrencyCode
   /** Null for USD. */
@@ -67,6 +71,8 @@ export type PortfolioResponse = {
   address: string
   mode: Mode
   method: Method
+  /** The pricing rule this was read through, or null when the server has only one. */
+  rule: string | null
   currency: CurrencyCode
   /** Null for USD. */
   exchange: PortfolioExchange | null

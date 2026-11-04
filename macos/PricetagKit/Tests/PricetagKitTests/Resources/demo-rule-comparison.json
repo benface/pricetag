@@ -1,0 +1,87 @@
+{
+  "address": "0x00000000000000000000000000000000000de300",
+  "currency": "USD",
+  "blockNum": 1,
+  "a": {
+    "id": "market-price",
+    "name": "Market price",
+    "summary": "",
+    "dataset": "a/market-price@0.0.1",
+    "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "b": {
+    "id": "cautious-eth",
+    "name": "Cautious ETH",
+    "summary": "",
+    "dataset": "a/cautious-eth@0.0.1",
+    "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "why": "2 transactions' cost or sale value changed. Both read the same transactions at the same block, so the only difference is what ETH is worth, which also sets what ETH held and network fees count for.",
+  "rows": [
+    {
+      "label": "ETH price",
+      "format": "usdPrice",
+      "a": "2400000000",
+      "b": "2376000000",
+      "difference": "-24000000"
+    },
+    {
+      "label": "Total PnL",
+      "format": "signed",
+      "a": "74281640",
+      "b": "74288675",
+      "difference": "7035"
+    },
+    {
+      "label": "Realized",
+      "format": "signed",
+      "a": "74985000",
+      "b": "74985000",
+      "difference": "0"
+    },
+    {
+      "label": "Unrealized",
+      "format": "signed",
+      "a": null,
+      "b": null,
+      "difference": null
+    },
+    {
+      "label": "Value",
+      "format": "money",
+      "a": "4621410799",
+      "b": "4607690191",
+      "difference": "-13720608"
+    },
+    {
+      "label": "ETH value",
+      "format": "money",
+      "a": "1372060800",
+      "b": "1358340192",
+      "difference": "-13720608"
+    }
+  ],
+  "transactions": [
+    {
+      "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
+      "blockNum": 53504800,
+      "timestamp": "2026-11-04T10:40:00.000Z",
+      "asset": "ETH",
+      "label": "Sold for",
+      "a": "1299740000",
+      "b": "1286742600",
+      "difference": "-12997400"
+    },
+    {
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000003",
+      "blockNum": 53500300,
+      "timestamp": "2026-11-04T08:10:00.000Z",
+      "asset": "ETH",
+      "label": "Cost",
+      "a": "2399520000",
+      "b": "2375524800",
+      "difference": "-23995200"
+    }
+  ],
+  "changedTxs": 2
+}

@@ -5,6 +5,7 @@ struct SettingsView: View {
     let store: PortfolioStore
     @State private var server = ""
     @State private var serverError: String?
+    @State private var isComparing = false
 
     var body: some View {
         Form {
@@ -16,6 +17,17 @@ struct SettingsView: View {
                 Text("Costs use the exchange rate when each transaction happened, and current values use the current rate. If a rate is missing, the value shows as unavailable.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if store.rules.count > 1 {
+                Section {
+                    RulePicker(store: store)
+                    Button("Compare Side by Side…") { isComparing = true }
+                        .disabled(store.address == nil || store.address == WalletAddress.demo)
+                } footer: {
+                    Text(Wording.rulesHelp)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Section {
                 TextField("Server", text: $server, prompt: Text(PortfolioStore.defaultServerURL.absoluteString))
@@ -43,6 +55,8 @@ struct SettingsView: View {
         .frame(width: 480)
         .fixedSize(horizontal: false, vertical: true)
         .onAppear { server = store.serverURL.absoluteString }
+        .task { await store.refreshRules() }
+        .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
     }
 
     private func applyServer() {

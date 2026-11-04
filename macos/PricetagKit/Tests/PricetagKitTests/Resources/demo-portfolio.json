@@ -2,6 +2,7 @@
   "address": "0x00000000000000000000000000000000000de300",
   "mode": "demo",
   "method": "average",
+  "rule": null,
   "currency": "USD",
   "exchange": null,
   "coverage": {

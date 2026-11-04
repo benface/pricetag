@@ -1,10 +1,11 @@
 // The portfolio a wallet's legs fold into, for clients that don't run the fold themselves.
 // One source of PnL logic: this calls what the browser calls, and adds nothing to the math.
 
-import { TOKENS, foldPositions, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Method, type Position, type Totals } from "@pricetag/sdk/core"
+import { TOKENS, answerToMicros, foldPositions, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Method, type Position, type PricedLeg, type ReferenceRow, type Totals } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
 import { viewWallet, type CurrencyCode, type WalletView } from "../src/core/currency.ts"
 import { describeConversion, describeEffect, describeNetting, explainContext, explainTarget, rateSource, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
+import { differenceOf, whySentence, type PricingRule, type RuleComparison, type RuleRow, type RuleTransaction } from "../src/core/rules.ts"
 import { ETH_NOTE } from "../src/core/wording.ts"
 
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
@@ -48,6 +49,7 @@ export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioRe
     address: wallet.address,
     mode: wallet.mode,
     method,
+    rule: wallet.rule ?? null,
     currency: view.currency,
     exchange: exchangeOf(view),
     coverage: wallet.coverage,
@@ -105,5 +107,61 @@ export function explainPortfolio(wallet: WalletResponse, method: Method, target:
     lines: explanation.lines,
     legCount: explanation.effects.length,
     legs: explanation.effects.slice(0, MAX_LEGS).map((effect) => legOf(effect, explanation.currency)),
+  }
+}
+
+/** How many changed transactions a comparison lists. The count covers them all. */
+const MAX_COMPARED_TXS = 20
+
+/** Each leg's cost and sale value by the other rule, for what came out differently. */
+function changedLegs(a: readonly PricedLeg[], b: readonly PricedLeg[]): RuleTransaction[] {
+  const other = new Map(b.map((leg) => [leg.id, leg]))
+  const changed: RuleTransaction[] = []
+  for (const leg of a) {
+    const theirs = other.get(leg.id)
+    if (!theirs) continue
+    const base = { txHash: leg.txHash, blockNum: leg.blockNum, timestamp: leg.timestamp, asset: leg.asset }
+    if (leg.costMicros !== theirs.costMicros) changed.push({ ...base, label: "Cost", a: leg.costMicros, b: theirs.costMicros, difference: differenceOf(leg.costMicros, theirs.costMicros) })
+    if (leg.proceedsMicros !== theirs.proceedsMicros) changed.push({ ...base, label: "Sold for", a: leg.proceedsMicros, b: theirs.proceedsMicros, difference: differenceOf(leg.proceedsMicros, theirs.proceedsMicros) })
+  }
+  return changed.sort((x, y) => y.blockNum - x.blockNum)
+}
+
+type Compared = { rule: PricingRule; wallet: WalletResponse; reference: ReferenceRow | null }
+
+/** One wallet by two rules, both folded by the same code, so the rule is all that can differ. */
+export function compareRules(a: Compared, b: Compared, method: Method, blockNum: number): RuleComparison {
+  const [left, right] = [portfolioOf(a.wallet, method), portfolioOf(b.wallet, method)]
+  const rowOf = (label: string, format: RuleRow["format"], x: string | null, y: string | null): RuleRow => ({ label, format, a: x, b: y, difference: differenceOf(x, y) })
+  const totals = (key: "pnlMicros" | "realizedMicros" | "unrealizedMicros" | "valueMicros", label: string, format: RuleRow["format"]) => rowOf(label, format, left.totals[key], right.totals[key])
+  const rows: RuleRow[] = [
+    rowOf("ETH price", "usdPrice", answerToMicros(a.reference?.eth_usd), answerToMicros(b.reference?.eth_usd)),
+    totals("pnlMicros", "Total PnL", "signed"),
+    totals("realizedMicros", "Realized", "signed"),
+    totals("unrealizedMicros", "Unrealized", "signed"),
+    totals("valueMicros", "Value", "money"),
+  ]
+  for (const position of left.positions) {
+    const theirs = right.positions.find((p) => p.asset === position.asset)
+    if (!theirs) continue
+    const row = (label: string, format: RuleRow["format"], x: string | null, y: string | null) => {
+      if (x !== y) rows.push(rowOf(`${position.asset} ${label}`, format, x, y))
+    }
+    row("PnL", "signed", position.pnlMicros, theirs.pnlMicros)
+    row("cost", "money", position.values.costMicros, theirs.values.costMicros)
+    row("value", "money", position.values.valueMicros, theirs.values.valueMicros)
+  }
+  const changed = changedLegs(viewWallet(a.wallet).legs, viewWallet(b.wallet).legs)
+  const changedTxs = new Set(changed.map((c) => c.txHash)).size
+  return {
+    address: a.wallet.address,
+    currency: left.currency,
+    blockNum,
+    a: a.rule,
+    b: b.rule,
+    why: whySentence(changedTxs),
+    rows,
+    transactions: changed.slice(0, MAX_COMPARED_TXS),
+    changedTxs,
   }
 }
