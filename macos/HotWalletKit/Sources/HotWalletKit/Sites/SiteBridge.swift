@@ -42,6 +42,30 @@ struct Requester: Equatable, Hashable, Sendable {
     let id: String
 }
 
+/// One request, from when it arrives until it's answered. A tab can close at any point in that, including while a node is still working
+/// out what a transaction costs, when there's no approval yet to take away.
+@MainActor
+private final class LiveRequest {
+    let request: SiteRequest
+    let requester: Requester
+    var task: Task<RPCAnswer, Never>?
+    private(set) var isCancelled = false
+
+    var origin: String { request.origin }
+    var method: String { request.method }
+    var parameters: JSONValue? { request.parameters }
+
+    init(_ request: SiteRequest) {
+        self.request = request
+        requester = Requester(connection: request.connection, id: request.id)
+    }
+
+    func cancel() {
+        isCancelled = true
+        task?.cancel()
+    }
+}
+
 public struct SiteRequest: Sendable {
     public let connection: UUID
     public let id: String
@@ -72,6 +96,7 @@ public final class SiteBridge {
     private let wallet: HotWallet
     private let now: @Sendable () -> Date
     @ObservationIgnored private var waiting: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    @ObservationIgnored private var live: [LiveRequest] = []
     @ObservationIgnored private var rejections: [String: [Date]] = [:]
     @ObservationIgnored private var readsThisSecond: (second: Int, count: Int) = (0, 0)
     @ObservationIgnored private var lastKnownAddress: EthereumAddress?
@@ -103,6 +128,24 @@ public final class SiteBridge {
 
     /// Answers one request. It can wait a long time, for as long as the user takes to decide.
     public func handle(_ request: SiteRequest) async -> RPCAnswer {
+        await begin(request).value
+    }
+
+    /// The same, for a caller that has to know a later `cancel` will find this request. It's on record by the time this returns.
+    public func begin(_ request: SiteRequest) -> Task<RPCAnswer, Never> {
+        let request = LiveRequest(request)
+        live.append(request)
+        let task = Task {
+            let answer = await answer(request)
+            live.removeAll { $0 === request }
+            return answer
+        }
+        request.task = task
+        return task
+    }
+
+    private func answer(_ request: LiveRequest) async -> RPCAnswer {
+        guard !request.isCancelled else { return .failure(.rejected) }
         guard Self.isAllowed(origin: request.origin) else { return .failure(.notConnected) }
         switch request.method {
         case "eth_chainId":
@@ -163,12 +206,15 @@ public final class SiteBridge {
 
     /// The site went away: its tab closed, or the browser quit.
     public func cancel(connection: UUID, id: String) {
-        for approval in pending where approval.requester == Requester(connection: connection, id: id) {
+        let requester = Requester(connection: connection, id: id)
+        for request in live where request.requester == requester { request.cancel() }
+        for approval in pending where approval.requester == requester {
             finish(approval.id, approved: false)
         }
     }
 
     public func cancelAll(connection: UUID) {
+        for request in live where request.requester.connection == connection { request.cancel() }
         for approval in pending where approval.requester.connection == connection {
             finish(approval.id, approved: false)
         }
@@ -216,7 +262,7 @@ public final class SiteBridge {
         return .array([.object(["parentCapability": .string("eth_accounts"), "invoker": .string(origin), "caveats": .array([restriction])])])
     }
 
-    private func connect(_ request: SiteRequest) async -> RPCAnswer {
+    private func connect(_ request: LiveRequest) async -> RPCAnswer {
         if let problem = wallet.siteProblem { return .failure(problem) }
         if wallet.isConnected(request.origin) { return .success(.null) }
         switch await ask(request, .connect) {
@@ -231,7 +277,7 @@ public final class SiteBridge {
         return .success(.null)
     }
 
-    private func sendTransaction(_ request: SiteRequest) async -> RPCAnswer {
+    private func sendTransaction(_ request: LiveRequest) async -> RPCAnswer {
         if let problem = walletProblem(for: request.origin) { return .failure(problem) }
         guard let address = wallet.address else { return .failure(.notConnected) }
         let transaction: SiteTransaction
@@ -243,6 +289,8 @@ public final class SiteBridge {
         }
         do {
             quote = try await wallet.quoteForSite(transaction)
+        } catch is CancellationError {
+            return .failure(.rejected)
         } catch ChainError.rejected(let message) {
             return .failure(SiteError(code: -32000, message: message))
         } catch {
@@ -252,7 +300,9 @@ public final class SiteBridge {
         if case .failure(let error) = await ask(request, .transaction(review)) { return .failure(error) }
         if let problem = walletProblem(for: request.origin) { return .failure(problem) }
         do {
-            return .success(.string(try await wallet.sendForSite(transaction, quote: quote, review: review, origin: request.origin)))
+            return .success(.string(try await wallet.sendForSite(transaction, quote: quote, review: review, origin: request.origin, isWanted: { !request.isCancelled })))
+        } catch is CancellationError {
+            return .failure(.rejected)
         } catch ChainError.rejected(let message) {
             return .failure(SiteError(code: -32000, message: message))
         } catch {
@@ -260,7 +310,7 @@ public final class SiteBridge {
         }
     }
 
-    private func signPersonal(_ request: SiteRequest) async -> RPCAnswer {
+    private func signPersonal(_ request: LiveRequest) async -> RPCAnswer {
         if let problem = walletProblem(for: request.origin) { return .failure(problem) }
         guard let address = wallet.address else { return .failure(.notConnected) }
         guard let messageText = request.parameters?[0]?.string, let signer = request.parameters?[1]?.string else { return .failure(.invalid("personal_sign needs a message and an address.")) }
@@ -275,7 +325,7 @@ public final class SiteBridge {
         return await sign(request, MessageReview(personal: bytes, origin: request.origin))
     }
 
-    private func signTyped(_ request: SiteRequest) async -> RPCAnswer {
+    private func signTyped(_ request: LiveRequest) async -> RPCAnswer {
         if let problem = walletProblem(for: request.origin) { return .failure(problem) }
         guard let address = wallet.address else { return .failure(.notConnected) }
         guard let signer = request.parameters?[0]?.string, let payload = request.parameters?[1] else { return .failure(.invalid("eth_signTypedData_v4 needs an address and data.")) }
@@ -290,7 +340,7 @@ public final class SiteBridge {
         }
     }
 
-    private func sign(_ request: SiteRequest, _ review: MessageReview) async -> RPCAnswer {
+    private func sign(_ request: LiveRequest, _ review: MessageReview) async -> RPCAnswer {
         if case .failure(let error) = await ask(request, .message(review)) { return .failure(error) }
         if let problem = walletProblem(for: request.origin) { return .failure(problem) }
         do {
@@ -300,15 +350,15 @@ public final class SiteBridge {
         }
     }
 
-    private func read(_ request: SiteRequest) async -> RPCAnswer {
+    private func read(_ request: LiveRequest) async -> RPCAnswer {
         let second = Int(now().timeIntervalSince1970)
         if readsThisSecond.second != second { readsThisSecond = (second, 0) }
         guard readsThisSecond.count < Self.readsPerSecond else { return .failure(.readLimit) }
         readsThisSecond.count += 1
         do {
             return try await wallet.readForSite(request.method, request.parameters ?? .array([]))
-        } catch let error as SiteError {
-            return .failure(error)
+        } catch is CancellationError {
+            return .failure(.rejected)
         } catch {
             return .failure(SiteError(code: 4900, message: HotWalletWording.cantReachChain))
         }
@@ -318,17 +368,19 @@ public final class SiteBridge {
         wallet.siteProblem ?? (wallet.isConnected(origin) ? nil : .notConnected)
     }
 
-    private func ask(_ request: SiteRequest, _ action: SiteApproval.Action) async -> RPCAnswer {
+    private func ask(_ request: LiveRequest, _ action: SiteApproval.Action) async -> RPCAnswer {
+        // Working out what to show takes a while, and the site may be gone by now.
+        guard !request.isCancelled else { return .failure(.rejected) }
         recentRejections(of: request.origin)
         if (rejections[request.origin]?.count ?? 0) >= Self.rejectionsBeforeCooldown { return .failure(.rejected) }
         let fromThisOrigin = pending.filter { $0.origin == request.origin }
         guard pending.count < Self.maxPending, fromThisOrigin.count < Self.maxPendingPerOrigin else { return .failure(.tooManyRequests) }
         if action == .connect, fromThisOrigin.contains(where: { $0.action == .connect }) { return .failure(.tooManyRequests) }
 
-        let approval = SiteApproval(id: UUID(), origin: request.origin, action: action, requester: Requester(connection: request.connection, id: request.id))
+        let approval = SiteApproval(id: UUID(), origin: request.origin, action: action, requester: request.requester)
         pending.append(approval)
         let approved = await withCheckedContinuation { waiting[approval.id] = $0 }
-        return approved ? .success(.null) : .failure(.rejected)
+        return approved && !request.isCancelled ? .success(.null) : .failure(.rejected)
     }
 
     private func recentRejections(of origin: String) {

@@ -94,13 +94,16 @@ public final class BridgeServer {
     }
 
     private func receive(_ frame: Data, from id: UUID, on connection: BridgeConnection) {
+        // Its host has already gone, so nothing would hear an answer, and nothing would cancel this.
+        guard connections[id] != nil else { return }
         guard let message = try? JSONDecoder().decode(JSONValue.self, from: frame), let kind = message["kind"]?.string, let requestID = message["id"]?.string else { return }
         switch kind {
         case "site":
             guard let origin = message["origin"]?.string, let method = message["method"]?.string else { return }
-            let request = SiteRequest(connection: id, id: requestID, origin: origin, method: method, parameters: message["params"])
+            // On record before the next frame is read, which could be the one cancelling it.
+            let answer = bridge.begin(SiteRequest(connection: id, id: requestID, origin: origin, method: method, parameters: message["params"]))
             Task {
-                connection.send(Self.reply(id: requestID, await bridge.handle(request)))
+                connection.send(Self.reply(id: requestID, await answer.value))
             }
         case "cancel":
             bridge.cancel(connection: id, id: requestID)

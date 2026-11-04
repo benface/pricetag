@@ -86,7 +86,8 @@ public struct SiteTransaction: Equatable, Sendable {
     private static let baseWord = [UInt8](repeating: 0, count: 30) + [0x21, 0x05]
 }
 
-/// Enough to say what a transaction costs. What's signed uses this gas, so what's shown is what can be spent.
+/// Enough to say what a transaction costs. Its gas and fee per gas are limits that what's signed keeps to. `feeWei` also has the L1 data
+/// fee, which the chain charges on top at whatever L1 costs when it lands, so nothing can cap it and the total is an estimate.
 public struct SiteQuote: Equatable, Sendable {
     public let gasLimit: UInt64
     public let maxFeePerGas: UInt128
@@ -166,7 +167,20 @@ extension TransactionReview {
                 headline = "Send \(amountText(amount, token)) to \(SiteWording.address(recipient))"
                 if let token { recorded = (token.symbol, token.decimals, amount) }
             }
-        case Selectors.approve, Selectors.increaseAllowance:
+        case Selectors.increaseAllowance:
+            // This adds to whatever's already allowed, which nothing here has read. So it can't say what the total comes to, and adding nothing doesn't stop anything.
+            if let spender = arguments.address(0).map(SiteWording.address) {
+                let amount = arguments.amount(1)
+                if amount == 0 {
+                    headline = "Add nothing to what \(spender) can spend of your \(asset(token))"
+                } else if let amount, amount < Self.unlimitedAt {
+                    headline = "Let \(spender) spend \(amountText(amount, token)) more"
+                } else {
+                    headline = "Let \(spender) spend all of your \(asset(token))"
+                    warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(token)), isStrong: true))
+                }
+            }
+        case Selectors.approve:
             if let spender = arguments.address(0).map(SiteWording.address) {
                 let amount = arguments.amount(1)
                 if amount == 0 {

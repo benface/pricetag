@@ -923,4 +923,5 @@ private struct FailingChain: ChainClient {
     func send(_ transaction: SignedTransaction) throws { throw ChainError.unreachable }
     func receipt(of hash: String) throws -> Receipt? { throw ChainError.unreachable }
     func read(_ method: String, _ parameters: JSONValue) throws -> RPCAnswer { throw ChainError.unreachable }
+    func l1Fee(ofPayload payload: [UInt8]) throws -> UInt128 { throw ChainError.unreachable }
 }

@@ -72,6 +72,52 @@ private let mixed = """
         #expect(throws: TypedData.Failure.self) { _ = try TypedData(.string("not json")) }
     }
 
+    /// Only what the type lists gets signed, so anything else on screen would be a claim the signature doesn't back up.
+    @Test func aDomainHasToSayWhatItsTypeSigns() throws {
+        let message = #""types":{"EIP712Domain":SCHEMA,"A":[]},"primaryType":"A","message":{}"#
+        let fields = [
+            "name": #"{"name":"name","type":"string"}"#, "chainId": #"{"name":"chainId","type":"uint256"}"#,
+            "contract": #"{"name":"verifyingContract","type":"address"}"#,
+        ]
+        let build = { (domain: String, schema: [String]) in
+            #"{"domain":{\#(domain)},"# + message.replacingOccurrences(of: "SCHEMA", with: "[\(schema.joined(separator: ","))]") + "}"
+        }
+        let chain = #""chainId":8453"#
+        let contract = #""verifyingContract":"0x000000000022D473030F116dDEE9F6B43aC78BA3""#
+
+        // Fine when they agree, and the claim is what's signed.
+        let agreeing = try typedData(build("\(chain),\(contract)", [fields["chainId"]!, fields["contract"]!]))
+        #expect(try agreeing.chainID == 8453)
+        _ = try agreeing.signable()
+
+        // The review's case: a chain and contract that are claimed, and not signed at all.
+        #expect(throws: TypedData.Failure.self) { _ = try typedData(build("\(chain),\(contract)", [])) }
+        #expect(throws: TypedData.Failure.self) { _ = try typedData(build(chain, [fields["name"]!])) }
+        // In the type, but not the domain.
+        #expect(throws: TypedData.Failure.self) { _ = try typedData(build(chain, [fields["chainId"]!, fields["contract"]!])) }
+        // Mistyped, so it hashes as something else from what's shown.
+        #expect(throws: TypedData.Failure.self) { _ = try typedData(build(chain, [#"{"name":"chainId","type":"string"}"#])) }
+        #expect(throws: TypedData.Failure.self) { _ = try typedData(build(contract, [#"{"name":"verifyingContract","type":"string"}"#])) }
+        // Something that isn't a domain field.
+        #expect(throws: TypedData.Failure.self) { _ = try typedData(build(#"\#(chain),"note":"Base""#, [fields["chainId"]!, #"{"name":"note","type":"string"}"#])) }
+        // Even with no type given, nothing but the standard fields.
+        #expect(throws: TypedData.Failure.self) { _ = try typedData(#"{"domain":{"chainId":8453,"note":"x"},"types":{"A":[]},"primaryType":"A","message":{}}"#) }
+        #expect(throws: TypedData.Failure.self) { _ = try typedData(#"{"domain":{"chainId":null},"types":{"A":[]},"primaryType":"A","message":{}}"#).chainID }
+    }
+
+    @Test func aMessageHasToSayWhatItsTypeSigns() throws {
+        let build = { (message: String) in
+            #"{"domain":{"chainId":8453},"types":{"Inner":[{"name":"a","type":"uint8"}],"Outer":[{"name":"inner","type":"Inner"},{"name":"list","type":"Inner[]"}]},"primaryType":"Outer","message":\#(message)}"#
+        }
+        _ = try typedData(build(#"{"inner":{"a":1},"list":[{"a":2}]}"#)).signable()
+        // An unsigned field that says something, at the top, nested, and in a list.
+        #expect(throws: TypedData.Failure.self) { _ = try typedData(build(#"{"inner":{"a":1},"list":[],"spender":"0x4444444444444444444444444444444444444444"}"#)).signable() }
+        #expect(throws: TypedData.Failure.self) { _ = try typedData(build(#"{"inner":{"a":1,"b":2},"list":[]}"#)).signable() }
+        #expect(throws: TypedData.Failure.self) { _ = try typedData(build(#"{"inner":{"a":1},"list":[{"a":2,"b":3}]}"#)).signable() }
+        // The same name twice in a type.
+        #expect(throws: TypedData.Failure.self) { _ = try typedData(#"{"domain":{},"types":{"A":[{"name":"v","type":"uint8"},{"name":"v","type":"uint8"}]},"primaryType":"A","message":{"v":1}}"#) }
+    }
+
     @Test func edgesOfSignedIntegers() throws {
         let minimum = try TypedData.integerWord(.string("-128"), bits: 8, signed: true)
         #expect(minimum == [UInt8](repeating: 0xFF, count: 31) + [0x80])

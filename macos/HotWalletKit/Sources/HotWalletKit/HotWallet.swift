@@ -602,7 +602,8 @@ public final class HotWallet {
         return try await chain.read(method, parameters)
     }
 
-    /// What a transaction would cost. What's signed later keeps this gas, so the fee shown is what can be spent.
+    /// What a transaction would cost. What's signed later keeps to this gas and fee per gas. Its L1 data fee goes by its real size,
+    /// which a site's data can make far bigger than a sweep.
     func quoteForSite(_ transaction: SiteTransaction) async throws -> SiteQuote {
         guard let address else { throw ChainError.unreadable }
         let snapshot = try await chain.snapshot(of: address)
@@ -617,56 +618,77 @@ public final class HotWallet {
         }
         // A plain send to a plain address uses exactly what it's quoted.
         let gasLimit = transaction.data.isEmpty && estimate == 21000 ? estimate : estimate + estimate / 4
+        let unsigned = UnsignedTransaction(
+            chainID: Base.chainID,
+            nonce: snapshot.nonce,
+            maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas,
+            maxFeePerGas: snapshot.fees.maxFeePerGas,
+            gasLimit: gasLimit,
+            to: transaction.to,
+            value: transaction.value,
+            data: transaction.data
+        )
+        let l1Fee = try await chain.l1Fee(ofPayload: unsigned.signingPayload)
+        let fees = FeeQuote(maxFeePerGas: snapshot.fees.maxFeePerGas, maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas, l1FeeWei: l1Fee)
         return SiteQuote(
             gasLimit: gasLimit,
             maxFeePerGas: snapshot.fees.maxFeePerGas,
-            feeWei: snapshot.fees.costWei(gas: UInt128(gasLimit)),
+            feeWei: fees.costWei(gas: UInt128(gasLimit)),
             ethUsdMicros: snapshot.ethUsdMicros,
             ethBalance: snapshot.balances[Base.eth] ?? 0
         )
     }
 
     /// Only after the user approved exactly this in the app. It's in line with sweeps, since two at once would use the same nonce.
-    func sendForSite(_ transaction: SiteTransaction, quote: SiteQuote, review: TransactionReview, origin: String) async throws -> String {
+    /// `isWanted` says the site hasn't gone away, which can happen at any point while this waits.
+    func sendForSite(_ transaction: SiteTransaction, quote: SiteQuote, review: TransactionReview, origin: String, isWanted: @escaping @MainActor () -> Bool) async throws -> String {
         guard let address else { throw ChainError.unreadable }
         var result: Result<String, any Error> = .failure(ChainError.unreadable)
         await inTurn { [self] in
             do {
-                guard address == self.address, siteProblem == nil else { throw ChainError.rejected("This wallet changed while that was waiting.") }
-                let snapshot = try await chain.snapshot(of: address)
-                self.snapshot = snapshot
-                guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
-                guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected("The last transaction is still showing up. Try again in a moment.") }
-                guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
-                // The fee shown is a promise. A jump past it needs another look.
-                guard snapshot.fees.maxFeePerGas <= 2 * quote.maxFeePerGas else { throw ChainError.rejected("Fees rose a lot since you approved this, so nothing was signed. Try again.") }
-                let nonce = AlarmCheck.nextNonce(records: state.records[address] ?? [], onchainNonce: snapshot.nonce)
-                let unsigned = UnsignedTransaction(
-                    chainID: Base.chainID,
-                    nonce: nonce,
-                    maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas,
-                    maxFeePerGas: snapshot.fees.maxFeePerGas,
-                    gasLimit: quote.gasLimit,
-                    to: transaction.to,
-                    value: transaction.value,
-                    data: transaction.data
-                )
-                let signed = try await signer.sign(unsigned, from: address)
-                do {
-                    try await recordAndSend(signed, from: address, record: SignedRecord(
-                        hash: signed.hash, nonce: nonce, to: transaction.to, symbol: review.symbol, decimals: review.decimals,
-                        amount: review.amount, usdMicros: review.usdMicros, gainUsdMicros: "0",
-                        reason: .site, createdAt: now(), status: .pending, site: origin
-                    ))
-                } catch ChainError.unreachable {
-                    // It may have got through, and the site can watch for its hash either way.
-                }
-                result = .success(signed.hash)
+                result = .success(try await signAndSendForSite(transaction, from: address, quote: quote, review: review, origin: origin, isWanted: isWanted))
             } catch {
                 result = .failure(error)
             }
         }
         return try result.get()
+    }
+
+    private func signAndSendForSite(_ transaction: SiteTransaction, from address: EthereumAddress, quote: SiteQuote, review: TransactionReview, origin: String, isWanted: @MainActor () -> Bool) async throws -> String {
+        guard isWanted() else { throw CancellationError() }
+        guard address == self.address, siteProblem == nil else { throw ChainError.rejected("This wallet changed while that was waiting.") }
+        let snapshot = try await chain.snapshot(of: address)
+        self.snapshot = snapshot
+        guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
+        guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected("The last transaction is still showing up. Try again in a moment.") }
+        guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
+        // What was approved is a limit, so a small rise doesn't change what's signed. It has room to land anyway, since a quote allows
+        // twice the base fee. Past that it wouldn't land, and it needs another look.
+        guard snapshot.fees.maxFeePerGas <= 2 * quote.maxFeePerGas else { throw ChainError.rejected("Fees rose a lot since you approved this, so nothing was signed. Try again.") }
+        let maxFeePerGas = min(snapshot.fees.maxFeePerGas, quote.maxFeePerGas)
+        let nonce = AlarmCheck.nextNonce(records: state.records[address] ?? [], onchainNonce: snapshot.nonce)
+        let unsigned = UnsignedTransaction(
+            chainID: Base.chainID,
+            nonce: nonce,
+            maxPriorityFeePerGas: min(snapshot.fees.maxPriorityFeePerGas, maxFeePerGas),
+            maxFeePerGas: maxFeePerGas,
+            gasLimit: quote.gasLimit,
+            to: transaction.to,
+            value: transaction.value,
+            data: transaction.data
+        )
+        guard isWanted() else { throw CancellationError() }
+        let signed = try await signer.sign(unsigned, from: address)
+        do {
+            try await recordAndSend(signed, from: address, record: SignedRecord(
+                hash: signed.hash, nonce: nonce, to: transaction.to, symbol: review.symbol, decimals: review.decimals,
+                amount: review.amount, usdMicros: review.usdMicros, gainUsdMicros: "0",
+                reason: .site, createdAt: now(), status: .pending, site: origin
+            ))
+        } catch ChainError.unreachable {
+            // It may have got through, and the site can watch for its hash either way.
+        }
+        return signed.hash
     }
 
     /// Only after the user approved exactly this in the app. A message never spends by itself, but what it permits can.

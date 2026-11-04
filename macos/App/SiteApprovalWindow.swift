@@ -130,7 +130,7 @@ struct SiteApprovalView: View {
                     Text(amount(review.value, usd: review.valueUsdMicros))
                 }
                 GridRow {
-                    Text("Fee, at most").foregroundStyle(.secondary)
+                    Text("Fee, about").foregroundStyle(.secondary)
                     Text(amount(review.feeWei, usd: review.feeUsdMicros))
                 }
                 GridRow {

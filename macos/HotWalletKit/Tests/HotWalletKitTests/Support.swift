@@ -37,6 +37,12 @@ actor FakeChain: ChainClient {
     var estimateFailure: ChainError?
     private(set) var sent: [SignedTransaction] = []
     private(set) var reads: [String] = []
+    private(set) var l1FeePayloads: [[UInt8]] = []
+    /// How many calls `hold` is keeping waiting, like a slow node.
+    private(set) var heldCalls = 0
+    private var holdsEstimates = false
+    private var holdsSnapshots = false
+    private var held: [CheckedContinuation<Void, Never>] = []
     /// Set after each send, to read what was on disk at that moment.
     var onSend: (@Sendable (SignedTransaction) -> Void)?
 
@@ -57,9 +63,31 @@ actor FakeChain: ChainClient {
     func setEstimateFailure(_ failure: ChainError?) { estimateFailure = failure }
     func setOnSend(_ body: @escaping @Sendable (SignedTransaction) -> Void) { onSend = body }
 
-    func snapshot(of address: EthereumAddress) throws -> ChainSnapshot { current }
+    func hold(estimates: Bool = false, snapshots: Bool = false) {
+        holdsEstimates = estimates
+        holdsSnapshots = snapshots
+    }
 
-    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) throws -> UInt64 {
+    func release() {
+        holdsEstimates = false
+        holdsSnapshots = false
+        for call in held { call.resume() }
+        held = []
+        heldCalls = 0
+    }
+
+    private func wait() async {
+        heldCalls += 1
+        await withCheckedContinuation { held.append($0) }
+    }
+
+    func snapshot(of address: EthereumAddress) async throws -> ChainSnapshot {
+        if holdsSnapshots { await wait() }
+        return current
+    }
+
+    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64 {
+        if holdsEstimates { await wait() }
         if let estimateFailure { throw estimateFailure }
         return data.isEmpty ? 21000 : estimate
     }
@@ -75,6 +103,12 @@ actor FakeChain: ChainClient {
     func read(_ method: String, _ parameters: JSONValue) -> RPCAnswer {
         reads.append(method)
         return .success(.string("0xread"))
+    }
+
+    /// By size, like the real one, so a bigger transaction costs more.
+    func l1Fee(ofPayload payload: [UInt8]) -> UInt128 {
+        l1FeePayloads.append(payload)
+        return UInt128(payload.count) * 1_000_000_000
     }
 }
 

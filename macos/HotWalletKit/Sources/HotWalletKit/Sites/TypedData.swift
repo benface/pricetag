@@ -13,6 +13,11 @@ struct TypedData: Equatable, Sendable {
         case malformed(String)
     }
 
+    private static let domainFields = [
+        Field(name: "name", type: "string"), Field(name: "version", type: "string"), Field(name: "chainId", type: "uint256"),
+        Field(name: "verifyingContract", type: "address"), Field(name: "salt", type: "bytes32"),
+    ]
+
     let types: [String: [Field]]
     let primaryType: String
     let domain: JSONValue
@@ -36,14 +41,20 @@ struct TypedData: Equatable, Sendable {
             var parsedFields: [Field] = []
             for field in list {
                 guard let fieldName = field["name"]?.string, let type = field["type"]?.string else { throw .malformed("The type \(name) has a malformed field.") }
+                guard !parsedFields.contains(where: { $0.name == fieldName }) else { throw .malformed("The type \(name) has \(fieldName) twice.") }
                 parsedFields.append(Field(name: fieldName, type: type))
             }
             fields[name] = parsedFields
         }
         // Sites may leave this out, and it's fully determined by which fields the domain has.
         if fields["EIP712Domain"] == nil {
-            let known = [("name", "string"), ("version", "string"), ("chainId", "uint256"), ("verifyingContract", "address"), ("salt", "bytes32")]
-            fields["EIP712Domain"] = known.filter { domain[$0.0] != nil }.map { Field(name: $0.0, type: $0.1) }
+            fields["EIP712Domain"] = Self.domainFields.filter { domain[$0.name] != nil }
+        }
+        // What's in `domain` gets shown and checked, but only what the type lists gets signed. A chain or contract that's only claimed
+        // would be shown as if the signature were tied to it, so the two have to say the same thing, with the standard types.
+        let domainSchema = fields["EIP712Domain"] ?? []
+        guard domainSchema.allSatisfy(Self.domainFields.contains), Set(domainSchema.map(\.name)) == Set(domain.object?.keys.map { $0 } ?? []) else {
+            throw .malformed("The domain's fields don't match its type.")
         }
         guard fields[primaryType] != nil else { throw .malformed("The primary type \(primaryType) isn't defined.") }
         self.types = fields
@@ -59,7 +70,7 @@ struct TypedData: Equatable, Sendable {
     /// The chain the domain names, or nil if it doesn't name one, in which case the signature isn't tied to any.
     var chainID: UInt64? {
         get throws(Failure) {
-            guard let value = domain["chainId"], value != .null else { return nil }
+            guard let value = domain["chainId"] else { return nil }
             let word = try Self.integerWord(value, bits: 256, signed: false)
             guard word.prefix(24).allSatisfy({ $0 == 0 }) else { throw .malformed("The chain ID is out of range.") }
             return word.suffix(8).reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
@@ -88,10 +99,12 @@ struct TypedData: Equatable, Sendable {
 
     private func hashStruct(_ name: String, _ value: JSONValue, depth: Int) throws(Failure) -> [UInt8] {
         guard depth < 32 else { throw .malformed("It's nested too deeply.") }
-        guard let fields = types[name], value.object != nil else { throw .malformed("\(name) isn't an object.") }
+        guard let fields = types[name], let object = value.object else { throw .malformed("\(name) isn't an object.") }
+        // Leaving a field out would sign something other than what the type says, so it isn't filled in with zero. An extra one
+        // would be shown without being signed, so what's on screen could say anything.
+        guard Set(fields.map(\.name)) == Set(object.keys) else { throw .malformed("\(name)'s fields don't match its type.") }
         var encoded = keccak256(Array(try encodeType(name).utf8))
         for field in fields {
-            // Leaving a field out would sign something other than what the type says, so it isn't filled in with zero.
             guard let fieldValue = value[field.name] else { throw .malformed("\(name) is missing \(field.name).") }
             encoded += try encodeField(field.type, fieldValue, depth: depth + 1)
         }

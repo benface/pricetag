@@ -55,6 +55,30 @@ struct LiveBaseTests {
         print("Live Base: maxFee \(snapshot.fees.maxFeePerGas) wei, tip \(snapshot.fees.maxPriorityFeePerGas) wei, L1 fee \(snapshot.fees.l1FeeWei) wei, reserve \(reserve) wei, ETH \(snapshot.ethUsdMicros ?? 0), USDC \(snapshot.usdcUsdMicros ?? 0)")
         #expect(reserve == SweepPlanner.minimumGasReserveWei, "fees on Base should be nowhere near the minimum reserve")
     }
+
+    @Test func aRealL1FeeGoesBySize() async throws {
+        let client = RPCChainClient(url: liveRPC!)
+        // Hashes, since the chain compresses this before pricing it, and a repeating pattern would hardly cost more.
+        let payload = { (count: Int) in
+            var bytes: [UInt8] = []
+            var block = keccak256([1])
+            while bytes.count < count {
+                bytes += block
+                block = keccak256(block)
+            }
+            return Array(bytes.prefix(count))
+        }
+        var small: UInt128?
+        var big: UInt128?
+        // Past the public node's rate limit, like the snapshot above.
+        for _ in 0..<5 where small == nil || big == nil {
+            small = try? await client.l1Fee(ofPayload: payload(180))
+            big = try? await client.l1Fee(ofPayload: payload(9000))
+            if small == nil || big == nil { try await Task.sleep(for: .seconds(3)) }
+        }
+        #expect(try #require(small) > 0)
+        #expect(try #require(big) > 10 * (try #require(small)))
+    }
 }
 
 /// Everything real but the Keychain: a fresh key from the vault, wrapped by the Secure Enclave, signing for a local fork of Base,

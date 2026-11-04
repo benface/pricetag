@@ -71,9 +71,10 @@ private struct SiteRig {
         let bridge = bridge
         let request = request(method, parameters, origin: origin, id: id)
         let task = Task { await bridge.handle(request) }
-        for _ in 0..<2000 {
+        // It goes to the node first, which takes real time when every other test is running too.
+        for _ in 0..<10_000 {
             if let approval = bridge.pending.first(where: { !before.contains($0.id) }) { return (task, approval) }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(1))
         }
         Issue.record("\(method) never asked for approval: \(await task.value)")
         fatalError("no approval")
@@ -376,6 +377,143 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         #expect(await rig.signer.signed.isEmpty)
     }
 
+    @Test func aSmallFeeRiseDoesntGoPastWhatWasApproved() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        guard case .transaction(let review) = approval.action else { Issue.record("Not a transaction"); return }
+        let quoted = cheapFees.maxFeePerGas
+        await rig.chain.set(snapshot(fees: FeeQuote(maxFeePerGas: quoted * 3 / 2, maxPriorityFeePerGas: quoted * 3 / 2, l1FeeWei: 1)))
+        await rig.bridge.approve(approval.id)
+        _ = try await task.value.get()
+
+        let signed = try #require(await rig.signer.signed.first)
+        #expect(signed.maxFeePerGas == quoted)
+        #expect(signed.maxPriorityFeePerGas == quoted)
+        #expect(UInt128(signed.gasLimit) * signed.maxFeePerGas <= review.feeWei)
+    }
+
+    @Test func aFeeThatFallsIsntPaidAtTheOldPrice() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        await rig.chain.set(snapshot(fees: FeeQuote(maxFeePerGas: cheapFees.maxFeePerGas / 2, maxPriorityFeePerGas: 1, l1FeeWei: 1)))
+        await rig.bridge.approve(approval.id)
+        _ = try await task.value.get()
+        #expect(await rig.signer.signed.first?.maxFeePerGas == cheapFees.maxFeePerGas / 2)
+    }
+
+    /// A site's data can be far bigger than a sweep, and the chain charges for L1 data by size.
+    @Test func theFeeShownGoesByTheTransactionsRealSize() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let review = { (data: String) async throws -> TransactionReview in
+            let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters(data: data))
+            rig.bridge.cancelAll(connection: rig.connection)
+            _ = await task.value
+            guard case .transaction(let review) = approval.action else { throw ChainError.unreadable }
+            return review
+        }
+        let small = try await review("0x12345678")
+        let big = try await review("0x12345678" + String(repeating: "ab", count: 5000))
+        let payload = try #require(await rig.chain.l1FeePayloads.last)
+        #expect(payload.count > 5000)
+        #expect(big.feeWei >= small.feeWei + 2 * 5000 * 1_000_000_000)
+    }
+
+    @Test func noL1FeeMeansNoOffer() async {
+        final class NoFee: ChainClient {
+            func snapshot(of address: EthereumAddress) -> ChainSnapshot { HotWalletKitTests.snapshot() }
+            func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) -> UInt64 { 21000 }
+            func send(_ transaction: SignedTransaction) {}
+            func receipt(of hash: String) -> Receipt? { nil }
+            func read(_ method: String, _ parameters: JSONValue) -> RPCAnswer { .success(.null) }
+            func l1Fee(ofPayload payload: [UInt8]) throws -> UInt128 { throw ChainError.unreachable }
+        }
+        var state = DeviceWalletState()
+        state.active = hotAddress
+        state.connectedSites = [site]
+        let stateStore = MemoryStateStore()
+        try! stateStore.save(state)
+        let wallet = HotWallet(signer: FakeSigner(keys: [hotAddress]), settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { ScriptedPortfolios(.failure(.unreachable)) }, makeChain: { _ in NoFee() })
+        let bridge = SiteBridge(wallet: wallet)
+        let answer = await bridge.handle(SiteRequest(connection: UUID(), id: "1", origin: site, method: "eth_sendTransaction", parameters: .array([.object(["from": .string(hot), "to": .string(recipient)])])))
+        #expect(code(answer) == 4900)
+        #expect(bridge.pending.isEmpty)
+    }
+
+    private func waitForHeldCall(_ rig: SiteRig) async {
+        for _ in 0..<2000 {
+            if await rig.chain.heldCalls > 0 { return }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        Issue.record("Nothing reached the node")
+    }
+
+    /// The request is working out its fee, so there's no approval yet for the closed tab to take away. None must appear afterward.
+    @Test func aTabClosedWhileTheNodeIsWorkingNeverGetsAnApproval() async {
+        for closing in [{ (rig: SiteRig) in rig.bridge.cancel(connection: rig.connection, id: "1") }, { (rig: SiteRig) in rig.bridge.cancelAll(connection: rig.connection) }] {
+            let rig = SiteRig()
+            await rig.connect()
+            await rig.chain.hold(estimates: true)
+            let answer = rig.bridge.begin(rig.request("eth_sendTransaction", rig.sendParameters()))
+            await waitForHeldCall(rig)
+            closing(rig)
+            await rig.chain.release()
+
+            #expect(code(await answer.value) == 4001)
+            #expect(rig.bridge.pending.isEmpty)
+            #expect(await rig.signer.signed.isEmpty)
+            #expect(await rig.chain.sent.isEmpty)
+        }
+    }
+
+    @Test func aTabClosedBeforeItsRequestStartsIsNeverAsked() async {
+        let rig = SiteRig()
+        await rig.connect()
+        let answer = rig.bridge.begin(rig.request("eth_sendTransaction", rig.sendParameters()))
+        rig.bridge.cancel(connection: rig.connection, id: "1")
+        #expect(code(await answer.value) == 4001)
+        #expect(rig.bridge.pending.isEmpty)
+        #expect(await rig.chain.reads.isEmpty)
+    }
+
+    @Test func anotherRequestDoesntGoWithIt() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        await rig.chain.hold(estimates: true)
+        let leaving = rig.bridge.begin(rig.request("eth_sendTransaction", rig.sendParameters(), id: "leaving"))
+        let staying = rig.bridge.begin(rig.request("eth_sendTransaction", rig.sendParameters(), id: "staying"))
+        await waitForHeldCall(rig)
+        rig.bridge.cancel(connection: rig.connection, id: "leaving")
+        await rig.chain.release()
+        #expect(code(await leaving.value) == 4001)
+        for _ in 0..<5000 where rig.bridge.pending.isEmpty { try await Task.sleep(for: .milliseconds(1)) }
+        let approval = try #require(rig.bridge.current)
+        await rig.bridge.approve(approval.id)
+        _ = try await staying.value.get()
+        #expect(await rig.signer.signed.count == 1)
+    }
+
+    /// It was approved, and it's waiting its turn or for the node. The site's gone, so nothing's sent for it.
+    @Test func aTabClosedAfterApprovingButBeforeSigningSignsNothing() async {
+        for closing in [{ (rig: SiteRig) in rig.bridge.cancel(connection: rig.connection, id: "1") }, { (rig: SiteRig) in rig.bridge.cancelAll(connection: rig.connection) }] {
+            let rig = SiteRig()
+            await rig.connect()
+            let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+            await rig.chain.hold(snapshots: true)
+            await rig.bridge.approve(approval.id)
+            await waitForHeldCall(rig)
+            closing(rig)
+            await rig.chain.release()
+
+            #expect(code(await task.value) == 4001)
+            #expect(await rig.signer.signed.isEmpty)
+            #expect(await rig.chain.sent.isEmpty)
+            #expect(rig.wallet.records.isEmpty)
+        }
+    }
+
     @Test func aWalletStoppedWhileWaitingDoesntSign() async {
         let rig = SiteRig()
         await rig.connect()
@@ -383,7 +521,9 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         await rig.wallet.replaceKey()
         await rig.bridge.approve(approval.id)
         #expect(code(await task.value) == 4100)
-        #expect(await rig.signer.signed.isEmpty)
+        // Replacing the key signs its own moves, as it runs. None of them are this.
+        #expect(await rig.signer.signed.allSatisfy { $0.to != EthereumAddress(recipient) })
+        #expect(rig.wallet.records.allSatisfy { $0.reason != .site })
     }
 
     @Test func sitesFailingOnchainDontHoldUpSweeps() async throws {
@@ -488,6 +628,9 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
             ("0x095ea7b3" + spenderWord + word("0"), false, "Stop"),
             ("0x095ea7b3" + spenderWord + word("1" + String(repeating: "0", count: 24)), true, "all of your"),
             ("0x39509351" + spenderWord + maxWord, true, "all of your"),
+            // Adding to an allowance doesn't set it, so it can't say "up to", and adding nothing doesn't stop anything.
+            ("0x39509351" + spenderWord + limited, false, "spend 5 USDC more"),
+            ("0x39509351" + spenderWord + word("0"), false, "Add nothing"),
             ("0xa22cb465" + spenderWord + word("1"), true, "every item"),
             ("0xa22cb465" + spenderWord + word("0"), false, "Stop"),
             ("0xa9059cbb" + spenderWord + limited, false, "Send 5 USDC"),
@@ -542,6 +685,18 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         #expect(!approval.needsAcknowledgment)
         rig.bridge.reject(approval.id)
         _ = await task.value
+    }
+
+    /// A chain and contract on screen that the signature doesn't cover. Changing the chain here wouldn't change a single signed byte.
+    @Test func aClaimedChainThatIsntSignedIsRefusedWithoutAsking() async {
+        let rig = SiteRig()
+        await rig.connect()
+        let json = JSONValue.string(#"{"domain":{"chainId":8453,"verifyingContract":"\#(usdcText)"},"types":{"EIP712Domain":[],"Note":[{"name":"text","type":"string"}]},"primaryType":"Note","message":{"text":"hi"}}"#)
+        #expect(code(await rig.ask("eth_signTypedData_v4", .array([.string(hot), json]))) == -32602)
+        let extra = JSONValue.string(#"{"domain":{"chainId":8453},"types":{"Note":[{"name":"text","type":"string"}]},"primaryType":"Note","message":{"text":"hi","spender":"0x4444444444444444444444444444444444444444"}}"#)
+        #expect(code(await rig.ask("eth_signTypedData_v4", .array([.string(hot), extra]))) == -32602)
+        #expect(rig.bridge.pending.isEmpty)
+        #expect(await rig.signer.signedMessages.isEmpty)
     }
 
     @Test func malformedTypedDataIsRefusedWithoutAsking() async {
@@ -750,6 +905,40 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         try await waitForPending(rig.bridge)
         close(client)
         try await waitForPending(rig.bridge, count: 0)
+    }
+
+    /// The host's frames come as fast as they come, so a cancel can follow its request straight away, and either can beat the node.
+    @Test func goingAwayWhileTheNodeIsWorkingLeavesNothingToApprove() async throws {
+        for closes in [false, true] {
+            let rig = SiteRig()
+            await rig.connect()
+            await rig.chain.hold(estimates: true)
+            let path = path()
+            let server = BridgeServer(bridge: rig.bridge, path: path)
+            try server.start()
+            defer { server.stop() }
+            let client = try connect(path)
+            let site = #"{"kind":"site","id":"1","origin":"\#(site)","method":"eth_sendTransaction","params":[{"from":"\#(hot)","to":"\#(recipient)"}]}"#
+            send(site, to: client)
+            if closes {
+                for _ in 0..<500 {
+                    if await rig.chain.heldCalls > 0 { break }
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                #expect(await rig.chain.heldCalls == 1)
+                close(client)
+                // Gives the server time to hear it's gone.
+                try await Task.sleep(for: .milliseconds(200))
+            } else {
+                send(#"{"kind":"cancel","id":"1"}"#, to: client)
+                try await Task.sleep(for: .milliseconds(200))
+            }
+            await rig.chain.release()
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(rig.bridge.pending.isEmpty, "closes: \(closes)")
+            #expect(await rig.signer.signed.isEmpty)
+            if !closes { close(client) }
+        }
     }
 
     @Test func tooBigAFrameEndsTheConnection() async throws {

@@ -81,6 +81,8 @@ public protocol ChainClient: Sendable {
     func receipt(of hash: String) async throws -> Receipt?
     /// Passes a read a site asked for on to the node, with the node's own answer, including why a call reverted.
     func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer
+    /// What the chain would charge for this transaction's L1 data right now, on top of its gas.
+    func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128
 }
 
 /// A JSON-RPC node, and every read of one tick in a single batch. It can lie about what it tells us, but all it can get out of
@@ -149,6 +151,11 @@ public struct RPCChainClient: ChainClient {
         // A node can say a transaction is in a block without having a block number for it yet, which isn't settled.
         guard let status = receipt["status"], let block = receipt["blockNumber"], !(block is NSNull) else { return nil }
         return Receipt(succeeded: try Self.quantity(status) == 1, blockNumber: UInt64(try Self.quantity(block)))
+    }
+
+    public func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128 {
+        let (method, parameters) = call(Base.gasPriceOracle, Calldata.l1Fee(ofPayload: payload), at: "latest")
+        return try Self.quantity(try await single(method, parameters))
     }
 
     public func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer {
@@ -286,9 +293,12 @@ public enum Calldata {
     static let typicalSweepBytes = 180
 
     static func l1Fee(ofPayloadBytes count: Int) -> [UInt8] {
-        let padded = (count + 31) / 32 * 32
         // Non-zero and varied, so this doesn't compress better than a real transaction would.
-        let payload = (0..<padded).map { UInt8(truncatingIfNeeded: $0 &* 167 &+ 1) | 1 }
-        return selector("getL1Fee(bytes)") + word(32) + word(UInt128(count)) + payload
+        l1Fee(ofPayload: (0..<count).map { UInt8(truncatingIfNeeded: $0 &* 167 &+ 1) | 1 })
+    }
+
+    static func l1Fee(ofPayload payload: [UInt8]) -> [UInt8] {
+        let padding = (32 - payload.count % 32) % 32
+        return selector("getL1Fee(bytes)") + word(32) + word(UInt128(payload.count)) + payload + [UInt8](repeating: 0, count: padding)
     }
 }
