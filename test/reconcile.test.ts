@@ -3,6 +3,7 @@ import { describe, it } from "node:test"
 import { balancesByAsset, decodeBalanceResults, encodeBalanceCalls, MULTICALL3 } from "../server/balances.ts"
 import { USD_CONTEXT, explainMetric, explainTotal, mismatchCause } from "../src/core/explain.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
+import { feesUnknownSentence } from "../src/core/wording.ts"
 import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, foldPositions, openingLegs, pnlOverTime, referenceMarks, sumTotals, unconfirmedAssets, unreadAssets, type LegRow, type Onchain, type ReferenceRow } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
@@ -84,7 +85,7 @@ describe("a missed internal ETH transfer", () => {
 
   it("is out of the totals, and they say so, with the value still counted", () => {
     const totals = sumTotals(positions)
-    assert.deepEqual(totals.excluded.filter((e) => e.asset === "ETH"), [{ asset: "ETH", reason: "doesn't match its onchain balance" }])
+    assert.deepEqual(totals.excluded.filter((e) => e.asset === "ETH"), [{ asset: "ETH", reason: "doesn't match its actual balance" }])
     assert.equal(totals.valueMicros, eth.values.valueMicros)
     assert.equal(totals.coverage.unrealized.known, 0)
     assert.equal(totals.unrealizedMicros, null)
@@ -155,7 +156,7 @@ describe("when there's nothing to compare", () => {
   it("a failed read leaves positions unchecked, and their PnL unavailable", () => {
     const [position] = foldPositions(legsOf([row(USDC_ADDRESS, "credit", 5n)]), "average", {}, { balances: null, l1FeeUnknownTxs: [] })
     assert.equal(position!.reconciliation?.status, "unchecked")
-    assert.deepEqual(sumTotals([position!]).excluded.filter((e) => e.reason !== "no current price"), [{ asset: "USDC", reason: "not checked against its onchain balance" }])
+    assert.deepEqual(sumTotals([position!]).excluded.filter((e) => e.reason !== "no current price"), [{ asset: "USDC", reason: "not checked against its actual balance" }])
   })
 
   it("keeps the amount and value it has, since there's nothing better to show", () => {
@@ -186,7 +187,7 @@ describe("when there's nothing to compare", () => {
 
   it("units that left without arriving still leave the value partial", () => {
     const totals = sumTotals(foldPositions(legsOf([row(USDC_ADDRESS, "debit", 5n)]), "average", {}, { balances: null, l1FeeUnknownTxs: [] }))
-    assert.deepEqual(totals.excluded.map((e) => e.reason), ["not checked against its onchain balance", "incomplete history"])
+    assert.deepEqual(totals.excluded.map((e) => e.reason), ["not checked against its actual balance", "incomplete history"])
     assert.equal(totals.coverage.value.missing, 1)
   })
 
@@ -446,5 +447,24 @@ describe("the demo wallet", () => {
   it("has an opening balance that hasn't moved", () => {
     assert.equal(assetOf(positions, "DAI").effects.length, 1)
     assert.equal(assetOf(positions, "DAI").effects[0]!.leg.opening, true)
+  })
+})
+
+describe("a network fee that couldn't be worked out", () => {
+  // It leaves no leg, so what the legs add up to is too high, but what's shown doesn't have to be.
+  const legs = legsOf([row(ETH_ADDRESS, "credit", E18)])
+
+  it("doesn't blame the amount when it's the actual balance", () => {
+    const eth = assetOf(foldPositions(legs, "average", PRICES, onchain({ ETH: (E18 * 99n) / 100n })), "ETH")
+    assert.equal(eth.values.qty, ((E18 * 99n) / 100n).toString())
+    assert.doesNotMatch(feesUnknownSentence(1), /ETH|amount|balance/)
+  })
+
+  it("labels the amount as an estimate when the balance couldn't be read", () => {
+    const state: Onchain = { balances: null, l1FeeUnknownTxs: [], lastBalances: { ETH: { blockNum: 50, amount: E18.toString() } }, unreadBalances: ["ETH"] }
+    const eth = assetOf(foldPositions(legs, "average", PRICES, state), "ETH")
+    assert.equal(eth.reconciliation?.status, "unchecked")
+    assert.match(explainMetric(eth, "amount", USD_CONTEXT).lines.join(" "), /last balance read/)
+    assert.equal(feesUnknownSentence(1), "Network fees couldn't be worked out for 1 transaction, so the network fees shown are too low.")
   })
 })

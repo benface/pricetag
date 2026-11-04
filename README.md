@@ -1,7 +1,7 @@
 # pricetag
 Every transfer gets a price. A Base wallet with real cost and PnL, built on Amp.
 
-This first version is watch-only: paste any Base address to see its holdings, cost and PnL, and click any number to see the legs behind it. There are no keys in it, and it doesn't sign anything.
+This first version is watch-only: paste any Base address to see its holdings, cost and PnL, and click any number to see the activity behind it. There are no keys in it, and it doesn't sign anything.
 
 ## Run it
 
@@ -15,7 +15,7 @@ pnpm dev                     # http://localhost:5173
 
 ## The Mac app
 
-Patina is a native menu bar app: live total PnL in the bar, holdings, cost and PnL in its popover, and a window where any number clicks through to its legs, price source and transaction. It's watch-only, with no keys.
+Patina is a native menu bar app: live total PnL in the bar, holdings, cost and PnL in its popover, and a window where any number clicks through to its activity, price source and transaction. It's watch-only, with no keys.
 
 ```sh
 pnpm mac         # builds the app, opens it, and runs the server until you press Ctrl-C

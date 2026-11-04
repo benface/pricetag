@@ -34,7 +34,7 @@ public struct ExplanationPane: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(explanation.title).font(.headline)
+                    Text(explanation.title).font(.headline).help(Wording.pnlHelp(for: explanation.title) ?? "")
                     if let value = explanation.value {
                         LiveNumber(value).font(.title2.weight(.semibold))
                     } else {
@@ -49,6 +49,7 @@ public struct ExplanationPane: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
+                            .help(Wording.pnlHelp(for: line) ?? "")
                     }
                     if store.feed.isStale {
                         WarningText("Not updating").font(.callout)
@@ -56,18 +57,12 @@ public struct ExplanationPane: View {
                 }
                 .padding(.vertical, 4)
             }
-            Section(legsTitle(explanation)) {
+            Section(Wording.activityTitle(count: explanation.legCount, shown: explanation.legs.count)) {
                 ForEach(explanation.legs) { leg in
                     LegRow(leg: leg, currency: explanation.currency)
                 }
             }
         }
-    }
-
-    private func legsTitle(_ explanation: Explanation) -> String {
-        let count = explanation.legCount
-        let total = count == 1 ? "1 leg" : "\(Format.block(count)) legs"
-        return count > explanation.legs.count ? "\(total), newest \(explanation.legs.count) shown" : total
     }
 }
 
@@ -92,7 +87,7 @@ public struct LegRow: View {
                 }
             }
             tags
-            Text("\(leg.effect).").font(.callout).fixedSize(horizontal: false, vertical: true)
+            Text("\(leg.effect).").font(.callout).fixedSize(horizontal: false, vertical: true).help(Wording.pnlHelp(for: leg.effect) ?? "")
             if let note = leg.priceNote {
                 Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
@@ -118,20 +113,23 @@ public struct LegRow: View {
 
     private var tags: some View {
         // Price and cost stay apart: one is a shared fact with a source, the other is this wallet's.
-        HStack(spacing: 4) {
-            Tag(leg.kind)
-            if let price = leg.priceMicros, let source = leg.priceSource {
-                Tag("\(Format.price(price, currency)) · \(source)")
-            } else {
-                Tag("No price", isWarning: true)
-            }
-            if leg.isIncoming {
-                if leg.costLabel == "unknown" {
-                    Tag("Cost unknown", isWarning: true)
-                } else {
-                    Tag("Cost: \(leg.costLabel)")
-                }
-            }
+        // Plain words take more room, so they stack when the inspector is too narrow for one line.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 4) { tagList }
+            VStack(alignment: .leading, spacing: 4) { tagList }
+        }
+    }
+
+    @ViewBuilder
+    private var tagList: some View {
+        Tag(leg.opening ? Wording.startingBalance : Wording.action(kind: leg.kind, isIncoming: leg.isIncoming))
+        if let price = leg.priceMicros, let source = leg.priceSource {
+            Tag("\(Format.price(price, currency)) · \(Wording.priceSource(source))")
+        } else {
+            Tag("No price", isWarning: true)
+        }
+        if leg.isIncoming {
+            Tag(Wording.costTag(leg.costLabel), isWarning: leg.costLabel == "unknown")
         }
     }
 }

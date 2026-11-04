@@ -4,6 +4,7 @@ import { TOKENS, foldPositions, pnlOverTime, sumTotals, tokenByAddress, unconfir
 import type { WalletResponse } from "./api.ts"
 import { CURRENCIES, usdView, type CurrencyCode, type WalletView } from "./currency.ts"
 import { formatAmount, formatMoney, formatPrice, formatRate, formatSignedMoney, shortHash } from "./format.ts"
+import { AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, METHOD_LABELS, NETWORK_FEES, currentPriceSource, tokenLabel } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"
 
@@ -20,11 +21,11 @@ export type Explanation = {
 
 const METRIC_TITLES: Record<Metric, string> = {
   amount: "Amount",
-  average: "Average cost",
+  average: AVERAGE_PRICE_PAID,
   value: "Value",
   realized: "Realized PnL",
   unrealized: "Unrealized PnL",
-  onchain: "Onchain check",
+  onchain: BALANCE_CHECK,
 }
 
 function diff(after: string, before: string): bigint {
@@ -100,11 +101,11 @@ export function describeEffect({ leg, before, after }: LegEffect, currency: Curr
   const realized = diff(after.realizedMicros, before.realizedMicros)
   const unresolved = diff(after.unresolvedDisposedQty, before.unresolvedDisposedQty)
   const shortfall = diff(after.shortfallQty, before.shortfallQty)
-  if (leg.kind === "gas") parts.push(leg.priceMicros === null ? "Gas, with no price at this block" : `Gas: ${money(diff(after.gasMicros, before.gasMicros))} spent`)
-  if (leg.kind === "swap") parts.push(leg.proceedsMicros === null ? "Sold, but the proceeds have no usable value" : `Sold for ${money(leg.proceedsMicros)}`)
+  if (leg.kind === "gas") parts.push(leg.priceMicros === null ? "Network fee, with no price at this block" : `Network fee: ${money(diff(after.gasMicros, before.gasMicros))} spent`)
+  if (leg.kind === "swap") parts.push(leg.proceedsMicros === null ? "Sold, but what you received has no usable value" : `Sold for ${money(leg.proceedsMicros)}`)
   if (leg.kind === "transfer") {
     const carried = diff(after.transferredOutCostMicros, before.transferredOutCostMicros)
-    parts.push(`Sent out, carrying ${money(carried)} of known cost, with no gain or loss`)
+    parts.push(`Sent out with ${money(carried)} of known cost, so no gain or loss`)
   }
   if (leg.kind !== "transfer") {
     if (realized !== 0n) parts.push(`realized ${signed(realized)}`)
@@ -121,14 +122,14 @@ export function mismatchCause(asset: string, differenceQty: string): string {
   if (asset === "ETH") {
     return difference > 0n
       ? "This wallet holds more ETH than its transactions explain. Most likely a contract sent it some, which we can't see yet."
-      : "This wallet holds less ETH than its transactions explain. Most likely a contract turned WETH into ETH and sent it elsewhere, while we counted it as coming here."
+      : "This wallet holds less ETH than its transactions explain. Most likely a contract turned wrapped ETH into ETH and sent it elsewhere, while we counted it as coming here."
   }
   return `This balance changed in a way ${asset}'s transfers don't show, as with a token whose balance adjusts by itself.`
 }
 
 /** The whole comparison, in words. */
 function onchainLines({ asset, decimals, reconciliation, effects }: Position): string[] {
-  if (reconciliation === null) return ["There's no onchain balance to compare this with."]
+  if (reconciliation === null) return ["There's no actual balance to compare this with."]
   if (reconciliation.status === "unchecked") {
     const held = reconciliation.heldIsCurrent || reconciliation.heldQty === null ? [] : ["The amount is the last balance read, plus what's moved since."]
     return [`Not checked. ${reconciliation.reason} PnL is unavailable until this balance is confirmed, which happens by itself.`, ...held]
@@ -137,14 +138,14 @@ function onchainLines({ asset, decimals, reconciliation, effects }: Position): s
   const block = reconciliation.blockNum.toLocaleString("en-US")
   if (reconciliation.status === "reconciled") {
     const opening = effects.some(({ leg }) => leg.opening) ? "what it already held, plus every transaction since," : "its transactions"
-    return [`Matches the chain exactly: ${opening} add up to ${amount(reconciliation.actualQty)} at block ${block}.`]
+    return [`Matches the actual balance exactly: ${opening} add up to ${amount(reconciliation.actualQty)} at block ${block}.`]
   }
   return [
     `Worked out from its transactions: ${amount(reconciliation.computedQty)}.`,
-    `Onchain at block ${block}: ${amount(reconciliation.actualQty)}.`,
+    `Actual balance at block ${block}: ${amount(reconciliation.actualQty)}.`,
     `Difference: ${BigInt(reconciliation.differenceQty) > 0n ? "+" : ""}${amount(reconciliation.differenceQty)}.`,
     mismatchCause(asset, reconciliation.differenceQty),
-    "Value uses the onchain balance. PnL is unavailable, because we know some of this wallet's activity is missing.",
+    "Value uses the actual balance. PnL is unavailable, because we know some of this wallet's activity is missing.",
   ]
 }
 
@@ -153,10 +154,10 @@ export function describeNetting(leg: PricedLeg): string | null {
   if (leg.parts.length < 2) return null
   const rows = leg.parts.map((p) => {
     const token = tokenByAddress(p.token)
-    const fee = p.kind === "gas" ? " gas" : p.kind === "l1_fee" ? " data fee" : ""
-    return `${p.side === "credit" ? "+" : "−"}${formatAmount(p.amount, token?.decimals ?? 18)} ${token?.symbol ?? p.token}${fee}`
+    const fee = p.kind === "gas" ? " network fee" : p.kind === "l1_fee" ? " Ethereum fee" : ""
+    return `${p.side === "credit" ? "+" : "−"}${formatAmount(p.amount, token?.decimals ?? 18)} ${tokenLabel(token?.symbol ?? p.token)}${fee}`
   })
-  return `Nets ${leg.parts.length} rows: ${rows.join(", ")}`
+  return `Combines ${leg.parts.length} movements: ${rows.join(", ")}`
 }
 
 export function explainMetric(position: Position, metric: Metric, context: ExplainContext): Explanation {
@@ -169,12 +170,12 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
   const qty = `${formatAmount(values.qty, decimals)} ${asset}`
   const unknownQty = `${formatAmount(values.unknownCostQty, decimals)} ${asset}`
   const priceLine = price
-    ? `Current price: ${formatPrice(price.micros, currency)}${price.usdMicros ? ` (${formatPrice(price.usdMicros, "USD")} USD)` : ""}, from the ${price.source} at block ${price.blockNum.toLocaleString("en-US")}.`
+    ? `Current price: ${formatPrice(price.micros, currency)}${price.usdMicros ? ` (${formatPrice(price.usdMicros, "USD")} USD)` : ""}, from ${currentPriceSource(price.source)} at block ${price.blockNum.toLocaleString("en-US")}.`
     : currency !== "USD" && !view.latestRate
       ? `There's no current USD to ${currency} rate, so ${asset} has no current value here.`
       : TOKENS.some((t) => t.symbol === asset && t.oracle)
-      ? `There's no current price for ${asset}, because the latest oracle read failed or is too old. An old price would quietly be wrong.`
-      : `There's no current price for ${asset}. Only ETH and USDC have an oracle so far.`
+      ? `There's no current price for ${asset}, because the market price feed's latest answer failed or is too old. An old price would quietly be wrong.`
+      : `There's no current price for ${asset}. Only ETH and USDC have a market price feed so far.`
   const lines: string[] = []
   let value: string | null = null
 
@@ -186,7 +187,7 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
 
   switch (metric) {
     case "onchain":
-      value = reconciliation?.status === "reconciled" ? "✓ Reconciled" : incomplete ? "⚠ Incomplete" : "Not checked"
+      value = reconciliation?.status === "reconciled" ? `✓ ${CHECK_LABELS.reconciled}` : incomplete ? `⚠ ${CHECK_LABELS.incomplete}` : CHECK_LABELS.unchecked
       lines.push(...onchainLines(position))
       break
     case "amount":
@@ -199,19 +200,19 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
     case "average":
       value = values.averageCostMicros && formatPrice(values.averageCostMicros, currency)
       if (unknown) lines.push(`${unknownQty} of ${qty} has an unknown cost, so there's no average. It's never counted as zero.`)
-      else if (values.costMicros) lines.push(`${money(values.costMicros)} of cost ÷ ${qty}, by ${state.method === "fifo" ? "FIFO" : "average cost"}.`)
+      else if (values.costMicros) lines.push(`${money(values.costMicros)} of cost ÷ ${qty}, using the ${METHOD_LABELS[state.method]} method.`)
       break
     case "value":
       value = values.valueMicros && money(values.valueMicros)
       lines.push(priceLine)
-      if (values.valueMicros) lines.push(`${qty} × that price.${incomplete ? " That's the onchain balance, because its transactions don't add up to it." : ""}`)
+      if (values.valueMicros) lines.push(`${qty} × that price.${incomplete ? " That's the actual balance, because its transactions don't add up to it." : ""}`)
       break
     case "realized":
       value = values.realizedMicros && signed(values.realizedMicros)
       if (values.realizedMicros === null) {
         const known = BigInt(state.resolvedDisposedQty) > 0n ? ` ${signed(state.realizedMicros)} is the part that is known.` : ""
         lines.push(`${formatAmount(state.unresolvedDisposedQty, decimals)} ${asset} was sold or spent with an unknown cost or no price, so its gain can't be known.${known}`)
-      } else lines.push("Proceeds minus cost, on what was sold or spent on gas. Gas itself is a separate cost in the total.")
+      } else lines.push("What you received minus what it cost, on what was sold or spent on network fees. The fees themselves are a separate cost in the total.")
       break
     case "unrealized":
       value = values.unrealizedMicros && signed(values.unrealizedMicros)
@@ -240,7 +241,7 @@ const TOTAL_TITLES: Record<TotalMetric, string> = {
   value: "Total value",
   realized: "Total realized PnL",
   unrealized: "Total unrealized PnL",
-  gas: "Gas paid",
+  gas: NETWORK_FEES,
 }
 
 export function explainTotal(positions: readonly Position[], totals: Totals, metric: TotalMetric, context: ExplainContext): Explanation {
@@ -259,7 +260,7 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
   const lines: string[] = []
   if (metric === "pnl") {
     if (value === null) lines.push("Everything here depends on an unknown cost or price, so there's no PnL to show. It isn't zero.")
-    else lines.push(`Realized ${showSigned(totals.realizedMicros)}, unrealized ${showSigned(totals.unrealizedMicros)}, less ${totals.gasMicros === null ? "gas that's unavailable" : `${money(totals.gasMicros)} of gas`}.`)
+    else lines.push(`Realized ${showSigned(totals.realizedMicros)}, unrealized ${showSigned(totals.unrealizedMicros)}, less ${totals.gasMicros === null ? "network fees that are unavailable" : `${money(totals.gasMicros)} of network fees`}.`)
   }
   for (const position of positions) {
     const v = position.values
@@ -272,11 +273,11 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
     }[metric]
     if (part) lines.push(`${position.asset}: ${part}`)
   }
-  if (metric === "gas") lines.push("Gas, plus the data fee each transaction pays to be posted to Ethereum.")
-  if (totals.unpricedGas && (metric === "gas" || metric === "pnl")) lines.push("Some gas had no price at its block, so it isn't included.")
+  if (metric === "gas") lines.push("Network fees, including what each transaction pays to be posted to Ethereum.")
+  if (totals.unpricedGas && (metric === "gas" || metric === "pnl")) lines.push("Some network fees had no price at the time, so they aren't included.")
   const relevant = totals.excluded.filter(({ reason }) => {
     if (metric === "value") return reason === "no current price" || reason === "incomplete history" || reason === "balance couldn't be read"
-    if (metric === "realized") return reason === "sold at an unknown cost" || reason === "doesn't match its onchain balance" || reason === "not checked against its onchain balance"
+    if (metric === "realized") return reason === "sold at an unknown cost" || reason === "doesn't match its actual balance" || reason === "not checked against its actual balance"
     if (metric === "unrealized") return reason !== "sold at an unknown cost"
     return metric === "pnl"
   })
