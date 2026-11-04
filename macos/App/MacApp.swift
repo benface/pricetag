@@ -11,6 +11,7 @@ struct MacApp: App {
 
     init() {
         #if DEBUG
+        TestMode.runIfAsked()
         HotWalletDebug.runSelfTestIfAsked()
         #endif
         let store = PortfolioStore()
