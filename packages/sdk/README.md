@@ -10,7 +10,7 @@ Start the dataset, then print any Base wallet's positions and PnL:
 
 ```sh
 pnpm install
-PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start   # a local Amp. See the main README for how well it keeps up.
+PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start   # a local Amp at chain head, in about 2 minutes. See the main README.
 pnpm example 0xb4cb800910b228ed3d0834cf79d697127bbb00e5
 pnpm amp:stop                                # stops it and deletes its data
 ```

@@ -74,15 +74,14 @@ It adds a marked block to the end of `.env.local` that points the app at the loc
 
 **Use a dedicated RPC for a demo.** `BASE_RPC_URL` in `.env.local` defaults to the public `https://mainnet.base.org`, which allows 25 requests a second per IP and is shared with anything else on your network. A failed call stops the raw dataset, and everything built on it, until its retry succeeds. To avoid that, `amp:start` runs a small relay (`scripts/rpc-throttle.ts`) that holds requests to `BASE_RPC_RATE_LIMIT` a second, 20 by default, and retries 429s. Raise it to whatever a dedicated RPC allows. Of Amp's processes, only the relay gets `BASE_RPC_URL`. The app's server also uses it, for L1 fees. Neither ever logs it. Never commit a key.
 
-**From Base's 200 ms blocks on (November 5, 2026, 18:00 UTC), a local Amp can't keep up on the public RPC, so run a demo against a hosted Amp.** Five blocks a second cost 10 requests for the raw dataset and 10 `eth_call`s for `reference_prices`. Measured with this script on Base Sepolia, which already has these blocks, starting 300 blocks back:
+**On Base's 200 ms blocks, from November 5, 2026 at 18:00 UTC, following the head takes about 10 requests a second,** all for the raw dataset, because prices come from logs. Measured with this script on Base Sepolia, which already has those blocks, at the default 20 requests a second to `sepolia.base.org`:
 
-| RPC, requests a second | Raw dataset | `reference_prices` |
+| Start | Time to chain head | After that |
 | --- | --- | --- |
-| `sepolia.base.org`, 20 | Reached the head in about 70 s, then 3–8 blocks behind | Fell further behind, by about 1.4 blocks a second |
-| `sepolia.base.org`, 25 | Reached the head in about 60 s | Stayed about 670 blocks behind and slowly grew |
-| PublicNode, 35 | 3–7 blocks behind, and `legs` too | Fell further behind, by about 0.5 blocks a second |
+| Default, 1,800 blocks | About 7 minutes for the raw dataset, `legs` and `reference_prices`. About 11 until the script said so, waiting on `priced_legs`, which has few rows there | 3–11 blocks behind (about 2 s at most) for 6 minutes, with no job errors |
+| `PRICETAG_HISTORY_BLOCKS=300` | About 2 minutes | 5 blocks behind |
 
-A higher limit didn't fix it, so the limit looks like how long each `eth_call` takes. `pnpm amp:start` still starts, and says when it gives up waiting. Before those blocks, a fresh start took about 9 minutes for 1,800 blocks.
+Mainnet's RPC and blocks may differ. The previous dataset, which read prices with `eth_call`, couldn't follow these blocks: its `reference_prices` kept falling behind, or held hundreds of blocks behind, at 20, 25 and 35 requests a second.
 
 **A local Amp's first prices come from `eth_call`.** It only has logs from its start block, and USDC/USD's last update can be up to a day older. So `amp:start` reads each feed's latest round from its contract at the start block (`dataset/local.ts`), and those stand in as updates, with an all-zero transaction, for as long as the real ones would have lasted. If that read fails, `amp:start` stops before the backfill. Proof says a price came from the contract, and Verify doesn't claim to cover it. It covers the price from the first real log onward.
 

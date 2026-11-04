@@ -40,8 +40,8 @@ RAW_DATASET="edgeandnode/base_mainnet@0.0.2"
 PRICETAG_DATASET="benface/pricetag@0.0.1"
 MANIFEST="$REPO_DIR/dataset/pricetag.json"
 DEFAULT_RPC_URL="https://mainnet.base.org"
-# Requests a second. The public RPC allows 25. At 200 ms blocks, following the chain's head needs about 20: 10 for the
-# raw dataset and 10 for reference_prices' eth_calls.
+# Requests a second. The public RPC allows 25, and following the chain's head at 200 ms blocks needs about 10, all for
+# the raw dataset, which leaves the rest for catching up.
 DEFAULT_RPC_RATE_LIMIT=20
 # 6 minutes at 200 ms blocks. Each block costs the same requests however long it took, so a start can't cover an hour anymore.
 DEFAULT_HISTORY_BLOCKS=1800
@@ -369,7 +369,7 @@ cmd_start() {
   RPC_RATE_LIMIT="$(env_value BASE_RPC_RATE_LIMIT)"
   RPC_RATE_LIMIT="${RPC_RATE_LIMIT:-$DEFAULT_RPC_RATE_LIMIT}"
   if [ "$BASE_RPC_URL" = "$DEFAULT_RPC_URL" ]; then
-    say "Using the public Base RPC, which can't keep a local Amp at chain head once blocks are 200 ms. See README.md."
+    say "Using the public Base RPC. Set BASE_RPC_URL in .env.local for a demo (see README.md)."
   else
     say "Using BASE_RPC_URL from your environment."
   fi
