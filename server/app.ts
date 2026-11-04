@@ -10,6 +10,7 @@ import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.t
 import { createRates } from "./rates.ts"
 import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
 import { datasetSource, feedRounds, rawSource, type Source } from "./source.ts"
+import { TAX_COUNTRIES, isTaxCountryCode, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 import { createWallets } from "./wallets.ts"
 
 type Env = Record<string, string | undefined>
@@ -20,6 +21,13 @@ function parseMethod(value: string | null): Method | null {
   if (value === null || value === "average") return "average"
   return value === "fifo" ? "fifo" : null
 }
+
+function parseScope(value: string | null): TaxScope | null {
+  return value === "pooled" || value === "per-wallet" ? value : null
+}
+
+/** How many other wallets a report can add. Each is a full read. */
+const MAX_OTHER_WALLETS = 20
 
 function parseCurrency(value: string | null): CurrencyCode | null {
   if (value === null) return "USD"
@@ -221,6 +229,52 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
       const explanation = explainPortfolio(wallet, method, target, linkedWallets)
       if (explanation) sendJson(res, 200, explanation)
       else sendJson(res, 404, { error: "This wallet has nothing like that." })
+      return true
+    }
+
+    const taxMatch = /^\/api\/tax-report\/([^/]+)$/.exec(path)
+    if (taxMatch) {
+      const country = params.get("country")
+      if (!isTaxCountryCode(country)) {
+        sendJson(res, 400, { error: "That country isn't supported." })
+        return true
+      }
+      const rules = TAX_COUNTRIES[country]
+      const method = params.has("method") ? parseMethod(params.get("method")) : rules.method
+      if (!method) {
+        sendJson(res, 400, { error: "The method is either average or fifo." })
+        return true
+      }
+      const scope = params.has("scope") ? parseScope(params.get("scope")) : rules.scope
+      if (!scope) {
+        sendJson(res, 400, { error: "The calculation is either pooled or per-wallet." })
+        return true
+      }
+      const address = (taxMatch[1] as string).toLowerCase()
+      const others = (params.get("also") ?? "").split(",").map((other) => other.trim().toLowerCase()).filter(Boolean)
+      if (others.length > MAX_OTHER_WALLETS) {
+        sendJson(res, 400, { error: `A report can add up to ${MAX_OTHER_WALLETS} other wallets.` })
+        return true
+      }
+      const bad = others.find((other) => !isAddress(other))
+      if (bad !== undefined) {
+        sendJson(res, 400, { error: `${bad} isn't a Base address.` })
+        return true
+      }
+      // Whichever way round: demo data must never land in a report on a real wallet.
+      if (others.length > 0 && [address, ...others].some((wallet) => wallet === "demo" || wallet === DEMO_ADDRESS)) {
+        sendJson(res, 400, { error: "The demo wallet can't be combined with other wallets." })
+        return true
+      }
+      // One at a time, because a read that fails answers the request. A report never quietly leaves a wallet out.
+      const wallets: WalletResponse[] = []
+      for (const next of new Set([address, ...others])) {
+        const read = await readWallet(next, res)
+        const wallet = read && (await inCurrency(read, currency, res))
+        if (!wallet) return true
+        wallets.push(wallet)
+      }
+      sendJson(res, 200, taxReportOf(wallets, { country, method, scope }))
       return true
     }
 

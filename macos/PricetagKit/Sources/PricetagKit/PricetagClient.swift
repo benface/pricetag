@@ -17,6 +17,7 @@ public protocol PortfolioSource: Sendable {
     /// `linked` is the user's other wallets, which transfers between carry their cost.
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], timeout: Duration) async throws -> Portfolio
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> Explanation
+    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
 }
 
 public struct PricetagClient: PortfolioSource {
@@ -36,6 +37,11 @@ public struct PricetagClient: PortfolioSource {
 
     public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> Explanation {
         try await get("/api/portfolio/\(address)/explain", query: settings(method, currency, linked) + target.queryItems, timeout: .seconds(30))
+    }
+
+    /// Reads every wallet in it, so it gets as long as a first read.
+    public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
+        try await get("/api/tax-report/\(request.address)", query: request.queryItems, timeout: .seconds(180))
     }
 
     private func settings(_ method: CostMethod, _ currency: CurrencyCode, _ linked: [String]) -> [URLQueryItem] {

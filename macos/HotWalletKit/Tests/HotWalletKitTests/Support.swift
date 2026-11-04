@@ -147,6 +147,10 @@ actor ScriptedPortfolios: PortfolioSource {
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) throws -> Explanation {
         throw FetchError.unreachable
     }
+
+    func taxReport(_ request: TaxReportRequest) throws -> TaxReport {
+        throw FetchError.unreachable
+    }
 }
 
 /// A portfolio as the server would send it, from JSON, so the test uses the same decoding as the app.

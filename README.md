@@ -97,6 +97,30 @@ Both apps show every value in the chosen currency, USD or CAD, and remember the 
 
 To add a currency, add its Chainlink feed to `CURRENCIES` in `src/core/currency.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/Currency.swift`. Base has feeds for EUR, GBP, AUD, CHF, SGD and others.
 
+## Tax report
+
+Both apps export the same CSV, because the server writes it (`GET /api/tax-report/<address>?country=CA|US`, and `src/core/tax.ts` does the work). This isn't tax advice, and the report says so first.
+
+- **One row per thing that may be taxable:** a sale, a network fee (paying one in ETH counts as selling that ETH) or something sent. Each has its date, asset, amount, proceeds, cost, gain, method, price source and transaction link, in the main currency. The gains come from what the fold did, so a position with nothing unresolved adds up to the Realized the apps show. With something unresolved, the apps leave out the whole position and this keeps each row it knows, so the report's total can differ, and it says so.
+- **Gaps say so.** A cost, proceeds or gain that can't be worked out says `unknown`, its row is `UNRESOLVED` with a reason, and it isn't in the gain total. It's never 0. A sale that's part known and part unknown becomes two rows. A cost from an estimate is `ESTIMATED`.
+- **Notes are rows too**, right under the header, so the file still parses and the warnings are the first thing anyone sees.
+- **The country picks the defaults, and both can be overridden**, with a warning when that may not be accepted:
+
+| Country | Method | Wallets | Official sources |
+| --- | --- | --- | --- |
+| Canada | Average | All together | [Income Tax Act s. 47](https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-47.html), [CRA guide T4037](https://www.canada.ca/en/revenue-agency/services/forms-publications/publications/t4037/capital-gains.html), [CRA crypto guide](https://www.canada.ca/en/revenue-agency/programs/about-canada-revenue-agency-cra/compliance/cryptocurrency-guide/income-crypto-transactions.html) |
+| United States | Oldest first | Each on its own | [Treas. Reg. 1.1012-1(j)](https://www.ecfr.gov/current/title-26/section-1.1012-1), [Rev. Proc. 2024-28](https://www.irs.gov/pub/irs-drop/rp-24-28.pdf), [IRS digital asset FAQs](https://www.irs.gov/individuals/international-taxpayers/frequently-asked-questions-on-digital-asset-transactions) |
+
+Canada's "all together" is our reading: s. 47 averages what a taxpayer owns and says nothing about where it's held, but CRA's crypto guide doesn't address wallets directly.
+
+Wallets are the address on screen plus any others typed into the report. A transfer between them, netting to zero, isn't a sale. All together, its cost stays in the pool. Each on its own, what arrives has an unknown cost in the report, until WORK-371 uses the costs the apps now carry between linked wallets.
+
+All together needs one consistent history, because a cost worked out from part of it would look known and be wrong. So the report stops at the last block every wallet has reached and says what that leaves out. If their histories start at different blocks, which can only happen reading the raw dataset, every cost and gain says `unknown`. The demo wallet can't be combined with anything.
+
+The report doesn't check Canada's superficial loss rule, split US short-term from long-term gains, or list what was received, and it says so. Anything before the first block read has an unknown cost, so most rows on an older wallet are unresolved for now.
+
+To add a country, add it to `TAX_COUNTRIES` in `src/core/tax.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/TaxReport.swift`.
+
 ## Rules the numbers follow
 
 - Price and cost are separate. A price is a shared fact labeled `oracle` or `swap`. A cost is this wallet's, labeled `paid` or `unknown`. A swap's cost and proceeds are what actually changed hands, valued on the side with an oracle, preferring USDC. They aren't the oracle price of what was bought or sold.
