@@ -1,8 +1,10 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { valuePosition } from "../core/fold.ts"
-import type { LegEffect, Position, Totals } from "../core/portfolio.ts"
-import { formatAmount, formatPrice, formatSignedUsd, formatUsd } from "./format.ts"
+import { valuePosition } from "./fold.ts"
+import type { PricedLeg } from "./legs.ts"
+import type { LegEffect, PnlPoint, Position, Totals } from "./portfolio.ts"
+import { tokenByAddress } from "./tokens.ts"
+import { formatAmount, formatPrice, formatSignedUsd, formatUsd, shortHash } from "./format.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized"
 
@@ -49,6 +51,16 @@ export function describeEffect({ leg, before, after }: LegEffect): string {
   }
   if (shortfall > 0n) parts.push(`${formatAmount(shortfall, leg.decimals)} ${leg.asset} more than we saw arrive`)
   return parts.join(", ")
+}
+
+/** The rows a leg nets together, or null when it's just one. */
+export function describeNetting(leg: PricedLeg): string | null {
+  if (leg.parts.length < 2) return null
+  const rows = leg.parts.map((p) => {
+    const token = tokenByAddress(p.token)
+    return `${p.side === "credit" ? "+" : "−"}${formatAmount(p.amount, token?.decimals ?? 18)} ${token?.symbol ?? p.token}`
+  })
+  return `Nets ${leg.parts.length} rows: ${rows.join(", ")}`
 }
 
 export function explainMetric(position: Position, metric: Metric): Explanation {
@@ -137,5 +149,14 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
       .flatMap((p) => p.effects)
       .filter((e) => metric !== "gas" || e.leg.kind === "gas")
       .sort((a, b) => b.leg.blockNum - a.leg.blockNum || b.leg.txIndex - a.leg.txIndex),
+  }
+}
+
+export function explainPoint(positions: readonly Position[], point: PnlPoint): Explanation {
+  return {
+    title: `Transaction ${shortHash(point.txHash as string)}`,
+    value: formatSignedUsd(point.pnlUsdMicros),
+    lines: [`Total PnL after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`],
+    effects: positions.flatMap((p) => p.effects).filter((e) => e.leg.txHash === point.txHash),
   }
 }

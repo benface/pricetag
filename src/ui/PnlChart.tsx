@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { PnlPoint } from "../core/portfolio.ts"
-import { formatClock, formatSignedUsd, formatTime } from "./format.ts"
+import { formatClock, formatSignedUsd, formatTime } from "../core/format.ts"
 
 const HEIGHT = 220
 const MARGIN = { top: 16, right: 84, bottom: 26, left: 64 }

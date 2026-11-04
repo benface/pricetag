@@ -3,8 +3,8 @@ import { isAddress } from "../core/api.ts"
 import type { Method } from "../core/fold.ts"
 import { foldPositions, pnlOverTime, sumTotals, type Exclusion, type PnlPoint, type Position } from "../core/portfolio.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
-import { explainMetric, explainTotal, type Explanation, type Metric, type TotalMetric } from "./explain.ts"
-import { formatAmount, formatDuration, formatPrice, formatSignedUsd, formatUsd, shortHash } from "./format.ts"
+import { explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
+import { formatAmount, formatDuration, formatPrice, formatSignedUsd, formatUsd } from "../core/format.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { useWallet } from "./useWallet.ts"
 
@@ -140,15 +140,7 @@ export function App() {
   const points = useMemo(() => (wallet ? pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest) : []), [wallet, method])
   const close = useCallback(() => setExplanation(null), [])
   const openTotal = (metric: TotalMetric) => setExplanation(explainTotal(positions, totals, metric))
-  const openPoint = (point: PnlPoint) => {
-    const effects = positions.flatMap((p) => p.effects).filter((e) => e.leg.txHash === point.txHash)
-    setExplanation({
-      title: `Transaction ${shortHash(point.txHash as string)}`,
-      value: formatSignedUsd(point.pnlUsdMicros),
-      lines: [`Total PnL after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`],
-      effects,
-    })
-  }
+  const openPoint = (point: PnlPoint) => setExplanation(explainPoint(positions, point))
 
   return (
     <div className="page">

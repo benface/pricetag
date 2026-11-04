@@ -68,6 +68,20 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>) 
     return next
   }
 
+  function responseOf(key: string, wallet: Cached): WalletResponse {
+    const references = [...wallet.references.values()]
+    return {
+      address: key,
+      mode: source.mode,
+      coverage: { fromBlock: wallet.fromBlock, toBlock: wallet.coveredTo },
+      legs: buildPricedLegs({ account: key, rows: wallet.rows, references, priced: wallet.priced }),
+      references,
+      prices: wallet.prices,
+      latest: wallet.latest,
+      gasUnknownTxs: [...wallet.gasUnknownTxs],
+    }
+  }
+
   return {
     async get(address: string): Promise<WalletResponse> {
       const key = address.toLowerCase()
@@ -76,18 +90,14 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>) 
         pending = refresh(key).finally(() => inflight.delete(key))
         inflight.set(key, pending)
       }
-      const wallet = await pending
-      const references = [...wallet.references.values()]
-      return {
-        address: key,
-        mode: source.mode,
-        coverage: { fromBlock: wallet.fromBlock, toBlock: wallet.coveredTo },
-        legs: buildPricedLegs({ account: key, rows: wallet.rows, references, priced: wallet.priced }),
-        references,
-        prices: wallet.prices,
-        latest: wallet.latest,
-        gasUnknownTxs: [...wallet.gasUnknownTxs],
-      }
+      return responseOf(key, await pending)
+    },
+
+    /** What's already been read, with no query, or null when nothing has been. */
+    peek(address: string): WalletResponse | null {
+      const key = address.toLowerCase()
+      const wallet = wallets.get(key)
+      return wallet ? responseOf(key, wallet) : null
     },
   }
 }
