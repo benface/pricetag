@@ -102,12 +102,6 @@ private struct HotWalletDetails: View {
         .formStyle(.grouped)
         .sheet(isPresented: $isAddingCold) { AddColdWalletSheet(wallet: wallet) }
         .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet) }
-        #if DEBUG
-        .onAppear {
-            isAddingCold = HotWalletDebug.sheet == "add-cold"
-            isToppingUp = HotWalletDebug.sheet == "top-up"
-        }
-        #endif
     }
 
     private func alarmBanner(_ alarm: StolenKeyAlarm) -> some View {
@@ -384,13 +378,18 @@ private struct HotWalletDetails: View {
 }
 
 /// The Mac app has no device code, so the user is the one who checks the address against the device.
-private struct AddColdWalletSheet: View {
+struct AddColdWalletSheet: View {
     let wallet: HotWallet
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
-    @State private var address = ""
+    @State private var address: String
     @State private var matches = false
     @State private var problem: String?
+
+    init(wallet: HotWallet, address: String = "") {
+        self.wallet = wallet
+        _address = State(initialValue: address)
+    }
 
     private var parsed: EthereumAddress? {
         EthereumAddress(address.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -460,10 +459,14 @@ private struct AddColdWalletSheet: View {
 }
 
 /// Until the web app's device flow lands (WORK-325), this says what to do on the device by hand.
-private struct TopUpSheet: View {
+struct TopUpSheet: View {
     let wallet: HotWallet
     @Environment(\.dismiss) private var dismiss
     @State private var dollars = 0.0
+
+    init(wallet: HotWallet) {
+        self.wallet = wallet
+    }
 
     private var room: Int { Int(wallet.topUpRoom / Money.dollar) }
 
