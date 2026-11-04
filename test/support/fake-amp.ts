@@ -8,8 +8,11 @@ export type Tables = {
   unlisted_legs?: unknown[]
   priced_legs?: unknown[]
   reference_prices?: unknown[]
-  /** What the chain says each token's balance is, by symbol, at each block. Any other token holds none, and any other block's read fails. */
-  balances?: Record<string, Record<string, string>>
+  /**
+   * What the chain says each token's balance is, by symbol, at each block. Any other token holds none, and any other
+   * block's read fails. Null fails the read of that one token.
+   */
+  balances?: Record<string, Record<string, string | null>>
 }
 
 /** How far each table has processed, or null if it hasn't started. One value applies to all of them. */
@@ -18,10 +21,17 @@ export type Through = number | null | Record<Exclude<keyof Tables, "balances">, 
 const word = (value: bigint | number) => BigInt(value).toString(16).padStart(64, "0")
 
 /** What `aggregate3` returns for one balance call per token. */
-function encodeBalances(amounts: Record<string, string>): string {
-  const item = (token: (typeof TOKENS)[number]) => word(1) + word(0x40) + word(32) + word(BigInt(amounts[token.symbol] ?? "0"))
-  const items = TOKENS.map(item)
-  const offsets = items.map((_, i) => word(TOKENS.length * 32 + (i * items[0]!.length) / 2))
+function encodeBalances(amounts: Record<string, string | null>): string {
+  const items = TOKENS.map(({ symbol }) => {
+    const amount = amounts[symbol]
+    return amount === null ? word(0) + word(0x40) + word(0) : word(1) + word(0x40) + word(32) + word(BigInt(amount ?? "0"))
+  })
+  let next = TOKENS.length * 32
+  const offsets = items.map((item) => {
+    const offset = word(next)
+    next += item.length / 2
+    return offset
+  })
   return word(32) + word(TOKENS.length) + offsets.join("") + items.join("")
 }
 

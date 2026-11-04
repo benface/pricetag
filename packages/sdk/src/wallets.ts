@@ -49,10 +49,10 @@ type Cached = {
   prices: LatestPrices
   latest: Head
   gasUnknownTxs: Set<string>
-  /** Before `fromBlock`. Fixed once its block is past any reorg, which `openingReadAtHead` says. */
+  /** Before `fromBlock`. Fixed once its block is past any reorg, which `openingReadAt` says. */
   opening: BalanceSnapshot | null
-  /** The chain's head at the last read that got all of `opening`, or null before that. */
-  openingReadAtHead: number | null
+  /** The chain's head at each asset's last successful read. Reads can fail for one asset, so `opening` can come from several. */
+  openingReadAt: Record<string, number>
   /** The chain's head at the last refresh, which a wallet read as of a fixed block can't tell from `latest`. */
   readAtHead: number
   /** At `coveredTo`, the same block the rows reach, or the check would fail whenever a dataset is slightly behind. */
@@ -84,10 +84,10 @@ function mergeOpening(known: BalanceSnapshot | null, read: BalanceSnapshot | nul
   return { blockNum: read.blockNum, amounts: { ...known?.amounts, ...read.amounts } }
 }
 
-/** Whether a reorg could have changed the opening balances since they were read. */
+/** Whether a reorg could have changed any opening balance since it was read. */
 function openingMayChange(wallet: Cached | undefined, chain: Head): boolean {
-  if (wallet?.openingReadAtHead == null) return false
-  return chain.blockNum > wallet.openingReadAtHead && wallet.openingReadAtHead - (wallet.fromBlock - 1) < REORG_BLOCKS
+  if (!wallet) return false
+  return Object.values(wallet.openingReadAt).some((readAt) => chain.blockNum > readAt && readAt - (wallet.fromBlock - 1) < REORG_BLOCKS)
 }
 
 /**
@@ -183,14 +183,14 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     }
 
     let opening = cached?.opening ?? null
-    let openingReadAtHead = cached?.openingReadAtHead ?? null
+    const openingReadAt = { ...cached?.openingReadAt }
     let closing = cached?.closing ?? null
     const lastBalances = { ...cached?.lastBalances }
     if (coveredTo >= fromBlock) {
       if (!isComplete(opening) || openingMayChange(cached, chain)) {
         const read = await readBalances(address, fromBlock - 1)
         opening = mergeOpening(opening, read)
-        if (isComplete(read)) openingReadAtHead = chain.blockNum
+        for (const asset of Object.keys(read?.amounts ?? {})) openingReadAt[asset] = chain.blockNum
       }
       if (closing?.blockNum !== coveredTo || !isComplete(closing) || reorgable) closing = await readBalances(address, coveredTo)
       for (const [asset, amount] of Object.entries(closing?.amounts ?? {})) lastBalances[asset] = { blockNum: coveredTo, amount }
@@ -198,7 +198,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
     const prices = latestPrices(await source.readLatestReference(head.blockNum))
 
-    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs, opening, openingReadAtHead, readAtHead: chain.blockNum, closing, lastBalances, l1Fees }
+    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs, opening, openingReadAt, readAtHead: chain.blockNum, closing, lastBalances, l1Fees }
     wallets.delete(key)
     wallets.set(key, next)
     if (wallets.size > MAX_WALLETS) wallets.delete(wallets.keys().next().value as string)

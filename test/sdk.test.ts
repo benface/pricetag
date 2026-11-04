@@ -413,7 +413,7 @@ describe("getPortfolio", () => {
       const query: Query = async <T,>(sql: string) => {
         chain.queries.push(sql)
         if (sql.includes(".blocks")) return [{ block_num: String(chain.block), timestamp: 1_800_000_000_000 }] as T[]
-        return fakeAmp(chain.tables, 200).query<T>(sql)
+        return fakeAmp(chain.tables, chain.block).query<T>(sql)
       }
       const client = () => pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 50, readL1Fees })
       return { chain, client }
@@ -515,6 +515,71 @@ describe("getPortfolio", () => {
       chain.block = 201
       assert.equal(await read(), String(2n * E18))
     })
+
+    for (const [name, range] of [["with a `to`", { from: 190, to: 200 }], ["without a `to`", { from: 190 }]] as const) {
+      describe(`an opening balance put together from reads that each failed for one asset, ${name}`, () => {
+        const CLOSING_BLOCKS = [200, 201, 202, 240, 241, 250, 251]
+        const tables = (opening: Record<string, string | null>, held: bigint) => ({
+          legs: [creditAt(195, 5n)],
+          reference_prices: refsThrough(195),
+          balances: { 189: opening, ...Object.fromEntries(CLOSING_BLOCKS.map((block) => [block, { ETH: String(held + 5n) }])) },
+        })
+        const summaryOf = async (client: ReturnType<typeof pricetagClient>) => {
+          const { legs, positions } = await client.getPortfolio(ADDRESS, range)
+          return { opening: legs.find((l) => l.opening)?.delta, status: positions.find((p) => p.asset === "ETH")?.reconciliation?.status }
+        }
+
+        /** Each read misses a different asset, so together they make a whole opening balance. */
+        async function assemble() {
+          const { chain, client } = chainAt(200, tables({ ETH: String(E18), USDC: null }, E18))
+          const kept = client()
+          await summaryOf(kept)
+          chain.tables = tables({ ETH: null, USDC: "0" }, E18)
+          chain.block = 201
+          assert.deepEqual(await summaryOf(kept), { opening: String(E18), status: "reconciled" })
+          return { chain, client, kept }
+        }
+
+        it("still picks up a reorg, and matches a fresh client", async () => {
+          const { chain, client, kept } = await assemble()
+          chain.tables = tables({ ETH: String(2n * E18), USDC: "0" }, 2n * E18)
+          chain.block = 202
+          const after = await summaryOf(kept)
+          assert.deepEqual(after, { opening: String(2n * E18), status: "reconciled" })
+          assert.deepEqual(after, await summaryOf(client()))
+          chain.block = 240
+          assert.deepEqual(await summaryOf(kept), after)
+          chain.block = 250
+          assert.deepEqual(await summaryOf(kept), after)
+        })
+
+        it("stops reading it once a read of every asset is past the window", async () => {
+          const { chain, kept } = await assemble()
+          chain.tables = tables({ ETH: String(E18), USDC: "0" }, E18)
+          chain.block = 240
+          await summaryOf(kept)
+          chain.block = 250
+          chain.queries.length = 0
+          await summaryOf(kept)
+          assert.ok(!chain.queries.some((q) => q.includes(", 189) AS r")), chain.queries.join("; "))
+        })
+
+        it("keeps trying an asset whose read past the window failed, then stops", async () => {
+          const { chain, kept } = await assemble()
+          // A reorg, and the one read that would have caught it fails for that asset.
+          chain.tables = tables({ ETH: null, USDC: "0" }, 2n * E18)
+          chain.block = 240
+          await summaryOf(kept)
+          chain.tables = tables({ ETH: String(2n * E18), USDC: "0" }, 2n * E18)
+          chain.block = 241
+          assert.deepEqual(await summaryOf(kept), { opening: String(2n * E18), status: "reconciled" })
+          chain.block = 250
+          chain.queries.length = 0
+          await summaryOf(kept)
+          assert.ok(!chain.queries.some((q) => q.includes(", 189) AS r")), chain.queries.join("; "))
+        })
+      })
+    }
   })
 
   it("needs a first block from somewhere, and checks the rest", async () => {
