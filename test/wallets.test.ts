@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { portfolioOf } from "../server/portfolio.ts"
 import { createWallets, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
-import { ASSETS, ETH_ADDRESS, type LegRow, type Reference } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, type LegRow, type Reference } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 
@@ -580,6 +580,88 @@ describe("reconciling", () => {
     head = 1001
     await wallets.get(ME)
     assert.deepEqual(reads, [960, 1001])
+  })
+})
+
+describe("looking for ETH a token's sale brought in", () => {
+  const send = (block: number): LegRow => ({ ...row(block, "5"), token: USDC_ADDRESS, side: "debit", kind: "erc20" })
+  const allFees: ReadL1Fees = async (requests) => new Map(requests.map((r) => [r.txHash, "0"]))
+  const every = (amount: string) => Object.fromEntries(ASSETS.map((asset) => [asset, amount]))
+  const held = (eth: string) => async (block: number) => (block === 899 ? every("0") : { ...every("0"), ETH: eth })
+  const rises = (block: number, amount: bigint) => async (blocks: readonly number[]) => new Map(blocks.map((b) => [b, (b >= block ? amount : 0n).toString()]))
+
+  it("reads nothing for a wallet whose ETH adds up, however many tokens it sent", async () => {
+    const { source, ethReads } = fake(new Map([[950, [send(950)]], [960, [send(960)]]]), () => reference(1000), undefined, held("0"))
+    const wallet = await createWallets(source, headAt(1000), allFees).get(ME)
+    assert.deepEqual(ethReads, [])
+    assert.deepEqual(wallet.unseenEth, [])
+    assert.ok(wallet.legs.every((l) => l.kind === "transfer"))
+  })
+
+  it("reads nothing while ETH's own balance is unknown, because that can't say it doesn't add up", async () => {
+    const { source, ethReads } = fake(new Map([[950, [send(950)]]]), () => reference(1000))
+    await createWallets(source, headAt(1000), allFees).get(ME)
+    assert.deepEqual(ethReads, [])
+  })
+
+  it("reads each send's block when it doesn't, then marks the one where ETH rose", async () => {
+    const { source, ethReads } = fake(new Map([[950, [send(950)]], [960, [send(960)]]]), () => reference(1000), undefined, held("800"), rises(960, 800n))
+    const wallet = await createWallets(source, headAt(1000), allFees).get(ME)
+    assert.deepEqual(ethReads, [[949, 950, 959, 960]])
+    assert.deepEqual(wallet.unseenEth, [{ blockNum: 960, amount: "800", txHashes: [`0x${(960).toString(16)}`] }])
+    assert.deepEqual(wallet.legs.map((l) => l.kind), ["transfer", "swap"])
+    const eth = portfolioOf({ ...wallet }, "average").positions.find((p) => p.asset === "ETH")!
+    assert.deepEqual(eth.reconciliation?.status === "incomplete" && eth.reconciliation.unseenEth, wallet.unseenEth)
+  })
+
+  it("caps what one refresh reads, and catches up on the next", async () => {
+    let head = 1000
+    const chain = new Map(Array.from({ length: 300 }, (_, i) => [i * 3 + 100, [send(i * 3 + 100)]] as [number, LegRow[]]))
+    const { source, ethReads } = fake(chain, () => reference(head), undefined, async (block) => (block < 100 ? every("0") : { ...every("0"), ETH: "800" }), rises(10_000, 0n))
+    const wallets = createWallets({ ...source, historyBlocks: 950 }, async () => headAt(head)(), allFees)
+    await wallets.get(ME)
+    assert.equal(ethReads[0]!.length, 400)
+    head = 1001
+    await wallets.get(ME)
+    assert.equal(ethReads[1]!.length, 200)
+    head = 1002
+    await wallets.get(ME)
+    // Only what's still re-read for reorgs.
+    assert.ok(ethReads[2]!.every((block) => block >= 1002 - 31))
+  })
+
+  it("keeps the wallet up when the read fails, and tries again", async () => {
+    let head = 1000
+    let fail = true
+    const read = async (blocks: readonly number[]) => {
+      if (fail) throw new Error("no RPC")
+      return rises(950, 800n)(blocks)
+    }
+    const { source } = fake(new Map([[950, [send(950)]]]), () => reference(head), undefined, held("800"), read)
+    const original = console.warn
+    console.warn = () => {}
+    try {
+      const wallets = createWallets(source, async () => headAt(head)(), allFees)
+      assert.deepEqual((await wallets.get(ME)).unseenEth, [])
+      fail = false
+      head = 1001
+      assert.equal((await wallets.get(ME)).unseenEth.length, 1)
+    } finally {
+      console.warn = original
+    }
+  })
+
+  it("finishes a wallet read as of a fixed block without a new block to prompt it", async () => {
+    let answers = false
+    const read = async (blocks: readonly number[]) => (answers ? rises(950, 800n)(blocks) : new Map<number, string>())
+    const { source, ethReads } = fake(new Map([[950, [send(950)]]]), () => reference(2000), undefined, held("800"), read)
+    const wallets = createWallets(source, headAt(2000), allFees)
+    assert.deepEqual((await wallets.get(ME, { from: 900, to: 960 })).unseenEth, [])
+    answers = true
+    assert.equal((await wallets.get(ME, { from: 900, to: 960 })).unseenEth.length, 1)
+    const reads = ethReads.length
+    await wallets.get(ME, { from: 900, to: 960 })
+    assert.equal(ethReads.length, reads)
   })
 })
 

@@ -56,6 +56,13 @@ public struct PositionValues: Codable, Sendable, Equatable {
 }
 
 /// How a position's activity compares with what the chain says it holds, at the same block.
+/// ETH that arrived in a block with no transaction showing it, and the ones that took a token from this wallet there.
+public struct UnseenEth: Codable, Sendable, Equatable {
+    public let blockNum: Int
+    public let amount: String
+    public let txHashes: [String]
+}
+
 public struct Reconciliation: Codable, Sendable, Equatable {
     public enum Status: String, Codable, Sendable {
         /// They match, to the smallest unit.
@@ -73,6 +80,8 @@ public struct Reconciliation: Codable, Sendable, Equatable {
     /// Actual minus computed.
     public let differenceQty: String?
     public let reason: String?
+    /// On ETH that doesn't match: the transactions most likely behind it.
+    public let unseenEth: [UnseenEth]?
 }
 
 public struct Position: Codable, Sendable, Equatable, Identifiable {

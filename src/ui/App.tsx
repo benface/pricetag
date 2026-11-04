@@ -28,6 +28,7 @@ import {
   feesUnknownSentence,
   networkFeeUnknownSentence,
   staleSentence,
+  unseenEthCause,
 } from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { RulesPanel } from "./RulesPanel.tsx"
@@ -151,6 +152,7 @@ function Holdings({ positions, currency, explain }: { positions: Position[]; cur
                     <tr className="mismatch">
                       <td colSpan={7}>
                         Worked out {formatAmount(mismatch.computedQty, decimals)} · Actual {formatAmount(mismatch.actualQty, decimals)} · Difference {formatSignedAmount(mismatch.differenceQty, decimals)} {asset}. {mismatchCause(asset, mismatch.differenceQty)}
+                        {mismatch.unseenEth ? ` ${unseenEthCause(mismatch.unseenEth)}` : null}
                       </td>
                     </tr>
                   ) : null}

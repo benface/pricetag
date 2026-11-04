@@ -113,6 +113,7 @@ export const DEMO_WALLET: WalletResponse = {
   unlisted: [{ token: "0x00000000000000000000000000000000000000f1", transfers: 1 }],
   l1FeeUnknownTxs: [],
   openingUnread: [],
+  unseenEth: [],
   lastBalances: {},
   unreadBalances: [],
   balances: { blockNum: START_BLOCK + HEAD_OFFSET, amounts: Object.fromEntries([...balances].map(([asset, amount]) => [asset, amount.toString()])) },
