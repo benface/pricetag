@@ -186,15 +186,72 @@ describe("pricing a wallet's rows", () => {
     })
 
     it("a token with no swap price still has a known cost, checked against its plausible range", () => {
-      // Two AERO credits from a split route pair twice, so `priced_legs` has no row for them.
-      const split = [row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 300n * E18), row("0x1", AERO, "credit", 500n * E18)]
-      const aero = legsOf(split).find((l) => l.asset === "AERO")!
+      const legs = [row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 800n * E18)]
+      const aero = buildPricedLegs({ account: ME, rows: legs, references: [REF], priced: [] }).find((l) => l.asset === "AERO")!
       assert.equal(aero.priceUsdMicros, null)
       assert.equal(aero.costLabel, "paid")
       assert.equal(aero.costUsdMicros, "1000000000")
       const absurd = legsOf([row("0x1", USDC_ADDRESS, "debit", 1n), row("0x1", AERO, "credit", 300n * E18), row("0x1", AERO, "credit", 500n * E18)]).find((l) => l.asset === "AERO")!
       assert.equal(absurd.costLabel, "unknown")
       assert.match(absurd.priceNote!, /Rejected/)
+    })
+
+    it("a split route gets the price of what it netted to", () => {
+      const single = legsOf([row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 800n * E18)]).find((l) => l.asset === "AERO")!
+      const split = legsOf([
+        row("0x1", USDC_ADDRESS, "debit", 400n * E6),
+        row("0x1", USDC_ADDRESS, "debit", 600n * E6),
+        row("0x1", AERO, "credit", 300n * E18),
+        row("0x1", AERO, "credit", 500n * E18),
+      ]).find((l) => l.asset === "AERO")!
+      assert.equal(split.priceSource, "swap")
+      assert.equal(split.priceUsdMicros, single.priceUsdMicros)
+      assert.equal(split.costUsdMicros, "1000000000")
+    })
+
+    it("what came back of the same token reduces the amount, as a refund does", () => {
+      const [priced] = derivePricedRows([row("0x1", USDC_ADDRESS, "debit", 1200n * E6), row("0x1", USDC_ADDRESS, "credit", 200n * E6), row("0x1", AERO, "credit", 800n * E18)], [REF])
+      assert.equal(priced!.sold_amount, (1000n * E6).toString())
+      assert.equal(priced!.bought_amount, (800n * E18).toString())
+    })
+
+    it("what mostly cancels out is what a router kept, so it's a pair with no price", () => {
+      const rows = [row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", USDC_ADDRESS, "credit", 995n * E6), row("0x1", AERO, "credit", 8n * E18)]
+      const [priced] = derivePricedRows(rows, [REF])
+      assert.equal(priced!.sold_amount, "")
+      assert.equal(priced!.bought_amount, (8n * E18).toString())
+      assert.equal(priced!.priced.source, "unknown")
+    })
+
+    it("a token that mostly cancels out still counts, so it can't leave another pair looking single", () => {
+      const rows = [row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", USDC_ADDRESS, "credit", 995n * E6), row("0x1", WETH_ADDRESS, "debit", E18), row("0x1", AERO, "credit", 8n * E18)]
+      assert.deepEqual(derivePricedRows(rows, [REF]), [])
+    })
+
+    it("what passes straight through nets to nothing, so the rest is still a single pair", () => {
+      const rows = [row("0x1", USDC_ADDRESS, "credit", 1000n * E6), row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", WETH_ADDRESS, "debit", E18), row("0x1", AERO, "credit", 800n * E18)]
+      const [priced] = derivePricedRows(rows, [REF])
+      assert.equal(priced!.sold_token, WETH_ADDRESS)
+      assert.equal(priced!.priced.source, "swap")
+    })
+
+    it("ETH and WETH are separate tokens here, so paying with both has no price, but the cost is still known", () => {
+      const rows = [row("0x1", ETH_ADDRESS, "debit", E18 / 2n), row("0x1", WETH_ADDRESS, "debit", E18 / 2n), row("0x1", AERO, "credit", 3000n * E18)]
+      assert.deepEqual(derivePricedRows(rows, [REF]), [])
+      const aero = legsOf(rows).find((l) => l.asset === "AERO")!
+      assert.equal(aero.priceUsdMicros, null)
+      assert.equal(aero.costLabel, "paid")
+    })
+
+    it("a transaction netting to several tokens on a side still has no row", () => {
+      const rows = [row("0x1", USDC_ADDRESS, "debit", 5n * E6), row("0x1", AERO, "credit", E18), row("0x1", ETH_ADDRESS, "credit", E18)]
+      assert.deepEqual(derivePricedRows(rows, [REF]), [])
+    })
+
+    it("each account nets on its own", () => {
+      const pool = "0x00000000000000000000000000000000000000bb"
+      const rows = [row("0x1", USDC_ADDRESS, "debit", 5n * E6), row("0x1", AERO, "credit", E18), { ...row("0x1", USDC_ADDRESS, "credit", 5n * E6), account: pool }, { ...row("0x1", AERO, "debit", E18), account: pool }]
+      assert.deepEqual(derivePricedRows(rows, [REF]).map((p) => p.account).sort(), [ME, pool].sort())
     })
 
     it("real slippage isn't rejected", () => {

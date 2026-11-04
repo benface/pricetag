@@ -44,6 +44,6 @@ Both go through the same path after that, and they gave identical legs on the wa
 - Amounts are what moved since the first block read, not full balances. Reconciling against onchain balances is next.
 - Only the allowlist in `src/core/tokens.ts` gets a position and a price. A transaction that also moves another token is never valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. Internal ETH isn't seen without traces, so it can't trigger this.
 - Only ETH and USDC have a current price, so other tokens show their cost but no value or unrealized PnL yet.
-- A split route has no swap price, because the dataset only prices an account's single pair. If it nets to one token out and one in, what was paid is still known, but the token has no price at that block. Anything messier leaves its legs `unknown`.
+- The dataset nets per token, then only prices an account's single pair. A split route that nets to one token out and one in gets a price. A token that mostly cancels out (under half of what moved is left) is what a router or pool kept, so it gets no price. Paying with ETH and WETH together makes two pairs, so the other token has no price, though the app still knows what was paid.
 - There are no traces: a WETH `Withdrawal` counts as ETH paid to the transaction's sender, and other internal ETH transfers aren't seen. Smart wallets, whose transactions are sent by a bundler, won't get that ETH.
 - Gas is L2 gas only, because Amp's data has no L1 data fee.
