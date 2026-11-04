@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { ptGasSource, ptNetSource, ptPriceSource, tablesSql } from "../dataset/build.ts"
+import { cautiousEthTablesSql, ptCautiousSource, ptGasSource, ptNetSource, ptPriceSource, tablesSql } from "../dataset/build.ts"
 import { gasPaid, type RawTx } from "../server/raw.ts"
 import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, ptNet, ptPrice } from "@pricetag/sdk/core"
 
@@ -195,5 +195,51 @@ describe("the token stays on the server", () => {
       assert.doesNotMatch(source, /from "[^"]*server\//, file)
       assert.doesNotMatch(source, /@edgeandnode\/amp|@connectrpc|process\.env|import\.meta\.env/, file)
     }
+  })
+})
+
+describe("the fork", () => {
+  const fork = JSON.parse(readFileSync(new URL("../dataset/cautious-eth.json", import.meta.url), "utf8")) as {
+    dependencies: Record<string, string>
+    tables: Record<string, { input: { sql: string } }>
+    functions: Record<string, { source: { source: string } }>
+  }
+  const start = Number(/block_num\(\) >= (\d+)/.exec(fork.tables.reference_prices!.input.sql)![1])
+
+  it("is what build.ts generates", () => {
+    assert.deepEqual(Object.fromEntries(Object.entries(fork.tables).map(([k, v]) => [k, v.input.sql])), cautiousEthTablesSql(start))
+    assert.equal(fork.functions.pt_price!.source.source, ptPriceSource())
+    assert.equal(fork.functions.pt_cautious!.source.source, ptCautiousSource())
+  })
+
+  it("only has the tables a pricing rule decides, and depends only on what it forks", () => {
+    assert.deepEqual(Object.keys(fork.tables).sort(), ["priced_legs", "reference_prices"])
+    assert.deepEqual(Object.keys(fork.dependencies), ["pricetag"])
+  })
+
+  it("makes no eth_calls of its own", () => {
+    for (const { input } of Object.values(fork.tables)) assert.doesNotMatch(input.sql, /eth_call/)
+  })
+
+  it("prices swaps with the same SQL as the dataset, reading the pairs it forks and its own reference prices", () => {
+    assert.equal(fork.tables.priced_legs!.input.sql.replace("pricetag.single_pairs", "self.single_pairs"), manifest.tables.priced_legs!.input.sql.replace(/block_num\(\) >= \d+/, `block_num() >= ${start}`))
+  })
+
+  it("leaves USDC alone, and changes nothing else about a reference row", () => {
+    const sql = fork.tables.reference_prices!.input.sql
+    assert.match(sql, /usdc_round\nFROM pricetag\.reference_prices/)
+    for (const field of ["c0", "c2", "c3", "c4"]) assert.ok(sql.includes(`'${field}', get_field(eth_round, '${field}')`))
+    assert.ok(sql.includes("'c1', self.pt_cautious(get_field(eth_round, 'c1'))"))
+  })
+
+  const cautious = new Function(`${ptCautiousSource()}; return pt_cautious`)() as (answer: unknown) => string
+
+  it("pt_cautious takes 1% off, in BigInt", () => {
+    assert.equal(cautious("240000000000"), "237600000000")
+    assert.equal(cautious("115792089237316195423570985008687907853269984665640564039457584007913129639935"), ((2n ** 256n - 1n) * 99n / 100n).toString())
+  })
+
+  it("pt_cautious never returns null or throws, because that would stop the whole dataset", () => {
+    for (const bad of [null, undefined, "", "-1", "1.5", "abc"]) assert.equal(cautious(bad), "")
   })
 })

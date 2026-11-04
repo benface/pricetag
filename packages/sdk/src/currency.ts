@@ -4,8 +4,9 @@
 // at 1.40 is a real gain in CAD. So this runs before the fold, which then adds up amounts that are already in CAD.
 // A missing rate makes an amount null, which the fold already treats as unknown. It's never filled in from another day.
 
-import { referenceMarks, type LatestPrices, type MarkPrice, type PricedLeg } from "@pricetag/sdk/core"
-import type { WalletResponse } from "./api.ts"
+import type { PricedLeg } from "./legs.ts"
+import { referenceMarks, type LatestPrices, type MarkPrice } from "./portfolio.ts"
+import type { WalletData } from "./wallet.ts"
 
 export type CurrencyCode = "USD" | "CAD"
 
@@ -51,7 +52,7 @@ const MAX_ROUND_AGE_SECONDS = 3 * 24 * 60 * 60
 const E8 = 10n ** 8n
 const E6 = 10n ** 6n
 
-function usableAnswer(round: RateRound | null | undefined, at: string): bigint | null {
+export function usableAnswer(round: RateRound | null | undefined, at: string): bigint | null {
   if (!round || !/^\d+$/.test(round.answer)) return null
   const answer = BigInt(round.answer)
   if (answer === 0n) return null
@@ -76,11 +77,11 @@ export type WalletView = {
 }
 
 /** The wallet as its own USD facts, whatever its currency. */
-export function usdView(wallet: WalletResponse): WalletView {
+export function usdView(wallet: WalletData): WalletView {
   return { currency: "USD", legs: wallet.legs, prices: wallet.prices, markPrice: referenceMarks(wallet.references), latestRate: null, missingRateTxs: [] }
 }
 
-export function viewWallet(wallet: WalletResponse): WalletView {
+export function viewWallet(wallet: WalletData): WalletView {
   if (wallet.currency === "USD" || !wallet.rates) return usdView(wallet)
   const { rates } = wallet
   const answers = new Map<number, bigint | null>()

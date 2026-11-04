@@ -13,6 +13,7 @@ struct MacApp: App {
 
     init() {
         #if DEBUG
+        TestMode.runIfAsked()
         HotWalletDebug.runSelfTestIfAsked()
         #endif
         let store = PortfolioStore()
@@ -98,9 +99,23 @@ struct MacApp: App {
                     .keyboardShortcut("r", modifiers: .command)
                 Button("Change Wallet…") { navigation.isChangingWallet = true }
                     .keyboardShortcut("l", modifiers: .command)
+                Button("Export Tax Report…") { navigation.isExportingTaxReport = true }
+                    .keyboardShortcut("e", modifiers: .command)
+                    .disabled(store.address == nil)
             }
             CommandGroup(before: .windowList) {
                 OpenHotWalletCommand()
+            }
+            CommandGroup(after: .newItem) {
+                Button("Resolve Unknowns…") { navigation.resolve() }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(store.portfolio?.questions.isEmpty != false)
+                Button("Export as CSV…") { navigation.isExporting = true }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    .disabled(store.portfolio == nil)
+                Button("Undo Last Answer") { store.undo() }
+                    .keyboardShortcut("z", modifiers: [.command, .option])
+                    .disabled(store.undoStack.isEmpty)
             }
         }
 

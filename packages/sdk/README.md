@@ -1,6 +1,6 @@
 # Build on Pricetag
 
-Pricetag is an Amp dataset that puts a USD price on token transfers on Base. This package reads it from TypeScript and derives a wallet's cost and PnL. It's also what the app in this repo runs on. If you don't use TypeScript, [plain SQL](#plain-sql) gets you the same legs and prices.
+Pricetag is an Amp dataset that puts a USD price on token transfers on Base. This package reads it from TypeScript and derives a wallet's cost and PnL, the same way the app in this repo does, because the app runs on it. If you don't use TypeScript, [plain SQL](#plain-sql) gets you the same legs and prices.
 
 The package is local for now. It isn't on npm, so use it from inside this repo.
 
@@ -15,31 +15,35 @@ pnpm example 0xb4cb800910b228ed3d0834cf79d697127bbb00e5
 pnpm amp:stop                                # stops it and deletes its data
 ```
 
-Which prints something like this:
+Which prints something like this. This wallet held most of this before the first block read, so its amounts are right and match the chain, but what it paid is unknown, and so is its PnL:
 
 ```
-Blocks 53515266 to 53515680: 1356 legs
-ETH: 1.209804786286906 | cost $2,931.29 | value $2,932.02 (oracle) | realized unknown | unrealized $0.73
-USDC: 3159.098126 | cost $3,158.55 | value $3,158.55 (oracle) | realized unknown | unrealized $0.00
-PnL: $0.73 (partial), gas $0.00, leaving out: ETH, USDC
-Latest: USDC in 0x34355602d8da6870b10a3fab054e756d7c243c1f1fd6fb5e8c7cfcbcdb3e0410, price $1.00 (oracle), cost paid
+Blocks 53517359 to 53518014
+ETH: 143.6716 | cost unknown | value $346,994.90 (oracle) | realized unknown | unrealized unknown | reconciled
+USDC: 200,253.2 | cost unknown | value $200,218.56 (oracle) | realized unknown | unrealized unknown | reconciled
+PnL: unknown (unavailable), gas $0.00, leaving out: ETH (sold at an unknown cost, unknown cost), USDC (sold at an unknown cost, unknown cost)
+Latest: ETH in 0x3920fc301a4d45b33d11fd22218e79f1b3e1233c82d8dc0e9450e7ac3f4a74c1, price $2,415.19 (oracle), cost paid
 ```
 
 The whole script is [`examples/portfolio.ts`](examples/portfolio.ts). The part that matters:
 
 ```ts
-import { buildPortfolio, createPricetag, pnlStatus } from "@pricetag/sdk"
+import { createPricetag, formatSignedMoney } from "@pricetag/sdk"
 
-const pricetag = createPricetag({ url: "http://127.0.0.1:1602", dataset: "benface/pricetag@0.0.1" })
+const pricetag = createPricetag({
+  url: "http://127.0.0.1:1602",
+  dataset: "benface/pricetag@0.0.1",
+  startBlock,
+  rpcUrl: "https://mainnet.base.org",
+})
 
-const { legs, blocks, gasUnknownTxs } = await pricetag.getLegs(address, { from: startBlock })
-if (blocks.toBlock < blocks.fromBlock) throw new Error("Nothing in this range has been processed yet")
+const { started, positions, totals, pnlStatus, missing } = await pricetag.getPortfolio(address)
+if (!started) throw new Error("Nothing has been processed yet")
 
-const { positions, totals } = buildPortfolio(legs, "average", await pricetag.getLatestPrices())
-const status = pnlStatus(totals, gasUnknownTxs) // "complete", "partial" or "unavailable"
+console.log(formatSignedMoney(totals.pnlMicros), pnlStatus, missing) // "complete", "partial" or "unavailable", and what's left out
 ```
 
-`pnpm amp:start` writes `AMP_QUERY_URL`, `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` to `.env.local`, and the example reads them from there. A dataset only has data from its start block on, so that's the earliest `from` that returns anything.
+`pnpm amp:start` writes `AMP_QUERY_URL`, `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` to `.env.local`, and the example reads them from there, along with `BASE_RPC_URL` if you've set one. A dataset only has data from its start block on, so that's the earliest block that returns anything.
 
 ## API
 
@@ -47,23 +51,73 @@ Amounts are in a token's smallest unit, and USD values are in micros (millionths
 
 | Call | What it returns |
 | --- | --- |
-| `createPricetag({ url, token?, dataset, baseDataset? })` | A client. A local Amp doesn't need a `token`, but a hosted one does. |
-| `getLegs(address, { from, to? })` | `{ legs, blocks, references, gasUnknownTxs }`: a wallet's legs, priced and labeled, in the order the fold reads them. |
-| `getPrices(token, { from, to? })` | `{ token, prices, blocks }`: a token's prices, by symbol or address. It throws on a token off the allowlist, which has no prices to give. |
+| `createPricetag(config)` | A client. See [the config](#the-config). |
+| `getPortfolio(address, { method?, from?, to? })` | A wallet's holdings, cost and PnL, matching the app. `method` is `"average"`, the default, or `"fifo"`. With a `to`, it's the wallet as of that block, at that block's prices. See [what it returns](#what-getportfolio-returns). |
+| `getLegs(address, { from?, to? })` | `{ legs, blocks, references, gasUnknownTxs, l1Fees, l1FeeUnknownTxs }`: what moved in the range, priced and labeled, in the order the fold reads them. It doesn't include opening balances. With an `rpcUrl`, these are the same legs as the app's and `getPortfolio`'s, L1 fees included. Without one, gas leaves out L1 fees, and a swap paid out in unwrapped ETH stays unknown. |
+| `getPrices(token, { from?, to? })` | `{ token, prices, blocks }`: a token's prices, by symbol or address. It throws on a token off the allowlist, which has no prices to give. |
 | `getLatestPrices()` | The current prices to value positions at. Only ETH and USDC have one, and only with a recent oracle read. |
-| `buildPortfolio(legs, method, prices?)` | `{ method, positions, totals }`, where `method` is `"average"` or `"fifo"`. It's pure, so it needs no Amp. Without `prices`, values and unrealized PnL stay unknown. |
-| `pnlStatus(totals, gasUnknownTxs?)` | Whether `totals.pnlMicros` can be read as the wallet's PnL: `complete`, `partial` or `unavailable`. |
+| `buildPortfolio(legs, method, prices?)` | `{ method, positions, totals }` from `getLegs`' legs. It's pure, so it needs no Amp. Nothing in it is checked against the chain, so prefer `getPortfolio`. |
+| `pnlStatus(totals, gasUnknownTxs?)` | Whether `totals.pnlMicros` can be read as the wallet's PnL: `complete`, `partial` or `unavailable`. `getPortfolio` already includes it. |
+| `pnlOverTime(legs, method, prices, markPrice, latest, unconfirmed?)` | PnL after each transaction, where `referenceMarks(references)` gives `markPrice`. `getPortfolio` already includes it, as `points`. |
+| `formatMoney`, `formatSignedMoney`, `formatPrice` | A value in micros, as text, in USD unless you pass another currency. `null` prints as `unknown`, never as $0. |
+| `formatAmount`, `formatSignedAmount` | An amount in whole tokens, from its smallest units and decimals, cut to a readable length. They cut instead of rounding, so they never show more than there is. |
+| `shortHash` | A transaction hash or address, shortened. |
+| `describeError(error)` | The most useful message in an error from Amp's client. The SDK's own errors already have it as their `message`, with Amp's error as their `cause`. |
+| `TOKENS`, `ASSETS`, `isAddress` | The allowlist, its positions, and whether a string is a Base address. |
 
-Browser code should import `@pricetag/sdk/core`. It has `buildPortfolio` and the rest of the pure code, without the Amp client.
+Everything callers see is camelCase. The one exception is in `@pricetag/sdk/core`: `LegRow` and `PricedRow` are rows of the dataset's tables, so they keep its column names.
 
-Things to check on every result:
+There are three entry points:
 
-- **`blocks`:** what was actually read. `toBlock` can stop short of what you asked for while a table catches up, and it's below `fromBlock` when nothing in the range has been processed yet. So no rows doesn't always mean nothing happened: check this before folding, because a portfolio of no legs adds up to $0. Each call only waits for the tables it reads, so `getPrices` for ETH, WETH or USDC only needs `reference_prices`, and other tokens need `legs`, `unlisted_legs` and `priced_legs`.
-- **Gas:** `gasUnknownTxs` lists transactions whose gas couldn't be worked out. The fold never sees that gas, so `totals` can't say it's missing, and ETH is overstated by that much. Show the list, and pass it to `pnlStatus`. `totals.unpricedGas` means some gas had no price at its block, so it isn't in `totals.gasMicros`.
+- `@pricetag/sdk` is the list above, for Node.
+- `@pricetag/sdk/core` is for browser code. It has the fold, the pricing, the allowlist and the formatters, without the Amp client.
+- `@pricetag/sdk/internal` is for this repo's server and tests. It can change at any time, so don't build on it.
+
+### The config
+
+| Option | What it does |
+| --- | --- |
+| `url` | Amp's query URL. |
+| `token` | A local Amp doesn't need one, but a hosted one does. |
+| `dataset` | The Pricetag dataset, like `benface/pricetag@0.0.1`. |
+| `startBlock` | The dataset's first block. Reads start here unless they pass a `from`. With neither, they throw. |
+| `rpcUrl` | Where `getPortfolio` and `getLegs` read L1 fees from. See below. |
+| `baseDataset` | The raw dataset the chain's head is read from. It defaults to `edgeandnode/base_mainnet@0.0.2`. |
+| `network` | Amp's name for the chain, used to read onchain balances. It defaults to `base_mainnet`. |
+| `timeoutMs` | How long one query can take. It defaults to 60 s. |
+| `logger` | Gets slow queries, and reads that failed and will be retried, through its `warn(message)`. It defaults to `console`. Pass `{ warn() {} }` to silence it. |
+
+Queries always run one at a time, because a hosted Amp is shared.
+
+L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anything can't have its ETH checked against the chain, so ETH is `unchecked`, `l1Fees` is `"no rpc url"`, and `missing` says so. `getLegs` can't confirm a swap paid out in unwrapped ETH either, so `l1Fees` says the same there and the swap stays unknown. The public RPC is `https://mainnet.base.org`, and it rate-limits.
+
+### What `getPortfolio` returns
+
+| Field | What it is |
+| --- | --- |
+| `started` | False until the dataset has processed the first block. Until then, every total is `null` and `pnlStatus` is `unavailable`. No rows doesn't mean nothing happened. |
+| `blocks` | `{ fromBlock, toBlock }`, what was actually read. `toBlock` can stop short of the head while a table catches up. |
+| `positions` | One per asset, with `values`, `price`, `state`, `reconciliation` and the legs behind it in `effects`. |
+| `totals` | Sums of only what's known, each `null` when nothing is, with what's left out in `excluded`. |
+| `pnlStatus` | `complete`, `partial` or `unavailable`. |
+| `missing` | What the numbers leave out, in words. It's empty when nothing is. Show it next to any total. |
+| `legs` | Every leg in fold order, starting with what the wallet already held as opening legs (`opening: true`, with an unknown cost). |
+| `points` | PnL after each transaction, for a chart. |
+| `gasUnknownTxs` | Transactions whose gas couldn't be worked out, so ETH is overstated by that much. |
+| `l1Fees`, `l1FeeUnknownTxs` | `read`, `pending` (some couldn't be read yet, and the next call tries again) or `no rpc url`, and the transactions affected. |
+| `openingUnread`, `unreadAssets` | Assets whose balance before the first block couldn't be read, and assets with no position because nothing could be read about them, which isn't the same as holding none. |
+
+A position's `reconciliation.status` is `reconciled` when its legs add up to its onchain balance to the smallest unit, `incomplete` when they don't, and `unchecked` when a read is missing. Only a reconciled position shows PnL. Otherwise its amount and value come from the chain, and its cost and PnL are `null`. On ETH that's `incomplete`, `reconciliation.unseenEth` lists blocks where ETH rose with nothing to explain it, and the transactions that took a token from the wallet there. Those transactions' proceeds stay unknown.
+
+A client keeps each wallet's rows in memory, so another call on the same client only reads new blocks. A read with a `to` is re-read on each new block until `to` is 30 blocks behind the chain's head, because a reorg can still change it. After that, it's fixed. It also reads at most 200 L1 fees per call, so a busy wallet's ETH stays `unchecked` for its first few calls while they catch up. With an `rpcUrl`, `getLegs` shares all of this with `getPortfolio`, so a swap paid out in unwrapped ETH can stay unknown for those first few calls too.
+
+### Other things to check
+
+- **Lower-level `blocks`:** each call only waits for the tables it reads, so `getPrices` for ETH, WETH or USDC only needs `reference_prices`, and other tokens need `legs`, `unlisted_legs` and `priced_legs`. Check `blocks` before folding `getLegs`' legs, because a portfolio of no legs adds up to $0.
 - **Price:** a leg's `priceSource` is `oracle`, `swap` or null. When it's null, `priceNote` says why. In `getPrices`, an unknown price stays in the list with `source: "unknown"` and a `note`.
-- **Transaction:** a leg has its `txHash` and the rows it nets together in `parts`. A swap price has its `txHash` and `account`. An oracle price is read at a block, so its `txHash` is null. A position's legs are in `effects`.
+- **Transaction:** a leg has its `txHash` and the rows it nets together in `parts`. A swap price has its `txHash` and `account`. An oracle price is read at a block, so its `txHash` is null. An opening leg isn't a transaction, so its `txHash` is empty.
 
-`totals` adds up only what's known, and `totals.excluded` says what it leaves out. Don't read a total without `pnlStatus` and `totals.excluded`: a `partial` total of $0.00 is what's known so far, not a wallet that broke even.
+`totals` adds up only what's known. Don't read a total without `pnlStatus` and `missing`: a `partial` total of $0.00 is what's known so far, not a wallet that broke even.
 
 ## What the tables mean
 
@@ -118,7 +172,7 @@ WHERE block_num BETWEEN 53515266 AND 53515658
 GROUP BY 1
 ```
 
-A negative `net` means the wallet held more than the range shows. In the SDK, that's `values.qty` minus `state.shortfallQty`.
+A negative `net` means the wallet held more than the range shows. In `buildPortfolio`, that's `values.qty` minus `state.shortfallQty`.
 
 **Oracle prices:** divide by 100 for micros.
 
@@ -152,12 +206,11 @@ SQL stops at cost, because a cost depends on every earlier leg. To get cost and 
 
 ## Limits
 
-**Numbers can differ from the app's on the same wallet.** The app's server also reads onchain balances and L1 fees, and this package doesn't yet. On one wallet, the example showed 0.31 ETH and PnL -$1.36, while the app, reading the chain, showed 143 ETH and PnL unavailable.
-
-- Amounts are what moved since the range's first block, not full balances. A short range shows a lot of `unknown`, because most tokens were bought before it.
-- Nothing is checked against the chain, so a total can show a number where the app has none. Read it as what these legs add up to, not as the wallet's PnL.
-- Gas is L2 gas only, without the L1 data fee.
+- `getPortfolio` is in USD. The app can also show CAD, converting at each transaction's rate, and the SDK doesn't read those rates yet.
+- An old wallet's cost is unknown for whatever it held before the first block read, so its PnL stays unavailable, and that's the common case on a short range. Its amounts and value are still right, because they come from the chain.
+- A sender's swap paid out in unwrapped ETH stays unknown, with a note saying why, in `getLegs` without an `rpcUrl`, and always in `getPrices`. An `unwrap` credit in `legs` only says a contract turned WETH into ETH in that transaction, not that the ETH reached the sender, and its amount can be wrong. Confirming it takes balances and L1 fees, so only `getPortfolio`, and `getLegs` with an `rpcUrl`, do, like the app. `getPrices` would need those reads for every swap's wallet, and another account's row in the same transaction, like the pool's, usually still prices it. `priced_legs` still has a row for them, so if you query it directly, don't take a `bought_token` of ETH on trust.
 - Only tokens on the allowlist in [`src/tokens.ts`](src/tokens.ts) get a position or a price.
 - Only ETH and USDC have a current price, so other tokens show a cost but no value yet.
+- `getLegs` with `buildPortfolio` is only what moved in the range, so its numbers won't match `getPortfolio`'s. Read them as what those legs add up to, not as the wallet's PnL.
 
 The app's other limits are in the [main README](../../README.md#known-gaps).

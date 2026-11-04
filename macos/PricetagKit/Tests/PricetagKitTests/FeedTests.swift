@@ -12,13 +12,25 @@ actor ScriptedSource: PortfolioSource {
         self.answers = answers
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         methods.append(method)
         currencies.append(currency)
         return try answers.removeFirst().get()
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
+        throw FetchError.unreachable
+    }
+
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
+        throw FetchError.unreachable
+    }
+
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
         throw FetchError.unreachable
     }
 }
@@ -27,11 +39,23 @@ actor ScriptedSource: PortfolioSource {
 actor GatedSource: PortfolioSource {
     private var waiting: CheckedContinuation<Portfolio, any Error>?
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         try await withCheckedThrowingContinuation { waiting = $0 }
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
+        throw FetchError.unreachable
+    }
+
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
+        throw FetchError.unreachable
+    }
+
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
         throw FetchError.unreachable
     }
 
@@ -305,7 +329,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     @Test func aPartialTotalWarns() throws {
         let summary = FeedSummary(feed: .live, portfolio: try demoPortfolio())
         #expect(summary.isWarning)
-        #expect(summary.text == "Demo +$74.28")
+        #expect(summary.text == "Demo ≈+$149.30")
     }
 
     @Test func anUnavailableTotalHasNoNumber() throws {
@@ -328,6 +352,121 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     @Test func aCompleteTotalDoesntWarn() throws {
         let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .complete))
         #expect(!summary.isWarning)
-        #expect(summary.text == "+$74.28")
+        #expect(summary.text == "≈+$149.30")
+    }
+}
+
+/// Has two pricing rules, and remembers which one each read asked for.
+actor RuledSource: PortfolioSource {
+    static let market = PricingRule(id: "market-price", name: "Market price", summary: "", dataset: "a/b@0.0.1", hash: String(repeating: "a", count: 64))
+    static let cautious = PricingRule(id: "cautious-eth", name: "Cautious ETH", summary: "", dataset: "a/c@0.0.1", hash: String(repeating: "b", count: 64))
+    private(set) var asked: [String?] = []
+    private(set) var askedAboutProof: [String?] = []
+    var failing = false
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+        asked.append(rule)
+        if failing { throw FetchError.ampUnavailable("Couldn't read this wallet's data.") }
+        let portfolio = try demoPortfolio()
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(portfolio)) as! [String: Any]
+        json["rule"] = rule ?? Self.market.id
+        return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
+        throw FetchError.unreachable
+    }
+
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
+        askedAboutProof.append(rule)
+        return try resource("proof", as: Proof.self)
+    }
+
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
+        askedAboutProof.append(rule)
+        return try resource("verification", as: Verification.self)
+    }
+
+    func rules() async throws -> [PricingRule] { [Self.market, Self.cautious] }
+
+    func setFailing() { failing = true }
+}
+
+@MainActor
+@Suite struct RuleTests {
+    func makeStore(_ source: RuledSource, stored: String? = nil) -> PortfolioStore {
+        let defaults = UserDefaults(suiteName: "rules-\(UUID().uuidString)")!
+        defaults.set("demo", forKey: "wallet")
+        if let stored { defaults.set(stored, forKey: "pricingRule") }
+        return PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: .seconds(60))
+    }
+
+    @Test func asksForTheServersDefaultUntilARuleIsChosen() async {
+        let source = RuledSource()
+        let store = makeStore(source)
+        await store.refreshRules()
+        _ = await store.poll()
+        #expect(await source.asked == [nil])
+        #expect(store.activeRuleName == nil)
+    }
+
+    @Test func aChosenRuleIsAskedForAndSaidOnScreen() async {
+        let source = RuledSource()
+        let store = makeStore(source)
+        await store.refreshRules()
+        store.setRule(RuledSource.cautious.id)
+        store.stop()
+        #expect(store.feed == .reading)
+        _ = await store.poll()
+        #expect(await source.asked.last == RuledSource.cautious.id)
+        #expect(store.portfolio?.rule == RuledSource.cautious.id)
+        #expect(store.activeRuleName == "Cautious ETH")
+    }
+
+    @Test func aRuleTheServerDoesntHaveIsDropped() async {
+        let source = RuledSource()
+        let store = makeStore(source, stored: "gone")
+        await store.refreshRules()
+        store.stop()
+        #expect(store.selectedRule == nil)
+    }
+
+    @Test func numbersByTheOldRuleGoWhenTheNewOneCantBeRead() async {
+        let source = RuledSource()
+        let store = makeStore(source)
+        await store.refreshRules()
+        _ = await store.poll()
+        #expect(store.portfolio != nil)
+        await source.setFailing()
+        store.setRule(RuledSource.cautious.id)
+        store.stop()
+        _ = await store.poll()
+        #expect(store.portfolio == nil)
+    }
+
+    @Test func anExplanationIsAboutTheRuleOnScreen() async {
+        let source = RuledSource()
+        let store = makeStore(source)
+        await store.refreshRules()
+        let before = store.explanationRequest(for: .total(.pnl))
+        store.setRule(RuledSource.cautious.id)
+        store.stop()
+        #expect(before != store.explanationRequest(for: .total(.pnl)))
+    }
+
+    @Test func aProofIsAboutTheRuleOnScreen() async throws {
+        let source = RuledSource()
+        let store = makeStore(source)
+        await store.refreshRules()
+        _ = try await store.proof(leg: "x", address: "demo")
+        store.setRule(RuledSource.cautious.id)
+        store.stop()
+        _ = try await store.proof(leg: "x", address: "demo")
+        _ = try await store.verification(leg: "x", address: "demo")
+        #expect(await source.askedAboutProof == [nil, RuledSource.cautious.id, RuledSource.cautious.id])
     }
 }

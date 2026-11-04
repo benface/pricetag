@@ -6,8 +6,9 @@ import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
-import { describeError, isNotStarted } from "@pricetag/sdk"
-import { datasetSource } from "../server/source.ts"
+import { datasetSource, describeError, isNotStarted } from "@pricetag/sdk/internal"
+import { resolvingSource } from "../server/source.ts"
+import { encodeNote } from "@pricetag/sdk/core"
 
 /** Sends the path exactly as written, which fetch wouldn't. */
 function get(server: Server, path: string): Promise<{ status: number; body: string }> {
@@ -47,6 +48,62 @@ describe("the server", () => {
     })
   }
 
+  it("has no rules to choose from when it has only one", async () => {
+    assert.deepEqual(JSON.parse((await get(server, "/api/rules")).body), { rules: [] })
+  })
+
+  it("won't quietly read by another rule than the one asked for", async () => {
+    assert.equal((await get(server, "/api/wallet/demo?rule=nope")).status, 400)
+    assert.equal((await get(server, "/api/portfolio/demo?rule=nope")).status, 400)
+  })
+
+  it("has nothing to compare with only one rule", async () => {
+    assert.equal((await get(server, "/api/portfolio/demo/compare")).status, 404)
+  })
+
+  it("won't start with a fork it can't pin", () => {
+    const env = { AMP_QUERY_URL: "http://127.0.0.1:1", PRICETAG_DATASET: "a/b@0.0.1", PRICETAG_START_BLOCK: "5", PRICETAG_FORK_DATASET: "a/c@0.0.1" }
+    assert.throws(() => createApi(env), /manifest hash/)
+    assert.throws(() => createApi({ ...env, PRICETAG_DATASET_HASH: "a".repeat(64) }), /manifest hash/)
+    assert.throws(() => createApi({ ...env, PRICETAG_DATASET_HASH: "a".repeat(64), PRICETAG_FORK_HASH: "nope" }), /manifest hash/)
+  })
+
+  it("lists both rules by name, dataset and hash when there's a fork, with the default first", async () => {
+    const hash = { PRICETAG_DATASET_HASH: "a".repeat(64), PRICETAG_FORK_HASH: "b".repeat(64) }
+    const api = createApi({ AMP_QUERY_URL: "http://127.0.0.1:1", PRICETAG_DATASET: "a/b@0.0.1", PRICETAG_START_BLOCK: "5", PRICETAG_FORK_DATASET: "a/c@0.0.1", ...hash })
+    const fork = createServer(createHandler(api, dist))
+    await new Promise<void>((resolve) => fork.listen(0, "127.0.0.1", resolve))
+    const { rules } = JSON.parse((await get(fork, "/api/rules")).body) as { rules: { id: string; dataset: string; hash: string }[] }
+    assert.equal((await get(fork, "/api/portfolio/demo/compare")).status, 400)
+    fork.close()
+    assert.deepEqual(rules.map((r) => [r.dataset, r.hash]), [["a/b@0.0.1", "a".repeat(64)], ["a/c@0.0.1", "b".repeat(64)]])
+  })
+
+  it("shows the proof behind a demo row, and says there's no real block to check", async () => {
+    const { legs } = JSON.parse((await get(server, "/api/wallet/demo")).body) as { legs: { id: string; opening?: boolean }[] }
+    const leg = legs.find((candidate) => !candidate.opening) as { id: string }
+    const query = `leg=${encodeURIComponent(leg.id)}`
+    const proof = await get(server, `/api/portfolio/demo/proof?${query}`)
+    assert.equal(proof.status, 200)
+    const body = JSON.parse(proof.body) as { unavailable: string; datasets: unknown[]; scope: string[] }
+    assert.match(body.unavailable, /demo wallet/)
+    assert.deepEqual(body.datasets, [])
+    assert.match(body.scope[0] as string, /matches the block's header/)
+    assert.equal((await get(server, `/api/portfolio/demo/verify?${query}`)).status, 400)
+  })
+
+  it("has no proof for what isn't a transaction", async () => {
+    assert.equal((await get(server, "/api/portfolio/demo/proof?leg=nope")).status, 404)
+    assert.equal((await get(server, "/api/portfolio/demo/verify")).status, 404)
+    assert.equal((await get(server, "/api/portfolio/demo/proof?leg=opening:ETH")).status, 404)
+  })
+
+  it("won't read a wallet for proof with no data source", async () => {
+    const address = "0x1111111111111111111111111111111111111111"
+    assert.equal((await get(server, `/api/portfolio/${address}/proof?leg=x`)).status, 503)
+    assert.equal((await get(server, "/api/portfolio/nope/verify?leg=x")).status, 400)
+  })
+
   it("a malformed URL is a 400", async () => {
     assert.equal((await get(server, "/%")).status, 400)
     assert.equal((await get(server, "/api/%")).status, 400)
@@ -67,6 +124,8 @@ describe("the server", () => {
   })
 })
 
+const notStarted = { _tag: "ArrowFlightError", message: "", cause: { _tag: "ArrowFlightError", cause: { rawMessage: "failed to resolve batch query snapshot | Caused by: no common canonical watermark is available for batch snapshot" } } }
+
 describe("the balance read", () => {
   it("is one eth_call at that exact block, with no table, so it can read before a dataset's first block", async () => {
     const queries: string[] = []
@@ -83,8 +142,65 @@ describe("the balance read", () => {
   })
 })
 
+describe("what a dataset adds to a wallet's rows", () => {
+  const config = { baseDataset: "base", dataset: "ds", startBlock: 1, network: "base_mainnet" }
+  const ME = "00000000000000000000000000000000000000cc"
+  const SENDER = "00000000000000000000000000000000000000dd"
+  const leg = { block_num: 5, timestamp: 1, tx_hash: "aa", tx_index: 1, log_index: 3, token: "833589fcd6edb6e08f4c7c32d4f71b54bda02913", account: ME, side: "credit", amount: "7", kind: "erc20" }
+
+  it("says who sent each row, reading only the blocks that have one", async () => {
+    const queries: string[] = []
+    const query = async <T>(sql: string) => {
+      queries.push(sql)
+      if (sql.includes(".legs")) return [leg, { ...leg, log_index: 0, token: "0000000000000000000000000000000000000000", kind: "eth", tx_hash: "bb" }] as T[]
+      if (sql.includes("base\".logs")) return [{ tx_hash: "aa", log_index: 3, topic1: SENDER.padStart(64, "0"), topic2: ME.padStart(64, "0") }] as T[]
+      if (sql.includes("base\".transactions")) return [{ tx_hash: "bb", from: SENDER, to: ME }] as T[]
+      return [] as T[]
+    }
+    const { rows } = await resolvingSource(query, config).readWindow(`0x${ME}`, 1, 10)
+    assert.deepEqual(rows.map((r) => r.counterparty), [`0x${SENDER}`, `0x${SENDER}`])
+    const raw = queries.filter((q) => q.includes('"base"'))
+    assert.equal(raw.length, 2)
+    assert.ok(raw.every((q) => q.includes("block_num BETWEEN 5 AND 5")), "only that block")
+  })
+
+  it("doesn't touch the raw tables for a wallet with nothing to look up", async () => {
+    const queries: string[] = []
+    const query = async <T>(sql: string) => (queries.push(sql), [] as T[])
+    await resolvingSource(query, config).readWindow(`0x${ME}`, 1, 10)
+    assert.ok(!queries.some((q) => q.includes('"base"')))
+  })
+
+  it("only trusts priced_legs from a dataset that has the fix for its wrong rows", async () => {
+    const answer = (error: unknown) => resolvingSource(async () => Promise.reject(error), config)
+    assert.equal(await answer(new Error("Error during planning: table 'amp.benface/pricetag_scratch@0.0.4.unlisted_moves' not found")).marketReady!(), false)
+    assert.equal(await answer(notStarted).marketReady!(), true, "it has the table, and hasn't written to it yet")
+    await assert.rejects(answer(new Error("connection refused")).marketReady!(), "an outage says nothing about the dataset")
+    assert.equal(await resolvingSource(async <T>() => [] as T[], config).marketReady!(), true)
+  })
+
+  it("reads an asset's trades in a range, newest first, keeping only plausible prices", async () => {
+    const queries: string[] = []
+    const row = (usd_micros: string) => ({ block_num: 9, tx_hash: "aa", sold_token: "833589fcd6edb6e08f4c7c32d4f71b54bda02913", sold_amount: "500000000", bought_token: "940181a94a35a4569e4529a3cdfb74e38fd98631", bought_amount: "400000000000000000000", priced: { token: "AERO", usd_micros, source: "swap" }, eth_usd: "240000000000" })
+    const query = async <T>(sql: string) => (queries.push(sql), [row("1250000"), row("6600000000000")] as T[])
+    const trades = await resolvingSource(query, config).readMarketTrades!("AERO'; DROP", 100, 200)
+    assert.deepEqual(trades, [{ blockNum: 9, txHash: "0xaa", asset: "AERO", usdMicros: "1250000", notionalUsdMicros: "500000000" }])
+    assert.match(queries[0]!, /block_num BETWEEN 100 AND 200/)
+    assert.match(queries[0]!, /get_field\(priced, 'token'\) = 'AERODROP'/)
+    assert.match(queries[0]!, /ORDER BY block_num DESC LIMIT \d+/)
+  })
+
+  it("reads only this wallet's own notes, from zero-value transactions to itself", async () => {
+    const queries: string[] = []
+    const hash = `0x${"ab".repeat(32)}`
+    const query = async <T>(sql: string) => (queries.push(sql), [{ block_num: 5, tx_hash: "cc", input: encodeNote(hash, "USDC", "5").slice(2) }, { block_num: 5, tx_hash: "dd", input: "abcd" }] as T[])
+    const notes = await resolvingSource(query, config).readNotes!(`0x${ME}`, [5])
+    assert.deepEqual(notes, [{ txHash: hash, asset: "USDC", usdMicros: "5", noteTx: "0xcc", blockNum: 5 }])
+    assert.match(queries[0]!, new RegExp(`"from" = X'${ME}' AND "to" = X'${ME}' AND status AND value = '0'`))
+  })
+})
+
 describe("a dataset whose tables haven't started", () => {
-  const notStarted = { _tag: "ArrowFlightError", message: "", cause: { _tag: "ArrowFlightError", cause: { rawMessage: "failed to resolve batch query snapshot | Caused by: no common canonical watermark is available for batch snapshot" } } }
   const config = { baseDataset: "base", dataset: "ds", startBlock: 1, network: "base_mainnet" }
 
   it("reads as not processed yet, rather than as an outage", async () => {
@@ -126,6 +242,6 @@ describe("a dataset whose tables haven't started", () => {
       (sql.includes(".unlisted_legs") ? [{ ...leg, amount: null, kind: "unlisted" }] : sql.includes(".legs") ? [{ ...leg, amount: "", kind: "gas" }] : []) as T[]
     const window = await datasetSource(query, config).readWindow("0x00000000000000000000000000000000000000cc", 1, 10)
     assert.deepEqual(window.rows.map((r) => [r.kind, r.amount]), [["unlisted", ""]])
-    assert.equal(window.gasUnknownTxs.length, 1)
+    assert.deepEqual(window.gasUnknown, [{ tx_hash: "0xaa", block_num: 5 }])
   })
 })

@@ -13,6 +13,8 @@ SKIP_INSTALL = YES
 
 // Signed like the app, but never with its entitlements: all this one can do is reach the app's socket. See run.sh.
 BRIDGE_ENTITLEMENTS =
+APP_SIGN_IDENTITY = -
+APP_TEAM =
 CODE_SIGN_STYLE = Manual
 CODE_SIGN_IDENTITY = $(APP_SIGN_IDENTITY)
 DEVELOPMENT_TEAM = $(APP_TEAM)

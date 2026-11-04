@@ -165,6 +165,60 @@ struct AnvilTests {
         #expect((try await client.snapshot(of: cold)).balances[usdc] == usdcUnits(500))
     }
 
+    /// Compiled-in addresses are the whole of the trust here, so each one is asked what it is, on the real chain's code and state.
+    @Test func everyFeedIsWhatItSays() async throws {
+        let feeds = Array(Oracle.others.values) + [.eth, .usdc]
+        for feed in feeds {
+            let description = try #require(try await anvil("eth_call", [["to": feed.address.lowercased, "data": "0x7284e416"], "latest"]) as? String)
+            let decimals = try #require(try await anvil("eth_call", [["to": feed.address.lowercased, "data": "0x313ce567"], "latest"]) as? String)
+            let bytes = try #require(Hex.decode(description))
+            try #require(bytes.count >= 64)
+            let length = Int(bytes[63])
+            #expect(String(decoding: bytes[64..<(64 + length)], as: UTF8.self) == feed.description)
+            #expect(try RPCChainClient.quantity(decimals) == UInt128(feed.decimals), "\(feed.description)")
+        }
+    }
+
+    /// $500 of each token lands at once, with real feeds pricing it. The app holds on to the cap's worth, and the rest goes to savings.
+    @Test func everyAllowlistedTokenCountsAndSweeps() async throws {
+        let vault = KeyVault(store: MemoryKeys())
+        let hot = try await vault.createKey()
+        let cold = try await vault.createKey()
+        let client = RPCChainClient(url: rpc!)
+        let stateStore = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hot
+        try stateStore.save(state)
+        let unreachable = ScriptedPortfolios(.failure(.unreachable))
+        let wallet = HotWallet(signer: vault, settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { unreachable }, makeChain: { _ in client })
+        try wallet.addColdWallet(address: cold.lowercased, name: "Fork")
+        wallet.setCap(dollars: 50)
+
+        _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth / 100)])
+        // Nothing else is held yet, so no other feed gets read.
+        #expect(try await client.snapshot(of: hot).otherUsdMicros.isEmpty)
+        let others = Base.tokens.filter { Oracle.others[$0.asset] != nil }
+        for token in others {
+            _ = try await anvil("anvil_dealERC20", [hot.lowercased, token.contract!.lowercased, hex(1)])
+        }
+        let read = try await client.snapshot(of: hot)
+        #expect(Set(read.otherUsdMicros.keys) == Set(others.map(\.asset)), "every feed reads, ages and bounds included")
+        print("Live feeds: \(read.otherUsdMicros.sorted { $0.key < $1.key })")
+
+        for token in others {
+            let price = try #require(read.otherUsdMicros[token.asset])
+            let amount = Money.amount(ofUsdMicros: 500 * Money.dollar, priceMicros: price, decimals: token.decimals)
+            _ = try await anvil("anvil_dealERC20", [hot.lowercased, token.contract!.lowercased, hex(amount)])
+        }
+        for _ in 0..<(others.count + 2) { await wallet.tick() }
+        #expect(wallet.chainProblem == nil)
+        #expect(wallet.sweepProblem == nil)
+        #expect(wallet.unpricedSymbols.isEmpty)
+        #expect((wallet.plan?.valueUsdMicros ?? .max) <= 51 * Money.dollar, "about the cap is left")
+        let saved = try await client.snapshot(of: cold)
+        #expect(others.filter { (saved.balances[$0] ?? 0) > 0 }.count >= others.count - 1, "all but what's left under the cap")
+    }
+
     @Test func sweepsEverythingIncludingEth() async throws {
         let vault = KeyVault(store: MemoryKeys())
         let hot = try await vault.createKey()

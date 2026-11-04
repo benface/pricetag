@@ -7,6 +7,10 @@ struct SettingsView: View {
     let hotWallet: HotWallet
     @State private var server = ""
     @State private var serverError: String?
+    @State private var proving = ""
+    @State private var signature = ""
+    @State private var linkResult: String?
+    @State private var isComparing = false
     @State private var rpc = ""
     @State private var rpcError: String?
     @State private var isConfirmingDelete = false
@@ -21,6 +25,17 @@ struct SettingsView: View {
                 Text("Costs use the exchange rate when each transaction happened, and current values use the current rate. If a rate is missing, the value shows as unavailable.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if store.rules.count > 1 {
+                Section {
+                    RulePicker(store: store)
+                    Button("Compare Side by Side…") { isComparing = true }
+                        .disabled(store.address == nil || store.address == WalletAddress.demo)
+                } footer: {
+                    Text(Wording.rulesHelp)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Section {
                 TextField("Server", text: $server, prompt: Text(PortfolioStore.defaultServerURL.absoluteString))
@@ -43,6 +58,52 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section("Your Other Wallets") {
+                ForEach(store.book.linkedWallets.filter { $0 != store.address }, id: \.self) { wallet in
+                    LabeledContent(Format.shortHash(wallet)) {
+                        Button("Unlink") {
+                            var next = store.book
+                            next.senders[wallet] = nil
+                            store.setBook(next)
+                        }
+                    }
+                }
+                TextField("Wallet to add, 0x…", text: $proving)
+                    .font(.body.monospaced())
+                    .autocorrectionDisabled()
+                if WalletAddress.isValid(proving), store.address.map(WalletAddress.isValid) == true {
+                    LabeledContent("Sign this with that wallet") {
+                        Text(Wording.linkMessage(owner: store.address ?? "", address: proving)).font(.caption).textSelection(.enabled)
+                    }
+                    TextField("Signature, 0x…", text: $signature)
+                        .font(.body.monospaced())
+                        .autocorrectionDisabled()
+                    Button("Link It") {
+                        Task {
+                            do {
+                                let linked = try await store.linkProved(proving, signature: signature.trimmingCharacters(in: .whitespacesAndNewlines))
+                                linkResult = linked ? "Linked." : "That signature isn't from this wallet."
+                                if linked {
+                                    proving = ""
+                                    signature = ""
+                                }
+                            } catch {
+                                linkResult = "Couldn't check it. Is the server running?"
+                            }
+                        }
+                    }
+                    .disabled(signature.isEmpty)
+                }
+                if let linkResult { Text(linkResult).font(.callout) }
+            }
+            Section {
+                Button("Forget All My Answers", role: .destructive) { store.setBook(Book()) }
+                    .disabled(store.book.isEmpty)
+            } footer: {
+                Text("Your answers about who sent what stay on this Mac. They're only sent to the server above, to work out your numbers, and it doesn't keep them.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             spendingMoney
         }
         .formStyle(.grouped)
@@ -52,6 +113,8 @@ struct SettingsView: View {
             server = store.serverURL.absoluteString
             rpc = hotWallet.settings.rpcURL.absoluteString
         }
+        .task { await store.refreshRules() }
+        .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
     }
 
     private var spendingMoney: some View {

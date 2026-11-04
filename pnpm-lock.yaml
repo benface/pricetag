@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@noble/hashes':
+        specifier: 1.8.0
+        version: 1.8.0
       '@pricetag/sdk':
         specifier: workspace:*
         version: link:packages/sdk
@@ -17,6 +20,9 @@ importers:
       react-dom:
         specifier: 19.3.1
         version: 19.3.1(react@19.3.1)
+      viem:
+        specifier: 2.57.16
+        version: 2.57.16(typescript@7.0.2)
     devDependencies:
       '@types/node':
         specifier: 26.6.6

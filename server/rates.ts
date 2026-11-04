@@ -2,9 +2,9 @@
 // USD stays the data's base, so this adds nothing to what's read for a wallet shown in USD.
 
 import type { WalletResponse } from "../src/core/api.ts"
-import { CURRENCIES, type CurrencyCode, type Rates, type RateRound } from "../src/core/currency.ts"
+import { CURRENCIES, type CurrencyCode, type Rates, type RateRound } from "@pricetag/sdk/core"
+import { REORG_BLOCKS } from "@pricetag/sdk/internal"
 import type { RoundReader } from "./source.ts"
-import { REORG_BLOCKS } from "./wallets.ts"
 
 export function createRates(readRounds: RoundReader) {
   const settled = new Map<CurrencyCode, Map<number, RateRound>>()

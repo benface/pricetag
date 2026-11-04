@@ -3,10 +3,8 @@ import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
-import { CURRENCIES, viewWallet, type Rates } from "../src/core/currency.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
-import { formatMoney, formatPrice, formatRate, formatSignedMoney } from "../src/core/format.ts"
-import { foldPositions, openingLegs, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type PricedLeg } from "@pricetag/sdk/core"
+import { CURRENCIES, foldPositions, formatMoney, formatPrice, formatRate, formatSignedMoney, openingLegs, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, viewWallet, type LegEffect, type PricedLeg, type Rates } from "@pricetag/sdk/core"
 import { describeConversion, describeEffect, explainContext, explainTarget, type ExplainTarget } from "../src/core/explain.ts"
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
@@ -124,7 +122,7 @@ describe("converting a wallet", () => {
   })
 
   it("marks the chart at each transaction's own rate", () => {
-    const usd = walletWith({ references: [{ block_num: BUY_BLOCK, eth_usd: "200000000000", usdc_usd: "100000000" }] })
+    const usd = walletWith({ references: [{ blockNum: BUY_BLOCK, ethUsd: "200000000000", usdcUsd: "100000000" }] })
     assert.equal(viewWallet(usd).markPrice(BUY_BLOCK, "ETH"), "2500000000")
     assert.equal(viewWallet({ ...usd, rates: withoutRate(BUY_BLOCK) }).markPrice(BUY_BLOCK, "ETH"), null)
   })
