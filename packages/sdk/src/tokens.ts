@@ -39,6 +39,39 @@ export const TOKEN_FEEDS: Readonly<Record<string, TokenFeed | undefined>> = {
   DEGEN: usdFeed("0xe62bce5d7cb9d16ab8b4d622538bc0a50a5799c2", "DEGEN / USD", DAILY_HEARTBEAT),
 }
 
+export type FeedName = "eth" | "usdc"
+
+export type PriceFeed = {
+  name: FeedName
+  pair: string
+  /** What `latestRoundData()` and `aggregator()` are called on. It emits no log, not even when its aggregator changes. */
+  proxy: string
+  /** The contracts that emit this feed's `AnswerUpdated`. A new aggregator goes here, and needs a new dataset version. */
+  aggregators: readonly string[]
+  /** How long an update counts. After that the price is unknown, not stale. It's in time because feeds update on a clock, whatever the block rate. Longest gaps seen: 1,236 s and 86,490 s. */
+  validSeconds: number
+}
+
+export const PRICE_FEEDS: readonly [PriceFeed, PriceFeed] = [
+  { name: "eth", pair: "ETH/USD", proxy: ETH_USD_FEED, aggregators: ["0x05c84a58FE042275b37db038bAAcD15F410c7bB0"], validSeconds: 2_600 },
+  { name: "usdc", pair: "USDC/USD", proxy: USDC_USD_FEED, aggregators: ["0x68bE4C50235205Ede361ac8244B1ee221CDDA5E2"], validSeconds: 90_000 },
+]
+
+/**
+ * Stands in for the transaction of a price read from a feed's contract instead of a log. A local Amp has no logs from
+ * before its start, so that's where its first prices come from. A real transaction can't have this hash.
+ */
+export const SEED_TX = `0x${"0".repeat(64)}`
+
+/** Base's first 200ms block, from its 2026-11-05 18:00 UTC upgrade. Blocks before it are 2 s apart. */
+const FAST_BLOCKS_FROM = 53_556_127
+
+/** How many blocks up to `block` it takes to span `seconds`, which is what keeps a read over a time window bounded. */
+export function blocksWithin(seconds: number, block: number): number {
+  const fast = Math.max(0, block - FAST_BLOCKS_FROM)
+  return seconds * 5 <= fast ? Math.ceil(seconds * 5) : fast + Math.ceil((seconds - fast / 5) / 2)
+}
+
 /**
  * A swap price outside this range is rejected, and the leg has no usable price. Swaps can imply absurd prices:
  * WORK-319 saw up to 6.6e12× the oracle. The ranges are wide on purpose, so they only catch those.
@@ -51,7 +84,7 @@ export type Token = {
   decimals: number
   /** The position this token folds into. WETH and ETH are one position, so wrapping is never a sale. */
   asset: string
-  /** The dataset reads a Chainlink feed for it at every block, so `sanity` only applies to a swap at a block where that read failed. */
+  /** The dataset tracks a Chainlink feed for it at every block, so `sanity` only applies to a swap at a block where the feed has no price. */
   oracle?: "eth" | "usdc"
   sanity?: Sanity
 }

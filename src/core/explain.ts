@@ -2,7 +2,7 @@
 
 import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatSignedMoney, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
-import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, METHOD_LABELS, NETWORK_FEES, currentPriceSource, tokenLabel } from "./wording.ts"
+import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, METHOD_LABELS, NETWORK_FEES, currentPriceSource, tokenLabel, unseenEthCause } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"
 
@@ -151,6 +151,7 @@ function onchainLines({ asset, decimals, reconciliation, effects }: Position): s
     `Actual balance at block ${block}: ${amount(reconciliation.actualQty)}.`,
     `Difference: ${BigInt(reconciliation.differenceQty) > 0n ? "+" : ""}${amount(reconciliation.differenceQty)}.`,
     mismatchCause(asset, reconciliation.differenceQty),
+    ...(reconciliation.unseenEth ? [unseenEthCause(reconciliation.unseenEth)] : []),
     ...(unconfirmed.length > 0 ? [`We couldn't confirm how much ETH reached this wallet in: ${[...new Set(unconfirmed)].join(", ")}.`] : []),
     "Value uses the actual balance. PnL is unavailable, because we know some of this wallet's activity is missing.",
   ]

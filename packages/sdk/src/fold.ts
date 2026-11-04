@@ -45,6 +45,10 @@ export type CostPiece = {
   label: CostLabel
   /** The part of `costMicros` that's an estimate. */
   estimatedCostMicros: string
+  /** Its cost rests on what the user entered, even if that's $0, wherever it's moved since. Always so on a self-reported piece. */
+  reported?: true
+  /** The part of `costMicros` that's a market price for what the user said came from someone else, wherever it's moved since. Missing means none. */
+  givenCostMicros?: string
   acquiredBlock?: number
   acquiredAt?: string
 }
@@ -57,6 +61,10 @@ export type Lot = {
   legId: string
   /** The part of `costMicros` that's an estimate. Missing means none. */
   estimatedCostMicros?: string
+  /** Its cost rests on what the user entered, even if that's $0. An average lot stays this way, because every unit shares that cost. */
+  reported?: true
+  /** The part of `costMicros` that's a market price for what the user said came from someone else. Missing means none. */
+  givenCostMicros?: string
   /** When these units were first acquired, which an inherited lot keeps from the wallet that sent it. */
   acquiredBlock?: number
   acquiredAt?: string
@@ -110,6 +118,14 @@ export function worth(qty: bigint, unitMicros: bigint, decimals: number): bigint
   return (qty * unitMicros) / 10n ** BigInt(decimals)
 }
 
+/** Only what's there, so a lot with neither looks the way it always has. */
+const costSource = (reported: boolean | undefined, given: bigint): Pick<CostPiece, "reported" | "givenCostMicros"> => ({
+  ...(reported ? { reported: true } : {}),
+  ...(given > 0n ? { givenCostMicros: given.toString() } : {}),
+})
+
+const givenOf = (lot: Pick<Lot, "givenCostMicros">) => BigInt(lot.givenCostMicros ?? "0")
+
 function lotOf(piece: CostPiece, legId: string): Lot {
   const known = piece.label !== "unknown" && piece.costMicros !== null
   const estimated = known ? BigInt(piece.estimatedCostMicros) : 0n
@@ -119,6 +135,7 @@ function lotOf(piece: CostPiece, legId: string): Lot {
     label: known ? piece.label : "unknown",
     legId,
     ...(estimated > 0n ? { estimatedCostMicros: estimated.toString() } : {}),
+    ...costSource(known && (piece.reported || piece.label === "self-reported"), known ? givenOf(piece) : 0n),
     ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }),
   }
 }
@@ -144,6 +161,7 @@ function addLot(method: Method, lots: readonly Lot[], lot: Lot): Lot[] {
     label: pool.label === lot.label ? pool.label : "mixed",
     legId: pool.legId,
     ...(estimated > 0n ? { estimatedCostMicros: estimated.toString() } : {}),
+    ...costSource(pool.reported || lot.reported, givenOf(pool) + givenOf(lot)),
     ...(acquired.acquiredBlock === undefined ? {} : { acquiredBlock: acquired.acquiredBlock, acquiredAt: acquired.acquiredAt as string }),
   }
   return lots.map((l) => (l === pool ? merged : l))
@@ -159,23 +177,25 @@ function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
 
 type Taken = { lots: Lot[]; pieces: CostPiece[]; knownQty: bigint; knownCost: bigint; estimatedCost: bigint; unknownQty: bigint; shortfall: bigint }
 
-function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint; estimated: bigint } {
+function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint; estimated: bigint; given: bigint } {
   const lotQty = BigInt(lot.qty)
   const lotCost = lot.costMicros === null ? null : BigInt(lot.costMicros)
   const lotEstimated = estimatedOf(lot)
   // Taking a whole lot takes all of its cost, so rounding never leaves dust behind.
-  if (qty === lotQty) return { rest: null, cost: lotCost ?? 0n, estimated: lotEstimated }
+  if (qty === lotQty) return { rest: null, cost: lotCost ?? 0n, estimated: lotEstimated, given: givenOf(lot) }
   const cost = lotCost === null ? 0n : (lotCost * qty) / lotQty
   const estimated = (lotEstimated * qty) / lotQty
   const left = lotEstimated - estimated
-  const { estimatedCostMicros: _, ...plain } = lot
+  const given = (givenOf(lot) * qty) / lotQty
+  const { estimatedCostMicros: _, givenCostMicros: _given, ...plain } = lot
   const rest: Lot = {
     ...plain,
     qty: (lotQty - qty).toString(),
     costMicros: lotCost === null ? null : (lotCost - cost).toString(),
     ...(left > 0n ? { estimatedCostMicros: left.toString() } : {}),
+    ...costSource(false, givenOf(lot) - given),
   }
-  return { rest, cost, estimated }
+  return { rest, cost, estimated, given }
 }
 
 /** FIFO takes the oldest lots first. Average takes from the known and unknown pools in proportion. */
@@ -195,7 +215,7 @@ function take(state: PositionState, qty: bigint): Taken {
       result.lots.push(lot)
       return
     }
-    const { rest, cost, estimated } = shrink(lot, n)
+    const { rest, cost, estimated, given } = shrink(lot, n)
     if (rest) result.lots.push(rest)
     if (lot.costMicros === null) result.unknownQty += n
     else {
@@ -208,6 +228,7 @@ function take(state: PositionState, qty: bigint): Taken {
       costMicros: lot.costMicros === null ? null : cost.toString(),
       label: lot.costMicros === null ? "unknown" : lot.label === "mixed" ? "inherited" : lot.label,
       estimatedCostMicros: estimated.toString(),
+      ...costSource(lot.costMicros !== null && lot.reported, given),
       ...(lot.acquiredBlock === undefined ? {} : { acquiredBlock: lot.acquiredBlock, acquiredAt: lot.acquiredAt as string }),
     })
   })

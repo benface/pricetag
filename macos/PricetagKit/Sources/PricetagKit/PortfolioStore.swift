@@ -258,12 +258,12 @@ public final class PortfolioStore {
 
     public func proof(leg: String, address: String) async throws -> Proof {
         guard address == self.address else { throw CancellationError() }
-        return try await source.proof(leg: leg, address: address, currency: currency)
+        return try await source.proof(leg: leg, address: address, currency: currency, rule: selectedRule)
     }
 
     public func verification(leg: String, address: String) async throws -> Verification {
         guard address == self.address else { throw CancellationError() }
-        return try await source.verification(leg: leg, address: address, currency: currency)
+        return try await source.verification(leg: leg, address: address, currency: currency, rule: selectedRule)
     }
 
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
@@ -272,7 +272,7 @@ public final class PortfolioStore {
         return try await source.taxReport(request)
     }
 
-    private func linked(for address: String) -> [String] {
+    public func linked(for address: String) -> [String] {
         // Costs only carry over onto a wallet that's the user's own. A wallet being watched could be anyone's.
         linkedWallets.contains(address) ? linkedWallets.filter { $0 != address } : []
     }
