@@ -43,11 +43,18 @@ function merged(pending: ChainTick | null, next: ChainTick): ChainTick {
 
 async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS, retryMs = RETRY_MS, stallMs = STALL_MS }: FollowConfig, emit: (tick: ChainTick) => void, signal: AbortSignal) {
   let last: BlockMark | null = null
+  /** The first block replaced by a reorg that no tick has said yet. It outlives a stream that dies halfway through reporting one. */
+  let reorgFrom: number | null = null
+
+  const tickFor = (blockNum: number, via: Via): ChainTick => {
+    const tick: ChainTick = { kind: "block", blockNum, reorgFrom, via }
+    reorgFrom = null
+    return tick
+  }
 
   async function followStream(streamed: StreamRanges, from: BlockMark) {
     const stalled = new AbortController()
     const watchdog = setTimeout(() => stalled.abort(new Error(`No new block in ${stallMs} ms`)), stallMs)
-    let reorgFrom: number | null = null
     let at = from
     try {
       for await (const range of streamed(sql, from, AbortSignal.any([signal, stalled.signal]))) {
@@ -57,8 +64,7 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
         if (range.start <= at.blockNum && !isSameBlock) reorgFrom = Math.min(reorgFrom ?? range.start, range.start)
         if (!range.complete || isSameBlock) continue
         at = last = { blockNum: range.end, hash: range.hash }
-        emit({ kind: "block", blockNum: range.end, reorgFrom, via: "stream" })
-        reorgFrom = null
+        emit(tickFor(range.end, "stream"))
       }
       throw new Error("The stream ended")
     } finally {
@@ -67,12 +73,15 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
   }
 
   async function pollOnce() {
-    const mark = await readMark(last?.blockNum ?? null)
+    // A reorg the stream reported can leave a shorter chain, which reading from the last block wouldn't find.
+    const mark = await readMark(reorgFrom === null ? (last?.blockNum ?? null) : reorgFrom - 1)
     if (!mark) return
     const replaced = mark.blockNum === last?.blockNum && mark.hash !== last.hash
-    if (last && mark.blockNum <= last.blockNum && !replaced) return
+    const shorter = reorgFrom !== null && last !== null && mark.blockNum < last.blockNum
+    if (last && mark.blockNum <= last.blockNum && !replaced && !shorter) return
     last = mark
-    emit({ kind: "block", blockNum: mark.blockNum, reorgFrom: replaced ? mark.blockNum : null, via: "polling" })
+    if (replaced) reorgFrom = Math.min(reorgFrom ?? mark.blockNum, mark.blockNum)
+    emit(tickFor(mark.blockNum, "polling"))
   }
 
   while (!signal.aborted) {

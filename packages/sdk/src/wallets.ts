@@ -212,7 +212,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const chain = await currentHead()
     const head = headAsOf(chain, range.to)
     const cached = wallets.get(key)
-    if (cached && (range.to === undefined ? cached.latest.blockNum >= head.blockNum : isFixedCurrent(cached, head, chain))) return cached
+    // A dataset that's behind can finish more blocks under the same head, so a live read is only current once it's reached the head.
+    if (cached && (range.to === undefined ? cached.latest.blockNum >= head.blockNum && cached.coveredTo >= head.blockNum : isFixedCurrent(cached, head, chain))) return cached
 
     const fromBlock = cached?.fromBlock ?? range.from ?? source.startBlock ?? Math.max(0, head.blockNum - (source.historyBlocks ?? 0))
     // Coverage only moves up to what's been processed. If it followed the chain, a table catching up later would

@@ -158,7 +158,6 @@ export function createApi(env: Env, created: Created | null = createSource(env))
     if (following || !source) return
     const stop = new AbortController()
     following = stop
-    let last = head?.blockNum ?? null
     for await (const tick of followChain(created?.follow ?? pollingOnly(source), stop.signal)) {
       if (tick.kind === "down") {
         console.error("Head read failed:", tick.message)
@@ -167,9 +166,8 @@ export function createApi(env: Env, created: Created | null = createSource(env))
       }
       try {
         if (tick.reorgFrom !== null) await rewindTo(tick.reorgFrom)
+        // Every tick, even under the same head: it can be a block the dataset has only now finished.
         const current = await pollHead()
-        if (current.blockNum === last && tick.reorgFrom === null) continue
-        last = current.blockNum
         send(`event: head\ndata: ${JSON.stringify({ ...current, via: tick.via })}\n\n`)
       } catch (error) {
         console.error("Head read failed:", describeError(error))

@@ -99,6 +99,46 @@ describe("following the chain", () => {
     await chain.stop()
   })
 
+  it("keeps a reorg the stream reported before it died, and says it on the next tick", async () => {
+    const hand = handStream()
+    let mark = MARK
+    const chain = following({ stream: hand.stream, readMark: async () => mark, retryMs: 60_000 })
+    const first = chain.next()
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    mark = { blockNum: 101, hash: "0xnew101" }
+    hand.send(dataOf(101, 90, "0xnew101"), new Error("gone before the block was complete"))
+    assert.deepEqual(await first, { kind: "block", blockNum: 101, reorgFrom: 90, via: "polling" })
+    mark = { blockNum: 102, hash: "0xnew102" }
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 102, reorgFrom: null, via: "polling" })
+    await chain.stop()
+  })
+
+  it("finds a shorter chain after a reorg the stream reported before it died", async () => {
+    const hand = handStream()
+    const asked: (number | null)[] = []
+    let mark = MARK
+    const chain = following({ stream: hand.stream, readMark: async (after) => (asked.push(after), mark), retryMs: 60_000 })
+    const first = chain.next()
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    mark = { blockNum: 95, hash: "0xnew95" }
+    hand.send(dataOf(95, 90, "0xnew95"), new Error("gone before the block was complete"))
+    assert.deepEqual(await first, { kind: "block", blockNum: 95, reorgFrom: 90, via: "polling" })
+    assert.equal(asked.at(-1), 89)
+    await chain.stop()
+  })
+
+  it("keeps the reorg through a reconnect that resumes from the old block", async () => {
+    const hand = handStream()
+    const chain = following({ stream: hand.stream, readMark: async () => MARK, retryMs: 5 })
+    const first = chain.next()
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    hand.send(dataOf(100, 90, "0xnew100"), new Error("gone before the block was complete"))
+    while (hand.resumes.length < 2) await new Promise((resolve) => setTimeout(resolve, 1))
+    hand.send(blockOf(100, 95, "0xnew100"))
+    assert.deepEqual(await first, { kind: "block", blockNum: 100, reorgFrom: 90, via: "stream" })
+    await chain.stop()
+  })
+
   it("polls when the stream fails, and goes back to it from the newest block", async () => {
     const hand = handStream()
     let mark = MARK
@@ -221,10 +261,10 @@ describe("Amp's stream on the wire", () => {
 
 /** A chain a test can move and reorg: what its tables hold, how far it's gone, and a stream of what happened. */
 function chainAt(block: number, tables: Tables) {
-  const chain = { block, tables }
+  const chain: { block: number; tables: Tables; through?: number } = { block, tables }
   const query: Query = async <T,>(sql: string) => {
     if (sql.includes(".blocks")) return [{ block_num: String(chain.block), hash: `${chain.block}`.padStart(64, "0"), timestamp: 1_800_000_000_000 }] as T[]
-    return fakeAmp(chain.tables, chain.block).query<T>(sql)
+    return fakeAmp(chain.tables, chain.through ?? chain.block).query<T>(sql)
   }
   const hand = handStream()
   const client = pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 50, stream: hand.stream, logger: QUIET, readL1Fees: async (txs) => new Map(txs.map((t) => [t.txHash, "0"])), follow: { pollMs: 1 } })
@@ -283,6 +323,40 @@ describe("watchWallet", () => {
     assert.equal(update.reorgFrom, 100)
     assert.deepEqual(update.blocks, { fromBlock: 50, toBlock: 149 })
     assert.deepEqual(legsOf(update), ["120:0xee:9"])
+    await updates.return()
+  })
+
+  it("replaces a reorg the stream reported before it died, past the blocks it would re-read anyway", async () => {
+    const { chain, hand, client } = chainAt(150, { legs: [creditAt(100, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(200, "5") })
+    const updates = client.watchWallet(ADDRESS)
+    assert.deepEqual(legsOf((await updates.next()).value as WalletUpdate), ["100:0xaa:5"])
+
+    chain.block = 151
+    chain.tables = { ...chain.tables, legs: [creditAt(120, "bb", "7")], reference_prices: [{ ...REFERENCE, block_num: "120" }], balances: balancesThrough(200, "7") }
+    hand.send(dataOf(151, 100, "0xnew"), new Error("gone before the block was complete"))
+    const update = (await updates.next()).value as WalletUpdate
+    assert.equal(update.reorgFrom, 100)
+    assert.equal(update.via, "polling")
+    assert.deepEqual(legsOf(update), ["120:0xbb:7"])
+    await updates.return()
+  })
+
+  it("gives each block the dataset finishes while it's behind a head that doesn't move", async () => {
+    const { chain, hand, client } = chainAt(105, { legs: [], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(120, "0") })
+    chain.through = 100
+    const updates = client.watchWallet(ADDRESS)
+    assert.equal(((await updates.next()).value as WalletUpdate).blocks.toBlock, 100)
+
+    chain.through = 101
+    hand.send(blockOf(101))
+    assert.equal(((await updates.next()).value as WalletUpdate).blocks.toBlock, 101)
+
+    chain.through = 102
+    chain.tables = { ...chain.tables, legs: [creditAt(102, "bb", "7")], reference_prices: [{ ...REFERENCE, block_num: "102" }], balances: balancesThrough(120, "7") }
+    hand.send(blockOf(102))
+    const update = (await updates.next()).value as WalletUpdate
+    assert.equal(update.blocks.toBlock, 102)
+    assert.deepEqual(legsOf(update), ["102:0xbb:7"])
     await updates.return()
   })
 
@@ -352,6 +426,52 @@ describe("wallets.rewind", () => {
     tables.legs = [creditAt(100, "cc", "7")]
     const after = await wallets.get(ADDRESS, { from: 50 })
     assert.deepEqual(after.legs.filter((l) => !l.opening).map((l) => l.txHash), ["0xcc"])
+  })
+})
+
+describe("the server's live events while the dataset catches up", () => {
+  const hand = handStream()
+  const state = { through: 100 }
+  const tables: Tables = { legs: [], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(120, "0") }
+  let server: Server
+  let base: string
+
+  before(async () => {
+    const query: Query = async <T,>(sql: string) => fakeAmp(tables, state.through).query<T>(sql)
+    const source = { ...datasetSource(query, { dataset: "benface/pricetag@0.0.1", baseDataset: "b", startBlock: 50, network: "base_mainnet" }), head: async () => ({ blockNum: 105, timestamp: new Date(1_800_000_000_000).toISOString() }) }
+    const api = createApi({}, {
+      source,
+      readRates: async () => ({ byBlock: {}, latest: null }),
+      proofs: { datasets: async () => [], readBlock: async () => null },
+      follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET },
+    })
+    server = createServer((req, res) => void api(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+  after(() => {
+    server.closeAllConnections()
+    server.close()
+  })
+
+  it("sends a head for each block it finishes under one chain head, and a read reaches it", async () => {
+    const toBlock = async () => ((await (await fetch(`${base}/api/wallet/${ADDRESS}`)).json()) as { coverage: { toBlock: number } }).coverage.toBlock
+    assert.equal(await toBlock(), 100)
+
+    const stop = new AbortController()
+    const events = await fetch(`${base}/api/events`, { signal: stop.signal })
+    const reader = events.body!.pipeThrough(new TextDecoderStream()).getReader()
+    await reader.read()
+    while (hand.resumes.length === 0) await new Promise((resolve) => setTimeout(resolve, 2))
+
+    for (const through of [101, 102]) {
+      state.through = through
+      hand.send(blockOf(through))
+      assert.match((await reader.read()).value!, /^event: head\ndata: \{"blockNum":105,/)
+      assert.equal(await toBlock(), through)
+    }
+    stop.abort()
+    await reader.cancel().catch(() => {})
   })
 })
 
