@@ -451,7 +451,7 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
         return next
     }
 
-    /// Saying what was paid for a sender's open receipts, by asset. What earlier answers covered stays as it was.
+    /// Saying what was paid for a sender's open receipts, by asset. It takes over for those receipts, and any others keep their earlier answers.
     public func enteringExchangeCosts(_ sender: String, receipts: [Receipt], amounts: [String: Money], focus: String?) -> Book {
         let key = sender.lowercased()
         let earlier = senders[key]?.kind == .myExchange ? (senders[key]?.costs ?? []) : []

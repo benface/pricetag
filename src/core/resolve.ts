@@ -49,16 +49,15 @@ function without(piece: CostPiece, taken: CostPiece): CostPiece {
   return { ...piece, qty: (BigInt(piece.qty) - BigInt(taken.qty)).toString(), costMicros: less(piece.costMicros, taken.costMicros), estimatedCostMicros: less(piece.estimatedCostMicros, taken.estimatedCostMicros) as string }
 }
 
-/** Who each part of a debit went to, in the order it went. Null when the leg isn't simply that, as when something also came back. */
+/** Each transfer in a debit, in the order it went. Null when the leg isn't simply that, as when something also came back. */
 function recipientsOf(leg: PricedLeg): Source[] | null {
-  const recipients = new Map<string, bigint>()
+  const transfers: Source[] = []
+  // One per transfer, not per address: oldest first follows the order they went in, even to the same wallet twice.
   for (const part of [...leg.parts].sort((a, b) => a.log_index - b.log_index)) {
     if (part.side === "credit" || !part.counterparty) return null
-    const address = normalizeAddress(part.counterparty)
-    recipients.set(address, (recipients.get(address) ?? 0n) + BigInt(part.amount))
+    transfers.push({ address: normalizeAddress(part.counterparty), units: BigInt(part.amount) })
   }
-  const total = [...recipients.values()].reduce((sum, units) => sum + units, 0n)
-  return total === -BigInt(leg.delta) ? [...recipients].map(([address, units]) => ({ address, units })) : null
+  return transfers.reduce((sum, { units }) => sum + units, 0n) === -BigInt(leg.delta) ? transfers : null
 }
 
 /**
@@ -103,11 +102,12 @@ function sourcesOf(leg: PricedLeg): Source[] | null {
 }
 
 /**
- * This receipt's share of what was entered for it, or null when nothing covers it, or the chain no longer says what was
- * answered. Shares add up to the whole amount, and only depend on the receipts it was entered for.
+ * This receipt's share of what was last entered for it, or null when nothing covers it, or the chain no longer says what was
+ * answered. A newer answer takes over for the receipts it covers. The rest keep their shares, which only depend on the
+ * receipts their own answer was for, and add up to its whole amount.
  */
 function exchangeShare(costs: readonly ExchangeCost[], wallet: string, legId: string, units: bigint): Money | null {
-  for (const { micros, currency, receipts } of costs) {
+  for (const { micros, currency, receipts } of [...costs].reverse()) {
     const at = receipts.findIndex((r) => r.wallet === wallet && r.legId === legId)
     if (at < 0) continue
     if (BigInt((receipts[at] as Receipt).units) !== units) return null

@@ -366,6 +366,32 @@ describe("a transfer to several wallets", () => {
     }
   })
 
+  it("follows the order transfers went in, even when a wallet gets two of them", () => {
+    // $100 of lots, then $200. 50 to B, 100 to C, then 50 more to B, so each gets half of each.
+    const repeated = [
+      ...buy(10, "0x1", A, 100n),
+      ...send(11, "0x2", STRANGER, A, 100n * E6),
+      move(20, "0x3", A, "debit", 50n * E6, B),
+      { ...move(20, "0x3", A, "debit", 100n * E6, C), log_index: 1 },
+      { ...move(20, "0x3", A, "debit", 50n * E6, B), log_index: 2 },
+      move(20, "0x3", B, "credit", 50n * E6, A),
+      { ...move(20, "0x3", C, "credit", 100n * E6, A), log_index: 1 },
+      { ...move(20, "0x3", B, "credit", 50n * E6, A), log_index: 2 },
+    ]
+    const from = wallet(A, repeated, { notes })
+    const [b, c] = [wallet(B, repeated), wallet(C, repeated)]
+    const cost = (focus: WalletResponse, others: WalletResponse[], method: Method) => position(focus, others, linkedAll, "USDC", method).values.costMicros
+    for (const others of [[from], [from, c], [c, from]]) assert.equal(cost(b, others, "fifo"), "150000000")
+    for (const others of [[from], [from, b], [b, from]]) assert.equal(cost(c, others, "fifo"), "150000000")
+    assert.equal(cost(b, [from], "average"), "150000000")
+    assert.equal(cost(c, [from], "average"), "150000000")
+  })
+
+  it("doesn't let the order parts were read in change who got what", () => {
+    const shuffled = rows.map((row) => row).reverse()
+    assert.deepEqual(costOf(wallet(B, shuffled), [wallet(A, shuffled, { notes })], linkedAll, "fifo"), [[(100n * E6).toString(), "100000000"]])
+  })
+
   it("still sets aside the share of a recipient that isn't one of the user's wallets", () => {
     const toStranger = [...buy(10, "0x1", A, 100n), ...send(11, "0x2", STRANGER, A, 100n * E6), move(20, "0x3", A, "debit", 100n * E6, STRANGER), { ...move(20, "0x3", A, "debit", 100n * E6, B), log_index: 1 }, { ...move(20, "0x3", B, "credit", 100n * E6, A), log_index: 1 }]
     assert.deepEqual(costOf(wallet(B, toStranger), [wallet(A, toStranger, { notes })], book({ [A]: { kind: "mine" } }), "fifo"), [[(100n * E6).toString(), "200000000"]])
@@ -433,6 +459,37 @@ describe("a saved exchange cost", () => {
   it("won't apply to a receipt the chain no longer agrees with", () => {
     const changed = send(10, "0x1", COINBASE, A, 80n * E6)
     assert.equal(position(wallet(A, changed), [], answered).values.costMicros, null)
+  })
+
+  it("lets a new answer replace one that no longer matches the chain", () => {
+    const changed = send(10, "0x1", COINBASE, A, 80n * E6)
+    const before = foldBook(wallet(A, changed), [], "average", answered)
+    assert.equal(before.positions[0]?.values.costMicros, null)
+    assert.equal(before.questions[0]?.needsCost, true, "it reopened")
+    const corrected = enterExchangeCosts(answered, A, COINBASE, before.questions[0]!.receipts, { USDC: usd("72000000") })
+    const after = foldBook(wallet(A, changed), [], "average", corrected)
+    assert.equal(after.positions[0]?.values.costMicros, "72000000")
+    assert.deepEqual(after.questions, [])
+  })
+
+  it("lets a new answer replace one that can't be converted", () => {
+    const rows = send(10, "0x1", COINBASE, A, 100n * E6)
+    const noRate = wallet(A, rows, { currency: "CAD", rates: { byBlock: {}, latest: null } })
+    const before = foldBook(noRate, [], "average", answered)
+    assert.equal(before.positions[0]?.effects[0]?.leg.costMicros, null, "USD with no rate to CAD")
+    const corrected = enterExchangeCosts(answered, A, COINBASE, before.questions[0]!.receipts, { USDC: { micros: "130000000", currency: "CAD" } })
+    const after = foldBook(noRate, [], "average", corrected)
+    assert.equal(after.positions[0]?.effects[0]?.leg.costMicros, "130000000")
+    assert.deepEqual(after.questions, [])
+  })
+
+  it("lets a new answer correct one, leaving what else it covered alone", () => {
+    const two = [...send(10, "0x1", COINBASE, A, 100n * E6), ...send(20, "0x2", COINBASE, A, 300n * E6)]
+    const first = enterExchangeCosts(emptyBook(), A, COINBASE, [receipt(A, "0x1", 100n * E6), receipt(A, "0x2", 300n * E6)], { USDC: usd("400000000") })
+    const corrected = enterExchangeCosts(first, A, COINBASE, [receipt(A, "0x2", 300n * E6)], { USDC: usd("600000000") })
+    const usdc = position(wallet(A, two), [], corrected)
+    assert.deepEqual(usdc.effects.map((e) => e.leg.costMicros), ["100000000", "600000000"], "the first keeps its $100 share of the $400")
+    assert.equal(position(wallet(A, two), [], first).values.costMicros, "400000000", "and undoing brings back the old answer")
   })
 
   it("only covers each asset's own receipts", () => {

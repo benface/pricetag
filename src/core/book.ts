@@ -46,7 +46,7 @@ export function answerSender(book: Book, focus: string, sender: string, answer: 
   return { ...book, senders }
 }
 
-/** Saying what was paid for a sender's open receipts, by asset. What earlier answers covered stays as it was. */
+/** Saying what was paid for a sender's open receipts, by asset. It takes over for those receipts, and any others keep their earlier answers. */
 export function enterExchangeCosts(book: Book, focus: string, sender: string, receipts: readonly Receipt[], amounts: Readonly<Record<string, Money>>): Book {
   const earlier = book.senders[sender]?.kind === "my-exchange" ? (book.senders[sender].costs ?? []) : []
   const costs = Object.entries(amounts).map(([asset, money]) => ({ ...money, asset, receipts: receipts.filter((r) => r.asset === asset) }))
