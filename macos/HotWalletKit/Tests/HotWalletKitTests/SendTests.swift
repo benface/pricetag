@@ -107,10 +107,13 @@ private let stolen = "0x" + String(repeating: "ab", count: 32)
         model.addressText = friend.lowercased
         model.ownership = .mine
         await chain.setOnEstimate {
+            // What keeps the sheet's Cancel and Escape from closing it on something that's still going out.
+            #expect(model.isSending)
             model.addressText = nextAddress.lowercased
             model.ownership = .someoneElse
         }
         #expect(await model.send())
+        #expect(!model.isSending)
         #expect(store.book.senders[friend.lowercased]?.kind == .mine)
         #expect(store.book.senders[nextAddress.lowercased] == nil)
     }

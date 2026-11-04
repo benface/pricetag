@@ -104,7 +104,9 @@ enum TestScene: String, CaseIterable {
     case settings
     case send
     case sendKnown = "send-known"
+    case sendWaiting = "send-waiting"
     case publishCost = "publish-cost"
+    case publishWaiting = "publish-cost-waiting"
 
     enum Chrome { case titled, none }
 
@@ -113,7 +115,7 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .changeWallet, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve, .send, .sendKnown, .publishCost: .none
+        case .changeWallet, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve, .send, .sendKnown, .sendWaiting, .publishCost, .publishWaiting: .none
         default: .titled
         }
     }
@@ -166,18 +168,23 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
         case .settings:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
-        case .send, .sendKnown:
+        case .send, .sendKnown, .sendWaiting:
             // One read of a chain that isn't there, and no savings wallet, so it has nothing to sweep and nowhere to sweep it.
-            let wallet = HotWallet(signer: NoKeys(has: TestScene.hotWallet), settingsStore: NoSavedSettings(), stateStore: NoSavedState(active: TestScene.hotWallet), presence: NoOneThere(), portfolioSource: { source }, makeChain: { _ in FixtureChain() })
-            Task { await wallet.tick() }
+            let wallet = HotWallet(signer: NoKeys(has: TestScene.hotWallet), settingsStore: NoSavedSettings(), stateStore: NoSavedState(active: TestScene.hotWallet), presence: self == .sendWaiting ? StillAsking() : NoOneThere(), portfolioSource: { source }, makeChain: { _ in FixtureChain() })
             let model = SendModel(wallet: wallet, store: store)
             model.token = Base.tokens.first { $0.symbol == "USDC" }!
             model.amountText = "12.50"
             model.addressText = TestScene.recipient
-            return TestScreen(view: AnyView(SendSheet(model: model)), isReady: { wallet.snapshot != nil })
-        case .publishCost:
+            let isWaiting = self == .sendWaiting
+            Task {
+                await wallet.tick()
+                // It never gets past the prompt, and there's no key behind it anyway.
+                if isWaiting { _ = await model.send() }
+            }
+            return TestScreen(view: AnyView(SendSheet(model: model)), isReady: { wallet.snapshot != nil && (!isWaiting || model.isSending) })
+        case .publishCost, .publishWaiting:
             let draft = CostNoteDraft(wallet: TestScene.hotWallet.lowercased, txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
-            return TestScreen(view: AnyView(PublishCostSheet(draft: draft, typed: "250", publish: { _ in false }, problem: { nil })), isReady: isReady)
+            return TestScreen(view: AnyView(PublishCostSheet(draft: draft, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
         }
     }
 
@@ -232,6 +239,14 @@ private struct NoSavedState: DeviceStateStore {
 
 private struct NoOneThere: UserPresence {
     func confirm(reason: String) async throws { throw NoKeys.NotInTestMode() }
+}
+
+/// A prompt nobody's answered yet, to show what the screen does in the meantime.
+private struct StillAsking: UserPresence {
+    func confirm(reason: String) async throws {
+        try await Task.sleep(for: .seconds(600))
+        throw NoKeys.NotInTestMode()
+    }
 }
 
 /// Stands in for the server, with the same demo wallet the tests read.

@@ -6,15 +6,17 @@ public struct PublishCostSheet: View {
     let publish: (String) async -> Bool
     /// Why it didn't go out, if it was anything but them changing their mind.
     let problem: () -> String?
+    /// Read here rather than passed in, so this follows it while it's open.
+    let isPublishing: () -> Bool
     @State private var usd: String
-    @State private var isPublishing = false
     @State private var shownProblem: String?
     @Environment(\.dismiss) private var dismiss
 
-    public init(draft: CostNoteDraft, typed: String, publish: @escaping (String) async -> Bool, problem: @escaping () -> String?) {
+    public init(draft: CostNoteDraft, typed: String, publish: @escaping (String) async -> Bool, problem: @escaping () -> String?, isPublishing: @escaping () -> Bool) {
         self.draft = draft
         self.publish = publish
         self.problem = problem
+        self.isPublishing = isPublishing
         _usd = State(initialValue: typed)
     }
 
@@ -30,7 +32,7 @@ public struct PublishCostSheet: View {
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.trailing)
                     .frame(width: 140)
-                    .disabled(isPublishing)
+                    .disabled(isPublishing())
             }
             if let micros {
                 Text("This wallet would publish that it paid \(Format.money(micros, .USD)) in transaction \(Format.shortHash(draft.txHash)).")
@@ -47,10 +49,12 @@ public struct PublishCostSheet: View {
             }
             HStack {
                 Spacer()
+                if isPublishing() { ProgressView().controlSize(.small) }
+                // Touch ID's own prompt can still say no. Past that, closing this wouldn't stop what's on its way.
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .disabled(isPublishing())
                 Button("Publish for Everyone") {
-                    isPublishing = true
                     shownProblem = nil
                     Task {
                         if await publish(usd) {
@@ -58,13 +62,13 @@ public struct PublishCostSheet: View {
                         } else {
                             shownProblem = problem()
                         }
-                        isPublishing = false
                     }
                 }
-                .disabled(micros == nil || isPublishing)
+                .disabled(micros == nil || isPublishing())
             }
         }
         .padding(20)
         .frame(width: 460)
+        .interactiveDismissDisabled(isPublishing())
     }
 }

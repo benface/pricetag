@@ -365,6 +365,7 @@ actor BookSource: PortfolioSource {
         #expect(await model.publish(draft, usd: "250") == false)
         #expect(store.book.costs[try #require(question.costKey)] == nil)
         #expect(model.failure == "No gas.")
+        #expect(!model.isPublishing, "the sheet can close again")
     }
 
     @Test func publishingNeedsAnAmount() async throws {
@@ -387,8 +388,14 @@ actor BookSource: PortfolioSource {
     @Test func publishingKeepsAnswersGivenDuringTheWait() async throws {
         let (store, _, _) = try makeStore()
         let (model, draft, question, writer) = try await virtualDraft(store)
-        writer.onWrite = { store.setBook(store.book.answering("0x00000000000000000000000000000000000000ee", .someoneElse, focus: nil)) }
+        var wasPublishing = false
+        writer.onWrite = {
+            wasPublishing = model.isPublishing
+            store.setBook(store.book.answering("0x00000000000000000000000000000000000000ee", .someoneElse, focus: nil))
+        }
         #expect(await model.publish(draft, usd: "250"))
+        #expect(wasPublishing, "what keeps the sheet's Cancel and Escape from closing it on something that's still going out")
+        #expect(!model.isPublishing)
         #expect(store.book.senders["0x00000000000000000000000000000000000000ee"]?.kind == .someoneElse)
         #expect(store.book.costs[try #require(question.costKey)] != nil)
     }

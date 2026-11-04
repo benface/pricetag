@@ -43,6 +43,8 @@ public final class ResolveModel {
     /// Asking what they paid, because they said it's their exchange account.
     public private(set) var isAskingCost = false
     public var failure: String?
+    /// From the moment it's asked for until it's on its way or isn't going. It can't be called back in that time.
+    public private(set) var isPublishing = false
 
     public init(store: PortfolioStore, firstAsset: String? = nil, noteWriter: (any CostNoteWriter)? = nil) {
         self.store = store
@@ -152,12 +154,14 @@ public final class ResolveModel {
     /// Publishes what was paid, and keeps it here too, so the question's answered before the note's been read back. `usd` is as typed,
     /// because a note is always in USD. True once it's on its way.
     public func publish(_ draft: CostNoteDraft, usd: String) async -> Bool {
-        guard let question = current, question.noteDraft == draft, let noteWriter, let micros = Format.micros(fromDollars: usd), let calldata = CostNote.calldata(txHash: draft.txHash, asset: draft.asset, usdMicros: micros) else { return false }
+        guard !isPublishing, let question = current, question.noteDraft == draft, let noteWriter, let micros = Format.micros(fromDollars: usd), let calldata = CostNote.calldata(txHash: draft.txHash, asset: draft.asset, usdMicros: micros) else { return false }
         failure = nil
         guard noteWriter.canWriteNote(from: draft.wallet) else {
             failure = "That wallet can't publish this any more, so nothing was signed."
             return false
         }
+        isPublishing = true
+        defer { isPublishing = false }
         guard await noteWriter.writeNote(calldata, asset: draft.asset, from: draft.wallet) else {
             failure = noteWriter.noteProblem
             return false

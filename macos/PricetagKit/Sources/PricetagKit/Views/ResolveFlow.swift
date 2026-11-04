@@ -82,7 +82,7 @@ public struct ResolveFlow: View {
             Task { await _ = model.importCoinbase(csv: csv) }
         }
         .sheet(item: $publishing) { draft in
-            PublishCostSheet(draft: draft, typed: store.currency == .USD ? costs[draft.asset] ?? "" : "", publish: { await model.publish(draft, usd: $0) }, problem: { model.failure })
+            PublishCostSheet(draft: draft, typed: store.currency == .USD ? costs[draft.asset] ?? "" : "", publish: { await model.publish(draft, usd: $0) }, problem: { model.failure }, isPublishing: { model.isPublishing })
         }
     }
 

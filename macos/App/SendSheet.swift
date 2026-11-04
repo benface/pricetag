@@ -48,8 +48,11 @@ struct SendSheet: View {
             }
             HStack {
                 Spacer()
+                if model.isSending { ProgressView().controlSize(.small) }
+                // Touch ID's own prompt can still say no. Past that, closing this wouldn't stop what's on its way.
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .disabled(model.isSending)
                 Button("Send") {
                     Task { if await model.send() { dismiss() } }
                 }
@@ -59,6 +62,7 @@ struct SendSheet: View {
         }
         .padding(20)
         .frame(width: 460)
+        .interactiveDismissDisabled(model.isSending)
     }
 
     @ViewBuilder
