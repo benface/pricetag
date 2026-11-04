@@ -36,6 +36,25 @@ public enum Format {
         isPositive(micros) ? "+\(money(micros, currency))" : money(micros, currency)
     }
 
+    /// One side of a comparison. A nil is unavailable, not zero.
+    public static func ruleValue(_ micros: String?, format: String, currency: CurrencyCode) -> String {
+        guard let micros else { return "Unavailable" }
+        switch format {
+        case "usdPrice": return price(micros, .USD)
+        case "money": return money(micros, currency)
+        default: return signedMoney(micros, currency)
+        }
+    }
+
+    /// Always signed, so which way it went can be read at a glance. A price's is small, so it keeps its digits.
+    public static func ruleDifference(_ micros: String?, format: String, currency: CurrencyCode) -> String {
+        guard let micros else { return "—" }
+        if whole(micros) == 0 { return "Same" }
+        guard format == "usdPrice" else { return signedMoney(micros, currency) }
+        let isNegative = micros.hasPrefix("-")
+        return "\(isNegative ? "-" : "+")\(price(isNegative ? String(micros.dropFirst()) : micros, .USD))"
+    }
+
     /// Whole tokens from smallest units, cut to a readable length. Cuts instead of rounding, so it never shows more than there is.
     public static func amount(_ units: String, decimals: Int) -> String {
         let negative = units.hasPrefix("-")

@@ -32,6 +32,8 @@ import {
   staleSentence,
 } from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
+import { RulesPanel } from "./RulesPanel.tsx"
+import { useRules } from "./useRules.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
 
@@ -170,7 +172,8 @@ export function App() {
   const [target, setTarget] = useState<ExplainTarget | null>(null)
   const [taxOpen, setTaxOpen] = useState(false)
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
-  const { wallet, loading, error } = useWallet(address, chosenCurrency)
+  const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
+  const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule)
 
   useEffect(() => {
     const onPop = () => {
@@ -249,6 +252,7 @@ export function App() {
         {wallet ? <LiveBadge wallet={wallet} stale={error !== null} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
+      {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={wallet?.rule ?? null} address={address} method={method} currency={currency} /> : null}
 
       {!address ? (
         <section className="empty">

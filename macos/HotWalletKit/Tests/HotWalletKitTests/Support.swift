@@ -139,8 +139,12 @@ actor ScriptedPortfolios: PortfolioSource {
 
     func set(_ next: Result<Portfolio, FetchError>) { self.next = next }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], timeout: Duration) throws -> Portfolio {
+    /// Each read's pricing rule. Money only ever moves by the default.
+    private(set) var rules: [String?] = []
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], timeout: Duration) throws -> Portfolio {
         self.linked.append(linked)
+        rules.append(rule)
         return try next.get()
     }
 
@@ -152,7 +156,7 @@ actor ScriptedPortfolios: PortfolioSource {
         throw FetchError.unreachable
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) throws -> Explanation {
         throw FetchError.unreachable
     }
 

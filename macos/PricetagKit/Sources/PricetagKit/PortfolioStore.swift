@@ -35,6 +35,7 @@ public struct ExplanationRequest: Hashable, Sendable {
     public let address: String
     public let method: CostMethod
     public let currency: CurrencyCode
+    public let rule: String?
     public let linked: [String]
     public let serverURL: URL
 }
@@ -46,8 +47,8 @@ public final class PortfolioStore {
     /// Past this, the newest block is too old to call live. Base makes a block every 2 s.
     static let behindAfterSeconds = 120
 
-    /// What the store holds, which may not be current: read `feed` before calling it live. While a new method's numbers
-    /// or currency's numbers are on their way, the feed is `.reading` and this still holds the old ones, so the screen doesn't jump.
+    /// What the store holds, which may not be current: read `feed` before calling it live. While a new method's, currency's
+    /// or rule's numbers are on their way, the feed is `.reading` and this still holds the old ones, so the screen doesn't jump.
     public private(set) var portfolio: Portfolio?
     public private(set) var feed: FeedState
     public private(set) var updatedAt: Date?
@@ -55,6 +56,10 @@ public final class PortfolioStore {
     public private(set) var method: CostMethod
     public private(set) var currency: CurrencyCode
     public private(set) var serverURL: URL
+    /// The server's pricing rules. Empty when it has only one, so there's nothing to choose.
+    public private(set) var rules: [PricingRule] = []
+    /// What to ask the server for, or nil for its default.
+    public private(set) var selectedRule: String?
     /// The user's own wallets. Transfers between them carry their cost, and aren't new purchases.
     public private(set) var linkedWallets: [String] = []
 
@@ -84,6 +89,7 @@ public final class PortfolioStore {
         self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
         self.currency = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
         self.serverURL = serverURL
+        self.selectedRule = defaults.string(forKey: Keys.rule)
         self.feed = address == nil ? .noWallet : .reading
         self.source = makeSource(serverURL)
     }
@@ -91,6 +97,7 @@ public final class PortfolioStore {
     /// Starts polling, or starts over, say after a change or when asked to refresh.
     public func start() {
         pollTask?.cancel()
+        Task { await refreshRules() }
         guard address != nil else { return }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -140,11 +147,44 @@ public final class PortfolioStore {
         start()
     }
 
+    public func setRule(_ id: String) {
+        guard id != (selectedRule ?? rules.first?.id) else { return }
+        selectedRule = id
+        defaults.set(id, forKey: Keys.rule)
+        if address != nil { feed = .reading }
+        start()
+    }
+
+    /// The rule the numbers on screen were read through, when it isn't the server's default, so they can say so.
+    public var activeRuleName: String? {
+        guard let id = portfolio?.rule, id != rules.first?.id else { return nil }
+        return rules.first { $0.id == id }?.name
+    }
+
+    /// Asks the server what rules it has. A rule it doesn't have would fail every read, so that choice goes.
+    public func refreshRules() async {
+        let asked = serverURL
+        guard let next = try? await source.rules(), asked == serverURL else { return }
+        rules = next
+        if let chosen = selectedRule, !next.contains(where: { $0.id == chosen }) {
+            selectedRule = nil
+            defaults.removeObject(forKey: Keys.rule)
+            if address != nil { feed = .reading }
+            start()
+        }
+    }
+
+    public func comparison() async throws -> RuleComparison {
+        guard let address else { throw CancellationError() }
+        return try await source.comparison(address: address, method: method, currency: currency, linked: linked(for: address))
+    }
+
     public func setServerURL(_ url: URL) {
         guard url != serverURL else { return }
         serverURL = url
         defaults.set(url.absoluteString, forKey: Keys.server)
         source = makeSource(url)
+        rules = []
         // Another server's numbers can be different facts, so these aren't kept even for a moment.
         portfolio = nil
         updatedAt = nil
@@ -154,13 +194,13 @@ public final class PortfolioStore {
 
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, linked: linked(for: $0), serverURL: serverURL) }
+        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), serverURL: serverURL) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
         // A request from before a change has nothing to say about what's on screen now.
         guard request == explanationRequest(for: request.target) else { throw CancellationError() }
-        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, linked: request.linked)
+        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked)
     }
 
     public func proof(leg: String, address: String) async throws -> Proof {
@@ -192,14 +232,17 @@ public final class PortfolioStore {
         guard let address else { return unreachableDelay }
         let method = self.method
         let currency = self.currency
+        let rule = selectedRule
         let serverURL = self.serverURL
         let linked = linked(for: address)
         // An answer that arrives after a change is about something else, whatever it says.
-        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && currency == self.currency && serverURL == self.serverURL && linked == self.linked(for: address) }
-        // The first read in a currency also reads its rate at each of this wallet's transactions, so it gets as long as a first read.
-        let timeout: Duration = portfolio?.currency == currency ? .seconds(15) : .seconds(180)
+        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && currency == self.currency && rule == self.selectedRule && serverURL == self.serverURL && linked == self.linked(for: address) }
+        let isOtherRule = rule != nil && portfolio?.rule != rule
+        // The first read in a currency also reads its rate at each of this wallet's transactions, and the first by a rule
+        // reads the wallet again, so they get as long as a first read.
+        let timeout: Duration = portfolio?.currency == currency && !isOtherRule ? .seconds(15) : .seconds(180)
         do {
-            let next = try await source.portfolio(address: address, method: method, currency: currency, linked: linked, timeout: timeout)
+            let next = try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, timeout: timeout)
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
@@ -207,8 +250,8 @@ public final class PortfolioStore {
             return reachableDelay
         } catch {
             guard isCurrent(), !(error is CancellationError) else { return .zero }
-            // Numbers by another method or in another currency are wrong now, not just old, and there's no way to get the right ones.
-            if portfolio?.method != method || portfolio?.currency != currency { portfolio = nil }
+            // Numbers by another method or rule, or in another currency, are wrong now, not just old, and there's no way to get the right ones.
+            if portfolio?.method != method || portfolio?.currency != currency || isOtherRule { portfolio = nil }
             feed = state(of: error)
             return feed == .serverUnreachable ? unreachableDelay : reachableDelay
         }
@@ -235,5 +278,6 @@ public final class PortfolioStore {
         static let method = "method"
         static let currency = "currency"
         static let server = "serverURL"
+        static let rule = "pricingRule"
     }
 }

@@ -862,6 +862,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         let rig = await Rig()
         await rig.wallet.readHistory()
         #expect(await rig.portfolios.linked.last == [coldAddress.lowercased])
+        #expect(await rig.portfolios.rules.allSatisfy { $0 == nil }, "a rule picked to compare numbers must never decide what money moves")
     }
 }
 
