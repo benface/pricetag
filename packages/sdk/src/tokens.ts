@@ -9,6 +9,30 @@ export const USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 export const ETH_USD_FEED = "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70"
 export const USDC_USD_FEED = "0x7e860098F58bBFC8648a4311b374B1D669a2bc6B"
 
+export type FeedName = "eth" | "usdc"
+
+export type PriceFeed = {
+  name: FeedName
+  pair: string
+  /** What `latestRoundData()` and `aggregator()` are called on. It emits no log, not even when its aggregator changes. */
+  proxy: string
+  /** The contracts that emit this feed's `AnswerUpdated`. A new aggregator goes here, and needs a new dataset version. */
+  aggregators: readonly string[]
+  /** How long an update counts. After that the price is unknown, not stale. It's in time because feeds update on a clock, whatever the block rate. Longest gaps seen: 1,236 s and 86,490 s. */
+  validSeconds: number
+}
+
+export const PRICE_FEEDS: readonly [PriceFeed, PriceFeed] = [
+  { name: "eth", pair: "ETH/USD", proxy: ETH_USD_FEED, aggregators: ["0x05c84a58FE042275b37db038bAAcD15F410c7bB0"], validSeconds: 2_600 },
+  { name: "usdc", pair: "USDC/USD", proxy: USDC_USD_FEED, aggregators: ["0x68bE4C50235205Ede361ac8244B1ee221CDDA5E2"], validSeconds: 90_000 },
+]
+
+/**
+ * Stands in for the transaction of a price read from a feed's contract instead of a log. A local Amp has no logs from
+ * before its start, so that's where its first prices come from. A real transaction can't have this hash.
+ */
+export const SEED_TX = `0x${"0".repeat(64)}`
+
 /**
  * A swap price outside this range is rejected, and the leg has no usable price. Swaps can imply absurd prices:
  * WORK-319 saw up to 6.6e12× the oracle. The ranges are wide on purpose, so they only catch those.
@@ -21,7 +45,7 @@ export type Token = {
   decimals: number
   /** The position this token folds into. WETH and ETH are one position, so wrapping is never a sale. */
   asset: string
-  /** A Chainlink feed prices it, so `sanity` only applies to a swap at a block where the feed's read failed. */
+  /** A Chainlink feed prices it, so `sanity` only applies to a swap at a block where the feed has no price. */
   oracle?: "eth" | "usdc"
   sanity?: Sanity
 }

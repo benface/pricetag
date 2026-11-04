@@ -3,13 +3,14 @@ import { readFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, type LegRow } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, PRICE_FEEDS, USDC_ADDRESS, type LegRow, type PriceFeed } from "@pricetag/sdk/core"
 import type { BookPreview, PortfolioResponse, ProofResponse, VerificationResponse, WalletResponse } from "../src/core/api.ts"
 import { costKey, emptyBook } from "../src/core/book.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule, type RuleComparison } from "../src/core/rules.ts"
 import { createApi } from "../server/app.ts"
 import type { BlockData } from "../server/block.ts"
 import { createProofs, type Proofs } from "../server/proof.ts"
+import type { DepositDetails } from "../server/verify.ts"
 import type { Source } from "@pricetag/sdk/internal"
 
 const ME = "0x00000000000000000000000000000000000000aa"
@@ -52,7 +53,7 @@ function sourceAt(ethAnswer: bigint, through = HEAD, reads: string[] = []): Sour
   }
 }
 
-const NO_PROOFS: Proofs = { datasets: async () => [], readBlock: async () => null }
+const NO_PROOFS: Proofs = { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null }
 
 const rule = (id: string): PricingRule => ({ id, ...RULE_TEXT[id]!, dataset: `a/${id}@0.0.1`, hash: "a".repeat(64) })
 
@@ -164,6 +165,41 @@ describe("reading by a pricing rule", () => {
   it("refuses a bad compare request", async () => {
     assert.equal((await fetch(`${base}/api/portfolio/${ME}/compare?linked=nope`)).status, 400)
     assert.equal((await fetch(`${base}/api/portfolio/demo/compare`)).status, 400)
+  })
+})
+
+describe("the update behind a price, by a pricing rule", () => {
+  // A real block with an AnswerUpdated log at index 2. This test's prices don't come from it, so only a rule's check can pass.
+  const { block: data, deposits } = JSON.parse(readFileSync(new URL("./support/base-update-block.json", import.meta.url), "utf8")) as { block: BlockData; deposits: Record<string, DepositDetails> }
+  const log = data.logs.find((candidate) => candidate.log_index === 2)!
+  const tx = data.txs.find((candidate) => candidate.tx_index === log.tx_index)!
+  const feed: PriceFeed = { ...PRICE_FEEDS[0], aggregators: [`0x${log.address}`] }
+  const update = { block_num: Number(data.block.block_num), tx_hash: `0x${tx.tx_hash}`, log_index: 2, answer: BigInt(`0x${log.topics[1]}`).toString() }
+  const proofs: Proofs = { datasets: async () => [], priceBehind: async () => ({ feed, update }), readBlock: async () => ({ data, deposits: new Map(Object.entries(deposits)) }) }
+  const cautious = `&rule=${CAUTIOUS_RULE_ID}`
+  let server: Server
+  let base: string
+  before(async () => ({ server, base } = await serve(HEAD, [], proofs)))
+  after(() => server.close())
+  const get = async <T>(path: string) => (await (await fetch(`${base}${path}`)).json()) as T
+  const legOf = async (query: string) => encodeURIComponent((await get<WalletResponse>(`/api/wallet/${ME}${query}`)).legs.find((leg) => leg.asset === "ETH" && !leg.opening)!.id)
+  const updateCheck = (verification: VerificationResponse) => verification.checks.find((check) => check.title === "Chainlink's update")
+
+  it("checks the update, and doesn't hold the log to the rule's own price", async () => {
+    const check = updateCheck(await get<VerificationResponse>(`/api/portfolio/${ME}/verify?leg=${await legOf(`?rule=${CAUTIOUS_RULE_ID}`)}${cautious}`))
+    assert.equal(check?.status, "passed")
+    assert.match(check?.detail ?? "", /the price this rule starts from/)
+  })
+
+  it("still holds the default rule's price to the log", async () => {
+    assert.equal(updateCheck(await get<VerificationResponse>(`/api/portfolio/${ME}/verify?leg=${await legOf("")}`))?.status, "failed")
+  })
+
+  it("names the update, then the rule, and says the log has what the rule starts from", async () => {
+    const proof = await get<ProofResponse>(`/api/portfolio/${ME}/proof?leg=${await legOf(`?rule=${CAUTIOUS_RULE_ID}`)}${cautious}`)
+    assert.match(proof.source[0] as string, /in log #2/)
+    assert.equal(proof.source.at(-1), ruleNote(RULE_TEXT[CAUTIOUS_RULE_ID]!))
+    assert.ok(proof.scope.some((line) => /has to say the price this rule starts from/.test(line)))
   })
 })
 

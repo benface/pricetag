@@ -255,8 +255,8 @@ flight_addr = "127.0.0.1:$FLIGHT_PORT"
 
 [worker]
 health_addr = "127.0.0.1:$WORKER_HEALTH_PORT"
-# A failed RPC call restarts the job from its last commit, so commit often: eth_call batches stay small,
-# and the raw backfill keeps what it has every few seconds.
+# A failed RPC call restarts the job from its last commit, so commit often: the raw backfill keeps what it has every
+# few seconds.
 microbatch_max_interval = $MICROBATCH_BLOCKS
 segment_flush_interval_secs = $RAW_FLUSH_SECS
 
@@ -299,16 +299,20 @@ deploy_raw() {
   ampctl dataset deploy "$RAW_DATASET" > /dev/null
 }
 
+# The raw dataset has no blocks from before the start, so the manifest gets Chainlink's prices at the start block. They're
+# read first, because it's a pity to find out they can't be read after the backfill. See "Run the dataset locally" in the README.
+write_local_manifest() {
+  say "Reading Chainlink's prices at block $1..."
+  node "$REPO_DIR/dataset/local.ts" "$1" "$RPC_URL" > "$STATE_DIR/pricetag.json" \
+    || die "couldn't read Chainlink's prices at block $1 from BASE_RPC_URL."
+}
+
 deploy_pricetag() {
   local start_block="$1"
   say "Deploying $PRICETAG_DATASET from block $start_block..."
-  # A table without its own top-level block_num() filter walks from genesis, which here would mean
-  # about 2 eth_calls per block for the whole chain. Refuse to deploy one.
-  jq -e '.tables | map_values(.input.sql | test("block_num\\(\\) >= [0-9]+")) | all' "$MANIFEST" > /dev/null \
+  # A table without its own top-level block_num() filter walks from genesis. Refuse to deploy one.
+  jq -e '.tables | map_values(.input.sql | test("block_num\\(\\) >= [0-9]+")) | all' "$STATE_DIR/pricetag.json" > /dev/null \
     || die "every table in $MANIFEST needs a top-level block_num() >= <block> filter."
-  jq --argjson start "$start_block" \
-    '.tables |= map_values(.input.sql |= gsub("block_num\\(\\) >= [0-9]+"; "block_num() >= \($start)"))' \
-    "$MANIFEST" > "$STATE_DIR/pricetag.json"
   ampctl dataset register "${PRICETAG_DATASET%@*}" "$STATE_DIR/pricetag.json" --tag "${PRICETAG_DATASET#*@}" > /dev/null
   # Unbounded on purpose: --end-block turns off the start filter.
   ampctl dataset deploy "$PRICETAG_DATASET" > /dev/null
@@ -381,11 +385,11 @@ cmd_start() {
   printf '%s' "$ENV_FILE" > "$STATE_DIR/env_file"
   trap 'say "Start failed. See $STATE_DIR/ampd.log, then clean up with: scripts/amp stop"' EXIT
   start_rpc_throttle
+  write_local_manifest "$start_block"
   start_metadb
   start_ampd
   deploy_raw "$start_block"
-  # Backfilling raw blocks uses most of a public RPC's allowance. A failed eth_call fails its batch,
-  # so reference_prices would keep retrying if it ran alongside.
+  # Backfilling raw blocks uses most of a public RPC's allowance, and the dataset is built from them, so it goes after.
   say "Waiting for the raw dataset to reach chain head (block $head when this started)..."
   wait_for_head "$RAW_DATASET blocks" || die "the raw dataset is still behind after $((HEAD_TIMEOUT_SECS / 60)) minutes."
   deploy_pricetag "$start_block"
