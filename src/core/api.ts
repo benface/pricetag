@@ -3,6 +3,7 @@
 
 import type { BalanceSnapshot, Head, LatestPrice, LatestPrices, Method, PnlPoint, PnlStatus, PositionValues, PricedLeg, Reconciliation, ReferenceRow, Totals } from "@pricetag/sdk/core"
 import type { CurrencyCode, Rates } from "./currency.ts"
+import type { TaxCountryCode, TaxScope } from "./tax.ts"
 
 export type { Head, PnlStatus }
 
@@ -121,6 +122,30 @@ export type ExplanationLeg = {
   netting: string | null
   /** What this leg was in USD and the rate that converted it, in words, or null when it's in USD. */
   conversion: string | null
+}
+
+/** A tax report, ready to save. See `src/core/tax.ts`. */
+export type TaxReportResponse = {
+  /** The one asked about comes first. */
+  wallets: string[]
+  country: TaxCountryCode
+  method: Method
+  scope: TaxScope
+  currency: CurrencyCode
+  /** What this country calls for, so a client can tell an override. */
+  defaults: { method: Method; scope: TaxScope }
+  rowCount: number
+  unresolvedCount: number
+  estimatedCount: number
+  /** Only rows whose gain is known, and null when none is. Read it next to `unresolvedCount`. */
+  gainMicros: string | null
+  disclaimer: string
+  /** What's wrong with this file in particular. */
+  warnings: string[]
+  /** What this report never does, and what it covers. */
+  notes: string[]
+  filename: string
+  csv: string
 }
 
 /** A derived table is normally a block or two behind the chain. More than this is worth saying out loud. */

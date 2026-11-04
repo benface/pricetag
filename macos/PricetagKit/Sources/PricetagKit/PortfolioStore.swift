@@ -153,6 +153,12 @@ public final class PortfolioStore {
         return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency)
     }
 
+    public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
+        // A request from before a change of server has nothing to say about what's on screen now.
+        guard request.serverURL == serverURL else { throw CancellationError() }
+        return try await source.taxReport(request)
+    }
+
     /// One read. Returns how long to wait before the next one.
     func poll() async -> Duration {
         guard let address else { return unreachableDelay }

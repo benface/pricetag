@@ -21,8 +21,8 @@ public enum CostMethod: String, Codable, Sendable, CaseIterable, Identifiable {
     public var id: Self { self }
     public var label: String {
         switch self {
-        case .average: "Average cost"
-        case .fifo: "FIFO"
+        case .average: "Average"
+        case .fifo: "Oldest first"
         }
     }
 }
