@@ -65,6 +65,9 @@ public struct PnlCaveats: View {
             if !portfolio.gasUnknownTxs.isEmpty {
                 WarningText(Wording.gasUnknown(portfolio.gasUnknownTxs.count))
             }
+            if !portfolio.l1FeeUnknownTxs.isEmpty {
+                WarningText(Wording.networkFeeUnknown(portfolio.l1FeeUnknownTxs.count))
+            }
         }
         .font(.caption)
         .fixedSize(horizontal: false, vertical: true)

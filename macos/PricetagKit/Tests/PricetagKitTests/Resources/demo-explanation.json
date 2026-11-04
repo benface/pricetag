@@ -19,6 +19,7 @@
       "blockNum": 53502400,
       "timestamp": "2026-11-04T09:20:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
+      "opening": false,
       "effect": "Sold for $449.91, realized +$74.99",
       "netting": null
     },
@@ -35,6 +36,7 @@
       "blockNum": 53500900,
       "timestamp": "2026-11-04T08:30:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
+      "opening": false,
       "effect": "Adds 800 AERO for $999.80",
       "netting": null
     }
