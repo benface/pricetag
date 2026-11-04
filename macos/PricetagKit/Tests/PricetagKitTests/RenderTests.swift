@@ -34,7 +34,7 @@ struct RenderTests {
                 ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
-            ForEach(portfolio.positions) { HoldingRow(position: $0, isLive: true) }
+            ForEach(portfolio.positions) { HoldingRow(position: $0, currency: portfolio.currency, isLive: true) }
         }
         .padding()
         .frame(width: 380)
