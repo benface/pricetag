@@ -1,5 +1,7 @@
 #if DEBUG
 import AppKit
+import HotWalletKit
+import KeyVault
 import PricetagKit
 import SwiftUI
 import Synchronization
@@ -131,6 +133,8 @@ enum TestScene: String, CaseIterable {
         let source = FixtureSource(feed: feed)
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: .milliseconds(50), unreachableDelay: .seconds(30))
         store.start()
+        // Never started, so it reads nothing, and it has nowhere to get a key from or keep anything.
+        let hotWallet = HotWallet(signer: NoKeys(), settingsStore: NoSavedSettings(), stateStore: NoSavedState(), presence: NoOneThere(), portfolioSource: { source }, costMethod: { store.method })
         let navigation = Navigation()
         navigation.showsTransactions = self == .mainTransactions
         if self == .mainDetails { navigation.target = .asset("AERO", .realized) }
@@ -149,11 +153,36 @@ enum TestScene: String, CaseIterable {
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
         case .popover, .popoverNoWallet, .popoverNotUpdating:
-            return TestScreen(view: AnyView(PopoverView(store: store, navigation: navigation)), isReady: isReady)
+            return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
         case .settings:
-            return TestScreen(view: AnyView(SettingsView(store: store)), isReady: isReady)
+            return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
         }
     }
+}
+
+/// The test mode never makes, loads or signs with a key, and this is what makes sure of it.
+private struct NoKeys: Signer {
+    struct NotInTestMode: Error {}
+
+    func createKey() async throws -> EthereumAddress { throw NotInTestMode() }
+    func sign(_ transaction: UnsignedTransaction, from address: EthereumAddress) async throws -> SignedTransaction { throw NotInTestMode() }
+    func hasKey(_ address: EthereumAddress) async throws -> Bool { false }
+    func deleteKey(_ address: EthereumAddress) async throws {}
+    func addresses() async throws -> [EthereumAddress] { [] }
+}
+
+private struct NoSavedSettings: WalletSettingsStore {
+    func load() -> WalletSettings { WalletSettings() }
+    func save(_ settings: WalletSettings) {}
+}
+
+private struct NoSavedState: DeviceStateStore {
+    func load() throws -> DeviceWalletState { DeviceWalletState() }
+    func save(_ state: DeviceWalletState) throws {}
+}
+
+private struct NoOneThere: UserPresence {
+    func confirm(reason: String) async throws { throw NoKeys.NotInTestMode() }
 }
 
 /// Stands in for the server, with the same demo wallet the tests read.
@@ -167,7 +196,7 @@ private final class FixtureSource: PortfolioSource {
         self.feed = feed
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], timeout: Duration) async throws -> Portfolio {
         let read = reads.withLock { reads in
             reads += 1
             return reads
@@ -181,8 +210,12 @@ private final class FixtureSource: PortfolioSource {
         return try decode("demo-portfolio")
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> Explanation {
         try decode("demo-explanation")
+    }
+
+    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
+        throw FetchError.rejected("There's no tax report fixture.")
     }
 
     private func decode<T: Decodable>(_ name: String) throws -> T {

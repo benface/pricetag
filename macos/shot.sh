@@ -45,7 +45,7 @@ done
 xcodebuild -quiet \
   -project "$here/App.xcodeproj" -scheme App -configuration Debug \
   -derivedDataPath "$here/build/test-mode" -destination 'platform=macOS' \
-  ENABLE_APP_SANDBOX=NO build >&2
+  -onlyUsePackageVersionsFromResolvedFile ENABLE_APP_SANDBOX=NO build >&2
 
 run=$(mktemp -d "${TMPDIR:-/tmp}/patina-shot.XXXXXX")
 ditto "$here/build/test-mode/Build/Products/Debug/$name.app" "$run/$name.app"
