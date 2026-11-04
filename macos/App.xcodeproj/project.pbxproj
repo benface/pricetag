@@ -8,12 +8,15 @@
 
 /* Begin PBXBuildFile section */
 		A1B2C3D4E5F6000000000007 /* PricetagKit in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F6000000000006 /* PricetagKit */; };
+		A1B2C3D4E5F6000000000017 /* HotWalletKit in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F6000000000016 /* HotWalletKit */; };
+		A1B2C3D4E5F6000000000019 /* KeyVault in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F6000000000018 /* KeyVault */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A1B2C3D4E5F6000000000008 /* $(APP_NAME).app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "$(APP_NAME).app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D4E5F6000000000013 /* App.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = App.xcconfig; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000000000014 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A1B2C3D4E5F600000000001A /* HotWallet.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HotWallet.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -26,6 +29,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1B2C3D4E5F6000000000007 /* PricetagKit in Frameworks */,
+				A1B2C3D4E5F6000000000017 /* HotWalletKit in Frameworks */,
+				A1B2C3D4E5F6000000000019 /* KeyVault in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -54,6 +59,7 @@
 			children = (
 				A1B2C3D4E5F6000000000013 /* App.xcconfig */,
 				A1B2C3D4E5F6000000000014 /* Info.plist */,
+				A1B2C3D4E5F600000000001A /* HotWallet.entitlements */,
 			);
 			path = Config;
 			sourceTree = "<group>";
@@ -79,6 +85,8 @@
 			name = App;
 			packageProductDependencies = (
 				A1B2C3D4E5F6000000000006 /* PricetagKit */,
+				A1B2C3D4E5F6000000000016 /* HotWalletKit */,
+				A1B2C3D4E5F6000000000018 /* KeyVault */,
 			);
 			productName = App;
 			productReference = A1B2C3D4E5F6000000000008 /* $(APP_NAME).app */;
@@ -105,6 +113,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A1B2C3D4E5F6000000000005 /* XCLocalSwiftPackageReference "PricetagKit" */,
+				A1B2C3D4E5F6000000000015 /* XCLocalSwiftPackageReference "HotWalletKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A1B2C3D4E5F6000000000002 /* Products */;
@@ -199,12 +208,24 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = PricetagKit;
 		};
+		A1B2C3D4E5F6000000000015 /* XCLocalSwiftPackageReference "HotWalletKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = HotWalletKit;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		A1B2C3D4E5F6000000000006 /* PricetagKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = PricetagKit;
+		};
+		A1B2C3D4E5F6000000000016 /* HotWalletKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = HotWalletKit;
+		};
+		A1B2C3D4E5F6000000000018 /* KeyVault */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = KeyVault;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
