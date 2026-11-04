@@ -223,7 +223,7 @@ describe("the portfolio endpoint with linked wallets", () => {
     let other: Server
     let url: string
     before(async () => {
-      const api = createApi({}, { source: flaky, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], readBlock: async () => null } })
+      const api = createApi({}, { source: flaky, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
       other = createServer((req, res) => void api(req, res))
       await new Promise<void>((resolve) => other.listen(0, "127.0.0.1", resolve))
       url = `http://127.0.0.1:${(other.address() as AddressInfo).port}`
