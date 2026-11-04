@@ -3,7 +3,7 @@
 // Every query is bounded by block, because a hosted Amp is shared.
 
 import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type Query } from "./amp.ts"
-import { readBalancesAt } from "./balances.ts"
+import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
 import type { LegRow, PricedRow, Reference } from "./legs.ts"
 import type { Head } from "./portfolio.ts"
 import type { Source } from "./wallets.ts"
@@ -133,7 +133,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
         // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
         // An unlisted row stays either way, because it's evidence that something moved.
         rows: [...rows.filter((r) => r.amount !== "" && r.amount !== "0"), ...unlistedRows.map(toLegRow)],
-        gasUnknownTxs: rows.filter((r) => r.kind === "gas" && r.amount === "").map((r) => r.tx_hash),
+        gasUnknown: rows.filter((r) => r.kind === "gas" && r.amount === "").map(({ tx_hash, block_num }) => ({ tx_hash, block_num })),
         priced: pricedRows.map(toPricedRow),
       }
     },
@@ -180,12 +180,39 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   }
 }
 
+/**
+ * One query per 200 blocks, in the shape the raw source's `readReferences` explains. A block the table doesn't have, like
+ * the one before a local dataset's start, is read on its own.
+ */
+export async function readEthBalancesAt(query: Query, network: string, baseDataset: string, address: string, blocks: readonly number[]): Promise<Map<number, string>> {
+  const balances = new Map<number, string>()
+  const call = (block: string) => `rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeEthBalanceCall(address)}', ${block}) AS r`
+  const dataOf = (row: Row | undefined) => (row?.r as { data?: string } | null | undefined)?.data
+  const returned = new Set<number>()
+  for (const { filter, count } of blockFilters(blocks)) {
+    for (const row of await query<Row>(`SELECT block_num, ${call("block_num")} FROM (SELECT block_num FROM "${baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)) {
+      const block = asNumber(row.block_num)
+      const balance = decodeEthBalance(dataOf(row))
+      returned.add(block)
+      if (balance !== null) balances.set(block, balance)
+    }
+  }
+  for (const block of blocks) {
+    if (returned.has(block)) continue
+    const [row] = await query<Row>(`SELECT ${call(String(block))}`)
+    const balance = decodeEthBalance(dataOf(row))
+    if (balance !== null) balances.set(block, balance)
+  }
+  return balances
+}
+
 export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock: number | null; network: string }): Source {
   return {
     mode: "dataset",
     startBlock: config.startBlock,
     historyBlocks: null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     ...datasetReader(query, config),
   }
 }

@@ -181,6 +181,6 @@ describe("a dataset whose tables haven't started", () => {
       (sql.includes(".unlisted_legs") ? [{ ...leg, amount: null, kind: "unlisted" }] : sql.includes(".legs") ? [{ ...leg, amount: "", kind: "gas" }] : []) as T[]
     const window = await datasetSource(query, config).readWindow("0x00000000000000000000000000000000000000cc", 1, 10)
     assert.deepEqual(window.rows.map((r) => [r.kind, r.amount]), [["unlisted", ""]])
-    assert.equal(window.gasUnknownTxs.length, 1)
+    assert.deepEqual(window.gasUnknown, [{ tx_hash: "0xaa", block_num: 5 }])
   })
 })

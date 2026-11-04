@@ -68,6 +68,20 @@ describe("getLegs", () => {
     assert.ok(aero!.priceNote)
   })
 
+  it("leaves a swap paid out in unwrapped ETH unknown, because it can't confirm the ETH arrived", async () => {
+    const { client } = fakeAmp({
+      legs: [leg("aa", AERO, ME, "debit", String(500n * E18), "erc20"), leg("aa", "0000000000000000000000000000000000000000", ME, "credit", String(E18), "unwrap")],
+      priced_legs: [pricedRow("aa", AERO, String(500n * E18), "0000000000000000000000000000000000000000", String(E18), swapTo("2000000"))],
+      reference_prices: [{ block_num: "100", eth_usd: ETH_ANSWER, usdc_usd: USDC_ANSWER }],
+    })
+    const { legs } = await client.getLegs(`0x${ME}`, { from: 50 })
+    const aero = legs.find((l) => l.asset === "AERO")!
+    assert.deepEqual([aero.priceMicros, aero.priceSource, aero.proceedsMicros], [null, null, null])
+    assert.match(aero.priceNote!, /couldn't confirm/)
+    const { prices } = await client.getPrices("AERO", { from: 50 })
+    assert.deepEqual(prices.map((p) => [p.usdMicros, p.source]), [[null, "unknown"]])
+  })
+
   it("stops at what every table has processed, and says so", async () => {
     const { client, queries } = fakeAmp({}, 150)
     assert.deepEqual((await client.getLegs(`0x${ME}`, { from: 50 })).blocks, { fromBlock: 50, toBlock: 150 })
@@ -515,6 +529,47 @@ describe("getPortfolio", () => {
       chain.tables = opening(2n * E18)
       chain.block = 201
       assert.equal(await read(), String(2n * E18))
+    })
+
+    describe("with an unwrap credit that only the balance can confirm", () => {
+      const ethReads = (queries: string[]) => queries.filter((q) => q.includes("X'4d2301cc")).length
+      const claimAt = (block: number) => ({ ...leg("bb", ETH, ME, "credit", "5", "unwrap"), block_num: String(block) })
+      const claim = { legs: [gasAt(195, "bb"), claimAt(195)], reference_prices: refsThrough(195), balances: { 49: { ETH: String(E18) }, 200: { ETH: String(E18) } } }
+
+      it("still retries a block's ETH balance without a new block, then stops", async () => {
+        const { chain, client } = chainAt(500, claim, async (requests) => new Map(requests.map(({ txHash }) => [txHash, "0"])))
+        const kept = client()
+        await summary(kept)
+        chain.queries.length = 0
+        await summary(kept)
+        assert.ok(ethReads(chain.queries) > 0, "a missing balance is read again")
+        chain.tables = { ...claim, ethBalances: { 194: String(E18), 195: String(E18) } }
+        await summary(kept)
+        chain.queries.length = 0
+        await summary(kept)
+        assert.equal(ethReads(chain.queries), 0)
+      })
+
+      it("keeps its L1 fee as current as the balance on each new block, until it's past the window", async () => {
+        const reads: string[] = []
+        const readFees: ReadL1Fees = async (requests) => {
+          reads.push(...requests.map((r) => r.txHash))
+          return new Map(requests.map(({ txHash }) => [txHash, "0"]))
+        }
+        const { chain, client } = chainAt(200, { ...claim, ethBalances: { 194: String(E18), 195: String(E18) } }, readFees)
+        const kept = client()
+        await summary(kept)
+        assert.equal(reads.length, 1)
+        chain.block = 201
+        await summary(kept)
+        assert.equal(reads.length, 2)
+        chain.block = 240
+        await summary(kept)
+        assert.equal(reads.length, 3)
+        chain.block = 241
+        await summary(kept)
+        assert.equal(reads.length, 3)
+      })
     })
 
     for (const [name, range] of [["with a `to`", { from: 190, to: 200 }], ["without a `to`", { from: 190 }]] as const) {

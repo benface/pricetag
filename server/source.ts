@@ -4,7 +4,7 @@
 // Every query is bounded by block, because staging is shared.
 
 import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, type RateRound } from "@pricetag/sdk/core"
-import { asIso, asNumber, blockFilters, decimalString, hexOf, prefixed, readBalancesAt, readHead, type Query, type Row, type Source } from "@pricetag/sdk/internal"
+import { asIso, asNumber, blockFilters, decimalString, hexOf, prefixed, readBalancesAt, readEthBalancesAt, readHead, type Query, type Row, type Source } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRound, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
 /** A feed's answer at each block, leaving out blocks where the read failed. */
@@ -68,6 +68,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
     readReferences,
     readLatestReference: async (head) => (await readReferences([head]))[0] ?? null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
 
     async readWindow(address, from, to) {
       const me = hexOf(address)
@@ -134,7 +135,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
         : []
       const baseFees = await inBlocks<Row>(sentBlocks, (filter) => `SELECT block_num, base_fee_per_gas FROM ${ds}.blocks WHERE ${filter}`)
 
-      const { rows, gasUnknownTxs } = legRowsFromRaw({
+      const { rows, gasUnknown } = legRowsFromRaw({
         account: address,
         txs,
         logs,
@@ -144,7 +145,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
           baseFeeByBlock: new Map(baseFees.map((b) => [asNumber(b.block_num), decimalString(b.base_fee_per_gas) ?? "0"])),
         },
       })
-      return { rows, priced: null, gasUnknownTxs }
+      return { rows, priced: null, gasUnknown }
     },
   }
 }
