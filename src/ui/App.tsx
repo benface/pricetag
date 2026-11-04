@@ -1,10 +1,10 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { isAddress, type WalletResponse } from "../core/api.ts"
+import { hasStarted, isAddress, isBehind, type WalletResponse } from "../core/api.ts"
 import type { Method } from "../core/fold.ts"
-import { foldPositions, hasAnswer, pnlOverTime, sumTotals, type Coverage, type Exclusion, type PnlPoint, type Position } from "../core/portfolio.ts"
+import { foldPositions, hasAnswer, pnlOverTime, sumTotals, unconfirmedAssets, type Coverage, type Exclusion, type PnlPoint, type Position } from "../core/portfolio.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
-import { explainMetric, explainTotal, mismatchCause, type Explanation, type Metric, type TotalMetric } from "./explain.ts"
-import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd, shortHash } from "./format.ts"
+import { explainMetric, explainPoint, explainTotal, mismatchCause, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
+import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd } from "../core/format.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { useWallet } from "./useWallet.ts"
 
@@ -33,7 +33,7 @@ function OnchainCheck({ position, onClick }: { position: Position; onClick: () =
   const status = position.reconciliation?.status
   if (status === "reconciled") return <Num label={`${position.asset} reconciled with its onchain balance`} onClick={onClick} tone="gain">✓ Reconciled</Num>
   if (status === "incomplete") return <Num label={`${position.asset} doesn't match its onchain balance`} onClick={onClick} tone="warn">⚠ Incomplete</Num>
-  return <Num label={`${position.asset} not checked against its onchain balance`} onClick={onClick}>Not checked</Num>
+  return <Num label={`${position.asset} not checked against its onchain balance`} onClick={onClick} tone="warn">⚠ Not checked</Num>
 }
 
 function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: (e: Explanation) => void }) {
@@ -159,22 +159,10 @@ export function App() {
 
   const positions = useMemo(() => (wallet ? foldPositions(wallet.legs, method, wallet.prices, wallet) : []), [wallet, method])
   const totals = useMemo(() => sumTotals(positions), [positions])
-  const points = useMemo(() => {
-    if (!wallet) return []
-    const incomplete = new Set(positions.filter((p) => p.reconciliation?.status === "incomplete").map((p) => p.asset))
-    return pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, incomplete)
-  }, [wallet, method, positions])
+  const points = useMemo(() => (wallet ? pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions)) : []), [wallet, method, positions])
   const close = useCallback(() => setExplanation(null), [])
   const openTotal = (metric: TotalMetric) => setExplanation(explainTotal(positions, totals, metric))
-  const openPoint = (point: PnlPoint) => {
-    const effects = positions.flatMap((p) => p.effects).filter((e) => e.leg.txHash === point.txHash)
-    setExplanation({
-      title: `Transaction ${shortHash(point.txHash as string)}`,
-      value: point.pnlUsdMicros && formatSignedUsd(point.pnlUsdMicros),
-      lines: [`Total PnL after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`],
-      effects,
-    })
-  }
+  const openPoint = (point: PnlPoint) => setExplanation(explainPoint(positions, point))
 
   return (
     <div className="page">
@@ -236,7 +224,7 @@ export function App() {
             </p>
           ) : null}
           {wallet.gasUnknownTxs.length > 0 ? <p className="notice warn">⚠ Gas couldn't be worked out for {wallet.gasUnknownTxs.length} transactions, so ETH is overstated by that much.</p> : null}
-          {wallet.l1FeeUnknownTxs.length > 0 ? <p className="notice warn">⚠ Couldn't read the L1 fee of {wallet.l1FeeUnknownTxs.length} transactions yet, so gas paid is low and ETH isn't checked against the chain.</p> : null}
+          {wallet.l1FeeUnknownTxs.length > 0 ? <p className="notice warn">⚠ Couldn't read the network fee of {wallet.l1FeeUnknownTxs.length} transactions yet, so gas paid is low and ETH's PnL is unavailable until it can.</p> : null}
 
           {positions.length === 0 && !hasStarted(wallet) ? null : positions.length === 0 ? (
             <section className="empty">
@@ -298,12 +286,6 @@ function Stat({ label, onClick, coverage, value }: { label: string; onClick: () 
     </div>
   )
 }
-
-/** A derived table is normally a block or two behind the chain. More than this is worth saying out loud. */
-const BEHIND_BLOCKS = 5
-
-const hasStarted = (wallet: WalletResponse) => wallet.coverage.toBlock >= wallet.coverage.fromBlock
-const isBehind = (wallet: WalletResponse) => wallet.latest.blockNum - wallet.coverage.toBlock > BEHIND_BLOCKS
 
 function LiveBadge({ wallet, stale }: { wallet: WalletResponse; stale: boolean }) {
   if (wallet.mode === "demo") return <span className="badge">Demo data</span>

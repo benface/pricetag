@@ -1,9 +1,10 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { balancesByAsset, decodeBalanceResults, encodeBalanceCalls, MULTICALL3 } from "../server/balances.ts"
+import { explainMetric, mismatchCause } from "../src/core/explain.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { buildPricedLegs, type LegRow, type ReferenceRow } from "../src/core/legs.ts"
-import { foldPositions, pnlOverTime, sumTotals } from "../src/core/portfolio.ts"
+import { foldPositions, pnlOverTime, sumTotals, unconfirmedAssets } from "../src/core/portfolio.ts"
 import { openingLegs, type Onchain } from "../src/core/reconcile.ts"
 import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS } from "../src/core/tokens.ts"
 
@@ -154,10 +155,23 @@ describe("a wallet with an opening balance", () => {
 })
 
 describe("when there's nothing to compare", () => {
-  it("a failed read leaves positions unchecked, with their PnL", () => {
+  it("a failed read leaves positions unchecked, and their PnL unavailable", () => {
     const [position] = foldPositions(legsOf([row(USDC_ADDRESS, "credit", 5n)]), "average", {}, { balances: null, l1FeeUnknownTxs: [] })
     assert.equal(position!.reconciliation?.status, "unchecked")
-    assert.deepEqual(sumTotals([position!]).excluded.filter((e) => e.reason === "doesn't match its onchain balance"), [])
+    assert.deepEqual(sumTotals([position!]).excluded.filter((e) => e.reason !== "no current price"), [{ asset: "USDC", reason: "not checked against its onchain balance" }])
+  })
+
+  it("keeps the amount and value it has, since there's nothing better to show", () => {
+    const rows = [row(USDC_ADDRESS, "debit", 3000n * E6, "erc20", SWAP), row(WETH_ADDRESS, "credit", E18, "erc20", SWAP), row(USDC_ADDRESS, "credit", 3000n * E6)]
+    const eth = assetOf(foldPositions(legsOf(rows), "average", PRICES, { balances: null, l1FeeUnknownTxs: [] }), "ETH")
+    assert.equal(eth.values.qty, E18.toString())
+    assert.equal(eth.values.valueUsdMicros, "3000000000")
+  })
+
+  it("units that left without arriving still leave the value partial", () => {
+    const totals = sumTotals(foldPositions(legsOf([row(USDC_ADDRESS, "debit", 5n)]), "average", {}, { balances: null, l1FeeUnknownTxs: [] }))
+    assert.deepEqual(totals.excluded.map((e) => e.reason), ["not checked against its onchain balance", "incomplete history"])
+    assert.equal(totals.coverage.value.missing, 1)
   })
 
   it("an asset whose read failed is unchecked, and the others aren't", () => {
@@ -174,6 +188,101 @@ describe("when there's nothing to compare", () => {
 
   it("a fold with no onchain data at all has no check", () => {
     assert.equal(foldPositions(legsOf(WALLET_ROWS), "average", {})[0]!.reconciliation, null)
+  })
+})
+
+describe("a known mismatch, when the next check can't run", () => {
+  // Bought 1 ETH for $2,000, now $3,000, with 1.5 ETH onchain. Its PnL has to stay gone until a check says otherwise.
+  const SWAP_REF: ReferenceRow = { block_num: 100, eth_usd: "200000000000", usdc_usd: "100000000" }
+  const rows = [row(USDC_ADDRESS, "credit", 2000n * E6), row(USDC_ADDRESS, "debit", 2000n * E6, "erc20", "0xbuy"), row(WETH_ADDRESS, "credit", E18, "erc20", "0xbuy")]
+  const legs = buildPricedLegs({ account: ME, rows, references: [SWAP_REF], priced: [] })
+  const fold = (state: Onchain) => foldPositions(legs, "average", PRICES, state)
+  const eth = (state: Onchain) => assetOf(fold(state), "ETH")
+  const chartEnd = (state: Onchain) => pnlOverTime(legs, "average", PRICES, [SWAP_REF], { blockNum: 200, timestamp: "2026-11-04T00:00:00.000Z" }, unconfirmedAssets(fold(state))).at(-1)!
+
+  const mismatch = onchain({ ETH: E18 + E18 / 2n, USDC: 0n })
+  const readFailed: Onchain = { balances: null, l1FeeUnknownTxs: [] }
+  const feeUnread = onchain({ ETH: E18 + E18 / 2n, USDC: 0n }, ["0xnew"])
+  const match = onchain({ ETH: E18, USDC: 0n })
+
+  it("starts unavailable", () => {
+    assert.equal(eth(mismatch).reconciliation?.status, "incomplete")
+    assert.equal(eth(mismatch).values.unrealizedUsdMicros, null)
+  })
+
+  for (const [name, state] of [["a failed balance read", readFailed], ["a new L1 fee that isn't in yet", feeUnread]] as const) {
+    it(`${name} doesn't bring the PnL back, in the position, the totals or the chart`, () => {
+      assert.equal(eth(state).reconciliation?.status, "unchecked")
+      assert.equal(eth(state).values.realizedUsdMicros, null)
+      assert.equal(eth(state).values.unrealizedUsdMicros, null)
+      assert.equal(eth(state).values.averageCostUsdMicros, null)
+      assert.ok(sumTotals(fold(state)).excluded.some((e) => e.asset === "ETH"))
+      assert.equal(sumTotals(fold(state)).unrealizedUsdMicros, null)
+      assert.ok(chartEnd(state).excludedCount > 0)
+      assert.equal(chartEnd(state).pnlUsdMicros, sumTotals(fold(state)).pnlUsdMicros)
+    })
+  }
+
+  it("a check that matches is what brings it back", () => {
+    assert.equal(eth(match).reconciliation?.status, "reconciled")
+    assert.equal(eth(match).values.unrealizedUsdMicros, "1000000000")
+    assert.equal(chartEnd(match).pnlUsdMicros, sumTotals(fold(match)).pnlUsdMicros)
+  })
+
+  it("the words say why, for every number that's gone", () => {
+    for (const metric of ["average", "realized", "unrealized"] as const) {
+      const explanation = explainMetric(eth(readFailed), metric)
+      assert.equal(explanation.value, null)
+      assert.match(explanation.lines.join(" "), /Not checked/)
+    }
+  })
+})
+
+describe("what the chart leaves out", () => {
+  const latest = { blockNum: 200, timestamp: "2026-11-04T00:00:00.000Z" }
+
+  it("agrees with the headline about an asset only the chain knows about", () => {
+    // USDC arrives and leaves, so its PnL is a real $0, and 1 ETH shows up from a transfer we can't see.
+    const legs = legsOf([row(USDC_ADDRESS, "credit", 5n), row(USDC_ADDRESS, "debit", 5n)])
+    const positions = foldPositions(legs, "average", PRICES, onchain({ USDC: 0n, ETH: E18 }))
+    assert.equal(sumTotals(positions).pnlUsdMicros, null)
+    const end = pnlOverTime(legs, "average", PRICES, [REF], latest, unconfirmedAssets(positions)).at(-1)!
+    assert.equal(end.pnlUsdMicros, null)
+    assert.equal(end.excludedCount, 1)
+  })
+
+  it("counts it at every point, because we can't tell when it started", () => {
+    const legs = legsOf([row(USDC_ADDRESS, "credit", 5n), row(USDC_ADDRESS, "debit", 5n)])
+    const points = pnlOverTime(legs, "average", PRICES, [REF], latest, new Set(["ETH"]))
+    assert.ok(points.every((p) => p.excludedCount >= 1))
+  })
+
+  it("a wallet with no activity at all still ends on an unavailable point, not an empty chart that disagrees", () => {
+    const positions = foldPositions([], "average", PRICES, onchain({ ETH: E18 }))
+    const points = pnlOverTime([], "average", PRICES, [], latest, unconfirmedAssets(positions))
+    assert.deepEqual(points.map((p) => [p.pnlUsdMicros, p.excludedCount]), [[null, 1]])
+    assert.equal(sumTotals(positions).pnlUsdMicros, null)
+  })
+
+  it("a wallet with nothing wrong and no activity has no points", () => {
+    assert.deepEqual(pnlOverTime([], "average", PRICES, [], latest, new Set()), [])
+  })
+})
+
+describe("the words", () => {
+  const JARGON = /\b(legs?|oracle|FIFO|traces?|rebas\w*|L1|L2)\b/i
+
+  it("in reconciliation messages stay plain, for every outcome", () => {
+    const states = [onchain({ ETH: COMPUTED_ETH, USDC: 0n }), onchain({ ETH: COMPUTED_ETH + 1n, USDC: 1n }), onchain({ ETH: COMPUTED_ETH, USDC: 0n }, ["0xabc"]), { balances: null, l1FeeUnknownTxs: [] }]
+    for (const state of states) {
+      for (const position of foldPositions(legsOf(WALLET_ROWS), "average", PRICES, state)) {
+        const { lines } = explainMetric(position, "onchain")
+        assert.ok(lines.length > 0)
+        for (const line of lines) assert.doesNotMatch(line, JARGON)
+        if (position.reconciliation?.status === "unchecked") assert.doesNotMatch(position.reconciliation.reason, JARGON)
+      }
+    }
+    for (const [asset, difference] of [["ETH", "1"], ["ETH", "-1"], ["USDC", "1"], ["USDC", "0"]] as const) assert.doesNotMatch(mismatchCause(asset, difference), JARGON)
   })
 })
 

@@ -28,9 +28,9 @@ export type Reconciliation =
 export function reconcile(asset: string, computed: bigint, shortfall: bigint, { balances, l1FeeUnknownTxs }: Onchain): Reconciliation {
   const actual = balances?.amounts[asset]
   if (!balances || actual === undefined) return { status: "unchecked", reason: "The onchain balance couldn't be read." }
-  // This clears on its own when the receipts can be read, so it isn't a reason to call the history incomplete.
+  // This clears when the receipts can be read, so it isn't a reason to call the history incomplete. Nor is it a match.
   if (asset === "ETH" && l1FeeUnknownTxs.length > 0) {
-    return { status: "unchecked", reason: `The L1 fee of ${l1FeeUnknownTxs.length === 1 ? "1 transaction" : `${l1FeeUnknownTxs.length} transactions`} couldn't be read yet.` }
+    return { status: "unchecked", reason: `The network fee of ${l1FeeUnknownTxs.length === 1 ? "1 transaction" : `${l1FeeUnknownTxs.length} transactions`} couldn't be read yet.` }
   }
   const difference = BigInt(actual) - computed
   return {

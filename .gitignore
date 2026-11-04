@@ -1,5 +1,9 @@
 node_modules/
 dist/
+macos/build/
+.build/
+.swiftpm/
+xcuserdata/
 *.local
 .env
 .env.*

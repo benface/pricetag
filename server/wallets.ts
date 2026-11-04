@@ -4,6 +4,7 @@ import type { Head, WalletResponse } from "../src/core/api.ts"
 import { buildPricedLegs, derivePricedRows, answerToMicros, type LegRow, type PricedRow, type ReferenceRow } from "../src/core/legs.ts"
 import type { LatestPrices } from "../src/core/portfolio.ts"
 import { openingLegs, type BalanceSnapshot } from "../src/core/reconcile.ts"
+import { ASSETS } from "../src/core/tokens.ts"
 import { describeError } from "./amp.ts"
 import type { ReadL1Fees } from "./receipts.ts"
 import type { Source } from "./source.ts"
@@ -27,8 +28,28 @@ type Cached = {
   opening: BalanceSnapshot | null
   /** At `coveredTo`, the same block the rows reach, or the check would fail whenever a dataset is slightly behind. */
   closing: BalanceSnapshot | null
-  /** L1 fees by transaction, each with the block it was read for, so a reorg that moves a transaction reads it again. */
-  l1Fees: Map<string, { blockNum: number; fee: string }>
+  /** L1 fees by transaction. See `isL1FeeSettled`. */
+  l1Fees: Map<string, L1Fee>
+}
+
+type L1Fee = { blockNum: number; fee: string; readAtCoveredTo: number }
+
+/**
+ * A reorg can keep a transaction at the same height and still change its fee, because the block's L1 inputs changed.
+ * So a fee is read when it's first seen, then once more when its block has left the part of the chain that's re-read
+ * for reorgs. A transaction that moved to another block is read again straight away.
+ */
+function isL1FeeSettled(fee: L1Fee | undefined, blockNum: number, coveredTo: number): boolean {
+  if (fee?.blockNum !== blockNum) return false
+  return fee.readAtCoveredTo - blockNum >= REORG_BLOCKS || coveredTo - blockNum < REORG_BLOCKS
+}
+
+const isComplete = (snapshot: BalanceSnapshot | null) => snapshot !== null && ASSETS.every((asset) => snapshot.amounts[asset] !== undefined)
+
+/** A read can fail for one asset and work for the rest. What's already known stays, and only what's missing gets filled in. */
+function mergeOpening(known: BalanceSnapshot | null, read: BalanceSnapshot | null): BalanceSnapshot | null {
+  if (!read) return known
+  return { blockNum: read.blockNum, amounts: { ...read.amounts, ...known?.amounts } }
 }
 
 /** A gas row's L1 fee, as a row of its own beside it. */
@@ -50,7 +71,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
   // A failed check leaves positions unchecked, and it mustn't take the wallet down with it.
   async function readBalances(address: string, block: number): Promise<BalanceSnapshot | null> {
-    if (block < 0) return { blockNum: block, amounts: {} }
+    // Before the first block there's nothing to hold.
+    if (block < 0) return { blockNum: block, amounts: Object.fromEntries(ASSETS.map((asset) => [asset, "0"])) }
     try {
       return await source.readBalances(address, block)
     } catch (error) {
@@ -86,18 +108,18 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     }
 
     const l1Fees = new Map(cached?.l1Fees ?? [])
-    const unread = rows.filter((r) => r.kind === "gas" && l1Fees.get(r.tx_hash)?.blockNum !== r.block_num)
+    const unread = rows.filter((r) => r.kind === "gas" && !isL1FeeSettled(l1Fees.get(r.tx_hash), r.block_num, coveredTo))
     const fees = unread.length > 0 ? await readL1Fees(unread.map((r) => ({ txHash: r.tx_hash, blockNum: r.block_num }))) : new Map<string, string>()
     for (const { tx_hash, block_num } of unread) {
       const fee = fees.get(tx_hash)
-      if (fee !== undefined) l1Fees.set(tx_hash, { blockNum: block_num, fee })
+      if (fee !== undefined) l1Fees.set(tx_hash, { blockNum: block_num, fee, readAtCoveredTo: coveredTo })
     }
 
     let opening = cached?.opening ?? null
     let closing = cached?.closing ?? null
     if (coveredTo >= fromBlock) {
-      opening ??= await readBalances(address, fromBlock - 1)
-      if (closing?.blockNum !== coveredTo) closing = await readBalances(address, coveredTo)
+      if (!isComplete(opening)) opening = mergeOpening(opening, await readBalances(address, fromBlock - 1))
+      if (closing?.blockNum !== coveredTo || !isComplete(closing)) closing = await readBalances(address, coveredTo)
     }
 
     // Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong.
@@ -115,6 +137,26 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     return next
   }
 
+  function responseOf(key: string, wallet: Cached): WalletResponse {
+    const references = [...wallet.references.values()]
+    const l1 = l1FeeRows(wallet.rows, wallet.l1Fees)
+    const { opening, closing } = wallet
+    const openedAt = new Date(new Date(wallet.latest.timestamp).getTime() - (wallet.latest.blockNum - wallet.fromBlock + 1) * BLOCK_MS).toISOString()
+    return {
+      address: key,
+      mode: source.mode,
+      coverage: { fromBlock: wallet.fromBlock, toBlock: wallet.coveredTo },
+      legs: [...(opening ? openingLegs(opening, openedAt) : []), ...buildPricedLegs({ account: key, rows: [...wallet.rows, ...l1.rows], references, priced: wallet.priced })],
+      references,
+      prices: wallet.prices,
+      latest: wallet.latest,
+      gasUnknownTxs: [...wallet.gasUnknownTxs],
+      l1FeeUnknownTxs: l1.unknownTxs,
+      // Without an asset's opening balance, its legs don't add up to a whole balance, so there's nothing to compare.
+      balances: opening && closing ? { blockNum: closing.blockNum, amounts: Object.fromEntries(Object.entries(closing.amounts).filter(([asset]) => opening.amounts[asset] !== undefined)) } : null,
+    }
+  }
+
   return {
     async get(address: string): Promise<WalletResponse> {
       const key = address.toLowerCase()
@@ -123,24 +165,14 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         pending = refresh(key).finally(() => inflight.delete(key))
         inflight.set(key, pending)
       }
-      const wallet = await pending
-      const references = [...wallet.references.values()]
-      const l1 = l1FeeRows(wallet.rows, wallet.l1Fees)
-      const { opening, closing } = wallet
-      const openedAt = new Date(new Date(wallet.latest.timestamp).getTime() - (wallet.latest.blockNum - wallet.fromBlock + 1) * BLOCK_MS).toISOString()
-      return {
-        address: key,
-        mode: source.mode,
-        coverage: { fromBlock: wallet.fromBlock, toBlock: wallet.coveredTo },
-        legs: [...(opening ? openingLegs(opening, openedAt) : []), ...buildPricedLegs({ account: key, rows: [...wallet.rows, ...l1.rows], references, priced: wallet.priced })],
-        references,
-        prices: wallet.prices,
-        latest: wallet.latest,
-        gasUnknownTxs: [...wallet.gasUnknownTxs],
-        l1FeeUnknownTxs: l1.unknownTxs,
-        // Without the opening balances, the legs don't add up to a whole balance, so there's nothing to compare.
-        balances: opening ? closing : null,
-      }
+      return responseOf(key, await pending)
+    },
+
+    /** What's already been read, with no query, or null when nothing has been. */
+    peek(address: string): WalletResponse | null {
+      const key = address.toLowerCase()
+      const wallet = wallets.get(key)
+      return wallet ? responseOf(key, wallet) : null
     },
   }
 }

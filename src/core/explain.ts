@@ -1,8 +1,9 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import type { LegEffect, Position, Totals } from "../core/portfolio.ts"
-import { TOKENS } from "../core/tokens.ts"
-import { formatAmount, formatPrice, formatSignedUsd, formatUsd } from "./format.ts"
+import type { PricedLeg } from "./legs.ts"
+import type { LegEffect, PnlPoint, Position, Totals } from "./portfolio.ts"
+import { TOKENS, tokenByAddress } from "./tokens.ts"
+import { formatAmount, formatPrice, formatSignedUsd, formatUsd, shortHash } from "./format.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"
 
@@ -52,35 +53,46 @@ export function describeEffect({ leg, before, after }: LegEffect): string {
   return parts.join(", ")
 }
 
-/** Why the legs and the chain might disagree, by which way they do. */
+/** Why what we saw and the chain might disagree, by which way they do. */
 export function mismatchCause(asset: string, differenceQty: string): string {
   const difference = BigInt(differenceQty)
   if (difference === 0n) return "The end balance matches, but more left than arrived, so something moved that we can't see."
   if (asset === "ETH") {
     return difference > 0n
-      ? "More ETH is onchain than the legs explain, most likely from an internal transfer, which Amp's data can't show without traces."
-      : "Less ETH is onchain than the legs explain. Most likely a contract unwrapped WETH and sent the ETH elsewhere: without traces, an unwrap counts as ETH paid to the transaction's sender."
+      ? "This wallet holds more ETH than its transactions explain. Most likely a contract sent it some, which we can't see yet."
+      : "This wallet holds less ETH than its transactions explain. Most likely a contract turned WETH into ETH and sent it elsewhere, while we counted it as coming here."
   }
-  return `This balance changed in a way ${asset}'s transfer logs don't show, as with a rebasing token.`
+  return `This balance changed in a way ${asset}'s transfers don't show, as with a token whose balance adjusts by itself.`
 }
 
 /** The whole comparison, in words. */
 function onchainLines({ asset, decimals, reconciliation, effects }: Position): string[] {
   if (reconciliation === null) return ["There's no onchain balance to compare this with."]
-  if (reconciliation.status === "unchecked") return [`Not checked. ${reconciliation.reason} PnL still shows, but nothing has confirmed it.`]
+  if (reconciliation.status === "unchecked") return [`Not checked. ${reconciliation.reason} PnL is unavailable until this balance is confirmed, which happens by itself.`]
   const amount = (qty: string) => `${formatAmount(qty, decimals)} ${asset}`
   const block = reconciliation.blockNum.toLocaleString("en-US")
   if (reconciliation.status === "reconciled") {
-    const opening = effects.some(({ leg }) => leg.opening) ? "what it already held, plus every leg since," : "its legs"
-    return [`Matches the chain exactly: ${opening} add up to ${amount(reconciliation.actualQty)} at block ${block}, to the smallest unit.`]
+    const opening = effects.some(({ leg }) => leg.opening) ? "what it already held, plus every transaction since," : "its transactions"
+    return [`Matches the chain exactly: ${opening} add up to ${amount(reconciliation.actualQty)} at block ${block}.`]
   }
   return [
-    `Computed from the legs: ${amount(reconciliation.computedQty)}.`,
+    `Worked out from its transactions: ${amount(reconciliation.computedQty)}.`,
     `Onchain at block ${block}: ${amount(reconciliation.actualQty)}.`,
     `Difference: ${BigInt(reconciliation.differenceQty) > 0n ? "+" : ""}${amount(reconciliation.differenceQty)}.`,
     mismatchCause(asset, reconciliation.differenceQty),
-    "Value uses the onchain balance. PnL is unavailable, because it would come from legs we know are incomplete.",
+    "Value uses the onchain balance. PnL is unavailable, because we know some of this wallet's activity is missing.",
   ]
+}
+
+/** The rows a leg nets together, or null when it's just one. */
+export function describeNetting(leg: PricedLeg): string | null {
+  if (leg.parts.length < 2) return null
+  const rows = leg.parts.map((p) => {
+    const token = tokenByAddress(p.token)
+    const fee = p.kind === "gas" ? " gas" : p.kind === "l1_fee" ? " data fee" : ""
+    return `${p.side === "credit" ? "+" : "−"}${formatAmount(p.amount, token?.decimals ?? 18)} ${token?.symbol ?? p.token}${fee}`
+  })
+  return `Nets ${leg.parts.length} rows: ${rows.join(", ")}`
 }
 
 export function explainMetric(position: Position, metric: Metric): Explanation {
@@ -97,7 +109,8 @@ export function explainMetric(position: Position, metric: Metric): Explanation {
   let value: string | null = null
 
   const incomplete = reconciliation?.status === "incomplete"
-  if (incomplete && (metric === "average" || metric === "realized" || metric === "unrealized")) {
+  const unconfirmed = reconciliation !== null && reconciliation.status !== "reconciled"
+  if (unconfirmed && (metric === "average" || metric === "realized" || metric === "unrealized")) {
     return { title: `${asset}: ${METRIC_TITLES[metric]}`, value: null, lines: onchainLines(position), effects: [...effects].reverse() }
   }
 
@@ -176,11 +189,11 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
     }[metric]
     if (part) lines.push(`${position.asset}: ${part}`)
   }
-  if (metric === "gas") lines.push("L2 gas, plus each transaction's L1 data fee from its receipt.")
+  if (metric === "gas") lines.push("Gas, plus the data fee each transaction pays to be posted to Ethereum.")
   if (totals.unpricedGas && (metric === "gas" || metric === "pnl")) lines.push("Some gas had no price at its block, so it isn't included.")
   const relevant = totals.excluded.filter(({ reason }) => {
     if (metric === "value") return reason === "no current price" || reason === "incomplete history"
-    if (metric === "realized") return reason === "sold at an unknown cost" || reason === "doesn't match its onchain balance"
+    if (metric === "realized") return reason === "sold at an unknown cost" || reason === "doesn't match its onchain balance" || reason === "not checked against its onchain balance"
     if (metric === "unrealized") return reason !== "sold at an unknown cost"
     return metric === "pnl"
   })
@@ -193,5 +206,14 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
       .flatMap((p) => p.effects)
       .filter((e) => metric !== "gas" || e.leg.kind === "gas")
       .sort((a, b) => b.leg.blockNum - a.leg.blockNum || b.leg.txIndex - a.leg.txIndex),
+  }
+}
+
+export function explainPoint(positions: readonly Position[], point: PnlPoint): Explanation {
+  return {
+    title: `Transaction ${shortHash(point.txHash as string)}`,
+    value: point.pnlUsdMicros && formatSignedUsd(point.pnlUsdMicros),
+    lines: [`Total PnL after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`],
+    effects: positions.flatMap((p) => p.effects).filter((e) => e.leg.txHash === point.txHash),
   }
 }

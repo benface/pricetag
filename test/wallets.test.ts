@@ -4,7 +4,8 @@ import { createWallets } from "../server/wallets.ts"
 import type { ReadL1Fees } from "../server/receipts.ts"
 import type { Source, WindowRows } from "../server/source.ts"
 import type { LegRow, ReferenceRow } from "../src/core/legs.ts"
-import { ETH_ADDRESS } from "../src/core/tokens.ts"
+import { foldPositions } from "../src/core/portfolio.ts"
+import { ASSETS, ETH_ADDRESS } from "../src/core/tokens.ts"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 
@@ -214,10 +215,12 @@ describe("reconciling", () => {
     assert.equal(wallet.coverage.toBlock, 990)
   })
 
+  const every = (amount: string) => Object.fromEntries(ASSETS.map((asset) => [asset, amount]))
+
   it("reads the opening once, and the closing again only when coverage moves", async () => {
     let head = 1000
     let processed = 1000
-    const { source, balanceReads } = fake(chain(), () => reference(head), () => processed)
+    const { source, balanceReads } = fake(chain(), () => reference(head), () => processed, async () => every("0"))
     const wallets = createWallets(source, async () => headAt(head)(), noFees)
     await wallets.get(ME)
     head = 1001
@@ -260,6 +263,58 @@ describe("reconciling", () => {
       assert.equal((await wallets.get(ME)).balances?.blockNum, 1001)
     }))
 
+  describe("when an opening read fails for one asset", () => {
+    const ONE_ETH = "1000000000000000000"
+    const held = { ...every("0"), ETH: ONE_ETH }
+    const withoutEth = () => {
+      const { ETH: _, ...rest } = held
+      return rest
+    }
+
+    it("leaves that asset unchecked instead of calling an unchanged holding a missing transfer", async () => {
+      const { source } = fake(new Map(), () => reference(1000), undefined, async (block) => (block === 899 ? withoutEth() : held))
+      const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+      assert.equal(wallet.balances?.amounts.ETH, undefined)
+      assert.equal(wallet.balances?.amounts.USDC, "0")
+      assert.ok(foldPositions(wallet.legs, "average", wallet.prices, wallet).every((p) => p.reconciliation?.status !== "incomplete"))
+    })
+
+    it("retries it on the next block, and then it reconciles", async () => {
+      let head = 1000
+      const { source, balanceReads } = fake(new Map(), () => reference(head), undefined, async (block) => (block === 899 && head === 1000 ? withoutEth() : held))
+      const wallets = createWallets(source, async () => headAt(head)(), noFees)
+      await wallets.get(ME)
+      head = 1001
+      const wallet = await wallets.get(ME)
+      assert.deepEqual(balanceReads.filter((b) => b === 899).length, 2)
+      assert.equal(wallet.balances?.amounts.ETH, ONE_ETH)
+      const eth = foldPositions(wallet.legs, "average", wallet.prices, wallet).find((p) => p.asset === "ETH")!
+      assert.equal(eth.reconciliation?.status, "reconciled")
+      head = 1002
+      await wallets.get(ME)
+      assert.deepEqual(balanceReads.filter((b) => b === 899).length, 2, "complete now, so it stops")
+    })
+
+    it("a retry that fails doesn't lose what was already read", async () => {
+      let head = 1000
+      const { source } = fake(new Map(), () => reference(head), undefined, async (block) => (block !== 899 ? held : head === 1000 ? withoutEth() : null))
+      const wallets = createWallets(source, async () => headAt(head)(), noFees)
+      await wallets.get(ME)
+      head = 1001
+      assert.equal((await wallets.get(ME)).balances?.amounts.USDC, "0")
+    })
+
+    it("a closing read missing an asset is retried even if coverage hasn't moved", async () => {
+      let head = 1000
+      const { source, balanceReads } = fake(new Map(), () => reference(head), () => 1000, async (block) => (block === 1000 && head === 1000 ? withoutEth() : held))
+      const wallets = createWallets(source, async () => headAt(head)(), noFees)
+      assert.equal((await wallets.get(ME)).balances?.amounts.ETH, undefined)
+      head = 1001
+      assert.equal((await wallets.get(ME)).balances?.amounts.ETH, ONE_ETH)
+      assert.equal(balanceReads.filter((b) => b === 1000).length, 2)
+    })
+  })
+
   it("a closing balance alone isn't enough to compare", async () => {
     const { source } = fake(chain(), () => reference(1000), undefined, async (block) => (block === 899 ? null : { ETH: "1" }))
     assert.equal((await createWallets(source, headAt(1000), noFees).get(ME)).balances, null)
@@ -273,6 +328,73 @@ describe("reconciling", () => {
     assert.equal(leg.delta, "-1024")
     assert.deepEqual(leg.parts.map((p) => [p.kind, p.amount]), [["gas", "1000"], ["l1_fee", "24"]])
     assert.deepEqual(l1FeeUnknownTxs, [])
+  })
+
+  it("reads an L1 fee once when its block is already past the reorg window", async () => {
+    let head = 1000
+    const reads: number[] = []
+    const fees: ReadL1Fees = async (requests) => {
+      reads.push(...requests.map((r) => r.blockNum))
+      return new Map(requests.map((r) => [r.txHash, "24"]))
+    }
+    const { source } = fake(chain(), () => reference(head))
+    const wallets = createWallets(source, async () => headAt(head)(), fees)
+    await wallets.get(ME)
+    head = 1001
+    await wallets.get(ME)
+    assert.deepEqual(reads, [960])
+  })
+
+  describe("a reorg that keeps a transaction at the same height", () => {
+    const setup = () => {
+      let fee = "24"
+      const reads: number[] = []
+      const fees: ReadL1Fees = async (requests) => {
+        reads.push(...requests.map((r) => r.blockNum))
+        return new Map(requests.map((r) => [r.txHash, fee]))
+      }
+      let head = 1000
+      const { source } = fake(new Map([[995, [gas(995)]]]), () => reference(head))
+      const wallets = createWallets(source, async () => headAt(head)(), fees)
+      return { reads, wallets, setFee: (next: string) => (fee = next), setHead: (next: number) => (head = next) }
+    }
+    const paid = async (wallets: ReturnType<typeof setup>["wallets"]) => (await wallets.get(ME)).legs.find((l) => l.kind === "gas")!.delta
+
+    it("settles on the new fee once its block is past the reorg window, so it can't stay wrong", async () => {
+      const { reads, wallets, setFee, setHead } = setup()
+      assert.equal(await paid(wallets), "-1024")
+      setFee("34")
+      setHead(1010)
+      assert.equal(await paid(wallets), "-1024", "not re-read on every block")
+      setHead(1025)
+      assert.equal(await paid(wallets), "-1034")
+      assert.deepEqual(reads, [995, 995])
+      setHead(1040)
+      await paid(wallets)
+      assert.deepEqual(reads, [995, 995], "settled now")
+    })
+
+    it("keeps the fee it has if that last read fails, and tries again", async () => {
+      let answer = true
+      const reads: number[] = []
+      const fees: ReadL1Fees = async (requests) => {
+        reads.push(...requests.map((r) => r.blockNum))
+        return new Map(answer ? requests.map((r) => [r.txHash, "24"]) : [])
+      }
+      let head = 1000
+      const { source } = fake(new Map([[995, [gas(995)]]]), () => reference(head))
+      const wallets = createWallets(source, async () => headAt(head)(), fees)
+      await wallets.get(ME)
+      answer = false
+      head = 1025
+      const wallet = await wallets.get(ME)
+      assert.deepEqual(wallet.l1FeeUnknownTxs, [])
+      assert.equal(wallet.legs.find((l) => l.kind === "gas")!.delta, "-1024")
+      answer = true
+      head = 1026
+      await wallets.get(ME)
+      assert.deepEqual(reads, [995, 995, 995])
+    })
   })
 
   it("reads each L1 fee once, and retries what's missing on the next block", async () => {

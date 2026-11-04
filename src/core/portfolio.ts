@@ -24,7 +24,7 @@ export type Position = {
   reconciliation: Reconciliation | null
 }
 
-export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "incomplete history" | "doesn't match its onchain balance" }
+export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "incomplete history" | "doesn't match its onchain balance" | "not checked against its onchain balance" }
 
 /** What a sum is made of. A sum with something missing and nothing known has no answer, which isn't the same as $0. */
 export type Coverage = { known: number; missing: number }
@@ -45,21 +45,27 @@ export type Totals = {
 }
 
 /**
- * A position that doesn't match the chain. What it holds and what that's worth are facts, so they come from the chain.
- * Anything about cost comes from legs we now know are incomplete, so it's unavailable rather than wrong.
+ * A position the chain hasn't confirmed. Anything about cost comes from legs that are incomplete, or may be, so it's
+ * unavailable rather than wrong. PnL only ever shows for a position that matches: otherwise a failed read would bring
+ * back a number we already knew was wrong. What it holds and what that's worth come from the chain when it's been read.
  */
-function incompleteValues(values: PositionValues, actualQty: string, priceUsdMicros: string | null, decimals: number): PositionValues {
+function unconfirmedValues(values: PositionValues, qty: string, priceUsdMicros: string | null, decimals: number): PositionValues {
   return {
     ...values,
-    qty: actualQty,
-    unknownCostQty: actualQty,
+    qty,
+    unknownCostQty: qty,
     costUsdMicros: null,
     averageCostUsdMicros: null,
-    valueUsdMicros: priceUsdMicros === null ? null : usdOf(BigInt(actualQty), BigInt(priceUsdMicros), decimals).toString(),
+    valueUsdMicros: priceUsdMicros === null ? null : usdOf(BigInt(qty), BigInt(priceUsdMicros), decimals).toString(),
     realizedUsdMicros: null,
     unrealizedUsdMicros: null,
   }
 }
+
+const isUnconfirmed = ({ reconciliation }: Position) => reconciliation !== null && reconciliation.status !== "reconciled"
+
+/** The assets `pnlOverTime` has to leave out. */
+export const unconfirmedAssets = (positions: readonly Position[]) => new Set(positions.filter(isUnconfirmed).map((p) => p.asset))
 
 export function foldPositions(legs: readonly PricedLeg[], method: Method, prices: LatestPrices, onchain?: Onchain): Position[] {
   const positions = new Map<string, { state: PositionState; effects: LegEffect[]; decimals: number }>()
@@ -88,7 +94,10 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
       effects,
       price,
       reconciliation,
-      values: reconciliation?.status === "incomplete" ? incompleteValues(values, reconciliation.actualQty, price?.usdMicros ?? null, decimals) : values,
+      values:
+        reconciliation === null || reconciliation.status === "reconciled"
+          ? values
+          : unconfirmedValues(values, reconciliation.status === "incomplete" ? reconciliation.actualQty : values.qty, price?.usdMicros ?? null, decimals),
     }
   })
 }
@@ -103,7 +112,8 @@ export function sumTotals(positions: readonly Position[]): Totals {
   let unpricedGas = false
   const excluded: Exclusion[] = []
   const coverage = { value: { known: 0, missing: 0 }, realized: { known: 0, missing: 0 }, unrealized: { known: 0, missing: 0 }, pnl: { known: 0, missing: 0 } }
-  for (const { asset, values, state, reconciliation } of positions) {
+  for (const position of positions) {
+    const { asset, values, state, reconciliation } = position
     gas += BigInt(state.gasUsdMicros)
     if (BigInt(state.gasUsdMicros) > 0n) coverage.pnl.known++
     if (BigInt(state.unpricedGasQty) > 0n) {
@@ -111,10 +121,15 @@ export function sumTotals(positions: readonly Position[]): Totals {
       coverage.pnl.missing++
     }
     const held = BigInt(values.qty) > 0n
-    if (reconciliation?.status === "incomplete") {
-      excluded.push({ asset, reason: "doesn't match its onchain balance" })
+    if (isUnconfirmed(position)) {
+      excluded.push({ asset, reason: reconciliation?.status === "incomplete" ? "doesn't match its onchain balance" : "not checked against its onchain balance" })
       coverage.realized.missing++
       coverage.unrealized.missing++
+      // With no onchain balance to take over, units we never saw arrive still mean this amount isn't all of it.
+      if (reconciliation?.status === "unchecked" && BigInt(state.shortfallQty) > 0n) {
+        coverage.value.missing++
+        excluded.push({ asset, reason: "incomplete history" })
+      }
       if (values.valueUsdMicros !== null) {
         value += BigInt(values.valueUsdMicros)
         if (held) coverage.value.known++
@@ -187,8 +202,8 @@ export function pnlOverTime(
   prices: LatestPrices,
   references: readonly ReferenceRow[],
   latest: { blockNum: number; timestamp: string } | null,
-  /** Assets that don't match the chain. We can't tell when that started, so their PnL is left out of every point. */
-  incomplete: ReadonlySet<string> = new Set(),
+  /** Assets the chain hasn't confirmed. We can't tell when that started, so their PnL is left out of every point. */
+  unconfirmed: ReadonlySet<string> = new Set(),
 ): PnlPoint[] {
   const refs = new Map(references.map((r) => [r.block_num, r]))
   const states = new Map<string, PositionState>()
@@ -202,7 +217,7 @@ export function pnlOverTime(
       pnl -= BigInt(state.gasUsdMicros)
       if (BigInt(state.gasUsdMicros) > 0n) coverage.known++
       if (BigInt(state.unpricedGasQty) > 0n) coverage.missing++
-      if (incomplete.has(asset)) {
+      if (unconfirmed.has(asset)) {
         excludedCount++
         coverage.missing++
         continue
@@ -223,6 +238,12 @@ export function pnlOverTime(
         coverage.missing++
       }
     }
+    // One that no leg touches yet, or ever, like a wallet funded only by an internal transfer, still counts.
+    for (const asset of unconfirmed) {
+      if (states.has(asset)) continue
+      excludedCount++
+      coverage.missing++
+    }
     return { pnlUsdMicros: answer(pnl, coverage), excludedCount }
   }
   legs.forEach((leg, i) => {
@@ -236,7 +257,7 @@ export function pnlOverTime(
     }
     points.push({ blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure(priceOf) })
   })
-  if (latest && states.size > 0) {
+  if (latest && (states.size > 0 || unconfirmed.size > 0)) {
     points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.usdMicros ?? null) })
   }
   return points

@@ -1,10 +1,12 @@
-// The small server: the browser's only way to Amp, so the token stays here.
+// The small server: the only way to Amp for the browser and the Mac app, so the token stays here.
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { isAddress, type Head } from "../src/core/api.ts"
+import { isAddress, type Head, type WalletResponse } from "../src/core/api.ts"
 import { DEMO_ADDRESS, DEMO_WALLET } from "../src/core/fixtures.ts"
+import type { Method } from "../src/core/fold.ts"
 import { createQuery, describeError } from "./amp.ts"
+import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
 import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
 import { datasetSource, rawSource, type Source } from "./source.ts"
 import { createWallets } from "./wallets.ts"
@@ -12,6 +14,11 @@ import { createWallets } from "./wallets.ts"
 type Env = Record<string, string | undefined>
 
 const POLL_MS = 2000
+
+function parseMethod(value: string | null): Method | null {
+  if (value === null || value === "average") return "average"
+  return value === "fifo" ? "fifo" : null
+}
 
 function createSource(env: Env): Source | null {
   if (!env.AMP_QUERY_URL) return null
@@ -90,6 +97,28 @@ export function createApi(env: Env) {
 
   const wallets = source ? createWallets(source, pollHead, createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL)) : null
 
+  /**
+   * Reads a wallet, or answers the request with why it can't.
+   * `fresh: false` settles for the last read if there is one: a read can take seconds, and a click shouldn't wait on it.
+   */
+  async function readWallet(address: string, res: ServerResponse, { fresh } = { fresh: true }): Promise<WalletResponse | null> {
+    if (address === "demo" || address === DEMO_ADDRESS) return DEMO_WALLET
+    if (!isAddress(address)) {
+      sendJson(res, 400, { error: "That isn't a Base address." })
+      return null
+    }
+    if (!wallets) {
+      sendJson(res, 503, { error: "No Amp connection is set up, so only the demo wallet is available." })
+      return null
+    }
+    try {
+      return (!fresh && wallets.peek(address)) || (await wallets.get(address))
+    } catch (error) {
+      sendAmpError(res, error)
+      return null
+    }
+  }
+
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = pathOf(req)
     if (path === null) {
@@ -112,26 +141,35 @@ export function createApi(env: Env) {
       return true
     }
 
-    const match = /^\/api\/wallet\/([^/]+)$/.exec(path)
-    if (match) {
-      const address = match[1] as string
-      if (address === "demo" || address === DEMO_ADDRESS) {
-        sendJson(res, 200, DEMO_WALLET)
+    const walletMatch = /^\/api\/wallet\/([^/]+)$/.exec(path)
+    if (walletMatch) {
+      const wallet = await readWallet(walletMatch[1] as string, res)
+      if (wallet) sendJson(res, 200, wallet)
+      return true
+    }
+
+    const portfolioMatch = /^\/api\/portfolio\/([^/]+)(\/explain)?$/.exec(path)
+    if (portfolioMatch) {
+      const params = new URL(req.url ?? "/", "http://localhost").searchParams
+      const method = parseMethod(params.get("method"))
+      if (!method) {
+        sendJson(res, 400, { error: "The method is either average or fifo." })
         return true
       }
-      if (!isAddress(address)) {
-        sendJson(res, 400, { error: "That isn't a Base address." })
+      const target = portfolioMatch[2] ? parseExplainTarget(params) : null
+      if (portfolioMatch[2] && !target) {
+        sendJson(res, 400, { error: "That isn't a number this can explain." })
         return true
       }
-      if (!wallets) {
-        sendJson(res, 503, { error: "No Amp connection is set up, so only the demo wallet is available." })
+      const wallet = await readWallet(portfolioMatch[1] as string, res, { fresh: !target })
+      if (!wallet) return true
+      if (!target) {
+        sendJson(res, 200, portfolioOf(wallet, method))
         return true
       }
-      try {
-        sendJson(res, 200, await wallets.get(address))
-      } catch (error) {
-        sendAmpError(res, error)
-      }
+      const explanation = explainPortfolio(wallet, method, target)
+      if (explanation) sendJson(res, 200, explanation)
+      else sendJson(res, 404, { error: "This wallet has nothing like that." })
       return true
     }
 

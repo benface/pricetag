@@ -35,6 +35,12 @@ export type ReferenceRow = { block_num: number; eth_usd: string; usdc_usd: strin
 /** The result of `pt_price`, in the shape `priced_legs` stores it. */
 export type PtPrice = { token: string; usd_micros: string; source: "swap" | "unknown" }
 
+/**
+ * The result of `pt_net`. No side means it nets to zero, or an amount couldn't be read. No amount means most of it
+ * cancelled out, as with what a router or pool kept: something moved, but it isn't a trade that can be priced.
+ */
+export type PtNet = { amount: string; side: "debit" | "credit" | "" }
+
 /** A row of `priced_legs`. */
 export type PricedRow = {
   block_num: number
@@ -94,38 +100,56 @@ export function ptPrice(
   return none
 }
 
+/** The same calculation as the dataset's `pt_net` UDF, on comma-separated signed amounts. A test runs both. */
+export function ptNet(amounts: string): PtNet {
+  const none: PtNet = { amount: "", side: "" }
+  if (!amounts) return none
+  let net = 0n
+  let gross = 0n
+  for (const part of amounts.split(",")) {
+    if (!/^-?\d+$/.test(part)) return none
+    const amount = BigInt(part)
+    net += amount
+    gross += amount < 0n ? -amount : amount
+  }
+  if (net === 0n) return none
+  const size = net < 0n ? -net : net
+  return { amount: size * 2n < gross ? "" : size.toString(), side: net > 0n ? "credit" : "debit" }
+}
+
 /**
- * What the dataset's `pairs`, `single_pairs` and `priced_legs` tables compute, for one wallet's rows.
+ * What the dataset's `net_legs`, `pairs`, `single_pairs` and `priced_legs` tables compute, for one wallet's rows.
  * Used when reading the raw dataset, and for fixtures, so both go through the same path as the real table.
  */
 export function derivePricedRows(rows: readonly LegRow[], references: readonly ReferenceRow[]): PricedRow[] {
   const refs = new Map(references.map((r) => [r.block_num, r]))
-  const byTx = new Map<string, LegRow[]>()
+  const byTx = new Map<string, { first: LegRow; amounts: Map<string, string[]> }>()
   for (const row of rows) {
     // Like the dataset's `legs`, which pairs are made from: gas isn't traded, and unlisted tokens have no decimals.
     if (isFeeRow(row) || row.kind === "unlisted" || row.kind === "unlisted_nft") continue
     const key = `${row.account}:${row.tx_hash}`
-    byTx.set(key, [...(byTx.get(key) ?? []), row])
+    const tx = byTx.get(key) ?? { first: row, amounts: new Map<string, string[]>() }
+    tx.amounts.set(row.token, [...(tx.amounts.get(row.token) ?? []), row.side === "credit" ? row.amount : `-${row.amount}`])
+    byTx.set(key, tx)
   }
   const result: PricedRow[] = []
-  for (const txRows of byTx.values()) {
-    const pairs = txRows
-      .filter((a) => a.side === "debit")
-      .flatMap((a) => txRows.filter((b) => b.side === "credit" && b.token !== a.token).map((b) => [a, b] as const))
-    const [pair] = pairs
-    if (!pair || pairs.length !== 1) continue
-    const [sold, bought] = pair
-    const ref = refs.get(sold.block_num)
+  for (const { first, amounts } of byTx.values()) {
+    const nets = [...amounts].map(([token, signed]) => ({ token, ...ptNet(signed.join(",")) }))
+    const sold = nets.filter((n) => n.side === "debit")
+    const bought = nets.filter((n) => n.side === "credit")
+    if (sold.length !== 1 || bought.length !== 1) continue
+    const ref = refs.get(first.block_num)
     if (!ref) continue
+    const [out, into] = [sold[0]!, bought[0]!]
     result.push({
-      block_num: sold.block_num,
-      tx_hash: sold.tx_hash,
-      account: sold.account,
-      sold_token: sold.token,
-      sold_amount: sold.amount,
-      bought_token: bought.token,
-      bought_amount: bought.amount,
-      priced: ptPrice(sold.token, sold.amount, bought.token, bought.amount, ref.eth_usd, ref.usdc_usd),
+      block_num: first.block_num,
+      tx_hash: first.tx_hash,
+      account: first.account,
+      sold_token: out.token,
+      sold_amount: out.amount,
+      bought_token: into.token,
+      bought_amount: into.amount,
+      priced: ptPrice(out.token, out.amount, into.token, into.amount, ref.eth_usd, ref.usdc_usd),
     })
   }
   return result
