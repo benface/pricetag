@@ -28,7 +28,7 @@ function assertMatchesFile(name: string, actual: unknown) {
 describe("the hot wallet's allowlist", () => {
   it("matches what the Swift package has compiled in", () => {
     const url = new URL("../macos/HotWalletKit/Tests/HotWalletKitTests/Resources/tokens.json", import.meta.url)
-    const actual = { tokens: TOKENS.map(({ address, symbol, decimals, asset }) => ({ address, symbol, decimals, asset })), ethUsdFeed: ETH_USD_FEED.toLowerCase(), usdcUsdFeed: USDC_USD_FEED.toLowerCase() }
+    const actual = { tokens: TOKENS.map(({ address, symbol, decimals, asset, sanity }) => ({ address, symbol, decimals, asset, sanity })), ethUsdFeed: ETH_USD_FEED.toLowerCase(), usdcUsdFeed: USDC_USD_FEED.toLowerCase() }
     const text = `${JSON.stringify(actual, null, 2)}\n`
     if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
     assert.equal(readFileSync(url, "utf8"), text, "tokens.json is out of date. Run with UPDATE_FIXTURES=1, and change Tokens.swift to match.")

@@ -298,9 +298,7 @@ public final class HotWallet {
         switch token.asset {
         case "ETH": return snapshot.ethUsdMicros
         case "USDC": return snapshot.usdcUsdMicros
-        default:
-            // Nothing but the server knows these, and only when the price it has is one it stands behind.
-            return portfolio?.positions.first { $0.asset == token.asset }?.price.flatMap { UInt128($0.micros) }
+        default: return snapshot.otherUsdMicros[token.asset]
         }
     }
 

@@ -136,7 +136,7 @@ public enum SweepPlanner {
         if plan.excessUsdMicros > 0 { take(plan.excessUsdMicros, from: byValue, isGain: false) }
         if wantsGain {
             // Gains are mostly already in a stablecoin. Taking from there leaves what's being held alone.
-            let stablesFirst = byValue.filter { $0.token.symbol == "USDC" } + byValue.filter { $0.token.symbol != "USDC" }
+            let stablesFirst = byValue.filter(\.token.isStablecoin) + byValue.filter { !$0.token.isStablecoin }
             take(pendingGainUsdMicros, from: stablesFirst, isGain: true)
         }
         return plan

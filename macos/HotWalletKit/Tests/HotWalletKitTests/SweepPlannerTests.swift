@@ -123,6 +123,14 @@ private func plan(_ holdings: [Holding], cap: UInt128 = cap, fees: FeeQuote = ch
         #expect(!result.excessIsDust)
     }
 
+    @Test func gainsComeFromAnyStablecoinBeforeWhatsBeingHeld() throws {
+        let aero = token("AERO")
+        // $30 of ETH, $40 of AERO and $20 of DAI, all under a high cap. $10 of gains leaves the ETH and AERO alone.
+        let result = plan(holdings(eth: oneEth / 100, (aero, oneEth * 40, Money.dollar), (dai, oneEth * 20, Money.dollar)), cap: 100 * Money.dollar, gain: 10 * Money.dollar)
+        #expect(result.transfers.map(\.token) == [dai])
+        #expect(result.transfers.first?.gainUsdMicros == 10 * Money.dollar)
+    }
+
     @Test func sweepsRealizedGainsEvenUnderTheCap() throws {
         let result = plan(holdings(eth: SweepPlanner.minimumGasReserveWei, (usdc, usdcUnits(30), Money.dollar)), gain: 12 * Money.dollar)
         let transfer = try #require(result.transfers.first)
@@ -282,6 +290,38 @@ private func plan(_ holdings: [Holding], cap: UInt128 = cap, fees: FeeQuote = ch
         #expect(Oracle.price(nil, feed: .eth, blockTime: 1000) == nil)
     }
 
+    @Test func aFeedKeepsToItsOwnHeartbeat() throws {
+        let dai = try #require(Oracle.others["DAI"])
+        let cbBTC = try #require(Oracle.others["cbBTC"])
+        #expect(Oracle.price(round(answer: 100_000_000, updatedAt: 1000), feed: dai, blockTime: 1000 + 25 * 3600) == Money.dollar)
+        #expect(Oracle.price(round(answer: 100_000_000, updatedAt: 1000), feed: dai, blockTime: 1000 + 27 * 3600) == nil)
+        #expect(Oracle.price(round(answer: 8_000_000_000_000, updatedAt: 1000), feed: cbBTC, blockTime: 1000 + 3601, ethUsdMicros: ethPrice) == nil)
+    }
+
+    @Test func aDepeggedStablecoinIsNoPrice() throws {
+        let usdt = try #require(Oracle.others["USDT"])
+        #expect(Oracle.price(round(answer: 99_000_000, updatedAt: 1000), feed: usdt, blockTime: 1000) == 990_000)
+        #expect(Oracle.price(round(answer: 70_000_000, updatedAt: 1000), feed: usdt, blockTime: 1000) == nil)
+    }
+
+    @Test func aFeedCheckedAgainstEthNeedsEthsPrice() throws {
+        let cbBTC = try #require(Oracle.others["cbBTC"])
+        let answer = round(answer: 8_000_000_000_000, updatedAt: 1000)
+        #expect(Oracle.price(answer, feed: cbBTC, blockTime: 1000, ethUsdMicros: ethPrice) == 80_000 * Money.dollar)
+        #expect(Oracle.price(answer, feed: cbBTC, blockTime: 1000) == nil)
+        // $80,000 is more than 200 ETH at $300, and less than 5 ETH at $20,000.
+        #expect(Oracle.price(answer, feed: cbBTC, blockTime: 1000, ethUsdMicros: 300 * Money.dollar) == nil)
+        #expect(Oracle.price(answer, feed: cbBTC, blockTime: 1000, ethUsdMicros: 20_000 * Money.dollar) == nil)
+    }
+
+    @Test func aFeedAnsweringInEthIsPricedThroughEth() throws {
+        let wstETH = try #require(Oracle.others["wstETH"])
+        let answer = round(answer: 1_250_000_000_000_000_000, updatedAt: 1000)
+        #expect(Oracle.price(answer, feed: wstETH, blockTime: 1000, ethUsdMicros: 2000 * Money.dollar) == 2500 * Money.dollar)
+        #expect(Oracle.price(answer, feed: wstETH, blockTime: 1000) == nil)
+        #expect(Oracle.price(round(answer: 2_000_000_000_000_000_000, updatedAt: 1000), feed: wstETH, blockTime: 1000, ethUsdMicros: 2000 * Money.dollar) == nil)
+    }
+
     @Test func quantities() throws {
         #expect(try RPCChainClient.quantity("0x0") == 0)
         #expect(try RPCChainClient.quantity("0x10") == 16)
@@ -310,11 +350,17 @@ private func plan(_ holdings: [Holding], cap: UInt128 = cap, fees: FeeQuote = ch
             let symbol: String
             let decimals: Int
             let asset: String
+            let sanity: Sanity?
         }
 
         let tokens: [Entry]
         let ethUsdFeed: String
         let usdcUsdFeed: String
+    }
+
+    private struct Sanity: Decodable {
+        let usd: [Double]?
+        let eth: [Double]?
     }
 
     @Test func matchesTheServers() throws {
@@ -328,5 +374,23 @@ private func plan(_ holdings: [Holding], cap: UInt128 = cap, fees: FeeQuote = ch
         }
         #expect(fixture.ethUsdFeed == Base.ethUsdFeed.lowercased)
         #expect(fixture.usdcUsdFeed == Base.usdcUsdFeed.lowercased)
+    }
+
+    @Test func everyTokenHasAFeed() {
+        let priced = Set(Oracle.others.keys).union(["ETH", "USDC"])
+        #expect(priced == Set(Base.tokens.map(\.asset)))
+    }
+
+    @Test func feedsUseTheServersBounds() throws {
+        let url = try #require(Bundle.module.url(forResource: "tokens", withExtension: "json", subdirectory: "Resources"))
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        let scaled: ([Double], Double) -> ClosedRange<UInt128> = { UInt128(($0[0] * $1).rounded())...UInt128(($0[1] * $1).rounded()) }
+        for entry in fixture.tokens {
+            guard let sanity = entry.sanity else { continue }
+            let feeds = Oracle.others.merging(["ETH": .eth, "USDC": .usdc]) { first, _ in first }
+            let feed = try #require(feeds[entry.asset], "\(entry.symbol)")
+            if let usd = sanity.usd { #expect(feed.plausible == .usd(scaled(usd, 1_000_000)), "\(entry.symbol)") }
+            if let eth = sanity.eth { #expect(feed.plausible == .eth(scaled(eth, 1000)), "\(entry.symbol)") }
+        }
     }
 }

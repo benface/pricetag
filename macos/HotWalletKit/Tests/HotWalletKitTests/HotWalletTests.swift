@@ -344,8 +344,8 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
 @MainActor
 @Suite struct PriceTests {
-    @Test func aTokenTheServerPricesCountsTowardTheCap() async throws {
-        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [dai: oneEth * 500]), portfolio: .success(portfolio(positions: [position("DAI", decimals: 18, priceMicros: "1000000")])))
+    @Test func aTokenWithAFeedCountsTowardTheCap() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [dai: oneEth * 500], prices: ["DAI": Money.dollar]))
         await rig.wallet.readHistory()
         await rig.wallet.tick()
         #expect(await rig.chain.sent.count == 1)
@@ -354,6 +354,15 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
     @Test func aTokenWithNoPriceIsFlaggedAndStaysPut() async throws {
         let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [dai: oneEth * 500]))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.isEmpty)
+        #expect(rig.wallet.unpricedSymbols == ["DAI"])
+    }
+
+    /// A market price is good enough to show, but what moves money only trusts what it read from the chain itself.
+    @Test func aPriceFromTheServerMovesNothing() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [dai: oneEth * 500]), portfolio: .success(portfolio(positions: [position("DAI", decimals: 18, priceMicros: "1000000")])))
         await rig.wallet.readHistory()
         await rig.wallet.tick()
         #expect(await rig.chain.sent.isEmpty)
