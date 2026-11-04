@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { applyLeg, emptyPosition, valuePosition, type FoldLeg, type Method } from "../src/core/fold.ts"
+import { applyLeg, emptyPosition, valuePosition, type FoldLeg, type Method } from "@pricetag/sdk/core"
 
 const USD = 1_000_000n
 const ETH = 10n ** 18n
@@ -210,7 +210,7 @@ describe("the fold can move into a stateful table", () => {
   })
 
   it("has no imports, clock or randomness", () => {
-    const source = readFileSync(new URL("../src/core/fold.ts", import.meta.url), "utf8")
+    const source = readFileSync(new URL("../packages/sdk/src/fold.ts", import.meta.url), "utf8")
     assert.doesNotMatch(source, /^\s*import\s/m)
     assert.doesNotMatch(source, /\b(Date|Math\.random|performance|process|require)\b/)
   })

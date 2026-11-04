@@ -79,7 +79,7 @@ public enum Wording {
     }
 
     public static func feesUnknown(_ count: Int) -> String {
-        "Network fees couldn't be worked out for \(count) \(count == 1 ? "transaction" : "transactions"), so the ETH amount is too high by that much."
+        "Network fees couldn't be worked out for \(count) \(count == 1 ? "transaction" : "transactions"), so the network fees shown are too low."
     }
 
     public static func networkFeeUnknown(_ count: Int) -> String {

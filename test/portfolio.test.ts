@@ -3,11 +3,11 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
+import { ETH_ADDRESS, PRICE_NOTES, WETH_ADDRESS, buildPricedLegs, foldPositions, sumTotals, type LegRow } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd } from "../src/core/format.ts"
-import { foldPositions, sumTotals } from "../src/core/portfolio.ts"
 import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
@@ -317,7 +317,11 @@ describe("wording", () => {
       if (typeof value !== "object" || value === null) return []
       return Object.entries(value).flatMap(([key, inner]) => (["kind", "source", "cost"].includes(key) ? [] : printed(inner)))
     }
-    const texts: string[] = [...printed(vectors), ...Object.values(wording.PRICE_NOTES), wording.ETH_NOTE]
+    const texts: string[] = [...printed(vectors), ...Object.values(PRICE_NOTES), wording.ETH_NOTE]
+    const incoming = (token: string, kind: LegRow["kind"]): LegRow => ({ block_num: 100, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: "0xa", tx_index: 1, log_index: 0, token, account: "0xaa", side: "credit", amount: "1000000000000000000", kind })
+    const [wrapped] = buildPricedLegs({ account: "0xaa", rows: [incoming(ETH_ADDRESS, "eth"), incoming(WETH_ADDRESS, "erc20")], references: [], priced: [] })
+    assert.equal(describeNetting(wrapped!), "Combines 2 movements: +1 ETH, +1 wrapped ETH")
+    texts.push(describeNetting(wrapped!) ?? "")
     for (const method of ["average", "fifo"] as const) {
       for (const position of foldPositions(DEMO_WALLET.legs, method, DEMO_WALLET.prices)) {
         for (const effect of position.effects) {

@@ -3,10 +3,8 @@ import { describe, it } from "node:test"
 import { balancesByAsset, decodeBalanceResults, encodeBalanceCalls, MULTICALL3 } from "../server/balances.ts"
 import { explainMetric, explainTotal, mismatchCause } from "../src/core/explain.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
-import { buildPricedLegs, type LegRow, type ReferenceRow } from "../src/core/legs.ts"
-import { foldPositions, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets } from "../src/core/portfolio.ts"
-import { openingLegs, type Onchain } from "../src/core/reconcile.ts"
-import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS } from "../src/core/tokens.ts"
+import { feesUnknownSentence } from "../src/core/wording.ts"
+import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, foldPositions, openingLegs, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type LegRow, type Onchain, type ReferenceRow } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 const E18 = 10n ** 18n
@@ -449,5 +447,24 @@ describe("the demo wallet", () => {
   it("has an opening balance that hasn't moved", () => {
     assert.equal(assetOf(positions, "DAI").effects.length, 1)
     assert.equal(assetOf(positions, "DAI").effects[0]!.leg.opening, true)
+  })
+})
+
+describe("a network fee that couldn't be worked out", () => {
+  // It leaves no leg, so what the legs add up to is too high, but what's shown doesn't have to be.
+  const legs = legsOf([row(ETH_ADDRESS, "credit", E18)])
+
+  it("doesn't blame the amount when it's the actual balance", () => {
+    const eth = assetOf(foldPositions(legs, "average", PRICES, onchain({ ETH: (E18 * 99n) / 100n })), "ETH")
+    assert.equal(eth.values.qty, ((E18 * 99n) / 100n).toString())
+    assert.doesNotMatch(feesUnknownSentence(1), /ETH|amount|balance/)
+  })
+
+  it("labels the amount as an estimate when the balance couldn't be read", () => {
+    const state: Onchain = { balances: null, l1FeeUnknownTxs: [], lastBalances: { ETH: { blockNum: 50, amount: E18.toString() } }, unreadBalances: ["ETH"] }
+    const eth = assetOf(foldPositions(legs, "average", PRICES, state), "ETH")
+    assert.equal(eth.reconciliation?.status, "unchecked")
+    assert.match(explainMetric(eth, "amount").lines.join(" "), /last balance read/)
+    assert.equal(feesUnknownSentence(1), "Network fees couldn't be worked out for 1 transaction, so the network fees shown are too low.")
   })
 })

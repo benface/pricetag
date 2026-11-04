@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import type { PnlPoint } from "../core/portfolio.ts"
+import type { PnlPoint } from "@pricetag/sdk/core"
 import { formatClock, formatSignedUsd, formatTime } from "../core/format.ts"
 import { NOTHING_TO_CHART, PNL_HELP } from "../core/wording.ts"
 

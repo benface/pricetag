@@ -1,4 +1,4 @@
-// The only file that talks to Amp, and the only place the token is used. Nothing under src/ may import this.
+// The only file that talks to Amp, and the only place the token is used. `core.ts` must never reach this, so it stays out of browsers.
 
 import { createAuthInterceptor, createClient } from "@edgeandnode/amp"
 import { createGrpcTransport } from "@connectrpc/connect-node"
@@ -9,6 +9,11 @@ const DEFAULT_TIMEOUT_MS = 60_000
 
 /** Amp's client returns Decimal128 values as Arrow big numbers, not strings. */
 export const decimalString = (value: unknown): string | null => (value == null ? null : String(value).replaceAll('"', ""))
+
+export const hexOf = (address: string) => address.replace(/^0x/, "").toLowerCase()
+export const asNumber = (value: unknown) => Number(value)
+export const asIso = (value: unknown) => new Date(Number(value)).toISOString()
+export const prefixed = (hex: string) => `0x${hex}`
 
 /** Amp's client wraps errors a few levels deep, and the outer ones have no message. Nothing here contains the token. */
 export function describeError(error: unknown): string {
@@ -54,7 +59,7 @@ export function createQuery(url: string, token: string | undefined): Query {
       const started = Date.now()
       const rows = await run<T>(sql, timeoutMs)
       const took = Date.now() - started
-      if (took > 5000) console.log(`Slow Amp query: ${took} ms, ${rows.length} rows: ${sql.replace(/\s+/g, " ").slice(0, 100)}…`)
+      if (took > 5000) console.warn(`Slow Amp query: ${took} ms, ${rows.length} rows: ${sql.replace(/\s+/g, " ").slice(0, 100)}…`)
       return rows
     })
     queue = result.catch(() => {})

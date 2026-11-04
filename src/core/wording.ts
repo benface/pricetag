@@ -2,10 +2,9 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
+import type { CostLabel, FoldLeg, Method, PriceSource } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 import { formatDuration } from "./format.ts"
-import type { CostLabel, FoldLeg, Method } from "./fold.ts"
-import type { PriceSource } from "./legs.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
 export const METHOD_NAME = "How cost is worked out"
@@ -23,6 +22,9 @@ export const UNREALIZED_HELP = "Gain or loss on what you still hold, at the curr
 /** The tooltip for a title or sentence that says PnL, or nothing when it doesn't. */
 export const pnlHelp = (text: string): string | undefined => (text.includes("PnL") ? PNL_HELP : undefined)
 
+/** A token's name in a sentence. The code keeps its symbol. */
+export const tokenLabel = (symbol: string) => (symbol === "WETH" ? "wrapped ETH" : symbol)
+
 export const ETH_NOTE = "incl. wrapped ETH"
 export const DEMO_NOTICE = "Demo data, not a real wallet. Every case the app has to get right is in here."
 export const PNL_UNAVAILABLE = "PnL unavailable"
@@ -32,16 +34,6 @@ export const READING = "Reading this wallet's history. The first read can take a
 export const NOT_AN_ADDRESS = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 
 export const MODE_LABELS: Record<Mode, string> = { demo: "Demo data", raw: "Raw chain data", dataset: "Pricetag data" }
-
-/** Why a leg has no usable price. */
-export const PRICE_NOTES = {
-  feedFailed: "The market price feed didn't answer at this block.",
-  rejected: "Ignored the price this exchange implied, because it's far from any plausible value.",
-  unlisted: "This transaction also moved a token we can't price yet, so what was paid or received can't be split between them.",
-  unusable: "This exchange didn't give a usable price for this token.",
-  noExchange: "Nothing was exchanged in this transaction, and this token has no market price feed.",
-  notSimple: "This transaction isn't a simple exchange of one token for another.",
-}
 
 /** What a leg did, in a word. */
 export function actionLabel(kind: FoldLeg["kind"], incoming: boolean): string {
@@ -94,7 +86,7 @@ export function networkFeeUnknownSentence(count: number): string {
 }
 
 export function feesUnknownSentence(count: number): string {
-  return `Network fees couldn't be worked out for ${count} ${count === 1 ? "transaction" : "transactions"}, so the ETH amount is too high by that much.`
+  return `Network fees couldn't be worked out for ${count} ${count === 1 ? "transaction" : "transactions"}, so the network fees shown are too low.`
 }
 
 export const NOT_STARTED = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."

@@ -3,9 +3,18 @@
 
 import { usdOf, type CostLabel, type FoldLeg } from "./fold.ts"
 import { normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
-import { PRICE_NOTES } from "./wording.ts"
 
 export type PriceSource = "oracle" | "swap" | "market"
+
+/** Why a leg has no usable price. Apps show these as they are, so they stay in plain language. */
+export const PRICE_NOTES = {
+  feedFailed: "The market price feed didn't answer at this block.",
+  rejected: "Ignored the price this exchange implied, because it's far from any plausible value.",
+  unlisted: "This transaction also moved a token we can't price yet, so what was paid or received can't be split between them.",
+  unusable: "This exchange didn't give a usable price for this token.",
+  noExchange: "Nothing was exchanged in this transaction, and this token has no market price feed.",
+  notSimple: "This transaction isn't a simple exchange of one token for another.",
+}
 /**
  * Transfers of tokens off the allowlist. They have no position or price, but they say money went elsewhere.
  * `unlisted`: `amount` is a quantity, or empty when it can't be read, as with ERC-1155.

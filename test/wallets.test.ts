@@ -4,8 +4,7 @@ import { portfolioOf } from "../server/portfolio.ts"
 import { createWallets } from "../server/wallets.ts"
 import type { ReadL1Fees } from "../server/receipts.ts"
 import type { Source, WindowRows } from "../server/source.ts"
-import type { LegRow, ReferenceRow } from "../src/core/legs.ts"
-import { ASSETS, ETH_ADDRESS } from "../src/core/tokens.ts"
+import { ASSETS, ETH_ADDRESS, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 

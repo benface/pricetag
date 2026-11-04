@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from "react"
-import type { LegEffect } from "../core/portfolio.ts"
+import type { LegEffect } from "@pricetag/sdk/core"
 import { formatPrice, formatSignedAmount, formatTime, shortHash } from "../core/format.ts"
 import { describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
 import { STARTING_BALANCE, actionLabel, activityTitle, costTag, pnlHelp, priceSourceLabel } from "../core/wording.ts"

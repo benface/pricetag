@@ -128,11 +128,11 @@
   "feesUnknown": [
     {
       "count": 1,
-      "text": "Network fees couldn't be worked out for 1 transaction, so the ETH amount is too high by that much."
+      "text": "Network fees couldn't be worked out for 1 transaction, so the network fees shown are too low."
     },
     {
       "count": 2,
-      "text": "Network fees couldn't be worked out for 2 transactions, so the ETH amount is too high by that much."
+      "text": "Network fees couldn't be worked out for 2 transactions, so the network fees shown are too low."
     }
   ],
   "behind": [

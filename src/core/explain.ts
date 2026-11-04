@@ -1,10 +1,8 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import type { PricedLeg } from "./legs.ts"
-import type { LegEffect, PnlPoint, Position, Totals } from "./portfolio.ts"
-import { TOKENS, tokenByAddress } from "./tokens.ts"
+import { TOKENS, tokenByAddress, valuePosition, type LegEffect, type PnlPoint, type Position, type PricedLeg, type Totals } from "@pricetag/sdk/core"
 import { formatAmount, formatPrice, formatSignedUsd, formatUsd, shortHash } from "./format.ts"
-import { AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, METHOD_LABELS, NETWORK_FEES, currentPriceSource } from "./wording.ts"
+import { AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, METHOD_LABELS, NETWORK_FEES, currentPriceSource, tokenLabel } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"
 
@@ -94,7 +92,7 @@ export function describeNetting(leg: PricedLeg): string | null {
   const rows = leg.parts.map((p) => {
     const token = tokenByAddress(p.token)
     const fee = p.kind === "gas" ? " network fee" : p.kind === "l1_fee" ? " Ethereum fee" : ""
-    return `${p.side === "credit" ? "+" : "−"}${formatAmount(p.amount, token?.decimals ?? 18)} ${token?.symbol ?? p.token}${fee}`
+    return `${p.side === "credit" ? "+" : "−"}${formatAmount(p.amount, token?.decimals ?? 18)} ${tokenLabel(token?.symbol ?? p.token)}${fee}`
   })
   return `Combines ${leg.parts.length} movements: ${rows.join(", ")}`
 }
