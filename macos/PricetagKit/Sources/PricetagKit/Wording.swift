@@ -14,6 +14,14 @@ public enum Wording {
     public static let realizedHelp = "Gain or loss on what you've sold or spent."
     public static let unrealizedHelp = "Gain or loss on what you still hold, at the current price."
 
+    public static let rulesTitle = "Pricing rule"
+    public static let rulesHelp = "Prices come from a public recipe anyone can copy and change. Each rule here is one version of it, named by its fingerprint. Switching only changes which one this wallet is read through."
+
+    /// A dataset version's fingerprint, short enough to read and long enough to recognize.
+    public static func shortManifestHash(_ hash: String) -> String {
+        "\(hash.prefix(12))…\(hash.suffix(4))"
+    }
+
     /// The tooltip for a title or sentence that says PnL, or nothing when it doesn't.
     public static func pnlHelp(for text: String) -> String? {
         text.contains("PnL") ? pnlHelp : nil

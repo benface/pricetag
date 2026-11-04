@@ -189,7 +189,8 @@ public final class HotWallet {
         let linked = linkedWallets.filter { $0 != address.lowercased }
         do {
             // Always USD, like the cap and the balances it's compared with.
-            let portfolio = try await portfolioSource().portfolio(address: address.lowercased, method: costMethod(), currency: .USD, linked: linked, timeout: .seconds(180))
+            // Always by the default pricing rule. A rule picked to compare numbers must never decide what money moves.
+            let portfolio = try await portfolioSource().portfolio(address: address.lowercased, method: costMethod(), currency: .USD, rule: nil, linked: linked, timeout: .seconds(180))
             guard !Task.isCancelled, address == self.address else { return }
             self.portfolio = portfolio
             ampProblem = false

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
+import { createServer } from "node:http2"
+import type { AddressInfo } from "node:net"
 import { describe, it } from "node:test"
-import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, pnlStatus, sumTotals } from "@pricetag/sdk"
+import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, createQuery, datasetReader, foldPositions, pnlStatus, sumTotals } from "@pricetag/sdk"
 import { DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
 import { fakeAmp } from "./support/fake-amp.ts"
 
@@ -322,4 +324,44 @@ describe("the package boundary", () => {
     }
   })
 
+})
+
+describe("reading through aliases", () => {
+  it("sends amp-alias only on an aliased query, with the token on both", async () => {
+    const seen: { alias: unknown; authorization: unknown }[] = []
+    const server = createServer((req, res) => {
+      seen.push({ alias: req.headers["amp-alias"], authorization: req.headers.authorization })
+      res.writeHead(200, { "content-type": "application/grpc", "grpc-status": "14", "grpc-message": "not a real Amp" })
+      res.end()
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const query = createQuery(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "t0ken")
+    const aliases = { pricetag: "benface/pricetag@aa", pricing: "benface/fork@bb" }
+    await query("SELECT 1").catch(() => {})
+    await query.aliased(aliases)("SELECT 1").catch(() => {})
+    server.close()
+    assert.ok(seen.length >= 2)
+    assert.equal(seen[0]!.alias, undefined)
+    assert.equal(seen.at(-1)!.alias, JSON.stringify(aliases))
+    for (const { authorization } of seen) assert.match(String(authorization), /t0ken/)
+  })
+
+  it("reads prices from the price dataset, and what happened on the chain from the other", async () => {
+    const { query, queries } = fakeAmp({ legs: [], unlisted_legs: [], priced_legs: [], reference_prices: [] })
+    const reader = datasetReader(query, { baseDataset: "base", dataset: "pricetag", priceDataset: "pricing" })
+    await reader.readWindow("0x" + ME, 1, 2)
+    await reader.readReferences([1])
+    await reader.processedThrough(1, 200)
+    const from = (table: string) => [...new Set(queries.filter((sql) => sql.includes(`.${table} `)).map((sql) => /FROM "(\w+)"/.exec(sql)![1]))]
+    assert.deepEqual(from("legs"), ["pricetag"])
+    assert.deepEqual(from("unlisted_legs"), ["pricetag"])
+    assert.deepEqual(from("priced_legs"), ["pricing"])
+    assert.deepEqual(from("reference_prices"), ["pricing"])
+  })
+
+  it("reads everything from one dataset when there's no price dataset", async () => {
+    const { query, queries } = fakeAmp({ legs: [], unlisted_legs: [], priced_legs: [], reference_prices: [] })
+    await datasetReader(query, { baseDataset: "base", dataset: "pricetag" }).readWindow("0x" + ME, 1, 2)
+    for (const sql of queries) assert.match(sql, /FROM "pricetag"\./)
+  })
 })

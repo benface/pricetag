@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ETH_ADDRESS, PRICE_NOTES, WETH_ADDRESS, buildPricedLegs, foldPositions, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, PRICE_NOTES, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
@@ -11,7 +11,8 @@ import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSi
 import { ETH_USD_FEED, TOKENS, USDC_USD_FEED } from "@pricetag/sdk/core"
 import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
-import { explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
+import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
+import { RULE_TEXT, differenceOf, ruleNote, whySentence } from "../src/core/rules.ts"
 import { proofOf, verificationOf } from "../server/proof.ts"
 
 const RESOURCES = new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/", import.meta.url)
@@ -321,7 +322,10 @@ describe("wording", () => {
       nothingToChart: wording.NOTHING_TO_CHART,
       reading: wording.READING,
       notAnAddress: wording.NOT_AN_ADDRESS,
+      rulesTitle: wording.RULES_TITLE,
+      rulesHelp: wording.RULES_HELP,
     },
+    manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
   }
 
   it("says the same on the Mac", () => {
@@ -366,5 +370,148 @@ describe("wording", () => {
       }
     }
     for (const text of texts) assert.doesNotMatch(text, JARGON)
+  })
+})
+
+describe("comparing pricing rules", () => {
+  const rule = (id: string, name: string) => ({ id, name, summary: "", dataset: `a/${id}@0.0.1`, hash: "a".repeat(64) })
+  const market = rule("market-price", "Market price")
+  const cautious = rule("cautious-eth", "Cautious ETH")
+  const eth = DEMO_WALLET.prices.ETH!
+  const lower = (micros: string | null) => (micros === null ? null : ((BigInt(micros) * 99n) / 100n).toString())
+  // What the fork does: everything's the same but what ETH is worth, here and in anything valued in ETH.
+  const forked = walletWith({
+    prices: { ...DEMO_WALLET.prices, ETH: { ...eth, micros: lower(eth.micros)! } },
+    balances: DEMO_WALLET.balances,
+    legs: DEMO_WALLET.legs.map((leg) => (leg.asset === "ETH" ? { ...leg, priceMicros: lower(leg.priceMicros), costMicros: lower(leg.costMicros), proceedsMicros: lower(leg.proceedsMicros) } : leg)),
+  })
+  const reference = (eth_usd: string) => ({ block_num: 1, eth_usd, usdc_usd: "100000000" })
+  const compared = compareRules({ rule: market, wallet: walletWith({}), reference: reference("240000000000") }, { rule: cautious, wallet: forked, reference: reference("237600000000") }, "average", 1)
+  const row = (label: string) => compared.rows.find((r) => r.label === label)
+
+  it("says what ETH is worth by each rule", () => {
+    assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "2400000000", b: "2376000000", difference: "-24000000", aPartial: false, bPartial: false })
+  })
+
+  it("gets each side from the same fold the app shows", () => {
+    assert.equal(row("Total PnL")?.a, portfolioOf(walletWith({}), "average").totals.pnlMicros)
+    assert.equal(row("Total PnL")?.b, portfolioOf(forked, "average").totals.pnlMicros)
+    assert.equal(row("Value")?.a, portfolioOf(walletWith({}), "average").totals.valueMicros)
+  })
+
+  it("has no difference from something unknown, and an unknown is never zero", () => {
+    assert.equal(differenceOf(null, "5"), null)
+    assert.equal(differenceOf("5", null), null)
+    assert.equal(differenceOf("5", "7"), "2")
+  })
+
+  it("lists each transaction that changed, newest first, and counts them all", () => {
+    assert.ok(compared.changedTxs > 0)
+    assert.ok(compared.transactions.every((tx) => tx.asset === "ETH" && tx.a !== tx.b))
+    const blocks = compared.transactions.map((tx) => tx.blockNum)
+    assert.deepEqual(blocks, [...blocks].sort((x, y) => y - x))
+    assert.ok(compared.why.includes(`${compared.changedTxs}`))
+  })
+
+  it("finds no difference between a rule and itself", () => {
+    const same = compareRules({ rule: market, wallet: walletWith({}), reference: reference("1") }, { rule: cautious, wallet: walletWith({}), reference: reference("1") }, "average", 1)
+    assert.equal(same.changedTxs, 0)
+    assert.deepEqual(same.transactions, [])
+    assert.ok(same.rows.every((r) => r.a === r.b))
+    assert.equal(same.why, whySentence(0))
+  })
+
+  it("says which rule is on wherever a number is explained, because a label alone can't", () => {
+    const note = ruleNote(RULE_TEXT["cautious-eth"]!)
+    const explained = explainPortfolio(walletWith({ ruleNote: note }), "average", { kind: "total", metric: "pnl" })
+    assert.ok(explained?.lines.includes(note))
+    assert.ok(!explainPortfolio(walletWith({}), "average", { kind: "total", metric: "pnl" })?.lines.includes(note))
+  })
+
+  it("says what a partial sum leaves out, the same as the main screen, and marks it", () => {
+    const portfolio = portfolioOf(walletWith({}), "average")
+    assert.ok(portfolio.totals.coverage.pnl.missing > 0, "the demo wallet leaves things out")
+    assert.equal(row("Total PnL")?.aPartial, true)
+    assert.equal(row("Total PnL")?.bPartial, true)
+    assert.ok(compared.warnings.includes(wording.excludedSentence(portfolio.totals.excluded)!))
+  })
+
+  it("says when a total's difference is real", () => {
+    assert.notEqual(row("Value")?.difference, null)
+  })
+
+  it("won't call it a difference when one side leaves out something the other doesn't", () => {
+    const missing = walletWith({ balances: null })
+    const lopsided = compareRules({ rule: market, wallet: walletWith({}), reference: reference("1") }, { rule: cautious, wallet: missing, reference: reference("1") }, "average", 1)
+    assert.equal(lopsided.rows.find((r) => r.label === "Total PnL")?.difference, null)
+    assert.ok(lopsided.warnings.some((w) => w.startsWith("Cautious ETH: ")))
+  })
+
+  it("counts a network fee that changed, and says so", () => {
+    const gas: LegRow = { block_num: 5, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: "0xfee", tx_index: 1, log_index: 0, token: ETH_ADDRESS, account: "0xaa", side: "debit", amount: "1000000000000000", kind: "gas" }
+    const by = (eth_usd: string) => walletWith({ address: "0xaa", prices: {}, legs: buildPricedLegs({ account: "0xaa", rows: [gas], references: [{ block_num: 5, eth_usd, usdc_usd: "100000000" }], priced: [] }), balances: null })
+    const fees = compareRules({ rule: market, wallet: by("300000000000"), reference: reference("300000000000") }, { rule: cautious, wallet: by("297000000000"), reference: reference("297000000000") }, "average", 5)
+    assert.equal(fees.changedTxs, 1)
+    assert.deepEqual(fees.transactions.map((tx) => [tx.label, tx.a, tx.b, tx.difference]), [["Network fee", "3000000", "2970000", "-30000"]])
+    assert.deepEqual(fees.rows.find((r) => r.label === "Network fees")?.difference, "-30000")
+    assert.equal(fees.why, whySentence(1))
+  })
+
+  describe("a transfer between linked wallets carrying several purchases", () => {
+    const [ME, OTHER] = ["0x00000000000000000000000000000000000000aa", "0x00000000000000000000000000000000000000bb"]
+    const DEGEN = TOKENS.find((t) => t.symbol === "DEGEN")!.address
+    const THOUSANDS = "10000000000000000000000"
+    const moved = (tx: string, block: number, account: string, token: string, side: LegRow["side"], amount: string): LegRow => ({ block_num: block, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: tx, tx_index: 1, log_index: 0, token, account, side, amount, kind: "erc20" })
+    const walletOf = (address: string, rows: LegRow[], eth_usd: string) => {
+      const references = [...new Set(rows.map((r) => r.block_num))].map((block_num) => ({ block_num, eth_usd, usdc_usd: "100000000" }))
+      return walletWith({ address, legs: buildPricedLegs({ account: address, rows, references, priced: derivePricedRows(rows, references) }), references, prices: {} })
+    }
+    const fund = moved("0xfund", 2, OTHER, ETH_ADDRESS, "credit", "300000000000000000")
+    const buys = [
+      moved("0xbuy1", 3, OTHER, ETH_ADDRESS, "debit", "100000000000000000"),
+      moved("0xbuy1", 3, OTHER, DEGEN, "credit", THOUSANDS),
+      moved("0xbuy2", 4, OTHER, ETH_ADDRESS, "debit", "200000000000000000"),
+      moved("0xbuy2", 4, OTHER, DEGEN, "credit", THOUSANDS),
+    ]
+    const send = (amount: string) => [moved("0xsend", 6, OTHER, DEGEN, "debit", amount)]
+    const land = (amount: string) => [moved("0xsend", 6, ME, DEGEN, "credit", amount)]
+    const by = (rule: typeof market, eth: string, others: LegRow[], amount: string) => ({ rule, wallet: walletOf(ME, land(amount), eth), linked: [walletOf(OTHER, [fund, ...others, ...send(amount)], eth)], reference: reference(eth) })
+    const compareFifo = (others: LegRow[], amount: string) => compareRules(by(market, "300000000000", others, amount), by(cautious, "297000000000", others, amount), "fifo", 20)
+    const costs = (comparison: ReturnType<typeof compareFifo>) => comparison.transactions.filter((tx) => tx.txHash === "0xsend")
+
+    it("is one cost for one transaction", () => {
+      const comparison = compareFifo(buys, "20000000000000000000000")
+      assert.deepEqual(costs(comparison).map((tx) => [tx.asset, tx.label, tx.a, tx.b, tx.difference]), [["DEGEN", "Cost", "900000000", "891000000", "-9000000"]])
+      assert.equal(comparison.changedTxs, 1)
+    })
+
+    it("gives every row its own identity, which both apps key on", () => {
+      const { transactions } = compareFifo(buys, "20000000000000000000000")
+      const ids = transactions.map((tx) => `${tx.txHash}:${tx.asset}:${tx.label}`)
+      assert.equal(new Set(ids).size, ids.length)
+    })
+
+    it("stays unknown when part of it is, and still says it changed", () => {
+      // Half of what's sent arrived from a stranger at an unknown cost, so the whole cost is unknown by either rule.
+      const others = [moved("0xbuy1", 3, OTHER, ETH_ADDRESS, "debit", "100000000000000000"), moved("0xbuy1", 3, OTHER, DEGEN, "credit", THOUSANDS), moved("0xgift", 4, OTHER, DEGEN, "credit", THOUSANDS)]
+      const comparison = compareFifo(others, "20000000000000000000000")
+      assert.deepEqual(costs(comparison).map((tx) => [tx.label, tx.a, tx.b, tx.difference]), [["Cost", null, null, null]])
+      assert.equal(comparison.changedTxs, 1)
+    })
+
+    it("doesn't list an amount that stayed the same, known or not", () => {
+      const same = compareRules(by(market, "300000000000", buys, "20000000000000000000000"), by(cautious, "300000000000", buys, "20000000000000000000000"), "fifo", 20)
+      assert.deepEqual(same.transactions, [])
+      assert.equal(same.changedTxs, 0)
+    })
+  })
+
+  it("sends the Mac app what it can read", () => {
+    assertMatchesFile("demo-rule-comparison.json", compared)
+  })
+
+  it("keeps the rule's words plain", () => {
+    const JARGON = /\b(fifo|legs?|proceeds|oracles?|allowlist|swaps?|dataset|onchain|weth|slippage)\b/i
+    for (const text of [...Object.values(RULE_TEXT).flatMap((t) => [t.name, t.summary]), whySentence(0), whySentence(1), whySentence(2), wording.RULES_HELP]) assert.doesNotMatch(text, JARGON, text)
   })
 })

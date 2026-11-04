@@ -7,6 +7,7 @@ struct SettingsView: View {
     let hotWallet: HotWallet
     @State private var server = ""
     @State private var serverError: String?
+    @State private var isComparing = false
     @State private var rpc = ""
     @State private var rpcError: String?
     @State private var isConfirmingDelete = false
@@ -21,6 +22,17 @@ struct SettingsView: View {
                 Text("Costs use the exchange rate when each transaction happened, and current values use the current rate. If a rate is missing, the value shows as unavailable.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if store.rules.count > 1 {
+                Section {
+                    RulePicker(store: store)
+                    Button("Compare Side by Side…") { isComparing = true }
+                        .disabled(store.address == nil || store.address == WalletAddress.demo)
+                } footer: {
+                    Text(Wording.rulesHelp)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Section {
                 TextField("Server", text: $server, prompt: Text(PortfolioStore.defaultServerURL.absoluteString))
@@ -52,6 +64,8 @@ struct SettingsView: View {
             server = store.serverURL.absoluteString
             rpc = hotWallet.settings.rpcURL.absoluteString
         }
+        .task { await store.refreshRules() }
+        .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
     }
 
     private var spendingMoney: some View {

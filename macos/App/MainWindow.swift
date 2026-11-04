@@ -32,7 +32,8 @@ struct MainWindow: View {
 
     private var subtitle: String {
         guard let address = store.address else { return "" }
-        return address == WalletAddress.demo ? "Demo wallet" : Format.shortHash(address)
+        let wallet = address == WalletAddress.demo ? "Demo wallet" : Format.shortHash(address)
+        return store.activeRuleName.map { "\(wallet) · \($0)" } ?? wallet
     }
 
     private var inspectorBinding: Binding<Bool> {
@@ -384,7 +385,7 @@ private struct Unavailable: View {
     }
 }
 
-private struct WalletSheet: View {
+struct WalletSheet: View {
     let store: PortfolioStore
     @Environment(\.dismiss) private var dismiss
 

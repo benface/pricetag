@@ -97,8 +97,13 @@ export const WALLET_TABLES = ["legs", "unlisted_legs", "priced_legs", "reference
 export const ORACLE_TABLES = ["reference_prices"]
 export const SWAP_TABLES = ["legs", "unlisted_legs", "priced_legs"]
 
-export function datasetReader(query: Query, config: { baseDataset: string; dataset: string }) {
+/** The tables a pricing rule decides. Everything else is what happened on the chain, whichever rule prices it. */
+const PRICE_TABLES = ["priced_legs", "reference_prices"]
+
+export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined }) {
   const ds = `"${config.dataset}"`
+  // A fork of the pricing rule only needs the tables the rule reaches, so these can come from somewhere else.
+  const prices = `"${config.priceDataset ?? config.dataset}"`
   const readOrEmpty = (sql: string) =>
     query<Row>(sql).catch((error: unknown) => {
       if (isNotStarted(error)) return []
@@ -114,7 +119,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
     async processedThrough(after: number, head: number, tables: readonly string[] = WALLET_TABLES): Promise<number | null> {
       let through = head
       for (const table of tables) {
-        const rows = await readOrEmpty(`SELECT block_num FROM ${ds}.${table} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`)
+        const rows = await readOrEmpty(`SELECT block_num FROM ${PRICE_TABLES.includes(table) ? prices : ds}.${table} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`)
         if (!rows[0]) return null
         through = Math.min(through, asNumber(rows[0].block_num))
       }
@@ -126,7 +131,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
       const range = `block_num BETWEEN ${from} AND ${to}`
       const legRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
       const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
-      const pricedRows = await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${ds}.priced_legs WHERE ${range} AND account = X'${me}'`)
+      const pricedRows = await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${prices}.priced_legs WHERE ${range} AND account = X'${me}'`)
       const rows = legRows.map(toLegRow)
       return {
         // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
@@ -140,7 +145,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
     async readReferences(blocks: readonly number[]): Promise<ReferenceRow[]> {
       const result: ReferenceRow[] = []
       for (const { filter } of blockFilters(blocks)) {
-        const rows = await query<Row>(`SELECT ${REFERENCE_COLUMNS} FROM ${ds}.reference_prices WHERE ${filter}`)
+        const rows = await query<Row>(`SELECT ${REFERENCE_COLUMNS} FROM ${prices}.reference_prices WHERE ${filter}`)
         result.push(...rows.map(toReference))
       }
       return result
@@ -148,12 +153,12 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
 
     /** The newest oracle read at or just before `head`, or null if there's none recent enough to call current. */
     async readLatestReference(head: number): Promise<ReferenceRow | null> {
-      const rows = await readOrEmpty(`SELECT ${REFERENCE_COLUMNS} FROM ${ds}.reference_prices WHERE block_num BETWEEN ${head - MAX_PRICE_AGE_BLOCKS} AND ${head} ORDER BY block_num DESC LIMIT 1`)
+      const rows = await readOrEmpty(`SELECT ${REFERENCE_COLUMNS} FROM ${prices}.reference_prices WHERE block_num BETWEEN ${head - MAX_PRICE_AGE_BLOCKS} AND ${head} ORDER BY block_num DESC LIMIT 1`)
       return rows[0] ? toReference(rows[0]) : null
     },
 
     async readOracle(oracle: "eth" | "usdc", from: number, to: number): Promise<OracleRow[]> {
-      const rows = await query<Row>(`SELECT block_num, timestamp, ${ORACLE_COLUMNS[oracle]} AS answer FROM ${ds}.reference_prices WHERE block_num BETWEEN ${from} AND ${to} ORDER BY block_num`)
+      const rows = await query<Row>(`SELECT block_num, timestamp, ${ORACLE_COLUMNS[oracle]} AS answer FROM ${prices}.reference_prices WHERE block_num BETWEEN ${from} AND ${to} ORDER BY block_num`)
       return rows.map((r) => ({ block_num: asNumber(r.block_num), timestamp: asIso(r.timestamp), answer: decimalString(r.answer) ?? "" }))
     },
 
@@ -170,7 +175,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
     async readSwaps(token: string, from: number, to: number): Promise<SwapRow[]> {
       const hex = `X'${hexOf(token)}'`
       const rows = await query<Row>(
-        `SELECT ${PRICED_COLUMNS}, timestamp, eth_usd, usdc_usd, eth_tx, usdc_tx FROM ${ds}.priced_legs WHERE block_num BETWEEN ${from} AND ${to} AND (sold_token = ${hex} OR bought_token = ${hex}) ORDER BY block_num`,
+        `SELECT ${PRICED_COLUMNS}, timestamp, eth_usd, usdc_usd, eth_tx, usdc_tx FROM ${prices}.priced_legs WHERE block_num BETWEEN ${from} AND ${to} AND (sold_token = ${hex} OR bought_token = ${hex}) ORDER BY block_num`,
       )
       return rows.map((r) => ({ row: toPricedRow(r), timestamp: asIso(r.timestamp), reference: toReference(r) }))
     },

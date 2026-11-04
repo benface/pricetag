@@ -1,12 +1,13 @@
 // The portfolio a wallet's legs fold into, for clients that don't run the fold themselves.
 // One source of PnL logic: this calls what the browser calls, and adds nothing to the math.
 
-import { TOKENS, foldPositions, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Method, type Position, type PricedLeg, type Totals } from "@pricetag/sdk/core"
+import { TOKENS, answerToMicros, foldPositions, worth, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Method, type Position, type PricedLeg, type ReferenceRow, type Totals } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
 import { viewWallet, type CurrencyCode, type WalletView } from "../src/core/currency.ts"
 import { inheritCosts } from "../src/core/linked.ts"
-import { describeConversion, describeEffect, describeNetting, explainContext, explainTarget, rateSource, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
-import { ETH_NOTE } from "../src/core/wording.ts"
+import { describeConversion, describeEffect, describeNetting, explainContext, explainTarget, missingRatesLine, rateSource, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
+import { differenceOf, whySentence, type PricingRule, type RuleComparison, type RuleRow, type RuleTransaction } from "../src/core/rules.ts"
+import { ETH_NOTE, UNPRICED_FEES, excludedSentence, feesUnknownSentence, networkFeeUnknownSentence } from "../src/core/wording.ts"
 
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS = 200
@@ -64,6 +65,7 @@ export function portfolioOf(wallet: WalletResponse, method: Method, linked: read
     address: wallet.address,
     mode: wallet.mode,
     method,
+    rule: wallet.rule ?? null,
     currency: view.currency,
     exchange: exchangeOf(view),
     coverage: wallet.coverage,
@@ -123,5 +125,121 @@ export function explainPortfolio(wallet: WalletResponse, method: Method, target:
     lines: explanation.lines,
     legCount: explanation.effects.length,
     legs: explanation.effects.slice(0, MAX_LEGS).map((effect) => legOf(effect, explanation.currency)),
+  }
+}
+
+/** How many changed transactions a comparison lists. The count covers them all. */
+const MAX_COMPARED_TXS = 20
+
+type ComparedAmount = Pick<RuleTransaction, "txHash" | "blockNum" | "timestamp" | "asset" | "label"> & { parts: (string | null)[] }
+
+/**
+ * Each transaction's cost, sale value and network fee per asset. A leg can be split, as when a transfer between linked
+ * wallets carries several purchases, but people read one amount for one transaction.
+ */
+function comparedAmounts(legs: readonly PricedLeg[]): Map<string, ComparedAmount> {
+  const amounts = new Map<string, ComparedAmount>()
+  const add = (leg: PricedLeg, label: RuleTransaction["label"], value: string | null) => {
+    const key = `${leg.txHash}:${leg.asset}:${label}`
+    const known = amounts.get(key)
+    if (known) known.parts.push(value)
+    else amounts.set(key, { txHash: leg.txHash, blockNum: leg.blockNum, timestamp: leg.timestamp, asset: leg.asset, label, parts: [value] })
+  }
+  for (const leg of legs) {
+    // A fee has no cost or sale value. It's spent at the price of its block, the same way the fold counts it.
+    if (leg.kind === "gas") add(leg, "Network fee", leg.priceMicros === null ? null : worth(BigInt(leg.delta.replace("-", "")), BigInt(leg.priceMicros), leg.decimals).toString())
+    else {
+      add(leg, "Cost", leg.costMicros)
+      add(leg, "Sold for", leg.proceedsMicros)
+    }
+  }
+  return amounts
+}
+
+/** One part unknown leaves the whole unknown. It's never added up as if that part were zero. */
+const sumOf = (parts: readonly (string | null)[]) => (parts.includes(null) ? null : parts.reduce((sum, part) => sum + BigInt(part as string), 0n).toString())
+
+/** What came out differently by the other rule. A known part can change inside an amount that stays unknown, and that still counts. */
+function changedAmounts(a: readonly PricedLeg[], b: readonly PricedLeg[]): RuleTransaction[] {
+  const theirs = comparedAmounts(b)
+  const changed: RuleTransaction[] = []
+  for (const [key, { parts, ...base }] of comparedAmounts(a)) {
+    const other = theirs.get(key)?.parts ?? [null]
+    if (JSON.stringify(parts) === JSON.stringify(other)) continue
+    const [x, y] = [sumOf(parts), sumOf(other)]
+    changed.push({ ...base, a: x, b: y, difference: differenceOf(x, y) })
+  }
+  return changed.sort((x, y) => y.blockNum - x.blockNum)
+}
+
+/** What a portfolio's numbers leave out or can't vouch for, as the main screen says it. */
+function warningsOf({ totals, currency, exchange, gasUnknownTxs, l1FeeUnknownTxs }: PortfolioResponse): string[] {
+  return [
+    excludedSentence(totals.excluded),
+    totals.unpricedGas ? UNPRICED_FEES : null,
+    gasUnknownTxs.length > 0 ? feesUnknownSentence(gasUnknownTxs.length) : null,
+    l1FeeUnknownTxs.length > 0 ? networkFeeUnknownSentence(l1FeeUnknownTxs.length) : null,
+    exchange && exchange.missingRateTxs.length > 0 ? missingRatesLine(exchange.missingRateTxs.length, currency) : null,
+    exchange && exchange.latestRateMicros === null ? `There's no current USD to ${currency} rate, so what's held has no current value.` : null,
+  ].filter((warning) => warning !== null)
+}
+
+/** Once when both sides say it, and otherwise saying which side. */
+function combinedWarnings(a: PricingRule, left: readonly string[], b: PricingRule, right: readonly string[]): string[] {
+  const only = (rule: PricingRule, mine: readonly string[], theirs: readonly string[]) => mine.filter((w) => !theirs.includes(w)).map((w) => `${rule.name}: ${w}`)
+  return [...left.filter((w) => right.includes(w)), ...only(a, left, right), ...only(b, right, left)]
+}
+
+type Compared = { rule: PricingRule; wallet: WalletResponse; reference: ReferenceRow | null; linked?: readonly WalletResponse[] }
+
+/** One wallet by two rules, both folded by the same code, so the rule is all that can differ. */
+export function compareRules(a: Compared, b: Compared, method: Method, blockNum: number): RuleComparison {
+  const [left, right] = [portfolioOf(a.wallet, method, a.linked), portfolioOf(b.wallet, method, b.linked)]
+  // A sum that leaves out something else on the other side isn't a difference between rules.
+  const sameMakeup = JSON.stringify([left.totals.excluded, left.totals.unpricedGas]) === JSON.stringify([right.totals.excluded, right.totals.unpricedGas])
+  const rowOf = (label: string, format: RuleRow["format"], x: string | null, y: string | null, partial: [boolean, boolean] = [false, false], comparable = true): RuleRow => ({
+    label,
+    format,
+    a: x,
+    b: y,
+    difference: comparable ? differenceOf(x, y) : null,
+    aPartial: x !== null && partial[0],
+    bPartial: y !== null && partial[1],
+  })
+  const totals = (key: "pnlMicros" | "realizedMicros" | "unrealizedMicros" | "valueMicros", part: "pnl" | "realized" | "unrealized" | "value", label: string, format: RuleRow["format"]) => {
+    const [x, y] = [left.totals.coverage[part], right.totals.coverage[part]]
+    return rowOf(label, format, left.totals[key], right.totals[key], [x.missing > 0, y.missing > 0], sameMakeup && x.known === y.known && x.missing === y.missing)
+  }
+  const rows: RuleRow[] = [
+    rowOf("ETH price", "usdPrice", answerToMicros(a.reference?.eth_usd), answerToMicros(b.reference?.eth_usd)),
+    totals("pnlMicros", "pnl", "Total PnL", "signed"),
+    totals("realizedMicros", "realized", "Realized", "signed"),
+    totals("unrealizedMicros", "unrealized", "Unrealized", "signed"),
+    totals("valueMicros", "value", "Value", "money"),
+    rowOf("Network fees", "money", left.totals.gasMicros, right.totals.gasMicros, [left.totals.unpricedGas, right.totals.unpricedGas], left.totals.unpricedGas === right.totals.unpricedGas),
+  ]
+  for (const position of left.positions) {
+    const theirs = right.positions.find((p) => p.asset === position.asset)
+    if (!theirs) continue
+    const row = (label: string, format: RuleRow["format"], x: string | null, y: string | null) => {
+      if (x !== y) rows.push(rowOf(`${position.asset} ${label}`, format, x, y))
+    }
+    row("PnL", "signed", position.pnlMicros, theirs.pnlMicros)
+    row("cost", "money", position.values.costMicros, theirs.values.costMicros)
+    row("value", "money", position.values.valueMicros, theirs.values.valueMicros)
+  }
+  const changed = changedAmounts(viewWithLinkedCosts(a.wallet, a.linked ?? [], method).legs, viewWithLinkedCosts(b.wallet, b.linked ?? [], method).legs)
+  const changedTxs = new Set(changed.map((c) => c.txHash)).size
+  return {
+    address: a.wallet.address,
+    currency: left.currency,
+    blockNum,
+    a: a.rule,
+    b: b.rule,
+    why: whySentence(changedTxs),
+    warnings: combinedWarnings(a.rule, warningsOf(left), b.rule, warningsOf(right)),
+    rows,
+    transactions: changed.slice(0, MAX_COMPARED_TXS),
+    changedTxs,
   }
 }

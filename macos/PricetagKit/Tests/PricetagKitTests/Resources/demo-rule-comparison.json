@@ -1,0 +1,181 @@
+{
+  "address": "0x00000000000000000000000000000000000de300",
+  "currency": "USD",
+  "blockNum": 1,
+  "a": {
+    "id": "market-price",
+    "name": "Market price",
+    "summary": "",
+    "dataset": "a/market-price@0.0.1",
+    "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "b": {
+    "id": "cautious-eth",
+    "name": "Cautious ETH",
+    "summary": "",
+    "dataset": "a/cautious-eth@0.0.1",
+    "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "why": "7 transactions' cost, sale value or network fee changed. Both read the same transactions, balances and exchange rates at the same block, so the only difference is what ETH is worth, which also sets what ETH held counts for.",
+  "warnings": [
+    "Excludes DAI, AERO, cbBTC, DEGEN, VIRTUAL (no current price); DAI, USDC, ETH, DEGEN, VIRTUAL (unknown cost); USDC, ETH (sold at an unknown cost); cbBTC (doesn't match its actual balance)."
+  ],
+  "rows": [
+    {
+      "label": "ETH price",
+      "format": "usdPrice",
+      "a": "2400000000",
+      "b": "2376000000",
+      "difference": "-24000000",
+      "aPartial": false,
+      "bPartial": false
+    },
+    {
+      "label": "Total PnL",
+      "format": "signed",
+      "a": "74281640",
+      "b": "74288675",
+      "difference": "7035",
+      "aPartial": true,
+      "bPartial": true
+    },
+    {
+      "label": "Realized",
+      "format": "signed",
+      "a": "74985000",
+      "b": "74985000",
+      "difference": "0",
+      "aPartial": true,
+      "bPartial": true
+    },
+    {
+      "label": "Unrealized",
+      "format": "signed",
+      "a": null,
+      "b": null,
+      "difference": null,
+      "aPartial": false,
+      "bPartial": false
+    },
+    {
+      "label": "Value",
+      "format": "money",
+      "a": "4621410799",
+      "b": "4607690191",
+      "difference": "-13720608",
+      "aPartial": true,
+      "bPartial": true
+    },
+    {
+      "label": "Network fees",
+      "format": "money",
+      "a": "703360",
+      "b": "696325",
+      "difference": "-7035",
+      "aPartial": false,
+      "bPartial": false
+    },
+    {
+      "label": "ETH value",
+      "format": "money",
+      "a": "1372060800",
+      "b": "1358340192",
+      "difference": "-13720608",
+      "aPartial": false,
+      "bPartial": false
+    }
+  ],
+  "transactions": [
+    {
+      "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
+      "blockNum": 53504800,
+      "timestamp": "2026-11-04T10:40:00.000Z",
+      "asset": "ETH",
+      "label": "Network fee",
+      "a": "104000",
+      "b": "102960",
+      "difference": "-1040"
+    },
+    {
+      "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
+      "blockNum": 53504800,
+      "timestamp": "2026-11-04T10:40:00.000Z",
+      "asset": "ETH",
+      "label": "Sold for",
+      "a": "1299740000",
+      "b": "1286742600",
+      "difference": "-12997400"
+    },
+    {
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
+      "blockNum": 53504200,
+      "timestamp": "2026-11-04T10:20:00.000Z",
+      "asset": "ETH",
+      "label": "Network fee",
+      "a": "103600",
+      "b": "102564",
+      "difference": "-1036"
+    },
+    {
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000008",
+      "blockNum": 53503600,
+      "timestamp": "2026-11-04T10:00:00.000Z",
+      "asset": "ETH",
+      "label": "Network fee",
+      "a": "103320",
+      "b": "102286",
+      "difference": "-1034"
+    },
+    {
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
+      "blockNum": 53502400,
+      "timestamp": "2026-11-04T09:20:00.000Z",
+      "asset": "ETH",
+      "label": "Network fee",
+      "a": "100400",
+      "b": "99396",
+      "difference": "-1004"
+    },
+    {
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000005",
+      "blockNum": 53501500,
+      "timestamp": "2026-11-04T08:50:00.000Z",
+      "asset": "ETH",
+      "label": "Network fee",
+      "a": "98600",
+      "b": "97614",
+      "difference": "-986"
+    },
+    {
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
+      "blockNum": 53500900,
+      "timestamp": "2026-11-04T08:30:00.000Z",
+      "asset": "ETH",
+      "label": "Network fee",
+      "a": "97440",
+      "b": "96465",
+      "difference": "-975"
+    },
+    {
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000003",
+      "blockNum": 53500300,
+      "timestamp": "2026-11-04T08:10:00.000Z",
+      "asset": "ETH",
+      "label": "Network fee",
+      "a": "96000",
+      "b": "95040",
+      "difference": "-960"
+    },
+    {
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000003",
+      "blockNum": 53500300,
+      "timestamp": "2026-11-04T08:10:00.000Z",
+      "asset": "ETH",
+      "label": "Cost",
+      "a": "2399520000",
+      "b": "2375524800",
+      "difference": "-23995200"
+    }
+  ],
+  "changedTxs": 7
+}

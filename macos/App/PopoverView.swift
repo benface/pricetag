@@ -141,6 +141,15 @@ struct PopoverView: View {
     }
 
     private var footer: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let rule = store.activeRuleName {
+                Text("\(Wording.rulesTitle): \(rule)").font(.caption).foregroundStyle(.secondary)
+            }
+            footerControls
+        }
+    }
+
+    private var footerControls: some View {
         HStack {
             Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
                 ForEach(CostMethod.allCases) { Text($0.label).tag($0) }

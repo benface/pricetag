@@ -23,18 +23,20 @@ pnpm mac:build   # only builds it, to macos/build/
 pnpm check:mac   # the Swift tests, the app's build, and the shared packages' builds for iOS
 pnpm check:keychain  # the real Secure Enclave and Keychain, with a throwaway key, from a signed debug build
 pnpm check:anvil     # real signing and sweeps against a local fork of Base, with no real funds. It needs Foundry
+pnpm mac:shot    # screenshots from fixtures that never open a window you'd see or take focus. See macos/TESTING.md
 ```
 
 It reads from the server on http://127.0.0.1:8787, set in Settings, so it runs on whatever the server runs on: with no `.env.local`, that's the demo wallet. It remembers the wallet, method and currency across restarts.
 
 If the menu bar is full, macOS hides new items. Look under the menu bar's "show hidden items" control, or in System Settings > Menu Bar, and drag it out. The window opens at launch either way.
 
-The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<address>?method=average|fifo&currency=USD|CAD` returns the portfolio the fold computed, `GET /api/portfolio/<address>/explain?metric=…&asset=…` or `?tx=…` returns what's behind one number, and `GET /api/portfolio/<address>/proof?leg=…` and `/verify?leg=…` return what's behind one price and the check of its block. `test/portfolio.test.ts` writes what they send to files the Swift tests read, so the two can't drift apart without a failure: when a change is on purpose, run it with `UPDATE_FIXTURES=1`.
+The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<address>?method=average|fifo&currency=USD|CAD` returns the portfolio the fold computed, `GET /api/portfolio/<address>/explain?metric=…&asset=…` or `?tx=…` returns what's behind one number, and `GET /api/portfolio/<address>/proof?leg=…` and `/verify?leg=…` return what's behind one price and the check of its block. With a [forked pricing rule](#forking-a-pricing-rule), `GET /api/rules` lists the rules, `&rule=<id>` picks one, and `GET /api/portfolio/<address>/compare` returns a wallet by both. `test/portfolio.test.ts` writes what they send to files the Swift tests read, so the two can't drift apart without a failure: when a change is on purpose, run it with `UPDATE_FIXTURES=1`.
 
 - `macos/PricetagKit/`: everything that isn't Mac-specific, like the API models, the live feed, formatting and shared views. It also builds for iOS.
 - `macos/HotWalletKit/`: the hot wallet, which also builds for iOS. `KeyVault` is the only code that touches a key, and `HotWalletKit` decides what to do and can only ask it to sign.
 - `macos/App/`: the menu bar item, popover, window and settings.
 - `macos/Config/App.xcconfig`: the app's name, in one place.
+- `macos/TESTING.md`: how to test and screenshot the app without interrupting whoever's using this Mac.
 
 ### Spending money and savings
 
@@ -76,6 +78,34 @@ On the public RPC, a fresh start takes about 9 minutes for the default hour of b
 
 **USDC has no price at first on a local Amp.** A local Amp only has logs from its start block, and USDC/USD's next update can be up to a day away. Until then, USDC's price is `unknown`, and so is every exchange's, because `pt_price` needs both feeds. ETH's prices work within about 20 minutes, its longest gap so far. A hosted Amp doesn't have this problem, since its Base dataset goes back further than the 45,000 blocks `price_updates` reads.
 
+## Forking a pricing rule
+
+A pricing rule is a dataset version, and the server picks one per request with Amp's `amp-alias` header. The SQL never changes, and the app has no code for any rule. Set these and both apps show a switch, in the Mac app's Settings and above the web app's numbers, with each rule's dataset and manifest hash, and a side-by-side comparison of a wallet. The comparison uses one set of facts at one block for both rules: the same transactions, balances, fees and exchange rates, with only prices from each. If it can't establish that, it says so and shows no numbers.
+
+```sh
+PRICETAG_DATASET=benface/pricetag_scratch@0.0.6
+PRICETAG_DATASET_HASH=7a6deb3f2fd4b9c972f9d94027d385d72038747061e3c1be97aa3a2fcc60f393
+PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.0.2
+PRICETAG_FORK_HASH=ec377e0a0df29fea0c4095114891a1b4a2e74cca2e0f02ea41c2322f48470b2e
+```
+
+Queries are pinned to those hashes, so a hash on screen is what was read, and a wrong one fails instead of showing other numbers. With no fork set, nothing changes: there's no switch and no header.
+
+The fork here is `dataset/cautious-eth.json`, from `cautiousEthTablesSql` in `dataset/build.ts`. Its one rule is that ETH counts at 1% below the Chainlink feed. It only materializes the tables a rule decides, `reference_prices` and `priced_legs`, and reads everything else from the dataset it forks. So it starts from the same block, and can only differ by the rule. The transactions always come from the first dataset.
+
+To change the rule, edit that function, then build, register and deploy it under a new tag, and update the hash:
+
+```sh
+FORK_OF=benface/pricetag_scratch@0.0.6 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
+ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.0.3
+```
+
+Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.0.3` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging.
+
+**Replacing the dataset it forks means replacing the fork too.** The fork reads the job of the version it names, so stopping that job stops the fork. Deploy a fork of the new version before stopping the old one, then change all four lines together.
+
+`pnpm amp:start` turns the fork off while it runs, because it isn't registered on a local Amp. Hot wallet decisions and tax reports always read by the default rule, whatever the switch says.
+
 ## How it's put together
 
 - `packages/sdk/`: `@pricetag/sdk`, what other apps can build on too. [Its quickstart](packages/sdk/README.md) covers the tables, the API and plain SQL.
@@ -87,7 +117,7 @@ On the public RPC, a fresh start takes about 9 minutes for the default hour of b
 - `src/`: the web app. `src/core/api.ts` is what the server sends its clients, `src/core/currency.ts` converts a wallet out of USD at each transaction's rate, `src/core/explain.ts` says how each number is worked out, for the web and Mac apps, and `src/core/fixtures.ts` is the demo wallet.
 - `server/`: the raw data source, the balance and receipt readers, the block check, and the small HTTP server.
 - `macos/`: the Mac app.
-- `dataset/`: the manifest. `pricetag.json` is generated by `build.ts`, so change the SQL there.
+- `dataset/`: the manifests. `pricetag.json` and the fork `cautious-eth.json` are generated by `build.ts`, so change the SQL there.
 
 ## Where prices come from
 

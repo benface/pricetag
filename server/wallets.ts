@@ -49,6 +49,16 @@ export function unlistedTokens(rows: readonly LegRow[], account: string): Unlist
 type L1Fee = { blockNum: number; fee: string; readAtCoveredTo: number }
 
 /**
+ * What happened to a wallet up to one block, without what any of it was worth. Two pricing rules read through the same
+ * facts can only differ by the rule, because what's held, what moved and what fees came to are all the same object.
+ */
+export type WalletFacts = Pick<Cached, "fromBlock" | "coveredTo" | "rows" | "latest" | "gasUnknownTxs" | "opening" | "closing" | "lastBalances" | "l1Fees">
+
+/** Everything about a row but its price. A transaction that moved to another block isn't the same fact, even with the same amounts. */
+const rowKey = (r: LegRow) => `${r.block_num}:${r.timestamp}:${r.tx_index}:${r.tx_hash}:${r.log_index}:${r.account}:${r.side}:${r.kind}:${r.token}:${r.amount}`
+const rowKeys = (rows: readonly LegRow[]) => rows.map(rowKey).sort().join()
+
+/**
  * A reorg can keep a transaction at the same height and still change its fee, because the block's L1 inputs changed.
  * So a fee is read when it's first seen, then once more when its block has left the part of the chain that's re-read
  * for reorgs. A transaction that moved to another block is read again straight away.
@@ -181,6 +191,47 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         inflight.set(key, pending)
       }
       return responseOf(key, await pending)
+    },
+
+    /**
+     * This wallet's facts at `through`, from what's been read, with its balance at that block when `withBalances`.
+     * A failed balance read comes back as no balance, which every rule read through these facts then shares.
+     * Null when this wallet hasn't been read as far as `through`.
+     */
+    async factsAt(address: string, through: number, { withBalances }: { withBalances: boolean }): Promise<WalletFacts | null> {
+      const key = address.toLowerCase()
+      const wallet = wallets.get(key)
+      if (!wallet || wallet.coveredTo < through) return null
+      const closing = !withBalances ? null : wallet.closing?.blockNum === through ? wallet.closing : await readBalances(key, through)
+      return {
+        fromBlock: wallet.fromBlock,
+        coveredTo: through,
+        rows: wallet.rows.filter((r) => r.block_num <= through),
+        latest: { blockNum: through, timestamp: new Date(new Date(wallet.latest.timestamp).getTime() - (wallet.latest.blockNum - through) * BLOCK_MS).toISOString() },
+        gasUnknownTxs: wallet.gasUnknownTxs,
+        opening: wallet.opening,
+        closing,
+        lastBalances: Object.fromEntries(Object.entries(wallet.lastBalances).filter(([, last]) => last.blockNum <= through)),
+        l1Fees: wallet.l1Fees,
+      }
+    },
+
+    /**
+     * Those facts, priced by this source's rows, with `prices` as what's current. Null when this source hasn't read that
+     * far, or read different transactions, as after a reorg, so the two can't be said to differ only by price.
+     */
+    pricedOn(address: string, facts: WalletFacts, prices: LatestPrices): WalletResponse | null {
+      const key = address.toLowerCase()
+      const own = wallets.get(key)
+      if (!own || own.coveredTo < facts.coveredTo) return null
+      const through = facts.coveredTo
+      if (rowKeys(own.rows.filter((r) => r.block_num <= through)) !== rowKeys(facts.rows)) return null
+      return responseOf(key, {
+        ...facts,
+        priced: own.priced.filter((p) => p.block_num <= through),
+        references: new Map([...own.references].filter(([block]) => block <= through)),
+        prices,
+      })
     },
 
     /** What's already been read, with no query, or null when nothing has been. */
