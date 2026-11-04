@@ -21,6 +21,7 @@ Patina is a native menu bar app: live total PnL in the bar, holdings, cost and P
 pnpm mac         # builds the app, opens it, and runs the server until you press Ctrl-C
 pnpm mac:build   # only builds it, to macos/build/
 pnpm check:mac   # the Swift tests, the app's build, and the shared package's build for iOS
+pnpm mac:shot    # screenshots from fixtures that never open a window you'd see or take focus. See macos/TESTING.md
 ```
 
 It reads from the server on http://127.0.0.1:8787, set in Settings, so it runs on whatever the server runs on: with no `.env.local`, that's the demo wallet. It remembers the wallet and method across restarts.
@@ -32,6 +33,7 @@ The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<a
 - `macos/PricetagKit/`: everything that isn't Mac-specific, like the API models, the live feed, formatting and shared views. It also builds for iOS.
 - `macos/App/`: the menu bar item, popover, window and settings.
 - `macos/Config/App.xcconfig`: the app's name, in one place.
+- `macos/TESTING.md`: how to test and screenshot the app without interrupting whoever's using this Mac.
 
 ## Where the data comes from
 

@@ -7,6 +7,9 @@ struct MacApp: App {
     @State private var navigation = Navigation()
 
     init() {
+        #if DEBUG
+        TestMode.runIfAsked()
+        #endif
         let store = PortfolioStore()
         // Here and not in a view: the menu bar shows the total whether or not anything is open.
         store.start()

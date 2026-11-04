@@ -366,7 +366,7 @@ private struct Unavailable: View {
     }
 }
 
-private struct WalletSheet: View {
+struct WalletSheet: View {
     let store: PortfolioStore
     @Environment(\.dismiss) private var dismiss
 

@@ -14,6 +14,7 @@
     "check": "tsc --noEmit && node --test 'test/**/*.test.ts' && vite build",
     "mac": "macos/run.sh",
     "mac:build": "macos/run.sh --build-only",
+    "mac:shot": "macos/shot.sh",
     "check:mac": "swift test --package-path macos/PricetagKit && macos/run.sh --build-only && cd macos/PricetagKit && xcodebuild -quiet -scheme PricetagKit -destination 'generic/platform=iOS' -derivedDataPath ../build/ios build",
     "amp:start": "scripts/amp start",
     "amp:stop": "scripts/amp stop",

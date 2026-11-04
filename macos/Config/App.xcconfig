@@ -4,6 +4,8 @@ APP_NAME = Patina
 PRODUCT_NAME = $(APP_NAME)
 PRODUCT_MODULE_NAME = MacApp
 PRODUCT_BUNDLE_IDENTIFIER = com.benface.pricetag.mac
+// A debug build gets its own settings, so trying things can't touch the real ones.
+PRODUCT_BUNDLE_IDENTIFIER[config=Debug] = com.benface.pricetag.mac.debug
 MARKETING_VERSION = 0.1.0
 CURRENT_PROJECT_VERSION = 1
 
@@ -31,6 +33,9 @@ ENABLE_HARDENED_RUNTIME = YES
 CODE_SIGN_STYLE = Manual
 CODE_SIGN_IDENTITY = -
 DEVELOPMENT_TEAM =
+
+// The fixtures macos/shot.sh uses. The code that reads them compiles to nothing outside of debug builds.
+EXCLUDED_SOURCE_FILE_NAMES[config=Release] = */TestMode/*
 
 ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
 ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO
