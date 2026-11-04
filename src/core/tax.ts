@@ -17,13 +17,15 @@
 //   s. 52(1) adds what was included in income to the cost of what was received.
 // - US, it depends: IRS digital asset FAQs Q59 makes fair market value the basis of what you were paid, but Q76 gives a
 //   gift the giver's basis. We can't tell which it was, so it stays an estimate.
-// In both, your own money moved from elsewhere keeps what you first paid, which we can't see either, so the report says so.
+// That only goes for what the user said came from someone else. A bridge or a mint could be their own money arriving from
+// elsewhere, and CRA's crypto guide doesn't count moving between your own wallets as a disposition, so that keeps what they
+// first paid, which we can't see. Those stay estimates in every country, and the report says why.
 
 import { foldPositions, formatDuration, isAddress, normalizeAddress, shortHash, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { rateSource } from "./explain.ts"
-import { resolveLegs } from "./resolve.ts"
+import { resolveLegs, type Resolved } from "./resolve.ts"
 import { METHOD_LABELS } from "./wording.ts"
 
 export type TaxCountryCode = "CA" | "US"
@@ -41,7 +43,7 @@ export type TaxCountry = {
   /** Said when the method is overridden, because the file may then not be what this country's rules call for. */
   methodWarning: string
   scopeWarning: string
-  /** Whether a market price from when something arrived is its real cost here, rather than an estimate of it. */
+  /** Whether a market price from when something arrived from someone else is its real cost here, rather than an estimate of it. */
   marketIsCost: boolean
   /** On a row that uses that price. */
   marketRowNote: string
@@ -64,7 +66,7 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     scopeWarning: "Canada's rules average what you own wherever it's held, so calculating each wallet on its own may not be accepted.",
     marketIsCost: true,
     marketRowNote: "Part of its cost is what it was worth when it arrived, which is generally the cost of what you're paid or given in Canada.",
-    marketWarning: "In Canada, that's generally the cost of what you're paid or given. If it was your own, moved from elsewhere, its cost is what you first paid instead.",
+    marketWarning: "In Canada, that's generally the cost of what you're paid or given.",
     notes: [
       "A loss can be denied if you buy the same asset back within 30 days before or after selling it (a superficial loss). This report doesn't check for that.",
       "Every gain here is shown in full, as if it's capital. Canada generally taxes half of a capital gain, and frequent trading can count as business income instead.",
@@ -81,7 +83,7 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     scopeWarning: "US rules have tracked cost wallet by wallet since January 1, 2025, so calculating all wallets together may not be accepted.",
     marketIsCost: false,
     marketRowNote: "If it was pay, that price is its cost. If it was a gift, its cost is generally the giver's.",
-    marketWarning: "In the US, that's the cost of what you're paid, but a gift generally keeps the giver's cost. If it was your own, moved from elsewhere, its cost is what you first paid instead.",
+    marketWarning: "In the US, that's the cost of what you're paid, but a gift generally keeps the giver's cost.",
     notes: ["This report doesn't split short-term from long-term gains, or give the date each sold unit was acquired, which Form 8949 asks for.", "Choosing specific units to sell isn't available yet."],
   },
 }
@@ -100,6 +102,7 @@ const COMMON_NOTES = [
   "Network fees are their own rows, because paying one in ETH counts as selling that ETH. They aren't added to what you bought or taken off what you sold, which an accountant may want to adjust.",
   "The gain total adds up every row it knows. Realized in the app leaves out a whole asset when any of its sales is unknown, so the two can differ.",
   "What you received isn't listed. Some of it, like pay or rewards, may be income when it arrives.",
+  "What arrives from a bridge or is newly created counts at its market price when it arrived, as an estimate. If it was your own, moved from elsewhere, its cost is what you first paid.",
 ]
 
 const PRICE_SOURCE_LABELS: Record<PriceSource, string> = { oracle: "Market price feed (Chainlink)", swap: "This exchange", market: "Market price" }
@@ -123,8 +126,8 @@ export type TaxRow = {
   status: TaxRowStatus
   /** Why it's estimated, self-reported or unresolved, or where a known cost came from when that needs saying. */
   reason: string | null
-  /** Part of its cost is a market price from when it arrived. */
-  marketCost: boolean
+  /** Part of its cost is a market price for what the user said came from someone else. */
+  givenCost: boolean
   wallet: string
   txHash: string
 }
@@ -145,14 +148,14 @@ const DIFFERENT_STARTS = "These wallets' histories start at different blocks, so
 
 /** Units with a known cost, what they cost, and where that cost came from. The fold keeps count, whatever a lot is labeled. */
 function knownOf(state: PositionState) {
-  const known = { qty: 0n, cost: 0n, estimated: 0n, reported: 0n, atMarket: 0n }
+  const known = { qty: 0n, cost: 0n, estimated: 0n, given: 0n, reportedQty: 0n }
   for (const lot of state.lots) {
     if (lot.costMicros === null) continue
     known.qty += BigInt(lot.qty)
     known.cost += BigInt(lot.costMicros)
     known.estimated += BigInt(lot.estimatedCostMicros ?? "0")
-    known.reported += BigInt(lot.reportedCostMicros ?? "0")
-    known.atMarket += BigInt(lot.atMarketCostMicros ?? "0")
+    known.given += BigInt(lot.givenCostMicros ?? "0")
+    if (lot.reported) known.reportedQty += BigInt(lot.qty)
   }
   return known
 }
@@ -167,8 +170,8 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
   const knownAfter = knownOf(after)
   const knownCost = knownBefore.cost - knownAfter.cost
   const unknownQty = qty - (knownBefore.qty - knownAfter.qty)
-  const row = (fields: Pick<TaxRow, "amount" | "proceedsMicros" | "costMicros" | "gainMicros" | "status" | "reason"> & { marketCost?: boolean }): TaxRow => ({
-    marketCost: false,
+  const row = (fields: Pick<TaxRow, "amount" | "proceedsMicros" | "costMicros" | "gainMicros" | "status" | "reason"> & { givenCost?: boolean }): TaxRow => ({
+    givenCost: false,
     blockNum: leg.blockNum,
     txIndex: leg.txIndex,
     timestamp: leg.timestamp,
@@ -198,13 +201,14 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
   const gain = BigInt(after.realizedMicros) - BigInt(before.realizedMicros)
   const resolvedProceeds = resolvedQty > 0n ? gain + knownCost : 0n
   if (resolvedQty > 0n) {
-    const atMarket = knownBefore.atMarket - knownAfter.atMarket
-    const costIsEstimated = knownBefore.estimated - knownAfter.estimated - (country?.marketIsCost ? atMarket : 0n) > 0n
+    const given = knownBefore.given - knownAfter.given
+    const costIsEstimated = knownBefore.estimated - knownAfter.estimated - (country?.marketIsCost ? given : 0n) > 0n
     const proceedsAreEstimated = leg.estimated === true && resolvedProceeds > 0n
-    const reported = knownBefore.reported - knownAfter.reported > 0n
+    // By units rather than dollars, because $0 is a cost someone can enter.
+    const reported = knownBefore.reportedQty > knownAfter.reportedQty
     const estimate = costIsEstimated && proceedsAreEstimated ? ESTIMATED_BOTH : costIsEstimated ? ESTIMATED_COST : proceedsAreEstimated ? ESTIMATED_PROCEEDS : null
-    const reason = [estimate, atMarket > 0n ? (country?.marketRowNote ?? null) : null, reported ? REPORTED_COST : null].filter((note) => note !== null).join(" ")
-    rows.push(row({ amount: resolvedQty.toString(), proceedsMicros: resolvedProceeds.toString(), costMicros: knownCost.toString(), gainMicros: gain.toString(), status: estimate ? "estimated" : reported ? "self-reported" : "resolved", reason: reason || null, marketCost: atMarket > 0n }))
+    const reason = [estimate, given > 0n ? (country?.marketRowNote ?? null) : null, reported ? REPORTED_COST : null].filter((note) => note !== null).join(" ")
+    rows.push(row({ amount: resolvedQty.toString(), proceedsMicros: resolvedProceeds.toString(), costMicros: knownCost.toString(), gainMicros: gain.toString(), status: estimate ? "estimated" : reported ? "self-reported" : "resolved", reason: reason || null, givenCost: given > 0n }))
   }
   if (unknownQty > 0n) {
     const short = BigInt(after.shortfallQty) > BigInt(before.shortfallQty)
@@ -215,13 +219,14 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
 
 type Source = { wallet: WalletResponse; view: WalletView; unconfirmed: Map<string, string>; unread: string[] }
 
-function sourceOf(wallet: WalletResponse, view: WalletView, method: Method): Source {
+/** What the chain can't back up in a wallet. Balances only depend on amounts, so this doesn't need the answers. */
+function checksOf(wallet: WalletResponse, view: WalletView, method: Method): Pick<Source, "unconfirmed" | "unread"> {
   const positions = foldPositions(view.legs, method, view.prices, wallet)
   const unconfirmed = new Map<string, string>()
   for (const { asset, reconciliation } of positions) {
     if (reconciliation && reconciliation.status !== "reconciled") unconfirmed.set(asset, reconciliation.status === "incomplete" ? MISMATCH : UNCHECKED)
   }
-  return { wallet, view, unconfirmed, unread: unreadAssets(positions, wallet) }
+  return { unconfirmed, unread: unreadAssets(positions, wallet) }
 }
 
 /** What else goes into a report: the user's answers, and wallets whose costs it needs but whose rows it doesn't list. */
@@ -231,11 +236,17 @@ export type TaxContext = { book?: Book; costsFrom?: readonly WalletResponse[] }
  * Each wallet with what the user has said filled in, the same way the apps do it. The wallets in a report are the user's
  * own, because that's what asking for them together says, so costs carry between them whatever else has been answered.
  */
-function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = emptyBook(), costsFrom = [] }: TaxContext): Source[] {
-  const sides = [...wallets, ...costsFrom].map((wallet) => ({ wallet, view: viewWallet(wallet) }))
+function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = emptyBook(), costsFrom = [] }: TaxContext): { sources: Source[]; withheld: Resolved["withheld"] } {
+  const sides = [...wallets, ...costsFrom].map((wallet) => {
+    const view = viewWallet(wallet)
+    return { wallet, view, ...checksOf(wallet, view, method) }
+  })
+  const checks = new Map(sides.map(({ wallet, unconfirmed }) => [normalizeAddress(wallet.address), unconfirmed]))
   const linking = wallets.length > 1 ? { ...book, linked: [...(book.linked ?? []), ...wallets.map((wallet) => wallet.address.toLowerCase())] } : book
-  const { legs } = resolveLegs(sides, method, linking)
-  return wallets.map((wallet, index) => sourceOf(wallet, { ...(sides[index] as (typeof sides)[number]).view, legs: legs.get(normalizeAddress(wallet.address)) as PricedLeg[] }, method))
+  // A cost the chain can't back up where it came from can't be known where it went, however well that wallet adds up.
+  const { legs, withheld } = resolveLegs(sides, method, linking, (wallet, asset) => checks.get(wallet)?.has(asset) === true)
+  const sources = sides.slice(0, wallets.length).map((side) => ({ ...side, view: { ...side.view, legs: legs.get(normalizeAddress(side.wallet.address)) as PricedLeg[] } }))
+  return { sources, withheld }
 }
 
 const moveKey = (leg: PricedLeg) => `${leg.txHash}:${leg.asset}`
@@ -324,7 +335,7 @@ function rowsFrom(sources: readonly Source[], method: Method, scope: TaxScope, c
 
 /** Every row, oldest first, with a transaction's fee before what it did, the way the fold reads them. */
 export function taxRows(wallets: readonly WalletResponse[], { method, scope, country }: Pick<TaxSettings, "method" | "scope"> & { country?: TaxCountryCode }, context: TaxContext = {}): TaxRow[] {
-  return rowsFrom(sourcesOf(wallets, method, context), method, scope, country ? TAX_COUNTRIES[country] : null)
+  return rowsFrom(sourcesOf(wallets, method, context).sources, method, scope, country ? TAX_COUNTRIES[country] : null)
 }
 
 /**
@@ -410,21 +421,22 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const country = TAX_COUNTRIES[code]
   const first = wallets[0] as WalletResponse
   const { currency } = first
-  const sources = sourcesOf(wallets, method, context)
+  const { sources, withheld } = sourcesOf(wallets, method, context)
   const named = wallets.length > 1
   const rows = rowsFrom(sources, method, scope, country)
   const count = (status: TaxRowStatus) => rows.filter((row) => row.status === status).length
   const unresolved = count("unresolved")
   const estimated = count("estimated")
   const selfReported = count("self-reported")
-  const atMarket = rows.filter((row) => row.marketCost).length
+  const given = rows.filter((row) => row.givenCost).length
   const counted = rows.filter((row) => row.gainMicros !== null)
 
   const warnings: string[] = []
   if (unresolved > 0) warnings.push(`${plural(unresolved, "row")} of ${rows.length.toLocaleString("en-US")} ${unresolved === 1 ? "is" : "are"} unresolved. What can't be worked out says "unknown". It's never counted as 0, and it isn't in the gain total.`)
   if (estimated > 0) warnings.push(`${plural(estimated, "row")} of ${rows.length.toLocaleString("en-US")} ${estimated === 1 ? "rests" : "rest"} on an estimate.`)
   if (selfReported > 0) warnings.push(`${plural(selfReported, "row")} of ${rows.length.toLocaleString("en-US")} ${selfReported === 1 ? "uses" : "use"} a cost you entered or imported, which the chain can't confirm, so keep your records for it.`)
-  if (atMarket > 0) warnings.push(`${plural(atMarket, "row")} of ${rows.length.toLocaleString("en-US")} ${atMarket === 1 ? "uses" : "use"} a market price from when it arrived as part of its cost. ${country.marketWarning}`)
+  if (given > 0) warnings.push(`${plural(given, "row")} of ${rows.length.toLocaleString("en-US")} ${given === 1 ? "uses" : "use"} a market price from when something you said came from someone else arrived. ${country.marketWarning}`)
+  for (const { wallet, asset } of withheld) warnings.push(`${shortHash(wallet)}'s ${asset} history can't be confirmed, so what it sent has an unknown cost where it arrived.`)
   for (const source of sources) warnings.push(...walletWarnings(source, named))
   if (method !== country.method) warnings.push(country.methodWarning)
   if (scope !== country.scope) warnings.push(country.scopeWarning)
