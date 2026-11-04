@@ -2,14 +2,13 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { verifyLink } from "../server/links.ts"
 import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
-import { ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, type LegRow, type Method, type ReferenceRow } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
 import { answerSender, costKey, emptyBook, enterExchangeCosts, linkMessage, parseBook, type Book, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
 import { matchWithdrawals, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
-import { encodeNote, parseNote } from "../src/core/notes.ts"
-import { allocateTaken, foldBook, isBalanced } from "../src/core/resolve.ts"
+import { allocateTaken, foldBook, isBalanced, missingWallets, previewBook, readKey, readsMatching } from "../src/core/resolve.ts"
 
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`
 const [A, B, C, STRANGER] = [addr(0xa1), addr(0xb1), addr(0xc1), addr(0xd1)] as [string, string, string, string]
@@ -20,7 +19,7 @@ const MINT = "0x0000000000000000000000000000000000000000"
 const E18 = 10n ** 18n
 const E6 = 10n ** 6n
 
-const references = (blocks: number[]): ReferenceRow[] => blocks.map((block_num) => ({ block_num, eth_usd: "200000000000", usdc_usd: "100000000" }))
+const references = (blocks: number[]): Reference[] => blocks.map((blockNum) => ({ blockNum, ethUsd: "200000000000", usdcUsd: "100000000" }))
 
 const move = (block: number, tx: string, account: string, side: LegRow["side"], amount: bigint, counterparty: string | null, token = USDC_ADDRESS): LegRow => ({
   block_num: block,
@@ -964,5 +963,90 @@ describe("proving a wallet by signing", () => {
     assert.equal(await verifyLink(A, B, signature, async () => C), false)
     assert.equal(await verifyLink(A, B, "0x1234", async () => B), false)
     assert.equal(await verifyLink(A, B, signature, async () => Promise.reject(new Error("bad"))), false)
+  })
+})
+
+describe("wallets read another way", () => {
+  // A got 1 ETH from someone else and sent it on to linked B, so B's cost is what A's estimate says, by whichever rule.
+  const eth = move(10, "0xin", A, "credit", E18, STRANGER, ETH_ADDRESS)
+  const out = move(20, "0xout", A, "debit", E18, B, ETH_ADDRESS)
+  const landed = move(20, "0xout", B, "credit", E18, A, ETH_ADDRESS)
+  const answers = answerSender(answerSender(emptyBook(), B, A, { kind: "mine" }), B, STRANGER, { kind: "someone-else" })
+  const RULES = { market: { rule: "market-price", ethUsd: "200000000000", micros: "2000000000" }, cautious: { rule: "cautious-eth", ethUsd: "198000000000", micros: "1980000000" } }
+  const read = (address: string, rows: LegRow[], { rule, ethUsd, micros }: (typeof RULES)["market"], changes: Partial<WalletResponse> = {}) =>
+    wallet(address, [], {
+      rule,
+      legs: buildPricedLegs({ account: address, rows, references: [10, 20].map((blockNum) => ({ blockNum, ethUsd, usdcUsd: "100000000" })), priced: [] }),
+      prices: { ETH: { micros, source: "oracle", blockNum: 100 } },
+      ...changes,
+    })
+  const shown = (by: (typeof RULES)["market"]) => read(B, [landed], by)
+  const linked = (by: (typeof RULES)["market"]) => read(A, [eth, out], by)
+  const headline = (focus: WalletResponse, others: WalletResponse[]) => {
+    const { totals, positions } = foldBook(focus, others, "average", answers)
+    return { pnl: totals.pnlMicros, cost: positions.find((p) => p.asset === "ETH")?.values.costMicros }
+  }
+  const store = (reads: Record<string, WalletResponse>, wallet: WalletResponse) => ({ ...reads, [readKey(wallet.address, wallet)]: wallet })
+  const others = (reads: Record<string, WalletResponse>, focus: WalletResponse) => readsMatching(reads, [A], focus)
+  const ZERO = { market: { pnl: "0", cost: "2000000000" }, cautious: { pnl: "0", cost: "1980000000" } }
+  const WAITING = { pnl: null, cost: null }
+
+  it("has no gain by either rule, when everything's read the same way", () => {
+    assert.deepEqual(headline(shown(RULES.market), [linked(RULES.market)]), ZERO.market)
+    assert.deepEqual(headline(shown(RULES.cautious), [linked(RULES.cautious)]), ZERO.cautious)
+  })
+
+  it("won't fold a cost by one rule with a value by another, even when handed them, in totals, a preview, an explanation or a CSV", () => {
+    const [focus, other] = [shown(RULES.market), linked(RULES.cautious)]
+    assert.deepEqual(headline(focus, [other]), WAITING, "not the +$20 that $2,000 of value and $1,980 of cost would make")
+    const fold = foldBook(focus, [other], "average", answers)
+    assert.equal(fold.meter.waiting, 1)
+    assert.equal(previewBook(focus, [other], "average", answers).pnlMicros, null)
+    assert.equal(previewBook(focus, [other], "average", answers).pending, true)
+    assert.deepEqual(missingWallets(answers, focus, [other]), [A])
+    assert.equal(explainPortfolio(focus, "average", { kind: "total", metric: "pnl" }, [other], answers)?.value, null)
+    assert.ok(!exportCsv(fold.positions, fold.view.currency).includes("1980"))
+  })
+
+  it("won't fold one currency's cost with another's", () => {
+    const rates = { byBlock: {}, latest: null }
+    const focus = shown(RULES.market)
+    const other = { ...linked(RULES.market), currency: "CAD" as const, rates }
+    assert.deepEqual(headline(focus, [other]), WAITING)
+    assert.deepEqual(readsMatching(store({}, other), [A], focus), [])
+  })
+
+  describe("after switching rules", () => {
+    const before = store({}, linked(RULES.market))
+
+    it("keeps the old set whole when a linked wallet's new read comes first", () => {
+      const reads = store(before, linked(RULES.cautious))
+      assert.deepEqual(headline(shown(RULES.market), others(reads, shown(RULES.market))), ZERO.market)
+      assert.deepEqual(headline(shown(RULES.cautious), others(reads, shown(RULES.cautious))), ZERO.cautious)
+    })
+
+    it("says it's waiting when the wallet's own new read comes first", () => {
+      const focus = shown(RULES.cautious)
+      assert.deepEqual(headline(focus, others(before, focus)), WAITING)
+      const reads = store(before, linked(RULES.cautious))
+      assert.deepEqual(headline(focus, others(reads, focus)), ZERO.cautious)
+    })
+
+    it("never gets to a gain when a linked wallet's new read fails", () => {
+      const focus = shown(RULES.cautious)
+      assert.deepEqual(headline(shown(RULES.market), others(before, shown(RULES.market))), ZERO.market)
+      assert.deepEqual(headline(focus, others(before, focus)), WAITING)
+    })
+
+    it("stays whole through quick switches, whichever read lands when", () => {
+      // There and back before anything lands, then the abandoned rule's read lands late.
+      let reads = before
+      const back = shown(RULES.market)
+      assert.deepEqual(headline(back, others(reads, back)), ZERO.market)
+      reads = store(reads, linked(RULES.cautious))
+      assert.deepEqual(headline(back, others(reads, back)), ZERO.market)
+      reads = store(reads, linked(RULES.market))
+      assert.deepEqual(headline(back, others(reads, back)), ZERO.market)
+    })
   })
 })

@@ -1,4 +1,4 @@
-// Display only, and the same output as `src/core/format.ts`: a test runs both on the same inputs.
+// Display only, and the same output as `packages/sdk/src/format.ts`: a test runs both on the same inputs.
 // Amounts are cut as strings, because a token amount can be far bigger than any number type here.
 
 import Foundation
@@ -37,22 +37,22 @@ public enum Format {
     }
 
     /// One side of a comparison. A nil is unavailable, not zero.
-    public static func ruleValue(_ micros: String?, format: String, currency: CurrencyCode) -> String {
+    public static func ruleValue(_ micros: String?, format: String, currency: CurrencyCode, isEstimate: Bool = false) -> String {
         guard let micros else { return "Unavailable" }
         switch format {
-        case "usdPrice": return price(micros, .USD)
-        case "money": return money(micros, currency)
-        default: return signedMoney(micros, currency)
+        case "usdPrice": return estimate(price(micros, .USD), isEstimate)
+        case "money": return estimate(money(micros, currency), isEstimate)
+        default: return estimate(signedMoney(micros, currency), isEstimate)
         }
     }
 
     /// Always signed, so which way it went can be read at a glance. A price's is small, so it keeps its digits.
-    public static func ruleDifference(_ micros: String?, format: String, currency: CurrencyCode) -> String {
+    public static func ruleDifference(_ micros: String?, format: String, currency: CurrencyCode, isEstimate: Bool = false) -> String {
         guard let micros else { return "—" }
         if whole(micros) == 0 { return "Same" }
-        guard format == "usdPrice" else { return signedMoney(micros, currency) }
+        guard format == "usdPrice" else { return estimate(signedMoney(micros, currency), isEstimate) }
         let isNegative = micros.hasPrefix("-")
-        return "\(isNegative ? "-" : "+")\(price(isNegative ? String(micros.dropFirst()) : micros, .USD))"
+        return estimate("\(isNegative ? "-" : "+")\(price(isNegative ? String(micros.dropFirst()) : micros, .USD))", isEstimate)
     }
 
     /// Whole tokens from smallest units, cut to a readable length. Cuts instead of rounding, so it never shows more than there is.

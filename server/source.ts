@@ -1,80 +1,11 @@
-// Where a wallet's rows come from: the Pricetag dataset when it's deployed, otherwise the raw Base dataset,
-// read through the same shapes so everything after this file doesn't care which one it was.
+// Where a wallet's rows come from when the Pricetag dataset isn't deployed: the raw Base dataset, read through the same
+// shapes as the dataset's `datasetSource`, so everything after this file doesn't care which one it was.
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ERC20_ADDRESSES, ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, asIso, asNumber, blockFilters, datasetReader, decimalString, describeError, hexOf, isNotStarted, prefixed, readHead, type GasUnknownTx, type LegRow, type PricedRow, type Query, type ReferenceRow, type Row, type BalanceSnapshot } from "@pricetag/sdk"
-import type { Head, Mode } from "../src/core/api.ts"
-import type { RateRound } from "../src/core/currency.ts"
-import { marketTrades, type MarketTrade } from "../src/core/market.ts"
-import { parseNote, type CostNote } from "../src/core/notes.ts"
-import { MULTICALL3, balancesByAsset, decodeBalanceResults, decodeEthBalance, encodeBalanceCalls, encodeEthBalanceCall } from "./balances.ts"
+import { ERC20_ADDRESSES, ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, marketTrades, parseNote, type CostNote, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
+import { asIso, asNumber, blockFilters, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, type Query, type Row, type Source } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRound, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
-
-export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknown: GasUnknownTx[] }
-
-export type Source = {
-  mode: Mode
-  /** The first block a wallet's history can start from, or null to count back from the head. */
-  startBlock: number | null
-  historyBlocks: number | null
-  head(after: number | null): Promise<Head | null>
-  /**
-   * The newest block, in `after`..`head`, that every table a wallet read needs has processed, or null if none has.
-   * Reads never go past this. A derived table can lag the chain, and a block read before it's processed looks empty.
-   */
-  processedThrough(after: number, head: number): Promise<number | null>
-  readWindow(address: string, from: number, to: number): Promise<WindowRows>
-  readReferences(blocks: readonly number[]): Promise<ReferenceRow[]>
-  /** The newest oracle read at or just before `head`, or null if there's none recent enough to call current. */
-  readLatestReference(head: number): Promise<ReferenceRow | null>
-  /** What the chain says this wallet holds at `block`, or null when the read gave nothing usable. */
-  readBalances(address: string, block: number): Promise<BalanceSnapshot | null>
-  /** The cost notes this wallet published in these blocks: zero-value transactions from itself to itself. */
-  readNotes?(address: string, blocks: readonly number[]): Promise<CostNote[]>
-  /** Whether `readMarketTrades` can be trusted. An older dataset's `priced_legs` has wrong rows, so it can't. */
-  marketReady?(): Promise<boolean>
-  /** An asset's latest trades in a block range, newest first. Only a dataset's `priced_legs` has them. */
-  readMarketTrades?(asset: string, from: number, to: number): Promise<MarketTrade[]>
-  /** This wallet's plain ETH at the end of each block, not counting WETH. A block whose read failed isn't in it. */
-  readEthBalances(address: string, blocks: readonly number[]): Promise<Map<number, string>>
-}
-
-/**
- * With no table in the query, this makes exactly one `eth_call`, and it can read a block no table has, like the one
- * before a local dataset's start.
- */
-async function readBalancesAt(query: Query, network: string, address: string, block: number): Promise<BalanceSnapshot | null> {
-  const [row] = await query<Row>(`SELECT rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeBalanceCalls(address)}', ${block}) AS r`)
-  const results = decodeBalanceResults((row?.r as { data?: string } | null | undefined)?.data)
-  return results && { blockNum: block, amounts: balancesByAsset(results) }
-}
-
-/**
- * One query per 200 blocks, in the shape `readReferences` explains. A block the table doesn't have, like the one before a
- * local dataset's start, is read on its own.
- */
-async function readEthBalancesAt(query: Query, network: string, baseDataset: string, address: string, blocks: readonly number[]): Promise<Map<number, string>> {
-  const balances = new Map<number, string>()
-  const call = (block: string) => `rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeEthBalanceCall(address)}', ${block}) AS r`
-  const dataOf = (row: Row | undefined) => (row?.r as { data?: string } | null | undefined)?.data
-  const returned = new Set<number>()
-  for (const { filter, count } of blockFilters(blocks)) {
-    for (const row of await query<Row>(`SELECT block_num, ${call("block_num")} FROM (SELECT block_num FROM "${baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)) {
-      const block = asNumber(row.block_num)
-      const balance = decodeEthBalance(dataOf(row))
-      returned.add(block)
-      if (balance !== null) balances.set(block, balance)
-    }
-  }
-  for (const block of blocks) {
-    if (returned.has(block)) continue
-    const [row] = await query<Row>(`SELECT ${call(String(block))}`)
-    const balance = decodeEthBalance(dataOf(row))
-    if (balance !== null) balances.set(block, balance)
-  }
-  return balances
-}
 
 /** A feed's answer at each block, leaving out blocks where the read failed. */
 export type RoundReader = (feed: string, blocks: readonly number[]) => Promise<Map<number, RateRound>>
@@ -134,9 +65,9 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
          FROM (SELECT block_num FROM ${ds}.blocks WHERE ${filter} LIMIT ${count})`,
     ).then((rows) =>
       rows.map((r) => ({
-        block_num: asNumber(r.block_num),
-        eth_usd: decodeRoundAnswer((r.e as { data?: string } | null)?.data),
-        usdc_usd: decodeRoundAnswer((r.u as { data?: string } | null)?.data),
+        blockNum: asNumber(r.block_num),
+        ethUsd: decodeRoundAnswer((r.e as { data?: string } | null)?.data),
+        usdcUsd: decodeRoundAnswer((r.u as { data?: string } | null)?.data),
       })),
     )
 
@@ -238,20 +169,16 @@ const isMissingTable = (error: unknown) => /table .*not found|not found.*table|d
 /** Enough for the guards in market.ts, which only read the latest few. A busy pool repeats each trade per account. */
 const MARKET_ROWS = 300
 
-export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string }): Source {
-  const reader = datasetReader(query, config)
+/** The SDK's `datasetSource`, plus what only working out a cost needs: who was on the other side, notes, and market prices. */
+export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string }): Source {
+  const reader = datasetSource(query, config)
   const ds = `"${config.dataset}"`
   // What a fork of the pricing rule changes, so its market prices come from its own trades.
   const prices = `"${config.priceDataset ?? config.dataset}"`
   const base = `"${config.baseDataset}"`
   return {
-    mode: "dataset",
-    startBlock: config.startBlock,
-    historyBlocks: null,
-    readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
-    readNotes: (address, blocks) => readNotesAt(query, config.baseDataset, address, blocks),
-    readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     ...reader,
+    readNotes: (address, blocks) => readNotesAt(query, config.baseDataset, address, blocks),
 
     async readWindow(address, from, to) {
       const window = await reader.readWindow(address, from, to)

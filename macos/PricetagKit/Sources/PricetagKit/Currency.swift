@@ -1,4 +1,4 @@
-// The currencies a portfolio can be shown in: see `src/core/currency.ts`. The server does the converting, and this only
+// The currencies a portfolio can be shown in: see `packages/sdk/src/currency.ts`. The server does the converting, and this only
 // says how to ask for one and how to print it. A test checks the printing against the web app.
 
 import Foundation

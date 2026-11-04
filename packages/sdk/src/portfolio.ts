@@ -1,7 +1,7 @@
 // Runs the fold over a wallet's priced legs, and adds up what can honestly be added up.
 
 import { applyLeg, emptyPosition, worth, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
-import { answerToMicros, type PricedLeg, type ReferenceRow } from "./legs.ts"
+import { answerToMicros, type PricedLeg, type Reference } from "./legs.ts"
 import { decimalsOf, estimateHeld, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
 import { TOKENS } from "./tokens.ts"
 
@@ -144,12 +144,12 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
 }
 
 /** Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong. */
-export function latestPrices(reference: ReferenceRow | null): LatestPrices {
+export function latestPrices(reference: Reference | null): LatestPrices {
   const prices: LatestPrices = {}
-  const eth = answerToMicros(reference?.eth_usd)
-  const usdc = answerToMicros(reference?.usdc_usd)
-  if (reference && eth) prices.ETH = { micros: eth, source: "oracle", blockNum: reference.block_num }
-  if (reference && usdc) prices.USDC = { micros: usdc, source: "oracle", blockNum: reference.block_num }
+  const eth = answerToMicros(reference?.ethUsd)
+  const usdc = answerToMicros(reference?.usdcUsd)
+  if (reference && eth) prices.ETH = { micros: eth, source: "oracle", blockNum: reference.blockNum }
+  if (reference && usdc) prices.USDC = { micros: usdc, source: "oracle", blockNum: reference.blockNum }
   return prices
 }
 
@@ -263,12 +263,12 @@ export function sumTotals(positions: readonly Position[], unread: readonly strin
 export type MarkPrice = (blockNum: number, asset: string) => string | null
 
 /** Each block's oracle prices, in USD, from the oracle reads that come with a wallet's legs. */
-export function referenceMarks(references: readonly ReferenceRow[]): MarkPrice {
-  const refs = new Map(references.map((r) => [r.block_num, r]))
+export function referenceMarks(references: readonly Reference[]): MarkPrice {
+  const refs = new Map(references.map((r) => [r.blockNum, r]))
   return (blockNum, asset) => {
     const ref = refs.get(blockNum)
-    if (asset === "ETH") return answerToMicros(ref?.eth_usd)
-    if (asset === "USDC") return answerToMicros(ref?.usdc_usd)
+    if (asset === "ETH") return answerToMicros(ref?.ethUsd)
+    if (asset === "USDC") return answerToMicros(ref?.usdcUsd)
     return null
   }
 }

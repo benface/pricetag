@@ -1,9 +1,8 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
-import type { Query } from "@pricetag/sdk"
-import { datasetSource } from "../server/source.ts"
-import { MARKET_MAX_AGE_BLOCKS, marketPrice, marketTrades, type MarketRow, type MarketTrade } from "../src/core/market.ts"
+import { ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, MARKET_MAX_AGE_BLOCKS, marketPrice, marketTrades, type LegRow, type MarketRow, type MarketTrade, type Reference } from "@pricetag/sdk/core"
+import type { Query } from "@pricetag/sdk/internal"
+import { resolvingSource } from "../server/source.ts"
 
 const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
 const DEGEN = "0x4ed4e862860bed51a9570b96d89af5e1b0efefed"
@@ -96,7 +95,7 @@ describe("reading trades from priced_legs", () => {
 })
 
 describe("the price of a leg, in order", () => {
-  const REF: ReferenceRow = { block_num: 100, eth_usd: "240000000000", usdc_usd: "100000000" }
+  const REF: Reference = { blockNum: 100, ethUsd: "240000000000", usdcUsd: "100000000" }
   const rows = (tx: string, ...moves: [string, LegRow["side"], bigint][]): LegRow[] =>
     moves.map(([token, side, amount]) => ({ block_num: 100, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: tx, tx_index: 1, log_index: 0, token, account: ME, side, amount: amount.toString(), kind: token === ETH_ADDRESS ? ("eth" as const) : ("erc20" as const) }))
   const legsOf = (input: LegRow[], market: (asset: string) => string | null = (asset) => (asset === "AERO" ? "1300000" : null)) => buildPricedLegs({ account: ME, rows: input, references: [REF], priced: derivePricedRows(input, [REF]), market })
@@ -154,7 +153,7 @@ describe("a trade in a transaction with an unconfirmed credit", () => {
   it("gets no value from its market price, even with what's sold and bought both priced", () => {
     const at = (token: string, side: LegRow["side"], amount: string, kind: LegRow["kind"] = "erc20"): LegRow => ({ block_num: 5, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: "0xc", tx_index: 1, log_index: 0, token, account: ME, side, amount, kind })
     const rows = [at(AERO, "debit", (5n * E18).toString()), at(DEGEN, "credit", (5n * E18).toString()), at(ETH_ADDRESS, "credit", E18.toString(), "unwrap")]
-    const legs = buildPricedLegs({ account: ME, rows, references: [{ block_num: 5, eth_usd: "200000000000", usdc_usd: "100000000" }], priced: [], market: () => "1300000" })
+    const legs = buildPricedLegs({ account: ME, rows, references: [{ blockNum: 5, ethUsd: "200000000000", usdcUsd: "100000000" }], priced: [], market: () => "1300000" })
     assert.deepEqual(legs.map((l) => [l.asset, l.kind, l.costMicros, l.proceedsMicros, l.estimated ?? false]), [["AERO", "swap", null, null, false], ["DEGEN", "swap", null, null, false], ["ETH", "swap", null, null, false]])
   })
 })
@@ -166,7 +165,7 @@ describe("where a rule's market prices come from", () => {
       asked.push(sql)
       return []
     }) as unknown as Query
-    const source = datasetSource(query, { baseDataset: "base", dataset: "pricetag", priceDataset: "pricing", startBlock: 1, network: "base" })
+    const source = resolvingSource(query, { baseDataset: "base", dataset: "pricetag", priceDataset: "pricing", startBlock: 1, network: "base" })
     await source.readMarketTrades?.("AERO", 1, 2)
     assert.ok(asked[0]?.includes(`"pricing".priced_legs`))
   })

@@ -12,11 +12,9 @@
 // - US, oldest first in each wallet: Treas. Reg. 1.1012-1(j), for dispositions from January 1, 2025. Average basis in
 //   1.1012-1(e) only covers certain stock. Rev. Proc. 2024-28 and IRS digital asset FAQs cover the move to wallets.
 
-import { foldPositions, isAddress, unreadAssets, worth, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg } from "@pricetag/sdk/core"
+import { foldPositions, formatDuration, isAddress, shortHash, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
-import { viewWallet, type CurrencyCode, type WalletView } from "./currency.ts"
 import { rateSource } from "./explain.ts"
-import { formatDuration, shortHash } from "./format.ts"
 import { METHOD_LABELS } from "./wording.ts"
 
 export type TaxCountryCode = "CA" | "US"

@@ -1,10 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
-import type { Method } from "@pricetag/sdk/core"
+import { formatAmount, formatMoney, formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "../core/api.ts"
 import { answerSender, enterExchangeCosts, linkMessage, linkedWallets, type Book, type Money, type SenderAnswer } from "../core/book.ts"
-import type { CurrencyCode } from "../core/currency.ts"
 import { parseCoinbaseCsv } from "../core/exchange-import.ts"
-import { formatAmount, formatMoney, formatSignedMoney, shortHash } from "../core/format.ts"
 import { foldBook, isBalanced, previewBook, type Question } from "../core/resolve.ts"
 import { linkedFailedSentence } from "../core/wording.ts"
 

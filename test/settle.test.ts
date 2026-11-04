@@ -1,16 +1,15 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { USD_CONTEXT, explainMetric } from "../src/core/explain.ts"
-import { decodeEthBalance, encodeEthBalanceCall } from "../server/balances.ts"
-import { datasetSource } from "../server/source.ts"
-import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, settleUnwraps, sumTotals, unwrapBalanceBlocks, type LegRow, type Onchain, type PricedLeg, type PricedRow, type ReferenceRow } from "@pricetag/sdk/core"
+import { datasetSource, decodeEthBalance, encodeEthBalanceCall } from "@pricetag/sdk/internal"
+import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, settleUnwraps, sumTotals, unwrapBalanceBlocks, type LegRow, type Onchain, type PricedLeg, type PricedRow, type Reference } from "@pricetag/sdk/core"
 
 const ME = "0x7b42a330a13a8032a48fd4e6392f46d132104f5e"
 const CBBTC = "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"
 const BLOCK = 53515217
 const ETH_USD = 2420n
-const REF: ReferenceRow = { block_num: BLOCK, eth_usd: (ETH_USD * 10n ** 8n).toString(), usdc_usd: "100000000" }
-const PRIOR: ReferenceRow = { ...REF, block_num: BLOCK - 10 }
+const REF: Reference = { blockNum: BLOCK, ethUsd: (ETH_USD * 10n ** 8n).toString(), usdcUsd: "100000000" }
+const PRIOR: Reference = { ...REF, blockNum: BLOCK - 10 }
 
 function row(token: string, side: LegRow["side"], amount: bigint | string, kind: LegRow["kind"], tx = "0xcb", block = BLOCK): LegRow {
   return { block_num: block, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: tx, tx_index: 1, log_index: 0, token, account: ME, side, amount: amount.toString(), kind }
@@ -45,7 +44,7 @@ const ONCHAIN: Onchain = { balances: { blockNum: BLOCK, amounts: { ETH: (AFTER +
 
 function foldOf(rows: LegRow[]) {
   const all = [...FUNDING, ...PURCHASE, ...rows]
-  const legs = buildPricedLegs({ account: ME, rows: all, references: [...references, { ...REF, block_num: BLOCK - 20 }], priced: [] })
+  const legs = buildPricedLegs({ account: ME, rows: all, references: [...references, { ...REF, blockNum: BLOCK - 20 }], priced: [] })
   const positions = foldPositions(legs, "average", PRICES, ONCHAIN)
   return { legs, positions, cbBtc: positions.find((p) => p.asset === "cbBTC")!, eth: positions.find((p) => p.asset === "ETH")! }
 }
@@ -224,7 +223,7 @@ describe("what a block's balance can't tell apart", () => {
   const start = 5n * E18
   const usdFold = (rows: LegRow[], amounts: Record<string, bigint>) => {
     const funded = [...FUNDING, ...PURCHASE, ...rows]
-    const legs = buildPricedLegs({ account: ME, rows: funded, references: [...references, { ...REF, block_num: BLOCK - 20 }], priced: [] })
+    const legs = buildPricedLegs({ account: ME, rows: funded, references: [...references, { ...REF, blockNum: BLOCK - 20 }], priced: [] })
     const onchain: Onchain = { balances: { blockNum: BLOCK, amounts: Object.fromEntries(Object.entries(amounts).map(([asset, amount]) => [asset, amount.toString()])) }, l1FeeUnknownTxs: [] }
     return { legs, positions: foldPositions(legs, "average", PRICES, onchain) }
   }
@@ -263,7 +262,7 @@ describe("a claim that cancels out what left", () => {
   // cbBTC and 1 WETH leave, with a 1 ETH claim that nets ETH to nothing.
   const NETTED = [gas(100n), row(CBBTC, "debit", CB_SOLD, "erc20"), row(WETH_ADDRESS, "debit", E18, "erc20"), claim(E18)]
   const foldNetted = (rows: LegRow[], held = 0n) => {
-    const legs = buildPricedLegs({ account: ME, rows, references: [...references, { ...REF, block_num: BLOCK - 5 }], priced: [] })
+    const legs = buildPricedLegs({ account: ME, rows, references: [...references, { ...REF, blockNum: BLOCK - 5 }], priced: [] })
     const onchain: Onchain = { balances: { blockNum: BLOCK, amounts: { cbBTC: held.toString() } }, l1FeeUnknownTxs: [] }
     return { legs, cbBtc: foldPositions(legs, "average", PRICES, onchain).find((p) => p.asset === "cbBTC")! }
   }

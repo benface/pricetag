@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../core/api.ts"
 import { emptyBook, parseBook, type Book } from "../core/book.ts"
-import type { CurrencyCode } from "../core/currency.ts"
+import { readKey, readsMatching } from "../core/resolve.ts"
 
 const KEY = "patina.book"
 
@@ -41,17 +42,15 @@ export function useBook() {
  * Reads other wallets, and again on each new block of the wallet on screen. One that can't be read yet stays out, and one
  * whose read failed is in `failed`, so nobody's told it's still reading. `retry` reads them all again now.
  */
-export function useOtherWallets(addresses: readonly string[], currency: CurrencyCode, rule: string | null, block: number | null) {
+/**
+ * Linked wallets, read by `rule` in `currency`. `shown` is how the numbers on screen were read, which for a moment after a
+ * change isn't that: they go with the wallets read the same way, and a newer read waits until they've changed too.
+ */
+export function useOtherWallets(addresses: readonly string[], currency: CurrencyCode, rule: string | null, block: number | null, shown: Pick<WalletResponse, "rule" | "currency"> | null) {
   const [wallets, setWallets] = useState<Record<string, WalletResponse>>({})
   const [failures, setFailures] = useState<ReadonlySet<string>>(new Set())
   const [attempt, setAttempt] = useState(0)
   const key = addresses.join(",")
-  // A wallet read by another rule would mix prices, and "the default" doesn't say which rule that was, so those are dropped.
-  const [readBy, setReadBy] = useState(rule)
-  if (readBy !== rule) {
-    setReadBy(rule)
-    setWallets({})
-  }
 
   useEffect(() => {
     if (!key) return
@@ -62,7 +61,7 @@ export function useOtherWallets(addresses: readonly string[], currency: Currency
         .then((response) => (response.ok ? (response.json() as Promise<WalletResponse>) : null))
         .then((wallet) => {
           if (!wallet) return fail(address)
-          setWallets((w) => ({ ...w, [address]: wallet }))
+          setWallets((w) => ({ ...w, [readKey(address, wallet)]: wallet }))
           setFailures((f) => new Set([...f].filter((other) => other !== address)))
         })
         .catch(() => {
@@ -73,8 +72,7 @@ export function useOtherWallets(addresses: readonly string[], currency: Currency
   }, [key, currency, rule, block, attempt])
 
   return {
-    // A wallet in another currency would mix amounts, so one from before a change waits for the new read.
-    others: addresses.flatMap((address) => (wallets[address]?.currency === currency ? [wallets[address]] : [])),
+    others: useMemo(() => readsMatching(wallets, key ? key.split(",") : [], shown), [wallets, key, shown?.rule, shown?.currency]),
     failed: addresses.filter((address) => failures.has(address)),
     retry: useCallback(() => setAttempt((n) => n + 1), []),
   }

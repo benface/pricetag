@@ -8,7 +8,7 @@ import { costKey, emptyBook } from "../src/core/book.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule, type RuleComparison } from "../src/core/rules.ts"
 import { createApi } from "../server/app.ts"
 import type { Proofs } from "../server/proof.ts"
-import type { Source } from "../server/source.ts"
+import type { Source } from "@pricetag/sdk/internal"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 const OTHER = "0x00000000000000000000000000000000000000bb"
@@ -24,7 +24,7 @@ const ROWS: Record<string, LegRow[]> = {
 
 /** What a wallet's rows look like through one rule: the same rows, with ETH at this price. */
 function sourceAt(ethAnswer: bigint, through = HEAD, reads: string[] = []): Source {
-  const reference = (block_num: number) => ({ block_num, eth_usd: ethAnswer.toString(), usdc_usd: "100000000" })
+  const reference = (block_num: number) => ({ blockNum: block_num, ethUsd: ethAnswer.toString(), usdcUsd: "100000000" })
   return {
     mode: "dataset",
     startBlock: 1,
@@ -99,11 +99,11 @@ describe("reading by a pricing rule", () => {
     const row = (label: string) => comparison.rows.find((r) => r.label === label)
     assert.equal(comparison.blockNum, HEAD)
     assert.deepEqual([comparison.a.id, comparison.b.id], [MARKET_RULE_ID, CAUTIOUS_RULE_ID])
-    const whole = { aPartial: false, bPartial: false }
+    const whole = { aPartial: false, bPartial: false, aEstimated: false, bEstimated: false }
     assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "3000000000", b: "2970000000", difference: "-30000000", ...whole })
     assert.deepEqual(row("Value"), { label: "Value", format: "money", a: "3000000000", b: "2970000000", difference: "-30000000", ...whole })
     // The USDC it paid with arrived with an unknown cost, so the total says it leaves that out.
-    assert.deepEqual(row("Total PnL"), { label: "Total PnL", format: "signed", a: "0", b: "-30000000", difference: "-30000000", aPartial: true, bPartial: true })
+    assert.deepEqual(row("Total PnL"), { label: "Total PnL", format: "signed", a: "0", b: "-30000000", difference: "-30000000", aPartial: true, bPartial: true, aEstimated: false, bEstimated: false })
     assert.ok(comparison.warnings.some((warning) => warning.includes("USDC")))
     assert.equal(comparison.changedTxs, 0, "it paid in USDC, so no cost changed")
   })
@@ -253,7 +253,7 @@ describe("comparing only ever shows the rule", () => {
   })
 
   it("won't compare when the rules' current prices are from different blocks", async () => {
-    const { status } = await compareWith({}, { readLatestReference: async (head) => ({ block_num: head - 1, eth_usd: "1", usdc_usd: "1" }) })
+    const { status } = await compareWith({}, { readLatestReference: async (head) => ({ blockNum: head - 1, ethUsd: "1", usdcUsd: "1" }) })
     assert.equal(status, 409)
   })
 

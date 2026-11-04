@@ -599,6 +599,9 @@ public struct RuleRow: Codable, Sendable, Equatable, Identifiable {
     /// This side's sum leaves something out. `warnings` says what.
     public let aPartial: Bool
     public let bPartial: Bool
+    /// This side rests on an estimate, and so does a difference from it. `warnings` says how much.
+    public let aEstimated: Bool
+    public let bEstimated: Bool
 
     public var id: String { label }
 }
@@ -612,6 +615,8 @@ public struct RuleTransaction: Codable, Sendable, Equatable, Identifiable {
     public let a: String?
     public let b: String?
     public let difference: String?
+    public let aEstimated: Bool
+    public let bEstimated: Bool
 
     public var id: String { "\(txHash):\(asset):\(label)" }
 }

@@ -1,58 +1,17 @@
 // What the server sends its clients. The browser runs the fold itself, because cost is personal.
 // Clients that can't run it, like the Mac app, read the portfolio it computes instead.
 
-import type { BalanceSnapshot, Head, LatestPrice, LatestPrices, Method, PnlPoint, PnlStatus, PositionValues, PricedLeg, Reconciliation, ReferenceRow, Totals } from "@pricetag/sdk/core"
+import { hasStarted, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type UnlistedToken, type WalletData } from "@pricetag/sdk/core"
 import type { Estimates } from "@pricetag/sdk/core"
-import type { CurrencyCode, Rates } from "./currency.ts"
-import type { CostNote } from "./notes.ts"
 import type { Meter, Question } from "./resolve.ts"
 import type { TaxCountryCode, TaxScope } from "./tax.ts"
 
-export type { Head, PnlStatus }
+export { hasStarted }
+export type { Head, Mode, PnlStatus }
 
-export type Mode = "demo" | "raw" | "dataset"
+export type { UnlistedToken }
 
-/** A token off the allowlist that this wallet holds. It has no trusted price and may be malicious, so nothing ever calls it. */
-export type UnlistedToken = { token: string; transfers: number }
-
-export type WalletResponse = {
-  address: string
-  mode: Mode
-  /**
-   * The blocks read. What the wallet held before `fromBlock` comes from the chain, as opening legs with an unknown cost.
-   * `toBlock` can be behind `latest` while a derived table catches up, and is below `fromBlock` until it starts.
-   */
-  coverage: { fromBlock: number; toBlock: number }
-  legs: PricedLeg[]
-  references: ReferenceRow[]
-  prices: LatestPrices
-  latest: Head
-  /** Transactions this wallet sent whose gas couldn't be worked out, so the fees are too low, and ETH worked out from its legs is too high. */
-  gasUnknownTxs: string[]
-  /** The pricing rule this was read through, when the server has more than one. */
-  rule?: string
-  /** Set when that rule isn't the default, because the prices it shows aren't what their labels alone would say. */
-  ruleNote?: string | null
-  unlisted: UnlistedToken[]
-  /** What this response is meant to be shown in. Its money is always USD, and `viewWallet` converts it. */
-  currency: CurrencyCode
-  /** Null for USD. */
-  rates: Rates | null
-  /** Transactions this wallet sent whose L1 fee couldn't be read yet. */
-  l1FeeUnknownTxs: string[]
-  /** Onchain balances at `coverage.toBlock`, as read. An asset missing from them is in `unreadBalances`. Null when the whole read failed. */
-  balances: BalanceSnapshot | null
-  /** Assets whose balance before `fromBlock` couldn't be read, so they can't be compared yet. */
-  openingUnread: string[]
-  /** The last balance read for each asset in `unreadBalances` that has one. */
-  lastBalances: Record<string, { blockNum: number; amount: string }>
-  /** Assets with no balance read at `coverage.toBlock`, which isn't the same as holding none. Empty until reads start. */
-  unreadBalances: string[]
-  /** Costs this wallet published itself, from its own zero-value transactions to itself. */
-  notes: CostNote[]
-  /** Whether market prices were read successfully, so a token without one really has no market. */
-  marketChecked: boolean
-}
+export type WalletResponse = WalletData
 
 export type PortfolioPosition = {
   asset: string
@@ -201,10 +160,7 @@ export type TaxReportResponse = {
 /** A derived table is normally a block or two behind the chain. More than this is worth saying out loud. */
 const BEHIND_BLOCKS = 5
 
-type Progress = Pick<WalletResponse, "coverage" | "latest">
-
-export const hasStarted = ({ coverage }: Progress) => coverage.toBlock >= coverage.fromBlock
-export const isBehind = ({ coverage, latest }: Progress) => latest.blockNum - coverage.toBlock > BEHIND_BLOCKS
+export const isBehind = ({ coverage, latest }: Pick<WalletResponse, "coverage" | "latest">) => latest.blockNum - coverage.toBlock > BEHIND_BLOCKS
 
 /** A dataset behind a number, by name and manifest hash. The hash is null when it couldn't be read, and is never guessed. */
 export type ProofDataset = { title: string; name: string; hash: string | null }

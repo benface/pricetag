@@ -2,9 +2,8 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import type { CostLabel, FoldLeg, Method, PriceSource } from "@pricetag/sdk/core"
+import { formatDuration, formatMoney, type CostLabel, type CurrencyCode, type FoldLeg, type Method, type PriceSource } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
-import { formatDuration } from "./format.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
 export const METHOD_NAME = "How cost is worked out"
@@ -82,6 +81,9 @@ export function activityTitle(count: number, shown: number): string {
   const total = count.toLocaleString("en-US")
   return count > shown ? `Activity (newest ${shown} of ${total})` : `Activity (${total})`
 }
+
+/** How much of a wallet's PnL rests on an estimate, or null when none does. */
+export const estimatedSentence = (micros: string, currency: CurrencyCode): string | null => (BigInt(micros) > 0n ? `${formatMoney(micros, currency)} of this is an estimate, from market prices.` : null)
 
 /** What a total leaves out, or null when it leaves out nothing. */
 export function excludedSentence(excluded: readonly { asset: string; reason: string }[]): string | null {

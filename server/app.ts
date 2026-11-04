@@ -2,10 +2,10 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { createQuery, describeError, isAddress, latestPrices, type Method } from "@pricetag/sdk"
+import { isAddress, isCurrencyCode, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createWallets, describeError, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, type Book } from "../src/core/book.ts"
-import { isCurrencyCode, type CurrencyCode } from "../src/core/currency.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fixtures.ts"
@@ -14,12 +14,10 @@ import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule
 import { verifyLink } from "./links.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
 import { createRates } from "./rates.ts"
-import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
 import { createDepositReader } from "./block.ts"
 import { createManifestReader, createProofs, proofOf, verificationOf, type BlockRead, type Proofs } from "./proof.ts"
-import { datasetSource, feedRounds, rawSource, type Source } from "./source.ts"
+import { feedRounds, rawSource, resolvingSource } from "./source.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, taxReportOf, type TaxScope } from "../src/core/tax.ts"
-import { createWallets } from "./wallets.ts"
 
 type Env = Record<string, string | undefined>
 
@@ -75,7 +73,7 @@ function createSource(env: Env): { source: Source; rules?: RuleSource[]; readRat
       const dataset = pinned(env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH)
       const ruleSource = (id: string, name: string, hash: string | undefined, priceDataset: string): RuleSource => ({
         rule: { id, ...RULE_TEXT[id]!, dataset: name, hash: hash as string },
-        source: datasetSource(query.aliased({ pricetag: dataset, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", startBlock, network }),
+        source: resolvingSource(query.aliased({ pricetag: dataset, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", startBlock, network }),
       })
       const rules = [
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, dataset),
@@ -83,7 +81,7 @@ function createSource(env: Env): { source: Source; rules?: RuleSource[]; readRat
       ]
       return { source: rules[0]!.source, rules, readRates, proofs }
     }
-    return { source: datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates, proofs }
+    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates, proofs }
   }
   const historyBlocks = Number(env.PRICETAG_HISTORY_BLOCKS || 1800)
   if (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
@@ -251,7 +249,8 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
             linkedFailures.add(address)
           },
         )
-        wallet = from.peek(address)
+        const read = from.peek(address)
+        wallet = read && rule ? { ...read, rule: rule.rule.id, ruleNote: rule.note } : read
       }
       // With no data source, only the demo's own wallets can ever be read, so this one isn't still reading.
       if (!wallet && !wallets) linkedFailures.add(address)
@@ -357,14 +356,14 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
     try {
       const [atA, atB] = [await first.source.readLatestReference(blockNum), await second.source.readLatestReference(blockNum)]
       // A current price at another block, or none, would be a difference that isn't the rule.
-      if (!atA || !atB || atA.block_num !== atB.block_num) return notYet()
+      if (!atA || !atB || atA.blockNum !== atB.blockNum) return notYet()
       const pair = async (wallet: string, withBalances: boolean): Promise<[WalletResponse, WalletResponse] | null | undefined> => {
         const facts = await first.wallets.factsAt(wallet, blockNum, { withBalances })
         const a = facts && first.wallets.pricedOn(wallet, facts, latestPrices(atA))
         const b = facts && second.wallets.pricedOn(wallet, facts, latestPrices(atB))
         if (!a || !b) return null
         // A block one side has no price for would look like the rule made a number unavailable.
-        const blocksOf = (wallet: WalletResponse) => new Set(wallet.references.map((reference) => reference.block_num))
+        const blocksOf = (wallet: WalletResponse) => new Set(wallet.references.map((reference) => reference.blockNum))
         const [pricedA, pricedB] = [blocksOf(a), blocksOf(b)]
         if (a.legs.some((leg) => pricedA.has(leg.blockNum) !== pricedB.has(leg.blockNum))) return null
         // One read of the rates, on both sides. Answers the request itself when it fails, so that's not a "not yet".

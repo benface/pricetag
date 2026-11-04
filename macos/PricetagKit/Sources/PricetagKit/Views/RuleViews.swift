@@ -53,7 +53,7 @@ public struct RuleComparisonTable: View {
                 .foregroundStyle(.secondary)
                 Divider()
                 ForEach(comparison.rows) { row in
-                    line(row.label, format: row.format, a: row.a, b: row.b, difference: row.difference, aPartial: row.aPartial, bPartial: row.bPartial)
+                    line(row.label, format: row.format, a: row.a, b: row.b, difference: row.difference, aPartial: row.aPartial, bPartial: row.bPartial, aEstimated: row.aEstimated, bEstimated: row.bEstimated)
                 }
                 // In the same grid, so the columns line up with the ones above.
                 if !comparison.transactions.isEmpty {
@@ -63,7 +63,7 @@ public struct RuleComparisonTable: View {
                         .gridCellAnchor(.leading)
                         .padding(.top, 8)
                     ForEach(comparison.transactions) { tx in
-                        line("\(tx.asset) \(tx.label.lowercased()) · \(Format.shortHash(tx.txHash))", format: "money", a: tx.a, b: tx.b, difference: tx.difference)
+                        line("\(tx.asset) \(tx.label.lowercased()) · \(Format.shortHash(tx.txHash))", format: "money", a: tx.a, b: tx.b, difference: tx.difference, aEstimated: tx.aEstimated, bEstimated: tx.bEstimated)
                     }
                 }
             }
@@ -77,19 +77,19 @@ public struct RuleComparisonTable: View {
         .textSelection(.enabled)
     }
 
-    private func line(_ label: String, format: String, a: String?, b: String?, difference: String?, aPartial: Bool = false, bPartial: Bool = false) -> some View {
+    private func line(_ label: String, format: String, a: String?, b: String?, difference: String?, aPartial: Bool = false, bPartial: Bool = false, aEstimated: Bool, bEstimated: Bool) -> some View {
         GridRow {
             Text(label).gridColumnAlignment(.leading)
-            value(a, format: format, isPartial: aPartial)
-            value(b, format: format, isPartial: bPartial)
-            Text(Format.ruleDifference(difference, format: format, currency: comparison.currency))
+            value(a, format: format, isPartial: aPartial, isEstimate: aEstimated)
+            value(b, format: format, isPartial: bPartial, isEstimate: bEstimated)
+            Text(Format.ruleDifference(difference, format: format, currency: comparison.currency, isEstimate: aEstimated || bEstimated))
         }
     }
 
-    private func value(_ micros: String?, format: String, isPartial: Bool) -> some View {
+    private func value(_ micros: String?, format: String, isPartial: Bool, isEstimate: Bool) -> some View {
         HStack(spacing: 4) {
             if isPartial { Text("partial").font(.caption).foregroundStyle(Tone.warning.style) }
-            Text(Format.ruleValue(micros, format: format, currency: comparison.currency))
+            Text(Format.ruleValue(micros, format: format, currency: comparison.currency, isEstimate: isEstimate))
         }
     }
 }

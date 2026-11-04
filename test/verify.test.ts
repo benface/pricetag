@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import type { LegRow, PricedLeg, Query } from "@pricetag/sdk"
+import type { LegPart, PricedLeg } from "@pricetag/sdk/core"
+import type { Query } from "@pricetag/sdk/internal"
 import { createDepositReader, readBlock } from "../server/block.ts"
 import { createManifestReader, createProofs, proofOf, verificationOf } from "../server/proof.ts"
 import { checkHeader, checkReceipts, checkTransactions, encodeTransaction, keccak, rlp, trieRoot, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "../server/verify.ts"
@@ -147,12 +148,8 @@ const paidForGas = (() => {
   return (BigInt(user.gas_used) - BigInt(deposit.gas_used)) * (tipped < cap ? tipped : cap)
 })()
 
-const legRow = (changes: Partial<LegRow>): LegRow => ({
-  block_num: 9200017,
-  timestamp: "2024-01-30T00:00:00.000Z",
-  tx_hash: `0x${user.tx_hash}`,
-  tx_index: user.tx_index,
-  log_index: 0,
+const legRow = (changes: Partial<LegPart>): LegPart => ({
+  logIndex: 0,
   token: "0x0000000000000000000000000000000000000000",
   account,
   side: "debit",
@@ -205,25 +202,25 @@ describe("a leg against its checked block", () => {
   })
 
   it("matches a transfer to its log, down to the amount and who it names", () => {
-    const row = legRow({ kind: "erc20", token: `0x${USDC}`, log_index: transferLog.log_index, amount: "5000000", account: `0x${ALICE}`, side: "debit" })
+    const row = legRow({ kind: "erc20", token: `0x${USDC}`, logIndex: transferLog.log_index, amount: "5000000", account: `0x${ALICE}`, side: "debit" })
     const to = `0x${BOB}`
     assert.equal(activity(legOf({ parts: [row] })).status, "passed")
     assert.equal(activity(legOf({ parts: [{ ...row, account: to, side: "credit" }] })).status, "passed")
     assert.equal(activity(legOf({ parts: [{ ...row, amount: "1" }] })).status, "failed")
     assert.equal(activity(legOf({ parts: [{ ...row, account: to }] })).status, "failed")
     assert.equal(activity(legOf({ parts: [{ ...row, token: "0x0000000000000000000000000000000000000001" }] })).status, "failed")
-    assert.equal(activity(legOf({ parts: [{ ...row, log_index: 999 }] })).status, "failed")
+    assert.equal(activity(legOf({ parts: [{ ...row, logIndex: 999 }] })).status, "failed")
   })
 
   it("doesn't take an NFT's transfer for a token's", () => {
     const nft = logs[0] as LogRow
     assert.equal(nft.data, "")
     const from = `0x${(nft.topics[1] as string).slice(24)}`
-    assert.equal(activity(legOf({ parts: [legRow({ kind: "erc20", token: `0x${nft.address}`, log_index: nft.log_index, amount: "1", account: from })] })).status, "failed")
+    assert.equal(activity(legOf({ parts: [legRow({ kind: "erc20", token: `0x${nft.address}`, logIndex: nft.log_index, amount: "1", account: from })] })).status, "failed")
   })
 
   it("checks both sides of an exchange, since the price is worked out from them", () => {
-    const paidRow = legRow({ kind: "erc20", token: `0x${USDC}`, log_index: transferLog.log_index, amount: "5000000", account: `0x${ALICE}`, side: "debit" })
+    const paidRow = legRow({ kind: "erc20", token: `0x${USDC}`, logIndex: transferLog.log_index, amount: "5000000", account: `0x${ALICE}`, side: "debit" })
     const bought = legOf({ id: "x:AERO", asset: "AERO", kind: "swap", priceSource: "swap", parts: [] })
     const paid = legOf({ id: "x:USDC", asset: "USDC", delta: "-5000000", decimals: 6, kind: "swap", parts: [paidRow] })
     assert.equal(activity(bought, [bought, paid]).status, "passed")
@@ -305,7 +302,7 @@ describe("a leg against its checked block", () => {
   })
 
   it("doesn't bring up the sender when logs or the recipient already name the account", () => {
-    const row = legRow({ kind: "erc20", token: `0x${USDC}`, log_index: transferLog.log_index, amount: "5000000", account: `0x${ALICE}`, side: "debit" })
+    const row = legRow({ kind: "erc20", token: `0x${USDC}`, logIndex: transferLog.log_index, amount: "5000000", account: `0x${ALICE}`, side: "debit" })
     const leg = legOf({ parts: [row] })
     assert.doesNotMatch(activity(leg).detail, /sender/)
     assert.ok(!proofOf(leg, [], "USD", [], null).scope.some((line) => /who sent/.test(line)))
@@ -355,7 +352,7 @@ describe("what the proof says", () => {
   })
 
   it("uses plain language", () => {
-    const leg = legOf({ parts: [legRow({ kind: "erc20", log_index: 3, amount: "5", token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" })] })
+    const leg = legOf({ parts: [legRow({ kind: "erc20", logIndex: 3, amount: "5", token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" })] })
     const proof = proofOf(leg, [], "CAD", [{ title: "Base's blocks", name: "a/b@1", hash: null }], null)
     const verification = verificationOf(leg, [], data, deposits)
     const words = [...proof.source, ...proof.movements, ...proof.scope, ...proof.links.map((l) => l.title), verification.summary, ...verification.checks.flatMap((c) => [c.title, c.detail])].join(" ")

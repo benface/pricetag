@@ -1,10 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { TOKENS, hasAnswer, isAddress, sumTotals, type Coverage, type Method, type Position } from "@pricetag/sdk/core"
+import { CURRENCIES, CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isCurrencyCode, sumTotals, type Coverage, type CurrencyCode, type Method, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
-import { CURRENCIES, CURRENCY_CODES, isCurrencyCode, viewWallet, type CurrencyCode } from "../core/currency.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { explainTarget, missingRatesLine, mismatchCause, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
-import { formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime } from "../core/format.ts"
 import {
   AVERAGE_PRICE_PAID,
   BALANCE_CHECK,
@@ -193,7 +191,7 @@ export function App() {
   const [resolving, setResolving] = useState<{ asset: string | null } | null>(null)
   const [cardSender, setCardSender] = useState<string | null>(null)
   const wanted = useMemo(() => [...new Set([...linkedWallets(book), ...(cardSender ? [cardSender] : [])])].filter((a) => a !== wallet?.address), [book, cardSender, wallet?.address])
-  const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, wallet?.latest.blockNum ?? null)
+  const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, wallet?.latest.blockNum ?? null, wallet)
   const linkedFailed = useMemo(() => failed.filter((address) => linkedWallets(book).includes(address)), [failed, book])
 
   useEffect(() => {

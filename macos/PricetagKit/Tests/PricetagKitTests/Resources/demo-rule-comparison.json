@@ -18,6 +18,7 @@
   },
   "why": "8 transactions' cost, sale value or network fee changed. Both read the same transactions, balances and exchange rates at the same block, so the only difference is what ETH is worth, which also sets what ETH held counts for.",
   "warnings": [
+    "$899.98 of this is an estimate, from market prices.",
     "Excludes DAI, USDC, ETH, VIRTUAL (unknown cost); USDC, ETH (sold at an unknown cost); cbBTC (doesn't match its actual balance)."
   ],
   "rows": [
@@ -28,7 +29,9 @@
       "b": "2376000000",
       "difference": "-24000000",
       "aPartial": false,
-      "bPartial": false
+      "bPartial": false,
+      "aEstimated": false,
+      "bEstimated": false
     },
     {
       "label": "Total PnL",
@@ -37,7 +40,9 @@
       "b": "149309923",
       "difference": "8083",
       "aPartial": true,
-      "bPartial": true
+      "bPartial": true,
+      "aEstimated": true,
+      "bEstimated": true
     },
     {
       "label": "Realized",
@@ -46,7 +51,9 @@
       "b": "74985000",
       "difference": "0",
       "aPartial": true,
-      "bPartial": true
+      "bPartial": true,
+      "aEstimated": false,
+      "bEstimated": false
     },
     {
       "label": "Unrealized",
@@ -55,7 +62,9 @@
       "b": "75125000",
       "difference": "0",
       "aPartial": true,
-      "bPartial": true
+      "bPartial": true,
+      "aEstimated": true,
+      "bEstimated": true
     },
     {
       "label": "Value",
@@ -64,7 +73,9 @@
       "b": "7557363447",
       "difference": "-13666752",
       "aPartial": false,
-      "bPartial": false
+      "bPartial": false,
+      "aEstimated": true,
+      "bEstimated": true
     },
     {
       "label": "Network fees",
@@ -73,7 +84,9 @@
       "b": "800077",
       "difference": "-8083",
       "aPartial": false,
-      "bPartial": false
+      "bPartial": false,
+      "aEstimated": false,
+      "bEstimated": false
     },
     {
       "label": "ETH value",
@@ -82,7 +95,9 @@
       "b": "1353008448",
       "difference": "-13666752",
       "aPartial": false,
-      "bPartial": false
+      "bPartial": false,
+      "aEstimated": false,
+      "bEstimated": false
     }
   ],
   "transactions": [
@@ -94,7 +109,9 @@
       "label": "Network fee",
       "a": "104800",
       "b": "103752",
-      "difference": "-1048"
+      "difference": "-1048",
+      "aEstimated": false,
+      "bEstimated": false
     },
     {
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000b",
@@ -104,7 +121,9 @@
       "label": "Network fee",
       "a": "104000",
       "b": "102960",
-      "difference": "-1040"
+      "difference": "-1040",
+      "aEstimated": false,
+      "bEstimated": false
     },
     {
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000b",
@@ -114,7 +133,9 @@
       "label": "Sold for",
       "a": "1299740000",
       "b": "1286742600",
-      "difference": "-12997400"
+      "difference": "-12997400",
+      "aEstimated": false,
+      "bEstimated": false
     },
     {
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
@@ -124,7 +145,9 @@
       "label": "Network fee",
       "a": "103600",
       "b": "102564",
-      "difference": "-1036"
+      "difference": "-1036",
+      "aEstimated": false,
+      "bEstimated": false
     },
     {
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
@@ -134,7 +157,9 @@
       "label": "Network fee",
       "a": "103320",
       "b": "102286",
-      "difference": "-1034"
+      "difference": "-1034",
+      "aEstimated": false,
+      "bEstimated": false
     },
     {
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000007",
@@ -144,7 +169,9 @@
       "label": "Network fee",
       "a": "100400",
       "b": "99396",
-      "difference": "-1004"
+      "difference": "-1004",
+      "aEstimated": false,
+      "bEstimated": false
     },
     {
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
@@ -154,7 +181,9 @@
       "label": "Network fee",
       "a": "98600",
       "b": "97614",
-      "difference": "-986"
+      "difference": "-986",
+      "aEstimated": false,
+      "bEstimated": false
     },
     {
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
@@ -164,7 +193,9 @@
       "label": "Network fee",
       "a": "97440",
       "b": "96465",
-      "difference": "-975"
+      "difference": "-975",
+      "aEstimated": false,
+      "bEstimated": false
     },
     {
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000003",
@@ -174,7 +205,9 @@
       "label": "Network fee",
       "a": "96000",
       "b": "95040",
-      "difference": "-960"
+      "difference": "-960",
+      "aEstimated": false,
+      "bEstimated": false
     },
     {
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000003",
@@ -184,7 +217,9 @@
       "label": "Cost",
       "a": "2399520000",
       "b": "2375524800",
-      "difference": "-23995200"
+      "difference": "-23995200",
+      "aEstimated": false,
+      "bEstimated": false
     }
   ],
   "changedTxs": 8

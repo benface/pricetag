@@ -4,12 +4,10 @@
 // The rest come from here, and the fold then runs on the result. An unanswered sender stays unknown: it could be the user's
 // own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, emptyPosition, foldPositions, normalizeAddress, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, worth, type CostPiece, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals } from "@pricetag/sdk/core"
+import { applyLegTaking, emptyPosition, foldWallet, formatAmount, normalizeAddress, usableAnswer, usdView, viewWallet, worth, type CostPiece, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "./api.ts"
 import { costKey, linkedWallets, type Book, type ExchangeCost, type Money, type Receipt } from "./book.ts"
-import { usableAnswer, usdView, viewWallet, type WalletView } from "./currency.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
-import { formatAmount } from "./format.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
 
 /** What arrived with no cost, and who could say. A null sender means there's no one to ask about, only what it cost. */
@@ -53,7 +51,7 @@ function without(piece: CostPiece, taken: CostPiece): CostPiece {
 function recipientsOf(leg: PricedLeg): Source[] | null {
   const transfers: Source[] = []
   // One per transfer, not per address: oldest first follows the order they went in, even to the same wallet twice.
-  for (const part of [...leg.parts].sort((a, b) => a.log_index - b.log_index)) {
+  for (const part of [...leg.parts].sort((a, b) => a.logIndex - b.logIndex)) {
     if (part.side === "credit" || !part.counterparty) return null
     transfers.push({ address: normalizeAddress(part.counterparty), units: BigInt(part.amount) })
   }
@@ -351,13 +349,11 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
   const address = normalizeAddress(focus.address)
   const linked = new Set(linkedWallets(book))
   const sideOf = (wallet: WalletResponse): Side => ({ wallet, view: usd ? usdView(wallet) : viewWallet(wallet) })
-  const sides = [focus, ...others.filter((w) => normalizeAddress(w.address) !== address && linked.has(normalizeAddress(w.address)))].map(sideOf)
+  const sides = [focus, ...others.filter((w) => normalizeAddress(w.address) !== address && linked.has(normalizeAddress(w.address)) && sameRead(w, focus))].map(sideOf)
   const view = (sides[0] as Side).view
   const { legs: resolved, open } = resolveLegs(sides, method, book)
   const legs = resolved.get(address) as PricedLeg[]
-  const positions = foldPositions(legs, method, view.prices, focus)
-  const unread = unreadAssets(positions, focus)
-  const totals = sumTotals(positions, unread)
+  const { positions, unreadAssets: unread, totals, pnlStatus, points } = foldWallet(focus, method, { ...view, legs })
   const questions = questionsOf(open, sides, book)
   return {
     view,
@@ -365,21 +361,37 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
     positions,
     unread,
     totals,
-    pnlStatus: pnlStatus(totals, focus.gasUnknownTxs),
-    points: pnlOverTime(legs, method, view.prices, view.markPrice, focus.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket)),
+    pnlStatus,
+    points,
     questions,
-    meter: meterOf(questions, book, address, missingWallets(book, address, others).length),
+    meter: meterOf(questions, book, address, missingWallets(book, focus, others).length),
   }
 }
 
-/** The linked wallets a book needs that aren't in `read`. */
-export const missingWallets = (book: Book, focus: string, read: readonly WalletResponse[]) => {
-  const have = new Set([normalizeAddress(focus), ...read.map((w) => normalizeAddress(w.address))])
+/** How a wallet was read. Its money only adds up with another wallet's when this is the same. */
+type HowRead = Pick<WalletResponse, "rule" | "currency">
+
+/**
+ * A cost by one pricing rule against a value by another is a gain nobody made, and so is one currency's against another's.
+ * So a wallet read another way counts as not read at all, which leaves what came from it unresolved.
+ */
+const sameRead = (a: HowRead, b: HowRead) => (a.rule ?? null) === (b.rule ?? null) && a.currency === b.currency
+
+/** Where a client keeps a read, so one set of wallets stays whole while the next set is on its way. */
+export const readKey = (address: string, read: HowRead) => `${normalizeAddress(address)}:${read.rule ?? ""}:${read.currency}`
+
+/** The reads that go with what's on screen. Never a newer rule's, however soon it arrives: those wait until the numbers on screen change too. */
+export const readsMatching = (reads: Readonly<Record<string, WalletResponse>>, addresses: readonly string[], shown: HowRead | null): WalletResponse[] =>
+  shown ? addresses.flatMap((address) => reads[readKey(address, shown)] ?? []) : []
+
+/** The linked wallets a book needs that aren't in `read`, or were read another way. */
+export const missingWallets = (book: Book, focus: WalletResponse, read: readonly WalletResponse[]) => {
+  const have = new Set([normalizeAddress(focus.address), ...read.filter((w) => sameRead(w, focus)).map((w) => normalizeAddress(w.address))])
   return linkedWallets(book).filter((address) => !have.has(address))
 }
 
 /** What a different set of answers would make the headline say, before any of them is final. */
 export function previewBook(focus: WalletResponse, others: readonly WalletResponse[], method: Method, book: Book, failed: readonly string[] = []): BookPreview {
   const { totals, pnlStatus: status, questions } = foldBook(focus, others, method, book)
-  return { pnlMicros: totals.pnlMicros, pnlStatus: status, estimatedMicros: totals.estimatedMicros, unresolvedMicros: totals.unresolvedMicros, open: questions.length, pending: missingWallets(book, focus.address, others).length > 0, failed: linkedWallets(book).some((address) => failed.includes(address)) }
+  return { pnlMicros: totals.pnlMicros, pnlStatus: status, estimatedMicros: totals.estimatedMicros, unresolvedMicros: totals.unresolvedMicros, open: questions.length, pending: missingWallets(book, focus, others).length > 0, failed: linkedWallets(book).some((address) => failed.includes(address)) }
 }

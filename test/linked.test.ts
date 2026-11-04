@@ -2,11 +2,11 @@ import assert from "node:assert/strict"
 import { after, before, describe, it } from "node:test"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
-import { ASSETS, ETH_ADDRESS, buildPricedLegs, foldPositions, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, buildPricedLegs, foldPositions, type LegPart, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import { createApi } from "../server/app.ts"
 import { portfolioOf } from "../server/portfolio.ts"
-import type { Source } from "../server/source.ts"
-import { unlistedTokens } from "../server/wallets.ts"
+import type { Source } from "@pricetag/sdk/internal"
+import { unlistedTokens } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 
@@ -39,7 +39,7 @@ function leg(tx: string, delta: bigint, changes: Partial<PricedLeg> = {}): Price
   }
 }
 /** What a real row says about a plain ETH transfer: who was on the other side. */
-const moved = (tx: string, account: string, side: LegRow["side"], amount: bigint, counterparty: string): LegRow => ({ block_num: 1, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: tx, tx_index: 1, log_index: 0, token: ETH_ADDRESS, account, side, amount: amount.toString(), kind: "eth", counterparty })
+const moved = (tx: string, account: string, side: LegPart["side"], amount: bigint, counterparty: string): LegPart => ({ logIndex: 0, token: ETH_ADDRESS, account, side, amount: amount.toString(), kind: "eth", counterparty })
 const bought = (tx: string, qty: bigint, cost: number) => leg(tx, qty, { kind: "swap", costLabel: "paid", costMicros: String(cost * 1_000_000) })
 const sameBlock = (a: PricedLeg, b: PricedLeg): PricedLeg => ({ ...b, blockNum: a.blockNum })
 
@@ -156,8 +156,8 @@ describe("the portfolio endpoint with linked wallets", () => {
     head: async () => ({ blockNum: 20, timestamp: "2026-11-04T00:00:00.000Z" }),
     processedThrough: async (_, head) => head,
     readWindow: async (address) => ({ rows: rows[address] ?? [], priced: null, gasUnknown: [] }),
-    readReferences: async (blocks) => blocks.map((block_num) => ({ block_num, eth_usd: "300000000000", usdc_usd: "100000000" })),
-    readLatestReference: async () => ({ block_num: 20, eth_usd: "400000000000", usdc_usd: "100000000" }),
+    readReferences: async (blocks) => blocks.map((block_num) => ({ blockNum: block_num, ethUsd: "300000000000", usdcUsd: "100000000" })),
+    readLatestReference: async () => ({ blockNum: 20, ethUsd: "400000000000", usdcUsd: "100000000" }),
     readEthBalances: async () => new Map(),
     readBalances: async (address, block) => {
       const amounts: Record<string, string> = Object.fromEntries(ASSETS.map((asset) => [asset, "0"]))

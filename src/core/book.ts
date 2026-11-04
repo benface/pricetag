@@ -1,8 +1,7 @@
 // The user's answers about where things came from. They stay on the device: clients keep them and send them along with
 // each request, and the server doesn't store them. Writing one onchain would publicly tie the wallets together.
 
-import { isAddress, normalizeAddress } from "@pricetag/sdk/core"
-import { isCurrencyCode, type CurrencyCode } from "./currency.ts"
+import { isAddress, isCurrencyCode, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
 
 /** An amount someone entered or imported, in the currency it was in, because that's what it stays true in. */
 export type Money = { micros: string; currency: CurrencyCode }

@@ -1,9 +1,7 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { TOKENS, foldPositions, pnlOverTime, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, type CostLabel, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals } from "@pricetag/sdk/core"
+import { CURRENCIES, TOKENS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatSignedMoney, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
-import { CURRENCIES, usdView, type CurrencyCode, type WalletView } from "./currency.ts"
-import { formatAmount, formatMoney, formatPrice, formatRate, formatSignedMoney, shortHash } from "./format.ts"
 import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, METHOD_LABELS, NETWORK_FEES, currentPriceSource, tokenLabel } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"

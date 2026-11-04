@@ -1,6 +1,8 @@
 // A token's `market` price: what it recently traded at, from `priced_legs`, with guards so a thin pool can't set it.
 
-import { ETH_ADDRESS, TOKENS, answerToMicros, isSanePrice, normalizeAddress, tokenByAddress, worth, type PricedRow } from "@pricetag/sdk/core"
+import { worth } from "./fold.ts"
+import { answerToMicros, isSanePrice, type PricedRow } from "./legs.ts"
+import { ETH_ADDRESS, TOKENS, normalizeAddress, tokenByAddress } from "./tokens.ts"
 
 /** One account's trade of a token. A trade shows up once per account it went through, which is why these group by transaction. */
 export type MarketTrade = { blockNum: number; txHash: string; asset: string; usdMicros: string; notionalUsdMicros: string }

@@ -1,9 +1,8 @@
 // Reads a Coinbase transaction history CSV, to find what each withdrawal cost. A withdrawal it can't price exactly is left
 // out rather than guessed: it stays a question.
 
-import { ASSETS, decimalsOf, isAddress, normalizeAddress } from "@pricetag/sdk/core"
+import { ASSETS, decimalsOf, isAddress, isCurrencyCode, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
 import type { ExchangeWithdrawal } from "./book.ts"
-import { isCurrencyCode, type CurrencyCode } from "./currency.ts"
 
 export type ExchangeImport = {
   withdrawals: ExchangeWithdrawal[]

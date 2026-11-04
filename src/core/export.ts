@@ -1,7 +1,6 @@
 // Every movement as a spreadsheet row, marked so an estimate or an unknown can't pass for an exact number.
 
-import type { LegEffect, Position } from "@pricetag/sdk/core"
-import type { CurrencyCode } from "./currency.ts"
+import type { CurrencyCode, LegEffect, Position } from "@pricetag/sdk/core"
 
 const HEADER = ["time", "block", "transaction", "asset", "amount", "kind", "currency", "price", "price_source", "cost", "cost_source", "proceeds", "status"]
 

@@ -3,18 +3,16 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ETH_ADDRESS, PRICE_NOTES, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, PRICE_NOTES, TOKENS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
-import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedMoney, formatMoney } from "../src/core/format.ts"
-import { ETH_USD_FEED, TOKENS, USDC_USD_FEED } from "@pricetag/sdk/core"
 import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
 import { emptyBook, linkMessage } from "../src/core/book.ts"
 import { foldBook } from "../src/core/resolve.ts"
-import { RULE_TEXT, differenceOf, ruleNote, whySentence } from "../src/core/rules.ts"
+import { RULE_TEXT, differenceOf, ruleNote, whySentence, type RuleComparison } from "../src/core/rules.ts"
 import { proofOf, verificationOf } from "../server/proof.ts"
 
 const RESOURCES = new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/", import.meta.url)
@@ -458,12 +456,12 @@ describe("comparing pricing rules", () => {
     balances: DEMO_WALLET.balances,
     legs: DEMO_WALLET.legs.map((leg) => (leg.asset === "ETH" ? { ...leg, priceMicros: lower(leg.priceMicros), costMicros: lower(leg.costMicros), proceedsMicros: lower(leg.proceedsMicros) } : leg)),
   })
-  const reference = (eth_usd: string) => ({ block_num: 1, eth_usd, usdc_usd: "100000000" })
+  const reference = (eth_usd: string) => ({ blockNum: 1, ethUsd: eth_usd, usdcUsd: "100000000" })
   const compared = compareRules({ rule: market, wallet: walletWith({}), reference: reference("240000000000") }, { rule: cautious, wallet: forked, reference: reference("237600000000") }, "average", 1)
   const row = (label: string) => compared.rows.find((r) => r.label === label)
 
   it("says what ETH is worth by each rule", () => {
-    assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "2400000000", b: "2376000000", difference: "-24000000", aPartial: false, bPartial: false })
+    assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "2400000000", b: "2376000000", difference: "-24000000", aPartial: false, bPartial: false, aEstimated: false, bEstimated: false })
   })
 
   it("gets each side from the same fold the app shows", () => {
@@ -522,12 +520,75 @@ describe("comparing pricing rules", () => {
 
   it("counts a network fee that changed, and says so", () => {
     const gas: LegRow = { block_num: 5, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: "0xfee", tx_index: 1, log_index: 0, token: ETH_ADDRESS, account: "0xaa", side: "debit", amount: "1000000000000000", kind: "gas" }
-    const by = (eth_usd: string) => walletWith({ address: "0xaa", prices: {}, legs: buildPricedLegs({ account: "0xaa", rows: [gas], references: [{ block_num: 5, eth_usd, usdc_usd: "100000000" }], priced: [] }), balances: null })
+    const by = (eth_usd: string) => walletWith({ address: "0xaa", prices: {}, legs: buildPricedLegs({ account: "0xaa", rows: [gas], references: [{ blockNum: 5, ethUsd: eth_usd, usdcUsd: "100000000" }], priced: [] }), balances: null })
     const fees = compareRules({ rule: market, wallet: by("300000000000"), reference: reference("300000000000") }, { rule: cautious, wallet: by("297000000000"), reference: reference("297000000000") }, "average", 5)
     assert.equal(fees.changedTxs, 1)
     assert.deepEqual(fees.transactions.map((tx) => [tx.label, tx.a, tx.b, tx.difference]), [["Network fee", "3000000", "2970000", "-30000"]])
     assert.deepEqual(fees.rows.find((r) => r.label === "Network fees")?.difference, "-30000")
     assert.equal(fees.why, whySentence(1))
+  })
+
+  describe("what rests on an estimate", () => {
+    const [ME, OTHER, STRANGER] = ["0x00000000000000000000000000000000000000aa", "0x00000000000000000000000000000000000000bb", "0x00000000000000000000000000000000000000dd"]
+    const AERO = TOKENS.find((t) => t.symbol === "AERO")!.address
+    const VIRTUAL = TOKENS.find((t) => t.symbol === "VIRTUAL")!.address
+    const E18 = 10n ** 18n
+    const moved = (tx: string, block: number, account: string, token: string, side: LegRow["side"], amount: bigint, counterparty?: string): LegRow => ({ block_num: block, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: tx, tx_index: 1, log_index: 0, token, account, side, amount: amount.toString(), kind: token === ETH_ADDRESS ? "eth" : "erc20", ...(counterparty ? { counterparty } : {}) })
+    const walletOf = (address: string, rows: LegRow[], eth_usd: string, market: string | null = null, prices: Record<string, string> = {}) => {
+      const references = [...new Set(rows.map((r) => r.block_num))].map((block_num) => ({ blockNum: block_num, ethUsd: eth_usd, usdcUsd: "100000000" }))
+      const legs = buildPricedLegs({ account: address, rows, references, priced: [], ...(market ? { market: () => market } : {}) })
+      const amounts: Record<string, string> = Object.fromEntries(ASSETS.map((asset) => [asset, "0"]))
+      for (const leg of legs) amounts[leg.asset] = (BigInt(amounts[leg.asset] ?? "0") + BigInt(leg.delta)).toString()
+      return walletWith({ address, legs, references, balances: { blockNum: 20, amounts }, prices: Object.fromEntries(Object.entries(prices).map(([asset, micros]) => [asset, { micros, source: asset === "ETH" ? ("oracle" as const) : ("market" as const), blockNum: 20 }])) })
+    }
+    const mine = () => ({ senders: { [OTHER]: { kind: "mine" as const }, [ME]: { kind: "mine" as const }, [STRANGER]: { kind: "someone-else" as const } }, costs: {}, withdrawals: [] })
+    // OTHER got 1 ETH from someone else, so its cost is an estimate, and sent it to this wallet, which inherits that.
+    const inherited = (eth: string, rule: typeof market) => ({
+      rule,
+      reference: reference(eth),
+      wallet: walletOf(ME, [moved("0xout", 15, ME, ETH_ADDRESS, "credit", E18, OTHER)], eth, null, { ETH: ((BigInt(eth) / 100n)).toString() }),
+      linked: [walletOf(OTHER, [moved("0xin", 10, OTHER, ETH_ADDRESS, "credit", E18, STRANGER), moved("0xout", 15, OTHER, ETH_ADDRESS, "debit", E18, ME)], eth)],
+    })
+    const ruleRow = (comparison: RuleComparison, label: string) => comparison.rows.find((r) => r.label === label)!
+
+    it("marks an inherited estimate, and what's worked out from it, on each side", () => {
+      const comparison = compareRules(inherited("300000000000", market), inherited("297000000000", cautious), "average", 20, mine())
+      const cost = ruleRow(comparison, "ETH cost")
+      assert.deepEqual([cost.a, cost.b, cost.difference, cost.aEstimated, cost.bEstimated], ["3000000000", "2970000000", "-30000000", true, true])
+      const pnl = ruleRow(comparison, "Total PnL")
+      assert.deepEqual([pnl.a, pnl.b, pnl.aEstimated, pnl.bEstimated], ["0", "0", true, true])
+      assert.deepEqual(comparison.transactions.map((tx) => [tx.txHash, tx.label, tx.aEstimated, tx.bEstimated]), [["0xout", "Cost", true, true]])
+    })
+
+    it("says how much is an estimate, per side when the sides differ", () => {
+      const comparison = compareRules(inherited("300000000000", market), inherited("297000000000", cautious), "average", 20, mine())
+      assert.ok(comparison.warnings.includes(`Market price: ${wording.estimatedSentence("3000000000", "USD")}`))
+      assert.ok(comparison.warnings.includes(`Cautious ETH: ${wording.estimatedSentence("2970000000", "USD")}`))
+    })
+
+    it("marks a value from a market price, and a trade valued by one", () => {
+      const rows = [moved("0xin", 10, ME, AERO, "credit", 10n * E18, STRANGER), moved("0xtrade", 15, ME, AERO, "debit", 5n * E18), moved("0xtrade", 15, ME, VIRTUAL, "credit", 5n * E18)]
+      const by = (rule: typeof market, price: string) => ({ rule, reference: reference("300000000000"), wallet: walletOf(ME, rows, "300000000000", price, { AERO: price }) })
+      const comparison = compareRules(by(market, "2000000"), by(cautious, "1900000"), "average", 20, { ...mine(), linked: [] })
+      const value = ruleRow(comparison, "AERO value")
+      assert.deepEqual([value.a, value.b, value.aEstimated, value.bEstimated], ["10000000", "9500000", true, true])
+      const sold = comparison.transactions.find((tx) => tx.txHash === "0xtrade" && tx.label === "Sold for")!
+      assert.deepEqual([sold.a, sold.b, sold.difference, sold.aEstimated, sold.bEstimated], ["10000000", "9500000", "-500000", true, true])
+    })
+
+    it("doesn't mark what's exact, right beside it", () => {
+      const eth = (usd: string, rule: typeof market) => ({ rule, reference: reference(usd), wallet: walletOf(ME, [moved("0xbuy", 10, ME, USDC_ADDRESS, "debit", 3_000_000_000n), moved("0xbuy", 10, ME, ETH_ADDRESS, "credit", E18), moved("0xgift", 11, ME, ETH_ADDRESS, "credit", E18 / 2n, STRANGER)], usd, null, { ETH: (BigInt(usd) / 100n).toString() }) })
+      const comparison = compareRules(eth("300000000000", market), eth("297000000000", cautious), "fifo", 20, { ...mine(), linked: [] })
+      assert.deepEqual([ruleRow(comparison, "ETH price").aEstimated, ruleRow(comparison, "Network fees").aEstimated, ruleRow(comparison, "Value").aEstimated], [false, false, false])
+      const costs = comparison.transactions.filter((tx) => tx.label === "Cost")
+      assert.deepEqual(costs.map((tx) => [tx.txHash, tx.aEstimated, tx.bEstimated]), [["0xgift", true, true]], "the USDC trade cost the same by both, so only what came at market is listed")
+    })
+
+    it("leaves a side alone when it's unavailable", () => {
+      const comparison = compareRules(inherited("300000000000", market), { ...inherited("297000000000", cautious), linked: [] }, "average", 20, mine())
+      const cost = comparison.transactions.find((tx) => tx.txHash === "0xout")!
+      assert.deepEqual([cost.a, cost.b, cost.difference, cost.aEstimated, cost.bEstimated], ["3000000000", null, null, true, false])
+    })
   })
 
   describe("a transfer between linked wallets carrying several purchases", () => {
@@ -536,7 +597,7 @@ describe("comparing pricing rules", () => {
     const THOUSANDS = "10000000000000000000000"
     const moved = (tx: string, block: number, account: string, token: string, side: LegRow["side"], amount: string): LegRow => ({ block_num: block, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: tx, tx_index: 1, log_index: 0, token, account, side, amount, kind: "erc20" })
     const walletOf = (address: string, rows: LegRow[], eth_usd: string) => {
-      const references = [...new Set(rows.map((r) => r.block_num))].map((block_num) => ({ block_num, eth_usd, usdc_usd: "100000000" }))
+      const references = [...new Set(rows.map((r) => r.block_num))].map((block_num) => ({ blockNum: block_num, ethUsd: eth_usd, usdcUsd: "100000000" }))
       return walletWith({ address, legs: buildPricedLegs({ account: address, rows, references, priced: derivePricedRows(rows, references) }), references, prices: {} })
     }
     const fund = moved("0xfund", 2, OTHER, ETH_ADDRESS, "credit", "300000000000000000")

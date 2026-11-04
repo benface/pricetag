@@ -3,9 +3,8 @@
 // that also moved a token off the allowlist, an opening balance, a balance the legs don't explain, and senders to answer
 // for: another of this user's wallets, a stranger, an exchange address and a bridge. Answering them is the demo.
 
-import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, normalizeAddress, openingLegs, type LegKind, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, normalizeAddress, openingLegs, type CurrencyCode, type LegKind, type LegRow, type Rates, type Reference } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
-import type { CurrencyCode, Rates } from "./currency.ts"
 
 export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
 /** The demo's other wallet. Nothing links them until someone answers that it's theirs. */
@@ -93,17 +92,17 @@ const SAVINGS_FROM = START_BLOCK - 500
 const MARKET: Record<string, string> = { AERO: "1400000", cbBTC: "68000000000", DAI: "1000100", USDT: "999900", VIRTUAL: "2100000" }
 const market = (asset: string) => MARKET[asset] ?? null
 
-function reference(blockOffset: number, ethUsd: number, usdcUsd = 0.9998): ReferenceRow {
+function reference(blockOffset: number, ethUsd: number, usdcUsd = 0.9998): Reference {
   return {
-    block_num: START_BLOCK + blockOffset,
-    eth_usd: String(Math.round(ethUsd * 1e8)),
-    usdc_usd: String(Math.round(usdcUsd * 1e8)),
+    blockNum: START_BLOCK + blockOffset,
+    ethUsd: String(Math.round(ethUsd * 1e8)),
+    usdcUsd: String(Math.round(usdcUsd * 1e8)),
   }
 }
 
 const HEAD_OFFSET = 5400
 
-const references: ReferenceRow[] = [
+const references: Reference[] = [
   reference(-300, 2370),
   reference(0, 2380),
   reference(150, 2392),

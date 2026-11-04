@@ -6,9 +6,9 @@ import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
-import { describeError, isNotStarted } from "@pricetag/sdk"
-import { datasetSource } from "../server/source.ts"
-import { encodeNote } from "../src/core/notes.ts"
+import { datasetSource, describeError, isNotStarted } from "@pricetag/sdk/internal"
+import { resolvingSource } from "../server/source.ts"
+import { encodeNote } from "@pricetag/sdk/core"
 
 /** Sends the path exactly as written, which fetch wouldn't. */
 function get(server: Server, path: string): Promise<{ status: number; body: string }> {
@@ -157,7 +157,7 @@ describe("what a dataset adds to a wallet's rows", () => {
       if (sql.includes("base\".transactions")) return [{ tx_hash: "bb", from: SENDER, to: ME }] as T[]
       return [] as T[]
     }
-    const { rows } = await datasetSource(query, config).readWindow(`0x${ME}`, 1, 10)
+    const { rows } = await resolvingSource(query, config).readWindow(`0x${ME}`, 1, 10)
     assert.deepEqual(rows.map((r) => r.counterparty), [`0x${SENDER}`, `0x${SENDER}`])
     const raw = queries.filter((q) => q.includes('"base"'))
     assert.equal(raw.length, 2)
@@ -167,23 +167,23 @@ describe("what a dataset adds to a wallet's rows", () => {
   it("doesn't touch the raw tables for a wallet with nothing to look up", async () => {
     const queries: string[] = []
     const query = async <T>(sql: string) => (queries.push(sql), [] as T[])
-    await datasetSource(query, config).readWindow(`0x${ME}`, 1, 10)
+    await resolvingSource(query, config).readWindow(`0x${ME}`, 1, 10)
     assert.ok(!queries.some((q) => q.includes('"base"')))
   })
 
   it("only trusts priced_legs from a dataset that has the fix for its wrong rows", async () => {
-    const answer = (error: unknown) => datasetSource(async () => Promise.reject(error), config)
+    const answer = (error: unknown) => resolvingSource(async () => Promise.reject(error), config)
     assert.equal(await answer(new Error("Error during planning: table 'amp.benface/pricetag_scratch@0.0.4.unlisted_moves' not found")).marketReady!(), false)
     assert.equal(await answer(notStarted).marketReady!(), true, "it has the table, and hasn't written to it yet")
     await assert.rejects(answer(new Error("connection refused")).marketReady!(), "an outage says nothing about the dataset")
-    assert.equal(await datasetSource(async <T>() => [] as T[], config).marketReady!(), true)
+    assert.equal(await resolvingSource(async <T>() => [] as T[], config).marketReady!(), true)
   })
 
   it("reads an asset's trades in a range, newest first, keeping only plausible prices", async () => {
     const queries: string[] = []
     const row = (usd_micros: string) => ({ block_num: 9, tx_hash: "aa", sold_token: "833589fcd6edb6e08f4c7c32d4f71b54bda02913", sold_amount: "500000000", bought_token: "940181a94a35a4569e4529a3cdfb74e38fd98631", bought_amount: "400000000000000000000", priced: { token: "AERO", usd_micros, source: "swap" }, eth_usd: "240000000000" })
     const query = async <T>(sql: string) => (queries.push(sql), [row("1250000"), row("6600000000000")] as T[])
-    const trades = await datasetSource(query, config).readMarketTrades!("AERO'; DROP", 100, 200)
+    const trades = await resolvingSource(query, config).readMarketTrades!("AERO'; DROP", 100, 200)
     assert.deepEqual(trades, [{ blockNum: 9, txHash: "0xaa", asset: "AERO", usdMicros: "1250000", notionalUsdMicros: "500000000" }])
     assert.match(queries[0]!, /block_num BETWEEN 100 AND 200/)
     assert.match(queries[0]!, /get_field\(priced, 'token'\) = 'AERODROP'/)
@@ -194,7 +194,7 @@ describe("what a dataset adds to a wallet's rows", () => {
     const queries: string[] = []
     const hash = `0x${"ab".repeat(32)}`
     const query = async <T>(sql: string) => (queries.push(sql), [{ block_num: 5, tx_hash: "cc", input: encodeNote(hash, "USDC", "5").slice(2) }, { block_num: 5, tx_hash: "dd", input: "abcd" }] as T[])
-    const notes = await datasetSource(query, config).readNotes!(`0x${ME}`, [5])
+    const notes = await resolvingSource(query, config).readNotes!(`0x${ME}`, [5])
     assert.deepEqual(notes, [{ txHash: hash, asset: "USDC", usdMicros: "5", noteTx: "0xcc", blockNum: 5 }])
     assert.match(queries[0]!, new RegExp(`"from" = X'${ME}' AND "to" = X'${ME}' AND status AND value = '0'`))
   })
