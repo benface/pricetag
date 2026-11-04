@@ -5,7 +5,7 @@
 // Writes dataset/cautious-eth.json with --fork: the fork, with one pricing rule changed. FORK_OF names what it forks, which has
 // to be registered where AMP_ADMIN_URL points.
 //
-//   FORK_OF=benface/pricetag_scratch@0.0.5 AMP_ADMIN_URL=... node dataset/build.ts --fork [start block]
+//   FORK_OF=benface/pricetag@0.0.1 AMP_ADMIN_URL=... node dataset/build.ts --fork [start block]
 //
 // It needs an Amp with edgeandnode/base_mainnet@0.0.2 registered, and only reads from it. What a table can look like
 // comes from WORK-319: every table needs its own top-level `block_num()` filter, at most one join, explicit columns,
@@ -330,7 +330,7 @@ async function build() {
   const args = process.argv.slice(2)
   if (args[0] === "--fork") {
     const forkOf = process.env.FORK_OF
-    if (!forkOf) throw new Error("Set FORK_OF to the dataset this forks, like benface/pricetag_scratch@0.0.5")
+    if (!forkOf) throw new Error("Set FORK_OF to the dataset this forks, like benface/pricetag@0.0.1")
     const start = Number(args[1] ?? startOf(CAUTIOUS_MANIFEST))
     const { pt_price } = functions()
     const pt_cautious = { inputTypes: ["Utf8"], outputType: "Utf8", source: { source: ptCautiousSource(), filename: "pt_cautious.js" } }
