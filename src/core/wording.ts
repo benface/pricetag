@@ -2,9 +2,8 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import type { CostLabel, FoldLeg, Method, PriceSource } from "@pricetag/sdk/core"
+import { formatDuration, type CostLabel, type FoldLeg, type Method, type PriceSource } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
-import { formatDuration } from "./format.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
 export const METHOD_NAME = "How cost is worked out"

@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react"
-import type { Method } from "@pricetag/sdk/core"
-import type { CurrencyCode } from "../core/currency.ts"
-import { formatMoney, formatPrice, formatSignedMoney, formatTime } from "../core/format.ts"
+import { formatMoney, formatPrice, formatSignedMoney, formatTime, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { PricingRule, RuleComparison, RuleRow } from "../core/rules.ts"
 import { RULES_HELP, RULES_TITLE, shortManifestHash } from "../core/wording.ts"
 

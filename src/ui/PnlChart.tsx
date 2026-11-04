@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import type { PnlPoint } from "@pricetag/sdk/core"
-import { CURRENCIES, type CurrencyCode } from "../core/currency.ts"
-import { formatClock, formatSignedMoney, formatTime } from "../core/format.ts"
+import { CURRENCIES, formatClock, formatSignedMoney, formatTime, type CurrencyCode, type PnlPoint } from "@pricetag/sdk/core"
 import { NOTHING_TO_CHART, PNL_HELP } from "../core/wording.ts"
 
 const HEIGHT = 220

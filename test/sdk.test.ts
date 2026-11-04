@@ -1,11 +1,14 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
 import { createServer } from "node:http2"
-import type { AddressInfo } from "node:net"
+import { createServer as createNetServer, type AddressInfo, type Socket } from "node:net"
 import { describe, it } from "node:test"
-import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, createQuery, datasetReader, foldPositions, pnlStatus, sumTotals } from "@pricetag/sdk"
+import { createPricetag } from "@pricetag/sdk"
+import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPrice, formatSignedMoney, formatMoney, pnlStatus, sumTotals } from "@pricetag/sdk/core"
+import { createQuery, createWallets, datasetReader, datasetSource, pricetagClient, type Query, type ReadL1Fees } from "@pricetag/sdk/internal"
+import { portfolioOf } from "../server/portfolio.ts"
 import { DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
-import { fakeAmp } from "./support/fake-amp.ts"
+import { fakeAmp, type Tables } from "./support/fake-amp.ts"
 
 const ME = "00000000000000000000000000000000000000aa"
 const POOL = "00000000000000000000000000000000000000bb"
@@ -310,7 +313,401 @@ describe("pnlStatus", () => {
   })
 })
 
+describe("getPortfolio", () => {
+  const HEAD = { blockNum: 200, timestamp: new Date(1_800_000_000_000).toISOString() }
+  const reference = { block_num: "100", eth_usd: ETH_ANSWER, usdc_usd: USDC_ANSWER }
+  const latest = { ...reference, block_num: "199" }
+  const ETH = "0000000000000000000000000000000000000000"
+  // A wallet with history before the first block read: it holds ETH and USDC, sells USDC for AERO and pays gas.
+  const TABLES = {
+    legs: [
+      leg("aa", ETH, ME, "debit", "1000", "gas"),
+      leg("aa", USDC, ME, "debit", "1000000000", "erc20"),
+      leg("aa", AERO, ME, "credit", String(500n * E18), "erc20"),
+    ],
+    priced_legs: [pricedRow("aa", USDC, "1000000000", AERO, String(500n * E18), swapTo("2000000"))],
+    reference_prices: [reference, latest],
+    balances: {
+      49: { ETH: String(E18), USDC: "3000000000" },
+      200: { ETH: String(E18 - 1024n), USDC: "2000000000", AERO: String(500n * E18) },
+    },
+  }
+  const readFees: ReadL1Fees = async (requests) => new Map(requests.map(({ txHash }) => [txHash, "24"]))
+
+  it("gives the same answer as the app, with opening balances, reconciliation and L1 fees", async () => {
+    const { query, client } = fakeAmp(TABLES, 200, { readL1Fees: readFees })
+    const source = datasetSource(query, { dataset: "benface/pricetag@0.0.1", baseDataset: "edgeandnode/base_mainnet@0.0.2", startBlock: 50, network: "base_mainnet" })
+    const app = portfolioOf(await createWallets(source, async () => HEAD, readFees).get(`0x${ME}`), "fifo")
+    const sdk = await client.getPortfolio(`0x${ME}`, { method: "fifo", from: 50 })
+
+    assert.deepEqual(sdk.totals, app.totals)
+    assert.equal(sdk.pnlStatus, app.pnlStatus)
+    assert.deepEqual(sdk.points, app.points)
+    assert.deepEqual(sdk.blocks, app.coverage)
+    assert.deepEqual(sdk.positions.map((p) => [p.asset, p.values, p.reconciliation, p.price]), app.positions.map((p) => [p.asset, p.values, p.reconciliation, p.price]))
+    assert.deepEqual(sdk.positions.map((p) => [p.asset, p.reconciliation?.status]), [["ETH", "reconciled"], ["USDC", "reconciled"], ["AERO", "reconciled"]])
+    assert.equal(sdk.l1Fees, "read")
+    // The opening legs count: USDC's sale came out of what it already held, so that PnL is left out rather than $0.
+    assert.equal(sdk.legs.filter((l) => l.opening).length, 2)
+    assert.match(sdk.missing.join(), /USDC/)
+  })
+
+  it("says L1 fees are missing without an RPC URL, and leaves ETH unchecked", async () => {
+    const { client } = fakeAmp(TABLES, 200, { startBlock: 50 })
+    const { l1Fees, l1FeeUnknownTxs, positions, missing } = await client.getPortfolio(`0x${ME}`)
+    assert.equal(l1Fees, "no rpc url")
+    assert.deepEqual(l1FeeUnknownTxs, ["0xaa"])
+    assert.equal(positions.find((p) => p.asset === "ETH")!.reconciliation?.status, "unchecked")
+    assert.match(missing.join(), /the L1 fees of 1 tx/)
+  })
+
+  it("has nothing to read in L1 fees for a wallet that sent nothing", async () => {
+    const { client } = fakeAmp({ legs: [leg("aa", USDC, ME, "credit", "5", "erc20")], reference_prices: [latest], balances: { 49: {}, 200: { USDC: "5" } } }, 200, { startBlock: 50 })
+    const { l1Fees, pnlStatus: status, missing } = await client.getPortfolio(`0x${ME}`)
+    assert.equal(l1Fees, "read")
+    assert.notEqual(status, "complete")
+    assert.ok(missing.length > 0)
+  })
+
+  it("gives no totals before anything's been processed, rather than $0", async () => {
+    const { client, queries } = fakeAmp({}, null, { startBlock: 50 })
+    const { started, blocks, positions, totals, pnlStatus: status, missing } = await client.getPortfolio(`0x${ME}`)
+    assert.equal(started, false)
+    assert.deepEqual(blocks, { fromBlock: 50, toBlock: 49 })
+    assert.deepEqual(positions, [])
+    assert.deepEqual([totals.valueMicros, totals.realizedMicros, totals.unrealizedMicros, totals.gasMicros, totals.pnlMicros], [null, null, null, null, null])
+    assert.equal(status, "unavailable")
+    assert.match(missing.join(), /hasn't processed block 50/)
+    assert.ok(!queries.some((q) => q.includes("eth_call")))
+  })
+
+  it("gives no totals when the chain has no blocks yet", async () => {
+    const queries: string[] = []
+    const client = pricetagClient(async (sql) => (queries.push(sql), []), { dataset: "benface/pricetag@0.0.1", startBlock: 50 })
+    const { started, totals } = await client.getPortfolio(`0x${ME}`)
+    assert.equal(started, false)
+    assert.equal(totals.pnlMicros, null)
+    assert.equal(queries.length, 1)
+  })
+
+  it("reads a wallet as of `to`, with that block's prices", async () => {
+    const { client, queries } = fakeAmp({ ...TABLES, balances: { 49: TABLES.balances[49], 150: TABLES.balances[200] } }, 200, { startBlock: 50, readL1Fees: readFees })
+    const { blocks, positions } = await client.getPortfolio(`0x${ME}`, { to: 150 })
+    assert.deepEqual(blocks, { fromBlock: 50, toBlock: 150 })
+    assert.equal(positions.find((p) => p.asset === "AERO")!.reconciliation?.status, "reconciled")
+    assert.ok(queries.some((q) => q.includes("reference_prices WHERE block_num BETWEEN 90 AND 150")))
+    assert.ok(queries.some((q) => /\.legs WHERE block_num BETWEEN 50 AND 150/.test(q)))
+  })
+
+  it("keeps a wallet's rows between calls, so a second call only reads what's new", async () => {
+    let block = 200
+    const queries: string[] = []
+    const { query } = fakeAmp(TABLES, 200)
+    const moving: Query = async <T,>(sql: string) => {
+      queries.push(sql)
+      if (sql.includes(".blocks")) return [{ block_num: String(block), timestamp: 1_800_000_000_000 }] as T[]
+      return query<T>(sql)
+    }
+    const client = pricetagClient(moving, { dataset: "benface/pricetag@0.0.1", startBlock: 50 })
+    await client.getPortfolio(`0x${ME}`)
+    assert.equal(queries.filter((q) => /\.legs WHERE block_num BETWEEN 50 AND 200/.test(q)).length, 1)
+    block = 201
+    await client.getPortfolio(`0x${ME}`)
+    assert.equal(queries.filter((q) => /\.legs WHERE block_num BETWEEN 50 AND/.test(q)).length, 1)
+  })
+
+  describe("a read with a `to`, near the chain's head", () => {
+    const ADDRESS = `0x${ME}`
+    const creditAt = (block: number, amount: bigint) => ({ ...leg("aa", ETH, ME, "credit", String(amount), "eth"), block_num: String(block) })
+    const gasAt = (block: number, tx: string) => ({ ...leg(tx, ETH, ME, "debit", "1000", "gas"), block_num: String(block) })
+    const refsThrough = (block: number) => [{ ...reference, block_num: String(block) }]
+
+    /** A fake chain whose head and tables a test can change, and a client that reads it, the same way each time. */
+    function chainAt(block: number, tables: Tables, readL1Fees?: ReadL1Fees) {
+      const chain = { block, tables, queries: [] as string[] }
+      const query: Query = async <T,>(sql: string) => {
+        chain.queries.push(sql)
+        if (sql.includes(".blocks")) return [{ block_num: String(chain.block), timestamp: 1_800_000_000_000 }] as T[]
+        return fakeAmp(chain.tables, chain.block).query<T>(sql)
+      }
+      const client = () => pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 50, readL1Fees })
+      return { chain, client }
+    }
+    const summary = async (client: ReturnType<typeof pricetagClient>) => {
+      const { positions, totals } = await client.getPortfolio(ADDRESS, { to: 200 })
+      return { positions: positions.map((p) => [p.asset, p.values.qty, p.values.valueMicros, p.reconciliation?.status]), totals }
+    }
+
+    const before = { legs: [creditAt(195, E18)], reference_prices: refsThrough(195), balances: { 49: {}, 200: { ETH: String(E18) } } }
+    const reorged = { ...before, legs: [creditAt(195, 2n * E18)], balances: { 49: {}, 200: { ETH: String(2n * E18) } } }
+
+    it("matches a fresh client after a shallow reorg", async () => {
+      const { chain, client } = chainAt(200, before)
+      const kept = client()
+      assert.equal((await summary(kept)).positions[0]![1], String(E18))
+      chain.tables = reorged
+      chain.block = 201
+      const after = await summary(kept)
+      assert.equal(after.positions[0]![1], String(2n * E18))
+      assert.deepEqual(after, await summary(client()))
+    })
+
+    it("still catches a reorg on the block that leaves the window, and then stops reading", async () => {
+      const { chain, client } = chainAt(200, before)
+      const kept = client()
+      await summary(kept)
+      // The tables change before anything's read again, and the first read after that is the one past the window.
+      chain.tables = reorged
+      chain.block = 230
+      assert.equal((await summary(kept)).positions[0]![1], String(2n * E18))
+      chain.tables = before
+      chain.block = 231
+      chain.queries.length = 0
+      assert.equal((await summary(kept)).positions[0]![1], String(2n * E18))
+      assert.ok(!chain.queries.some((q) => q.includes("eth_call") || q.includes(".legs")), chain.queries.join("; "))
+    })
+
+    it("doesn't read it again without a new block", async () => {
+      const { chain, client } = chainAt(201, before)
+      const kept = client()
+      await summary(kept)
+      chain.queries.length = 0
+      await summary(kept)
+      assert.ok(!chain.queries.some((q) => q.includes("eth_call") || q.includes(".legs")), chain.queries.join("; "))
+    })
+
+    it("reads what's far from the head once", async () => {
+      const { chain, client } = chainAt(500, before)
+      const kept = client()
+      await summary(kept)
+      chain.block = 501
+      chain.queries.length = 0
+      await summary(kept)
+      assert.ok(!chain.queries.some((q) => q.includes("eth_call") || q.includes(".legs")), chain.queries.join("; "))
+    })
+
+    it("still retries what's missing, without a new block", async () => {
+      const { chain, client } = chainAt(500, { ...before, balances: { 49: {} } })
+      const kept = client()
+      assert.equal((await kept.getPortfolio(ADDRESS, { to: 200 })).positions[0]!.reconciliation?.status, "unchecked")
+      chain.tables = before
+      assert.equal((await kept.getPortfolio(ADDRESS, { to: 200 })).positions[0]!.reconciliation?.status, "reconciled")
+    })
+
+    it("reads a transaction's L1 fee again once it's past the window, and only then", async () => {
+      const tables = { legs: [gasAt(195, "bb")], reference_prices: refsThrough(195), balances: { 49: { ETH: String(E18) }, 200: { ETH: String(E18 - 1000n) } } }
+      const reads: string[] = []
+      const fee = { amount: "0" }
+      const readFees: ReadL1Fees = async (requests) => {
+        reads.push(...requests.map((r) => r.txHash))
+        return new Map(requests.map(({ txHash }) => [txHash, fee.amount]))
+      }
+      const { chain, client } = chainAt(200, tables, readFees)
+      const kept = client()
+      await summary(kept)
+      assert.equal(reads.length, 1)
+      chain.block = 210
+      await summary(kept)
+      assert.equal(reads.length, 1)
+      fee.amount = "24"
+      chain.tables = { ...tables, balances: { ...tables.balances, 200: { ETH: String(E18 - 1024n) } } }
+      chain.block = 230
+      const { positions } = await summary(kept)
+      assert.equal(reads.length, 2)
+      assert.deepEqual(positions[0]!.slice(1, 2).concat(positions[0]![3]), [String(E18 - 1024n), "reconciled"])
+      chain.block = 231
+      await summary(kept)
+      assert.equal(reads.length, 2)
+    })
+
+    it("picks up a reorg of what the wallet held before a first block near the head", async () => {
+      const opening = (amount: bigint) => ({ legs: [creditAt(195, 5n)], reference_prices: refsThrough(195), balances: { 189: { ETH: String(amount) }, 200: { ETH: String(amount + 5n) } } })
+      const { chain, client } = chainAt(200, opening(E18))
+      const kept = client()
+      const read = async () => (await kept.getPortfolio(ADDRESS, { from: 190, to: 200 })).legs.find((l) => l.opening)?.delta
+      assert.equal(await read(), String(E18))
+      chain.tables = opening(2n * E18)
+      chain.block = 201
+      assert.equal(await read(), String(2n * E18))
+    })
+
+    describe("with an unwrap credit that only the balance can confirm", () => {
+      const ethReads = (queries: string[]) => queries.filter((q) => q.includes("X'4d2301cc")).length
+      const claimAt = (block: number) => ({ ...leg("bb", ETH, ME, "credit", "5", "unwrap"), block_num: String(block) })
+      const claim = { legs: [gasAt(195, "bb"), claimAt(195)], reference_prices: refsThrough(195), balances: { 49: { ETH: String(E18) }, 200: { ETH: String(E18) } } }
+
+      it("still retries a block's ETH balance without a new block, then stops", async () => {
+        const { chain, client } = chainAt(500, claim, async (requests) => new Map(requests.map(({ txHash }) => [txHash, "0"])))
+        const kept = client()
+        await summary(kept)
+        chain.queries.length = 0
+        await summary(kept)
+        assert.ok(ethReads(chain.queries) > 0, "a missing balance is read again")
+        chain.tables = { ...claim, ethBalances: { 194: String(E18), 195: String(E18) } }
+        await summary(kept)
+        chain.queries.length = 0
+        await summary(kept)
+        assert.equal(ethReads(chain.queries), 0)
+      })
+
+      it("keeps its L1 fee as current as the balance on each new block, until it's past the window", async () => {
+        const reads: string[] = []
+        const readFees: ReadL1Fees = async (requests) => {
+          reads.push(...requests.map((r) => r.txHash))
+          return new Map(requests.map(({ txHash }) => [txHash, "0"]))
+        }
+        const { chain, client } = chainAt(200, { ...claim, ethBalances: { 194: String(E18), 195: String(E18) } }, readFees)
+        const kept = client()
+        await summary(kept)
+        assert.equal(reads.length, 1)
+        chain.block = 201
+        await summary(kept)
+        assert.equal(reads.length, 2)
+        chain.block = 240
+        await summary(kept)
+        assert.equal(reads.length, 3)
+        chain.block = 241
+        await summary(kept)
+        assert.equal(reads.length, 3)
+      })
+    })
+
+    for (const [name, range] of [["with a `to`", { from: 190, to: 200 }], ["without a `to`", { from: 190 }]] as const) {
+      describe(`an opening balance put together from reads that each failed for one asset, ${name}`, () => {
+        const CLOSING_BLOCKS = [200, 201, 202, 240, 241, 250, 251]
+        const tables = (opening: Record<string, string | null>, held: bigint) => ({
+          legs: [creditAt(195, 5n)],
+          reference_prices: refsThrough(195),
+          balances: { 189: opening, ...Object.fromEntries(CLOSING_BLOCKS.map((block) => [block, { ETH: String(held + 5n) }])) },
+        })
+        const summaryOf = async (client: ReturnType<typeof pricetagClient>) => {
+          const { legs, positions } = await client.getPortfolio(ADDRESS, range)
+          return { opening: legs.find((l) => l.opening)?.delta, status: positions.find((p) => p.asset === "ETH")?.reconciliation?.status }
+        }
+
+        /** Each read misses a different asset, so together they make a whole opening balance. */
+        async function assemble() {
+          const { chain, client } = chainAt(200, tables({ ETH: String(E18), USDC: null }, E18))
+          const kept = client()
+          await summaryOf(kept)
+          chain.tables = tables({ ETH: null, USDC: "0" }, E18)
+          chain.block = 201
+          assert.deepEqual(await summaryOf(kept), { opening: String(E18), status: "reconciled" })
+          return { chain, client, kept }
+        }
+
+        it("still picks up a reorg, and matches a fresh client", async () => {
+          const { chain, client, kept } = await assemble()
+          chain.tables = tables({ ETH: String(2n * E18), USDC: "0" }, 2n * E18)
+          chain.block = 202
+          const after = await summaryOf(kept)
+          assert.deepEqual(after, { opening: String(2n * E18), status: "reconciled" })
+          assert.deepEqual(after, await summaryOf(client()))
+          chain.block = 240
+          assert.deepEqual(await summaryOf(kept), after)
+          chain.block = 250
+          assert.deepEqual(await summaryOf(kept), after)
+        })
+
+        it("stops reading it once a read of every asset is past the window", async () => {
+          const { chain, kept } = await assemble()
+          chain.tables = tables({ ETH: String(E18), USDC: "0" }, E18)
+          chain.block = 240
+          await summaryOf(kept)
+          chain.block = 250
+          chain.queries.length = 0
+          await summaryOf(kept)
+          assert.ok(!chain.queries.some((q) => q.includes(", 189) AS r")), chain.queries.join("; "))
+        })
+
+        it("keeps trying an asset whose read past the window failed, then stops", async () => {
+          const { chain, kept } = await assemble()
+          // A reorg, and the one read that would have caught it fails for that asset.
+          chain.tables = tables({ ETH: null, USDC: "0" }, 2n * E18)
+          chain.block = 240
+          await summaryOf(kept)
+          chain.tables = tables({ ETH: String(2n * E18), USDC: "0" }, 2n * E18)
+          chain.block = 241
+          assert.deepEqual(await summaryOf(kept), { opening: String(2n * E18), status: "reconciled" })
+          chain.block = 250
+          chain.queries.length = 0
+          await summaryOf(kept)
+          assert.ok(!chain.queries.some((q) => q.includes(", 189) AS r")), chain.queries.join("; "))
+        })
+      })
+    }
+  })
+
+  it("needs a first block from somewhere, and checks the rest", async () => {
+    const { client } = fakeAmp({})
+    await assert.rejects(client.getPortfolio(`0x${ME}`), /No first block/)
+    await assert.rejects(client.getLegs(`0x${ME}`), /No first block/)
+    await assert.rejects(client.getPortfolio(`0x${ME}`, { from: 50, to: 10 }), /Bad block range/)
+    await assert.rejects(client.getPortfolio("nope", { from: 50 }), /isn't a Base address/)
+    assert.throws(() => fakeAmp({}, 200, { startBlock: Number(undefined) }), /Bad start block/)
+  })
+
+  it("makes `from` optional on the lower-level calls too", async () => {
+    const { client } = fakeAmp({ reference_prices: [{ ...reference, timestamp: 1_800_000_000_000 }] }, 200, { startBlock: 50 })
+    assert.deepEqual((await client.getLegs(`0x${ME}`)).blocks, { fromBlock: 50, toBlock: 200 })
+    assert.deepEqual((await client.getPrices("ETH")).blocks, { fromBlock: 50, toBlock: 200 })
+    assert.deepEqual((await client.getLegs(`0x${ME}`, { from: 60 })).blocks, { fromBlock: 60, toBlock: 200 })
+  })
+})
+
+describe("the client's options", () => {
+  const ADDRESS = `0x${ME}`
+
+  it("sends a read that failed to the caller's logger, not the console", async () => {
+    const warnings: string[] = []
+    const { query } = fakeAmp({})
+    const failing: Query = (sql) => (sql.includes("eth_call") ? Promise.reject({ cause: { rawMessage: "rpc is down" } }) : query(sql))
+    const client = pricetagClient(failing, { dataset: "benface/pricetag@0.0.1", startBlock: 50, logger: { warn: (message) => warnings.push(message) } })
+    const { unreadAssets } = await client.getPortfolio(ADDRESS)
+    assert.ok(unreadAssets.includes("ETH"))
+    assert.ok(warnings.some((w) => w.includes("rpc is down")))
+  })
+
+  it("stops a query at the timeout, and says so", async () => {
+    // Accepts connections and never answers. Its sockets have to be closed here, or the client's would keep this process alive.
+    const sockets: Socket[] = []
+    const server = createNetServer((socket) => void sockets.push(socket.on("error", () => {})))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    try {
+      const { port } = server.address() as AddressInfo
+      const client = createPricetag({ url: `http://127.0.0.1:${port}`, dataset: "benface/pricetag@0.0.1", startBlock: 50, timeoutMs: 50 })
+      await assert.rejects(client.getLatestPrices(), { message: "Query timed out after 50 ms" })
+    } finally {
+      for (const socket of sockets) socket.destroy()
+      server.close()
+    }
+  })
+
+  it("puts Amp's message on the error, and keeps the rest as its cause", async () => {
+    const client = createPricetag({ url: "http://127.0.0.1:1", dataset: "benface/pricetag@0.0.1", startBlock: 50 })
+    await assert.rejects(client.getLatestPrices(), (error: Error) => {
+      assert.ok(error.message.length > 0)
+      assert.ok(error.cause)
+      return true
+    })
+  })
+})
+
+describe("the formatters", () => {
+  it("print unknown as unknown, never as $0", () => {
+    assert.equal(formatMoney(null), "unknown")
+    assert.equal(formatSignedMoney(null), "unknown")
+    assert.equal(formatPrice(null), "unknown")
+    assert.equal(formatMoney("0"), "$0.00")
+  })
+})
+
 describe("the package boundary", () => {
+  it("keeps the public API small", async () => {
+    const sdk = await import("@pricetag/sdk")
+    assert.deepEqual(Object.keys(sdk).sort(), ["ASSETS", "TOKENS", "buildPortfolio", "createPricetag", "describeError", "formatAmount", "formatMoney", "formatPrice", "formatSignedAmount", "formatSignedMoney", "isAddress", "pnlOverTime", "pnlStatus", "referenceMarks", "shortHash"])
+  })
+
   const sdkFile = (name: string) => readFileSync(new URL(`../packages/sdk/src/${name}`, import.meta.url), "utf8")
 
   it("keeps the Amp client out of what browsers load", () => {
@@ -324,7 +721,7 @@ describe("the package boundary", () => {
       }
     }
     walk("core.ts")
-    assert.deepEqual([...seen].sort(), ["core.ts", "fold.ts", "legs.ts", "portfolio.ts", "reconcile.ts", "tokens.ts"])
+    assert.deepEqual([...seen].sort(), ["core.ts", "currency.ts", "fold.ts", "format.ts", "legs.ts", "portfolio.ts", "reconcile.ts", "tokens.ts", "wallet.ts"])
   })
 
   it("has the app's browser code import only that part", () => {

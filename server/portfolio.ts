@@ -1,9 +1,8 @@
 // The portfolio a wallet's legs fold into, for clients that don't run the fold themselves.
 // One source of PnL logic: this calls what the browser calls, and adds nothing to the math.
 
-import { TOKENS, answerToMicros, foldPositions, worth, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Method, type Position, type PricedLeg, type ReferenceRow, type Totals } from "@pricetag/sdk/core"
+import { TOKENS, answerToMicros, foldWallet, worth, viewWallet, type CurrencyCode, type WalletView, type LegEffect, type Method, type Position, type PricedLeg, type Reference, type Totals } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
-import { viewWallet, type CurrencyCode, type WalletView } from "../src/core/currency.ts"
 import { inheritCosts } from "../src/core/linked.ts"
 import { describeConversion, describeEffect, describeNetting, explainContext, explainTarget, missingRatesLine, rateSource, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
 import { differenceOf, whySentence, type PricingRule, type RuleComparison, type RuleRow, type RuleTransaction } from "../src/core/rules.ts"
@@ -57,10 +56,7 @@ function viewWithLinkedCosts(wallet: WalletResponse, linked: readonly WalletResp
 }
 
 export function portfolioOf(wallet: WalletResponse, method: Method, linked: readonly WalletResponse[] = []): PortfolioResponse {
-  const view = viewWithLinkedCosts(wallet, linked, method)
-  const positions = foldPositions(view.legs, method, view.prices, wallet)
-  const unread = unreadAssets(positions, wallet)
-  const totals = sumTotals(positions, unread)
+  const { view, positions, unreadAssets, totals, pnlStatus, points } = foldWallet(wallet, method, viewWithLinkedCosts(wallet, linked, method))
   return {
     address: wallet.address,
     mode: wallet.mode,
@@ -78,11 +74,11 @@ export function portfolioOf(wallet: WalletResponse, method: Method, linked: read
     unlisted: wallet.unlisted,
     l1FeeUnknownTxs: wallet.l1FeeUnknownTxs,
     openingUnread: wallet.openingUnread,
-    unreadAssets: unread,
+    unreadAssets,
     positions: positions.map(positionOf),
     totals,
-    pnlStatus: pnlStatus(totals, wallet.gasUnknownTxs),
-    points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread)),
+    pnlStatus,
+    points,
   }
 }
 
@@ -110,11 +106,7 @@ function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg {
 
 /** The same explanation the web panel shows for a click on this number. null when the wallet has no such asset or transaction. */
 export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget, linked: readonly WalletResponse[] = []): ExplanationResponse | null {
-  const view = viewWithLinkedCosts(wallet, linked, method)
-  const positions = foldPositions(view.legs, method, view.prices, wallet)
-  const unread = unreadAssets(positions, wallet)
-  const totals = sumTotals(positions, unread)
-  const points = pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread))
+  const { view, positions, totals, points } = foldWallet(wallet, method, viewWithLinkedCosts(wallet, linked, method))
   const explanation = explainTarget(target, { positions, totals, points }, explainContext(wallet, view, method))
   if (!explanation) return null
   return {
@@ -190,7 +182,7 @@ function combinedWarnings(a: PricingRule, left: readonly string[], b: PricingRul
   return [...left.filter((w) => right.includes(w)), ...only(a, left, right), ...only(b, right, left)]
 }
 
-type Compared = { rule: PricingRule; wallet: WalletResponse; reference: ReferenceRow | null; linked?: readonly WalletResponse[] }
+type Compared = { rule: PricingRule; wallet: WalletResponse; reference: Reference | null; linked?: readonly WalletResponse[] }
 
 /** One wallet by two rules, both folded by the same code, so the rule is all that can differ. */
 export function compareRules(a: Compared, b: Compared, method: Method, blockNum: number): RuleComparison {
@@ -211,7 +203,7 @@ export function compareRules(a: Compared, b: Compared, method: Method, blockNum:
     return rowOf(label, format, left.totals[key], right.totals[key], [x.missing > 0, y.missing > 0], sameMakeup && x.known === y.known && x.missing === y.missing)
   }
   const rows: RuleRow[] = [
-    rowOf("ETH price", "usdPrice", answerToMicros(a.reference?.eth_usd), answerToMicros(b.reference?.eth_usd)),
+    rowOf("ETH price", "usdPrice", answerToMicros(a.reference?.ethUsd), answerToMicros(b.reference?.ethUsd)),
     totals("pnlMicros", "pnl", "Total PnL", "signed"),
     totals("realizedMicros", "realized", "Realized", "signed"),
     totals("unrealizedMicros", "unrealized", "Unrealized", "signed"),

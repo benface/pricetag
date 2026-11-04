@@ -1,7 +1,7 @@
 // Cost carried between a user's own wallets. A transfer between them isn't a purchase: the receiver takes on what the
 // sender paid, labeled `inherited`. Whatever was unknown on the way out stays unknown on the way in.
 
-import { applyLeg, emptyPosition, lotsTaken, type LegRow, type Method, type PositionState, type PricedLeg, type TakenLot } from "@pricetag/sdk/core"
+import { applyLeg, emptyPosition, lotsTaken, type LegPart, type Method, type PositionState, type PricedLeg, type TakenLot } from "@pricetag/sdk/core"
 
 type Debit = { wallet: string; leg: PricedLeg; lots: TakenLot[] }
 type Credit = { wallet: string; leg: PricedLeg; index: number }
@@ -15,7 +15,7 @@ function byTime(a: Event, b: Event): number {
   return x.blockNum - y.blockNum || x.txIndex - y.txIndex || (x.txHash < y.txHash ? -1 : x.txHash > y.txHash ? 1 : 0)
 }
 
-const sameLog = (a: LegRow, b: LegRow) => a.token === b.token && a.log_index === b.log_index && a.amount === b.amount
+const sameLog = (a: LegPart, b: LegPart) => a.token === b.token && a.logIndex === b.logIndex && a.amount === b.amount
 
 /**
  * Whether this debit and credit can be the same transfer. Each log names both sides, so when there are rows to compare,

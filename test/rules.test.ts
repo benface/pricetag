@@ -7,7 +7,7 @@ import type { PortfolioResponse } from "../src/core/api.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule, type RuleComparison } from "../src/core/rules.ts"
 import { createApi } from "../server/app.ts"
 import type { Proofs } from "../server/proof.ts"
-import type { Source } from "../server/source.ts"
+import type { Source } from "@pricetag/sdk/internal"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 const OTHER = "0x00000000000000000000000000000000000000bb"
@@ -23,7 +23,7 @@ const ROWS: Record<string, LegRow[]> = {
 
 /** What a wallet's rows look like through one rule: the same rows, with ETH at this price. */
 function sourceAt(ethAnswer: bigint, through = HEAD, reads: string[] = []): Source {
-  const reference = (block_num: number) => ({ block_num, eth_usd: ethAnswer.toString(), usdc_usd: "100000000" })
+  const reference = (block_num: number) => ({ blockNum: block_num, ethUsd: ethAnswer.toString(), usdcUsd: "100000000" })
   return {
     mode: "dataset",
     startBlock: 1,
@@ -211,7 +211,7 @@ describe("comparing only ever shows the rule", () => {
   })
 
   it("won't compare when the rules' current prices are from different blocks", async () => {
-    const { status } = await compareWith({}, { readLatestReference: async (head) => ({ block_num: head - 1, eth_usd: "1", usdc_usd: "1" }) })
+    const { status } = await compareWith({}, { readLatestReference: async (head) => ({ blockNum: head - 1, ethUsd: "1", usdcUsd: "1" }) })
     assert.equal(status, 409)
   })
 

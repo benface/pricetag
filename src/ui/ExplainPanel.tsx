@@ -1,7 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react"
-import type { LegEffect } from "@pricetag/sdk/core"
-import type { CurrencyCode } from "../core/currency.ts"
-import { formatPrice, formatSignedAmount, formatTime, shortHash } from "../core/format.ts"
+import { formatPrice, formatSignedAmount, formatTime, shortHash, type CurrencyCode, type LegEffect } from "@pricetag/sdk/core"
 import { describeConversion, describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
 import { STARTING_BALANCE, actionLabel, activityTitle, costTag, pnlHelp, priceSourceLabel } from "../core/wording.ts"
 import { ProofPanel } from "./ProofPanel.tsx"

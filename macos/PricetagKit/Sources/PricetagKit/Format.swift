@@ -1,4 +1,4 @@
-// Display only, and the same output as `src/core/format.ts`: a test runs both on the same inputs.
+// Display only, and the same output as `packages/sdk/src/format.ts`: a test runs both on the same inputs.
 // Amounts are cut as strings, because a token amount can be far bigger than any number type here.
 
 import Foundation
