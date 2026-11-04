@@ -3,7 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { isAddress, isCurrencyCode, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createWallets, describeError, type AmpQuery, type Source } from "@pricetag/sdk/internal"
+import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createWallets, describeError, sharedMarket, type AmpQuery, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -418,8 +418,12 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
       if (!atA || !atB || atA.blockNum !== atB.blockNum) return notYet()
       const pair = async (wallet: string, withBalances: boolean): Promise<[WalletResponse, WalletResponse] | null | undefined> => {
         const facts = await first.wallets.factsAt(wallet, blockNum, { withBalances })
-        const a = facts && first.wallets.pricedOn(wallet, facts, latestPrices(atA))
-        const b = facts && second.wallets.pricedOn(wallet, facts, latestPrices(atB))
+        if (!facts) return null
+        // Each rule's own market prices at this block, and only where both have one, so a token priced on one side alone
+        // can't look like the rule.
+        const market = sharedMarket(await first.wallets.marketOn(wallet, facts), await second.wallets.marketOn(wallet, facts))
+        const a = first.wallets.pricedOn(wallet, facts, latestPrices(atA), market)
+        const b = second.wallets.pricedOn(wallet, facts, latestPrices(atB), market)
         if (!a || !b) return null
         // A block one side has no price for would look like the rule made a number unavailable.
         const blocksOf = (wallet: WalletResponse) => new Set(wallet.references.map((reference) => reference.blockNum))

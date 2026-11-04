@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { portfolioOf } from "../server/portfolio.ts"
 import { USD_CONTEXT, explainMetric } from "../src/core/explain.ts"
-import { createWallets, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
+import { createWallets, sharedMarket, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
 import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, foldWallet, shortHash, type LegRow, type Reference } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
@@ -799,14 +799,49 @@ describe("market prices, notes and unlisted tokens", () => {
     await a.get(ME)
     await b.get(ME)
     const facts = (await a.factsAt(ME, 995, { withBalances: false }))!
-    const [byA, byB] = [a.pricedOn(ME, facts, {})!, b.pricedOn(ME, facts, {})!]
+    const [marketA, marketB] = [await a.marketOn(ME, facts), await b.marketOn(ME, facts)]
+    assert.deepEqual([marketB.priced.size, marketB.checked], [0, false])
+    const [byA, byB] = [a.pricedOn(ME, facts, {}, marketA)!, b.pricedOn(ME, facts, {}, marketB)!]
     assert.deepEqual([byA.prices.AERO?.source, byA.marketChecked], ["market", true])
     assert.deepEqual([byB.prices.AERO, byB.marketChecked], [undefined, false])
     assert.deepEqual(byA.legs.find((l) => l.asset === "AERO")?.priceSource, "market")
     assert.deepEqual(byB.legs.find((l) => l.asset === "AERO")?.priceSource, null)
     const older = (await a.factsAt(ME, 960, { withBalances: false }))!
-    assert.equal(a.pricedOn(ME, older, {})!.prices.AERO, undefined, "a price from after that block would be the wrong one")
+    const atOlder = a.pricedOn(ME, older, {}, await a.marketOn(ME, older))!
+    assert.ok(atOlder.prices.AERO!.blockNum <= 960, "a price from after that block would be the wrong one")
     assert.deepEqual(older.notes, [], "nor a note from after it")
+  })
+
+  it("reads a market price for the block it's asked about, when the wallet was read in another bucket", async () => {
+    const { source, reads } = marketFake(new Map([[950, [aeroRow(950)]]]), {})
+    const wallets = createWallets(source, headAt(1000), noFees)
+    await wallets.get(ME)
+    const facts = (await wallets.factsAt(ME, 985, { withBalances: false }))!
+    reads.length = 0
+    const market = await wallets.marketOn(ME, facts)
+    assert.deepEqual(reads.map(([asset, , to]) => [asset, to]), [["AERO", 960]])
+    assert.equal(market.checked, true)
+    assert.ok(market.priced.has("AERO:960"))
+    assert.equal(wallets.pricedOn(ME, facts, {}, market)!.prices.AERO?.source, "market")
+  })
+
+  it("uses only the market prices it's given, for what's held and for what moved", async () => {
+    const { source } = marketFake(new Map([[950, [aeroRow(950)]]]), {})
+    const wallets = createWallets(source, headAt(1000), noFees)
+    await wallets.get(ME)
+    const facts = (await wallets.factsAt(ME, 995, { withBalances: false }))!
+    await wallets.marketOn(ME, facts)
+    const wallet = wallets.pricedOn(ME, facts, {}, { priced: new Set(), checked: false })!
+    assert.equal(wallet.prices.AERO, undefined)
+    assert.equal(wallet.legs.find((l) => l.asset === "AERO")?.priceMicros, null)
+    assert.equal(wallet.marketChecked, false, "a token left out for this has a market")
+  })
+
+  it("two rules share a market price only when both have it", () => {
+    const one = { priced: new Set(["AERO:0", "DEGEN:0"]), checked: true }
+    assert.deepEqual(sharedMarket(one, one), { priced: new Set(["AERO:0", "DEGEN:0"]), checked: true })
+    assert.deepEqual(sharedMarket(one, { priced: new Set(["AERO:0"]), checked: true }), { priced: new Set(["AERO:0"]), checked: false })
+    assert.deepEqual(sharedMarket({ priced: new Set(), checked: true }, { priced: new Set(), checked: false }), { priced: new Set(), checked: false })
   })
 
   it("looks for notes only in transactions with nothing but gas, and passes along what it finds", async () => {
@@ -1044,7 +1079,8 @@ describe("settling unwrap credits", () => {
       await a.get(ME)
       await b.get(ME)
       const facts = (await a.factsAt(ME, 995, { withBalances: false }))!
-      const sales = [a.pricedOn(ME, facts, {})!, b.pricedOn(ME, facts, {})!].map((wallet) => wallet.legs.find((l) => l.asset === "cbBTC")!)
+      const noMarket = { priced: new Set<string>(), checked: true }
+      const sales = [a.pricedOn(ME, facts, {}, noMarket)!, b.pricedOn(ME, facts, {}, noMarket)!].map((wallet) => wallet.legs.find((l) => l.asset === "cbBTC")!)
       assert.deepEqual(sales.map((l) => [l.proceedsMicros, l.unsettledCredit]), [[WHOLE, undefined], [WHOLE, undefined]])
     })
 
