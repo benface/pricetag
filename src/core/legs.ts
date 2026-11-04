@@ -5,8 +5,12 @@ import { usdOf, type CostLabel, type FoldLeg } from "./fold.ts"
 import { normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
 
 export type PriceSource = "oracle" | "swap" | "market"
-/** `unlisted`: a transfer of a token off the allowlist. It has no position or price, but it says money went elsewhere. */
-export type LegKind = "erc20" | "eth" | "gas" | "wrap" | "unwrap" | "unlisted"
+/**
+ * Transfers of tokens off the allowlist. They have no position or price, but they say money went elsewhere.
+ * `unlisted`: `amount` is a quantity, or empty when it can't be read, as with ERC-1155.
+ * `unlisted_nft`: `amount` is an ERC-721 token ID, which identifies one asset and is not a quantity.
+ */
+export type LegKind = "erc20" | "eth" | "gas" | "wrap" | "unwrap" | "unlisted" | "unlisted_nft"
 
 /** A row of `legs`. `token` and `account` are 0x-prefixed lowercase hex, `amount` a decimal string. */
 export type LegRow = {
@@ -94,7 +98,7 @@ export function derivePricedRows(rows: readonly LegRow[], references: readonly R
   const byTx = new Map<string, LegRow[]>()
   for (const row of rows) {
     // Like the dataset's `legs`, which pairs are made from: gas isn't traded, and unlisted tokens have no decimals.
-    if (row.kind === "gas" || row.kind === "unlisted") continue
+    if (row.kind === "gas" || row.kind === "unlisted" || row.kind === "unlisted_nft") continue
     const key = `${row.account}:${row.tx_hash}`
     byTx.set(key, [...(byTx.get(key) ?? []), row])
   }
@@ -207,8 +211,15 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
       if (row.kind === "gas") continue
       const token = tokenByAddress(row.token)
       if (!token) {
-        if (isPlainAmount(row.amount)) unlisted.set(row.token, (unlisted.get(row.token) ?? 0n) + (row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)))
-        else unlistedUnreadable = true
+        if (!isPlainAmount(row.amount)) {
+          unlistedUnreadable = true
+          continue
+        }
+        // Fungible tokens net by contract. An NFT nets by contract and ID, each one counting once: IDs aren't amounts.
+        const isNft = row.kind === "unlisted_nft"
+        const asset = isNft ? `${row.token}#${row.amount}` : row.token
+        const size = isNft ? 1n : BigInt(row.amount)
+        unlisted.set(asset, (unlisted.get(asset) ?? 0n) + (row.side === "credit" ? size : -size))
         continue
       }
       const net = nets.get(token.asset) ?? { token: TOKENS.find((t) => t.symbol === token.asset)!, delta: 0n, parts: [] }

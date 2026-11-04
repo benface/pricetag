@@ -61,6 +61,17 @@ describe("unlisted_legs", () => {
     assert.match(sql, /topic3 IS NOT NULL/)
   })
 
+  it("labels an NFT's ID as one, so nothing sums it as a quantity", () => {
+    assert.match(sql, /t\.id AS amount, 'unlisted_nft' AS kind/)
+    assert.doesNotMatch(sql, /t\.id AS amount, 'unlisted' AS kind/)
+  })
+
+  it("covers ERC-1155, with an empty amount that the app reads as a movement", () => {
+    assert.match(sql, /TransferSingle\(/)
+    assert.match(sql, /TransferBatch\(/)
+    assert.equal(sql.match(/'' AS amount, 'unlisted' AS kind/g)?.length, 4)
+  })
+
   it("isn't part of legs, so it can't make pairs of tokens with no decimals", () => {
     assert.doesNotMatch(manifest.tables.legs!.input.sql, /unlisted_legs/)
   })

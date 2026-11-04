@@ -311,6 +311,66 @@ describe("pricing a wallet's rows", () => {
       assert.equal(aero(legs).costUsdMicros, null)
     })
 
+    describe("NFTs are identities, not amounts", () => {
+      const nft = (tx: string, side: LegRow["side"], id: bigint, token = JACK) => row(tx, token, side, id, "unlisted_nft")
+      const paid = (extra: LegRow[]) => aero(legsOf([row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 500n * E18), ...extra])).costUsdMicros
+
+      for (const method of ["average", "fifo"] as const) {
+        it(`receiving ID 0 still means the payment was split, so a later sale can't show a false loss (${method})`, () => {
+          const rows = [
+            row("0x1", USDC_ADDRESS, "debit", 1000n * E6),
+            row("0x1", AERO, "credit", 300n * E18),
+            row("0x1", AERO, "credit", 200n * E18),
+            nft("0x1", "credit", 0n),
+            { ...row("0x2", AERO, "debit", 500n * E18), block_num: 101 },
+            { ...row("0x2", USDC_ADDRESS, "credit", 600n * E6), block_num: 101 },
+          ]
+          const position = foldPositions(legsOf(rows, [REF, { ...REF, block_num: 101 }]), method, {}).find((p) => p.asset === "AERO")!
+          assert.equal(position.values.realizedUsdMicros, null)
+        })
+      }
+
+      it("sending IDs 1 and 2 and receiving ID 3 is three movements, though the numbers cancel", () => {
+        assert.equal(paid([nft("0x1", "debit", 1n), nft("0x1", "debit", 2n), nft("0x1", "credit", 3n)]), null)
+      })
+
+      it("swapping one ID for an equal ID in another collection is two movements", () => {
+        assert.equal(paid([nft("0x1", "debit", 5n), nft("0x1", "credit", 5n, OTHER)]), null)
+      })
+
+      it("a round trip of the same NFT moved nothing, so the swap stands", () => {
+        assert.equal(paid([nft("0x1", "credit", 42n), nft("0x1", "debit", 42n)]), "1000000000")
+      })
+
+      it("a round trip of ID 0 moved nothing either", () => {
+        assert.equal(paid([nft("0x1", "credit", 0n), nft("0x1", "debit", 0n)]), "1000000000")
+      })
+
+      it("an NFT and a fungible token of the same contract don't net against each other", () => {
+        assert.equal(paid([nft("0x1", "credit", 7n), unlisted("0x1", "debit", 7n)]), null)
+      })
+
+      it("buying only an NFT has unknown proceeds, instead of hiding the gain as a transfer", () => {
+        const [usdc] = legsOf([row("0x1", USDC_ADDRESS, "debit", 600n * E6), nft("0x1", "credit", 0n)])
+        assert.equal(usdc!.kind, "swap")
+        assert.equal(usdc!.proceedsUsdMicros, null)
+      })
+
+      it("an ID that can't be read counts as a movement", () => {
+        assert.equal(paid([{ ...nft("0x1", "credit", 1n), amount: "" }]), null)
+      })
+
+      it("never makes a pair", () => {
+        assert.equal(derivePricedRows([row("0x1", USDC_ADDRESS, "debit", 5n * E6), nft("0x1", "credit", 7n)], [REF]).length, 0)
+      })
+    })
+
+    it("an ERC-1155 movement has no readable amount, so the payment stays unknown", () => {
+      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 500n * E18), { ...unlisted("0x1", "credit", 0n), amount: "" }])
+      assert.equal(aero(legs).costUsdMicros, null)
+      assert.equal(legs.find((l) => l.asset === "USDC")!.proceedsUsdMicros, null)
+    })
+
     it("the ETH and USDC oracle prices stay, as shared facts", () => {
       const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 2500n * E6), row("0x1", ETH_ADDRESS, "credit", E18), unlisted("0x1", "credit", 7n)])
       const eth = legs.find((l) => l.asset === "ETH")!
