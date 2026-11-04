@@ -16,6 +16,8 @@ public enum FetchError: Error, Equatable, Sendable {
 public protocol PortfolioSource: Sendable {
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, timeout: Duration) async throws -> Portfolio
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode) async throws -> Explanation
+    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof
+    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification
 }
 
 public struct PricetagClient: PortfolioSource {
@@ -35,6 +37,19 @@ public struct PricetagClient: PortfolioSource {
 
     public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode) async throws -> Explanation {
         try await get("/api/portfolio/\(address)/explain", query: settings(method, currency) + target.queryItems, timeout: .seconds(30))
+    }
+
+    public func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+        try await get("/api/portfolio/\(address)/proof", query: legQuery(leg, currency), timeout: .seconds(30))
+    }
+
+    /// A block's rows can take a while on a busy server, and the read is one query at a time.
+    public func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+        try await get("/api/portfolio/\(address)/verify", query: legQuery(leg, currency), timeout: .seconds(120))
+    }
+
+    private func legQuery(_ leg: String, _ currency: CurrencyCode) -> [URLQueryItem] {
+        [URLQueryItem(name: "leg", value: leg), URLQueryItem(name: "currency", value: currency.rawValue)]
     }
 
     private func settings(_ method: CostMethod, _ currency: CurrencyCode) -> [URLQueryItem] {

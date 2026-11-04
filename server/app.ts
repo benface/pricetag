@@ -9,12 +9,15 @@ import { DEMO_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
 import { createRates } from "./rates.ts"
 import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
+import { createDepositReader } from "./block.ts"
+import { createManifestReader, createProofs, proofOf, type Proofs } from "./proof.ts"
 import { datasetSource, feedRounds, rawSource, type Source } from "./source.ts"
 import { createWallets } from "./wallets.ts"
 
 type Env = Record<string, string | undefined>
 
 const POLL_MS = 2000
+const DEMO_UNVERIFIABLE = "This is the demo wallet, so there's no real block to check."
 
 function parseMethod(value: string | null): Method | null {
   if (value === null || value === "average") return "average"
@@ -26,20 +29,26 @@ function parseCurrency(value: string | null): CurrencyCode | null {
   return isCurrencyCode(value) ? value : null
 }
 
-function createSource(env: Env): { source: Source; readRates: ReturnType<typeof createRates> } | null {
+function createSource(env: Env): { source: Source; readRates: ReturnType<typeof createRates>; proofs: Proofs } | null {
   if (!env.AMP_QUERY_URL) return null
   const query = createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined)
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
   const readRates = createRates(feedRounds(query, { baseDataset, network }))
+  const proofs = createProofs(query, {
+    baseDataset,
+    dataset: env.PRICETAG_DATASET || null,
+    readDeposits: createDepositReader(env.BASE_RPC_URL || DEFAULT_RPC_URL),
+    readManifestHash: createManifestReader(env.AMP_ADMIN_URL || `${env.AMP_QUERY_URL}/controller`, env.AMP_QUERY_TOKEN || undefined),
+  })
   if (env.PRICETAG_DATASET) {
     const startBlock = Number(env.PRICETAG_START_BLOCK)
     if (!Number.isSafeInteger(startBlock) || startBlock <= 0) throw new Error("PRICETAG_DATASET needs PRICETAG_START_BLOCK")
-    return { source: datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates }
+    return { source: datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates, proofs }
   }
   const historyBlocks = Number(env.PRICETAG_HISTORY_BLOCKS || 1800)
   if (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
-  return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates }
+  return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates, proofs }
 }
 
 /** The request's decoded path, or null when the URL is malformed. Clients can send anything here. */
@@ -57,9 +66,9 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 }
 
 /** Query errors can quote our SQL or the endpoint. The browser gets a fixed message, and the detail stays in the server log. */
-function sendAmpError(res: ServerResponse, error: unknown) {
+function sendAmpError(res: ServerResponse, error: unknown, message = "Couldn't read this wallet's data.") {
   console.error("Amp query failed:", describeError(error))
-  sendJson(res, 502, { error: "Couldn't read this wallet's data." })
+  sendJson(res, 502, { error: message })
 }
 
 export function createApi(env: Env) {
@@ -173,6 +182,34 @@ export function createApi(env: Env) {
       const read = await readWallet(walletMatch[1] as string, res)
       const wallet = read && (await inCurrency(read, currency, res))
       if (wallet) sendJson(res, 200, wallet)
+      return true
+    }
+
+    const proofMatch = /^\/api\/portfolio\/([^/]+)\/(proof|verify)$/.exec(path)
+    if (proofMatch) {
+      const wallet = await readWallet(proofMatch[1] as string, res, { fresh: false })
+      if (!wallet) return true
+      const leg = wallet.legs.find(({ id }) => id === params.get("leg"))
+      if (!leg || leg.opening) {
+        sendJson(res, 404, { error: "There's no transaction behind that." })
+        return true
+      }
+      const proofs = wallet.mode === "demo" ? null : (created?.proofs ?? null)
+      if (proofMatch[2] === "proof") {
+        sendJson(res, 200, proofOf(leg, wallet.legs, currency, proofs ? await proofs.datasets() : [], proofs ? null : DEMO_UNVERIFIABLE))
+        return true
+      }
+      if (!proofs) {
+        sendJson(res, 400, { error: DEMO_UNVERIFIABLE })
+        return true
+      }
+      try {
+        const verification = await proofs.verify(leg, wallet.legs)
+        if (verification) sendJson(res, 200, verification)
+        else sendJson(res, 404, { error: "Amp doesn't have this block." })
+      } catch (error) {
+        sendAmpError(res, error, "Couldn't read this block.")
+      }
       return true
     }
 

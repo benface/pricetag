@@ -153,6 +153,16 @@ public final class PortfolioStore {
         return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency)
     }
 
+    public func proof(leg: String, address: String) async throws -> Proof {
+        guard address == self.address else { throw CancellationError() }
+        return try await source.proof(leg: leg, address: address, currency: currency)
+    }
+
+    public func verification(leg: String, address: String) async throws -> Verification {
+        guard address == self.address else { throw CancellationError() }
+        return try await source.verification(leg: leg, address: address, currency: currency)
+    }
+
     /// One read. Returns how long to wait before the next one.
     func poll() async -> Duration {
         guard let address else { return unreachableDelay }
