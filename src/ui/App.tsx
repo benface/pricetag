@@ -1,10 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { TOKENS, foldPositions, hasAnswer, isAddress, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type Coverage, type Method, type Position } from "@pricetag/sdk/core"
+import { CURRENCIES, CURRENCY_CODES, TOKENS, foldWallet, formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isCurrencyCode, sumTotals, type Coverage, type CurrencyCode, type FoldedWallet, type Method, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
-import { CURRENCIES, CURRENCY_CODES, isCurrencyCode, viewWallet, type CurrencyCode } from "../core/currency.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { explainContext, explainTarget, missingRatesLine, mismatchCause, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
-import { formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime } from "../core/format.ts"
 import {
   AVERAGE_PRICE_PAID,
   BALANCE_CHECK,
@@ -57,6 +55,8 @@ function Num({ onClick, label, children, tone }: { onClick: () => void; label: s
     </button>
   )
 }
+
+const NO_WALLET: Omit<FoldedWallet, "view"> = { positions: [], unreadAssets: [], totals: sumTotals([]), pnlStatus: "complete", points: [] }
 
 const toneOf = (micros: string | null) => (micros === null ? "warn" : BigInt(micros) > 0n ? "gain" : BigInt(micros) < 0n ? "loss" : null)
 
@@ -207,17 +207,15 @@ export function App() {
     setChosenCurrency(next)
   }
 
-  const view = useMemo(() => (wallet ? viewWallet(wallet) : null), [wallet])
+  const folded = useMemo(() => (wallet ? foldWallet(wallet, method) : null), [wallet, method])
+  const { positions, unreadAssets: unread, totals, points } = folded ?? NO_WALLET
+  const view = folded?.view ?? null
   // Whatever's on screen says what it's in, which for a moment after a change isn't what was just chosen.
   const currency = view?.currency ?? chosenCurrency
-  const positions = useMemo(() => (view && wallet ? foldPositions(view.legs, method, view.prices, wallet) : []), [view, wallet, method])
-  const unread = useMemo(() => (wallet ? unreadAssets(positions, wallet) : []), [wallet, positions])
-  const totals = useMemo(() => sumTotals(positions, unread), [positions, unread])
-  const points = useMemo(() => (view && wallet ? pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread)) : []), [view, wallet, method, positions, unread])
   // Worked out from what's on screen, so it can't go on showing numbers that have since changed, or that are in another currency.
   const explanation = useMemo(
-    () => (target && view && wallet ? explainTarget(target, { positions, totals, points }, explainContext(wallet, view, method)) : null),
-    [target, view, wallet, method, positions, totals, points],
+    () => (target && folded && wallet ? explainTarget(target, folded, explainContext(wallet, folded.view, method)) : null),
+    [target, folded, wallet, method],
   )
   const close = useCallback(() => setTarget(null), [])
   const openTotal = (metric: TotalMetric) => setTarget({ kind: "total", metric })

@@ -1,10 +1,8 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { portfolioOf } from "../server/portfolio.ts"
-import { createWallets } from "../server/wallets.ts"
-import type { ReadL1Fees } from "../server/receipts.ts"
-import type { Source, WindowRows } from "../server/source.ts"
-import { ASSETS, ETH_ADDRESS, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
+import { createWallets, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
+import { ASSETS, ETH_ADDRESS, type LegRow, type Reference } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 
@@ -20,11 +18,11 @@ const row = (block: number, amount = "5"): LegRow => ({
   amount,
   kind: "eth",
 })
-const reference = (block: number): ReferenceRow => ({ block_num: block, eth_usd: "240000000000", usdc_usd: "100000000" })
+const reference = (block: number): Reference => ({ blockNum: block, ethUsd: "240000000000", usdcUsd: "100000000" })
 
 function fake(
   chain: Map<number, LegRow[]>,
-  latest: () => ReferenceRow | null,
+  latest: () => Reference | null,
   processed: (head: number) => number | null = (head) => head,
   balances: (block: number) => Promise<Record<string, string> | null> = async () => ({}),
   ethBalances: (blocks: readonly number[]) => Promise<Map<number, string>> = async () => new Map(),
@@ -121,7 +119,7 @@ describe("the wallet cache", () => {
 
     it("a stalled dataset's price expires instead of going stale", async () => {
       let head = 1000
-      let latest: ReferenceRow | null = reference(960)
+      let latest: Reference | null = reference(960)
       const { source } = fake(new Map(), () => latest, () => 960)
       const wallets = createWallets(source, async () => headAt(head)(), noFees)
       assert.ok((await wallets.get(ME)).prices.ETH)
@@ -174,7 +172,7 @@ describe("the wallet cache", () => {
   })
 
   it("with no recent oracle read, there's no price, rather than an old one", async () => {
-    let latest: ReferenceRow | null = reference(1000)
+    let latest: Reference | null = reference(1000)
     let head = 1000
     const { source } = fake(new Map(), () => latest)
     const wallets = createWallets(source, async () => headAt(head)(), noFees)
@@ -186,7 +184,7 @@ describe("the wallet cache", () => {
 
   it("a failed oracle read at a wallet's block leaves that leg with no price", async () => {
     const { source } = fake(new Map([[950, [row(950)]]]), () => reference(1000))
-    source.readReferences = async (blocks) => blocks.map((b) => ({ block_num: b, eth_usd: "", usdc_usd: "" }))
+    source.readReferences = async (blocks) => blocks.map((b) => ({ blockNum: b, ethUsd: "", usdcUsd: "" }))
     const [leg] = (await createWallets(source, headAt(1000), noFees).get(ME)).legs
     assert.equal(leg!.priceMicros, null)
   })
@@ -203,12 +201,12 @@ describe("reconciling", () => {
   const gas = (block: number): LegRow => ({ ...row(block, "1000"), kind: "gas", side: "debit" })
   const chain = () => new Map([[950, [row(950, "5000")]], [960, [gas(960)]]])
   const silenced = async (run: () => Promise<void>) => {
-    const original = console.error
-    console.error = () => {}
+    const original = console.warn
+    console.warn = () => {}
     try {
       await run()
     } finally {
-      console.error = original
+      console.warn = original
     }
   }
 

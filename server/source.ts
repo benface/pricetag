@@ -1,72 +1,11 @@
-// Where a wallet's rows come from: the Pricetag dataset when it's deployed, otherwise the raw Base dataset,
-// read through the same shapes so everything after this file doesn't care which one it was.
+// Where a wallet's rows come from when the Pricetag dataset isn't deployed: the raw Base dataset, read through the same
+// shapes as the dataset's `datasetSource`, so everything after this file doesn't care which one it was.
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, asIso, asNumber, blockFilters, datasetReader, decimalString, hexOf, prefixed, readHead, type GasUnknownTx, type LegRow, type PricedRow, type Query, type ReferenceRow, type Row, type BalanceSnapshot } from "@pricetag/sdk"
-import type { Head, Mode } from "../src/core/api.ts"
-import type { RateRound } from "../src/core/currency.ts"
-import { MULTICALL3, balancesByAsset, decodeBalanceResults, decodeEthBalance, encodeBalanceCalls, encodeEthBalanceCall } from "./balances.ts"
+import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, type RateRound } from "@pricetag/sdk/core"
+import { asIso, asNumber, blockFilters, decimalString, hexOf, prefixed, readBalancesAt, readEthBalancesAt, readHead, type Query, type Row, type Source } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRound, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
-
-export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknown: GasUnknownTx[] }
-
-export type Source = {
-  mode: Mode
-  /** The first block a wallet's history can start from, or null to count back from the head. */
-  startBlock: number | null
-  historyBlocks: number | null
-  head(after: number | null): Promise<Head | null>
-  /**
-   * The newest block, in `after`..`head`, that every table a wallet read needs has processed, or null if none has.
-   * Reads never go past this. A derived table can lag the chain, and a block read before it's processed looks empty.
-   */
-  processedThrough(after: number, head: number): Promise<number | null>
-  readWindow(address: string, from: number, to: number): Promise<WindowRows>
-  readReferences(blocks: readonly number[]): Promise<ReferenceRow[]>
-  /** The newest oracle read at or just before `head`, or null if there's none recent enough to call current. */
-  readLatestReference(head: number): Promise<ReferenceRow | null>
-  /** What the chain says this wallet holds at `block`, or null when the read gave nothing usable. */
-  readBalances(address: string, block: number): Promise<BalanceSnapshot | null>
-  /** This wallet's plain ETH at the end of each block, not counting WETH. A block whose read failed isn't in it. */
-  readEthBalances(address: string, blocks: readonly number[]): Promise<Map<number, string>>
-}
-
-/**
- * With no table in the query, this makes exactly one `eth_call`, and it can read a block no table has, like the one
- * before a local dataset's start.
- */
-async function readBalancesAt(query: Query, network: string, address: string, block: number): Promise<BalanceSnapshot | null> {
-  const [row] = await query<Row>(`SELECT rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeBalanceCalls(address)}', ${block}) AS r`)
-  const results = decodeBalanceResults((row?.r as { data?: string } | null | undefined)?.data)
-  return results && { blockNum: block, amounts: balancesByAsset(results) }
-}
-
-/**
- * One query per 200 blocks, in the shape `readReferences` explains. A block the table doesn't have, like the one before a
- * local dataset's start, is read on its own.
- */
-async function readEthBalancesAt(query: Query, network: string, baseDataset: string, address: string, blocks: readonly number[]): Promise<Map<number, string>> {
-  const balances = new Map<number, string>()
-  const call = (block: string) => `rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeEthBalanceCall(address)}', ${block}) AS r`
-  const dataOf = (row: Row | undefined) => (row?.r as { data?: string } | null | undefined)?.data
-  const returned = new Set<number>()
-  for (const { filter, count } of blockFilters(blocks)) {
-    for (const row of await query<Row>(`SELECT block_num, ${call("block_num")} FROM (SELECT block_num FROM "${baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)) {
-      const block = asNumber(row.block_num)
-      const balance = decodeEthBalance(dataOf(row))
-      returned.add(block)
-      if (balance !== null) balances.set(block, balance)
-    }
-  }
-  for (const block of blocks) {
-    if (returned.has(block)) continue
-    const [row] = await query<Row>(`SELECT ${call(String(block))}`)
-    const balance = decodeEthBalance(dataOf(row))
-    if (balance !== null) balances.set(block, balance)
-  }
-  return balances
-}
 
 /** A feed's answer at each block, leaving out blocks where the read failed. */
 export type RoundReader = (feed: string, blocks: readonly number[]) => Promise<Map<number, RateRound>>
@@ -113,9 +52,9 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
          FROM (SELECT block_num FROM ${ds}.blocks WHERE ${filter} LIMIT ${count})`,
     ).then((rows) =>
       rows.map((r) => ({
-        block_num: asNumber(r.block_num),
-        eth_usd: decodeRoundAnswer((r.e as { data?: string } | null)?.data),
-        usdc_usd: decodeRoundAnswer((r.u as { data?: string } | null)?.data),
+        blockNum: asNumber(r.block_num),
+        ethUsd: decodeRoundAnswer((r.e as { data?: string } | null)?.data),
+        usdcUsd: decodeRoundAnswer((r.u as { data?: string } | null)?.data),
       })),
     )
 
@@ -208,16 +147,5 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
       })
       return { rows, priced: null, gasUnknown }
     },
-  }
-}
-
-export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string }): Source {
-  return {
-    mode: "dataset",
-    startBlock: config.startBlock,
-    historyBlocks: null,
-    readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
-    readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
-    ...datasetReader(query, config),
   }
 }

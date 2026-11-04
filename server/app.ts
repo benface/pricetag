@@ -2,19 +2,17 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { createQuery, describeError, isAddress, latestPrices, type Method } from "@pricetag/sdk"
+import { isAddress, isCurrencyCode, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createWallets, datasetSource, describeError, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
-import { isCurrencyCode, type CurrencyCode } from "../src/core/currency.ts"
 import { DEMO_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule } from "../src/core/rules.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
 import { createRates } from "./rates.ts"
-import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
 import { createDepositReader } from "./block.ts"
 import { createManifestReader, createProofs, proofOf, verificationOf, type BlockRead, type Proofs } from "./proof.ts"
-import { datasetSource, feedRounds, rawSource, type Source } from "./source.ts"
+import { feedRounds, rawSource } from "./source.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, taxReportOf, type TaxScope } from "../src/core/tax.ts"
-import { createWallets } from "./wallets.ts"
 
 type Env = Record<string, string | undefined>
 
@@ -228,14 +226,14 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
     try {
       const [atA, atB] = [await first.source.readLatestReference(blockNum), await second.source.readLatestReference(blockNum)]
       // A current price at another block, or none, would be a difference that isn't the rule.
-      if (!atA || !atB || atA.block_num !== atB.block_num) return notYet()
+      if (!atA || !atB || atA.blockNum !== atB.blockNum) return notYet()
       const pair = async (wallet: string, withBalances: boolean): Promise<[WalletResponse, WalletResponse] | null | undefined> => {
         const facts = await first.wallets.factsAt(wallet, blockNum, { withBalances })
         const a = facts && first.wallets.pricedOn(wallet, facts, latestPrices(atA))
         const b = facts && second.wallets.pricedOn(wallet, facts, latestPrices(atB))
         if (!a || !b) return null
         // A block one side has no price for would look like the rule made a number unavailable.
-        const blocksOf = (wallet: WalletResponse) => new Set(wallet.references.map((reference) => reference.block_num))
+        const blocksOf = (wallet: WalletResponse) => new Set(wallet.references.map((reference) => reference.blockNum))
         const [pricedA, pricedB] = [blocksOf(a), blocksOf(b)]
         if (a.legs.some((leg) => pricedA.has(leg.blockNum) !== pricedB.has(leg.blockNum))) return null
         // One read of the rates, on both sides. Answers the request itself when it fails, so that's not a "not yet".
