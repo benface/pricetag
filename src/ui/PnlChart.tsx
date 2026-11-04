@@ -130,7 +130,7 @@ export function PnlChart({ points, onSelect }: Props) {
           </tbody>
         </table>
       ) : null}
-      {!asTable && !chart.hasData ? <p className="notice warn chart-empty">⚠ Nothing here has a known cost and a known price yet, so there's no PnL to chart. It isn't $0.</p> : null}
+      {!asTable && !chart.hasData ? <p className="notice warn chart-empty">⚠ Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't $0.</p> : null}
       <div
         ref={box}
         className="chart"

@@ -93,7 +93,8 @@ export function sumTotals(positions: readonly Position[]): Totals {
       coverage.realized.missing++
       excluded.push({ asset, reason: "sold at an unknown cost" })
     }
-    if (BigInt(state.resolvedDisposedQty) > 0n) coverage.realized.known++
+    // Only what the sum actually includes counts as known. A position with an unresolved sale is left out whole.
+    if (values.realizedUsdMicros !== null && BigInt(state.resolvedDisposedQty) > 0n) coverage.realized.known++
     if (values.unrealizedUsdMicros !== null) {
       unrealized += BigInt(values.unrealizedUsdMicros)
       if (held) coverage.unrealized.known++
@@ -149,12 +150,14 @@ export function pnlOverTime(
       pnl -= BigInt(state.gasUsdMicros)
       if (BigInt(state.gasUsdMicros) > 0n) coverage.known++
       if (BigInt(state.unpricedGasQty) > 0n) coverage.missing++
-      if (BigInt(state.resolvedDisposedQty) > 0n) coverage.known++
       if (BigInt(state.shortfallQty) > 0n) coverage.missing++
       if (v.realizedUsdMicros === null) {
         excludedCount++
         coverage.missing++
-      } else pnl += BigInt(v.realizedUsdMicros)
+      } else {
+        pnl += BigInt(v.realizedUsdMicros)
+        if (BigInt(state.resolvedDisposedQty) > 0n) coverage.known++
+      }
       if (v.unrealizedUsdMicros !== null) {
         pnl += BigInt(v.unrealizedUsdMicros)
         if (BigInt(v.qty) > 0n) coverage.known++

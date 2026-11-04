@@ -122,6 +122,81 @@ describe("pricing a wallet's rows", () => {
       assert.equal(legs.find((l) => l.asset === "USDC")!.proceedsUsdMicros, null)
     })
 
+    describe("with one oracle unavailable, what was paid is still known", () => {
+      const noEth: ReferenceRow = { block_num: 100, eth_usd: "", usdc_usd: "100000000" }
+      const noUsdc: ReferenceRow = { block_num: 100, eth_usd: "240000000000", usdc_usd: "" }
+      const eth = (legs: ReturnType<typeof legsOf>) => legs.find((l) => l.asset === "ETH")!
+      const usdc = (legs: ReturnType<typeof legsOf>) => legs.find((l) => l.asset === "USDC")!
+
+      it("buying ETH with USDC, with no ETH oracle: the cost is known, and the price stays unavailable", () => {
+        const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 2500n * E6), row("0x1", ETH_ADDRESS, "credit", E18)], [noEth])
+        assert.equal(eth(legs).priceUsdMicros, null)
+        assert.equal(eth(legs).priceSource, null)
+        assert.equal(eth(legs).costLabel, "paid")
+        assert.equal(eth(legs).costUsdMicros, "2500000000")
+        assert.equal(usdc(legs).proceedsUsdMicros, "2500000000")
+      })
+
+      it("selling ETH for USDC, with no ETH oracle: the proceeds are known, so the gain is too", () => {
+        const legs = legsOf(
+          [
+            { ...row("0x1", USDC_ADDRESS, "debit", 2400n * E6), block_num: 50 },
+            { ...row("0x1", ETH_ADDRESS, "credit", E18), block_num: 50 },
+            row("0x2", ETH_ADDRESS, "debit", E18),
+            row("0x2", USDC_ADDRESS, "credit", 2500n * E6),
+          ],
+          [{ block_num: 50, eth_usd: "240000000000", usdc_usd: "100000000" }, noEth],
+        )
+        const sale = legs.find((l) => l.txHash === "0x2" && l.asset === "ETH")!
+        assert.equal(sale.priceUsdMicros, null)
+        assert.equal(sale.proceedsUsdMicros, "2500000000")
+        assert.equal(foldPositions(legs, "fifo", {}).find((p) => p.asset === "ETH")!.values.realizedUsdMicros, "100000000")
+      })
+
+      it("buying USDC with ETH, with no USDC oracle: ETH sets the value", () => {
+        const legs = legsOf([row("0x1", ETH_ADDRESS, "debit", E18), row("0x1", USDC_ADDRESS, "credit", 2400n * E6)], [noUsdc])
+        assert.equal(usdc(legs).priceUsdMicros, null)
+        assert.equal(usdc(legs).costUsdMicros, "2400000000")
+        assert.equal(eth(legs).proceedsUsdMicros, "2400000000")
+      })
+
+      it("selling USDC for ETH, with no USDC oracle: ETH still sets the value", () => {
+        const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 2400n * E6), row("0x1", ETH_ADDRESS, "credit", E18)], [noUsdc])
+        assert.equal(usdc(legs).proceedsUsdMicros, "2400000000")
+        assert.equal(eth(legs).costUsdMicros, "2400000000")
+      })
+
+      it("an absurd swap is still rejected when the oracle that would catch it is down", () => {
+        const dust = legsOf([row("0x1", USDC_ADDRESS, "debit", 1n), row("0x1", ETH_ADDRESS, "credit", E18)], [noEth])
+        assert.equal(eth(dust).costLabel, "unknown")
+        assert.equal(eth(dust).costUsdMicros, null)
+        assert.equal(usdc(dust).proceedsUsdMicros, null)
+        assert.match(eth(dust).priceNote!, /Rejected/)
+        const reversed = legsOf([row("0x1", ETH_ADDRESS, "debit", E18), row("0x1", USDC_ADDRESS, "credit", 1n)], [noEth])
+        assert.equal(eth(reversed).proceedsUsdMicros, null)
+        const badUsdc = legsOf([row("0x1", ETH_ADDRESS, "debit", E18), row("0x1", USDC_ADDRESS, "credit", 1n)], [noUsdc])
+        assert.equal(usdc(badUsdc).costUsdMicros, null)
+      })
+
+      it("with both oracles down, nothing can value it", () => {
+        const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 2500n * E6), row("0x1", ETH_ADDRESS, "credit", E18)], [{ block_num: 100, eth_usd: "", usdc_usd: "" }])
+        assert.equal(eth(legs).costUsdMicros, null)
+        assert.equal(usdc(legs).proceedsUsdMicros, null)
+      })
+    })
+
+    it("a token with no swap price still has a known cost, checked against its plausible range", () => {
+      // Two AERO credits from a split route pair twice, so `priced_legs` has no row for them.
+      const split = [row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 300n * E18), row("0x1", AERO, "credit", 500n * E18)]
+      const aero = legsOf(split).find((l) => l.asset === "AERO")!
+      assert.equal(aero.priceUsdMicros, null)
+      assert.equal(aero.costLabel, "paid")
+      assert.equal(aero.costUsdMicros, "1000000000")
+      const absurd = legsOf([row("0x1", USDC_ADDRESS, "debit", 1n), row("0x1", AERO, "credit", 300n * E18), row("0x1", AERO, "credit", 500n * E18)]).find((l) => l.asset === "AERO")!
+      assert.equal(absurd.costLabel, "unknown")
+      assert.match(absurd.priceNote!, /Rejected/)
+    })
+
     it("real slippage isn't rejected", () => {
       const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 2800n * E6), row("0x1", ETH_ADDRESS, "credit", E18)])
       assert.equal(legs.find((l) => l.asset === "ETH")!.costUsdMicros, "2800000000")
@@ -195,6 +270,61 @@ describe("an entirely unknown result stays unavailable", () => {
     const points = pnlOverTime(unknownHolding, "average", {}, [REF], { blockNum: 101, timestamp: "2026-11-04T00:00:00.000Z" })
     assert.ok(points.length > 0)
     assert.ok(points.every((p) => p.pnlUsdMicros === null))
+  })
+
+  describe("a sale that's part known, part unknown", () => {
+    // Buys 1 ETH for 2,400 USDC, receives another ETH at an unknown cost, then sells both.
+    const mixed = (saleUsdc: bigint) => [
+      { ...row("0x1", USDC_ADDRESS, "debit", 2400n * E6), block_num: 100 },
+      { ...row("0x1", ETH_ADDRESS, "credit", E18), block_num: 100 },
+      { ...row("0x2", ETH_ADDRESS, "credit", E18), block_num: 101 },
+      { ...row("0x3", ETH_ADDRESS, "debit", 2n * E18), block_num: 102 },
+      { ...row("0x3", USDC_ADDRESS, "credit", saleUsdc * E6), block_num: 102 },
+    ]
+    const references = [100, 101, 102].map((block) => ({ ...REF, block_num: block }))
+    const ethOnly = (rows: LegRow[]) => legsOf(rows, references).filter((l) => l.asset === "ETH")
+
+    for (const method of ["average", "fifo"] as const) {
+      for (const [name, sale, knownPart] of [["a profit", 5000n, 100_000_000n], ["a loss", 4000n, -400_000_000n]] as const) {
+        it(`${name} stays out of every total, and never reads as $0 (${method})`, () => {
+          const legs = ethOnly(mixed(sale))
+          const positions = foldPositions(legs, method, {})
+          const eth = positions.find((p) => p.asset === "ETH")!
+          // The fold keeps the known part, and the position says it isn't the whole answer.
+          assert.equal(BigInt(eth.state.realizedUsdMicros), knownPart)
+          assert.equal(eth.values.realizedUsdMicros, null)
+          const totals = sumTotals(positions)
+          assert.equal(totals.realizedUsdMicros, null)
+          assert.equal(totals.pnlUsdMicros, null)
+          assert.deepEqual(totals.coverage.realized, { known: 0, missing: 1 })
+          assert.ok(totals.excluded.some((e) => e.asset === "ETH" && e.reason === "sold at an unknown cost"))
+          assert.equal(pnlOverTime(legs, method, {}, references, null).at(-1)!.pnlUsdMicros, null)
+        })
+
+        it(`${name} doesn't hide another position's known result (${method})`, () => {
+          const aeroTrade = [
+            { ...row("0x4", USDC_ADDRESS, "debit", 1000n * E6), block_num: 100 },
+            { ...row("0x4", AERO, "credit", 800n * E18), block_num: 100 },
+            { ...row("0x5", AERO, "debit", 800n * E18), block_num: 101 },
+            { ...row("0x5", USDC_ADDRESS, "credit", 1200n * E6), block_num: 101 },
+          ]
+          const legs = legsOf([...mixed(sale), ...aeroTrade], references).filter((l) => l.asset !== "USDC")
+          const totals = sumTotals(foldPositions(legs, method, {}))
+          assert.equal(totals.realizedUsdMicros, "200000000")
+          assert.deepEqual(totals.coverage.realized, { known: 1, missing: 1 })
+          assert.equal(totals.pnlUsdMicros, "200000000")
+          assert.equal(pnlOverTime(legs, method, {}, references, null).at(-1)!.pnlUsdMicros, "200000000")
+        })
+      }
+    }
+
+    it("known gas alongside it is still a real answer, and says what it leaves out", () => {
+      const legs = [...ethOnly(mixed(5000n)), ...legsOf([row("0x9", ETH_ADDRESS, "debit", E18 / 1000n, "gas")])]
+      const totals = sumTotals(foldPositions(legs, "fifo", {}))
+      assert.equal(totals.realizedUsdMicros, null)
+      assert.equal(totals.pnlUsdMicros, "-2400000")
+      assert.ok(totals.excluded.length > 0)
+    })
   })
 
   it("a genuine $0 stays $0: bought and sold at the same value", () => {

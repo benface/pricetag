@@ -217,7 +217,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
       if (net.token.oracle && price === null) priceNote = "The oracle read failed at this block."
       if (!net.token.oracle) {
         const swap = pricedRow?.priced.source === "swap" && pricedRow.priced.token === net.token.symbol ? pricedRow.priced.usd_micros : null
-        if (swap === null) priceNote = isSwap ? "The other side of this swap has no price." : "No swap in this transaction, and no oracle for this token."
+        if (swap === null) priceNote = isSwap ? "This swap didn't give a usable price for this token." : "No swap in this transaction, and no oracle for this token."
         else if (!isSwap) priceNote = "This transaction isn't a simple swap."
         else if (!isSanePrice(net.token, swap, ethMicros)) {
           priceNote = REJECTED_NOTE
@@ -240,8 +240,9 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     const other = anchor && resolved.find((r) => r !== anchor)
     if (anchor && other && tradeUsd !== null) {
       const implied = (tradeUsd * 10n ** BigInt(other.net.token.decimals)) / abs(other.net.delta)
-      const absurd = other.net.token.oracle && other.price !== null && !isSaneAgainstOracle(implied, other.price)
-      if (other.rejected || absurd) {
+      // Check against the token's oracle when it has a reading, and otherwise against its plausible range.
+      const sane = other.net.token.oracle && other.price !== null ? isSaneAgainstOracle(implied, other.price) : isSanePrice(other.net.token, implied.toString(), ethMicros)
+      if (other.rejected || !sane) {
         // A wrong trade value must never reach a total, so neither side gets one.
         tradeUsd = null
         anchor.priceNote = REJECTED_NOTE
@@ -250,7 +251,8 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     }
 
     for (const { net, price, priceSource, priceNote } of resolved) {
-      const value = tradeUsd !== null && price !== null ? tradeUsd.toString() : null
+      // What was paid is known even when the token's price isn't: price and cost are separate facts.
+      const value = tradeUsd === null ? null : tradeUsd.toString()
       const paid = net.delta > 0n && value !== null
       const costLabel: CostLabel = paid ? "paid" : "unknown"
       legs.push({

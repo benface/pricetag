@@ -122,7 +122,7 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
   }[metric]
   const lines: string[] = []
   if (metric === "pnl") {
-    if (value === null) lines.push("Nothing in this wallet has a known cost and a known price yet, so there's no PnL to show. It isn't $0.")
+    if (value === null) lines.push("Everything here depends on an unknown cost or price, so there's no PnL to show. It isn't $0.")
     else lines.push(`Realized ${showSigned(totals.realizedUsdMicros)}, unrealized ${showSigned(totals.unrealizedUsdMicros)}, less ${totals.gasUsdMicros === null ? "gas that's unavailable" : `${formatUsd(totals.gasUsdMicros)} of gas`}.`)
   }
   for (const position of positions) {
