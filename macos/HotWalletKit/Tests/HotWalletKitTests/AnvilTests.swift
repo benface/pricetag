@@ -31,11 +31,22 @@ private func anvil(_ method: String, _ parameters: [Any]) async throws -> Any? {
 
 private func hex(_ value: UInt128) -> String { "0x" + String(value, radix: 16) }
 
+/// The public node allows 25 requests a second per IP, shared with anything else on this network.
+private func readingPastTheRateLimit() async throws -> ChainSnapshot {
+    let client = RPCChainClient(url: liveRPC!)
+    let address = EthereumAddress("0x4200000000000000000000000000000000000006")!
+    for _ in 0..<5 {
+        if let snapshot = try? await client.snapshot(of: address) { return snapshot }
+        try await Task.sleep(for: .seconds(3))
+    }
+    return try await client.snapshot(of: address)
+}
+
 /// Only reads. A node's batch limits and its fee answers are the sort of thing a fork doesn't show.
 @Suite(.enabled(if: liveRPC != nil))
 struct LiveBaseTests {
     @Test func aRealSnapshotReads() async throws {
-        let snapshot = try await RPCChainClient(url: liveRPC!).snapshot(of: EthereumAddress("0x4200000000000000000000000000000000000006")!)
+        let snapshot = try await readingPastTheRateLimit()
         #expect(snapshot.chainID == Base.chainID)
         #expect(snapshot.ethUsdMicros != nil)
         #expect(snapshot.usdcUsdMicros != nil)
@@ -90,6 +101,10 @@ struct AnvilTests {
         let hotAfter = try await client.snapshot(of: hot)
         #expect((coldAfter.balances[usdc] ?? 0) > usdcUnits(400))
         #expect(hotAfter.nonce == 1)
+        // Anvil mines just after a send returns, so that tick's balances can be from before the receipt it found. It signs nothing
+        // from those, which `hotAfter.nonce` just showed, and this tick's are from after it.
+        await running.tick()
+        #expect(running.snapshot?.nonce == 1)
         let left = try #require(running.plan)
         #expect(left.valueUsdMicros <= 51 * Money.dollar, "about the cap is left")
         #expect(left.valueUsdMicros >= 49 * Money.dollar)
