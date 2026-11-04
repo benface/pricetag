@@ -25,6 +25,14 @@ actor ScriptedSource: PortfolioSource {
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
         throw FetchError.unreachable
     }
+
+    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+        throw FetchError.unreachable
+    }
+
+    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+        throw FetchError.unreachable
+    }
 }
 
 /// Holds one read open until it's told how to answer.
@@ -40,6 +48,14 @@ actor GatedSource: PortfolioSource {
     }
 
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
+        throw FetchError.unreachable
+    }
+
+    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+        throw FetchError.unreachable
+    }
+
+    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
         throw FetchError.unreachable
     }
 

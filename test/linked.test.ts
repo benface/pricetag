@@ -337,7 +337,7 @@ describe("the portfolio endpoint with linked wallets", () => {
   let server: Server
   let base: string
   before(async () => {
-    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }) })
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], readBlock: async () => null } })
     server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -369,7 +369,7 @@ describe("the portfolio endpoint with linked wallets", () => {
       if (address === HOT) throw new Error("nope")
       return { rows: rows[address] ?? [], priced: null, gasUnknownTxs: [] }
     } }
-    const api = createApi({}, { source: failing, readRates: async () => ({ byBlock: {}, latest: null }) })
+    const api = createApi({}, { source: failing, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], readBlock: async () => null } })
     const other = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => other.listen(0, "127.0.0.1", resolve))
     const response = await fetch(`http://127.0.0.1:${(other.address() as AddressInfo).port}/api/portfolio/${COLD}?linked=${HOT}`)

@@ -1,0 +1,28 @@
+{
+  "blockNum": 9200017,
+  "blockHash": "0x0dcc158ae036da166cbc5b240ba8e307b6709912475bb99e06c74c04b83e5c69",
+  "status": "passed",
+  "summary": "The data Amp stored for this block matches its header.",
+  "checks": [
+    {
+      "title": "Block fingerprint",
+      "status": "passed",
+      "detail": "The block's stored details hash to its fingerprint, 0x0dcc15…3e5c69."
+    },
+    {
+      "title": "Transactions",
+      "status": "passed",
+      "detail": "2 stored transactions rebuild the summary of them in the block's header. Amp doesn't store everything a deposit's hash covers, so Base's node supplied that, and a wrong answer would fail this."
+    },
+    {
+      "title": "Results and logs",
+      "status": "passed",
+      "detail": "2 stored results and 3 logs rebuild the summary of them in the block's header."
+    },
+    {
+      "title": "This activity",
+      "status": "passed",
+      "detail": "This transaction is in the checked data."
+    }
+  ]
+}

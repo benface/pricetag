@@ -163,6 +163,16 @@ public final class PortfolioStore {
         return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, linked: request.linked)
     }
 
+    public func proof(leg: String, address: String) async throws -> Proof {
+        guard address == self.address else { throw CancellationError() }
+        return try await source.proof(leg: leg, address: address, currency: currency)
+    }
+
+    public func verification(leg: String, address: String) async throws -> Verification {
+        guard address == self.address else { throw CancellationError() }
+        return try await source.verification(leg: leg, address: address, currency: currency)
+    }
+
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
         // A request from before a change of server has nothing to say about what's on screen now.
         guard request.serverURL == serverURL else { throw CancellationError() }
