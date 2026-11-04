@@ -217,6 +217,27 @@ describe("comparing only ever shows the rule", () => {
     assert.match(body.error!, /same block/)
   })
 
+  it("won't compare when a transaction is at another block on one side, with the same hash and amounts", async () => {
+    const moved = (ROWS[ME] as LegRow[]).map((r) => (r.tx_hash === "0xb" ? { ...r, block_num: r.block_num + 1 } : r))
+    // The same prices on both sides, so nothing here could be the rule.
+    const { status, body } = await compareWith({}, { readWindow: async () => ({ rows: moved, priced: null, gasUnknownTxs: [] }), readReferences: sourceAt(ETH_ANSWER).readReferences, readLatestReference: sourceAt(ETH_ANSWER).readLatestReference })
+    assert.equal(status, 409)
+    assert.match(body.error!, /same block/)
+    assert.equal(body.rows, undefined)
+  })
+
+  it("won't compare when a transaction's place in its block differs on one side", async () => {
+    const moved = (ROWS[ME] as LegRow[]).map((r) => ({ ...r, tx_index: r.tx_index + 1 }))
+    const { status } = await compareWith({}, { readWindow: async () => ({ rows: moved, priced: null, gasUnknownTxs: [] }) })
+    assert.equal(status, 409)
+  })
+
+  it("won't compare when one side has no price at a block the wallet moved in, because that isn't the rule either", async () => {
+    const { status, body } = await compareWith({}, { readReferences: async () => [] })
+    assert.equal(status, 409)
+    assert.equal(body.rows, undefined)
+  })
+
   it("answers with the failure when a price or a rate can't be read, and shows no numbers", async () => {
     const broken = await compareWith({}, { readLatestReference: async () => { throw new Error("no") } })
     assert.equal(broken.status, 502)

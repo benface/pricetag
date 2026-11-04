@@ -131,19 +131,43 @@ export function explainPortfolio(wallet: WalletResponse, method: Method, target:
 /** How many changed transactions a comparison lists. The count covers them all. */
 const MAX_COMPARED_TXS = 20
 
-/** Each leg's cost, sale value and network fee by the other rule, for what came out differently. */
-function changedLegs(a: readonly PricedLeg[], b: readonly PricedLeg[]): RuleTransaction[] {
-  const other = new Map(b.map((leg) => [leg.id, leg]))
+type ComparedAmount = Pick<RuleTransaction, "txHash" | "blockNum" | "timestamp" | "asset" | "label"> & { parts: (string | null)[] }
+
+/**
+ * Each transaction's cost, sale value and network fee per asset. A leg can be split, as when a transfer between linked
+ * wallets carries several purchases, but people read one amount for one transaction.
+ */
+function comparedAmounts(legs: readonly PricedLeg[]): Map<string, ComparedAmount> {
+  const amounts = new Map<string, ComparedAmount>()
+  const add = (leg: PricedLeg, label: RuleTransaction["label"], value: string | null) => {
+    const key = `${leg.txHash}:${leg.asset}:${label}`
+    const known = amounts.get(key)
+    if (known) known.parts.push(value)
+    else amounts.set(key, { txHash: leg.txHash, blockNum: leg.blockNum, timestamp: leg.timestamp, asset: leg.asset, label, parts: [value] })
+  }
+  for (const leg of legs) {
+    // A fee has no cost or sale value. It's spent at the price of its block, the same way the fold counts it.
+    if (leg.kind === "gas") add(leg, "Network fee", leg.priceMicros === null ? null : worth(BigInt(leg.delta.replace("-", "")), BigInt(leg.priceMicros), leg.decimals).toString())
+    else {
+      add(leg, "Cost", leg.costMicros)
+      add(leg, "Sold for", leg.proceedsMicros)
+    }
+  }
+  return amounts
+}
+
+/** One part unknown leaves the whole unknown. It's never added up as if that part were zero. */
+const sumOf = (parts: readonly (string | null)[]) => (parts.includes(null) ? null : parts.reduce((sum, part) => sum + BigInt(part as string), 0n).toString())
+
+/** What came out differently by the other rule. A known part can change inside an amount that stays unknown, and that still counts. */
+function changedAmounts(a: readonly PricedLeg[], b: readonly PricedLeg[]): RuleTransaction[] {
+  const theirs = comparedAmounts(b)
   const changed: RuleTransaction[] = []
-  // A fee has no cost or sale value. It's spent at the price of its block, the same way the fold counts it.
-  const fee = (leg: PricedLeg) => (leg.kind === "gas" && leg.priceMicros !== null ? worth(BigInt(leg.delta.replace("-", "")), BigInt(leg.priceMicros), leg.decimals).toString() : null)
-  for (const leg of a) {
-    const theirs = other.get(leg.id)
-    if (!theirs) continue
-    const base = { txHash: leg.txHash, blockNum: leg.blockNum, timestamp: leg.timestamp, asset: leg.asset }
-    if (fee(leg) !== fee(theirs)) changed.push({ ...base, label: "Network fee", a: fee(leg), b: fee(theirs), difference: differenceOf(fee(leg), fee(theirs)) })
-    if (leg.costMicros !== theirs.costMicros) changed.push({ ...base, label: "Cost", a: leg.costMicros, b: theirs.costMicros, difference: differenceOf(leg.costMicros, theirs.costMicros) })
-    if (leg.proceedsMicros !== theirs.proceedsMicros) changed.push({ ...base, label: "Sold for", a: leg.proceedsMicros, b: theirs.proceedsMicros, difference: differenceOf(leg.proceedsMicros, theirs.proceedsMicros) })
+  for (const [key, { parts, ...base }] of comparedAmounts(a)) {
+    const other = theirs.get(key)?.parts ?? [null]
+    if (JSON.stringify(parts) === JSON.stringify(other)) continue
+    const [x, y] = [sumOf(parts), sumOf(other)]
+    changed.push({ ...base, a: x, b: y, difference: differenceOf(x, y) })
   }
   return changed.sort((x, y) => y.blockNum - x.blockNum)
 }
@@ -204,7 +228,7 @@ export function compareRules(a: Compared, b: Compared, method: Method, blockNum:
     row("cost", "money", position.values.costMicros, theirs.values.costMicros)
     row("value", "money", position.values.valueMicros, theirs.values.valueMicros)
   }
-  const changed = changedLegs(viewWithLinkedCosts(a.wallet, a.linked ?? [], method).legs, viewWithLinkedCosts(b.wallet, b.linked ?? [], method).legs)
+  const changed = changedAmounts(viewWithLinkedCosts(a.wallet, a.linked ?? [], method).legs, viewWithLinkedCosts(b.wallet, b.linked ?? [], method).legs)
   const changedTxs = new Set(changed.map((c) => c.txHash)).size
   return {
     address: a.wallet.address,

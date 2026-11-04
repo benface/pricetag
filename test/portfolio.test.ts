@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ETH_ADDRESS, PRICE_NOTES, WETH_ADDRESS, buildPricedLegs, foldPositions, sumTotals, type LegRow } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, PRICE_NOTES, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, sumTotals, type LegRow } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
@@ -447,6 +447,55 @@ describe("comparing pricing rules", () => {
     assert.deepEqual(fees.transactions.map((tx) => [tx.label, tx.a, tx.b, tx.difference]), [["Network fee", "3000000", "2970000", "-30000"]])
     assert.deepEqual(fees.rows.find((r) => r.label === "Network fees")?.difference, "-30000")
     assert.equal(fees.why, whySentence(1))
+  })
+
+  describe("a transfer between linked wallets carrying several purchases", () => {
+    const [ME, OTHER] = ["0x00000000000000000000000000000000000000aa", "0x00000000000000000000000000000000000000bb"]
+    const DEGEN = TOKENS.find((t) => t.symbol === "DEGEN")!.address
+    const THOUSANDS = "10000000000000000000000"
+    const moved = (tx: string, block: number, account: string, token: string, side: LegRow["side"], amount: string): LegRow => ({ block_num: block, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: tx, tx_index: 1, log_index: 0, token, account, side, amount, kind: "erc20" })
+    const walletOf = (address: string, rows: LegRow[], eth_usd: string) => {
+      const references = [...new Set(rows.map((r) => r.block_num))].map((block_num) => ({ block_num, eth_usd, usdc_usd: "100000000" }))
+      return walletWith({ address, legs: buildPricedLegs({ account: address, rows, references, priced: derivePricedRows(rows, references) }), references, prices: {} })
+    }
+    const fund = moved("0xfund", 2, OTHER, ETH_ADDRESS, "credit", "300000000000000000")
+    const buys = [
+      moved("0xbuy1", 3, OTHER, ETH_ADDRESS, "debit", "100000000000000000"),
+      moved("0xbuy1", 3, OTHER, DEGEN, "credit", THOUSANDS),
+      moved("0xbuy2", 4, OTHER, ETH_ADDRESS, "debit", "200000000000000000"),
+      moved("0xbuy2", 4, OTHER, DEGEN, "credit", THOUSANDS),
+    ]
+    const send = (amount: string) => [moved("0xsend", 6, OTHER, DEGEN, "debit", amount)]
+    const land = (amount: string) => [moved("0xsend", 6, ME, DEGEN, "credit", amount)]
+    const by = (rule: typeof market, eth: string, others: LegRow[], amount: string) => ({ rule, wallet: walletOf(ME, land(amount), eth), linked: [walletOf(OTHER, [fund, ...others, ...send(amount)], eth)], reference: reference(eth) })
+    const compareFifo = (others: LegRow[], amount: string) => compareRules(by(market, "300000000000", others, amount), by(cautious, "297000000000", others, amount), "fifo", 20)
+    const costs = (comparison: ReturnType<typeof compareFifo>) => comparison.transactions.filter((tx) => tx.txHash === "0xsend")
+
+    it("is one cost for one transaction", () => {
+      const comparison = compareFifo(buys, "20000000000000000000000")
+      assert.deepEqual(costs(comparison).map((tx) => [tx.asset, tx.label, tx.a, tx.b, tx.difference]), [["DEGEN", "Cost", "900000000", "891000000", "-9000000"]])
+      assert.equal(comparison.changedTxs, 1)
+    })
+
+    it("gives every row its own identity, which both apps key on", () => {
+      const { transactions } = compareFifo(buys, "20000000000000000000000")
+      const ids = transactions.map((tx) => `${tx.txHash}:${tx.asset}:${tx.label}`)
+      assert.equal(new Set(ids).size, ids.length)
+    })
+
+    it("stays unknown when part of it is, and still says it changed", () => {
+      // Half of what's sent arrived from a stranger at an unknown cost, so the whole cost is unknown by either rule.
+      const others = [moved("0xbuy1", 3, OTHER, ETH_ADDRESS, "debit", "100000000000000000"), moved("0xbuy1", 3, OTHER, DEGEN, "credit", THOUSANDS), moved("0xgift", 4, OTHER, DEGEN, "credit", THOUSANDS)]
+      const comparison = compareFifo(others, "20000000000000000000000")
+      assert.deepEqual(costs(comparison).map((tx) => [tx.label, tx.a, tx.b, tx.difference]), [["Cost", null, null, null]])
+      assert.equal(comparison.changedTxs, 1)
+    })
+
+    it("doesn't list an amount that stayed the same, known or not", () => {
+      const same = compareRules(by(market, "300000000000", buys, "20000000000000000000000"), by(cautious, "300000000000", buys, "20000000000000000000000"), "fifo", 20)
+      assert.deepEqual(same.transactions, [])
+      assert.equal(same.changedTxs, 0)
+    })
   })
 
   it("sends the Mac app what it can read", () => {

@@ -225,6 +225,10 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
         const a = facts && first.wallets.pricedOn(wallet, facts, latestPrices(atA))
         const b = facts && second.wallets.pricedOn(wallet, facts, latestPrices(atB))
         if (!a || !b) return null
+        // A block one side has no price for would look like the rule made a number unavailable.
+        const blocksOf = (wallet: WalletResponse) => new Set(wallet.references.map((reference) => reference.block_num))
+        const [pricedA, pricedB] = [blocksOf(a), blocksOf(b)]
+        if (a.legs.some((leg) => pricedA.has(leg.blockNum) !== pricedB.has(leg.blockNum))) return null
         // One read of the rates, on both sides. Answers the request itself when it fails, so that's not a "not yet".
         const shown = await inCurrency(a, currency, res)
         if (!shown) return undefined

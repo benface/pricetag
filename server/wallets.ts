@@ -54,7 +54,8 @@ type L1Fee = { blockNum: number; fee: string; readAtCoveredTo: number }
  */
 export type WalletFacts = Pick<Cached, "fromBlock" | "coveredTo" | "rows" | "latest" | "gasUnknownTxs" | "opening" | "closing" | "lastBalances" | "l1Fees">
 
-const rowKey = (r: LegRow) => `${r.tx_hash}:${r.log_index}:${r.account}:${r.side}:${r.kind}:${r.token}:${r.amount}`
+/** Everything about a row but its price. A transaction that moved to another block isn't the same fact, even with the same amounts. */
+const rowKey = (r: LegRow) => `${r.block_num}:${r.timestamp}:${r.tx_index}:${r.tx_hash}:${r.log_index}:${r.account}:${r.side}:${r.kind}:${r.token}:${r.amount}`
 const rowKeys = (rows: readonly LegRow[]) => rows.map(rowKey).sort().join()
 
 /**
