@@ -134,7 +134,7 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
     }
   }
 
-  // Without traces, a WETH Withdrawal in a transaction counts as ETH paid to its sender.
+  // Without traces, a WETH Withdrawal in a transaction counts as ETH paid to its sender. `settleUnwraps` checks it.
   const sentByMe = new Set(txs.filter((t) => normalizeAddress(t.from) === me).map((t) => normalizeAddress(t.tx_hash)))
   for (const log of withdrawals) {
     const hash = normalizeAddress(log.tx_hash)

@@ -76,11 +76,13 @@ function onchainLines({ asset, decimals, reconciliation, effects }: Position): s
     const opening = effects.some(({ leg }) => leg.opening) ? "what it already held, plus every transaction since," : "its transactions"
     return [`Matches the chain exactly: ${opening} add up to ${amount(reconciliation.actualQty)} at block ${block}.`]
   }
+  const unconfirmed = effects.filter(({ leg }) => leg.unsettledCredit).map(({ leg }) => shortHash(leg.txHash))
   return [
     `Worked out from its transactions: ${amount(reconciliation.computedQty)}.`,
     `Onchain at block ${block}: ${amount(reconciliation.actualQty)}.`,
     `Difference: ${BigInt(reconciliation.differenceQty) > 0n ? "+" : ""}${amount(reconciliation.differenceQty)}.`,
     mismatchCause(asset, reconciliation.differenceQty),
+    ...(unconfirmed.length > 0 ? [`We couldn't confirm how much ETH reached this wallet in: ${[...new Set(unconfirmed)].join(", ")}.`] : []),
     "Value uses the onchain balance. PnL is unavailable, because we know some of this wallet's activity is missing.",
   ]
 }

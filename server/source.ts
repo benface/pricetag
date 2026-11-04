@@ -5,7 +5,7 @@
 
 import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, asIso, asNumber, blockFilters, datasetReader, decimalString, hexOf, prefixed, readHead, type LegRow, type PricedRow, type Query, type ReferenceRow, type Row, type BalanceSnapshot } from "@pricetag/sdk"
 import type { Head, Mode } from "../src/core/api.ts"
-import { MULTICALL3, balancesByAsset, decodeBalanceResults, encodeBalanceCalls } from "./balances.ts"
+import { MULTICALL3, balancesByAsset, decodeBalanceResults, decodeEthBalance, encodeBalanceCalls, encodeEthBalanceCall } from "./balances.ts"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
 export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknownTxs: string[] }
@@ -27,6 +27,8 @@ export type Source = {
   readLatestReference(head: number): Promise<ReferenceRow | null>
   /** What the chain says this wallet holds at `block`, or null when the read gave nothing usable. */
   readBalances(address: string, block: number): Promise<BalanceSnapshot | null>
+  /** This wallet's plain ETH at the end of each block, not counting WETH. A block whose read failed isn't in it. */
+  readEthBalances(address: string, blocks: readonly number[]): Promise<Map<number, string>>
 }
 
 /**
@@ -37,6 +39,32 @@ async function readBalancesAt(query: Query, network: string, address: string, bl
   const [row] = await query<Row>(`SELECT rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeBalanceCalls(address)}', ${block}) AS r`)
   const results = decodeBalanceResults((row?.r as { data?: string } | null | undefined)?.data)
   return results && { blockNum: block, amounts: balancesByAsset(results) }
+}
+
+/**
+ * One query per 200 blocks, in the shape `readReferences` explains. A block the table doesn't have, like the one before a
+ * local dataset's start, is read on its own.
+ */
+async function readEthBalancesAt(query: Query, network: string, baseDataset: string, address: string, blocks: readonly number[]): Promise<Map<number, string>> {
+  const balances = new Map<number, string>()
+  const call = (block: string) => `rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeEthBalanceCall(address)}', ${block}) AS r`
+  const dataOf = (row: Row | undefined) => (row?.r as { data?: string } | null | undefined)?.data
+  const returned = new Set<number>()
+  for (const { filter, count } of blockFilters(blocks)) {
+    for (const row of await query<Row>(`SELECT block_num, ${call("block_num")} FROM (SELECT block_num FROM "${baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)) {
+      const block = asNumber(row.block_num)
+      const balance = decodeEthBalance(dataOf(row))
+      returned.add(block)
+      if (balance !== null) balances.set(block, balance)
+    }
+  }
+  for (const block of blocks) {
+    if (returned.has(block)) continue
+    const [row] = await query<Row>(`SELECT ${call(String(block))}`)
+    const balance = decodeEthBalance(dataOf(row))
+    if (balance !== null) balances.set(block, balance)
+  }
+  return balances
 }
 
 export function rawSource(query: Query, config: { baseDataset: string; network: string; historyBlocks: number }): Source {
@@ -76,6 +104,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
     readReferences,
     readLatestReference: async (head) => (await readReferences([head]))[0] ?? null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
 
     async readWindow(address, from, to) {
       const me = hexOf(address)
@@ -163,6 +192,7 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
     startBlock: config.startBlock,
     historyBlocks: null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     ...datasetReader(query, config),
   }
 }

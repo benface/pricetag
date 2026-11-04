@@ -27,10 +27,12 @@ function fake(
   latest: () => ReferenceRow | null,
   processed: (head: number) => number | null = (head) => head,
   balances: (block: number) => Promise<Record<string, string> | null> = async () => ({}),
+  ethBalances: (blocks: readonly number[]) => Promise<Map<number, string>> = async () => new Map(),
 ) {
   const windows: [number, number][] = []
   const balanceReads: number[] = []
   const referenceReads: number[][] = []
+  const ethReads: number[][] = []
   const source: Source = {
     mode: "raw",
     startBlock: null,
@@ -51,8 +53,12 @@ function fake(
       const amounts = await balances(block)
       return amounts && { blockNum: block, amounts }
     },
+    async readEthBalances(_, blocks) {
+      ethReads.push([...blocks])
+      return ethBalances(blocks)
+    },
   }
-  return { source, windows, referenceReads, balanceReads }
+  return { source, windows, referenceReads, balanceReads, ethReads }
 }
 
 const noFees: ReadL1Fees = async () => new Map()
@@ -576,5 +582,78 @@ describe("reconciling", () => {
     head = 1001
     await wallets.get(ME)
     assert.deepEqual(reads, [960, 1001])
+  })
+})
+
+describe("settling unwrap credits", () => {
+  const BLOCK = 950
+  const TX = `0x${BLOCK.toString(16)}`
+  const gas = (block = BLOCK, tx = TX): LegRow => ({ ...row(block, "100"), tx_hash: tx, side: "debit", kind: "gas" })
+  const claim = (block = BLOCK, tx = TX): LegRow => ({ ...row(block, "1000"), tx_hash: tx, kind: "unwrap" })
+  const allFees: ReadL1Fees = async (requests) => new Map(requests.map((r) => [r.txHash, "0"]))
+  const nothingArrived = async (blocks: readonly number[]) => new Map(blocks.map((b) => [b, b === BLOCK ? "4900" : "5000"]))
+  const ethDeltas = (legs: { asset: string; kind: string; delta: string }[]) => legs.filter((l) => l.asset === "ETH" && l.kind !== "gas").map((l) => l.delta)
+
+  it("reads the balance on both sides of the block, and only for those blocks", async () => {
+    const chain = new Map([[BLOCK, [gas(), claim()]], [960, [row(960)]]])
+    const { source, ethReads } = fake(chain, () => reference(1000), undefined, undefined, nothingArrived)
+    const wallet = await createWallets(source, headAt(1000), allFees).get(ME)
+    assert.deepEqual(ethReads, [[BLOCK - 1, BLOCK]])
+    assert.deepEqual(ethDeltas(wallet.legs), ["5"])
+  })
+
+  it("reads nothing when there's nothing to settle", async () => {
+    const { source, ethReads } = fake(new Map([[960, [row(960)]]]), () => reference(1000))
+    await createWallets(source, headAt(1000), allFees).get(ME)
+    assert.deepEqual(ethReads, [])
+  })
+
+  it("reads a block once, and again after a reorg can have changed it", async () => {
+    let head = 1000
+    const chain = new Map([[BLOCK, [gas(), claim()]], [990, [gas(990), claim(990)]]])
+    const { source, ethReads } = fake(chain, () => reference(head), undefined, undefined, nothingArrived)
+    const wallets = createWallets(source, async () => headAt(head)(), allFees)
+    await wallets.get(ME)
+    assert.deepEqual(ethReads, [[BLOCK - 1, BLOCK, 989, 990]])
+    head = 1001
+    await wallets.get(ME)
+    // Block 950 is past what's re-read for reorgs, so it's kept.
+    assert.deepEqual(ethReads[1], [989, 990])
+  })
+
+  it("keeps the wallet up when the read fails, leaves the swap unknown, and tries again on the next block", async () => {
+    let head = 1000
+    let fail = true
+    const read = async (blocks: readonly number[]) => {
+      if (fail) throw new Error("no RPC")
+      return nothingArrived(blocks)
+    }
+    const { source } = fake(new Map([[BLOCK, [gas(), claim()]]]), () => reference(head), undefined, undefined, read)
+    const wallets = createWallets(source, async () => headAt(head)(), allFees)
+    const first = await wallets.get(ME)
+    assert.deepEqual(ethDeltas(first.legs), ["1000"])
+    assert.equal(first.legs.find((l) => l.kind !== "gas")!.unsettledCredit, true)
+
+    fail = false
+    head = 1001
+    assert.deepEqual(ethDeltas((await wallets.get(ME)).legs), [])
+  })
+
+  it("waits for the L1 fee, and settles as soon as it's read", async () => {
+    let head = 1000
+    let fees = noFees
+    const { source } = fake(new Map([[BLOCK, [gas(), claim()]]]), () => reference(head), undefined, undefined, nothingArrived)
+    const wallets = createWallets(source, async () => headAt(head)(), (requests) => fees(requests))
+    assert.equal((await wallets.get(ME)).legs.find((l) => l.kind !== "gas")!.unsettledCredit, true)
+    fees = allFees
+    head = 1001
+    assert.deepEqual(ethDeltas((await wallets.get(ME)).legs), [])
+  })
+
+  it("adds the L1 fee to what the balance has to explain", async () => {
+    const fee: ReadL1Fees = async (requests) => new Map(requests.map((r) => [r.txHash, "30"]))
+    const read = async (blocks: readonly number[]) => new Map(blocks.map((b) => [b, b === BLOCK ? "5870" : "5000"]))
+    const { source } = fake(new Map([[BLOCK, [gas(), claim()]]]), () => reference(1000), undefined, undefined, read)
+    assert.deepEqual(ethDeltas((await createWallets(source, headAt(1000), fee).get(ME)).legs), ["1000"])
   })
 })

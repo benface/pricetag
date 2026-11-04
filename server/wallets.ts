@@ -1,7 +1,7 @@
 // Keeps each wallet's rows in memory: one full read, then only new blocks, because a wallet read scans the whole range.
 
 import { describeError } from "@pricetag/sdk"
-import { ASSETS, buildPricedLegs, derivePricedRows, latestPrices, openingLegs, type BalanceSnapshot, type LatestPrices, type LegRow, type PricedRow, type ReferenceRow } from "@pricetag/sdk/core"
+import { ASSETS, buildPricedLegs, derivePricedRows, latestPrices, openingLegs, settleUnwraps, unwrapBalanceBlocks, type BalanceSnapshot, type LatestPrices, type LegRow, type PricedRow, type ReferenceRow } from "@pricetag/sdk/core"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import type { ReadL1Fees } from "./receipts.ts"
 import type { Source } from "./source.ts"
@@ -9,6 +9,8 @@ import type { Source } from "./source.ts"
 /** Re-read this many blocks on each refresh, so a reorg near the tip replaces what it changed. */
 const REORG_BLOCKS = 30
 const MAX_WALLETS = 20
+/** A busy wallet catches up over a few refreshes, and until then the swaps left say they aren't confirmed. */
+const MAX_ETH_BALANCES_PER_READ = 400
 /** Base's block time, which is exact. */
 const BLOCK_MS = 2000
 
@@ -29,6 +31,8 @@ type Cached = {
   lastBalances: Record<string, { blockNum: number; amount: string }>
   /** L1 fees by transaction. See `isL1FeeSettled`. */
   l1Fees: Map<string, L1Fee>
+  /** Plain ETH at the end of the blocks `settleUnwraps` needs. */
+  ethBalances: Map<number, string>
 }
 
 type L1Fee = { blockNum: number; fee: string; readAtCoveredTo: number }
@@ -95,11 +99,13 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     let priced = cached?.priced ?? []
     const known = new Map(cached?.references ?? [])
     const gasUnknownTxs = new Set(cached?.gasUnknownTxs ?? [])
+    const ethBalances = new Map(cached?.ethBalances ?? [])
     if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo)) {
       const readFrom = cached ? Math.max(fromBlock, cached.coveredTo - REORG_BLOCKS + 1) : fromBlock
       const window = await source.readWindow(address, readFrom, coveredTo)
       rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
       for (const block of known.keys()) if (block >= readFrom) known.delete(block)
+      for (const block of ethBalances.keys()) if (block >= readFrom) ethBalances.delete(block)
       const missing = [...new Set(rows.map((r) => r.block_num))].filter((b) => !known.has(b))
       for (const reference of await source.readReferences(missing)) known.set(reference.block_num, reference)
       priced = window.priced ? [...priced.filter((p) => p.block_num < readFrom), ...window.priced] : derivePricedRows(rows, [...known.values()])
@@ -114,6 +120,15 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       if (fee !== undefined) l1Fees.set(tx_hash, { blockNum: block_num, fee, readAtCoveredTo: coveredTo })
     }
 
+    const unreadEth = unwrapBalanceBlocks(rows).filter((block) => !ethBalances.has(block)).slice(0, MAX_ETH_BALANCES_PER_READ)
+    if (unreadEth.length > 0) {
+      try {
+        for (const [block, balance] of await source.readEthBalances(address, unreadEth)) ethBalances.set(block, balance)
+      } catch (error) {
+        console.error("ETH balance read failed:", describeError(error))
+      }
+    }
+
     let opening = cached?.opening ?? null
     let closing = cached?.closing ?? null
     const lastBalances = { ...cached?.lastBalances }
@@ -125,7 +140,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
     const prices = latestPrices(await source.readLatestReference(head.blockNum))
 
-    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs, opening, closing, lastBalances, l1Fees }
+    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs, opening, closing, lastBalances, l1Fees, ethBalances }
     wallets.delete(address)
     wallets.set(address, next)
     if (wallets.size > MAX_WALLETS) wallets.delete(wallets.keys().next().value as string)
@@ -136,12 +151,19 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const references = [...wallet.references.values()]
     const l1 = l1FeeRows(wallet.rows, wallet.l1Fees)
     const { opening, closing } = wallet
+    const { rows, priced } = settleUnwraps({
+      rows: [...wallet.rows, ...l1.rows],
+      priced: wallet.priced,
+      references,
+      ethBalances: wallet.ethBalances,
+      feeUnknownTxs: [...wallet.gasUnknownTxs, ...l1.unknownTxs],
+    })
     const openedAt = new Date(new Date(wallet.latest.timestamp).getTime() - (wallet.latest.blockNum - wallet.fromBlock + 1) * BLOCK_MS).toISOString()
     return {
       address: key,
       mode: source.mode,
       coverage: { fromBlock: wallet.fromBlock, toBlock: wallet.coveredTo },
-      legs: [...(opening ? openingLegs(opening, openedAt) : []), ...buildPricedLegs({ account: key, rows: [...wallet.rows, ...l1.rows], references, priced: wallet.priced })],
+      legs: [...(opening ? openingLegs(opening, openedAt) : []), ...buildPricedLegs({ account: key, rows, references, priced })],
       references,
       prices: wallet.prices,
       latest: wallet.latest,
