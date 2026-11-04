@@ -313,7 +313,7 @@ describe("pricing a wallet's rows", () => {
       assert.match(aero(legs).priceNote!, /off the allowlist/)
     })
 
-    it("a dataset row can't price it either, because that row only saw the listed tokens", () => {
+    it("a row from a dataset deployed before unlisted_moves can't price it either", () => {
       const rows = [row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 500n * E18)]
       const priced = derivePricedRows(rows, [REF])
       assert.equal(priced.length, 1)
@@ -450,6 +450,40 @@ describe("pricing a wallet's rows", () => {
 
     it("the rows that make the dataset's pairs leave unlisted tokens out", () => {
       assert.equal(derivePricedRows([row("0x1", USDC_ADDRESS, "debit", 5n * E6), unlisted("0x1", "credit", 7n)], [REF]).length, 0)
+    })
+
+    describe("the dataset's priced row", () => {
+      const swap = [row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 500n * E18)]
+      const nft = (side: LegRow["side"], id: bigint) => row("0x1", JACK, side, id, "unlisted_nft")
+      const pricedWith = (extra: LegRow[]) => derivePricedRows([...swap, ...extra], [REF]).length
+
+      it("exists for a swap with nothing unlisted", () => assert.equal(pricedWith([]), 1))
+
+      it("is left out when an unlisted token moved, whichever way", () => {
+        assert.equal(pricedWith([unlisted("0x1", "credit", 7n)]), 0)
+        assert.equal(pricedWith([unlisted("0x1", "debit", 7n)]), 0)
+      })
+
+      it("stays when the unlisted token nets to zero or a transfer moved nothing", () => {
+        assert.equal(pricedWith([unlisted("0x1", "credit", 7n), unlisted("0x1", "debit", 7n)]), 1)
+        assert.equal(pricedWith([unlisted("0x1", "credit", 0n)]), 1)
+      })
+
+      it("is left out when an amount can't be read, even if another row cancels what it can", () => {
+        assert.equal(pricedWith([{ ...unlisted("0x1", "credit", 0n), amount: "" }]), 0)
+        assert.equal(pricedWith([unlisted("0x1", "credit", 7n), unlisted("0x1", "debit", 7n), { ...unlisted("0x1", "debit", 0n), amount: "" }]), 0)
+      })
+
+      it("counts NFTs by ID, so one that came and went moved nothing, and a swapped one did", () => {
+        assert.equal(pricedWith([nft("credit", 42n), nft("debit", 42n)]), 1)
+        assert.equal(pricedWith([nft("credit", 42n), nft("debit", 43n)]), 0)
+        assert.equal(pricedWith([nft("credit", 0n)]), 0)
+      })
+
+      it("ignores unlisted movements in another transaction or by another account", () => {
+        assert.equal(pricedWith([unlisted("0x2", "credit", 7n)]), 1)
+        assert.equal(pricedWith([{ ...unlisted("0x1", "credit", 7n), account: "0x000000000000000000000000000000000000dead" }]), 1)
+      })
     })
   })
 
