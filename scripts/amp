@@ -76,6 +76,8 @@ write_env_block() {
   local start_block="$1"
   remove_env_block
   (umask 077; touch "$ENV_FILE")
+  # The block's markers have to start a line.
+  if [ -s "$ENV_FILE" ] && [ -n "$(tail -c 1 "$ENV_FILE")" ]; then echo >> "$ENV_FILE"; fi
   {
     printf '%s\n' "$ENV_BLOCK_BEGIN"
     printf 'AMP_QUERY_URL=%s\n' "$FLIGHT_URL"

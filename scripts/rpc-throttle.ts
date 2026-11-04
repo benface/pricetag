@@ -1,8 +1,8 @@
 // A local relay in front of the Base RPC, started by scripts/amp. It holds requests to a steady rate and retries 429s.
 //
-// Amp can't do this itself: `eth_call` ignores the provider's concurrency limit, and its rate limit allows a burst of
-// a whole minute's quota, which starts over each time a job restarts. One rate-limited `eth_call` fails its job, so the
-// restarted job bursts and fails again, forever.
+// Amp can't do this itself: `eth_call` has its own client that skips the provider's concurrency limit, and the rate
+// limit allows a burst of a whole minute's quota. One rate-limited `eth_call` fails its job, and on the public RPC the
+// restarted job kept failing the same way until the dataset fell behind for good.
 
 import { createServer, type Server } from "node:http"
 import { fileURLToPath } from "node:url"
