@@ -2,7 +2,7 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { isAddress, type Head, type StatusResponse } from "../src/core/api.ts"
+import { isAddress, type Head } from "../src/core/api.ts"
 import { DEMO_ADDRESS, DEMO_WALLET } from "../src/core/fixtures.ts"
 import { createQuery } from "./amp.ts"
 import { datasetSource, rawSource, type Source } from "./source.ts"
@@ -33,7 +33,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 
 /** Query errors can quote our SQL or the endpoint. The browser gets a fixed message, and the detail stays in the server log. */
 function sendAmpError(res: ServerResponse, error: unknown) {
-  console.error("Amp query failed:", error instanceof Error ? error.message : "unknown error")
+  console.error("Amp query failed:", (error instanceof Error && error.message) || "unknown error")
   sendJson(res, 502, { error: "Couldn't read from Amp." })
 }
 
@@ -68,7 +68,7 @@ export function createApi(env: Env) {
           message = `event: head\ndata: ${JSON.stringify(current)}\n\n`
         }
       } catch (error) {
-        console.error("Head poll failed:", error instanceof Error ? error.message : "unknown error")
+        console.error("Head poll failed:", (error instanceof Error && error.message) || "unknown error")
         message = `event: down\ndata: {}\n\n`
       }
       if (message) for (const subscriber of subscribers) subscriber.write(message)
@@ -84,12 +84,6 @@ export function createApi(env: Env) {
     if (!path.startsWith("/api/")) return false
     if (req.method !== "GET") {
       sendJson(res, 405, { error: "Method not allowed" })
-      return true
-    }
-
-    if (path === "/api/status") {
-      const status: StatusResponse = { mode: source?.mode ?? "demo", head, historyBlocks: source?.historyBlocks ?? null }
-      sendJson(res, 200, status)
       return true
     }
 

@@ -20,8 +20,6 @@ export type WalletResponse = {
   gasUnknownTxs: string[]
 }
 
-export type StatusResponse = { mode: Mode; head: Head | null; historyBlocks: number | null }
-
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/
 
 export function isAddress(value: string): boolean {

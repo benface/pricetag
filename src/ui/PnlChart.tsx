@@ -1,21 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { PnlPoint } from "../core/portfolio.ts"
-import { formatSignedUsd, formatTime } from "./format.ts"
+import { formatClock, formatSignedUsd, formatTime } from "./format.ts"
 
 const HEIGHT = 220
 const MARGIN = { top: 16, right: 84, bottom: 26, left: 64 }
 
-function niceTicks(min: number, max: number, count = 4): number[] {
+function niceTicks(min: number, max: number, count = 4): { ticks: number[]; step: number } {
   const span = max - min || 1
   const raw = span / count
   const magnitude = 10 ** Math.floor(Math.log10(raw))
   const step = [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((s) => s >= raw) ?? raw
   const ticks: number[] = []
-  for (let v = Math.floor(min / step) * step; v <= Math.ceil(max / step) * step + step / 2; v += step) ticks.push(Number(v.toFixed(8)))
-  return ticks
+  const last = Math.ceil(max / step)
+  for (let i = Math.floor(min / step); i <= last; i++) ticks.push(Number((i * step).toFixed(9)))
+  return { ticks, step }
 }
 
-const compactUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 2 })
+/** Ticks are as precise as their step, so a chart of cents doesn't label every line $0. */
+function tickFormat(step: number): (value: number) => string {
+  const digits = step >= 1 ? 0 : Math.ceil(-Math.log10(step)) + (step * 10 ** Math.ceil(-Math.log10(step)) % 1 > 0.001 ? 1 : 0)
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: step >= 1000 ? "compact" : "standard", minimumFractionDigits: digits, maximumFractionDigits: digits }).format
+}
 
 type Props = { points: PnlPoint[]; onSelect: (point: PnlPoint) => void }
 
@@ -35,7 +40,7 @@ export function PnlChart({ points, onSelect }: Props) {
   const chart = useMemo(() => {
     const times = points.map((p) => new Date(p.timestamp).getTime())
     const values = points.map((p) => Number(p.pnlUsdMicros) / 1e6)
-    const ticks = niceTicks(Math.min(0, ...values), Math.max(0, ...values))
+    const { ticks, step } = niceTicks(Math.min(0, ...values), Math.max(0, ...values))
     const low = ticks[0] ?? 0
     const high = ticks[ticks.length - 1] ?? 1
     const start = times[0] ?? 0
@@ -52,7 +57,7 @@ export function PnlChart({ points, onSelect }: Props) {
         return i === 0 ? `M${px},${py}` : `H${px}V${py}`
       })
       .join("")
-    return { times, values, ticks, x, y, path, plotWidth }
+    return { times, values, ticks, x, y, path, plotWidth, formatTick: tickFormat(step) }
   }, [points, width])
 
   const nearest = (clientX: number) => {
@@ -123,13 +128,13 @@ export function PnlChart({ points, onSelect }: Props) {
             <g key={tick}>
               <line x1={MARGIN.left} x2={MARGIN.left + chart.plotWidth} y1={chart.y(tick)} y2={chart.y(tick)} className={tick === 0 ? "axis-zero" : "grid"} />
               <text x={MARGIN.left - 8} y={chart.y(tick)} dy="0.32em" textAnchor="end" className="tick">
-                {compactUsd.format(tick)}
+                {chart.formatTick(tick)}
               </text>
             </g>
           ))}
           {xLabels.map((i) => (
             <text key={i} x={chart.x(chart.times[i] as number)} y={HEIGHT - 6} textAnchor={i === 0 ? "start" : "end"} className="tick">
-              {formatTime((points[i] as PnlPoint).timestamp)}
+              {width < 520 ? formatClock((points[i] as PnlPoint).timestamp) : formatTime((points[i] as PnlPoint).timestamp)}
             </text>
           ))}
           <path d={chart.path} className="line" />
@@ -138,7 +143,7 @@ export function PnlChart({ points, onSelect }: Props) {
             : null}
           {points.length > 0 ? (
             <text x={chart.x(chart.times[points.length - 1] as number) + 10} y={chart.y(chart.values[points.length - 1] as number)} dy="0.32em" className="end-label">
-              {compactUsd.format(chart.values[points.length - 1] as number)}
+              {formatSignedUsd((points[points.length - 1] as PnlPoint).pnlUsdMicros)}
             </text>
           ) : null}
           {active !== null ? <line x1={chart.x(chart.times[active] as number)} x2={chart.x(chart.times[active] as number)} y1={MARGIN.top} y2={HEIGHT - MARGIN.bottom} className="crosshair" /> : null}
@@ -154,7 +159,7 @@ export function PnlChart({ points, onSelect }: Props) {
             <strong>{formatSignedUsd(point.pnlUsdMicros)}</strong>
             <span>{formatTime(point.timestamp)}</span>
             <span>Block {point.blockNum.toLocaleString("en-US")}</span>
-            {point.excludedCount > 0 ? <span>⚠ Excludes {point.excludedCount} unknown {point.excludedCount === 1 ? "item" : "items"}</span> : null}
+            {point.excludedCount > 0 ? <span>⚠ Leaves out {point.excludedCount} unknown {point.excludedCount === 1 ? "amount" : "amounts"}</span> : null}
             {point.txHash ? <span className="muted">Click to see this transaction</span> : <span className="muted">Now, at current prices</span>}
           </div>
         ) : null}

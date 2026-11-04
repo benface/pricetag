@@ -6,7 +6,8 @@ export function formatUsd(micros: string | bigint): string {
   const value = Number(micros) / 1e6
   const size = Math.abs(value)
   if (size === 0) return "$0.00"
-  if (size < 0.01) return `${value < 0 ? "-" : ""}<$0.01`
+  // Small amounts matter here: gas is often a fraction of a cent, and "$0.00" would read as nothing.
+  if (size < 0.01) return `${value < 0 ? "-" : ""}$${size.toLocaleString("en-US", { maximumSignificantDigits: 2, maximumFractionDigits: 6 })}`
   return usd2.format(value)
 }
 
@@ -21,18 +22,17 @@ export function formatSignedUsd(micros: string | bigint): string {
   return value > 0n ? `+${formatUsd(value)}` : formatUsd(value)
 }
 
-/** Whole tokens from smallest units, cut to a readable length. Never rounds up to look like more. */
+/** Whole tokens from smallest units, cut to a readable length. Cuts instead of rounding, so it never shows more than there is. */
 export function formatAmount(units: string | bigint, decimals: number): string {
   const value = BigInt(units)
   const size = value < 0n ? -value : value
   const scale = 10n ** BigInt(decimals)
   const whole = size / scale
   const fraction = (size % scale).toString().padStart(decimals, "0")
-  const shown = whole >= 1000n ? 2 : whole >= 1n ? 4 : 6
+  const leadingZeros = fraction.length - fraction.replace(/^0+/, "").length
+  const shown = whole >= 1000n ? 2 : whole >= 1n ? 4 : leadingZeros + 3
   const cut = fraction.slice(0, shown).replace(/0+$/, "")
-  const body = `${whole.toLocaleString("en-US")}${cut ? `.${cut}` : ""}`
-  if (size > 0n && whole === 0n && !cut) return `${value < 0n ? "-" : ""}<0.000001`
-  return `${value < 0n ? "-" : ""}${body}`
+  return `${value < 0n ? "-" : ""}${whole.toLocaleString("en-US")}${cut ? `.${cut}` : ""}`
 }
 
 export function formatSignedAmount(units: string, decimals: number): string {
@@ -45,6 +45,10 @@ export function shortHash(hash: string): string {
 
 export function formatTime(iso: string): string {
   return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+}
+
+export function formatClock(iso: string): string {
+  return new Date(iso).toLocaleString("en-US", { hour: "numeric", minute: "2-digit" })
 }
 
 export function formatDuration(blocks: number): string {

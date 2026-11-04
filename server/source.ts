@@ -180,20 +180,22 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
       const pricedRows = await query<Row>(
         `SELECT block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced FROM ${ds}.priced_legs WHERE ${range} AND account = X'${me}'`,
       )
+      const rows = legRows.map((l): LegRow => ({
+        block_num: asNumber(l.block_num),
+        timestamp: asIso(l.timestamp),
+        tx_hash: prefixed(String(l.tx_hash)),
+        tx_index: asNumber(l.tx_index),
+        log_index: asNumber(l.log_index),
+        token: prefixed(String(l.token)),
+        account: prefixed(String(l.account)),
+        side: l.side as LegRow["side"],
+        amount: String(l.amount),
+        kind: l.kind as LegRow["kind"],
+      }))
       return {
-        gasUnknownTxs: [],
-        rows: legRows.map((l) => ({
-          block_num: asNumber(l.block_num),
-          timestamp: asIso(l.timestamp),
-          tx_hash: prefixed(String(l.tx_hash)),
-          tx_index: asNumber(l.tx_index),
-          log_index: asNumber(l.log_index),
-          token: prefixed(String(l.token)),
-          account: prefixed(String(l.account)),
-          side: l.side as LegRow["side"],
-          amount: String(l.amount),
-          kind: l.kind as LegRow["kind"],
-        })),
+        // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
+        rows: rows.filter((r) => r.amount !== "" && r.amount !== "0"),
+        gasUnknownTxs: rows.filter((r) => r.kind === "gas" && r.amount === "").map((r) => r.tx_hash),
         priced: pricedRows.map((p) => ({
           block_num: asNumber(p.block_num),
           tx_hash: prefixed(String(p.tx_hash)),

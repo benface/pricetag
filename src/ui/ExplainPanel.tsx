@@ -4,7 +4,8 @@ import { formatAmount, formatPrice, formatSignedAmount, formatTime, shortHash } 
 import { describeEffect, type Explanation } from "./explain.ts"
 import { tokenByAddress } from "../core/tokens.ts"
 
-const SOURCE_LABEL = { oracle: "oracle", swap: "swap", market: "market" } as const
+/** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */
+const MAX_LEGS_SHOWN = 200
 
 function LegRow({ effect }: { effect: LegEffect }) {
   const { leg } = effect
@@ -24,7 +25,7 @@ function LegRow({ effect }: { effect: LegEffect }) {
         <span className="tag">{leg.kind}</span>
         {leg.priceUsdMicros !== null && leg.priceSource ? (
           <span className="tag">
-            {formatPrice(leg.priceUsdMicros)} · {SOURCE_LABEL[leg.priceSource]}
+            {formatPrice(leg.priceUsdMicros)} · {leg.priceSource}
           </span>
         ) : (
           <span className="tag warn">⚠ no price</span>
@@ -76,9 +77,12 @@ export function ExplainPanel({ explanation, onClose }: { explanation: Explanatio
             {line}
           </p>
         ))}
-        <h3>{explanation.effects.length === 1 ? "1 leg" : `${explanation.effects.length} legs`}</h3>
+        <h3>
+          {explanation.effects.length === 1 ? "1 leg" : `${explanation.effects.length.toLocaleString("en-US")} legs`}
+          {explanation.effects.length > MAX_LEGS_SHOWN ? `, newest ${MAX_LEGS_SHOWN} shown` : ""}
+        </h3>
         <ul className="legs">
-          {explanation.effects.map((effect) => (
+          {explanation.effects.slice(0, MAX_LEGS_SHOWN).map((effect) => (
             <LegRow key={effect.leg.id} effect={effect} />
           ))}
         </ul>

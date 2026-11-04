@@ -145,7 +145,7 @@ export function App() {
     setExplanation({
       title: `Transaction ${shortHash(point.txHash as string)}`,
       value: formatSignedUsd(point.pnlUsdMicros),
-      lines: [`Total PnL after this transaction.${point.excludedCount > 0 ? ` Excludes ${point.excludedCount} unknown ${point.excludedCount === 1 ? "item" : "items"}.` : ""}`],
+      lines: [`Total PnL after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`],
       effects,
     })
   }

@@ -1,0 +1,204 @@
+// Writes dataset/pricetag.json: the tables' SQL, the UDFs, and the schemas Amp infers for them.
+//
+//   AMP_ADMIN_URL=http://127.0.0.1:1610 node dataset/build.ts [start block]
+//
+// It needs an Amp with edgeandnode/base_mainnet@0.0.2 registered, and only reads from it. What a table can look like
+// comes from WORK-319: every table needs its own top-level `block_num()` filter, at most one join, explicit columns,
+// and UDFs that never return null or throw, because one bad row stops the whole dataset.
+
+import { readFileSync, writeFileSync } from "node:fs"
+import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, TOKENS, USDC_USD_FEED, WETH_ADDRESS } from "../src/core/tokens.ts"
+
+const MANIFEST = new URL("./pricetag.json", import.meta.url)
+
+const hex = (address: string) => address.replace(/^0x/, "")
+
+const TRANSFER = "Transfer(address indexed from, address indexed to, uint256 value)"
+const DEPOSIT = "Deposit(address indexed dst, uint256 wad)"
+const WITHDRAWAL = "Withdrawal(address indexed src, uint256 wad)"
+const OP_DEPOSIT_TX_TYPE = 126
+
+const allowlist = ERC20_ADDRESSES.map((a) => `X'${hex(a)}'`).join(", ")
+const ethToken = `arrow_cast(X'${hex(ETH_ADDRESS)}', 'FixedSizeBinary(20)')`
+const logColumns = "block_num, timestamp, tx_hash, tx_index, log_index, address AS token"
+const legColumns = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
+
+function decoded(signature: string, where: string) {
+  return `SELECT ${logColumns}, evm_decode_log(topic1, topic2, topic3, data, '${signature}') AS t
+    FROM base.logs WHERE topic0 = evm_topic('${signature}') AND ${where}`
+}
+
+export function tablesSql(start: number): Record<string, string> {
+  const since = `block_num() >= ${start}`
+  const transfer = decoded(TRANSFER, `topic3 IS NULL AND address IN (${allowlist})`)
+  const weth = `address = X'${hex(WETH_ADDRESS)}'`
+  return {
+    // WETH emits Deposit and Withdrawal instead of Transfer when it's wrapped and unwrapped, so those count too.
+    base_legs: `SELECT ${legColumns} FROM (
+  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, t.value AS amount, 'erc20' AS kind FROM (${transfer})
+  UNION ALL
+  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, t.value AS amount, 'erc20' AS kind FROM (${transfer})
+  UNION ALL
+  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.dst AS account, 'credit' AS side, t.wad AS amount, 'wrap' AS kind FROM (${decoded(DEPOSIT, weth)})
+  UNION ALL
+  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.src AS account, 'debit' AS side, t.wad AS amount, 'unwrap' AS kind FROM (${decoded(WITHDRAWAL, weth)})
+  UNION ALL
+  SELECT block_num, timestamp, tx_hash, tx_index, arrow_cast(0, 'UInt32') AS log_index, ${ethToken} AS token, "from" AS account, 'debit' AS side, value AS amount, 'eth' AS kind FROM base.transactions WHERE status AND value <> '0'
+  UNION ALL
+  SELECT block_num, timestamp, tx_hash, tx_index, arrow_cast(0, 'UInt32') AS log_index, ${ethToken} AS token, "to" AS account, 'credit' AS side, value AS amount, 'eth' AS kind FROM base.transactions WHERE status AND value <> '0' AND "to" IS NOT NULL
+) WHERE ${since}`,
+
+    // transactions.gas_used is cumulative within a block, so a transaction's gas needs the one before it.
+    // Index 0 is always the L1 attributes deposit on Base, so the inner join loses nothing.
+    tx_gas: `SELECT a.block_num, a.timestamp, a.tx_hash, a.tx_index, a."from" AS account,
+  CAST(a.gas_used AS VARCHAR) AS cumulative, CAST(p.gas_used AS VARCHAR) AS previous,
+  CAST(a.gas_price AS VARCHAR) AS gas_price, CAST(a.max_fee_per_gas AS VARCHAR) AS max_fee, CAST(a.max_priority_fee_per_gas AS VARCHAR) AS max_priority
+FROM base.transactions a
+JOIN base.transactions p ON a._block_num = p._block_num AND a.tx_index = p.tx_index + 1
+WHERE a.type <> ${OP_DEPOSIT_TX_TYPE} AND ${since}`,
+
+    // An empty amount means the gas couldn't be worked out. The app reports those.
+    gas_legs: `SELECT g.block_num, g.timestamp, g.tx_hash, g.tx_index, arrow_cast(0, 'UInt32') AS log_index, ${ethToken} AS token, g.account AS account, 'debit' AS side,
+  self.pt_gas(g.cumulative, g.previous, g.gas_price, g.max_fee, g.max_priority, CAST(b.base_fee_per_gas AS VARCHAR)) AS amount, 'gas' AS kind
+FROM self.tx_gas g
+JOIN base.blocks b ON g._block_num = b._block_num
+WHERE ${since}`,
+
+    // Without traces, a WETH Withdrawal in a transaction counts as ETH paid to its sender.
+    unwrap_legs: `SELECT l.block_num, l.timestamp, l.tx_hash, l.tx_index, l.log_index, ${ethToken} AS token, x."from" AS account, 'credit' AS side,
+  get_field(evm_decode_log(l.topic1, l.topic2, l.topic3, l.data, '${WITHDRAWAL}'), 'wad') AS amount, 'unwrap' AS kind
+FROM base.logs l
+JOIN base.transactions x ON l._block_num = x._block_num AND l.tx_hash = x.tx_hash
+WHERE l.address = X'${hex(WETH_ADDRESS)}' AND l.topic0 = evm_topic('${WITHDRAWAL}') AND ${since}`,
+
+    legs: `SELECT ${legColumns} FROM (
+  SELECT ${legColumns} FROM self.base_legs
+  UNION ALL
+  SELECT ${legColumns} FROM self.gas_legs
+  UNION ALL
+  SELECT ${legColumns} FROM self.unwrap_legs
+) WHERE ${since}`,
+
+    // Selecting the whole decoded struct makes a failed eth_call fail the job and retry, instead of committing NULL.
+    reference_prices: `SELECT block_num, timestamp,
+  evm_decode_type(e.data, '(uint80,int256,uint256,uint256,uint80)') AS eth_round,
+  evm_decode_type(u.data, '(uint80,int256,uint256,uint256,uint80)') AS usdc_round
+FROM (
+  SELECT block_num, timestamp,
+    rpc.base_mainnet.eth_call(NULL, evm_encode_hex('${ETH_USD_FEED}'), evm_encode_params('latestRoundData()'), block_num) AS e,
+    rpc.base_mainnet.eth_call(NULL, evm_encode_hex('${USDC_USD_FEED}'), evm_encode_params('latestRoundData()'), block_num) AS u
+  FROM base.blocks
+) WHERE ${since}`,
+
+    pairs: `SELECT a.block_num, a.timestamp, a.tx_hash, a.account,
+  a.token AS sold_token, a.amount AS sold_amount,
+  b.token AS bought_token, b.amount AS bought_amount
+FROM self.legs a
+JOIN self.legs b ON a._block_num = b._block_num AND a.tx_hash = b.tx_hash AND a.account = b.account
+WHERE a.side = 'debit' AND b.side = 'credit' AND a.kind <> 'gas' AND b.kind <> 'gas' AND a.token <> b.token AND ${since}`,
+
+    pair_counts: `SELECT block_num() AS bn, tx_hash, account, COUNT(*) AS pair_count
+FROM self.pairs WHERE ${since} GROUP BY block_num(), tx_hash, account`,
+
+    // Transactions moving several tokens pair unrelated amounts, so only an account's single pair gets a price.
+    single_pairs: `SELECT p.block_num, p.timestamp, p.tx_hash, p.account, p.sold_token, p.sold_amount, p.bought_token, p.bought_amount
+FROM self.pairs p
+JOIN self.pair_counts c ON p._block_num = c._block_num AND p.tx_hash = c.tx_hash AND p.account = c.account
+WHERE c.pair_count = 1 AND ${since}`,
+
+    priced_legs: `SELECT p.block_num, p.timestamp, p.tx_hash, p.account,
+  p.sold_token, p.sold_amount, p.bought_token, p.bought_amount,
+  get_field(r.eth_round, 'c1') AS eth_usd, get_field(r.usdc_round, 'c1') AS usdc_usd,
+  self.pt_price(evm_decode_hex(p.sold_token), p.sold_amount, evm_decode_hex(p.bought_token), p.bought_amount, get_field(r.eth_round, 'c1'), get_field(r.usdc_round, 'c1')) AS priced
+FROM self.single_pairs p
+JOIN self.reference_prices r ON p._block_num = r._block_num
+WHERE ${since}`,
+  }
+}
+
+/** The dataset's copy of `ptPrice` in src/core/legs.ts. test/dataset.test.ts runs both on the same inputs. */
+export function ptPriceSource(): string {
+  const tokens = TOKENS.map((t) => `  '${hex(t.address)}': { symbol: '${t.symbol}', decimals: ${t.decimals}, asset: '${t.asset}', oracle: ${t.oracle ? `'${t.oracle}'` : "null"} }`).join(",\n")
+  return `
+const TOKENS = {
+${tokens}
+};
+function norm(a) { return String(a).replace(/^0x/, '').toLowerCase(); }
+function usdPerToken(pricedAmt, pricedDec, refAmt, refDec, refAnswer) {
+  return (BigInt(refAmt) * BigInt(refAnswer) * (10n ** BigInt(pricedDec)) / (BigInt(pricedAmt) * (10n ** BigInt(refDec)) * 100n)).toString();
+}
+function pt_price(soldToken, soldAmount, boughtToken, boughtAmount, ethUsd, usdcUsd) {
+  const none = { source: 'unknown', token: '', usd_micros: '' };
+  const s = TOKENS[norm(soldToken)], b = TOKENS[norm(boughtToken)];
+  if (!s || !b || !ethUsd || !usdcUsd || !soldAmount || !boughtAmount) return none;
+  if (BigInt(soldAmount) === 0n || BigInt(boughtAmount) === 0n) return none;
+  if (s.asset === b.asset) return none;
+  const answer = { eth: ethUsd, usdc: usdcUsd };
+  if (s.oracle) return { source: 'swap', token: b.symbol, usd_micros: usdPerToken(boughtAmount, b.decimals, soldAmount, s.decimals, answer[s.oracle]) };
+  if (b.oracle) return { source: 'swap', token: s.symbol, usd_micros: usdPerToken(soldAmount, s.decimals, boughtAmount, b.decimals, answer[b.oracle]) };
+  return none;
+}
+`
+}
+
+export function ptGasSource(): string {
+  return `
+function pt_gas(cumulative, previous, gasPrice, maxFee, maxPriority, baseFee) {
+  if (!cumulative || !previous) return '';
+  let price;
+  if (gasPrice) price = BigInt(gasPrice);
+  else if (maxFee && maxPriority && baseFee) {
+    const tipped = BigInt(baseFee) + BigInt(maxPriority);
+    const cap = BigInt(maxFee);
+    price = tipped < cap ? tipped : cap;
+  } else return '';
+  return ((BigInt(cumulative) - BigInt(previous)) * price).toString();
+}
+`
+}
+
+const utf8Field = (name: string) => ({ name, data_type: "Utf8", nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+function functions() {
+  return {
+    pt_price: {
+      inputTypes: ["Utf8", "Utf8", "Utf8", "Utf8", "Utf8", "Utf8"],
+      // Struct fields have to be declared in alphabetical order.
+      outputType: { Struct: [utf8Field("source"), utf8Field("token"), utf8Field("usd_micros")] },
+      source: { source: ptPriceSource(), filename: "pt_price.js" },
+    },
+    pt_gas: {
+      inputTypes: ["Utf8", "Utf8", "Utf8", "Utf8", "Utf8", "Utf8"],
+      outputType: "Utf8",
+      source: { source: ptGasSource(), filename: "pt_gas.js" },
+    },
+  }
+}
+
+const DEPENDENCIES = { base: "edgeandnode/base_mainnet@0.0.2" }
+
+async function build() {
+  const admin = process.env.AMP_ADMIN_URL
+  if (!admin) throw new Error("Set AMP_ADMIN_URL to a local Amp's admin API")
+  const previous = process.argv[2] ?? JSON.parse(readFileSync(MANIFEST, "utf8")).tables.legs.input.sql.match(/block_num\(\) >= (\d+)/)[1]
+  const start = Number(previous)
+  const sql = tablesSql(start)
+  const response = await fetch(`${admin}/schema`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ dependencies: DEPENDENCIES, tables: sql, functions: functions() }),
+  })
+  if (!response.ok) throw new Error(`/schema: ${response.status} ${await response.text()}`)
+  const { schemas } = (await response.json()) as { schemas: Record<string, unknown> }
+  const tables = Object.fromEntries(
+    Object.entries(sql).map(([name, query]) => {
+      const inferred = schemas[name]
+      if (!inferred) throw new Error(`No schema for ${name}`)
+      return [name, { input: { sql: query }, schema: inferred, network: "base-mainnet" }]
+    }),
+  )
+  writeFileSync(MANIFEST, `${JSON.stringify({ kind: "manifest", dependencies: DEPENDENCIES, tables, functions: functions() }, null, 2)}\n`)
+  console.log(`Wrote dataset/pricetag.json with ${Object.keys(tables).length} tables, from block ${start}`)
+}
+
+if (import.meta.main) await build()

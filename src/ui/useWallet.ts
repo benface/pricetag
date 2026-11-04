@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import type { WalletResponse } from "../core/api.ts"
 
 export type WalletState = {
@@ -18,23 +18,23 @@ async function fetchWallet(address: string, signal: AbortSignal): Promise<Wallet
 /** Reads a wallet, then reads it again on each new block. A block that arrives during a read waits for the next one. */
 export function useWallet(address: string | null): WalletState {
   const [state, setState] = useState<WalletState>({ wallet: null, loading: false, error: null })
-  const busy = useRef(false)
 
   useEffect(() => {
     setState({ wallet: null, loading: address !== null, error: null })
     if (!address) return
     const abort = new AbortController()
+    let busy = false
 
     const read = () => {
-      if (busy.current) return
-      busy.current = true
+      if (busy) return
+      busy = true
       fetchWallet(address, abort.signal)
         .then((wallet) => setState({ wallet, loading: false, error: null }))
         .catch((error: Error) => {
           if (!abort.signal.aborted) setState((s) => ({ ...s, loading: false, error: error.message }))
         })
         .finally(() => {
-          busy.current = false
+          busy = false
         })
     }
     read()
@@ -46,7 +46,6 @@ export function useWallet(address: string | null): WalletState {
     return () => {
       events.close()
       abort.abort()
-      busy.current = false
     }
   }, [address])
 
