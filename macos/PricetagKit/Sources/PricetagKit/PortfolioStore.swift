@@ -258,12 +258,12 @@ public final class PortfolioStore {
 
     public func proof(leg: String, address: String) async throws -> Proof {
         guard address == self.address else { throw CancellationError() }
-        return try await source.proof(leg: leg, address: address, currency: currency)
+        return try await source.proof(leg: leg, address: address, currency: currency, rule: selectedRule)
     }
 
     public func verification(leg: String, address: String) async throws -> Verification {
         guard address == self.address else { throw CancellationError() }
-        return try await source.verification(leg: leg, address: address, currency: currency)
+        return try await source.verification(leg: leg, address: address, currency: currency, rule: selectedRule)
     }
 
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {

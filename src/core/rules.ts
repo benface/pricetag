@@ -9,7 +9,7 @@ export const CAUTIOUS_RULE_ID = "cautious-eth"
 
 export const RULE_TEXT: Record<string, Pick<PricingRule, "name" | "summary">> = {
   [MARKET_RULE_ID]: { name: "Market price", summary: "ETH counts at what Chainlink's price feed says at each block." },
-  [CAUTIOUS_RULE_ID]: { name: "Cautious ETH", summary: "ETH counts at 1% below that price, closer to what you'd get if you sold it. Every other price is the same." },
+  [CAUTIOUS_RULE_ID]: { name: "Cautious ETH", summary: "ETH counts at 1% below Chainlink's price, closer to what you'd get if you sold it. Every other price is the same." },
 }
 
 /** One number by each rule, in the wallet's main currency, except `usdPrice`. A null is unavailable, not zero. */
