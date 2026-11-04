@@ -39,7 +39,7 @@ public enum HotWalletWording {
         alarm.findings.map {
             switch $0 {
             case .unknownTransaction(let hash): "A transaction this app didn't sign took funds from this wallet: \(hash)."
-            case .nonceAhead(let signed, let onchain): "This key has sent \(onchain) transactions, and this app only signed \(signed)."
+            case .nonceAhead(let signed, let onchain): "This key has sent \(onchain) \(onchain == 1 ? "transaction" : "transactions"), and this app only signed \(signed)."
             case .nonceTaken(_, let ours): "Another transaction from this key took the place of one this app signed: \(ours)."
             }
         }.joined(separator: " ")
