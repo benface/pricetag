@@ -65,6 +65,20 @@ describe("getLegs", () => {
     assert.ok(aero!.priceNote)
   })
 
+  it("leaves a swap paid out in unwrapped ETH unknown, because it can't confirm the ETH arrived", async () => {
+    const { client } = fakeAmp({
+      legs: [leg("aa", AERO, ME, "debit", String(500n * E18), "erc20"), leg("aa", "0000000000000000000000000000000000000000", ME, "credit", String(E18), "unwrap")],
+      priced_legs: [pricedRow("aa", AERO, String(500n * E18), "0000000000000000000000000000000000000000", String(E18), swapTo("2000000"))],
+      reference_prices: [{ block_num: "100", eth_usd: ETH_ANSWER, usdc_usd: USDC_ANSWER }],
+    })
+    const { legs } = await client.getLegs(`0x${ME}`, { from: 50 })
+    const aero = legs.find((l) => l.asset === "AERO")!
+    assert.deepEqual([aero.priceMicros, aero.priceSource, aero.proceedsMicros], [null, null, null])
+    assert.match(aero.priceNote!, /couldn't confirm/)
+    const { prices } = await client.getPrices("AERO", { from: 50 })
+    assert.deepEqual(prices.map((p) => [p.usdMicros, p.source]), [[null, "unknown"]])
+  })
+
   it("stops at what every table has processed, and says so", async () => {
     const { client, queries } = fakeAmp({}, 150)
     assert.deepEqual((await client.getLegs(`0x${ME}`, { from: 50 })).blocks, { fromBlock: 50, toBlock: 150 })

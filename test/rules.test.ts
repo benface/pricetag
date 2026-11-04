@@ -32,10 +32,11 @@ function sourceAt(ethAnswer: bigint, through = HEAD, reads: string[] = []): Sour
     processedThrough: async (_, head) => Math.min(head, through),
     readWindow: async (address) => {
       reads.push(address)
-      return { rows: ROWS[address] ?? [], priced: null, gasUnknownTxs: [] }
+      return { rows: ROWS[address] ?? [], priced: null, gasUnknown: [] }
     },
     readReferences: async (blocks) => blocks.map(reference),
     readLatestReference: async (head) => reference(head),
+    readEthBalances: async () => new Map(),
     readBalances: async (address, block) => {
       const amounts: Record<string, string> = Object.fromEntries(ASSETS.map((asset) => [asset, "0"]))
       for (const r of ROWS[address] ?? []) {
@@ -215,7 +216,7 @@ describe("comparing only ever shows the rule", () => {
   })
 
   it("won't compare when the two read different transactions, as after a reorg", async () => {
-    const { status, body } = await compareWith({}, { readWindow: async () => ({ rows: [], priced: null, gasUnknownTxs: [] }) })
+    const { status, body } = await compareWith({}, { readWindow: async () => ({ rows: [], priced: null, gasUnknown: [] }) })
     assert.equal(status, 409)
     assert.match(body.error!, /same block/)
   })
@@ -223,7 +224,7 @@ describe("comparing only ever shows the rule", () => {
   it("won't compare when a transaction is at another block on one side, with the same hash and amounts", async () => {
     const moved = (ROWS[ME] as LegRow[]).map((r) => (r.tx_hash === "0xb" ? { ...r, block_num: r.block_num + 1 } : r))
     // The same prices on both sides, so nothing here could be the rule.
-    const { status, body } = await compareWith({}, { readWindow: async () => ({ rows: moved, priced: null, gasUnknownTxs: [] }), readReferences: sourceAt(ETH_ANSWER).readReferences, readLatestReference: sourceAt(ETH_ANSWER).readLatestReference })
+    const { status, body } = await compareWith({}, { readWindow: async () => ({ rows: moved, priced: null, gasUnknown: [] }), readReferences: sourceAt(ETH_ANSWER).readReferences, readLatestReference: sourceAt(ETH_ANSWER).readLatestReference })
     assert.equal(status, 409)
     assert.match(body.error!, /same block/)
     assert.equal(body.rows, undefined)
@@ -231,7 +232,7 @@ describe("comparing only ever shows the rule", () => {
 
   it("won't compare when a transaction's place in its block differs on one side", async () => {
     const moved = (ROWS[ME] as LegRow[]).map((r) => ({ ...r, tx_index: r.tx_index + 1 }))
-    const { status } = await compareWith({}, { readWindow: async () => ({ rows: moved, priced: null, gasUnknownTxs: [] }) })
+    const { status } = await compareWith({}, { readWindow: async () => ({ rows: moved, priced: null, gasUnknown: [] }) })
     assert.equal(status, 409)
   })
 

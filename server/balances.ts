@@ -52,6 +52,14 @@ export function decodeBalanceResults(data: string | null | undefined): (bigint |
   return results
 }
 
+/** Calldata for Multicall3's `getEthBalance`, as hex with no prefix: plain ETH, without WETH. */
+export const encodeEthBalanceCall = (account: string) => GET_ETH_BALANCE + addressWord(account)
+
+/** The balance `encodeEthBalanceCall` asked for, or null when the bytes aren't one word. */
+export function decodeEthBalance(data: string | null | undefined): string | null {
+  return data && data.length === WORD_BYTES * 2 ? BigInt(`0x${data}`).toString() : null
+}
+
 /** Adds tokens up into their assets, so ETH is ETH plus WETH. An asset with any failed read is left out. */
 export function balancesByAsset(results: readonly (bigint | null)[]): Record<string, string> {
   const totals = new Map<string, bigint | null>()
