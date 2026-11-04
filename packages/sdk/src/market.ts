@@ -1,6 +1,6 @@
 // A token's `market` price: what it recently traded at, from `priced_legs`, with guards so a thin pool can't set it.
 
-import { blockBefore } from "./chain.ts"
+import { msBetweenBlocks } from "./chain.ts"
 import { worth } from "./fold.ts"
 import { answerToMicros, isSanePrice, type PricedRow } from "./legs.ts"
 import { ETH_ADDRESS, TOKENS, normalizeAddress, tokenByAddress } from "./tokens.ts"
@@ -47,7 +47,7 @@ export function marketTrades(rows: readonly MarketRow[]): MarketTrade[] {
 export function marketPrice(trades: readonly MarketTrade[], asset: string, block: number): MarketPrice | null {
   const byTx = new Map<string, { blockNum: number; prices: bigint[]; notional: bigint }>()
   for (const trade of trades) {
-    if (trade.asset !== asset || trade.blockNum > block || trade.blockNum < blockBefore(block, MARKET_MAX_AGE_MS)) continue
+    if (trade.asset !== asset || trade.blockNum > block || msBetweenBlocks(trade.blockNum, block) > MARKET_MAX_AGE_MS) continue
     const notional = BigInt(trade.notionalUsdMicros)
     const tx = byTx.get(trade.txHash) ?? { blockNum: trade.blockNum, prices: [], notional: 0n }
     tx.prices.push(BigInt(trade.usdMicros))
