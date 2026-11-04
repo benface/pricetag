@@ -3,13 +3,13 @@
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, asIso, asNumber, blockFilters, datasetReader, decimalString, hexOf, prefixed, readHead, type LegRow, type PricedRow, type Query, type ReferenceRow, type Row, type BalanceSnapshot } from "@pricetag/sdk"
+import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, asIso, asNumber, blockFilters, datasetReader, decimalString, hexOf, prefixed, readHead, type GasUnknownTx, type LegRow, type PricedRow, type Query, type ReferenceRow, type Row, type BalanceSnapshot } from "@pricetag/sdk"
 import type { Head, Mode } from "../src/core/api.ts"
 import type { RateRound } from "../src/core/currency.ts"
 import { MULTICALL3, balancesByAsset, decodeBalanceResults, decodeEthBalance, encodeBalanceCalls, encodeEthBalanceCall } from "./balances.ts"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRound, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
-export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknownTxs: string[]; gasUnknownBlocks: number[] }
+export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknown: GasUnknownTx[] }
 
 export type Source = {
   mode: Mode
@@ -196,7 +196,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
         : []
       const baseFees = await inBlocks<Row>(sentBlocks, (filter) => `SELECT block_num, base_fee_per_gas FROM ${ds}.blocks WHERE ${filter}`)
 
-      const { rows, gasUnknownTxs, gasUnknownBlocks } = legRowsFromRaw({
+      const { rows, gasUnknown } = legRowsFromRaw({
         account: address,
         txs,
         logs,
@@ -206,7 +206,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
           baseFeeByBlock: new Map(baseFees.map((b) => [asNumber(b.block_num), decimalString(b.base_fee_per_gas) ?? "0"])),
         },
       })
-      return { rows, priced: null, gasUnknownTxs, gasUnknownBlocks }
+      return { rows, priced: null, gasUnknown }
     },
   }
 }

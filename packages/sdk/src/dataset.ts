@@ -122,13 +122,11 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
       const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
       const pricedRows = await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${ds}.priced_legs WHERE ${range} AND account = X'${me}'`)
       const rows = legRows.map(toLegRow)
-      const gasUnknown = rows.filter((r) => r.kind === "gas" && r.amount === "")
       return {
         // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
         // An unlisted row stays either way, because it's evidence that something moved.
         rows: [...rows.filter((r) => r.amount !== "" && r.amount !== "0"), ...unlistedRows.map(toLegRow)],
-        gasUnknownTxs: gasUnknown.map((r) => r.tx_hash),
-        gasUnknownBlocks: gasUnknown.map((r) => r.block_num),
+        gasUnknown: rows.filter((r) => r.kind === "gas" && r.amount === "").map(({ tx_hash, block_num }) => ({ tx_hash, block_num })),
         priced: pricedRows.map(toPricedRow),
       }
     },

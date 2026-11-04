@@ -22,9 +22,8 @@ type Cached = {
   references: Map<number, ReferenceRow>
   prices: LatestPrices
   latest: Head
-  gasUnknownTxs: Set<string>
-  /** Where those transactions are, as far as the last read of each block says. */
-  gasUnknownBlocks: Set<number>
+  /** Transactions whose gas couldn't be worked out, with their blocks, as the last read of each block says. */
+  gasUnknown: Map<string, number>
   /** Before `fromBlock`. Fixed once read. */
   opening: BalanceSnapshot | null
   /** At `coveredTo`, the same block the rows reach, or the check would fail whenever a dataset is slightly behind. */
@@ -47,6 +46,15 @@ type L1Fee = { blockNum: number; fee: string; readAtCoveredTo: number }
 function isL1FeeSettled(fee: L1Fee | undefined, blockNum: number, coveredTo: number): boolean {
   if (fee?.blockNum !== blockNum) return false
   return fee.readAtCoveredTo - blockNum >= REORG_BLOCKS || coveredTo - blockNum < REORG_BLOCKS
+}
+
+/**
+ * Whether a fee can explain a block's balance. Inside the part of the chain that's re-read, the balance is read again each
+ * time, so a fee read earlier could be from before a reorg, and that difference would pass for ETH that never arrived.
+ */
+function isL1FeeCurrent(fee: L1Fee | undefined, blockNum: number, coveredTo: number): boolean {
+  if (fee?.blockNum !== blockNum) return false
+  return fee.readAtCoveredTo === coveredTo || fee.readAtCoveredTo - blockNum >= REORG_BLOCKS
 }
 
 const isComplete = (snapshot: BalanceSnapshot | null) => snapshot !== null && ASSETS.every((asset) => snapshot.amounts[asset] !== undefined)
@@ -100,8 +108,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     let rows = cached?.rows ?? []
     let priced = cached?.priced ?? []
     const known = new Map(cached?.references ?? [])
-    const gasUnknownTxs = new Set(cached?.gasUnknownTxs ?? [])
-    const gasUnknownBlocks = new Set(cached?.gasUnknownBlocks ?? [])
+    const gasUnknown = new Map(cached?.gasUnknown ?? [])
     const ethBalances = new Map(cached?.ethBalances ?? [])
     if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo)) {
       const readFrom = cached ? Math.max(fromBlock, cached.coveredTo - REORG_BLOCKS + 1) : fromBlock
@@ -112,13 +119,17 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       const missing = [...new Set(rows.map((r) => r.block_num))].filter((b) => !known.has(b))
       for (const reference of await source.readReferences(missing)) known.set(reference.block_num, reference)
       priced = window.priced ? [...priced.filter((p) => p.block_num < readFrom), ...window.priced] : derivePricedRows(rows, [...known.values()])
-      for (const tx of window.gasUnknownTxs) gasUnknownTxs.add(tx)
-      for (const block of gasUnknownBlocks) if (block >= readFrom) gasUnknownBlocks.delete(block)
-      for (const block of window.gasUnknownBlocks) gasUnknownBlocks.add(block)
+      for (const [tx, block] of gasUnknown) if (block >= readFrom) gasUnknown.delete(tx)
+      for (const { tx_hash, block_num } of window.gasUnknown) gasUnknown.set(tx_hash, block_num)
     }
 
     const l1Fees = new Map(cached?.l1Fees ?? [])
-    const unread = rows.filter((r) => r.kind === "gas" && !isL1FeeSettled(l1Fees.get(r.tx_hash), r.block_num, coveredTo))
+    const claimBlocks = new Set(unwrapBalanceBlocks(rows))
+    const unread = rows.filter((r) => {
+      if (r.kind !== "gas") return false
+      const fee = l1Fees.get(r.tx_hash)
+      return !isL1FeeSettled(fee, r.block_num, coveredTo) || (claimBlocks.has(r.block_num) && !isL1FeeCurrent(fee, r.block_num, coveredTo))
+    })
     const fees = unread.length > 0 ? await readL1Fees(unread.map((r) => ({ txHash: r.tx_hash, blockNum: r.block_num }))) : new Map<string, string>()
     for (const { tx_hash, block_num } of unread) {
       const fee = fees.get(tx_hash)
@@ -145,7 +156,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
     const prices = latestPrices(await source.readLatestReference(head.blockNum))
 
-    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs, gasUnknownBlocks, opening, closing, lastBalances, l1Fees, ethBalances }
+    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknown, opening, closing, lastBalances, l1Fees, ethBalances }
     wallets.delete(address)
     wallets.set(address, next)
     if (wallets.size > MAX_WALLETS) wallets.delete(wallets.keys().next().value as string)
@@ -156,13 +167,14 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const references = [...wallet.references.values()]
     const l1 = l1FeeRows(wallet.rows, wallet.l1Fees)
     const { opening, closing } = wallet
+    const staleFeeTxs = wallet.rows.filter((r) => r.kind === "gas" && !isL1FeeCurrent(wallet.l1Fees.get(r.tx_hash), r.block_num, wallet.coveredTo)).map((r) => r.tx_hash)
     const { rows, priced } = settleUnwraps({
       rows: [...wallet.rows, ...l1.rows],
       priced: wallet.priced,
       references,
       ethBalances: wallet.ethBalances,
-      feeUnknownTxs: [...wallet.gasUnknownTxs, ...l1.unknownTxs],
-      gasUnknownBlocks: [...wallet.gasUnknownBlocks],
+      feeUnknownTxs: [...wallet.gasUnknown.keys(), ...l1.unknownTxs, ...staleFeeTxs],
+      gasUnknownBlocks: [...wallet.gasUnknown.values()],
     })
     const openedAt = new Date(new Date(wallet.latest.timestamp).getTime() - (wallet.latest.blockNum - wallet.fromBlock + 1) * BLOCK_MS).toISOString()
     return {
@@ -173,7 +185,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       references,
       prices: wallet.prices,
       latest: wallet.latest,
-      gasUnknownTxs: [...wallet.gasUnknownTxs],
+      gasUnknownTxs: [...wallet.gasUnknown.keys()],
       currency: "USD",
       rates: null,
       l1FeeUnknownTxs: l1.unknownTxs,

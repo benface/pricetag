@@ -98,9 +98,9 @@ export function pricetagClient(query: Query, config: Pick<PricetagConfig, "datas
       const account = normalizeAddress(address)
       const blocks = await blocksRead(range, WALLET_TABLES)
       if (blocks.toBlock < blocks.fromBlock) return { address: account, blocks, legs: [], references: [], gasUnknownTxs: [] }
-      const { rows, priced, gasUnknownTxs } = await reader.readWindow(account, blocks.fromBlock, blocks.toBlock)
+      const { rows, priced, gasUnknown } = await reader.readWindow(account, blocks.fromBlock, blocks.toBlock)
       const references = await reader.readReferences(rows.map((r) => r.block_num))
-      return { address: account, blocks, legs: buildPricedLegs({ account, rows, references, priced }), references, gasUnknownTxs }
+      return { address: account, blocks, legs: buildPricedLegs({ account, rows, references, priced }), references, gasUnknownTxs: gasUnknown.map((tx) => tx.tx_hash) }
     },
 
     /**

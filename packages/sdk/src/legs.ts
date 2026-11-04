@@ -49,6 +49,9 @@ export type LegRow = {
  */
 export const isUnwrapClaim = (row: LegRow) => row.kind === "unwrap" && row.side === "credit" && !row.settled
 
+/** A transaction whose gas couldn't be worked out, and the block it's in. It can have no rows at all. */
+export type GasUnknownTx = Pick<LegRow, "tx_hash" | "block_num">
+
 /** A row of `reference_prices`, with Chainlink answers in 1e8 USD. Empty when a read failed. */
 export type ReferenceRow = { block_num: number; eth_usd: string; usdc_usd: string }
 

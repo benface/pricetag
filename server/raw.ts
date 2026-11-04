@@ -1,7 +1,7 @@
 // Builds rows in the `legs` shape from raw `transactions` and `logs` rows, the same way the dataset's tables do.
 // Pure, so it can be tested without Amp.
 
-import { ETH_ADDRESS, WETH_ADDRESS, normalizeAddress, tokenByAddress, type LegRow } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, WETH_ADDRESS, normalizeAddress, tokenByAddress, type GasUnknownTx, type LegRow } from "@pricetag/sdk/core"
 import type { RateRound } from "../src/core/currency.ts"
 
 export const TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -80,21 +80,18 @@ export type RawInput = {
   gas: GasContext
 }
 
-export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInput): { rows: LegRow[]; gasUnknownTxs: string[]; gasUnknownBlocks: number[] } {
+export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInput): { rows: LegRow[]; gasUnknown: GasUnknownTx[] } {
   const me = normalizeAddress(account)
   const rows: LegRow[] = []
-  const gasUnknownTxs: string[] = []
-  const gasUnknownBlocks: number[] = []
+  const gasUnknown: GasUnknownTx[] = []
 
   for (const tx of txs) {
     const base = { block_num: tx.block_num, timestamp: tx.timestamp, tx_hash: normalizeAddress(tx.tx_hash), tx_index: tx.tx_index }
     const from = normalizeAddress(tx.from)
     if (from === me && tx.type !== DEPOSIT_TX_TYPE) {
       const paid = gasPaid(tx, gas)
-      if (paid === null) {
-        gasUnknownTxs.push(base.tx_hash)
-        gasUnknownBlocks.push(base.block_num)
-      } else if (paid > 0n) rows.push({ ...base, log_index: 0, token: ETH_ADDRESS, account: me, side: "debit", amount: paid.toString(), kind: "gas" })
+      if (paid === null) gasUnknown.push({ tx_hash: base.tx_hash, block_num: base.block_num })
+      else if (paid > 0n) rows.push({ ...base, log_index: 0, token: ETH_ADDRESS, account: me, side: "debit", amount: paid.toString(), kind: "gas" })
     }
     if (tx.status && BigInt(tx.value) > 0n) {
       const eth = { ...base, log_index: 0, token: ETH_ADDRESS, account: me, amount: tx.value, kind: "eth" as const }
@@ -156,7 +153,7 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
       kind: "unwrap",
     })
   }
-  return { rows, gasUnknownTxs, gasUnknownBlocks }
+  return { rows, gasUnknown }
 }
 
 /** A `latestRoundData()` result's answer and when it last updated, or null when the read failed or it isn't a positive answer. */
