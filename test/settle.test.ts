@@ -451,6 +451,13 @@ describe("finding ETH nothing explains", () => {
     assert.deepEqual(legs.map((l) => l.kind), ["swap", "transfer"])
   })
 
+  it("keeps saying so when the token has a market price, which is about the token and not this sale", () => {
+    const rows = settle([row(CBBTC, "debit", 5n, "erc20")], balances(5000n, 5400n)).rows
+    const [leg] = buildPricedLegs({ account: ME, rows, references, priced: [], market: () => "70000000000" })
+    assert.deepEqual([leg!.kind, leg!.priceSource, leg!.proceedsMicros], ["swap", "market", null])
+    assert.match(leg!.priceNote!, /may have been sold/)
+  })
+
   it("waits for a fee or gas that's unknown, since that would pass for ETH arriving", () => {
     const rows = [gas(100n), USDC_OUT]
     assert.deepEqual(unseen(rows, balances(5000n, 5400n), ["0xcb"]), [])

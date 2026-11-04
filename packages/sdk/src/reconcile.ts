@@ -20,6 +20,10 @@ export type Onchain = {
   unreadBalances?: readonly string[]
   /** Where ETH arrived that no row explains, as `settleUnwraps` found. */
   unseenEth?: readonly UnseenEth[]
+  /** Market prices were read, so a token without one really has no market. */
+  marketChecked?: boolean
+  /** What's priced before any conversion, because a missing exchange rate isn't a missing market. */
+  prices?: Readonly<Record<string, unknown>>
 }
 
 export type Reconciliation =

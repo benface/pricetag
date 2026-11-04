@@ -3,14 +3,16 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ETH_ADDRESS, ETH_USD_FEED, PRICE_NOTES, TOKENS, USDC_USD_FEED, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, PRICE_NOTES, TOKENS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
-import { RULE_TEXT, differenceOf, ruleNote, whySentence } from "../src/core/rules.ts"
+import { emptyBook, linkMessage } from "../src/core/book.ts"
+import { foldBook } from "../src/core/resolve.ts"
+import { RULE_TEXT, differenceOf, ruleNote, whySentence, type RuleComparison } from "../src/core/rules.ts"
 import { proofOf, verificationOf } from "../server/proof.ts"
 
 const RESOURCES = new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/", import.meta.url)
@@ -49,9 +51,9 @@ const walletWith = (changes: Partial<WalletResponse>): WalletResponse => ({
 describe("portfolioOf", () => {
   it("returns exactly what the browser's fold gives", () => {
     for (const method of ["average", "fifo"] as const) {
-      const positions = foldPositions(DEMO_WALLET.legs, method, DEMO_WALLET.prices, DEMO_WALLET)
+      const { positions, totals } = foldBook(DEMO_WALLET, [], method, emptyBook())
       const portfolio = portfolioOf(DEMO_WALLET, method)
-      assert.deepEqual(portfolio.totals, sumTotals(positions))
+      assert.deepEqual(portfolio.totals, totals)
       assert.deepEqual(portfolio.positions.map((p) => p.values), positions.map((p) => p.values))
       assert.equal(portfolio.method, method)
     }
@@ -62,7 +64,7 @@ describe("portfolioOf", () => {
     const position = (asset: string) => portfolio.positions.find((p) => p.asset === asset)
     assert.equal(position("USDC")?.pnlMicros, null)
     assert.equal(position("cbBTC")?.pnlMicros, null)
-    assert.equal(position("AERO")?.pnlMicros, null, "AERO has a known cost, but no current price")
+    assert.equal(position("DEGEN")?.pnlMicros, null, "DEGEN has no market at all")
   })
 
   it("carries each position's check, and leaves what doesn't match out of the chart too", () => {
@@ -148,12 +150,11 @@ describe("portfolioOf", () => {
     assert.equal(pnl?.value, null)
     assert.ok(pnl?.lines.every((line) => !line.includes("$0.00 ")))
     assert.ok(pnl?.lines.some((line) => line.includes("Not included: cbBTC")))
-    assert.equal(explainPortfolio(wallet, "average", { kind: "total", metric: "value" })?.value, null)
     assert.equal(explainPortfolio(wallet, "average", { kind: "total", metric: "unrealized" })?.value, null)
   })
 
   it("still explains a total that's only partial, with its value", () => {
-    assert.equal(explainPortfolio(DEMO_WALLET, "average", { kind: "total", metric: "pnl" })?.value, "+$74.28")
+    assert.equal(explainPortfolio(DEMO_WALLET, "average", { kind: "total", metric: "pnl" })?.value, "+$149.30")
   })
 
   it("matches the files the Swift package reads", () => {
@@ -253,6 +254,76 @@ describe("the portfolio API", () => {
     assert.match(String(body.error), /only the demo wallet/)
   })
 
+  const post = async (path: string, body: unknown, contentType = "application/json") => {
+    const response = await fetch(base + path, { method: "POST", headers: { "content-type": contentType }, body: JSON.stringify(body) })
+    const text = await response.text()
+    return { status: response.status, text, body: (response.headers.get("content-type")?.includes("json") ? JSON.parse(text) : {}) as Record<string, unknown> }
+  }
+  const SAVINGS = "0x00000000000000000000000000000000000de301"
+  const mine = { senders: { [SAVINGS]: { kind: "mine" } }, costs: {}, withdrawals: [] }
+
+  it("folds with the answers it's sent, and keeps none of them", async () => {
+    const answered = (await post("/api/portfolio/demo", { method: "average", book: mine })).body as unknown as PortfolioResponse
+    assert.ok(answered.questions.some((q) => q.wallet === SAVINGS))
+    assert.deepEqual(answered.linkedReading, [])
+    const without = (await get("/api/portfolio/demo")).body as unknown as PortfolioResponse
+    assert.ok(!without.questions.some((q) => q.wallet === SAVINGS), "the next request knows nothing about it")
+  })
+
+  it("folds linked wallets in the currency asked for", async () => {
+    const { status, body } = await post("/api/portfolio/demo", { method: "average", currency: "CAD", book: mine })
+    assert.equal(status, 200)
+    assert.equal((body as unknown as PortfolioResponse).currency, "CAD")
+    assert.equal((await post("/api/portfolio/demo", { method: "average", currency: "XYZ" })).status, 400)
+  })
+
+  it("previews what each answer would do, before any is final", async () => {
+    const { body } = await post("/api/portfolio/demo/preview", { method: "average", book: {}, candidates: [{}, mine] })
+    const [before, after] = body.previews as { unresolvedMicros: string; pending: boolean }[]
+    assert.ok(BigInt(after!.unresolvedMicros) < BigInt(before!.unresolvedMicros))
+    assert.equal(after!.pending, false)
+  })
+
+  it("says a wallet can't be read when there's no data source, rather than reading it forever", async () => {
+    const stranger = "0x000000000000000000000000000000000000be11"
+    const book = { senders: { [stranger]: { kind: "mine" } } }
+    const { body } = await post("/api/portfolio/demo/preview", { method: "average", candidates: [book] })
+    assert.deepEqual((body.previews as { failed: boolean; pending: boolean }[]).map((p) => [p.failed, p.pending]), [[true, true]])
+    const portfolio = (await post("/api/portfolio/demo", { method: "average", book })).body as unknown as PortfolioResponse
+    assert.deepEqual([portfolio.linkedReading, portfolio.linkedFailed], [[], [stranger]])
+  })
+
+  it("explains a number with the answers it's sent", async () => {
+    const { status, body } = await post("/api/portfolio/demo/explain?asset=USDC&metric=amount", { method: "average", book: mine })
+    assert.equal(status, 200)
+    assert.ok((body as unknown as ExplanationResponse).legs.some((l) => l.costLabel === "inherited"))
+  })
+
+  it("exports a CSV", async () => {
+    const { status, text } = await post("/api/portfolio/demo/export", { method: "average" })
+    assert.equal(status, 200)
+    assert.match(text, /^time,block,transaction/)
+  })
+
+  it("imports a Coinbase history without keeping it", async () => {
+    const csv = "Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes\n2026-10-01T10:00:00Z,Buy,ETH,1,USD,$2000,$2000,$2000,$0,x\n2026-10-02T10:00:00Z,Send,ETH,1,USD,$2000,$2000,$2000,$0,x\n"
+    const { status, body } = await post("/api/import/coinbase", { csv })
+    assert.equal(status, 200)
+    assert.equal((body.withdrawals as unknown[]).length, 1)
+    assert.equal((await post("/api/import/coinbase", { csv: "nope" })).status, 400)
+  })
+
+  it("refuses a post that isn't JSON, so a page can't send one without asking", async () => {
+    assert.equal((await post("/api/portfolio/demo", { method: "average" }, "text/plain")).status, 400)
+  })
+
+  it("refuses answers it can't read", async () => {
+    assert.equal((await post("/api/portfolio/demo", { method: "average", book: { senders: { nope: {} } } })).status, 400)
+    assert.equal((await post("/api/portfolio/demo", { method: "lifo" })).status, 400)
+    assert.equal((await post("/api/portfolio/demo/preview", { method: "average", candidates: "x" })).status, 400)
+    assert.equal((await post("/api/links/verify", { owner: "x" })).status, 400)
+  })
+
   it("still serves the browser's wallet route", async () => {
     assert.equal((await get("/api/wallet/demo")).body.mode, "demo")
   })
@@ -280,6 +351,7 @@ describe("the formatters the Swift package repeats", () => {
       price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, "USD"), cad: formatPrice(micros, "CAD") })),
       amount: units.map(([value, decimals]) => ({ units: value, decimals, amount: formatAmount(value, decimals), signed: formatSignedAmount(value, decimals) })),
       duration: [0, 30, 1800, 3599, 3600, 5400, 100000].map((blocks) => ({ blocks, duration: formatDuration(blocks) })),
+      linkMessage: { owner: DEMO_WALLET.address, address: "0x00000000000000000000000000000000000DE301", message: linkMessage(DEMO_WALLET.address, "0x00000000000000000000000000000000000DE301") },
     })
   })
 })
@@ -308,6 +380,7 @@ describe("wording", () => {
     stale: wording.staleSentence("Nov 4 at 5:40 AM"),
     feedDetail: [wording.feedDetail("demo", 1000), wording.feedDetail("raw", 1000), wording.feedDetail("dataset", 1000)],
     pnlHelp: ["Total PnL", "AERO: Realized PnL", "Transaction 0x1234…abcd"].map((text) => ({ text, help: wording.pnlHelp(text) ?? null })),
+    linkedFailed: [1, 2].map((count) => ({ count, text: wording.linkedFailedSentence(count) })),
     sentences: {
       methodName: wording.METHOD_NAME,
       methodHelp: wording.METHOD_HELP,
@@ -394,7 +467,7 @@ describe("comparing pricing rules", () => {
   const row = (label: string) => compared.rows.find((r) => r.label === label)
 
   it("says what ETH is worth by each rule", () => {
-    assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "2400000000", b: "2376000000", difference: "-24000000", aPartial: false, bPartial: false })
+    assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "2400000000", b: "2376000000", difference: "-24000000", aPartial: false, bPartial: false, aEstimated: false, bEstimated: false })
   })
 
   it("gets each side from the same fold the app shows", () => {
@@ -461,6 +534,69 @@ describe("comparing pricing rules", () => {
     assert.equal(fees.why, whySentence(1))
   })
 
+  describe("what rests on an estimate", () => {
+    const [ME, OTHER, STRANGER] = ["0x00000000000000000000000000000000000000aa", "0x00000000000000000000000000000000000000bb", "0x00000000000000000000000000000000000000dd"]
+    const AERO = TOKENS.find((t) => t.symbol === "AERO")!.address
+    const VIRTUAL = TOKENS.find((t) => t.symbol === "VIRTUAL")!.address
+    const E18 = 10n ** 18n
+    const moved = (tx: string, block: number, account: string, token: string, side: LegRow["side"], amount: bigint, counterparty?: string): LegRow => ({ block_num: block, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: tx, tx_index: 1, log_index: 0, token, account, side, amount: amount.toString(), kind: token === ETH_ADDRESS ? "eth" : "erc20", ...(counterparty ? { counterparty } : {}) })
+    const walletOf = (address: string, rows: LegRow[], eth_usd: string, market: string | null = null, prices: Record<string, string> = {}) => {
+      const references = [...new Set(rows.map((r) => r.block_num))].map((block_num) => ({ blockNum: block_num, ethUsd: eth_usd, usdcUsd: "100000000" }))
+      const legs = buildPricedLegs({ account: address, rows, references, priced: [], ...(market ? { market: () => market } : {}) })
+      const amounts: Record<string, string> = Object.fromEntries(ASSETS.map((asset) => [asset, "0"]))
+      for (const leg of legs) amounts[leg.asset] = (BigInt(amounts[leg.asset] ?? "0") + BigInt(leg.delta)).toString()
+      return walletWith({ address, legs, references, balances: { blockNum: 20, amounts }, prices: Object.fromEntries(Object.entries(prices).map(([asset, micros]) => [asset, { micros, source: asset === "ETH" ? ("oracle" as const) : ("market" as const), blockNum: 20 }])) })
+    }
+    const mine = () => ({ senders: { [OTHER]: { kind: "mine" as const }, [ME]: { kind: "mine" as const }, [STRANGER]: { kind: "someone-else" as const } }, costs: {}, withdrawals: [] })
+    // OTHER got 1 ETH from someone else, so its cost is an estimate, and sent it to this wallet, which inherits that.
+    const inherited = (eth: string, rule: typeof market) => ({
+      rule,
+      reference: reference(eth),
+      wallet: walletOf(ME, [moved("0xout", 15, ME, ETH_ADDRESS, "credit", E18, OTHER)], eth, null, { ETH: ((BigInt(eth) / 100n)).toString() }),
+      linked: [walletOf(OTHER, [moved("0xin", 10, OTHER, ETH_ADDRESS, "credit", E18, STRANGER), moved("0xout", 15, OTHER, ETH_ADDRESS, "debit", E18, ME)], eth)],
+    })
+    const ruleRow = (comparison: RuleComparison, label: string) => comparison.rows.find((r) => r.label === label)!
+
+    it("marks an inherited estimate, and what's worked out from it, on each side", () => {
+      const comparison = compareRules(inherited("300000000000", market), inherited("297000000000", cautious), "average", 20, mine())
+      const cost = ruleRow(comparison, "ETH cost")
+      assert.deepEqual([cost.a, cost.b, cost.difference, cost.aEstimated, cost.bEstimated], ["3000000000", "2970000000", "-30000000", true, true])
+      const pnl = ruleRow(comparison, "Total PnL")
+      assert.deepEqual([pnl.a, pnl.b, pnl.aEstimated, pnl.bEstimated], ["0", "0", true, true])
+      assert.deepEqual(comparison.transactions.map((tx) => [tx.txHash, tx.label, tx.aEstimated, tx.bEstimated]), [["0xout", "Cost", true, true]])
+    })
+
+    it("says how much is an estimate, per side when the sides differ", () => {
+      const comparison = compareRules(inherited("300000000000", market), inherited("297000000000", cautious), "average", 20, mine())
+      assert.ok(comparison.warnings.includes(`Market price: ${wording.estimatedSentence("3000000000", "USD")}`))
+      assert.ok(comparison.warnings.includes(`Cautious ETH: ${wording.estimatedSentence("2970000000", "USD")}`))
+    })
+
+    it("marks a value from a market price, and a trade valued by one", () => {
+      const rows = [moved("0xin", 10, ME, AERO, "credit", 10n * E18, STRANGER), moved("0xtrade", 15, ME, AERO, "debit", 5n * E18), moved("0xtrade", 15, ME, VIRTUAL, "credit", 5n * E18)]
+      const by = (rule: typeof market, price: string) => ({ rule, reference: reference("300000000000"), wallet: walletOf(ME, rows, "300000000000", price, { AERO: price }) })
+      const comparison = compareRules(by(market, "2000000"), by(cautious, "1900000"), "average", 20, { ...mine(), linked: [] })
+      const value = ruleRow(comparison, "AERO value")
+      assert.deepEqual([value.a, value.b, value.aEstimated, value.bEstimated], ["10000000", "9500000", true, true])
+      const sold = comparison.transactions.find((tx) => tx.txHash === "0xtrade" && tx.label === "Sold for")!
+      assert.deepEqual([sold.a, sold.b, sold.difference, sold.aEstimated, sold.bEstimated], ["10000000", "9500000", "-500000", true, true])
+    })
+
+    it("doesn't mark what's exact, right beside it", () => {
+      const eth = (usd: string, rule: typeof market) => ({ rule, reference: reference(usd), wallet: walletOf(ME, [moved("0xbuy", 10, ME, USDC_ADDRESS, "debit", 3_000_000_000n), moved("0xbuy", 10, ME, ETH_ADDRESS, "credit", E18), moved("0xgift", 11, ME, ETH_ADDRESS, "credit", E18 / 2n, STRANGER)], usd, null, { ETH: (BigInt(usd) / 100n).toString() }) })
+      const comparison = compareRules(eth("300000000000", market), eth("297000000000", cautious), "fifo", 20, { ...mine(), linked: [] })
+      assert.deepEqual([ruleRow(comparison, "ETH price").aEstimated, ruleRow(comparison, "Network fees").aEstimated, ruleRow(comparison, "Value").aEstimated], [false, false, false])
+      const costs = comparison.transactions.filter((tx) => tx.label === "Cost")
+      assert.deepEqual(costs.map((tx) => [tx.txHash, tx.aEstimated, tx.bEstimated]), [["0xgift", true, true]], "the USDC trade cost the same by both, so only what came at market is listed")
+    })
+
+    it("leaves a side alone when it's unavailable", () => {
+      const comparison = compareRules(inherited("300000000000", market), { ...inherited("297000000000", cautious), linked: [] }, "average", 20, mine())
+      const cost = comparison.transactions.find((tx) => tx.txHash === "0xout")!
+      assert.deepEqual([cost.a, cost.b, cost.difference, cost.aEstimated, cost.bEstimated], ["3000000000", null, null, true, false])
+    })
+  })
+
   describe("a transfer between linked wallets carrying several purchases", () => {
     const [ME, OTHER] = ["0x00000000000000000000000000000000000000aa", "0x00000000000000000000000000000000000000bb"]
     const DEGEN = TOKENS.find((t) => t.symbol === "DEGEN")!.address
@@ -477,8 +613,8 @@ describe("comparing pricing rules", () => {
       moved("0xbuy2", 4, OTHER, ETH_ADDRESS, "debit", "200000000000000000"),
       moved("0xbuy2", 4, OTHER, DEGEN, "credit", THOUSANDS),
     ]
-    const send = (amount: string) => [moved("0xsend", 6, OTHER, DEGEN, "debit", amount)]
-    const land = (amount: string) => [moved("0xsend", 6, ME, DEGEN, "credit", amount)]
+    const send = (amount: string) => [{ ...moved("0xsend", 6, OTHER, DEGEN, "debit", amount), counterparty: ME }]
+    const land = (amount: string) => [{ ...moved("0xsend", 6, ME, DEGEN, "credit", amount), counterparty: OTHER }]
     const by = (rule: typeof market, eth: string, others: LegRow[], amount: string) => ({ rule, wallet: walletOf(ME, land(amount), eth), linked: [walletOf(OTHER, [fund, ...others, ...send(amount)], eth)], reference: reference(eth) })
     const compareFifo = (others: LegRow[], amount: string) => compareRules(by(market, "300000000000", others, amount), by(cautious, "297000000000", others, amount), "fifo", 20)
     const costs = (comparison: ReturnType<typeof compareFifo>) => comparison.transactions.filter((tx) => tx.txHash === "0xsend")

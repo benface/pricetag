@@ -3,10 +3,12 @@
 
 import { describeError, type Logger } from "./amp.ts"
 import { buildPricedLegs, derivePricedRows, oneWaySendBalanceBlocks, settleUnwraps, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PricedRow, type Reference } from "./legs.ts"
+import { MARKET_MAX_AGE_BLOCKS, marketPrice, type MarketPrice, type MarketTrade } from "./market.ts"
+import type { CostNote } from "./notes.ts"
 import { foldPositions, latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
 import type { ReadL1Fees } from "./receipts.ts"
 import { openingLegs, type BalanceSnapshot } from "./reconcile.ts"
-import { ASSETS } from "./tokens.ts"
+import { ASSETS, TOKENS, tokenByAddress } from "./tokens.ts"
 import type { Mode, UnlistedToken, WalletData } from "./wallet.ts"
 
 export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknown: GasUnknownTx[] }
@@ -31,6 +33,12 @@ export type Source = {
   readBalances(address: string, block: number): Promise<BalanceSnapshot | null>
   /** This wallet's plain ETH at the end of each block, not counting WETH. A block whose read failed isn't in it. */
   readEthBalances(address: string, blocks: readonly number[]): Promise<Map<number, string>>
+  /** The cost notes this wallet published in these blocks: zero-value transactions from itself to itself. */
+  readNotes?(address: string, blocks: readonly number[]): Promise<CostNote[]>
+  /** Whether `readMarketTrades` can be trusted. An older dataset's `priced_legs` has wrong rows, so it can't. */
+  marketReady?(): Promise<boolean>
+  /** An asset's latest trades in a block range, newest first. Only a dataset's `priced_legs` has them. */
+  readMarketTrades?(asset: string, from: number, to: number): Promise<MarketTrade[]>
 }
 
 /** Blocks to read, inclusive, where the source's defaults aren't wanted. `to` reads the wallet as of that block. */
@@ -66,6 +74,11 @@ type Cached = {
   lastBalances: Record<string, { blockNum: number; amount: string }>
   /** L1 fees by transaction. See `isL1FeeSettled`. */
   l1Fees: Map<string, L1Fee>
+  notes: CostNote[]
+  /** Blocks already checked for notes, so each is only read once it's past the part of the chain re-read for reorgs. */
+  notesReadTo: number
+  /** Market prices were all read this time. */
+  marketChecked: boolean
   /** Transactions whose fee is older than the balance read of their block. See `isL1FeeCurrent`. */
   staleFeeTxs: string[]
   /** Plain ETH at the end of the blocks `settleUnwraps` reads, when they've been worth reading. */
@@ -93,7 +106,7 @@ type L1Fee = { blockNum: number; fee: string; readAtTip: number }
  * What happened to a wallet up to one block, without what any of it was worth. Two pricing rules read through the same
  * facts can only differ by the rule, because what's held, what moved and what fees came to are all the same object.
  */
-export type WalletFacts = Pick<Cached, "fromBlock" | "coveredTo" | "rows" | "latest" | "gasUnknown" | "opening" | "closing" | "lastBalances" | "l1Fees" | "staleFeeTxs" | "ethBalances">
+export type WalletFacts = Pick<Cached, "fromBlock" | "coveredTo" | "rows" | "latest" | "gasUnknown" | "opening" | "closing" | "lastBalances" | "l1Fees" | "staleFeeTxs" | "ethBalances" | "notes" | "notesReadTo" | "marketChecked">
 
 /** Everything about a row but its price. A transaction that moved to another block isn't the same fact, even with the same amounts. */
 const rowKey = (r: LegRow) => `${r.block_num}:${r.timestamp}:${r.tx_index}:${r.tx_hash}:${r.log_index}:${r.account}:${r.side}:${r.kind}:${r.token}:${r.amount}`
@@ -127,6 +140,23 @@ function mergeOpening(known: BalanceSnapshot | null, read: BalanceSnapshot | nul
   return { blockNum: read.blockNum, amounts: { ...known?.amounts, ...read.amounts } }
 }
 
+/** Rows that aren't a trade with a price of its own, so a market price is what would price them. */
+export function marketNeeds(rows: readonly LegRow[], priced: readonly PricedRow[]): { asset: string; block: number }[] {
+  const swapped = new Set(priced.filter((p) => p.priced.source === "swap").map((p) => p.tx_hash))
+  return rows.flatMap((row) => {
+    const token = tokenByAddress(row.token)
+    return !token || token.oracle || swapped.has(row.tx_hash) ? [] : [{ asset: token.asset, block: row.block_num }]
+  })
+}
+
+/** A price for each block in a bucket, so a thousand transfers don't make a thousand queries. Always at or before the block. */
+const MARKET_BUCKET_BLOCKS = 150
+/** A current price moves on faster. */
+const MARKET_HEAD_BUCKET_BLOCKS = 30
+/** Each read is a query, and they run one at a time. What's left waits for the next refresh, and has no price until then. */
+const MARKET_READS_PER_REFRESH = 20
+const bucketOf = (block: number, size = MARKET_BUCKET_BLOCKS) => block - (block % size)
+const MARKET_ASSETS = TOKENS.filter((t) => !t.oracle).map((t) => t.asset)
 /** Whether a reorg could have changed any opening balance since it was read. */
 function openingMayChange(wallet: Cached | undefined, chain: Head): boolean {
   if (!wallet) return false
@@ -166,6 +196,40 @@ const keyOf = (address: string, { from, to }: WalletRange) => `${address.toLower
 export function createWallets(source: Source, currentHead: () => Promise<Head>, readL1Fees: ReadL1Fees, logger: Logger = console) {
   const wallets = new Map<string, Cached>()
   const inflight = new Map<string, Promise<Cached>>()
+  /** Prices by `<asset>:<bucket>`, null when too little trading backs one. A failed read isn't in here, so it's tried again. */
+  const market = new Map<string, MarketPrice | null>()
+  let marketReady: boolean | null = null
+
+  /** Reads what's missing, and says whether everything asked for is now known. */
+  async function loadMarket(wanted: readonly { asset: string; bucket: number }[]): Promise<boolean> {
+    if (!source.readMarketTrades || !source.marketReady) return false
+    try {
+      marketReady ??= await source.marketReady()
+    } catch (error) {
+      logger.warn(`Market check failed: ${describeError(error)}`)
+      return false
+    }
+    if (!marketReady) return false
+    const missing = [...new Map(wanted.map((w) => [`${w.asset}:${w.bucket}`, w])).entries()].filter(([key]) => !market.has(key))
+    for (const [key, { asset, bucket }] of missing.slice(0, MARKET_READS_PER_REFRESH)) {
+      try {
+        market.set(key, marketPrice(await source.readMarketTrades(asset, bucket - MARKET_MAX_AGE_BLOCKS, bucket), asset, bucket))
+      } catch (error) {
+        logger.warn(`Market read failed: ${describeError(error)}`)
+        return false
+      }
+    }
+    return missing.length <= MARKET_READS_PER_REFRESH
+  }
+
+  /** What's already been read for the end of `through`. An asset that hasn't been has no current price, rather than a later one. */
+  function marketPricesAt(through: number): LatestPrices {
+    const bucket = bucketOf(through, MARKET_HEAD_BUCKET_BLOCKS)
+    return Object.fromEntries(MARKET_ASSETS.flatMap((asset) => {
+      const price = market.get(`${asset}:${bucket}`)
+      return price ? [[asset, { micros: price.usdMicros, source: "market" as const, blockNum: price.blockNum }]] : []
+    }))
+  }
 
   // A failed check leaves positions unchecked, and it mustn't take the wallet down with it.
   async function readBalances(address: string, block: number): Promise<BalanceSnapshot | null> {
@@ -258,6 +322,18 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       if (fee !== undefined) l1Fees.set(tx_hash, { blockNum: block_num, fee, readAtTip: tip })
     }
 
+    // A transaction with only gas in it is what a note looks like. Anything near the tip could still change, so it's read again.
+    let notes = cached?.notes ?? []
+    let notesReadTo = cached?.notesReadTo ?? fromBlock - 1
+    const settled = Math.min(coveredTo, tip - REORG_BLOCKS)
+    if (source.readNotes && coveredTo >= fromBlock) {
+      const movers = new Set(rows.filter((r) => r.kind !== "gas" && r.kind !== "l1_fee").map((r) => r.tx_hash))
+      const noteBlocks = [...new Set(rows.filter((r) => r.kind === "gas" && !movers.has(r.tx_hash) && r.block_num > notesReadTo).map((r) => r.block_num))]
+      const read = await source.readNotes(address, noteBlocks)
+      notes = [...notes.filter((n) => n.blockNum <= notesReadTo), ...read]
+      if (settled > notesReadTo) notesReadTo = settled
+    }
+
     const staleFeeTxs = rows.filter((r) => r.kind === "gas" && !isL1FeeCurrent(l1Fees.get(r.tx_hash), r.block_num, tip)).map((r) => r.tx_hash)
 
     const unreadEth = unwrapBalanceBlocks(rows).filter((block) => !ethBalances.has(block)).slice(0, MAX_ETH_BALANCES_PER_READ)
@@ -279,7 +355,19 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
     const prices = latestPrices(await source.readLatestReference(head.blockNum))
 
-    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknown, opening, openingReadAt, readAtHead: chain.blockNum, closing, lastBalances, l1Fees, staleFeeTxs, ethBalances }
+    // A price at the end of what's covered, for what's held, and one for each movement a trade doesn't already price.
+    const headBucket = bucketOf(Math.min(coveredTo, head.blockNum), MARKET_HEAD_BUCKET_BLOCKS)
+    const heldAssets = MARKET_ASSETS.filter((asset) => rows.some((r) => tokenByAddress(r.token)?.asset === asset) || BigInt(opening?.amounts[asset] ?? "0") > 0n || BigInt(closing?.amounts[asset] ?? "0") > 0n)
+    const marketChecked = await loadMarket([
+      ...heldAssets.map((asset) => ({ asset, bucket: headBucket })),
+      ...marketNeeds(rows, priced).map(({ asset, block }) => ({ asset, bucket: bucketOf(block) })),
+    ])
+    for (const asset of heldAssets) {
+      const price = market.get(`${asset}:${headBucket}`)
+      if (price) prices[asset] = { micros: price.usdMicros, source: "market", blockNum: price.blockNum }
+    }
+
+    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknown, opening, openingReadAt, readAtHead: chain.blockNum, closing, lastBalances, l1Fees, staleFeeTxs, ethBalances, notes, notesReadTo, marketChecked }
     // This comes after the claims and the closing balance, because whether ETH adds up depends on both.
     await readEthBalances(address, unreadSendBlocks(address, next).slice(0, MAX_ETH_BALANCES_PER_READ - unreadEth.length), ethBalances)
     wallets.delete(key)
@@ -305,7 +393,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       address,
       mode: source.mode,
       coverage: { fromBlock: wallet.fromBlock, toBlock: wallet.coveredTo },
-      legs: [...(opening ? openingLegs(opening, openedAt) : []), ...buildPricedLegs({ account: address, rows, references, priced })],
+      legs: [...(opening ? openingLegs(opening, openedAt) : []), ...buildPricedLegs({ account: address, rows, references, priced, market: (asset, block) => market.get(`${asset}:${bucketOf(block)}`)?.usdMicros ?? null })],
       references,
       prices: wallet.prices,
       latest: wallet.latest,
@@ -319,6 +407,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       lastBalances: Object.fromEntries(Object.entries(wallet.lastBalances).filter(([asset]) => closing?.amounts[asset] === undefined)),
       unreadBalances: wallet.coveredTo >= wallet.fromBlock ? ASSETS.filter((asset) => closing?.amounts[asset] === undefined) : [],
       unseenEth,
+      notes: wallet.notes,
+      marketChecked: wallet.marketChecked,
     }
   }
 
@@ -356,6 +446,9 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         l1Fees: wallet.l1Fees,
         staleFeeTxs: wallet.staleFeeTxs,
         ethBalances: wallet.ethBalances,
+        notes: wallet.notes.filter((n) => n.blockNum <= through),
+        notesReadTo: Math.min(wallet.notesReadTo, through),
+        marketChecked: wallet.marketChecked,
       }
     },
 
@@ -373,7 +466,9 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         ...facts,
         priced: own.priced.filter((p) => p.block_num <= through),
         references: new Map([...own.references].filter(([block]) => block <= through)),
-        prices,
+        // Market prices come from this source's own trades, like the rest of what's priced.
+        prices: { ...prices, ...marketPricesAt(through) },
+        marketChecked: own.marketChecked,
       })
     },
 

@@ -42,6 +42,8 @@ export type LegRow = {
   side: "debit" | "credit"
   amount: string
   kind: LegKind
+  /** The other side of this movement, when it's known: who sent a credit, or who a debit went to. */
+  counterparty?: string | null
   /** On an unwrap credit: `settleUnwraps` confirmed this amount against the chain. Without it, the amount is only a claim. */
   settled?: boolean
   /** On a transaction's rows: `settleUnwraps` found ETH in its block that nothing explains. See `UnseenEth`. */
@@ -90,9 +92,9 @@ export type PricedRow = {
 }
 
 /** One of the rows a leg nets together. */
-export type LegPart = Pick<LegRow, "token" | "account" | "side" | "amount" | "kind"> & { logIndex: number }
+export type LegPart = Pick<LegRow, "token" | "account" | "side" | "amount" | "kind" | "counterparty"> & { logIndex: number }
 
-const partOf = ({ token, account, side, amount, kind, log_index }: LegRow): LegPart => ({ token, account, side, amount, kind, logIndex: log_index })
+const partOf = ({ token, account, side, amount, kind, log_index, counterparty }: LegRow): LegPart => ({ token, account, side, amount, kind, logIndex: log_index, ...(counterparty ? { counterparty } : {}) })
 
 /** What a leg converted out of USD was before that, and the rate that took it there. */
 export type LegConversion = {
@@ -419,11 +421,15 @@ function isSaneAgainstOracle(impliedUsdMicros: bigint, oracleUsdMicros: string):
   return ratio >= ORACLE_BAND[0] && ratio <= ORACLE_BAND[1]
 }
 
+/** The guarded price of an asset's recent trades at or before a block. See `market.ts`. */
+export type MarketLookup = (asset: string, blockNum: number) => string | null
+
 type Input = {
   account: string
   rows: readonly LegRow[]
   references: readonly Reference[]
   priced: readonly PricedRow[]
+  market?: MarketLookup
 }
 
 /**
@@ -431,7 +437,7 @@ type Input = {
  * then labels each leg's price and cost. Gas stays its own leg. Ordered for the fold: by block, then transaction,
  * with gas first because it's paid before the transaction runs.
  */
-export function buildPricedLegs({ account, rows, references, priced }: Input): PricedLeg[] {
+export function buildPricedLegs({ account, rows, references, priced, market }: Input): PricedLeg[] {
   const me = normalizeAddress(account)
   const refs = new Map(references.map((r) => [r.blockNum, r]))
   const ordered = [...byTx(rows.filter((row) => row.account === me)).values()].sort((a, b) => a[0]!.block_num - b[0]!.block_num || a[0]!.tx_index - b[0]!.tx_index)
@@ -517,6 +523,13 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
           priceSource = "swap"
         }
       }
+      // A price is a fact about the token at this block, so a trade we couldn't value doesn't stop it having one.
+      const marketPrice = price === null && !net.token.oracle ? (market?.(net.token.asset, first.block_num) ?? null) : null
+      if (marketPrice !== null) {
+        price = marketPrice
+        priceSource = "market"
+        if (!rejected && !hasUnlisted && !unsettledCredit && !unseenEth) priceNote = null
+      }
       return { net, price, priceSource, priceNote, rejected }
     })
 
@@ -524,14 +537,17 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     // sides share one USD value: the amount on the side an oracle can value, preferring USDC, whose oracle is closest
     // to what was really paid. Otherwise buying above the oracle and selling below it would show up as a profit.
     const usdcSide = resolved.find((r) => r.net.token.oracle === "usdc" && r.price !== null)
-    const anchor = isSwap ? (usdcSide ?? resolved.find((r) => r.net.token.oracle === "eth" && r.price !== null)) : undefined
+    const oracleSide = isSwap ? (usdcSide ?? resolved.find((r) => r.net.token.oracle === "eth" && r.price !== null)) : undefined
+    // With no feed on either side, what left is worth about its market price. That's an estimate, and it's labeled as one.
+    const marketSide = isSwap && !oracleSide && !resolved.some((r) => r.rejected) ? (resolved.find((r) => r.net.delta < 0n && r.priceSource === "market") ?? resolved.find((r) => r.priceSource === "market")) : undefined
+    const anchor = oracleSide ?? marketSide
     const abs = (delta: bigint) => (delta < 0n ? -delta : delta)
     let tradeUsd = anchor ? worth(abs(anchor.net.delta), BigInt(anchor.price as string), anchor.net.token.decimals) : null
     const other = anchor && resolved.find((r) => r !== anchor)
     if (anchor && other && tradeUsd !== null) {
       const implied = (tradeUsd * 10n ** BigInt(other.net.token.decimals)) / abs(other.net.delta)
       // Check against the token's oracle when it has a reading, and otherwise against its plausible range.
-      const sane = other.net.token.oracle && other.price !== null ? isSaneAgainstOracle(implied, other.price) : isSanePrice(other.net.token, implied.toString(), ethMicros)
+      const sane = other.price !== null && other.priceSource !== "swap" ? isSaneAgainstOracle(implied, other.price) : isSanePrice(other.net.token, implied.toString(), ethMicros)
       if (other.rejected || !sane) {
         // A wrong trade value must never reach a total, so neither side gets one.
         tradeUsd = null
@@ -558,6 +574,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         costMicros: paid ? value : null,
         proceedsMicros: net.delta < 0n ? value : null,
         costLabel,
+        ...(marketSide && value !== null ? { estimated: true } : {}),
         parts: net.parts.map(partOf),
         ...unsettled,
       })

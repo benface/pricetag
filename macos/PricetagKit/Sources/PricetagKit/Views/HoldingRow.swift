@@ -19,17 +19,17 @@ public struct HoldingRow: View {
 
     private var cost: String {
         if !position.isHeld { return "None left" }
-        if let average = position.values.averageCostMicros { return "Average paid \(Format.price(average, currency))" }
+        if let average = position.values.averageCostMicros { return "Average paid \(Format.estimate(Format.price(average, currency), position.estimates.cost))" }
         return "Cost unknown"
     }
 
     private var pnlText: String {
-        position.pnlMicros.map { Format.signedMoney($0, currency) } ?? Wording.pnlUnavailable
+        position.pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized || position.estimates.unrealized) } ?? Wording.pnlUnavailable
     }
 
     private var valueText: String {
         if !position.isHeld { return "—" }
-        return position.values.valueMicros.map { Format.money($0, currency) } ?? "No price"
+        return position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price"
     }
 
     public var body: some View {
