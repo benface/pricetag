@@ -262,7 +262,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     @Test func aPartialTotalWarns() throws {
         let summary = FeedSummary(feed: .live, portfolio: try demoPortfolio())
         #expect(summary.isWarning)
-        #expect(summary.text == "Demo +$74.39")
+        #expect(summary.text == "Demo +$74.28")
     }
 
     @Test func anUnavailableTotalHasNoNumber() throws {
@@ -285,6 +285,6 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     @Test func aCompleteTotalDoesntWarn() throws {
         let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .complete))
         #expect(!summary.isWarning)
-        #expect(summary.text == "+$74.39")
+        #expect(summary.text == "+$74.28")
     }
 }

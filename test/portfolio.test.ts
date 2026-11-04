@@ -110,7 +110,7 @@ describe("portfolioOf", () => {
   })
 
   it("still explains a total that's only partial, with its value", () => {
-    assert.equal(explainPortfolio(DEMO_WALLET, "average", { kind: "total", metric: "pnl" })?.value, "+$74.39")
+    assert.equal(explainPortfolio(DEMO_WALLET, "average", { kind: "total", metric: "pnl" })?.value, "+$74.28")
   })
 
   it("matches the files the Swift package reads", () => {

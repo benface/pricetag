@@ -27,17 +27,17 @@
         "blockNum": 53505400
       },
       "values": {
-        "qty": "3349999999",
-        "unknownCostQty": "1600000000",
+        "qty": "3249999999",
+        "unknownCostQty": "1521951220",
         "costUsdMicros": null,
         "averageCostUsdMicros": null,
-        "valueUsdMicros": "3349329999",
+        "valueUsdMicros": "3249349999",
         "realizedUsdMicros": null,
         "unrealizedUsdMicros": null
       },
       "pnlUsdMicros": null,
       "shortfallQty": "0",
-      "legCount": 6
+      "legCount": 7
     },
     {
       "asset": "ETH",
@@ -49,17 +49,17 @@
         "blockNum": 53505400
       },
       "values": {
-        "qty": "519760000000000000",
-        "unknownCostQty": "10171388681909096",
+        "qty": "519720000000000000",
+        "unknownCostQty": "10170605906113966",
         "costUsdMicros": null,
         "averageCostUsdMicros": null,
-        "valueUsdMicros": "1372166400",
+        "valueUsdMicros": "1372060800",
         "realizedUsdMicros": null,
         "unrealizedUsdMicros": null
       },
       "pnlUsdMicros": null,
       "shortfallQty": "0",
-      "legCount": 9
+      "legCount": 10
     },
     {
       "asset": "AERO",
@@ -114,14 +114,32 @@
       "pnlUsdMicros": null,
       "shortfallQty": "0",
       "legCount": 1
+    },
+    {
+      "asset": "VIRTUAL",
+      "decimals": 18,
+      "note": null,
+      "price": null,
+      "values": {
+        "qty": "50000000000000000000",
+        "unknownCostQty": "50000000000000000000",
+        "costUsdMicros": null,
+        "averageCostUsdMicros": null,
+        "valueUsdMicros": null,
+        "realizedUsdMicros": "0",
+        "unrealizedUsdMicros": null
+      },
+      "pnlUsdMicros": null,
+      "shortfallQty": "0",
+      "legCount": 1
     }
   ],
   "totals": {
-    "valueUsdMicros": "4721496399",
+    "valueUsdMicros": "4621410799",
     "realizedUsdMicros": "74985000",
     "unrealizedUsdMicros": null,
-    "gasUsdMicros": "599760",
-    "pnlUsdMicros": "74385240",
+    "gasUsdMicros": "703360",
+    "pnlUsdMicros": "74281640",
     "excluded": [
       {
         "asset": "USDC",
@@ -158,13 +176,21 @@
       {
         "asset": "DEGEN",
         "reason": "unknown cost"
+      },
+      {
+        "asset": "VIRTUAL",
+        "reason": "no current price"
+      },
+      {
+        "asset": "VIRTUAL",
+        "reason": "unknown cost"
       }
     ],
     "unpricedGas": false,
     "coverage": {
       "value": {
         "known": 2,
-        "missing": 3
+        "missing": 4
       },
       "realized": {
         "known": 1,
@@ -172,11 +198,11 @@
       },
       "unrealized": {
         "known": 0,
-        "missing": 5
+        "missing": 6
       },
       "pnl": {
         "known": 2,
-        "missing": 7
+        "missing": 8
       }
     }
   },
@@ -239,18 +265,25 @@
       "excludedCount": 7
     },
     {
+      "blockNum": 53504200,
+      "timestamp": "2026-11-04T10:20:00.000Z",
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
+      "pnlUsdMicros": "74385640",
+      "excludedCount": 8
+    },
+    {
       "blockNum": 53504800,
       "timestamp": "2026-11-04T10:40:00.000Z",
-      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
-      "pnlUsdMicros": "74385240",
-      "excludedCount": 7
+      "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
+      "pnlUsdMicros": "74281640",
+      "excludedCount": 8
     },
     {
       "blockNum": 53505400,
       "timestamp": "2026-11-04T11:00:00.000Z",
       "txHash": null,
-      "pnlUsdMicros": "74385240",
-      "excludedCount": 7
+      "pnlUsdMicros": "74281640",
+      "excludedCount": 8
     }
   ]
 }
