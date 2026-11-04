@@ -564,6 +564,27 @@ describe("reconciling", () => {
     assert.deepEqual(reads, [[hash], [hash]])
   })
 
+  it("keeps the last ETH balance read with every fee known, while a newer fee can't be read", async () => {
+    let head = 1000
+    let answer = true
+    const fees: ReadL1Fees = async (requests) => new Map(answer ? requests.map((r) => [r.txHash, "24"]) : [])
+    const blocks = chain()
+    const { source } = fake(blocks, () => reference(head), undefined, async () => every("7"))
+    const wallets = createWallets(source, async () => headAt(head)(), fees)
+    assert.deepEqual((await wallets.get(ME)).lastCheckableEth, { blockNum: 1000, amount: "7" })
+
+    answer = false
+    head = 1001
+    blocks.set(1001, [gas(1001)])
+    const unread = await wallets.get(ME)
+    assert.deepEqual(unread.l1FeeUnknownTxs, [gas(1001).tx_hash])
+    assert.deepEqual(unread.lastCheckableEth, { blockNum: 1000, amount: "7" })
+
+    answer = true
+    head = 1002
+    assert.deepEqual((await wallets.get(ME)).lastCheckableEth, { blockNum: 1002, amount: "7" })
+  })
+
   it("reads an L1 fee again when a reorg moves its transaction to another block", async () => {
     let head = 1000
     const moved = chain()

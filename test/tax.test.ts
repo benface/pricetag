@@ -53,6 +53,7 @@ function walletOf(address: string, legs: PricedLeg[], changes: Partial<WalletRes
     legs,
     balances: { blockNum: 1000, amounts },
     lastBalances: {},
+    lastCheckableEth: null,
     unreadBalances: [],
     openingUnread: [],
     gasUnknownTxs: [],
@@ -622,6 +623,23 @@ describe("the user's answers in a report", () => {
         assert.deepEqual([row?.Cost, row?.Status], ["unknown", "UNRESOLVED"])
       })
     }
+
+    it("says the same as the screen", () => {
+      const bought = walletOf(B, [arrived(hop, A, B), sell(30, 1n, 2500)])
+      const onScreen = foldBook(bought, [mismatched()], "fifo", mine).positions[0]
+      const row = eventsOf(taxReportOf([bought], US, { book: mine, costsFrom: [mismatched()] }))[0]
+      assert.deepEqual([onScreen?.values.realizedMicros, onScreen?.reconciliation?.status], [null, "reconciled"])
+      assert.deepEqual([row?.Cost, row?.Status], ["unknown", "UNRESOLVED"])
+    })
+
+    it("goes by the last read that worked, like the screen, when the latest one failed", () => {
+      const failed = walletOf(A, legs(), { balances: null, unreadBalances: ["ETH"], lastBalances: { ETH: { blockNum: hop, amount: "0" } } })
+      const bought = walletOf(B, [arrived(hop, A, B), sell(30, 1n, 2500)])
+      const screen = foldBook(bought, [failed], "fifo", mine).positions[0]
+      const row = eventsOf(taxReportOf([bought], US, { book: mine, costsFrom: [failed] }))[0]
+      assert.equal(screen?.values.realizedMicros, usd(1500))
+      assert.deepEqual([row?.Gain, row?.Status], ["1500.000000", "OK"])
+    })
 
     it("only touches what came from there", () => {
       const legs = [buy(5, 1n, 500), arrived(hop, A, B), sell(30, 1n, 2500), sell(40, 1n, 2500)]

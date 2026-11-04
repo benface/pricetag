@@ -96,6 +96,7 @@ enum TestScene: String, CaseIterable {
     case mainServerDown = "main-server-down"
     case mainNotUpdating = "main-not-updating"
     case mainLinkedFailed = "main-linked-failed"
+    case mainCostWithheld = "main-cost-withheld"
     case resolve
     case changeWallet = "change-wallet"
     case popover
@@ -121,6 +122,7 @@ enum TestScene: String, CaseIterable {
         case .mainServerDown: .serverDown
         case .mainNotUpdating, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
+        case .mainCostWithheld: .costWithheld
         default: .demo
         }
     }
@@ -144,7 +146,7 @@ enum TestScene: String, CaseIterable {
 
         let isReady: () -> Bool = { [feed] in
             switch feed {
-            case .demo, .linkedFails: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .linkedFails, .costWithheld: store.feed == .noWallet || store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
             case .stopsAnswering: store.feed == .serverUnreachable && store.portfolio != nil
@@ -153,7 +155,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .resolve:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
-        case .main, .mainTransactions, .mainDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed:
+        case .main, .mainTransactions, .mainDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainCostWithheld:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
@@ -192,7 +194,7 @@ private struct NoOneThere: UserPresence {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 private final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails }
+    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld }
 
     private let feed: Feed
     private let reads = Mutex(0)
@@ -212,6 +214,11 @@ private final class FixtureSource: PortfolioSource {
             // The demo, with one of its linked wallets unreadable.
             guard let url = Bundle.main.url(forResource: "demo-portfolio", withExtension: "json"), var object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else { throw FetchError.rejected("There's no fixture called demo-portfolio.") }
             object["linkedFailed"] = ["0x00000000000000000000000000000000000de301"]
+            return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        case .costWithheld:
+            // The demo, with what one of its linked wallets sent left unknown.
+            guard let url = Bundle.main.url(forResource: "demo-portfolio", withExtension: "json"), var object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else { throw FetchError.rejected("There's no fixture called demo-portfolio.") }
+            object["withheld"] = [["wallet": "0x00000000000000000000000000000000000de301", "asset": "USDC"]]
             return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
         case .neverAnswers: try await Task.sleep(for: .seconds(600))
         case .serverDown: throw FetchError.unreachable

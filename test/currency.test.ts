@@ -64,6 +64,7 @@ const walletWith = (changes: Partial<WalletResponse>): WalletResponse => ({
   openingUnread: [],
   unreadBalances: [],
   lastBalances: {},
+  lastCheckableEth: null,
   l1FeeUnknownTxs: [],
   currency: "CAD",
   rates: RATES,

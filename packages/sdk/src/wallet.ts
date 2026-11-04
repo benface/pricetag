@@ -45,6 +45,8 @@ export type WalletData = {
   openingUnread: string[]
   /** The last balance read for each asset in `unreadBalances` that has one. */
   lastBalances: Record<string, { blockNum: number; amount: string }>
+  /** The last ETH balance read with every fee up to it known. A fee that can't be read yet says nothing about what came before it. */
+  lastCheckableEth: { blockNum: number; amount: string } | null
   /** Assets with no balance read at `coverage.toBlock`, which isn't the same as holding none. Empty until reads start. */
   unreadBalances: string[]
   /** Where ETH arrived that no row explains, with the transactions that took a token from this wallet there. */

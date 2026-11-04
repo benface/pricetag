@@ -26,7 +26,7 @@ import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } fro
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { rateSource } from "./explain.ts"
 import { resolveLegs, type Resolved } from "./resolve.ts"
-import { METHOD_LABELS } from "./wording.ts"
+import { METHOD_LABELS, withheldSentence } from "./wording.ts"
 
 export type TaxCountryCode = "CA" | "US"
 /** Whether cost is worked out across all of a person's wallets, or separately in each. */
@@ -241,10 +241,8 @@ function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = 
     const view = viewWallet(wallet)
     return { wallet, view, ...checksOf(wallet, view, method) }
   })
-  const checks = new Map(sides.map(({ wallet, unconfirmed }) => [normalizeAddress(wallet.address), unconfirmed]))
   const linking = wallets.length > 1 ? { ...book, linked: [...(book.linked ?? []), ...wallets.map((wallet) => wallet.address.toLowerCase())] } : book
-  // A cost the chain can't back up where it came from can't be known where it went, however well that wallet adds up.
-  const { legs, withheld } = resolveLegs(sides, method, linking, (wallet, asset) => checks.get(wallet)?.has(asset) === true)
+  const { legs, withheld } = resolveLegs(sides, method, linking)
   const sources = sides.slice(0, wallets.length).map((side) => ({ ...side, view: { ...side.view, legs: legs.get(normalizeAddress(side.wallet.address)) as PricedLeg[] } }))
   return { sources, withheld }
 }
@@ -436,7 +434,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   if (estimated > 0) warnings.push(`${plural(estimated, "row")} of ${rows.length.toLocaleString("en-US")} ${estimated === 1 ? "rests" : "rest"} on an estimate.`)
   if (selfReported > 0) warnings.push(`${plural(selfReported, "row")} of ${rows.length.toLocaleString("en-US")} ${selfReported === 1 ? "uses" : "use"} a cost you entered or imported, which the chain can't confirm, so keep your records for it.`)
   if (given > 0) warnings.push(`${plural(given, "row")} of ${rows.length.toLocaleString("en-US")} ${given === 1 ? "uses" : "use"} a market price from when something you said came from someone else arrived. ${country.marketWarning}`)
-  for (const { wallet, asset } of withheld) warnings.push(`${shortHash(wallet)}'s ${asset} history can't be confirmed, so what it sent has an unknown cost where it arrived.`)
+  for (const { wallet, asset } of withheld) warnings.push(withheldSentence(wallet, asset))
   for (const source of sources) warnings.push(...walletWarnings(source, named))
   if (method !== country.method) warnings.push(country.methodWarning)
   if (scope !== country.scope) warnings.push(country.scopeWarning)

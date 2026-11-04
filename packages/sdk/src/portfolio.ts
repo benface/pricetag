@@ -143,6 +143,31 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
   })
 }
 
+/**
+ * For each asset whose legs don't currently add up to its balance, the last block they're known to have, which is -Infinity
+ * when there's no such block. An asset that isn't here adds up.
+ *
+ * A read that failed says nothing about the history, so it falls back on the last one that worked, as of that block. That
+ * way a failed read can't turn a known cost unknown and back, and can't bring back one a mismatch already ruled out. A wallet
+ * with no read to go on stays unconfirmed until it has one, which only ever goes one way.
+ */
+export function vouchedThrough(legs: readonly PricedLeg[], method: Method, onchain: Onchain): Map<string, number> {
+  const through = new Map<string, number>()
+  for (const { asset, reconciliation } of foldPositions(legs, method, {}, onchain)) {
+    if (reconciliation === null || reconciliation.status === "reconciled") continue
+    through.set(asset, Number.NEGATIVE_INFINITY)
+    // A mismatch is a mismatch, and without the starting balance there are no legs to compare, whatever a read says.
+    if (reconciliation.status === "incomplete" || onchain.openingUnread?.includes(asset)) continue
+    const last = asset === "ETH" && onchain.l1FeeUnknownTxs.length > 0 ? onchain.lastCheckableEth : onchain.lastBalances?.[asset]
+    if (!last) continue
+    const then = legs.filter((leg) => leg.asset === asset && leg.blockNum <= last.blockNum)
+    const [position] = foldPositions(then, method, {}, { balances: { blockNum: last.blockNum, amounts: { [asset]: last.amount } }, l1FeeUnknownTxs: [] })
+    // With nothing moved by then and nothing held, there's no position, and nothing to disagree with.
+    if (!position || position.reconciliation?.status === "reconciled") through.set(asset, last.blockNum)
+  }
+  return through
+}
+
 /** Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong. */
 export function latestPrices(reference: Reference | null): LatestPrices {
   const prices: LatestPrices = {}

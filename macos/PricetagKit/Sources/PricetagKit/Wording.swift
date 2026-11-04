@@ -174,6 +174,11 @@ public enum Wording {
         count == 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : "Couldn't read \(count) of your other wallets, so what came from them may show as unresolved."
     }
 
+    /// A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent.
+    public static func withheld(wallet: String, asset: String) -> String {
+        "\(Format.shortHash(wallet))'s \(asset) history can't be confirmed, so what it sent has an unknown cost where it arrived."
+    }
+
     /// A preview's headline, as it would read.
     public static func consequence(_ preview: BookPreview, _ currency: CurrencyCode) -> String {
         if preview.failed { return "Couldn't read that wallet" }

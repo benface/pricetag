@@ -4,7 +4,7 @@
 // The rest come from here, and the fold then runs on the result. An unanswered sender stays unknown: it could be the user's
 // own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, emptyPosition, foldWallet, formatAmount, normalizeAddress, usableAnswer, usdView, viewWallet, worth, type CostPiece, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, emptyPosition, foldWallet, formatAmount, normalizeAddress, usableAnswer, usdView, vouchedThrough, viewWallet, worth, type CostPiece, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "./api.ts"
 import { costKey, linkedWallets, type Book, type ExchangeCost, type Money, type Receipt } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
@@ -16,7 +16,7 @@ type OpenItem = { wallet: string; leg: PricedLeg; sender: string | null; units: 
 export type Resolved = {
   legs: Map<string, PricedLeg[]>
   open: OpenItem[]
-  /** What `distrusted` kept from carrying over: a wallet's asset, which arrived somewhere with its cost left unknown. */
+  /** What couldn't carry over, because the wallet's history of that asset can't be confirmed. It arrived with its cost left unknown. */
   withheld: { wallet: string; asset: string }[]
 }
 
@@ -153,11 +153,21 @@ function withPieces(leg: PricedLeg, pieces: CostPiece[]): PricedLeg {
 
 const reported = (leg: PricedLeg, usdMicros: string): PricedLeg => ({ ...leg, costLabel: "self-reported", costMicros: usdMicros })
 
-/** `distrusted` says when what a wallet holds of an asset can't vouch for a cost, so what it sends arrives with its cost unknown. */
-export function resolveLegs(sides: readonly Side[], method: Method, book: Book, distrusted?: (wallet: string, asset: string) => boolean): Resolved {
+export function resolveLegs(sides: readonly Side[], method: Method, book: Book): Resolved {
   const linked = new Set(linkedWallets(book))
-  const read = new Set(sides.map(({ wallet }) => normalizeAddress(wallet.address)))
+  const read = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
   const open: OpenItem[] = []
+  const vouched = new Map<string, Map<string, number>>()
+  /**
+   * A cost can only carry over from a wallet whose history of that asset is confirmed as of when it left. Otherwise it could
+   * be anything, however well the wallet it arrived in adds up. Only worked out for wallets that sent something, since most don't.
+   */
+  const confirmed = (sender: string, { asset, blockNum }: PricedLeg) => {
+    const { wallet, view } = read.get(sender) as Side
+    const through = vouched.get(sender) ?? vouchedThrough(view.legs, method, wallet)
+    vouched.set(sender, through)
+    return blockNum <= (through.get(asset) ?? Number.POSITIVE_INFINITY)
+  }
   const withheld = new Map<string, { wallet: string; asset: string }>()
 
   // Everything that could be an exchange withdrawal, across every wallet read, so one withdrawal can't explain two of them.
@@ -204,7 +214,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book, 
       const answer = book.senders[sender]
       if (answer?.kind === "mine" || linked.has(sender) || sender === address) {
         if (!read.has(sender)) return [unknown]
-        if (sender !== address && distrusted?.(sender, leg.asset)) {
+        if (sender !== address && !confirmed(sender, leg)) {
           withheld.set(`${sender}:${leg.asset}`, { wallet: sender, asset: leg.asset })
           return [unknown]
         }
@@ -367,6 +377,8 @@ export type BookFold = {
   points: PnlPoint[]
   questions: Question[]
   meter: Meter
+  /** Other wallets' history that can't be confirmed, and that's why some of what's in this wallet has an unknown cost. */
+  withheld: Resolved["withheld"]
 }
 
 /**
@@ -379,7 +391,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
   const sideOf = (wallet: WalletResponse): Side => ({ wallet, view: usd ? usdView(wallet) : viewWallet(wallet) })
   const sides = [focus, ...others.filter((w) => normalizeAddress(w.address) !== address && linked.has(normalizeAddress(w.address)) && sameRead(w, focus))].map(sideOf)
   const view = (sides[0] as Side).view
-  const { legs: resolved, open } = resolveLegs(sides, method, book)
+  const { legs: resolved, open, withheld } = resolveLegs(sides, method, book)
   const legs = resolved.get(address) as PricedLeg[]
   const { positions, unreadAssets: unread, totals, pnlStatus, points } = foldWallet(focus, method, { ...view, legs })
   const questions = questionsOf(open, sides, book)
@@ -393,6 +405,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
     points,
     questions,
     meter: meterOf(questions, book, address, missingWallets(book, focus, others).length),
+    withheld: withheld.filter(({ wallet, asset }) => wallet !== address && positions.some((position) => position.asset === asset && position.effects.some(({ leg }) => leg.pieces?.some((piece) => piece.costMicros === null)))),
   }
 }
 
