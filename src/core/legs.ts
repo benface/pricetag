@@ -10,7 +10,10 @@ export type PriceSource = "oracle" | "swap" | "market"
  * `unlisted`: `amount` is a quantity, or empty when it can't be read, as with ERC-1155.
  * `unlisted_nft`: `amount` is an ERC-721 token ID, which identifies one asset and is not a quantity.
  */
-export type LegKind = "erc20" | "eth" | "gas" | "wrap" | "unwrap" | "unlisted" | "unlisted_nft"
+export type LegKind = "erc20" | "eth" | "gas" | "l1_fee" | "wrap" | "unwrap" | "unlisted" | "unlisted_nft"
+
+/** What a transaction cost to send. L2 gas comes from Amp's data, and the L1 data fee from its receipt. */
+const isFeeRow = (row: LegRow) => row.kind === "gas" || row.kind === "l1_fee"
 
 /** A row of `legs`. `token` and `account` are 0x-prefixed lowercase hex, `amount` a decimal string. */
 export type LegRow = {
@@ -55,6 +58,8 @@ export type PricedLeg = FoldLeg & {
   priceNote: string | null
   /** The rows this leg nets together, so a click can show them. */
   parts: LegRow[]
+  /** What the wallet already held before the first block read. It isn't a transaction, so `txHash` is empty. */
+  opening?: boolean
 }
 
 /** The same calculation as the dataset's `pt_price` UDF. A test runs both on the same inputs. */
@@ -98,7 +103,7 @@ export function derivePricedRows(rows: readonly LegRow[], references: readonly R
   const byTx = new Map<string, LegRow[]>()
   for (const row of rows) {
     // Like the dataset's `legs`, which pairs are made from: gas isn't traded, and unlisted tokens have no decimals.
-    if (row.kind === "gas" || row.kind === "unlisted" || row.kind === "unlisted_nft") continue
+    if (isFeeRow(row) || row.kind === "unlisted" || row.kind === "unlisted_nft") continue
     const key = `${row.account}:${row.tx_hash}`
     byTx.set(key, [...(byTx.get(key) ?? []), row])
   }
@@ -185,13 +190,13 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     const oracle = (t: Token) => (t.oracle === "eth" ? ethMicros : t.oracle === "usdc" ? usdcMicros : null)
     const base = { blockNum: first.block_num, timestamp: first.timestamp, txHash: first.tx_hash, txIndex: first.tx_index }
 
-    for (const row of txRows) {
-      if (row.kind !== "gas") continue
+    const feeRows = txRows.filter(isFeeRow)
+    if (feeRows.length > 0) {
       legs.push({
         ...base,
-        id: `${row.tx_hash}:gas`,
+        id: `${first.tx_hash}:gas`,
         asset: "ETH",
-        delta: `-${row.amount}`,
+        delta: `-${feeRows.reduce((sum, row) => sum + BigInt(row.amount), 0n)}`,
         decimals: 18,
         kind: "gas",
         priceUsdMicros: ethMicros,
@@ -200,7 +205,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         costUsdMicros: null,
         proceedsUsdMicros: null,
         costLabel: "unknown",
-        parts: [row],
+        parts: feeRows,
       })
     }
 
@@ -208,7 +213,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     const unlisted = new Map<string, bigint>()
     let unlistedUnreadable = false
     for (const row of txRows) {
-      if (row.kind === "gas") continue
+      if (isFeeRow(row)) continue
       const token = tokenByAddress(row.token)
       if (!token) {
         if (!isPlainAmount(row.amount)) {

@@ -22,8 +22,8 @@ function LegRow({ effect }: { effect: LegEffect }) {
         </span>
       </div>
       <div className="leg-tags">
-        <span className="tag">{leg.kind}</span>
-        {leg.priceUsdMicros !== null && leg.priceSource ? (
+        <span className="tag">{leg.opening ? "opening balance" : leg.kind}</span>
+        {leg.opening ? null : leg.priceUsdMicros !== null && leg.priceSource ? (
           <span className="tag">
             {formatPrice(leg.priceUsdMicros)} · {leg.priceSource}
           </span>
@@ -40,14 +40,17 @@ function LegRow({ effect }: { effect: LegEffect }) {
           {leg.parts
             .map((p) => {
               const token = tokenByAddress(p.token)
-              return `${p.side === "credit" ? "+" : "−"}${formatAmount(p.amount, token?.decimals ?? 18)} ${token?.symbol ?? p.token}`
+              const fee = p.kind === "gas" ? " L2 gas" : p.kind === "l1_fee" ? " L1 fee" : ""
+              return `${p.side === "credit" ? "+" : "−"}${formatAmount(p.amount, token?.decimals ?? 18)} ${token?.symbol ?? p.token}${fee}`
             })
             .join(", ")}
         </p>
       ) : null}
-      <a className="small" href={`https://basescan.org/tx/${leg.txHash}`} target="_blank" rel="noreferrer noopener">
-        {shortHash(leg.txHash)} on Basescan ↗
-      </a>
+      {leg.opening ? null : (
+        <a className="small" href={`https://basescan.org/tx/${leg.txHash}`} target="_blank" rel="noreferrer noopener">
+          {shortHash(leg.txHash)} on Basescan ↗
+        </a>
+      )}
     </li>
   )
 }

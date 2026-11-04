@@ -1,7 +1,8 @@
 // Runs the fold over a wallet's priced legs, and adds up what can honestly be added up.
 
-import { applyLeg, emptyPosition, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
+import { applyLeg, emptyPosition, usdOf, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
 import { answerToMicros, type PricedLeg, type ReferenceRow } from "./legs.ts"
+import { decimalsOf, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
 
 export type LatestPrice = { usdMicros: string; source: "oracle" | "swap" | "market"; blockNum: number }
 export type LatestPrices = Record<string, LatestPrice | undefined>
@@ -19,9 +20,11 @@ export type Position = {
   values: PositionValues
   price: LatestPrice | null
   effects: LegEffect[]
+  /** Null when there's nothing to compare against, as in a fold without onchain balances. */
+  reconciliation: Reconciliation | null
 }
 
-export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "incomplete history" }
+export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "incomplete history" | "doesn't match its onchain balance" }
 
 /** What a sum is made of. A sum with something missing and nothing known has no answer, which isn't the same as $0. */
 export type Coverage = { known: number; missing: number }
@@ -41,7 +44,24 @@ export type Totals = {
   coverage: Record<"value" | "realized" | "unrealized" | "pnl", Coverage>
 }
 
-export function foldPositions(legs: readonly PricedLeg[], method: Method, prices: LatestPrices): Position[] {
+/**
+ * A position that doesn't match the chain. What it holds and what that's worth are facts, so they come from the chain.
+ * Anything about cost comes from legs we now know are incomplete, so it's unavailable rather than wrong.
+ */
+function incompleteValues(values: PositionValues, actualQty: string, priceUsdMicros: string | null, decimals: number): PositionValues {
+  return {
+    ...values,
+    qty: actualQty,
+    unknownCostQty: actualQty,
+    costUsdMicros: null,
+    averageCostUsdMicros: null,
+    valueUsdMicros: priceUsdMicros === null ? null : usdOf(BigInt(actualQty), BigInt(priceUsdMicros), decimals).toString(),
+    realizedUsdMicros: null,
+    unrealizedUsdMicros: null,
+  }
+}
+
+export function foldPositions(legs: readonly PricedLeg[], method: Method, prices: LatestPrices, onchain?: Onchain): Position[] {
   const positions = new Map<string, { state: PositionState; effects: LegEffect[]; decimals: number }>()
   for (const leg of legs) {
     const position = positions.get(leg.asset) ?? { state: emptyPosition(method, leg.decimals), effects: [], decimals: leg.decimals }
@@ -50,9 +70,26 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
     position.state = after
     positions.set(leg.asset, position)
   }
+  // The chain says it's here and no leg explains any of it. A fresh wallet funded by an internal transfer looks like this.
+  for (const [asset, amount] of Object.entries(onchain?.balances?.amounts ?? {})) {
+    if (BigInt(amount) === 0n || positions.has(asset)) continue
+    positions.set(asset, { state: emptyPosition(method, decimalsOf(asset)), effects: [], decimals: decimalsOf(asset) })
+  }
   return [...positions.entries()].map(([asset, { state, effects, decimals }]) => {
     const price = prices[asset] ?? null
-    return { asset, decimals, state, effects, price, values: valuePosition(state, price?.usdMicros ?? null) }
+    const values = valuePosition(state, price?.usdMicros ?? null)
+    // The sum of what moved, not `values.qty`: the fold stops at zero, and what left beyond that still happened.
+    const computed = effects.reduce((sum, { leg }) => sum + BigInt(leg.delta), 0n)
+    const reconciliation = onchain ? reconcile(asset, computed, BigInt(state.shortfallQty), onchain) : null
+    return {
+      asset,
+      decimals,
+      state,
+      effects,
+      price,
+      reconciliation,
+      values: reconciliation?.status === "incomplete" ? incompleteValues(values, reconciliation.actualQty, price?.usdMicros ?? null, decimals) : values,
+    }
   })
 }
 
@@ -66,7 +103,7 @@ export function sumTotals(positions: readonly Position[]): Totals {
   let unpricedGas = false
   const excluded: Exclusion[] = []
   const coverage = { value: { known: 0, missing: 0 }, realized: { known: 0, missing: 0 }, unrealized: { known: 0, missing: 0 }, pnl: { known: 0, missing: 0 } }
-  for (const { asset, values, state } of positions) {
+  for (const { asset, values, state, reconciliation } of positions) {
     gas += BigInt(state.gasUsdMicros)
     if (BigInt(state.gasUsdMicros) > 0n) coverage.pnl.known++
     if (BigInt(state.unpricedGasQty) > 0n) {
@@ -74,6 +111,19 @@ export function sumTotals(positions: readonly Position[]): Totals {
       coverage.pnl.missing++
     }
     const held = BigInt(values.qty) > 0n
+    if (reconciliation?.status === "incomplete") {
+      excluded.push({ asset, reason: "doesn't match its onchain balance" })
+      coverage.realized.missing++
+      coverage.unrealized.missing++
+      if (values.valueUsdMicros !== null) {
+        value += BigInt(values.valueUsdMicros)
+        if (held) coverage.value.known++
+      } else if (held) {
+        coverage.value.missing++
+        excluded.push({ asset, reason: "no current price" })
+      }
+      continue
+    }
     // More left than we saw arrive, so there are units we can't see. Whatever this position shows, it isn't all of it.
     if (BigInt(state.shortfallQty) > 0n) {
       coverage.value.missing++
@@ -137,6 +187,8 @@ export function pnlOverTime(
   prices: LatestPrices,
   references: readonly ReferenceRow[],
   latest: { blockNum: number; timestamp: string } | null,
+  /** Assets that don't match the chain. We can't tell when that started, so their PnL is left out of every point. */
+  incomplete: ReadonlySet<string> = new Set(),
 ): PnlPoint[] {
   const refs = new Map(references.map((r) => [r.block_num, r]))
   const states = new Map<string, PositionState>()
@@ -150,6 +202,11 @@ export function pnlOverTime(
       pnl -= BigInt(state.gasUsdMicros)
       if (BigInt(state.gasUsdMicros) > 0n) coverage.known++
       if (BigInt(state.unpricedGasQty) > 0n) coverage.missing++
+      if (incomplete.has(asset)) {
+        excludedCount++
+        coverage.missing++
+        continue
+      }
       if (BigInt(state.shortfallQty) > 0n) coverage.missing++
       if (v.realizedUsdMicros === null) {
         excludedCount++
@@ -170,7 +227,7 @@ export function pnlOverTime(
   }
   legs.forEach((leg, i) => {
     states.set(leg.asset, applyLeg(states.get(leg.asset) ?? emptyPosition(method, leg.decimals), leg))
-    if (legs[i + 1]?.txHash === leg.txHash) return
+    if (leg.opening || legs[i + 1]?.txHash === leg.txHash) return
     const ref = refs.get(leg.blockNum)
     const priceOf = (asset: string) => {
       if (asset === "ETH") return answerToMicros(ref?.eth_usd)
