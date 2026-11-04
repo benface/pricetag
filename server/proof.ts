@@ -107,12 +107,22 @@ const short = (hex: string) => `0x${hex.slice(0, 6)}…${hex.slice(-6)}`
 
 const padded = (address: string) => hexOf(address).padStart(64, "0")
 
+/**
+ * The fee fields this type of transaction hashes, with the others blank, because a stored field that isn't hashed could
+ * say anything. A deposit has none, since it's paid for on L1.
+ */
+function hashedFees({ type, gas_price, max_fee_per_gas, max_priority_fee_per_gas }: TxRow) {
+  if (type === 0 || type === 1) return { gas_price, max_fee_per_gas: null, max_priority_fee_per_gas: null }
+  if (type === 2 || type === 4) return { gas_price: null, max_fee_per_gas, max_priority_fee_per_gas }
+  return { gas_price: null, max_fee_per_gas: null, max_priority_fee_per_gas: null }
+}
+
 /** What this transaction paid for gas, worked out from what's hashed: its fees, its gas in the block, and the block's base fee. */
 function gasFrom(tx: TxRow, { block, txs }: BlockData): bigint | null {
   const blockNum = Number(block.block_num)
   const previous = txs[tx.tx_index - 1]
   return gasPaid(
-    { ...tx, block_num: blockNum, timestamp: "" },
+    { ...tx, ...hashedFees(tx), block_num: blockNum, timestamp: "" },
     { cumulativeGas: new Map(previous ? [[`${blockNum}:${previous.tx_index}`, previous.gas_used]] : []), baseFeeByBlock: new Map([[blockNum, block.base_fee_per_gas ?? "0"]]) },
   )
 }

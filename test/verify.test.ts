@@ -248,6 +248,43 @@ describe("a leg against its checked block", () => {
     assert.equal(activity(legOf({ kind: "gas", parts: [{ ...row, amount: "" }] })).status, "failed")
   })
 
+  describe("only takes a fee from what its type of transaction hashes", () => {
+    const gasUsed = BigInt(user.gas_used) - BigInt((txs[0] as TxRow).gas_used)
+    /** The activity check on a fee row of this amount, with the fixture's transaction changed. */
+    const feeCheck = (changes: Partial<TxRow>, amount: bigint) =>
+      verificationOf(legOf({ kind: "gas", parts: [legRow({ amount: amount.toString() })] }), [], { block, txs: [txs[0] as TxRow, { ...user, ...changes }], logs }, deposits)
+
+    it("doesn't believe a made-up price on a dynamic fee transaction, even with every commitment intact", () => {
+      for (const type of [2, 4]) {
+        const madeUp = 1_000_000_000_000_000_000_000_000n
+        const verification = feeCheck({ type, gas_price: madeUp.toString() }, gasUsed * madeUp)
+        assert.equal(verification.checks.at(-1)!.status, "failed", `type ${type}`)
+        assert.equal(verification.status, "failed")
+        assert.equal(feeCheck({ type, gas_price: madeUp.toString() }, paidForGas).checks.at(-1)!.status, "passed", `type ${type}`)
+      }
+    })
+
+    it("works out a dynamic fee from what's signed and the base fee", () => {
+      for (const type of [2, 4]) assert.equal(feeCheck({ type }, paidForGas).checks.at(-1)!.status, "passed", `type ${type}`)
+      assert.equal(feeCheck({ max_fee_per_gas: null }, paidForGas).checks.at(-1)!.status, "failed")
+      assert.equal(feeCheck({ max_priority_fee_per_gas: null }, paidForGas).checks.at(-1)!.status, "failed")
+    })
+
+    it("uses the signed price on legacy and access list transactions, and nothing else", () => {
+      for (const type of [0, 1]) {
+        assert.equal(feeCheck({ type, gas_price: "5" }, gasUsed * 5n).checks.at(-1)!.status, "passed", `type ${type}`)
+        assert.equal(feeCheck({ type, gas_price: "5" }, gasUsed * 6n).checks.at(-1)!.status, "failed", `type ${type}`)
+        // These two aren't hashed for this type, so with no price they can't stand in for one.
+        assert.equal(feeCheck({ type, gas_price: null }, paidForGas).checks.at(-1)!.status, "failed", `type ${type}`)
+      }
+    })
+
+    it("doesn't work out a fee for a deposit, which pays none on Base", () => {
+      assert.equal(feeCheck({ type: 126 }, paidForGas).checks.at(-1)!.status, "failed")
+      assert.equal(feeCheck({ type: 126, gas_price: "5" }, gasUsed * 5n).checks.at(-1)!.status, "failed")
+    })
+  })
+
   it("says the fee paid to Ethereum wasn't compared, whatever it claims", () => {
     const leg = legOf({ kind: "gas", parts: [legRow({ amount: paidForGas.toString() }), legRow({ kind: "l1_fee", amount: "999999999999999999999999" })] })
     const check = activity(leg)
