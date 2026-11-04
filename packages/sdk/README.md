@@ -107,7 +107,7 @@ L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anyt
 | `l1Fees`, `l1FeeUnknownTxs` | `read`, `pending` (some couldn't be read yet, and the next call tries again) or `no rpc url`, and the transactions affected. |
 | `openingUnread`, `unreadAssets` | Assets whose balance before the first block couldn't be read, and assets with no position because nothing could be read about them, which isn't the same as holding none. |
 
-A position's `reconciliation.status` is `reconciled` when its legs add up to its onchain balance to the smallest unit, `incomplete` when they don't, and `unchecked` when a read is missing. Only a reconciled position shows PnL. Otherwise its amount and value come from the chain, and its cost and PnL are `null`.
+A position's `reconciliation.status` is `reconciled` when its legs add up to its onchain balance to the smallest unit, `incomplete` when they don't, and `unchecked` when a read is missing. Only a reconciled position shows PnL. Otherwise its amount and value come from the chain, and its cost and PnL are `null`. On ETH that's `incomplete`, `reconciliation.unseenEth` lists blocks where ETH rose with nothing to explain it, and the transactions that took a token from the wallet there. Those transactions' proceeds stay unknown.
 
 A client keeps each wallet's rows in memory, so another call on the same client only reads new blocks. A read with a `to` is re-read on each new block until `to` is 30 blocks behind the chain's head, because a reorg can still change it. After that, it's fixed. It also reads at most 200 L1 fees per call, so a busy wallet's ETH stays `unchecked` for its first few calls while they catch up. With an `rpcUrl`, `getLegs` shares all of this with `getPortfolio`, so a swap paid out in unwrapped ETH can stay unknown for those first few calls too.
 
@@ -127,10 +127,11 @@ The dataset reference is `benface/pricetag@0.0.1`, and it reads `edgeandnode/bas
 | --- | --- | --- |
 | `legs` | One account's signed movement of an allowlisted token, ETH, or gas | `account`, `token`, `side` (`debit` or `credit`), `amount`, `kind` (`erc20`, `eth`, `gas`, `wrap` or `unwrap`), `tx_hash` |
 | `unlisted_legs` | The same for a token off the allowlist. It has no price, but it shows money went somewhere else | Same as `legs`, with `kind` `unlisted` or `unlisted_nft`. An NFT's `amount` is its ID |
-| `reference_prices` | One block's Chainlink ETH/USD and USDC/USD reads | `eth_round` and `usdc_round`. Field `c1` is the answer, in 1e8 USD |
-| `priced_legs` | An account's only pair in a transaction, after netting each token: what it sold and what it bought | `sold_token`, `sold_amount`, `bought_token`, `bought_amount`, and `priced` (`source`, `token`, `usd_micros`) |
+| `reference_prices` | One block's latest Chainlink ETH/USD and USDC/USD updates | `eth_answer` and `usdc_answer`, in 1e8 USD, null when a feed has no recent update. `eth_tx` and `usdc_tx` are the transactions they came from |
+| `price_updates` | One Chainlink update, from its `AnswerUpdated` log. It starts a day before the dataset, except on a local Amp, whose first row per feed is read from the contract, with an all-zero `tx_hash` | `feed` (`eth` or `usdc`), `answer`, `tx_hash`, `log_index`, `round_id`, `updated_at`, `valid_until` |
+| `priced_legs` | An account's only pair in a transaction, after netting each token: what it sold and what it bought | `sold_token`, `sold_amount`, `bought_token`, `bought_amount`, `priced` (`source`, `token`, `usd_micros`), and the prices it used: `eth_usd`, `usdc_usd`, `eth_tx`, `usdc_tx` |
 
-The other tables are steps on the way to these: `base_legs`, `gas_legs`, `tx_gas`, `unwrap_legs`, `net_legs`, `unlisted_moves`, `pairs`, `pair_counts` and `single_pairs`.
+The other tables are steps on the way to these: `base_legs`, `gas_legs`, `tx_gas`, `unwrap_legs`, `net_legs`, `unlisted_moves`, `pairs`, `pair_counts`, `single_pairs` and `carried`.
 
 A price and a cost are separate. The dataset carries the price, a shared fact about a transaction. Cost is personal, so each client works it out: `cost = fold(pricedLegs, method)`. That's why the dataset has no cost column.
 
@@ -177,7 +178,7 @@ A negative `net` means the wallet held more than the range shows. In `buildPortf
 **Oracle prices:** divide by 100 for micros.
 
 ```sql
-SELECT block_num, timestamp, get_field(eth_round, 'c1') AS eth_usd, get_field(usdc_round, 'c1') AS usdc_usd
+SELECT block_num, timestamp, eth_answer AS eth_usd, usdc_answer AS usdc_usd
 FROM "benface/pricetag@0.0.1".reference_prices
 WHERE block_num BETWEEN 53515266 AND 53515658
 ORDER BY block_num

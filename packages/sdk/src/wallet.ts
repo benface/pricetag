@@ -3,7 +3,7 @@
 
 import { viewWallet, type CurrencyCode, type Rates, type WalletView } from "./currency.ts"
 import type { Method } from "./fold.ts"
-import type { PricedLeg, Reference } from "./legs.ts"
+import type { PricedLeg, Reference, UnseenEth } from "./legs.ts"
 import type { CostNote } from "./notes.ts"
 import { foldPositions, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type Head, type LatestPrices, type PnlPoint, type PnlStatus, type Position, type Totals } from "./portfolio.ts"
 import type { BalanceSnapshot } from "./reconcile.ts"
@@ -47,6 +47,8 @@ export type WalletData = {
   lastBalances: Record<string, { blockNum: number; amount: string }>
   /** Assets with no balance read at `coverage.toBlock`, which isn't the same as holding none. Empty until reads start. */
   unreadBalances: string[]
+  /** Where ETH arrived that no row explains, with the transactions that took a token from this wallet there. */
+  unseenEth: UnseenEth[]
   /** Costs this wallet published itself, from its own zero-value transactions to itself. */
   notes: CostNote[]
   /** Whether market prices were read successfully, so a token without one really has no market. */

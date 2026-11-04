@@ -113,8 +113,18 @@ public enum Wording {
         case .incomplete:
             guard let computed = check.computedQty, let actual = check.actualQty, let difference = check.differenceQty else { return nil }
             let signed = difference.hasPrefix("-") ? "" : "+"
-            return "Worked out \(Format.amount(computed, decimals: position.decimals)), actual \(Format.amount(actual, decimals: position.decimals)), difference \(signed)\(Format.amount(difference, decimals: position.decimals)) \(position.asset). PnL is unavailable."
+            return "Worked out \(Format.amount(computed, decimals: position.decimals)), actual \(Format.amount(actual, decimals: position.decimals)), difference \(signed)\(Format.amount(difference, decimals: position.decimals)) \(position.asset). PnL is unavailable.\(check.unseenEth.map { " " + unseenEthCause($0) } ?? "")"
         }
+    }
+
+    /// The transactions most likely behind ETH that doesn't match. The rest of a long list are still there, as sales with no known value.
+    static func unseenEthCause(_ unseen: [UnseenEth]) -> String {
+        let maxNamed = 5
+        let named = unseen.prefix(maxNamed).map { item in
+            "\(item.txHashes.map(Format.shortHash).joined(separator: ", ")) (+\(Format.amount(item.amount, decimals: 18)) ETH)"
+        }
+        let more = unseen.count > named.count ? ", and \(unseen.count - named.count) more" : ""
+        return "It lines up with what left this wallet in \(named.joined(separator: ", "))\(more): ETH rose by that much in the same block, with no transaction showing it."
     }
 
     /// What's missing while a dataset catches up to the chain. nil when it isn't behind.
