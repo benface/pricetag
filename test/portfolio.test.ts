@@ -6,7 +6,7 @@ import { after, before, describe, it } from "node:test"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd } from "../src/core/format.ts"
-import { emptyBook } from "../src/core/book.ts"
+import { emptyBook, linkMessage } from "../src/core/book.ts"
 import { foldBook } from "../src/core/portfolio.ts"
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
@@ -308,6 +308,7 @@ describe("the formatters the Swift package repeats", () => {
       price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros) })),
       amount: units.map(([value, decimals]) => ({ units: value, decimals, amount: formatAmount(value, decimals), signed: formatSignedAmount(value, decimals) })),
       duration: [0, 30, 1800, 3599, 3600, 5400, 100000].map((blocks) => ({ blocks, duration: formatDuration(blocks) })),
+      linkMessage: { owner: DEMO_WALLET.address, address: "0x00000000000000000000000000000000000DE301", message: linkMessage(DEMO_WALLET.address, "0x00000000000000000000000000000000000DE301") },
     })
   })
 })

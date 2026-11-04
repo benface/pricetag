@@ -25,7 +25,7 @@ const METRIC_TITLES: Record<Metric, string> = {
 }
 
 /** A cost's source, in words. */
-const COST_WORDS: Record<CostLabel, string> = {
+export const COST_WORDS: Record<CostLabel, string> = {
   paid: "what was paid",
   inherited: "what your other wallet paid",
   "received at market": "the price when it arrived",

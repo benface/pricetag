@@ -46,6 +46,17 @@ struct MacApp: App {
                 Button("Change Wallet…") { navigation.isChangingWallet = true }
                     .keyboardShortcut("l", modifiers: .command)
             }
+            CommandGroup(after: .newItem) {
+                Button("Resolve Unknowns…") { navigation.resolve() }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(store.portfolio?.questions.isEmpty != false)
+                Button("Export as CSV…") { navigation.isExporting = true }
+                    .keyboardShortcut("e", modifiers: .command)
+                    .disabled(store.portfolio == nil)
+                Button("Undo Last Answer") { store.undo() }
+                    .keyboardShortcut("z", modifiers: [.command, .option])
+                    .disabled(store.undoStack.isEmpty)
+            }
         }
 
         Settings {

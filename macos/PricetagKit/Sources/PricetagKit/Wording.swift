@@ -56,6 +56,61 @@ public enum Wording {
         return "The Pricetag dataset has only processed up to block \(Format.block(portfolio.coverage.toBlock)), \(Format.block(portfolio.progress.behindBlocks)) blocks behind the chain. Anything after that isn't in these numbers yet."
     }
 
+    /// What sits right next to a total, so it never appears bare. nil when it's exact and whole.
+    public static func headlineCaveat(_ totals: Totals) -> String? {
+        var parts: [String] = []
+        if isPositive(totals.unresolvedUsdMicros) { parts.append("\(Format.usd(totals.unresolvedUsdMicros)) unresolved") }
+        if isPositive(totals.estimatedUsdMicros) { parts.append("\(Format.usd(totals.estimatedUsdMicros)) estimated") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// What isn't listed with the holdings, and why it doesn't matter to the numbers. nil when there's nothing.
+    public static func noMarket(_ portfolio: Portfolio) -> String? {
+        let listed = portfolio.noMarketPositions.map(\.asset)
+        let total = listed.count + portfolio.unlistedTokens
+        if total == 0 { return nil }
+        let off = portfolio.unlistedTokens == 0 ? "" : "\(listed.isEmpty ? "" : ", plus ")\(portfolio.unlistedTokens) we don't track"
+        return "\(total) \(total == 1 ? "token" : "tokens") with no market: \(listed.joined(separator: ", "))\(off). Often spam, and not counted in any total."
+    }
+
+    /// What a wallet signs to prove it's this user's. The server checks the signature against the same words.
+    public static func linkMessage(owner: String, address: String) -> String {
+        "Patina: \(address.lowercased()) is my wallet, and belongs with \(owner.lowercased()).\n\nThis only links them in my own app. It can't move funds or approve anything."
+    }
+
+    /// Where a price came from, in plain words.
+    public static func priceSource(_ source: String) -> String {
+        switch source {
+        case "oracle": "price feed"
+        case "swap": "swap"
+        case "market": "recent trades"
+        default: source
+        }
+    }
+
+    /// Where a cost came from, in plain words.
+    public static func costSource(_ label: String) -> String {
+        switch label {
+        case "paid": "what you paid"
+        case "inherited": "from your other wallet"
+        case "received at market": "price when it arrived"
+        case "self-reported": "what you reported"
+        default: label
+        }
+    }
+
+    public static func kind(_ kind: String) -> String {
+        kind == "swap" ? "trade" : kind == "gas" ? "network fee" : kind
+    }
+
+    /// A preview's headline, as it would read.
+    public static func consequence(_ preview: BookPreview) -> String {
+        if preview.pending { return "Reading that wallet…" }
+        guard let pnl = preview.pnlUsdMicros else { return "PnL still unavailable" }
+        let number = Format.estimate(Format.signedUSD(pnl), isPositive(preview.estimatedUsdMicros))
+        return isPositive(preview.unresolvedUsdMicros) ? "\(number) · \(Format.usd(preview.unresolvedUsdMicros)) unresolved" : number
+    }
+
     public static let unpricedGas = "Some gas had no price at its block, and isn't in this total."
     public static let demo = "Demo data, not a real wallet. Every case the app has to get right is in here."
     public static let pnlUnavailable = "PnL unavailable"

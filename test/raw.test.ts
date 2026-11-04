@@ -188,3 +188,21 @@ describe("block filters", () => {
     assert.match(filters[1]!.filter, /^block_num BETWEEN 201 AND 400 /)
   })
 })
+
+describe("who was on the other side", () => {
+  const sender = "00000000000000000000000000000000000000dd"
+  const log = { block_num: 1, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: "aa", tx_index: 1, log_index: 2, address: USDC_ADDRESS, topic0: TRANSFER_TOPIC, topic3: null, data: (5n).toString(16).padStart(64, "0") }
+  const rows = (logs: RawLog[], txs: RawTx[] = []) => legRowsFromRaw({ account: ME, txs, logs, withdrawals: [], gas: CONTEXT }).rows
+
+  it("reads the sender of what arrived, and where what left went", () => {
+    const [credit] = rows([{ ...log, topic1: pad(sender), topic2: pad(ME) }])
+    assert.equal(credit?.counterparty, `0x${sender}`)
+    const [debit] = rows([{ ...log, topic1: pad(ME), topic2: pad(sender) }])
+    assert.equal(debit?.counterparty, `0x${sender}`)
+  })
+
+  it("reads it from a plain ETH transfer too", () => {
+    const tx: RawTx = { ...REAL_TX, from: sender, to: ME, value: "9", status: true }
+    assert.equal(rows([], [tx]).find((r) => r.kind === "eth")?.counterparty, `0x${sender}`)
+  })
+})

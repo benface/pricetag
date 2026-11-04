@@ -53,6 +53,16 @@ public struct PositionValues: Codable, Sendable, Equatable {
     public let valueUsdMicros: String?
     public let realizedUsdMicros: String?
     public let unrealizedUsdMicros: String?
+    public let estimatedCostUsdMicros: String
+    public let estimatedRealizedUsdMicros: String
+}
+
+/// Which of a position's numbers rest on an estimate, so they can look different from exact ones.
+public struct Estimates: Codable, Sendable, Equatable {
+    public let cost: Bool
+    public let value: Bool
+    public let realized: Bool
+    public let unrealized: Bool
 }
 
 /// How a position's activity compares with what the chain says it holds, at the same block.
@@ -85,6 +95,11 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public let shortfallQty: String
     public let legCount: Int
     public let reconciliation: Reconciliation?
+    /// No price, in any form, at any block. Often spam. It's listed apart, and can't affect PnL.
+    public let noMarket: Bool
+    public let estimates: Estimates
+    /// Its cost is unknown, and answering a question could change that.
+    public let resolvable: Bool
 
     public var id: String { asset }
     public var isHeld: Bool { isPositive(values.qty) }
@@ -124,6 +139,19 @@ public struct Totals: Codable, Sendable, Equatable {
     public let excluded: [Exclusion]
     public let unpricedGas: Bool
     public let coverage: TotalsCoverage
+    /// What's held with an unknown cost, at today's price. It's not in any PnL.
+    public let unresolvedUsdMicros: String
+    /// How much of what these sums are made of is an estimate.
+    public let estimatedUsdMicros: String
+    public let estimated: TotalEstimates
+    /// Assets with no market, which aren't in any of this.
+    public let noMarket: [String]
+}
+
+public struct TotalEstimates: Codable, Sendable, Equatable {
+    public let value: Bool
+    public let realized: Bool
+    public let unrealized: Bool
 }
 
 public enum PnlStatus: String, Codable, Sendable {
@@ -172,6 +200,18 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let totals: Totals
     public let pnlStatus: PnlStatus
     public let points: [PnlPoint]
+    /// What's left to ask, most useful first.
+    public let questions: [Question]
+    public let meter: Meter
+    /// Linked wallets that aren't read yet, so what came from them shows as unresolved for now.
+    public let linkedReading: [String]
+    /// Tokens off the allowlist that moved here, which have no position or price.
+    public let unlistedTokens: Int
+    public let marketChecked: Bool
+
+    /// What the holdings table lists. Tokens with no market go in a group of their own, so real warnings stay noticeable.
+    public var listedPositions: [Position] { positions.filter { !$0.noMarket } }
+    public var noMarketPositions: [Position] { positions.filter(\.noMarket) }
 
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
     /// A balance that couldn't be read doesn't count as nothing.
@@ -191,6 +231,10 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let priceSource: String?
     public let priceNote: String?
     public let costLabel: String
+    /// Its cost or proceeds rest on an estimate.
+    public let estimated: Bool
+    /// Some of what arrived has a known cost and some doesn't.
+    public let partlyUnknown: Bool
     public let blockNum: Int
     public let timestamp: String
     public let txHash: String
@@ -234,6 +278,142 @@ public enum ExplainTarget: Sendable, Hashable {
         }
     }
 }
+
+/// A public name for an address. It's only evidence: exchanges send everyone's withdrawals from shared addresses.
+public struct KnownSender: Codable, Sendable, Equatable {
+    public let name: String
+    public let kind: String
+}
+
+public struct Arrival: Codable, Sendable, Equatable, Identifiable {
+    public let asset: String
+    public let decimals: Int
+    public let units: String
+
+    public var id: String { asset }
+}
+
+/// One thing the app can't work out by itself, asked once per address however many transfers it covers.
+public struct Question: Codable, Sendable, Equatable, Identifiable {
+    public enum Kind: String, Codable, Sendable {
+        /// Who is this?
+        case sender
+        /// There's nobody to ask about, so what did it cost?
+        case cost
+    }
+
+    public let id: String
+    public let kind: Kind
+    public let wallet: String
+    public let sender: String?
+    public let known: KnownSender?
+    public let costKey: String?
+    /// They said it's their exchange account, and it still needs a cost.
+    public let needsCost: Bool
+    public let arrivals: [Arrival]
+    public let transfers: Int
+    public let firstAt: String
+    public let lastAt: String
+    /// Facts that might help. Never a preselected answer.
+    public let evidence: [String]
+    public let valueUsdMicros: String?
+}
+
+public struct Meter: Codable, Sendable, Equatable {
+    public let open: Int
+    public let answered: Int
+
+    /// How far through the questions this is, from 0 to 1.
+    public var progress: Double {
+        let total = open + answered
+        return total == 0 ? 1 : Double(answered) / Double(total)
+    }
+
+    public var isBalanced: Bool { open == 0 && answered > 0 }
+}
+
+/// What the headline would say with a different set of answers, before any of them is final.
+public struct BookPreview: Codable, Sendable, Equatable {
+    public let pnlUsdMicros: String?
+    public let pnlStatus: PnlStatus
+    public let estimatedUsdMicros: String
+    public let unresolvedUsdMicros: String
+    public let open: Int
+    /// A wallet these answers link hasn't been read yet, so this can't say yet.
+    public let pending: Bool
+}
+
+/// A withdrawal found in an exchange's history, with what it cost.
+public struct ExchangeWithdrawal: Codable, Sendable, Equatable {
+    public let exchange: String
+    public let asset: String
+    public let units: String
+    public let at: String
+    public let costUsdMicros: String
+    public let toAddress: String?
+}
+
+public struct ExchangeImport: Codable, Sendable, Equatable {
+    public let withdrawals: [ExchangeWithdrawal]
+    /// Withdrawals with no usable cost: bought in another currency, or with a history this can't follow.
+    public let skipped: Int
+}
+
+public struct SenderAnswer: Codable, Sendable, Equatable {
+    public enum Kind: String, Codable, Sendable {
+        case mine
+        case myExchange = "my-exchange"
+        case someoneElse = "someone-else"
+    }
+
+    public let kind: Kind
+    /// What was paid for everything from this address, by asset, in micro-USD.
+    public let costs: [String: String]?
+
+    public init(kind: Kind, costs: [String: String]? = nil) {
+        self.kind = kind
+        self.costs = costs
+    }
+
+    public static let mine = SenderAnswer(kind: .mine)
+    public static let someoneElse = SenderAnswer(kind: .someoneElse)
+}
+
+/// The user's answers. They stay on this device, and go along with each request. The server doesn't keep them.
+public struct Book: Codable, Sendable, Equatable, Hashable {
+    public var senders: [String: SenderAnswer]
+    public var costs: [String: String]
+    public var withdrawals: [ExchangeWithdrawal]
+
+    public init(senders: [String: SenderAnswer] = [:], costs: [String: String] = [:], withdrawals: [ExchangeWithdrawal] = []) {
+        self.senders = senders
+        self.costs = costs
+        self.withdrawals = withdrawals
+    }
+
+    /// Saying a sender's yours says the wallet you're looking at is yours too.
+    public func answering(_ sender: String, _ answer: SenderAnswer, focus: String?) -> Book {
+        var next = self
+        next.senders[sender.lowercased()] = answer
+        if answer.kind == .mine, let focus, WalletAddress.isValid(focus) { next.senders[focus.lowercased()] = .mine }
+        return next
+    }
+
+    public func enteringCost(_ key: String, usdMicros: String) -> Book {
+        var next = self
+        next.costs[key] = usdMicros
+        return next
+    }
+
+    public var linkedWallets: [String] {
+        senders.filter { $0.value.kind == .mine }.keys.sorted()
+    }
+
+    public var isEmpty: Bool { senders.isEmpty && costs.isEmpty && withdrawals.isEmpty }
+}
+
+extension SenderAnswer: Hashable {}
+extension ExchangeWithdrawal: Hashable {}
 
 public enum WalletAddress {
     /// What the server accepts in place of an address, to read its fixtures.

@@ -111,9 +111,9 @@ public struct LegRow: View {
     private var tags: some View {
         // Price and cost stay apart: one is a shared fact with a source, the other is this wallet's.
         HStack(spacing: 4) {
-            Tag(leg.kind)
+            Tag(Wording.kind(leg.kind))
             if let price = leg.priceUsdMicros, let source = leg.priceSource {
-                Tag("\(Format.price(price)) · \(source)")
+                Tag("\(Format.price(price)) · \(Wording.priceSource(source))")
             } else {
                 Tag("No price", isWarning: true)
             }
@@ -121,9 +121,11 @@ public struct LegRow: View {
                 if leg.costLabel == "unknown" {
                     Tag("Cost unknown", isWarning: true)
                 } else {
-                    Tag("Cost: \(leg.costLabel)")
+                    Tag("Cost: \(Wording.costSource(leg.costLabel))")
+                    if leg.partlyUnknown { Tag("Partly unknown", isWarning: true) }
                 }
             }
+            if leg.estimated { Tag("Estimate") }
         }
     }
 }

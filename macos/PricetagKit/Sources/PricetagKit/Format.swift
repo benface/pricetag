@@ -54,6 +54,22 @@ public enum Format {
         isPositive(units) ? "+\(amount(units, decimals: decimals))" : amount(units, decimals: decimals)
     }
 
+    /// An estimate has to look different from an exact value, wherever it's shown.
+    public static func estimate(_ text: String, _ isEstimate: Bool) -> String {
+        isEstimate ? "≈\(text)" : text
+    }
+
+    /// Micro-USD from what someone typed, like "$1,234.50". nil when it isn't an amount. Cents past six places are cut.
+    public static func micros(fromDollars text: String) -> String? {
+        let clean = text.filter { !" $,".contains($0) }
+        guard clean.wholeMatch(of: /\d+(\.\d*)?|\.\d+/) != nil else { return nil }
+        let parts = clean.split(separator: ".", omittingEmptySubsequences: false)
+        let whole = parts.first.map(String.init) ?? ""
+        let fraction = parts.count > 1 ? String(parts[1].prefix(6)) : ""
+        let digits = (whole + fraction.padding(toLength: 6, withPad: "0", startingAt: 0)).drop { $0 == "0" }
+        return digits.isEmpty ? "0" : String(digits)
+    }
+
     public static func block(_ number: Int) -> String {
         number.formatted(.number.locale(locale))
     }

@@ -35,6 +35,7 @@ public struct ExplanationRequest: Hashable, Sendable {
     public let address: String
     public let method: CostMethod
     public let serverURL: URL
+    public let book: Book
 }
 
 @MainActor
@@ -52,6 +53,10 @@ public final class PortfolioStore {
     public private(set) var address: String?
     public private(set) var method: CostMethod
     public private(set) var serverURL: URL
+    /// What the user has said about where things came from. It stays on this device.
+    public private(set) var book: Book
+    /// What each answer replaced, newest last, so Undo is always there.
+    public private(set) var undoStack: [Book] = []
 
     @ObservationIgnored private var source: any PortfolioSource
     @ObservationIgnored private let makeSource: @Sendable (URL) -> any PortfolioSource
@@ -78,6 +83,7 @@ public final class PortfolioStore {
         self.address = address
         self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
         self.serverURL = serverURL
+        self.book = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.feed = address == nil ? .noWallet : .reading
         self.source = makeSource(serverURL)
     }
@@ -131,15 +137,62 @@ public final class PortfolioStore {
         start()
     }
 
+    /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced.
+    public func setBook(_ next: Book) {
+        guard next != book else { return }
+        undoStack.append(book)
+        store(next)
+    }
+
+    public func undo() {
+        guard let previous = undoStack.popLast() else { return }
+        store(previous)
+    }
+
+    private func store(_ next: Book) {
+        book = next
+        defaults.set(try? JSONEncoder().encode(next), forKey: Keys.book)
+        start()
+    }
+
+    /// What these answers would do to the headline. Nothing's kept, so asking changes nothing.
+    public func previews(of candidates: [Book]) async throws -> [BookPreview] {
+        guard let address else { throw FetchError.unreachable }
+        return try await source.previews(address: address, method: method, candidates: candidates)
+    }
+
+    /// Every movement as a spreadsheet, marked so an estimate or an unknown can't pass for an exact number.
+    public func exportCSV() async throws -> String {
+        guard let address else { throw FetchError.unreachable }
+        return try await source.exportCSV(address: address, method: method, book: book)
+    }
+
+    /// Reads an exchange's history, and keeps what it found on this device. Says how many withdrawals had no usable cost.
+    public func importCoinbase(csv: String) async throws -> ExchangeImport {
+        let imported = try await source.importCoinbase(csv: csv)
+        var next = book
+        next.withdrawals = imported.withdrawals
+        setBook(next)
+        return imported
+    }
+
+    /// Links a wallet that proved it's this user's by signing. Says whether the signature holds up.
+    public func linkProved(_ wallet: String, signature: String) async throws -> Bool {
+        guard let address, WalletAddress.isValid(address) else { return false }
+        guard try await source.verifyLink(owner: address, address: wallet, signature: signature) else { return false }
+        setBook(book.answering(wallet, .mine, focus: address))
+        return true
+    }
+
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, serverURL: serverURL) }
+        address.map { ExplanationRequest(target: target, address: $0, method: method, serverURL: serverURL, book: book) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
         // A request from before a change has nothing to say about what's on screen now.
         guard request == explanationRequest(for: request.target) else { throw CancellationError() }
-        return try await source.explanation(of: request.target, address: request.address, method: request.method)
+        return try await source.explanation(of: request.target, address: request.address, method: request.method, book: request.book)
     }
 
     /// One read. Returns how long to wait before the next one.
@@ -147,11 +200,12 @@ public final class PortfolioStore {
         guard let address else { return unreachableDelay }
         let method = self.method
         let serverURL = self.serverURL
+        let book = self.book
         // An answer that arrives after a change is about something else, whatever it says.
-        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && serverURL == self.serverURL }
+        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && serverURL == self.serverURL && book == self.book }
         let timeout: Duration = portfolio == nil ? .seconds(180) : .seconds(15)
         do {
-            let next = try await source.portfolio(address: address, method: method, timeout: timeout)
+            let next = try await source.portfolio(address: address, method: method, book: book, timeout: timeout)
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
@@ -186,5 +240,6 @@ public final class PortfolioStore {
         static let wallet = "wallet"
         static let method = "method"
         static let server = "serverURL"
+        static let book = "book"
     }
 }

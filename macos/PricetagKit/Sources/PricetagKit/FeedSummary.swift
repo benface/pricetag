@@ -32,7 +32,7 @@ public struct FeedSummary: Equatable, Sendable {
                 (text, isWarning) = (prefix + Wording.pnlUnavailable, true)
                 return
             }
-            (text, isWarning) = (prefix + Format.signedUSD(pnl), portfolio.pnlStatus == .partial)
+            (text, isWarning) = (prefix + Format.estimate(Format.signedUSD(pnl), isPositive(portfolio.totals.estimatedUsdMicros)), portfolio.pnlStatus == .partial)
         }
     }
 }

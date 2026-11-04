@@ -11,12 +11,12 @@ actor ScriptedSource: PortfolioSource {
         self.answers = answers
     }
 
-    func portfolio(address: String, method: CostMethod, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, book: Book, timeout: Duration) async throws -> Portfolio {
         methods.append(method)
         return try answers.removeFirst().get()
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 }
@@ -25,11 +25,11 @@ actor ScriptedSource: PortfolioSource {
 actor GatedSource: PortfolioSource {
     private var waiting: CheckedContinuation<Portfolio, any Error>?
 
-    func portfolio(address: String, method: CostMethod, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, book: Book, timeout: Duration) async throws -> Portfolio {
         try await withCheckedThrowingContinuation { waiting = $0 }
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -262,7 +262,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     @Test func aPartialTotalWarns() throws {
         let summary = FeedSummary(feed: .live, portfolio: try demoPortfolio())
         #expect(summary.isWarning)
-        #expect(summary.text == "Demo +$74.28")
+        #expect(summary.text == "Demo ≈+$149.30")
     }
 
     @Test func anUnavailableTotalHasNoNumber() throws {
@@ -285,6 +285,6 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     @Test func aCompleteTotalDoesntWarn() throws {
         let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .complete))
         #expect(!summary.isWarning)
-        #expect(summary.text == "+$74.28")
+        #expect(summary.text == "≈+$149.30")
     }
 }

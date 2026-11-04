@@ -1,11 +1,15 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
 import { hasStarted, isAddress, isBehind, type WalletResponse } from "../core/api.ts"
+import { linkedWallets } from "../core/book.ts"
+import { exportCsv } from "../core/export.ts"
 import type { Method } from "../core/fold.ts"
-import { foldPositions, hasAnswer, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type Coverage, type Exclusion, type PnlPoint, type Position } from "../core/portfolio.ts"
+import { foldBook, hasAnswer, sumTotals, type Coverage, type Exclusion, type PnlPoint, type Position } from "../core/portfolio.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { explainMetric, explainPoint, explainTotal, mismatchCause, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
 import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd } from "../core/format.ts"
 import { PnlChart } from "./PnlChart.tsx"
+import { ResolvePanel } from "./ResolvePanel.tsx"
+import { useBook, useOtherWallets } from "./useBook.ts"
 import { useWallet } from "./useWallet.ts"
 
 function readAddress(): string | null {
@@ -36,7 +40,9 @@ function OnchainCheck({ position, onClick }: { position: Position; onClick: () =
   return <Num label={`${position.asset} not checked against its onchain balance`} onClick={onClick} tone="warn">⚠ Not checked</Num>
 }
 
-function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: (e: Explanation) => void }) {
+const est = (text: string, isEstimate: boolean) => (isEstimate ? `≈${text}` : text)
+
+function Holdings({ positions, resolvable, onExplain, onResolve }: { positions: Position[]; resolvable: ReadonlySet<string>; onExplain: (e: Explanation) => void; onResolve: (asset: string) => void }) {
   const open = (position: Position, metric: Metric) => () => onExplain(explainMetric(position, metric))
   return (
     <section className="card">
@@ -80,7 +86,7 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
                     <td className="num">
                       {held ? (
                         <Num label={`${asset} average cost`} onClick={open(position, "average")} tone={unknown ? "warn" : null}>
-                          {values.averageCostUsdMicros ? formatPrice(values.averageCostUsdMicros) : "⚠ Unknown"}
+                          {values.averageCostUsdMicros ? est(formatPrice(values.averageCostUsdMicros), position.estimates.cost) : "⚠ Unknown"}
                         </Num>
                       ) : (
                         <span className="muted">—</span>
@@ -89,7 +95,7 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
                     <td className="num">
                       {held ? (
                         <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueUsdMicros === null ? "warn" : null}>
-                          {values.valueUsdMicros ? formatUsd(values.valueUsdMicros) : "⚠ No price"}
+                          {values.valueUsdMicros ? est(formatUsd(values.valueUsdMicros), position.estimates.value) : "⚠ No price"}
                         </Num>
                       ) : (
                         <span className="muted">—</span>
@@ -97,14 +103,21 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
                     </td>
                     <td className="num">
                       <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedUsdMicros)}>
-                        {values.realizedUsdMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.realizedUsdMicros)}
+                        {values.realizedUsdMicros === null ? "⚠ PnL unavailable" : est(formatSignedUsd(values.realizedUsdMicros), position.estimates.realized)}
                       </Num>
                     </td>
                     <td className="num">
                       {held ? (
-                        <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedUsdMicros)}>
-                          {values.unrealizedUsdMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.unrealizedUsdMicros)}
-                        </Num>
+                        <>
+                          <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedUsdMicros)}>
+                            {values.unrealizedUsdMicros === null ? "⚠ PnL unavailable" : est(formatSignedUsd(values.unrealizedUsdMicros), position.estimates.unrealized)}
+                          </Num>
+                          {unknown && resolvable.has(asset) ? (
+                            <button type="button" className="resolve-button" aria-label={`Resolve ${asset}`} onClick={() => onResolve(asset)}>
+                              Resolve
+                            </button>
+                          ) : null}
+                        </>
                       ) : (
                         <span className="muted">—</span>
                       )}
@@ -134,6 +147,11 @@ export function App() {
   const [method, setMethod] = useState<Method>("average")
   const [explanation, setExplanation] = useState<Explanation | null>(null)
   const { wallet, loading, error } = useWallet(address)
+  const { book, change, undo, canUndo } = useBook()
+  const [resolving, setResolving] = useState<{ asset: string | null } | null>(null)
+  const [cardSender, setCardSender] = useState<string | null>(null)
+  const wanted = useMemo(() => [...new Set([...linkedWallets(book), ...(cardSender ? [cardSender] : [])])].filter((a) => a !== wallet?.address), [book, cardSender, wallet?.address])
+  const others = useOtherWallets(wanted, wallet?.latest.blockNum ?? null)
 
   useEffect(() => {
     const onPop = () => setAddress(readAddress())
@@ -157,10 +175,23 @@ export function App() {
     go(value.toLowerCase())
   }
 
-  const positions = useMemo(() => (wallet ? foldPositions(wallet.legs, method, wallet.prices, wallet) : []), [wallet, method])
-  const unread = useMemo(() => (wallet ? unreadAssets(positions, wallet) : []), [wallet, positions])
-  const totals = useMemo(() => sumTotals(positions, unread), [positions, unread])
-  const points = useMemo(() => (wallet ? pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)) : []), [wallet, method, positions, unread])
+  const fold = useMemo(() => (wallet ? foldBook(wallet, others, method, book) : null), [wallet, others, method, book])
+  const positions = fold?.positions ?? []
+  const unread = fold?.unread ?? []
+  const totals = fold?.totals ?? sumTotals([])
+  const points = fold?.points ?? []
+  const questions = fold?.questions ?? []
+  const resolvable = useMemo(() => new Set(questions.flatMap((q) => q.arrivals.map((a) => a.asset))), [questions])
+  const listed = positions.filter((p) => !p.noMarket)
+  const noMarketCount = totals.noMarket.length + (wallet?.unlistedTokens.length ?? 0)
+  const caveat = [BigInt(totals.unresolvedUsdMicros) > 0n ? `${formatUsd(totals.unresolvedUsdMicros)} unresolved` : null, BigInt(totals.estimatedUsdMicros) > 0n ? `${formatUsd(totals.estimatedUsdMicros)} estimated` : null].filter(Boolean).join(" · ")
+  const download = () => {
+    const link = document.createElement("a")
+    link.href = URL.createObjectURL(new Blob([exportCsv(positions)], { type: "text/csv" }))
+    link.download = `patina-${wallet?.address}.csv`
+    link.click()
+    URL.revokeObjectURL(link.href)
+  }
   const close = useCallback(() => setExplanation(null), [])
   const openTotal = (metric: TotalMetric) => setExplanation(explainTotal(positions, totals, metric))
   const openPoint = (point: PnlPoint) => setExplanation(explainPoint(positions, point))
@@ -239,8 +270,14 @@ export function App() {
                 <div className="headline">
                   <span className="muted small">Total PnL</span>
                   <Num label="Total PnL" onClick={() => openTotal("pnl")} tone={toneOf(totals.pnlUsdMicros)}>
-                    <span className="big">{totals.pnlUsdMicros === null ? "⚠ Unavailable" : formatSignedUsd(totals.pnlUsdMicros)}</span>
+                    <span className="big">{totals.pnlUsdMicros === null ? "⚠ PnL unavailable" : est(formatSignedUsd(totals.pnlUsdMicros), BigInt(totals.estimatedUsdMicros) > 0n)}</span>
                   </Num>
+                  {caveat ? <p className="caveat">{caveat}</p> : null}
+                  {questions.length > 0 ? (
+                    <button type="button" className="resolve-button big" onClick={() => setResolving({ asset: null })}>
+                      Resolve {questions.length}
+                    </button>
+                  ) : null}
                   {totals.excluded.length > 0 ? (
                     <p className="excluded">⚠ Excludes {describeExcluded(totals.excluded)}.</p>
                   ) : (
@@ -249,9 +286,9 @@ export function App() {
                   {totals.unpricedGas ? <p className="excluded">⚠ Some gas had no price at its block, and isn't in this total.</p> : null}
                 </div>
                 <dl className="stats">
-                  <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value} value={totals.valueUsdMicros && formatUsd(totals.valueUsdMicros)} />
-                  <Stat label="Realized" onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedUsdMicros && formatSignedUsd(totals.realizedUsdMicros)} />
-                  <Stat label="Unrealized" onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedUsdMicros && formatSignedUsd(totals.unrealizedUsdMicros)} />
+                  <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value} value={totals.valueUsdMicros && est(formatUsd(totals.valueUsdMicros), totals.estimated.value)} />
+                  <Stat label="Realized" onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedUsdMicros && est(formatSignedUsd(totals.realizedUsdMicros), totals.estimated.realized)} />
+                  <Stat label="Unrealized" onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedUsdMicros && est(formatSignedUsd(totals.unrealizedUsdMicros), totals.estimated.unrealized)} />
                   <Stat label="Gas paid" onClick={() => openTotal("gas")} coverage={{ known: 1, missing: totals.unpricedGas ? 1 : 0 }} value={totals.gasUsdMicros && formatUsd(totals.gasUsdMicros)} />
                 </dl>
                 <div className="method" role="group" aria-label="Cost method">
@@ -263,13 +300,25 @@ export function App() {
                 </div>
               </section>
               <PnlChart points={points} onSelect={openPoint} />
-              {positions.length > 0 ? <Holdings positions={positions} onExplain={setExplanation} /> : null}
+              {listed.length > 0 ? <Holdings positions={listed} resolvable={resolvable} onExplain={setExplanation} onResolve={(asset) => setResolving({ asset })} /> : null}
+              {noMarketCount > 0 ? (
+                <p className="notice">
+                  {noMarketCount} {noMarketCount === 1 ? "token" : "tokens"} with no market{totals.noMarket.length > 0 ? `: ${totals.noMarket.join(", ")}` : ""}
+                  {wallet.unlistedTokens.length > 0 ? `${totals.noMarket.length > 0 ? ", plus" : ":"} ${wallet.unlistedTokens.length} we don't track` : ""}. Often spam, and not counted in any total.
+                </p>
+              ) : null}
+              <p>
+                <button type="button" className="link" onClick={download}>
+                  Export as CSV
+                </button>
+              </p>
             </>
           )}
         </main>
       ) : null}
 
       {explanation ? <ExplainPanel explanation={explanation} onClose={close} /> : null}
+      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
     </div>
   )
 }

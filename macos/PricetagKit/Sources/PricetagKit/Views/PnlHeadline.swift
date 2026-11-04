@@ -6,13 +6,17 @@ public struct PnlHeadline: View {
     let isLive: Bool
     let size: CGFloat
     let onOpen: () -> Void
+    let onResolve: () -> Void
 
-    public init(portfolio: Portfolio, isLive: Bool, size: CGFloat, onOpen: @escaping () -> Void) {
+    public init(portfolio: Portfolio, isLive: Bool, size: CGFloat, onOpen: @escaping () -> Void, onResolve: @escaping () -> Void = {}) {
         self.portfolio = portfolio
         self.isLive = isLive
         self.size = size
         self.onOpen = onOpen
+        self.onResolve = onResolve
     }
+
+    private var isEstimate: Bool { isPositive(portfolio.totals.estimatedUsdMicros) }
 
     /// nil when there's no number to show, and that says so instead of showing $0.
     private var pnl: String? {
@@ -25,7 +29,7 @@ public struct PnlHeadline: View {
             Button(action: onOpen) {
                 Group {
                     if let pnl {
-                        LiveNumber(Format.signedUSD(pnl), tone: isLive ? Tone(signed: pnl) : .neutral)
+                        LiveNumber(Format.estimate(Format.signedUSD(pnl), isEstimate), tone: isLive ? Tone(signed: pnl) : .neutral)
                     } else {
                         WarningText(Wording.pnlUnavailable)
                     }
@@ -38,8 +42,18 @@ public struct PnlHeadline: View {
                 .animation(.easeOut(duration: 0.15), value: isLive)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("Total PnL, \(pnl.map(Format.signedUSD) ?? Wording.pnlUnavailable)")
+            .accessibilityLabel("Total PnL, \(pnl.map { Format.estimate(Format.signedUSD($0), isEstimate) } ?? Wording.pnlUnavailable)")
             .accessibilityHint("Shows the legs behind this number")
+            HStack(spacing: 8) {
+                if let caveat = Wording.headlineCaveat(portfolio.totals) {
+                    Text(caveat).font(.callout.weight(.medium)).foregroundStyle(Tone.warning.style).monospacedDigit()
+                }
+                if !portfolio.questions.isEmpty {
+                    Button("Resolve \(portfolio.questions.count)", action: onResolve)
+                        .controlSize(.small)
+                        .help("Answer what the app can't work out by itself")
+                }
+            }
             PnlCaveats(portfolio: portfolio)
         }
     }
@@ -123,9 +137,9 @@ extension Portfolio {
     /// The four sums beside the total, in reading order.
     public var totalStats: [(metric: TotalMetric, label: String, text: String?, coverage: SumCoverage?)] {
         [
-            (.value, "Value", totals.valueUsdMicros.map(Format.usd), totals.coverage.value),
-            (.realized, "Realized", totals.realizedUsdMicros.map(Format.signedUSD), totals.coverage.realized),
-            (.unrealized, "Unrealized", totals.unrealizedUsdMicros.map(Format.signedUSD), totals.coverage.unrealized),
+            (.value, "Value", totals.valueUsdMicros.map { Format.estimate(Format.usd($0), totals.estimated.value) }, totals.coverage.value),
+            (.realized, "Realized", totals.realizedUsdMicros.map { Format.estimate(Format.signedUSD($0), totals.estimated.realized) }, totals.coverage.realized),
+            (.unrealized, "Unrealized", totals.unrealizedUsdMicros.map { Format.estimate(Format.signedUSD($0), totals.estimated.unrealized) }, totals.coverage.unrealized),
             (.gas, "Gas paid", totals.gasUsdMicros.map(Format.usd), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
     }

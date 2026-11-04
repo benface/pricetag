@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef } from "react"
 import type { LegEffect } from "../core/portfolio.ts"
 import { formatPrice, formatSignedAmount, formatTime, shortHash } from "../core/format.ts"
-import { describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
+import { COST_WORDS, PRICE_WORDS, describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
 
 /** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS_SHOWN = 200
@@ -24,12 +24,14 @@ function LegRow({ effect }: { effect: LegEffect }) {
         <span className="tag">{leg.opening ? "opening balance" : leg.kind}</span>
         {leg.opening ? null : leg.priceUsdMicros !== null && leg.priceSource ? (
           <span className="tag">
-            {formatPrice(leg.priceUsdMicros)} · {leg.priceSource}
+            {formatPrice(leg.priceUsdMicros)} · {PRICE_WORDS[leg.priceSource]}
           </span>
         ) : (
           <span className="tag warn">⚠ no price</span>
         )}
-        {incoming ? <span className={leg.costLabel === "unknown" ? "tag warn" : "tag"}>{leg.costLabel === "unknown" ? "⚠ cost unknown" : `cost: ${leg.costLabel}`}</span> : null}
+        {incoming ? <span className={leg.costLabel === "unknown" ? "tag warn" : "tag"}>{leg.costLabel === "unknown" ? "⚠ cost unknown" : `cost: ${COST_WORDS[leg.costLabel]}`}</span> : null}
+        {incoming && leg.costLabel !== "unknown" && leg.costUsdMicros === null ? <span className="tag warn">⚠ partly unknown</span> : null}
+        {leg.estimated ? <span className="tag">≈ estimate</span> : null}
       </div>
       <p className="small">{describeEffect(effect)}.</p>
       {leg.priceNote ? <p className="small muted">{leg.priceNote}</p> : null}

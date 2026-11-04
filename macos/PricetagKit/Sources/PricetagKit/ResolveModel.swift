@@ -1,0 +1,169 @@
+// What the "Who's this?" cards need: which one's up, what each answer would do, and answering it. The server does the math.
+
+import Foundation
+import Observation
+
+/// One of the three answers about who a sender is.
+public enum Ownership: String, Sendable, CaseIterable, Identifiable {
+    case mine, myExchange, someoneElse
+
+    public var id: Self { self }
+
+    public var title: String {
+        switch self {
+        case .mine: "My wallet"
+        case .myExchange: "My exchange account"
+        case .someoneElse: "Someone else"
+        }
+    }
+}
+
+@MainActor
+@Observable
+public final class ResolveModel {
+    private let store: PortfolioStore
+    /// This holding's questions come first, because that's what Resolve was clicked on.
+    private let firstAsset: String?
+
+    /// Skipped for now. A skipped question stays open and stays flagged, and comes back next time.
+    public private(set) var skipped: Set<String> = []
+    /// What each answer to the current question would do, once the server has said.
+    public private(set) var previews: [Ownership: BookPreview] = [:]
+    /// What the cost being typed would do, once the server has said. Nothing's saved until it's confirmed.
+    public private(set) var costPreview: BookPreview?
+    /// Asking what they paid, because they said it's their exchange account.
+    public private(set) var isAskingCost = false
+    public var failure: String?
+
+    public init(store: PortfolioStore, firstAsset: String? = nil) {
+        self.store = store
+        self.firstAsset = firstAsset
+    }
+
+    public var questions: [Question] {
+        let open = (store.portfolio?.questions ?? []).filter { !skipped.contains($0.id) }
+        guard let firstAsset else { return open }
+        return open.filter { $0.arrivals.contains { $0.asset == firstAsset } } + open.filter { !$0.arrivals.contains { $0.asset == firstAsset } }
+    }
+
+    public var current: Question? { questions.first }
+    public var meter: Meter? { store.portfolio?.meter }
+    public var canUndo: Bool { !store.undoStack.isEmpty }
+    /// Every question's answered. Anything skipped doesn't count.
+    public var isBalanced: Bool { meter?.isBalanced == true }
+
+    /// The books each answer leads to. "My exchange account" changes nothing until there's a cost, so it isn't one.
+    private func candidate(_ ownership: Ownership, for question: Question) -> Book? {
+        guard let sender = question.sender else { return nil }
+        switch ownership {
+        case .mine: return store.book.answering(sender, .mine, focus: store.portfolio?.address)
+        case .someoneElse: return store.book.answering(sender, .someoneElse, focus: store.portfolio?.address)
+        case .myExchange: return nil
+        }
+    }
+
+    /// Reads what each answer would do. A wallet that isn't read yet says so, and this asks again until it is.
+    public func loadPreviews() async {
+        guard let question = current, question.kind == .sender else {
+            previews = [:]
+            return
+        }
+        let options = Ownership.allCases.filter { candidate($0, for: question) != nil }
+        while !Task.isCancelled, question.id == current?.id {
+            guard let answers = try? await store.previews(of: options.compactMap { candidate($0, for: question) }), answers.count == options.count else { return }
+            guard !Task.isCancelled, question.id == current?.id else { return }
+            previews = Dictionary(uniqueKeysWithValues: zip(options, answers))
+            if !answers.contains(where: \.pending) { return }
+            try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
+    public func answer(_ ownership: Ownership) {
+        guard let question = current, let sender = question.sender else { return }
+        switch ownership {
+        case .myExchange:
+            store.setBook(store.book.answering(sender, SenderAnswer(kind: .myExchange), focus: store.portfolio?.address))
+            isAskingCost = true
+        case .mine, .someoneElse:
+            if let book = candidate(ownership, for: question) { store.setBook(book) }
+            advance()
+        }
+    }
+
+    /// The books a typed cost leads to. nil until every amount reads as one.
+    private func candidate(costs dollars: [String: String], for question: Question) -> Book? {
+        var micros: [String: String] = [:]
+        for arrival in question.arrivals {
+            guard let amount = Format.micros(fromDollars: dollars[arrival.asset] ?? "") else { return nil }
+            micros[arrival.asset] = amount
+        }
+        if let sender = question.sender {
+            return store.book.answering(sender, SenderAnswer(kind: .myExchange, costs: micros), focus: store.portfolio?.address)
+        }
+        guard let key = question.costKey, let cost = micros.values.first else { return nil }
+        return store.book.enteringCost(key, usdMicros: cost)
+    }
+
+    /// Reads what this cost would do, so it shows before the answer's final.
+    public func previewCost(_ dollars: [String: String]) async {
+        guard let question = current, let book = candidate(costs: dollars, for: question) else {
+            costPreview = nil
+            return
+        }
+        guard let answer = try? await store.previews(of: [book]).first, !Task.isCancelled, question.id == current?.id else { return }
+        costPreview = answer
+    }
+
+    /// `dollars` is what was paid for everything that arrived, by asset, as typed. False when something isn't an amount.
+    @discardableResult
+    public func enterCost(_ dollars: [String: String]) -> Bool {
+        guard let question = current, let book = candidate(costs: dollars, for: question) else { return false }
+        store.setBook(book)
+        advance()
+        return true
+    }
+
+    /// They own the account but don't have what they paid, so the price when it arrived will do, as an estimate.
+    public func usePriceWhenItArrived() {
+        guard let sender = current?.sender else { return }
+        store.setBook(store.book.answering(sender, .someoneElse, focus: store.portfolio?.address))
+        advance()
+    }
+
+    public func importCoinbase(csv: String) async -> ExchangeImport? {
+        do {
+            let imported = try await store.importCoinbase(csv: csv)
+            failure = imported.skipped > 0 ? "Found \(imported.withdrawals.count) withdrawals. \(imported.skipped) had no usable cost, like one bought in another currency." : nil
+            advance()
+            return imported
+        } catch FetchError.rejected(let message) {
+            failure = message
+        } catch {
+            failure = "Couldn't read that file. Is the server running?"
+        }
+        return nil
+    }
+
+    public func skip() {
+        guard let question = current else { return }
+        skipped.insert(question.id)
+        advance()
+    }
+
+    public func undo() {
+        store.undo()
+        advance()
+    }
+
+    /// Back to what was skipped.
+    public func revisitSkipped() {
+        skipped = []
+        advance()
+    }
+
+    private func advance() {
+        isAskingCost = false
+        previews = [:]
+        costPreview = nil
+    }
+}
