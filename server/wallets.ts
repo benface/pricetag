@@ -37,16 +37,15 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>) 
     const known = new Map(cached?.references ?? [])
     for (const block of known.keys()) if (block >= readFrom) known.delete(block)
     const missing = [...new Set(rows.map((r) => r.block_num))].filter((b) => !known.has(b))
-    const references = await source.readReferences([...new Set([...missing, head.blockNum])])
-    for (const reference of references) known.set(reference.block_num, reference)
+    for (const reference of await source.readReferences(missing)) known.set(reference.block_num, reference)
 
-    // The head block may not be readable yet. Then the last good price stays, with its own block number on it.
-    const prices: LatestPrices = { ...cached?.prices }
-    const atHead = known.get(head.blockNum)
-    const eth = answerToMicros(atHead?.eth_usd)
-    const usdc = answerToMicros(atHead?.usdc_usd)
-    if (eth) prices.ETH = { usdMicros: eth, source: "oracle", blockNum: head.blockNum }
-    if (usdc) prices.USDC = { usdMicros: usdc, source: "oracle", blockNum: head.blockNum }
+    // Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong.
+    const latest = await source.readLatestReference(head.blockNum)
+    const eth = answerToMicros(latest?.eth_usd)
+    const usdc = answerToMicros(latest?.usdc_usd)
+    const prices: LatestPrices = {}
+    if (latest && eth) prices.ETH = { usdMicros: eth, source: "oracle", blockNum: latest.block_num }
+    if (latest && usdc) prices.USDC = { usdMicros: usdc, source: "oracle", blockNum: latest.block_num }
 
     const priced = window.priced
       ? [...(cached?.priced.filter((p) => p.block_num < readFrom) ?? []), ...window.priced]
