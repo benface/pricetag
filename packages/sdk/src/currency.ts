@@ -52,7 +52,7 @@ const MAX_ROUND_AGE_SECONDS = 3 * 24 * 60 * 60
 const E8 = 10n ** 8n
 const E6 = 10n ** 6n
 
-function usableAnswer(round: RateRound | null | undefined, at: string): bigint | null {
+export function usableAnswer(round: RateRound | null | undefined, at: string): bigint | null {
   if (!round || !/^\d+$/.test(round.answer)) return null
   const answer = BigInt(round.answer)
   if (answer === 0n) return null

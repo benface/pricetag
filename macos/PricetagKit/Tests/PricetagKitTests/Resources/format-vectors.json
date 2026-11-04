@@ -267,5 +267,10 @@
       "blocks": 100000,
       "duration": "56 h"
     }
-  ]
+  ],
+  "linkMessage": {
+    "owner": "0x00000000000000000000000000000000000de300",
+    "address": "0x00000000000000000000000000000000000DE301",
+    "message": "Patina: 0x00000000000000000000000000000000000de301 is my wallet, and belongs with 0x00000000000000000000000000000000000de300.\n\nThis only links them in my own app. It can't move funds or approve anything."
+  }
 }

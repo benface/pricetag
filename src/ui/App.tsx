@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { CURRENCIES, CURRENCY_CODES, TOKENS, foldWallet, formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isCurrencyCode, sumTotals, type Coverage, type CurrencyCode, type FoldedWallet, type Method, type Position } from "@pricetag/sdk/core"
+import { CURRENCIES, CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isCurrencyCode, sumTotals, type Coverage, type CurrencyCode, type Method, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
-import { explainContext, explainTarget, missingRatesLine, mismatchCause, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
+import { explainTarget, missingRatesLine, mismatchCause, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
 import {
   AVERAGE_PRICE_PAID,
   BALANCE_CHECK,
@@ -26,14 +26,20 @@ import {
   excludedSentence,
   feedDetail,
   feesUnknownSentence,
+  linkedFailedSentence,
   networkFeeUnknownSentence,
   staleSentence,
 } from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
+import { ResolvePanel } from "./ResolvePanel.tsx"
+import { useBook, useOtherWallets } from "./useBook.ts"
 import { RulesPanel } from "./RulesPanel.tsx"
 import { useRules } from "./useRules.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
+import { linkedWallets } from "../core/book.ts"
+import { exportCsv } from "../core/export.ts"
+import { foldBook } from "../core/resolve.ts"
 
 function readAddress(): string | null {
   const value = new URLSearchParams(window.location.search).get("address")
@@ -56,8 +62,6 @@ function Num({ onClick, label, children, tone }: { onClick: () => void; label: s
   )
 }
 
-const NO_WALLET: Omit<FoldedWallet, "view"> = { positions: [], unreadAssets: [], totals: sumTotals([]), pnlStatus: "complete", points: [] }
-
 const toneOf = (micros: string | null) => (micros === null ? "warn" : BigInt(micros) > 0n ? "gain" : BigInt(micros) < 0n ? "loss" : null)
 
 function OnchainCheck({ position, onClick }: { position: Position; onClick: () => void }) {
@@ -67,7 +71,9 @@ function OnchainCheck({ position, onClick }: { position: Position; onClick: () =
   return <Num label={`${position.asset} not checked against its actual balance`} onClick={onClick} tone="warn">⚠ {CHECK_LABELS.unchecked}</Num>
 }
 
-function Holdings({ positions, currency, explain }: { positions: Position[]; currency: CurrencyCode; explain: (target: ExplainTarget) => void }) {
+const est = (text: string, isEstimate: boolean) => (isEstimate ? `≈${text}` : text)
+
+function Holdings({ positions, currency, resolvable, explain, onResolve }: { positions: Position[]; currency: CurrencyCode; resolvable: ReadonlySet<string>; explain: (target: ExplainTarget) => void; onResolve: (asset: string) => void }) {
   const open = ({ asset }: Position, metric: Metric) => () => explain({ kind: "asset", asset, metric })
   const money = (micros: string) => formatMoney(micros, currency)
   const signed = (micros: string) => formatSignedMoney(micros, currency)
@@ -117,7 +123,7 @@ function Holdings({ positions, currency, explain }: { positions: Position[]; cur
                     <td className="num">
                       {held ? (
                         <Num label={`${asset} ${AVERAGE_PRICE_PAID.toLowerCase()}`} onClick={open(position, "average")} tone={unknown ? "warn" : null}>
-                          {values.averageCostMicros ? formatPrice(values.averageCostMicros, currency) : "⚠ Unknown"}
+                          {values.averageCostMicros ? est(formatPrice(values.averageCostMicros, currency), position.estimates.cost) : "⚠ Unknown"}
                         </Num>
                       ) : (
                         <span className="muted">—</span>
@@ -126,7 +132,7 @@ function Holdings({ positions, currency, explain }: { positions: Position[]; cur
                     <td className="num">
                       {held ? (
                         <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueMicros === null ? "warn" : null}>
-                          {values.valueMicros ? money(values.valueMicros) : "⚠ No price"}
+                          {values.valueMicros ? est(money(values.valueMicros), position.estimates.value) : "⚠ No price"}
                         </Num>
                       ) : (
                         <span className="muted">—</span>
@@ -134,14 +140,21 @@ function Holdings({ positions, currency, explain }: { positions: Position[]; cur
                     </td>
                     <td className="num" title={REALIZED_HELP}>
                       <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedMicros)}>
-                        {values.realizedMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : signed(values.realizedMicros)}
+                        {values.realizedMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : est(signed(values.realizedMicros), position.estimates.realized)}
                       </Num>
                     </td>
                     <td className="num" title={UNREALIZED_HELP}>
                       {held ? (
-                        <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedMicros)}>
-                          {values.unrealizedMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : signed(values.unrealizedMicros)}
-                        </Num>
+                        <>
+                          <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedMicros)}>
+                            {values.unrealizedMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : est(signed(values.unrealizedMicros), position.estimates.unrealized)}
+                          </Num>
+                          {unknown && resolvable.has(asset) ? (
+                            <button type="button" className="resolve-button" aria-label={`Resolve ${asset}`} onClick={() => onResolve(asset)}>
+                              Resolve
+                            </button>
+                          ) : null}
+                        </>
                       ) : (
                         <span className="muted">—</span>
                       )}
@@ -174,6 +187,12 @@ export function App() {
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
   const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule)
+  const { book, change, undo, canUndo } = useBook()
+  const [resolving, setResolving] = useState<{ asset: string | null } | null>(null)
+  const [cardSender, setCardSender] = useState<string | null>(null)
+  const wanted = useMemo(() => [...new Set([...linkedWallets(book), ...(cardSender ? [cardSender] : [])])].filter((a) => a !== wallet?.address), [book, cardSender, wallet?.address])
+  const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, wallet?.latest.blockNum ?? null, wallet)
+  const linkedFailed = useMemo(() => failed.filter((address) => linkedWallets(book).includes(address)), [failed, book])
 
   useEffect(() => {
     const onPop = () => {
@@ -207,16 +226,32 @@ export function App() {
     setChosenCurrency(next)
   }
 
-  const folded = useMemo(() => (wallet ? foldWallet(wallet, method) : null), [wallet, method])
-  const { positions, unreadAssets: unread, totals, points } = folded ?? NO_WALLET
-  const view = folded?.view ?? null
+  const fold = useMemo(() => (wallet ? foldBook(wallet, others, method, book) : null), [wallet, others, method, book])
+  const view = fold?.view ?? null
   // Whatever's on screen says what it's in, which for a moment after a change isn't what was just chosen.
   const currency = view?.currency ?? chosenCurrency
+  const positions = fold?.positions ?? []
+  const unread = fold?.unread ?? []
+  const totals = fold?.totals ?? sumTotals([])
+  const points = fold?.points ?? []
+  const questions = fold?.questions ?? []
+  const resolvable = useMemo(() => new Set(questions.flatMap((q) => q.arrivals.map((a) => a.asset))), [questions])
+  const listed = positions.filter((p) => !p.noMarket)
+  const noMarketCount = totals.noMarket.length + (wallet?.unlisted.length ?? 0)
+  const caveat = [BigInt(totals.unresolvedMicros) > 0n ? `${formatMoney(totals.unresolvedMicros, currency)} unresolved` : null, BigInt(totals.estimatedMicros) > 0n ? `${formatMoney(totals.estimatedMicros, currency)} estimated` : null].filter(Boolean).join(" · ")
+  const download = () => {
+    const link = document.createElement("a")
+    link.href = URL.createObjectURL(new Blob([exportCsv(positions, currency)], { type: "text/csv" }))
+    link.download = `patina-${wallet?.address}.csv`
+    link.click()
+    URL.revokeObjectURL(link.href)
+  }
   // Worked out from what's on screen, so it can't go on showing numbers that have since changed, or that are in another currency.
-  const explanation = useMemo(
-    () => (target && folded && wallet ? explainTarget(target, folded, explainContext(wallet, folded.view, method)) : null),
-    [target, folded, wallet, method],
-  )
+  const explanation = useMemo(() => {
+    if (!target || !fold || !wallet) return null
+    const usd = fold.view.currency === "USD" ? null : foldBook(wallet, others, method, book, { usd: true })
+    return explainTarget(target, fold, { view: fold.view, ruleNote: wallet.ruleNote ?? null, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points } })
+  }, [target, fold, wallet, others, method, book])
   const close = useCallback(() => setTarget(null), [])
   const openTotal = (metric: TotalMetric) => setTarget({ kind: "total", metric })
 
@@ -250,7 +285,7 @@ export function App() {
         {wallet ? <LiveBadge wallet={wallet} stale={error !== null} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
-      {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={wallet?.rule ?? null} address={address} method={method} currency={currency} /> : null}
+      {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={wallet?.rule ?? null} address={address} method={method} currency={currency} book={book} /> : null}
 
       {!address ? (
         <section className="empty">
@@ -279,6 +314,14 @@ export function App() {
           {wallet.mode === "demo" ? <p className="notice">{DEMO_NOTICE}</p> : null}
           {hasStarted(wallet) ? <p className="notice">{coverageSentence(wallet.coverage, TOKENS.length - 1, wallet.openingUnread.length > 0)}</p> : null}
           {wallet.gasUnknownTxs.length > 0 ? <p className="notice warn">⚠ {feesUnknownSentence(wallet.gasUnknownTxs.length)}</p> : null}
+          {linkedFailed.length > 0 ? (
+            <p className="notice warn">
+              ⚠ {linkedFailedSentence(linkedFailed.length)}{" "}
+              <button type="button" className="link" onClick={retry}>
+                Try again
+              </button>
+            </p>
+          ) : null}
           {view && view.missingRateTxs.length > 0 ? <p className="notice warn">⚠ {missingRatesLine(view.missingRateTxs.length, currency)}</p> : null}
           {currency !== "USD" && view && !view.latestRate ? <p className="notice warn">⚠ There's no current USD to {currency} rate, so what's held has no current value.</p> : null}
           {wallet.l1FeeUnknownTxs.length > 0 ? <p className="notice warn" title={PNL_HELP}>⚠ {networkFeeUnknownSentence(wallet.l1FeeUnknownTxs.length)}</p> : null}
@@ -297,8 +340,14 @@ export function App() {
                     Total PnL · {currency}
                   </span>
                   <Num label="Total PnL" onClick={() => openTotal("pnl")} tone={toneOf(totals.pnlMicros)}>
-                    <span className="big">{totals.pnlMicros === null ? "⚠ Unavailable" : formatSignedMoney(totals.pnlMicros, currency)}</span>
+                    <span className="big">{totals.pnlMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : est(formatSignedMoney(totals.pnlMicros, currency), BigInt(totals.estimatedMicros) > 0n)}</span>
                   </Num>
+                  {caveat ? <p className="caveat">{caveat}</p> : null}
+                  {questions.length > 0 ? (
+                    <button type="button" className="resolve-button big" onClick={() => setResolving({ asset: null })}>
+                      Resolve {questions.length}
+                    </button>
+                  ) : null}
                   {totals.excluded.length > 0 ? (
                     <p className="excluded">⚠ {excludedSentence(totals.excluded)}</p>
                   ) : (
@@ -307,9 +356,9 @@ export function App() {
                   {totals.unpricedGas ? <p className="excluded">⚠ {UNPRICED_FEES}</p> : null}
                 </div>
                 <dl className="stats">
-                  <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value} value={totals.valueMicros && formatMoney(totals.valueMicros, currency)} />
-                  <Stat label="Realized" help={REALIZED_HELP} onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedMicros && formatSignedMoney(totals.realizedMicros, currency)} />
-                  <Stat label="Unrealized" help={UNREALIZED_HELP} onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedMicros && formatSignedMoney(totals.unrealizedMicros, currency)} />
+                  <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value} value={totals.valueMicros && est(formatMoney(totals.valueMicros, currency), totals.estimated.value)} />
+                  <Stat label="Realized" help={REALIZED_HELP} onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedMicros && est(formatSignedMoney(totals.realizedMicros, currency), totals.estimated.realized)} />
+                  <Stat label="Unrealized" help={UNREALIZED_HELP} onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedMicros && est(formatSignedMoney(totals.unrealizedMicros, currency), totals.estimated.unrealized)} />
                   <Stat label={NETWORK_FEES} onClick={() => openTotal("gas")} coverage={{ known: 1, missing: totals.unpricedGas ? 1 : 0 }} value={totals.gasMicros && formatMoney(totals.gasMicros, currency)} />
                 </dl>
                 <div className="method" role="group" aria-label={METHOD_NAME} title={METHOD_HELP}>
@@ -326,13 +375,25 @@ export function App() {
                 </button>
               </p>
               <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
-              {positions.length > 0 ? <Holdings positions={positions} currency={currency} explain={setTarget} /> : null}
+              {listed.length > 0 ? <Holdings positions={listed} currency={currency} resolvable={resolvable} explain={setTarget} onResolve={(asset) => setResolving({ asset })} /> : null}
+              {noMarketCount > 0 ? (
+                <p className="notice">
+                  {noMarketCount} {noMarketCount === 1 ? "token" : "tokens"} with no market{totals.noMarket.length > 0 ? `: ${totals.noMarket.join(", ")}` : ""}
+                  {wallet.unlisted.length > 0 ? `${totals.noMarket.length > 0 ? ", plus" : ":"} ${wallet.unlisted.length} we don't track` : ""}. Often spam, and not counted in any total.
+                </p>
+              ) : null}
+              <p>
+                <button type="button" className="link" onClick={download}>
+                  Export as CSV
+                </button>
+              </p>
             </>
           )}
         </main>
       ) : null}
 
       {explanation && wallet ? <ExplainPanel explanation={explanation} address={wallet.address} rule={wallet.rule ?? null} onClose={close} /> : null}
+      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
       {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} onClose={() => setTaxOpen(false)} /> : null}
     </div>
   )
