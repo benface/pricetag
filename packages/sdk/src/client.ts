@@ -241,6 +241,8 @@ function emptyWallet(address: string, from: number): WalletData {
     currency: "USD",
     rates: null,
     coverage: { fromBlock: from, toBlock: from - 1 },
+    notes: [],
+    marketChecked: false,
     legs: [],
     references: [],
     prices: {},

@@ -1,31 +1,34 @@
 import { useEffect, useState } from "react"
 import { formatMoney, formatPrice, formatSignedMoney, formatTime, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import type { Book } from "../core/book.ts"
 import type { PricingRule, RuleComparison, RuleRow } from "../core/rules.ts"
 import { RULES_HELP, RULES_TITLE, shortManifestHash } from "../core/wording.ts"
 
-function show(micros: string | null, format: RuleRow["format"], currency: CurrencyCode): string {
+function show(micros: string | null, format: RuleRow["format"], currency: CurrencyCode, estimated = false): string {
   if (micros === null) return "Unavailable"
+  if (estimated) return `≈${show(micros, format, currency)}`
   if (format === "usdPrice") return formatPrice(micros, "USD")
   return format === "money" ? formatMoney(micros, currency) : formatSignedMoney(micros, currency)
 }
 
 /** A difference is always signed, so which way it went can be read at a glance. A price's is small, so it keeps its digits. */
-function showDifference(micros: string | null, format: RuleRow["format"], currency: CurrencyCode): string {
+function showDifference(micros: string | null, format: RuleRow["format"], currency: CurrencyCode, estimated = false): string {
   if (micros === null) return "—"
   if (BigInt(micros) === 0n) return "Same"
+  if (estimated) return `≈${showDifference(micros, format, currency)}`
   if (format !== "usdPrice") return formatSignedMoney(micros, currency)
   const size = micros.startsWith("-") ? micros.slice(1) : micros
   return `${micros.startsWith("-") ? "-" : "+"}${formatPrice(size, "USD")}`
 }
 
-function Comparison({ address, method, currency }: { address: string; method: Method; currency: CurrencyCode }) {
+function Comparison({ address, method, currency, book }: { address: string; method: Method; currency: CurrencyCode; book: Book }) {
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<{ comparison: RuleComparison | null; error: string | null; loading: boolean }>({ comparison: null, error: null, loading: true })
 
   useEffect(() => {
     const abort = new AbortController()
     setState((s) => ({ ...s, error: null, loading: true }))
-    fetch(`/api/portfolio/${address}/compare?method=${method}&currency=${currency}`, { signal: abort.signal })
+    fetch(`/api/portfolio/${address}/compare`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method, currency, book }), signal: abort.signal })
       .then(async (response) => {
         const body = (await response.json()) as RuleComparison | { error: string }
         if ("error" in body) throw new Error(body.error)
@@ -36,7 +39,7 @@ function Comparison({ address, method, currency }: { address: string; method: Me
         if (!abort.signal.aborted) setState({ comparison: null, error: error instanceof TypeError ? "Can't reach the server." : error.message, loading: false })
       })
     return () => abort.abort()
-  }, [address, method, currency, attempt])
+  }, [address, method, currency, book, attempt])
 
   const { comparison, error, loading } = state
   const again = (
@@ -66,9 +69,9 @@ function Comparison({ address, method, currency }: { address: string; method: Me
           {comparison.rows.map((row) => (
             <tr key={row.label}>
               <th scope="row">{row.label}</th>
-              <td>{show(row.a, row.format, shownIn)}{row.aPartial ? <span className="partial">⚠ partial</span> : null}</td>
-              <td>{show(row.b, row.format, shownIn)}{row.bPartial ? <span className="partial">⚠ partial</span> : null}</td>
-              <td>{showDifference(row.difference, row.format, shownIn)}</td>
+              <td>{show(row.a, row.format, shownIn, row.aEstimated)}{row.aPartial ? <span className="partial">⚠ partial</span> : null}</td>
+              <td>{show(row.b, row.format, shownIn, row.bEstimated)}{row.bPartial ? <span className="partial">⚠ partial</span> : null}</td>
+              <td>{showDifference(row.difference, row.format, shownIn, row.aEstimated || row.bEstimated)}</td>
             </tr>
           ))}
         </tbody>
@@ -83,9 +86,9 @@ function Comparison({ address, method, currency }: { address: string; method: Me
                   <th scope="row">
                     {tx.asset} {tx.label.toLowerCase()} <span className="muted small">{formatTime(tx.timestamp)}</span>
                   </th>
-                  <td>{show(tx.a, "money", shownIn)}</td>
-                  <td>{show(tx.b, "money", shownIn)}</td>
-                  <td>{showDifference(tx.difference, "signed", shownIn)}</td>
+                  <td>{show(tx.a, "money", shownIn, tx.aEstimated)}</td>
+                  <td>{show(tx.b, "money", shownIn, tx.bEstimated)}</td>
+                  <td>{showDifference(tx.difference, "signed", shownIn, tx.aEstimated || tx.bEstimated)}</td>
                 </tr>
               ))}
             </tbody>
@@ -99,7 +102,7 @@ function Comparison({ address, method, currency }: { address: string; method: Me
 }
 
 /** The switch. `current` is what the numbers on screen were read through, which for a moment after a click isn't what was chosen. */
-export function RulesPanel({ rules, chosen, choose, current, address, method, currency }: { rules: PricingRule[]; chosen: string | null; choose: (id: string) => void; current: string | null; address: string | null; method: Method; currency: CurrencyCode }) {
+export function RulesPanel({ rules, chosen, choose, current, address, method, currency, book }: { rules: PricingRule[]; chosen: string | null; choose: (id: string) => void; current: string | null; address: string | null; method: Method; currency: CurrencyCode; book: Book }) {
   const [comparing, setComparing] = useState(false)
   const selected = chosen ?? rules[0]?.id
   const canCompare = address !== null && address !== "demo"
@@ -125,7 +128,7 @@ export function RulesPanel({ rules, chosen, choose, current, address, method, cu
         ))}
       </div>
       {current !== null && current !== selected ? <p className="muted small">Reading this wallet by the new rule. The numbers below are still from the last one.</p> : null}
-      {comparing && canCompare ? <Comparison key={address} address={address} method={method} currency={currency} /> : null}
+      {comparing && canCompare ? <Comparison key={address} address={address} method={method} currency={currency} book={book} /> : null}
     </section>
   )
 }

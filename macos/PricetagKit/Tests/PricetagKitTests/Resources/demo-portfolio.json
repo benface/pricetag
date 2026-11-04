@@ -22,11 +22,12 @@
   "outgoingTxs": [
     "0xde30000000000000000000000000000000000000000000000000000000000003",
     "0xde30000000000000000000000000000000000000000000000000000000000004",
-    "0xde30000000000000000000000000000000000000000000000000000000000005",
     "0xde30000000000000000000000000000000000000000000000000000000000006",
-    "0xde30000000000000000000000000000000000000000000000000000000000008",
+    "0xde30000000000000000000000000000000000000000000000000000000000007",
     "0xde30000000000000000000000000000000000000000000000000000000000009",
-    "0xde3000000000000000000000000000000000000000000000000000000000000a"
+    "0xde3000000000000000000000000000000000000000000000000000000000000a",
+    "0xde3000000000000000000000000000000000000000000000000000000000000b",
+    "0xde3000000000000000000000000000000000000000000000000000000000000c"
   ],
   "unlisted": [
     {
@@ -42,15 +43,21 @@
       "asset": "DAI",
       "decimals": 18,
       "note": null,
-      "price": null,
+      "price": {
+        "micros": "1000100",
+        "source": "market",
+        "blockNum": 53505388
+      },
       "values": {
         "qty": "250000000000000000000",
         "unknownCostQty": "250000000000000000000",
         "costMicros": null,
         "averageCostMicros": null,
-        "valueMicros": null,
+        "valueMicros": "250025000",
         "realizedMicros": "0",
-        "unrealizedMicros": null
+        "unrealizedMicros": null,
+        "estimatedCostMicros": "0",
+        "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
       "shortfallQty": "0",
@@ -61,7 +68,15 @@
         "computedQty": "250000000000000000000",
         "actualQty": "250000000000000000000",
         "differenceQty": "0"
-      }
+      },
+      "noMarket": false,
+      "estimates": {
+        "cost": false,
+        "value": true,
+        "realized": false,
+        "unrealized": true
+      },
+      "resolvable": true
     },
     {
       "asset": "USDC",
@@ -79,7 +94,9 @@
         "averageCostMicros": null,
         "valueMicros": "3249349999",
         "realizedMicros": null,
-        "unrealizedMicros": null
+        "unrealizedMicros": null,
+        "estimatedCostMicros": "0",
+        "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
       "shortfallQty": "0",
@@ -90,7 +107,15 @@
         "computedQty": "3249999999",
         "actualQty": "3249999999",
         "differenceQty": "0"
-      }
+      },
+      "noMarket": false,
+      "estimates": {
+        "cost": false,
+        "value": false,
+        "realized": false,
+        "unrealized": false
+      },
+      "resolvable": true
     },
     {
       "asset": "ETH",
@@ -102,40 +127,56 @@
         "blockNum": 53505400
       },
       "values": {
-        "qty": "519720000000000000",
-        "unknownCostQty": "10170605906113966",
+        "qty": "517680000000000000",
+        "unknownCostQty": "10130684340562376",
         "costMicros": null,
         "averageCostMicros": null,
-        "valueMicros": "1372060800",
+        "valueMicros": "1366675200",
         "realizedMicros": null,
-        "unrealizedMicros": null
+        "unrealizedMicros": null,
+        "estimatedCostMicros": "0",
+        "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
       "shortfallQty": "0",
-      "legCount": 10,
+      "legCount": 12,
       "reconciliation": {
         "status": "reconciled",
         "blockNum": 53505400,
-        "computedQty": "519720000000000000",
-        "actualQty": "519720000000000000",
+        "computedQty": "517680000000000000",
+        "actualQty": "517680000000000000",
         "differenceQty": "0"
-      }
+      },
+      "noMarket": false,
+      "estimates": {
+        "cost": false,
+        "value": false,
+        "realized": false,
+        "unrealized": false
+      },
+      "resolvable": true
     },
     {
       "asset": "AERO",
       "decimals": 18,
       "note": null,
-      "price": null,
+      "price": {
+        "micros": "1400000",
+        "source": "market",
+        "blockNum": 53505388
+      },
       "values": {
         "qty": "500000000000000000000",
         "unknownCostQty": "0",
         "costMicros": "624875000",
         "averageCostMicros": "1249750",
-        "valueMicros": null,
+        "valueMicros": "700000000",
         "realizedMicros": "74985000",
-        "unrealizedMicros": null
+        "unrealizedMicros": "75125000",
+        "estimatedCostMicros": "0",
+        "estimatedRealizedMicros": "0"
       },
-      "pnlMicros": null,
+      "pnlMicros": "150110000",
       "shortfallQty": "0",
       "legCount": 2,
       "reconciliation": {
@@ -144,21 +185,74 @@
         "computedQty": "500000000000000000000",
         "actualQty": "500000000000000000000",
         "differenceQty": "0"
-      }
+      },
+      "noMarket": false,
+      "estimates": {
+        "cost": false,
+        "value": true,
+        "realized": false,
+        "unrealized": true
+      },
+      "resolvable": false
+    },
+    {
+      "asset": "USDT",
+      "decimals": 6,
+      "note": null,
+      "price": {
+        "micros": "999900",
+        "source": "market",
+        "blockNum": 53505388
+      },
+      "values": {
+        "qty": "200000000",
+        "unknownCostQty": "0",
+        "costMicros": "199980000",
+        "averageCostMicros": "999900",
+        "valueMicros": "199980000",
+        "realizedMicros": "0",
+        "unrealizedMicros": "0",
+        "estimatedCostMicros": "199980000",
+        "estimatedRealizedMicros": "0"
+      },
+      "pnlMicros": "0",
+      "shortfallQty": "0",
+      "legCount": 1,
+      "reconciliation": {
+        "status": "reconciled",
+        "blockNum": 53505400,
+        "computedQty": "200000000",
+        "actualQty": "200000000",
+        "differenceQty": "0"
+      },
+      "noMarket": false,
+      "estimates": {
+        "cost": true,
+        "value": true,
+        "realized": false,
+        "unrealized": true
+      },
+      "resolvable": false
     },
     {
       "asset": "cbBTC",
       "decimals": 8,
       "note": null,
-      "price": null,
+      "price": {
+        "micros": "68000000000",
+        "source": "market",
+        "blockNum": 53505388
+      },
       "values": {
         "qty": "2500000",
         "unknownCostQty": "2500000",
         "costMicros": null,
         "averageCostMicros": null,
-        "valueMicros": null,
+        "valueMicros": "1700000000",
         "realizedMicros": null,
-        "unrealizedMicros": null
+        "unrealizedMicros": null,
+        "estimatedCostMicros": "0",
+        "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
       "shortfallQty": "0",
@@ -169,7 +263,15 @@
         "computedQty": "2000000",
         "actualQty": "2500000",
         "differenceQty": "500000"
-      }
+      },
+      "noMarket": false,
+      "estimates": {
+        "cost": false,
+        "value": true,
+        "realized": false,
+        "unrealized": false
+      },
+      "resolvable": true
     },
     {
       "asset": "DEGEN",
@@ -183,7 +285,9 @@
         "averageCostMicros": null,
         "valueMicros": null,
         "realizedMicros": "0",
-        "unrealizedMicros": null
+        "unrealizedMicros": null,
+        "estimatedCostMicros": "0",
+        "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
       "shortfallQty": "0",
@@ -194,21 +298,35 @@
         "computedQty": "50000000000000000000000",
         "actualQty": "50000000000000000000000",
         "differenceQty": "0"
-      }
+      },
+      "noMarket": true,
+      "estimates": {
+        "cost": false,
+        "value": false,
+        "realized": false,
+        "unrealized": false
+      },
+      "resolvable": false
     },
     {
       "asset": "VIRTUAL",
       "decimals": 18,
       "note": null,
-      "price": null,
+      "price": {
+        "micros": "2100000",
+        "source": "market",
+        "blockNum": 53505388
+      },
       "values": {
         "qty": "50000000000000000000",
         "unknownCostQty": "50000000000000000000",
         "costMicros": null,
         "averageCostMicros": null,
-        "valueMicros": null,
+        "valueMicros": "105000000",
         "realizedMicros": "0",
-        "unrealizedMicros": null
+        "unrealizedMicros": null,
+        "estimatedCostMicros": "0",
+        "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
       "shortfallQty": "0",
@@ -219,22 +337,26 @@
         "computedQty": "50000000000000000000",
         "actualQty": "50000000000000000000",
         "differenceQty": "0"
-      }
+      },
+      "noMarket": false,
+      "estimates": {
+        "cost": false,
+        "value": true,
+        "realized": false,
+        "unrealized": true
+      },
+      "resolvable": true
     }
   ],
   "totals": {
-    "valueMicros": "4621410799",
+    "valueMicros": "7571030199",
     "realizedMicros": "74985000",
-    "unrealizedMicros": null,
-    "gasMicros": "703360",
-    "pnlMicros": "74281640",
+    "unrealizedMicros": "75125000",
+    "gasMicros": "808160",
+    "pnlMicros": "149301840",
     "excluded": [
       {
         "asset": "DAI",
-        "reason": "no current price"
-      },
-      {
-        "asset": "DAI",
         "reason": "unknown cost"
       },
       {
@@ -252,30 +374,10 @@
       {
         "asset": "ETH",
         "reason": "unknown cost"
-      },
-      {
-        "asset": "AERO",
-        "reason": "no current price"
       },
       {
         "asset": "cbBTC",
         "reason": "doesn't match its actual balance"
-      },
-      {
-        "asset": "cbBTC",
-        "reason": "no current price"
-      },
-      {
-        "asset": "DEGEN",
-        "reason": "no current price"
-      },
-      {
-        "asset": "DEGEN",
-        "reason": "unknown cost"
-      },
-      {
-        "asset": "VIRTUAL",
-        "reason": "no current price"
       },
       {
         "asset": "VIRTUAL",
@@ -285,22 +387,32 @@
     "unpricedGas": false,
     "coverage": {
       "value": {
-        "known": 2,
-        "missing": 5
+        "known": 7,
+        "missing": 0
       },
       "realized": {
         "known": 1,
         "missing": 3
       },
       "unrealized": {
-        "known": 0,
-        "missing": 7
+        "known": 2,
+        "missing": 5
       },
       "pnl": {
-        "known": 2,
-        "missing": 10
+        "known": 4,
+        "missing": 8
       }
-    }
+    },
+    "unresolvedMicros": "3603416835",
+    "estimatedMicros": "899980000",
+    "estimated": {
+      "value": true,
+      "realized": false,
+      "unrealized": true
+    },
+    "noMarket": [
+      "DEGEN"
+    ]
   },
   "pnlStatus": "partial",
   "points": [
@@ -333,53 +445,229 @@
       "excludedCount": 7
     },
     {
+      "blockNum": 53501200,
+      "timestamp": "2026-11-04T08:40:00.000Z",
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000005",
+      "pnlMicros": "-193440",
+      "excludedCount": 8
+    },
+    {
       "blockNum": 53501500,
       "timestamp": "2026-11-04T08:50:00.000Z",
-      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000005",
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
       "pnlMicros": "-292040",
-      "excludedCount": 7
+      "excludedCount": 8
     },
     {
       "blockNum": 53502400,
       "timestamp": "2026-11-04T09:20:00.000Z",
-      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000007",
       "pnlMicros": "74592560",
-      "excludedCount": 7
+      "excludedCount": 8
     },
     {
       "blockNum": 53503000,
       "timestamp": "2026-11-04T09:40:00.000Z",
-      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000007",
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000008",
       "pnlMicros": "74592560",
-      "excludedCount": 7
+      "excludedCount": 8
     },
     {
       "blockNum": 53503600,
       "timestamp": "2026-11-04T10:00:00.000Z",
-      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000008",
+      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
       "pnlMicros": "74489240",
       "excludedCount": 8
     },
     {
       "blockNum": 53504200,
       "timestamp": "2026-11-04T10:20:00.000Z",
-      "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
+      "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
       "pnlMicros": "74385640",
       "excludedCount": 9
     },
     {
       "blockNum": 53504800,
       "timestamp": "2026-11-04T10:40:00.000Z",
-      "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
+      "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000b",
       "pnlMicros": "74281640",
+      "excludedCount": 9
+    },
+    {
+      "blockNum": 53505000,
+      "timestamp": "2026-11-04T10:46:40.000Z",
+      "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000c",
+      "pnlMicros": "74176840",
       "excludedCount": 9
     },
     {
       "blockNum": 53505400,
       "timestamp": "2026-11-04T11:00:00.000Z",
       "txHash": null,
-      "pnlMicros": "74281640",
-      "excludedCount": 9
+      "pnlMicros": "149301840",
+      "excludedCount": 7
     }
-  ]
+  ],
+  "questions": [
+    {
+      "id": "sender:0x00000000000000000000000000000000000de301",
+      "kind": "sender",
+      "wallet": "0x00000000000000000000000000000000000de300",
+      "sender": "0x00000000000000000000000000000000000de301",
+      "known": null,
+      "costKey": null,
+      "needsCost": false,
+      "arrivals": [
+        {
+          "asset": "USDC",
+          "decimals": 6,
+          "units": "5000000000"
+        }
+      ],
+      "receipts": [
+        {
+          "wallet": "0x00000000000000000000000000000000000de300",
+          "legId": "0xde30000000000000000000000000000000000000000000000000000000000001:USDC",
+          "asset": "USDC",
+          "units": "5000000000"
+        }
+      ],
+      "transfers": 1,
+      "firstAt": "2026-11-04T08:00:00.000Z",
+      "lastAt": "2026-11-04T08:00:00.000Z",
+      "evidence": [
+        "You sent this address 0.002 ETH on Nov 4"
+      ],
+      "valueMicros": "4999000000"
+    },
+    {
+      "id": "sender:0x71660c4005ba85c37ccec55d0c4493e66fe775d3",
+      "kind": "sender",
+      "wallet": "0x00000000000000000000000000000000000de300",
+      "sender": "0x71660c4005ba85c37ccec55d0c4493e66fe775d3",
+      "known": {
+        "name": "Coinbase",
+        "kind": "exchange"
+      },
+      "costKey": null,
+      "needsCost": false,
+      "arrivals": [
+        {
+          "asset": "cbBTC",
+          "decimals": 8,
+          "units": "2000000"
+        }
+      ],
+      "receipts": [
+        {
+          "wallet": "0x00000000000000000000000000000000000de300",
+          "legId": "0xde30000000000000000000000000000000000000000000000000000000000008:cbBTC",
+          "asset": "cbBTC",
+          "units": "2000000"
+        }
+      ],
+      "transfers": 1,
+      "firstAt": "2026-11-04T09:40:00.000Z",
+      "lastAt": "2026-11-04T09:40:00.000Z",
+      "evidence": [
+        "From a Coinbase address"
+      ],
+      "valueMicros": "1360000000"
+    },
+    {
+      "id": "cost:0x00000000000000000000000000000000000de300:opening:DAI",
+      "kind": "cost",
+      "wallet": "0x00000000000000000000000000000000000de300",
+      "sender": null,
+      "known": null,
+      "costKey": "0x00000000000000000000000000000000000de300:opening:DAI",
+      "needsCost": false,
+      "arrivals": [
+        {
+          "asset": "DAI",
+          "decimals": 18,
+          "units": "250000000000000000000"
+        }
+      ],
+      "receipts": [
+        {
+          "wallet": "0x00000000000000000000000000000000000de300",
+          "legId": "opening:DAI",
+          "asset": "DAI",
+          "units": "250000000000000000000"
+        }
+      ],
+      "transfers": 1,
+      "firstAt": "2026-11-04T07:59:58.000Z",
+      "lastAt": "2026-11-04T07:59:58.000Z",
+      "evidence": [],
+      "valueMicros": "250025000"
+    },
+    {
+      "id": "cost:0x00000000000000000000000000000000000de300:0xde3000000000000000000000000000000000000000000000000000000000000a:VIRTUAL",
+      "kind": "cost",
+      "wallet": "0x00000000000000000000000000000000000de300",
+      "sender": null,
+      "known": null,
+      "costKey": "0x00000000000000000000000000000000000de300:0xde3000000000000000000000000000000000000000000000000000000000000a:VIRTUAL",
+      "needsCost": false,
+      "arrivals": [
+        {
+          "asset": "VIRTUAL",
+          "decimals": 18,
+          "units": "50000000000000000000"
+        }
+      ],
+      "receipts": [
+        {
+          "wallet": "0x00000000000000000000000000000000000de300",
+          "legId": "0xde3000000000000000000000000000000000000000000000000000000000000a:VIRTUAL",
+          "asset": "VIRTUAL",
+          "units": "50000000000000000000"
+        }
+      ],
+      "transfers": 1,
+      "firstAt": "2026-11-04T10:20:00.000Z",
+      "lastAt": "2026-11-04T10:20:00.000Z",
+      "evidence": [],
+      "valueMicros": "105000000"
+    },
+    {
+      "id": "sender:0x000000000000000000000000000000000000be11",
+      "kind": "sender",
+      "wallet": "0x00000000000000000000000000000000000de300",
+      "sender": "0x000000000000000000000000000000000000be11",
+      "known": null,
+      "costKey": null,
+      "needsCost": false,
+      "arrivals": [
+        {
+          "asset": "ETH",
+          "decimals": 18,
+          "units": "20000000000000000"
+        }
+      ],
+      "receipts": [
+        {
+          "wallet": "0x00000000000000000000000000000000000de300",
+          "legId": "0xde30000000000000000000000000000000000000000000000000000000000002:ETH",
+          "asset": "ETH",
+          "units": "20000000000000000"
+        }
+      ],
+      "transfers": 1,
+      "firstAt": "2026-11-04T08:05:00.000Z",
+      "lastAt": "2026-11-04T08:05:00.000Z",
+      "evidence": [],
+      "valueMicros": "47840000"
+    }
+  ],
+  "meter": {
+    "open": 5,
+    "answered": 0,
+    "waiting": 0
+  },
+  "linkedReading": [],
+  "linkedFailed": [],
+  "marketChecked": true
 }

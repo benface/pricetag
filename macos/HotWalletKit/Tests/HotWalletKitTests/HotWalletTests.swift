@@ -305,6 +305,20 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(await rig.chain.sent.count == 1, "already swept")
     }
 
+    @Test func neverSweepsAGainThatRestsOnAnEstimate() async throws {
+        let rig = await Rig(underCap, portfolio: .success(portfolio(realized: "10000000", estimatedRealized: true)))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.isEmpty)
+    }
+
+    @Test func neverSweepsAGainWhileALinkedWalletCantBeRead() async throws {
+        let rig = await Rig(underCap, portfolio: .success(portfolio(realized: "10000000", linkedFailed: ["0x00000000000000000000000000000000000000cc"])))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.isEmpty)
+    }
+
     @Test func aGainOnlyCountsAsSweptOnceItLands() async throws {
         let rig = await Rig(underCap, portfolio: .success(portfolio(realized: "12000000")))
         await rig.wallet.readHistory()

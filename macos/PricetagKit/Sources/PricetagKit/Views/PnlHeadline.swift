@@ -6,13 +6,17 @@ public struct PnlHeadline: View {
     let isLive: Bool
     let size: CGFloat
     let onOpen: () -> Void
+    let onResolve: () -> Void
 
-    public init(portfolio: Portfolio, isLive: Bool, size: CGFloat, onOpen: @escaping () -> Void) {
+    public init(portfolio: Portfolio, isLive: Bool, size: CGFloat, onOpen: @escaping () -> Void, onResolve: @escaping () -> Void = {}) {
         self.portfolio = portfolio
         self.isLive = isLive
         self.size = size
         self.onOpen = onOpen
+        self.onResolve = onResolve
     }
+
+    private var isEstimate: Bool { isPositive(portfolio.totals.estimatedMicros) }
 
     /// nil when there's no number to show, and that says so instead of showing $0.
     private var pnl: String? {
@@ -20,7 +24,7 @@ public struct PnlHeadline: View {
     }
 
     private func signed(_ micros: String) -> String {
-        Format.signedMoney(micros, portfolio.currency)
+        Format.estimate(Format.signedMoney(micros, portfolio.currency), isEstimate)
     }
 
     public var body: some View {
@@ -44,6 +48,16 @@ public struct PnlHeadline: View {
             .buttonStyle(NumberButtonStyle())
             .accessibilityLabel("Total PnL, \(pnl.map(signed) ?? Wording.pnlUnavailable)")
             .accessibilityHint("Shows the activity behind this number")
+            HStack(spacing: 8) {
+                if let caveat = Wording.headlineCaveat(portfolio.totals, portfolio.currency) {
+                    Text(caveat).font(.callout.weight(.medium)).foregroundStyle(Tone.warning.style).monospacedDigit()
+                }
+                if !portfolio.questions.isEmpty {
+                    Button("Resolve \(portfolio.questions.count)", action: onResolve)
+                        .controlSize(.small)
+                        .help("Answer what the app can't work out by itself")
+                }
+            }
             PnlCaveats(portfolio: portfolio)
         }
     }
@@ -134,9 +148,9 @@ extension Portfolio {
         let money = { Format.money($0, currency) }
         let signed = { Format.signedMoney($0, currency) }
         return [
-            (.value, "Value", nil, totals.valueMicros.map(money), totals.coverage.value),
-            (.realized, "Realized", Wording.realizedHelp, totals.realizedMicros.map(signed), totals.coverage.realized),
-            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map(signed), totals.coverage.unrealized),
+            (.value, "Value", nil, totals.valueMicros.map { Format.estimate(money($0), totals.estimated.value) }, totals.coverage.value),
+            (.realized, "Realized", Wording.realizedHelp, totals.realizedMicros.map { Format.estimate(signed($0), totals.estimated.realized) }, totals.coverage.realized),
+            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map { Format.estimate(signed($0), totals.estimated.unrealized) }, totals.coverage.unrealized),
             (.gas, Wording.networkFees, nil, totals.gasMicros.map(money), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
     }
