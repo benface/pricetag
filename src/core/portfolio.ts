@@ -2,7 +2,7 @@
 
 import { applyLeg, emptyPosition, usdOf, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
 import { answerToMicros, type PricedLeg, type ReferenceRow } from "./legs.ts"
-import { decimalsOf, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
+import { decimalsOf, estimateHeld, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
 
 export type LatestPrice = { usdMicros: string; source: "oracle" | "swap" | "market"; blockNum: number }
 export type LatestPrices = Record<string, LatestPrice | undefined>
@@ -24,7 +24,7 @@ export type Position = {
   reconciliation: Reconciliation | null
 }
 
-export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "incomplete history" | "doesn't match its onchain balance" | "not checked against its onchain balance" }
+export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "incomplete history" | "doesn't match its onchain balance" | "not checked against its onchain balance" | "balance couldn't be read" }
 
 /** What a sum is made of. A sum with something missing and nothing known has no answer, which isn't the same as $0. */
 export type Coverage = { known: number; missing: number }
@@ -47,7 +47,7 @@ export type Totals = {
 /**
  * A position the chain hasn't confirmed. Anything about cost comes from legs that are incomplete, or may be, so it's
  * unavailable rather than wrong. PnL only ever shows for a position that matches: otherwise a failed read would bring
- * back a number we already knew was wrong. What it holds and what that's worth come from the chain when it's been read.
+ * back a number we already knew was wrong. What it holds and what that's worth come from the chain whenever it's been read.
  */
 function unconfirmedValues(values: PositionValues, qty: string, priceUsdMicros: string | null, decimals: number): PositionValues {
   return {
@@ -64,8 +64,17 @@ function unconfirmedValues(values: PositionValues, qty: string, priceUsdMicros: 
 
 const isUnconfirmed = ({ reconciliation }: Position) => reconciliation !== null && reconciliation.status !== "reconciled"
 
+/**
+ * Assets with no balance read and nothing else to go on, so they have no position. They might still hold something, so
+ * they're missing from totals and the chart, rather than zero.
+ */
+export function unreadAssets(positions: readonly Position[], { unreadBalances }: Pick<Onchain, "unreadBalances">): string[] {
+  const shown = new Set(positions.map((p) => p.asset))
+  return (unreadBalances ?? []).filter((asset) => !shown.has(asset))
+}
+
 /** The assets `pnlOverTime` has to leave out. */
-export const unconfirmedAssets = (positions: readonly Position[]) => new Set(positions.filter(isUnconfirmed).map((p) => p.asset))
+export const unconfirmedAssets = (positions: readonly Position[], unread: readonly string[] = []) => new Set([...positions.filter(isUnconfirmed).map((p) => p.asset), ...unread])
 
 export function foldPositions(legs: readonly PricedLeg[], method: Method, prices: LatestPrices, onchain?: Onchain): Position[] {
   const positions = new Map<string, { state: PositionState; effects: LegEffect[]; decimals: number }>()
@@ -76,17 +85,17 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
     position.state = after
     positions.set(leg.asset, position)
   }
-  // The chain says it's here and no leg explains any of it. A fresh wallet funded by an internal transfer looks like this.
-  for (const [asset, amount] of Object.entries(onchain?.balances?.amounts ?? {})) {
-    if (BigInt(amount) === 0n || positions.has(asset)) continue
-    positions.set(asset, { state: emptyPosition(method, decimalsOf(asset)), effects: [], decimals: decimalsOf(asset) })
+  // Whether something's held is a separate question from whether it can be checked. The chain says it's here, or said so
+  // at its last read, and no leg explains it. A fresh wallet funded by an internal transfer looks like this.
+  const discover = (asset: string, held: bigint) => {
+    if (held > 0n && !positions.has(asset)) positions.set(asset, { state: emptyPosition(method, decimalsOf(asset)), effects: [], decimals: decimalsOf(asset) })
   }
+  for (const [asset, amount] of Object.entries(onchain?.balances?.amounts ?? {})) discover(asset, BigInt(amount))
+  for (const [asset, last] of Object.entries(onchain?.lastBalances ?? {})) discover(asset, BigInt(last.amount))
   return [...positions.entries()].map(([asset, { state, effects, decimals }]) => {
     const price = prices[asset] ?? null
     const values = valuePosition(state, price?.usdMicros ?? null)
-    // The sum of what moved, not `values.qty`: the fold stops at zero, and what left beyond that still happened.
-    const computed = effects.reduce((sum, { leg }) => sum + BigInt(leg.delta), 0n)
-    const reconciliation = onchain ? reconcile(asset, computed, BigInt(state.shortfallQty), onchain) : null
+    const reconciliation = onchain ? reconcile(asset, effects.map((e) => e.leg), BigInt(state.shortfallQty), onchain) : null
     return {
       asset,
       decimals,
@@ -97,14 +106,14 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
       values:
         reconciliation === null || reconciliation.status === "reconciled"
           ? values
-          : unconfirmedValues(values, reconciliation.status === "incomplete" ? reconciliation.actualQty : values.qty, price?.usdMicros ?? null, decimals),
+          : unconfirmedValues(values, reconciliation.status === "unchecked" ? (reconciliation.heldQty ?? values.qty) : reconciliation.actualQty, price?.usdMicros ?? null, decimals),
     }
   })
 }
 
 const answer = (sum: bigint, coverage: Coverage) => (hasAnswer(coverage) ? sum.toString() : null)
 
-export function sumTotals(positions: readonly Position[]): Totals {
+export function sumTotals(positions: readonly Position[], unread: readonly string[] = []): Totals {
   let value = 0n
   let realized = 0n
   let unrealized = 0n
@@ -125,10 +134,10 @@ export function sumTotals(positions: readonly Position[]): Totals {
       excluded.push({ asset, reason: reconciliation?.status === "incomplete" ? "doesn't match its onchain balance" : "not checked against its onchain balance" })
       coverage.realized.missing++
       coverage.unrealized.missing++
-      // With no onchain balance to take over, units we never saw arrive still mean this amount isn't all of it.
-      if (reconciliation?.status === "unchecked" && BigInt(state.shortfallQty) > 0n) {
+      // The chain didn't say what it holds right now, so its value is our best estimate, and that isn't a known value.
+      if (reconciliation?.status === "unchecked" && !reconciliation.heldIsCurrent) {
         coverage.value.missing++
-        excluded.push({ asset, reason: "incomplete history" })
+        if (BigInt(state.shortfallQty) > 0n) excluded.push({ asset, reason: "incomplete history" })
       }
       if (values.valueUsdMicros !== null) {
         value += BigInt(values.valueUsdMicros)
@@ -167,6 +176,11 @@ export function sumTotals(positions: readonly Position[]): Totals {
       coverage.unrealized.missing++
       if (BigInt(values.unknownCostQty) > 0n) excluded.push({ asset, reason: "unknown cost" })
     }
+  }
+  for (const asset of unread) {
+    excluded.push({ asset, reason: "balance couldn't be read" })
+    coverage.value.missing++
+    coverage.unrealized.missing++
   }
   coverage.pnl.known += coverage.realized.known + coverage.unrealized.known
   coverage.pnl.missing += coverage.realized.missing + coverage.unrealized.missing

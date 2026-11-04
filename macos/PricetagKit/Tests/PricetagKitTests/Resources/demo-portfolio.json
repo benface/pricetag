@@ -17,6 +17,8 @@
   },
   "gasUnknownTxs": [],
   "l1FeeUnknownTxs": [],
+  "openingUnread": [],
+  "unreadAssets": [],
   "positions": [
     {
       "asset": "DAI",

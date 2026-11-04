@@ -164,13 +164,18 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let progress: ReadProgress
     public let gasUnknownTxs: [String]
     public let l1FeeUnknownTxs: [String]
+    /// Assets whose balance before the first block couldn't be read yet.
+    public let openingUnread: [String]
+    /// Assets with no position because nothing could be read about them, which isn't the same as holding none.
+    public let unreadAssets: [String]
     public let positions: [Position]
     public let totals: Totals
     public let pnlStatus: PnlStatus
     public let points: [PnlPoint]
 
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
-    public var isEmpty: Bool { positions.isEmpty }
+    /// A balance that couldn't be read doesn't count as nothing.
+    public var isEmpty: Bool { positions.isEmpty && unreadAssets.isEmpty }
     public var hasChartableData: Bool { points.contains { $0.pnlUsdMicros != nil } }
     /// Every point with a transaction behind it, newest first.
     public var transactions: [PnlPoint] { points.filter { $0.txHash != nil }.reversed() }

@@ -4,7 +4,7 @@
 import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PnlStatus, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting, explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../src/core/explain.ts"
 import type { Method } from "../src/core/fold.ts"
-import { foldPositions, pnlOverTime, sumTotals, unconfirmedAssets, type LegEffect, type Position, type Totals } from "../src/core/portfolio.ts"
+import { foldPositions, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Position, type Totals } from "../src/core/portfolio.ts"
 import { TOKENS } from "../src/core/tokens.ts"
 
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
@@ -46,7 +46,8 @@ function pnlStatusOf(totals: Totals, gasUnknownTxs: readonly string[]): PnlStatu
 
 export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioResponse {
   const positions = foldPositions(wallet.legs, method, wallet.prices, wallet)
-  const totals = sumTotals(positions)
+  const unread = unreadAssets(positions, wallet)
+  const totals = sumTotals(positions, unread)
   return {
     address: wallet.address,
     mode: wallet.mode,
@@ -58,10 +59,12 @@ export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioRe
     progress: { started: hasStarted(wallet), behindBlocks: isBehind(wallet) ? wallet.latest.blockNum - wallet.coverage.toBlock : 0 },
     gasUnknownTxs: wallet.gasUnknownTxs,
     l1FeeUnknownTxs: wallet.l1FeeUnknownTxs,
+    openingUnread: wallet.openingUnread,
+    unreadAssets: unread,
     positions: positions.map(positionOf),
     totals,
     pnlStatus: pnlStatusOf(totals, wallet.gasUnknownTxs),
-    points: pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions)),
+    points: pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)),
   }
 }
 
@@ -89,13 +92,14 @@ function legOf(effect: LegEffect): ExplanationLeg {
 /** The same explanation the web panel shows for a click on this number. null when the wallet has no such asset or transaction. */
 export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget): ExplanationResponse | null {
   const positions = foldPositions(wallet.legs, method, wallet.prices, wallet)
+  const unread = unreadAssets(positions, wallet)
   const explanation = ((): Explanation | null => {
-    if (target.kind === "total") return explainTotal(positions, sumTotals(positions), target.metric)
+    if (target.kind === "total") return explainTotal(positions, sumTotals(positions, unread), target.metric)
     if (target.kind === "asset") {
       const position = positions.find((p) => p.asset === target.asset)
       return position ? explainMetric(position, target.metric) : null
     }
-    const point = pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions)).find((p) => p.txHash === target.txHash)
+    const point = pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)).find((p) => p.txHash === target.txHash)
     return point ? explainPoint(positions, point) : null
   })()
   if (!explanation) return null

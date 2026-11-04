@@ -18,7 +18,10 @@ public enum Wording {
 
     public static func coverage(_ portfolio: Portfolio) -> String {
         let span = portfolio.coverage
-        return "Covers blocks \(Format.block(span.fromBlock)) to \(Format.block(span.toBlock)) (about \(Format.duration(blocks: span.toBlock - span.fromBlock))) and \(portfolio.trackedTokens) tokens plus ETH. What the wallet held before that comes from the chain, at an unknown cost. Tokens off the list aren't counted."
+        let opening = portfolio.openingUnread.isEmpty
+            ? "What the wallet held before that comes from the chain, at an unknown cost."
+            : "What the wallet held before that couldn't all be read yet, so some amounts may not be full balances."
+        return "Covers blocks \(Format.block(span.fromBlock)) to \(Format.block(span.toBlock)) (about \(Format.duration(blocks: span.toBlock - span.fromBlock))) and \(portfolio.trackedTokens) tokens plus ETH. \(opening) Tokens off the list aren't counted."
     }
 
     public static func gasUnknown(_ count: Int) -> String {

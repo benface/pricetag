@@ -26,8 +26,14 @@ export type WalletResponse = {
   gasUnknownTxs: string[]
   /** Transactions this wallet sent whose L1 fee couldn't be read yet. */
   l1FeeUnknownTxs: string[]
-  /** Onchain balances at `coverage.toBlock`, only for assets whose opening balance was read too. Null when there are none. */
+  /** Onchain balances at `coverage.toBlock`, as read. An asset missing from them is in `unreadBalances`. Null when the whole read failed. */
   balances: BalanceSnapshot | null
+  /** Assets whose balance before `fromBlock` couldn't be read, so they can't be compared yet. */
+  openingUnread: string[]
+  /** The last balance read for each asset in `unreadBalances` that has one. */
+  lastBalances: Record<string, { blockNum: number; amount: string }>
+  /** Assets with no balance read at `coverage.toBlock`, which isn't the same as holding none. Empty until reads start. */
+  unreadBalances: string[]
 }
 
 export type PortfolioPosition = {
@@ -63,6 +69,9 @@ export type PortfolioResponse = {
   progress: { started: boolean; behindBlocks: number }
   gasUnknownTxs: string[]
   l1FeeUnknownTxs: string[]
+  openingUnread: string[]
+  /** Assets with no position because nothing could be read about them, which isn't the same as holding none. */
+  unreadAssets: string[]
   positions: PortfolioPosition[]
   totals: Totals
   pnlStatus: PnlStatus

@@ -28,6 +28,8 @@ type Cached = {
   opening: BalanceSnapshot | null
   /** At `coveredTo`, the same block the rows reach, or the check would fail whenever a dataset is slightly behind. */
   closing: BalanceSnapshot | null
+  /** Every asset's last successful read, because a failed read mustn't look like an empty wallet. */
+  lastBalances: Record<string, { blockNum: number; amount: string }>
   /** L1 fees by transaction. See `isL1FeeSettled`. */
   l1Fees: Map<string, L1Fee>
 }
@@ -117,9 +119,11 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
     let opening = cached?.opening ?? null
     let closing = cached?.closing ?? null
+    const lastBalances = { ...cached?.lastBalances }
     if (coveredTo >= fromBlock) {
       if (!isComplete(opening)) opening = mergeOpening(opening, await readBalances(address, fromBlock - 1))
       if (closing?.blockNum !== coveredTo || !isComplete(closing)) closing = await readBalances(address, coveredTo)
+      for (const [asset, amount] of Object.entries(closing?.amounts ?? {})) lastBalances[asset] = { blockNum: coveredTo, amount }
     }
 
     // Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong.
@@ -130,7 +134,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     if (latest && eth) prices.ETH = { usdMicros: eth, source: "oracle", blockNum: latest.block_num }
     if (latest && usdc) prices.USDC = { usdMicros: usdc, source: "oracle", blockNum: latest.block_num }
 
-    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs, opening, closing, l1Fees }
+    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs, opening, closing, lastBalances, l1Fees }
     wallets.delete(address)
     wallets.set(address, next)
     if (wallets.size > MAX_WALLETS) wallets.delete(wallets.keys().next().value as string)
@@ -152,8 +156,10 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       latest: wallet.latest,
       gasUnknownTxs: [...wallet.gasUnknownTxs],
       l1FeeUnknownTxs: l1.unknownTxs,
-      // Without an asset's opening balance, its legs don't add up to a whole balance, so there's nothing to compare.
-      balances: opening && closing ? { blockNum: closing.blockNum, amounts: Object.fromEntries(Object.entries(closing.amounts).filter(([asset]) => opening.amounts[asset] !== undefined)) } : null,
+      balances: closing,
+      openingUnread: ASSETS.filter((asset) => opening?.amounts[asset] === undefined),
+      lastBalances: Object.fromEntries(Object.entries(wallet.lastBalances).filter(([asset]) => closing?.amounts[asset] === undefined)),
+      unreadBalances: wallet.coveredTo >= wallet.fromBlock ? ASSETS.filter((asset) => closing?.amounts[asset] === undefined) : [],
     }
   }
 

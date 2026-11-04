@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { balancesByAsset, decodeBalanceResults, encodeBalanceCalls, MULTICALL3 } from "../server/balances.ts"
-import { explainMetric, mismatchCause } from "../src/core/explain.ts"
+import { explainMetric, explainTotal, mismatchCause } from "../src/core/explain.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { buildPricedLegs, type LegRow, type ReferenceRow } from "../src/core/legs.ts"
-import { foldPositions, pnlOverTime, sumTotals, unconfirmedAssets } from "../src/core/portfolio.ts"
+import { foldPositions, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets } from "../src/core/portfolio.ts"
 import { openingLegs, type Onchain } from "../src/core/reconcile.ts"
 import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS } from "../src/core/tokens.ts"
 
@@ -168,6 +168,25 @@ describe("when there's nothing to compare", () => {
     assert.equal(eth.values.valueUsdMicros, "3000000000")
   })
 
+  it("an estimate from the last read leaves the value partial, and says so", () => {
+    const state: Onchain = { balances: null, l1FeeUnknownTxs: [], lastBalances: { ETH: { blockNum: 50, amount: E18.toString() } }, unreadBalances: ["ETH"] }
+    const legs = legsOf([row(ETH_ADDRESS, "credit", 5n)])
+    const positions = foldPositions(legs, "average", PRICES, state)
+    const eth = assetOf(positions, "ETH")
+    assert.equal(eth.values.qty, (E18 + 5n).toString())
+    const totals = sumTotals(positions)
+    assert.deepEqual(totals.coverage.value, { known: 1, missing: 1 })
+    assert.notEqual(totals.valueUsdMicros, null)
+    assert.match(explainTotal(positions, totals, "value").lines.join(" "), /ETH's value is an estimate/)
+    assert.match(explainMetric(eth, "amount").lines.join(" "), /last balance read/)
+  })
+
+  it("an estimate can't go below zero", () => {
+    const state: Onchain = { balances: null, l1FeeUnknownTxs: [], lastBalances: { ETH: { blockNum: 50, amount: "3" } } }
+    const [eth] = foldPositions(legsOf([row(ETH_ADDRESS, "debit", 5n)]), "average", {}, state)
+    assert.equal(eth!.values.qty, "0")
+  })
+
   it("units that left without arriving still leave the value partial", () => {
     const totals = sumTotals(foldPositions(legsOf([row(USDC_ADDRESS, "debit", 5n)]), "average", {}, { balances: null, l1FeeUnknownTxs: [] }))
     assert.deepEqual(totals.excluded.map((e) => e.reason), ["not checked against its onchain balance", "incomplete history"])
@@ -264,6 +283,24 @@ describe("what the chart leaves out", () => {
     assert.equal(sumTotals(positions).pnlUsdMicros, null)
   })
 
+  it("leaves out assets that were never read, and they make the headline's answer match", () => {
+    const positions = foldPositions([], "average", PRICES, { balances: null, l1FeeUnknownTxs: [], unreadBalances: ["ETH", "USDC"] })
+    const unread = unreadAssets(positions, { unreadBalances: ["ETH", "USDC"] })
+    assert.deepEqual(unread, ["ETH", "USDC"])
+    const totals = sumTotals(positions, unread)
+    assert.equal(totals.valueUsdMicros, null)
+    assert.equal(totals.pnlUsdMicros, null)
+    assert.deepEqual(totals.excluded, [{ asset: "ETH", reason: "balance couldn't be read" }, { asset: "USDC", reason: "balance couldn't be read" }])
+    const end = pnlOverTime([], "average", PRICES, [], latest, unconfirmedAssets(positions, unread)).at(-1)!
+    assert.equal(end.pnlUsdMicros, null)
+    assert.equal(end.excludedCount, 2)
+  })
+
+  it("an asset with a position isn't also counted as unread", () => {
+    const positions = foldPositions(legsOf([row(USDC_ADDRESS, "credit", 5n)]), "average", {}, { balances: null, l1FeeUnknownTxs: [], unreadBalances: ["ETH", "USDC"] })
+    assert.deepEqual(unreadAssets(positions, { unreadBalances: ["ETH", "USDC"] }), ["ETH"])
+  })
+
   it("a wallet with nothing wrong and no activity has no points", () => {
     assert.deepEqual(pnlOverTime([], "average", PRICES, [], latest, new Set()), [])
   })
@@ -271,6 +308,19 @@ describe("what the chart leaves out", () => {
 
 describe("the words", () => {
   const JARGON = /\b(legs?|oracle|FIFO|traces?|rebas\w*|L1|L2)\b/i
+
+  it("about a position's value stay plain, whatever the check found", () => {
+    const states = [onchain({ ETH: COMPUTED_ETH, USDC: 0n }), onchain({ ETH: COMPUTED_ETH + 1n, USDC: 1n }), onchain({ ETH: COMPUTED_ETH, USDC: 0n }, ["0xabc"]), { balances: null, l1FeeUnknownTxs: [] }]
+    for (const state of states) {
+      for (const position of foldPositions(legsOf(WALLET_ROWS), "average", PRICES, state)) {
+        // The price's own wording is WORK-349's, so this looks at the part reconciliation adds.
+        for (const metric of ["amount", "average", "value", "realized", "unrealized", "onchain"] as const) {
+          const added = explainMetric(position, metric).lines.filter((line) => !line.startsWith("Current price") && !line.startsWith("There's no current price"))
+          for (const line of added) assert.doesNotMatch(line, /\blegs?\b/i)
+        }
+      }
+    }
+  })
 
   it("in reconciliation messages stay plain, for every outcome", () => {
     const states = [onchain({ ETH: COMPUTED_ETH, USDC: 0n }), onchain({ ETH: COMPUTED_ETH + 1n, USDC: 1n }), onchain({ ETH: COMPUTED_ETH, USDC: 0n }, ["0xabc"]), { balances: null, l1FeeUnknownTxs: [] }]

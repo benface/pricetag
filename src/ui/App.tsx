@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
 import { hasStarted, isAddress, isBehind, type WalletResponse } from "../core/api.ts"
 import type { Method } from "../core/fold.ts"
-import { foldPositions, hasAnswer, pnlOverTime, sumTotals, unconfirmedAssets, type Coverage, type Exclusion, type PnlPoint, type Position } from "../core/portfolio.ts"
+import { foldPositions, hasAnswer, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type Coverage, type Exclusion, type PnlPoint, type Position } from "../core/portfolio.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { explainMetric, explainPoint, explainTotal, mismatchCause, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
 import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd } from "../core/format.ts"
@@ -158,8 +158,9 @@ export function App() {
   }
 
   const positions = useMemo(() => (wallet ? foldPositions(wallet.legs, method, wallet.prices, wallet) : []), [wallet, method])
-  const totals = useMemo(() => sumTotals(positions), [positions])
-  const points = useMemo(() => (wallet ? pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions)) : []), [wallet, method, positions])
+  const unread = useMemo(() => (wallet ? unreadAssets(positions, wallet) : []), [wallet, positions])
+  const totals = useMemo(() => sumTotals(positions, unread), [positions, unread])
+  const points = useMemo(() => (wallet ? pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)) : []), [wallet, method, positions, unread])
   const close = useCallback(() => setExplanation(null), [])
   const openTotal = (metric: TotalMetric) => setExplanation(explainTotal(positions, totals, metric))
   const openPoint = (point: PnlPoint) => setExplanation(explainPoint(positions, point))
@@ -218,15 +219,15 @@ export function App() {
           {hasStarted(wallet) ? (
             <p className="notice">
               Covers blocks {wallet.coverage.fromBlock.toLocaleString("en-US")} to {wallet.coverage.toBlock.toLocaleString("en-US")} (about {formatDuration(wallet.coverage.toBlock - wallet.coverage.fromBlock)}) and 10 tokens plus ETH.{" "}
-              {wallet.balances
+              {wallet.openingUnread.length === 0
                 ? "What the wallet held before that comes from the chain, at an unknown cost. Tokens off the list aren't counted."
-                : "Anything earlier or off the list isn't counted, so amounts are what moved in this window, not full balances."}
+                : "What the wallet held before that couldn't all be read yet, so some amounts may not be full balances. Tokens off the list aren't counted."}
             </p>
           ) : null}
           {wallet.gasUnknownTxs.length > 0 ? <p className="notice warn">⚠ Gas couldn't be worked out for {wallet.gasUnknownTxs.length} transactions, so ETH is overstated by that much.</p> : null}
           {wallet.l1FeeUnknownTxs.length > 0 ? <p className="notice warn">⚠ Couldn't read the network fee of {wallet.l1FeeUnknownTxs.length} transactions yet, so gas paid is low and ETH's PnL is unavailable until it can.</p> : null}
 
-          {positions.length === 0 && !hasStarted(wallet) ? null : positions.length === 0 ? (
+          {positions.length === 0 && !hasStarted(wallet) ? null : positions.length === 0 && unread.length === 0 ? (
             <section className="empty">
               <p>
                 No movements for <code>{wallet.address}</code> in these blocks.
@@ -262,7 +263,7 @@ export function App() {
                 </div>
               </section>
               <PnlChart points={points} onSelect={openPoint} />
-              <Holdings positions={positions} onExplain={setExplanation} />
+              {positions.length > 0 ? <Holdings positions={positions} onExplain={setExplanation} /> : null}
             </>
           )}
         </main>

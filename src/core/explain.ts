@@ -68,7 +68,10 @@ export function mismatchCause(asset: string, differenceQty: string): string {
 /** The whole comparison, in words. */
 function onchainLines({ asset, decimals, reconciliation, effects }: Position): string[] {
   if (reconciliation === null) return ["There's no onchain balance to compare this with."]
-  if (reconciliation.status === "unchecked") return [`Not checked. ${reconciliation.reason} PnL is unavailable until this balance is confirmed, which happens by itself.`]
+  if (reconciliation.status === "unchecked") {
+    const held = reconciliation.heldIsCurrent || reconciliation.heldQty === null ? [] : ["The amount is the last balance read, plus what's moved since."]
+    return [`Not checked. ${reconciliation.reason} PnL is unavailable until this balance is confirmed, which happens by itself.`, ...held]
+  }
   const amount = (qty: string) => `${formatAmount(qty, decimals)} ${asset}`
   const block = reconciliation.blockNum.toLocaleString("en-US")
   if (reconciliation.status === "reconciled") {
@@ -134,7 +137,7 @@ export function explainMetric(position: Position, metric: Metric): Explanation {
     case "value":
       value = values.valueUsdMicros && formatUsd(values.valueUsdMicros)
       lines.push(priceLine)
-      if (values.valueUsdMicros) lines.push(`${qty} × that price.${incomplete ? " That's the onchain balance, because the legs don't add up to it." : ""}`)
+      if (values.valueUsdMicros) lines.push(`${qty} × that price.${incomplete ? " That's the onchain balance, because its transactions don't add up to it." : ""}`)
       break
     case "realized":
       value = values.realizedUsdMicros && formatSignedUsd(values.realizedUsdMicros)
@@ -192,12 +195,17 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
   if (metric === "gas") lines.push("Gas, plus the data fee each transaction pays to be posted to Ethereum.")
   if (totals.unpricedGas && (metric === "gas" || metric === "pnl")) lines.push("Some gas had no price at its block, so it isn't included.")
   const relevant = totals.excluded.filter(({ reason }) => {
-    if (metric === "value") return reason === "no current price" || reason === "incomplete history"
+    if (metric === "value") return reason === "no current price" || reason === "incomplete history" || reason === "balance couldn't be read"
     if (metric === "realized") return reason === "sold at an unknown cost" || reason === "doesn't match its onchain balance" || reason === "not checked against its onchain balance"
     if (metric === "unrealized") return reason !== "sold at an unknown cost"
     return metric === "pnl"
   })
   for (const { asset, reason } of relevant) lines.push(`Not included: ${asset} (${reason}).`)
+  if (metric === "value") {
+    for (const { asset, reconciliation } of positions) {
+      if (reconciliation?.status === "unchecked" && !reconciliation.heldIsCurrent) lines.push(`${asset}'s value is an estimate, because its balance couldn't be read.`)
+    }
+  }
   return {
     title: TOTAL_TITLES[metric],
     value,

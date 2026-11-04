@@ -73,3 +73,13 @@ import Testing
     let leg = try JSONDecoder().decode(ExplanationLeg.self, from: Data(json.utf8))
     #expect(leg.transactionURL == nil)
 }
+
+@Test func anUnreadBalanceIsNotAnEmptyWallet() throws {
+    let url = try #require(Bundle.module.url(forResource: "demo-portfolio", withExtension: "json", subdirectory: "Resources"))
+    var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    json["positions"] = [Any]()
+    json["unreadAssets"] = [String]()
+    #expect(try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: json)).isEmpty)
+    json["unreadAssets"] = ["ETH"]
+    #expect(try !JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: json)).isEmpty)
+}

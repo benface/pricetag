@@ -113,6 +113,9 @@ export const DEMO_WALLET: WalletResponse = {
   latest: { blockNum: START_BLOCK + HEAD_OFFSET, timestamp: new Date(START_TIME + HEAD_OFFSET * 2000).toISOString() },
   gasUnknownTxs: [],
   l1FeeUnknownTxs: [],
+  openingUnread: [],
+  lastBalances: {},
+  unreadBalances: [],
   balances: { blockNum: START_BLOCK + HEAD_OFFSET, amounts: Object.fromEntries([...balances].map(([asset, amount]) => [asset, amount.toString()])) },
 }
 

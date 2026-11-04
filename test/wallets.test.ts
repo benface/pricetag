@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
+import { portfolioOf } from "../server/portfolio.ts"
 import { createWallets } from "../server/wallets.ts"
 import type { ReadL1Fees } from "../server/receipts.ts"
 import type { Source, WindowRows } from "../server/source.ts"
 import type { LegRow, ReferenceRow } from "../src/core/legs.ts"
-import { foldPositions } from "../src/core/portfolio.ts"
 import { ASSETS, ETH_ADDRESS } from "../src/core/tokens.ts"
 
 const ME = "0x00000000000000000000000000000000000000aa"
@@ -271,12 +271,21 @@ describe("reconciling", () => {
       return rest
     }
 
-    it("leaves that asset unchecked instead of calling an unchanged holding a missing transfer", async () => {
+    it("leaves that asset unchecked instead of calling an unchanged holding a missing transfer, and still shows it", async () => {
       const { source } = fake(new Map(), () => reference(1000), undefined, async (block) => (block === 899 ? withoutEth() : held))
       const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
-      assert.equal(wallet.balances?.amounts.ETH, undefined)
-      assert.equal(wallet.balances?.amounts.USDC, "0")
-      assert.ok(foldPositions(wallet.legs, "average", wallet.prices, wallet).every((p) => p.reconciliation?.status !== "incomplete"))
+      assert.deepEqual(wallet.openingUnread, ["ETH"])
+      const portfolio = portfolioOf(wallet, "average")
+      const eth = portfolio.positions.find((p) => p.asset === "ETH")!
+      assert.equal(eth.reconciliation?.status, "unchecked")
+      assert.equal(eth.values.qty, ONE_ETH)
+      assert.equal(eth.values.valueUsdMicros, "2400000000")
+      assert.equal(eth.pnlUsdMicros, null)
+      assert.equal(portfolio.totals.valueUsdMicros, "2400000000")
+      assert.deepEqual(portfolio.totals.coverage.value, { known: 1, missing: 0 }, "the chain just said so, so the value isn't an estimate")
+      assert.equal(portfolio.totals.pnlUsdMicros, null)
+      assert.equal(portfolio.pnlStatus, "unavailable")
+      assert.equal(portfolio.points.at(-1)!.pnlUsdMicros, null)
     })
 
     it("retries it on the next block, and then it reconciles", async () => {
@@ -288,7 +297,8 @@ describe("reconciling", () => {
       const wallet = await wallets.get(ME)
       assert.deepEqual(balanceReads.filter((b) => b === 899).length, 2)
       assert.equal(wallet.balances?.amounts.ETH, ONE_ETH)
-      const eth = foldPositions(wallet.legs, "average", wallet.prices, wallet).find((p) => p.asset === "ETH")!
+      assert.deepEqual(wallet.openingUnread, [])
+      const eth = portfolioOf(wallet, "average").positions.find((p) => p.asset === "ETH")!
       assert.equal(eth.reconciliation?.status, "reconciled")
       head = 1002
       await wallets.get(ME)
@@ -315,9 +325,142 @@ describe("reconciling", () => {
     })
   })
 
-  it("a closing balance alone isn't enough to compare", async () => {
-    const { source } = fake(chain(), () => reference(1000), undefined, async (block) => (block === 899 ? null : { ETH: "1" }))
-    assert.equal((await createWallets(source, headAt(1000), noFees).get(ME)).balances, null)
+  it("a closing balance alone isn't enough to compare, though it says what's held", async () => {
+    const { source } = fake(chain(), () => reference(1000), undefined, async (block) => (block === 899 ? null : { ...every("0"), ETH: "1" }))
+    const portfolio = portfolioOf(await createWallets(source, headAt(1000), noFees).get(ME), "average")
+    const eth = portfolio.positions.find((p) => p.asset === "ETH")!
+    assert.equal(eth.reconciliation?.status, "unchecked")
+    assert.equal(eth.values.qty, "1")
+  })
+
+  describe("a holding only the chain knows about", () => {
+    const ONE_ETH = "1000000000000000000"
+    const held = { ...every("0"), ETH: ONE_ETH }
+    const without = (asset: string) => Object.fromEntries(Object.entries(held).filter(([a]) => a !== asset))
+    /** A wallet with no activity, whose balance reads answer however `closing` says. */
+    function wallet(closing: (head: number) => Record<string, string> | null, opening: () => Record<string, string> | null = () => every("0")) {
+      let head = 1000
+      const { source } = fake(new Map(), () => reference(head), undefined, async (block) => (block === 899 ? opening() : closing(head)))
+      const wallets = createWallets(source, async () => headAt(head)(), noFees)
+      return { read: async () => portfolioOf(await wallets.get(ME), "average"), next: () => head++ }
+    }
+
+    it("stays when the next read fails, as unchecked, and isn't a complete $0", async () => {
+      const { read, next } = wallet((head) => (head === 1000 ? held : null))
+      const first = await read()
+      assert.equal(first.positions.find((p) => p.asset === "ETH")!.reconciliation?.status, "incomplete")
+      assert.equal(first.totals.valueUsdMicros, "2400000000")
+
+      next()
+      const portfolio = await read()
+      const eth = portfolio.positions.find((p) => p.asset === "ETH")!
+      assert.equal(eth.reconciliation?.status, "unchecked")
+      assert.equal(eth.values.qty, ONE_ETH)
+      assert.equal(eth.values.valueUsdMicros, "2400000000")
+      assert.equal(eth.pnlUsdMicros, null)
+      assert.equal(portfolio.totals.valueUsdMicros, "2400000000")
+      assert.deepEqual(portfolio.totals.coverage.value.missing > 0, true, "it's an estimate now")
+      assert.equal(portfolio.totals.pnlUsdMicros, null)
+      assert.equal(portfolio.pnlStatus, "unavailable")
+      assert.ok(portfolio.totals.excluded.some((e) => e.asset === "ETH" && e.reason === "not checked against its onchain balance"))
+      assert.equal(portfolio.points.at(-1)!.pnlUsdMicros, null)
+    })
+
+    it("stays when the read fails for just that asset", async () => {
+      const { read, next } = wallet((head) => (head === 1000 ? held : without("ETH")))
+      await read()
+      next()
+      const portfolio = await read()
+      assert.equal(portfolio.positions.find((p) => p.asset === "ETH")!.values.qty, ONE_ETH)
+      assert.deepEqual(portfolio.unreadAssets, [], "it has a position, so it isn't missing as well")
+      assert.equal(portfolio.pnlStatus, "unavailable")
+    })
+
+    it("comes back as what it is once a read works", async () => {
+      const { read, next } = wallet((head) => (head === 1001 ? null : held))
+      await read()
+      next()
+      assert.equal((await read()).positions.find((p) => p.asset === "ETH")!.reconciliation?.status, "unchecked")
+      next()
+      const eth = (await read()).positions.find((p) => p.asset === "ETH")!
+      assert.equal(eth.reconciliation?.status, "incomplete")
+      assert.equal(eth.values.qty, ONE_ETH)
+    })
+
+    it("stops being unchecked, and starts matching, when the opening read recovers", async () => {
+      let answered = false
+      const { read, next } = wallet(() => held, () => {
+        const opening = answered ? held : without("ETH")
+        answered = true
+        return opening
+      })
+      assert.equal((await read()).positions.find((p) => p.asset === "ETH")!.reconciliation?.status, "unchecked")
+      next()
+      const portfolio = await read()
+      assert.equal(portfolio.positions.find((p) => p.asset === "ETH")!.reconciliation?.status, "reconciled")
+      assert.equal(portfolio.totals.excluded.some((e) => e.reason === "not checked against its onchain balance"), false)
+    })
+
+    it("adds what's moved since the last read, so the amount isn't stale", async () => {
+      let head = 1000
+      const moves = new Map<number, LegRow[]>()
+      const { source } = fake(moves, () => reference(head), undefined, async (block) => (block === 899 ? every("0") : head === 1000 ? { ...every("0"), ETH: "100" } : null))
+      const wallets = createWallets(source, async () => headAt(head)(), noFees)
+      await wallets.get(ME)
+      moves.set(1001, [row(1001, "5")])
+      head = 1001
+      const eth = portfolioOf(await wallets.get(ME), "average").positions.find((p) => p.asset === "ETH")!
+      assert.equal(eth.reconciliation?.status, "unchecked")
+      assert.equal(eth.values.qty, "105")
+    })
+  })
+
+  describe("a balance that was never read", () => {
+    it("isn't a confirmed zero: with nothing read, there's no answer", async () => {
+      const { source } = fake(new Map(), () => reference(1000), undefined, async () => null)
+      const portfolio = portfolioOf(await createWallets(source, headAt(1000), noFees).get(ME), "average")
+      assert.deepEqual(portfolio.positions, [])
+      assert.deepEqual(portfolio.unreadAssets, [...ASSETS])
+      assert.equal(portfolio.totals.valueUsdMicros, null)
+      assert.equal(portfolio.totals.pnlUsdMicros, null)
+      assert.equal(portfolio.pnlStatus, "unavailable")
+      assert.deepEqual(portfolio.totals.excluded.map((e) => e.asset), [...ASSETS])
+      assert.ok(portfolio.totals.excluded.every((e) => e.reason === "balance couldn't be read"))
+      assert.deepEqual(portfolio.points.map((p) => p.pnlUsdMicros), [null])
+    })
+
+    it("a read that failed for one asset leaves the total partial, even if everything else is zero", async () => {
+      const { ETH: _, ...others } = every("0")
+      const { source } = fake(new Map(), () => reference(1000), undefined, async () => others)
+      const portfolio = portfolioOf(await createWallets(source, headAt(1000), noFees).get(ME), "average")
+      assert.deepEqual(portfolio.unreadAssets, ["ETH"])
+      assert.equal(portfolio.totals.valueUsdMicros, null)
+      assert.notEqual(portfolio.pnlStatus, "complete")
+    })
+
+    it("a wallet last read as empty is still unknown while its reads fail", async () => {
+      let head = 1000
+      const { source } = fake(new Map(), () => reference(head), undefined, async () => (head === 1000 ? every("0") : null))
+      const wallets = createWallets(source, async () => headAt(head)(), noFees)
+      assert.equal(portfolioOf(await wallets.get(ME), "average").pnlStatus, "complete")
+      head = 1001
+      const portfolio = portfolioOf(await wallets.get(ME), "average")
+      assert.deepEqual(portfolio.positions, [])
+      assert.equal(portfolio.pnlStatus, "unavailable")
+    })
+
+    it("a wallet with everything read as zero is a real zero", async () => {
+      const { source } = fake(new Map(), () => reference(1000), undefined, async () => every("0"))
+      const portfolio = portfolioOf(await createWallets(source, headAt(1000), noFees).get(ME), "average")
+      assert.deepEqual(portfolio.unreadAssets, [])
+      assert.equal(portfolio.totals.valueUsdMicros, "0")
+      assert.equal(portfolio.pnlStatus, "complete")
+    })
+
+    it("isn't reported as unread before reads have started", async () => {
+      const { source } = fake(new Map(), () => null, () => null)
+      assert.deepEqual((await createWallets(source, headAt(1000), noFees).get(ME)).unreadBalances, [])
+    })
   })
 
   it("adds the L1 fee to its gas leg, keeping both parts", async () => {
