@@ -762,7 +762,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.notices.contains { $0.text == HotWalletWording.noGas })
     }
 
-    /// A token transfer costs $30 at this fee, which Base can briefly reach and `FeeQuote.isPlausible` allows.
+    /// A token transfer costs $30 at this fee, the highest `FeeQuote.isPlausible` allows.
     private static let expensiveFees = FeeQuote(maxFeePerGas: 100_000_000_000, maxPriorityFeePerGas: 1_000_000, l1FeeWei: 0)
 
     @Test func aRotationKeepsTheOldKeyWhenGasCostsMoreThanAPricedToken() async throws {
