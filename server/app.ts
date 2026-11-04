@@ -10,7 +10,8 @@ import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.t
 import { createRates } from "./rates.ts"
 import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
 import { createDepositReader } from "./block.ts"
-import { createManifestReader, createProofs, proofOf, verificationOf, type BlockRead, type Proofs } from "./proof.ts"
+import { warnOfNewAggregators } from "./feeds.ts"
+import { createManifestReader, createProofs, feedBehind, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
 import { datasetSource, feedRounds, rawSource, type Source } from "./source.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 import { createWallets } from "./wallets.ts"
@@ -52,6 +53,7 @@ function createSource(env: Env): { source: Source; readRates: ReturnType<typeof 
   if (env.PRICETAG_DATASET) {
     const startBlock = Number(env.PRICETAG_START_BLOCK)
     if (!Number.isSafeInteger(startBlock) || startBlock <= 0) throw new Error("PRICETAG_DATASET needs PRICETAG_START_BLOCK")
+    void warnOfNewAggregators(env.BASE_RPC_URL || DEFAULT_RPC_URL)
     return { source: datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates, proofs }
   }
   const historyBlocks = Number(env.PRICETAG_HISTORY_BLOCKS || 1800)
@@ -213,8 +215,17 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
         return true
       }
       const proofs = wallet.mode === "demo" ? null : (created?.proofs ?? null)
+      const feed = feedBehind(leg, wallet.legs)
       if (proofMatch[2] === "proof") {
-        sendJson(res, 200, proofOf(leg, wallet.legs, currency, proofs ? await proofs.datasets() : [], proofs ? null : DEMO_UNVERIFIABLE))
+        // The rest of the proof doesn't depend on this read, so a failure just says the update couldn't be found.
+        const behind: PriceBehind | null =
+          proofs && feed
+            ? await proofs.priceBehind(feed, leg.blockNum).catch((error: unknown) => {
+                console.error("Amp query failed:", describeError(error))
+                return { feed, update: null }
+              })
+            : null
+        sendJson(res, 200, proofOf(leg, wallet.legs, currency, proofs ? await proofs.datasets() : [], proofs ? null : DEMO_UNVERIFIABLE, behind))
         return true
       }
       if (!proofs) {
@@ -222,13 +233,19 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
         return true
       }
       let read: BlockRead | null
+      let checkedUpdate: CheckedUpdate | null = null
       try {
         read = await proofs.readBlock(leg.blockNum)
+        const behind = read && feed ? await proofs.priceBehind(feed, leg.blockNum) : null
+        if (behind) {
+          const updateBlock = behind.update?.block_num
+          checkedUpdate = { behind, read: updateBlock === undefined ? null : updateBlock === leg.blockNum ? read : await proofs.readBlock(updateBlock) }
+        }
       } catch (error) {
         sendAmpError(res, error, "Couldn't read this block.")
         return true
       }
-      if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits))
+      if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits, checkedUpdate))
       else sendJson(res, 404, { error: "Amp doesn't have this block." })
       return true
     }

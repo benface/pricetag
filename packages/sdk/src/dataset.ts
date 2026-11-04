@@ -5,6 +5,7 @@
 import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type Query } from "./amp.ts"
 import type { LegRow, PricedRow, ReferenceRow } from "./legs.ts"
 import type { Head } from "./portfolio.ts"
+import type { PriceFeed } from "./tokens.ts"
 
 export type Row = Record<string, unknown>
 
@@ -48,13 +49,15 @@ const MAX_PRICE_AGE_BLOCKS = 60
 
 const LEG_COLUMNS = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
 const PRICED_COLUMNS = "block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced"
-const ORACLE_COLUMNS = { eth: "get_field(eth_round, 'c1')", usdc: "get_field(usdc_round, 'c1')" }
-const REFERENCE_COLUMNS = `block_num, ${ORACLE_COLUMNS.eth} AS eth_usd, ${ORACLE_COLUMNS.usdc} AS usdc_usd`
+const ORACLE_COLUMNS = { eth: "eth_answer", usdc: "usdc_answer" }
+const REFERENCE_COLUMNS = `block_num, ${ORACLE_COLUMNS.eth} AS eth_usd, ${ORACLE_COLUMNS.usdc} AS usdc_usd, eth_tx, usdc_tx`
 
 const toReference = (r: Row): ReferenceRow => ({
   block_num: asNumber(r.block_num),
   eth_usd: decimalString(r.eth_usd) ?? "",
   usdc_usd: decimalString(r.usdc_usd) ?? "",
+  eth_tx: r.eth_tx == null ? undefined : prefixed(String(r.eth_tx)),
+  usdc_tx: r.usdc_tx == null ? undefined : prefixed(String(r.usdc_tx)),
 })
 
 const toLegRow = (l: Row): LegRow => ({
@@ -85,6 +88,9 @@ const toPricedRow = (p: Row): PricedRow => ({
 export type SwapRow = { row: PricedRow; timestamp: string; reference: ReferenceRow }
 
 export type OracleRow = { block_num: number; timestamp: string; answer: string }
+
+/** A row of `price_updates`: one `AnswerUpdated` log from a feed's aggregator. */
+export type PriceUpdate = { block_num: number; tx_hash: string; log_index: number; answer: string }
 
 /** Each read only waits for the tables it uses, so a lagging table doesn't hide what's ready in another. */
 export const WALLET_TABLES = ["legs", "unlisted_legs", "priced_legs", "reference_prices"]
@@ -151,11 +157,20 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
       return rows.map((r) => ({ block_num: asNumber(r.block_num), timestamp: asIso(r.timestamp), answer: decimalString(r.answer) ?? "" }))
     },
 
+    /** The update a `reference_prices` row at `block` names, or null if the feed's window doesn't reach it. */
+    async readPriceUpdate(feed: PriceFeed, txHash: string, block: number): Promise<PriceUpdate | null> {
+      const rows = await query<Row>(
+        `SELECT block_num, tx_hash, log_index, answer FROM ${ds}.price_updates WHERE block_num BETWEEN ${block - feed.validBlocks + 1} AND ${block} AND feed = '${feed.name}' AND tx_hash = X'${hexOf(txHash)}' ORDER BY block_num DESC, log_index DESC LIMIT 1`,
+      )
+      const row = rows[0]
+      return row ? { block_num: asNumber(row.block_num), tx_hash: prefixed(String(row.tx_hash)), log_index: asNumber(row.log_index), answer: decimalString(row.answer) ?? "" } : null
+    },
+
     /** Every swap in the range that sold or bought this token, whichever account made it. */
     async readSwaps(token: string, from: number, to: number): Promise<SwapRow[]> {
       const hex = `X'${hexOf(token)}'`
       const rows = await query<Row>(
-        `SELECT ${PRICED_COLUMNS}, timestamp, eth_usd, usdc_usd FROM ${ds}.priced_legs WHERE block_num BETWEEN ${from} AND ${to} AND (sold_token = ${hex} OR bought_token = ${hex}) ORDER BY block_num`,
+        `SELECT ${PRICED_COLUMNS}, timestamp, eth_usd, usdc_usd, eth_tx, usdc_tx FROM ${ds}.priced_legs WHERE block_num BETWEEN ${from} AND ${to} AND (sold_token = ${hex} OR bought_token = ${hex}) ORDER BY block_num`,
       )
       return rows.map((r) => ({ row: toPricedRow(r), timestamp: asIso(r.timestamp), reference: toReference(r) }))
     },

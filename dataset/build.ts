@@ -7,7 +7,7 @@
 // and UDFs that never return null or throw, because one bad row stops the whole dataset.
 
 import { readFileSync, writeFileSync } from "node:fs"
-import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, TOKENS, USDC_USD_FEED, WETH_ADDRESS } from "@pricetag/sdk/core"
+import { ERC20_ADDRESSES, ETH_ADDRESS, PRICE_FEEDS, TOKENS, WETH_ADDRESS, type PriceFeed } from "@pricetag/sdk/core"
 
 const MANIFEST = new URL("./pricetag.json", import.meta.url)
 
@@ -19,6 +19,7 @@ const TRANSFER_SINGLE = "TransferSingle(address indexed operator, address indexe
 const TRANSFER_BATCH = "TransferBatch(address indexed operator, address indexed from, address indexed to, uint256[] ids, uint256[] values)"
 const DEPOSIT = "Deposit(address indexed dst, uint256 wad)"
 const WITHDRAWAL = "Withdrawal(address indexed src, uint256 wad)"
+const ANSWER_UPDATED = "AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)"
 const OP_DEPOSIT_TX_TYPE = 126
 
 const allowlist = ERC20_ADDRESSES.map((a) => `X'${hex(a)}'`).join(", ")
@@ -30,6 +31,15 @@ function decoded(signature: string, where: string) {
   return `SELECT ${logColumns}, evm_decode_log(topic1, topic2, topic3, data, '${signature}') AS t
     FROM base.logs WHERE topic0 = evm_topic('${signature}') AND ${where}`
 }
+
+const addressList = (addresses: readonly string[]) => addresses.map((a) => `X'${hex(a)}'`).join(", ")
+
+const [ETH_FEED, USDC_FEED] = PRICE_FEEDS
+
+const feedCase = (value: (feed: PriceFeed) => string) => `CASE WHEN address IN (${addressList(ETH_FEED.aggregators)}) THEN ${value(ETH_FEED)} ELSE ${value(USDC_FEED)} END`
+
+/** The newest update of one feed in a block's group of `carried` rows. */
+const latest = (column: string, feed: PriceFeed) => `last_value(${column} ORDER BY update_block, log_index) FILTER (WHERE feed = '${feed.name}')`
 
 function unlistedSelect(account: string, side: string, amount: string, kind: string, from: string) {
   return `SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, ${account} AS account, '${side}' AS side, ${amount} AS amount, '${kind}' AS kind FROM (${from})`
@@ -111,15 +121,32 @@ WHERE l.address = X'${hex(WETH_ADDRESS)}' AND l.topic0 = evm_topic('${WITHDRAWAL
   SELECT ${legColumns} FROM self.unwrap_legs
 ) WHERE ${since}`,
 
-    // Selecting the whole decoded struct makes a failed eth_call fail the job and retry, instead of committing NULL.
-    reference_prices: `SELECT block_num, timestamp,
-  evm_decode_type(e.data, '(uint80,int256,uint256,uint256,uint80)') AS eth_round,
-  evm_decode_type(u.data, '(uint80,int256,uint256,uint256,uint80)') AS usdc_round
-FROM (
-  SELECT block_num, timestamp,
-    rpc.base_mainnet.eth_call(NULL, evm_encode_hex('${ETH_USD_FEED}'), evm_encode_params('latestRoundData()'), block_num) AS e,
-    rpc.base_mainnet.eth_call(NULL, evm_encode_hex('${USDC_USD_FEED}'), evm_encode_params('latestRoundData()'), block_num) AS u
-  FROM base.blocks
+    // Every Chainlink update. It starts one window before the dataset, so even the feed that updates least has a price at
+    // its first block. The address filter is required: 201 contracts emitted this event in a day.
+    price_updates: `SELECT block_num, timestamp, tx_hash, log_index, ${feedCase((feed) => `'${feed.name}'`)} AS feed,
+  ${feedCase((feed) => `arrow_cast(${feed.validBlocks}, 'UInt64')`)} AS valid_blocks,
+  get_field(t, 'current') AS answer, get_field(t, 'roundId') AS round_id, get_field(t, 'updatedAt') AS updated_at
+FROM (SELECT block_num, timestamp, tx_hash, log_index, address, evm_decode_log(topic1, topic2, topic3, data, '${ANSWER_UPDATED}') AS t
+  FROM base.logs WHERE topic0 = evm_topic('${ANSWER_UPDATED}') AND address IN (${addressList(PRICE_FEEDS.flatMap((feed) => feed.aggregators))}))
+WHERE block_num() >= ${start - Math.max(...PRICE_FEEDS.map((feed) => feed.validBlocks))}`,
+
+    // Every update that could still be the latest at each block. A join that isn't on the watermark reads history, which is
+    // how a table carries a value forward. The filter on b._block_num has to stay: without it, each batch can rescan all of
+    // Base's blocks. These stages can't merge either: an aggregate over this join, or a projecting subquery on the blocks
+    // side, registers fine and then fails in the job.
+    carried: `SELECT b.block_num AS at_block, b.timestamp, u.feed, u.block_num AS update_block, u.log_index, u.tx_hash, u.answer
+FROM base.blocks b
+JOIN self.price_updates u ON b.block_num >= u.block_num AND b.block_num < u.block_num + u.valid_blocks
+WHERE b._block_num >= ${start} AND ${since}`,
+
+    // The latest update per block, one row per block. A feed with no update in its window has an empty price, which is unknown.
+    reference_prices: `SELECT block_num, timestamp, eth_answer, usdc_answer, eth_tx, usdc_tx FROM (
+  SELECT at_block AS block_num, timestamp,
+    ${latest("answer", ETH_FEED)} AS eth_answer,
+    ${latest("answer", USDC_FEED)} AS usdc_answer,
+    ${latest("tx_hash", ETH_FEED)} AS eth_tx,
+    ${latest("tx_hash", USDC_FEED)} AS usdc_tx
+  FROM self.carried GROUP BY block_num(), at_block, timestamp
 ) WHERE ${since}`,
 
     // What each account gained or lost per token in a transaction, so a split route is one movement. Amounts can reach
@@ -169,8 +196,8 @@ WHERE c.pair_count = 1 AND ${since}`,
 
     priced_legs: `SELECT p.block_num, p.timestamp, p.tx_hash, p.account,
   p.sold_token, p.sold_amount, p.bought_token, p.bought_amount,
-  get_field(r.eth_round, 'c1') AS eth_usd, get_field(r.usdc_round, 'c1') AS usdc_usd,
-  self.pt_price(evm_decode_hex(p.sold_token), p.sold_amount, evm_decode_hex(p.bought_token), p.bought_amount, get_field(r.eth_round, 'c1'), get_field(r.usdc_round, 'c1')) AS priced
+  r.eth_answer AS eth_usd, r.usdc_answer AS usdc_usd, r.eth_tx, r.usdc_tx,
+  self.pt_price(evm_decode_hex(p.sold_token), p.sold_amount, evm_decode_hex(p.bought_token), p.bought_amount, r.eth_answer, r.usdc_answer) AS priced
 FROM self.single_pairs p
 JOIN self.reference_prices r ON p._block_num = r._block_num
 WHERE ${since}`,
@@ -271,7 +298,7 @@ async function build() {
   const sql = tablesSql(start)
   const response = await fetch(`${admin}/schema`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...(process.env.AMP_ADMIN_TOKEN ? { authorization: `Bearer ${process.env.AMP_ADMIN_TOKEN}` } : {}) },
     body: JSON.stringify({ dependencies: DEPENDENCIES, tables: sql, functions: functions() }),
   })
   if (!response.ok) throw new Error(`/schema: ${response.status} ${await response.text()}`)

@@ -251,8 +251,8 @@ flight_addr = "127.0.0.1:$FLIGHT_PORT"
 
 [worker]
 health_addr = "127.0.0.1:$WORKER_HEALTH_PORT"
-# A failed RPC call restarts the job from its last commit, so commit often: eth_call batches stay small,
-# and the raw backfill keeps what it has every few seconds.
+# A failed RPC call restarts the job from its last commit, so commit often: the raw backfill keeps what it has every
+# few seconds.
 microbatch_max_interval = $MICROBATCH_BLOCKS
 segment_flush_interval_secs = $RAW_FLUSH_SECS
 
@@ -298,12 +298,13 @@ deploy_raw() {
 deploy_pricetag() {
   local start_block="$1"
   say "Deploying $PRICETAG_DATASET from block $start_block..."
-  # A table without its own top-level block_num() filter walks from genesis, which here would mean
-  # about 2 eth_calls per block for the whole chain. Refuse to deploy one.
+  # A table without its own top-level block_num() filter walks from genesis. Refuse to deploy one.
   jq -e '.tables | map_values(.input.sql | test("block_num\\(\\) >= [0-9]+")) | all' "$MANIFEST" > /dev/null \
     || die "every table in $MANIFEST needs a top-level block_num() >= <block> filter."
+  # Everything starts at the raw dataset's first block, so price_updates can't read its usual window before it, and
+  # USDC has no price until its next update. See "Run the dataset locally" in the README.
   jq --argjson start "$start_block" \
-    '.tables |= map_values(.input.sql |= gsub("block_num\\(\\) >= [0-9]+"; "block_num() >= \($start)"))' \
+    '.tables |= map_values(.input.sql |= gsub("(?<column>block_num\\(\\)|b\\._block_num) >= [0-9]+"; "\(.column) >= \($start)"))' \
     "$MANIFEST" > "$STATE_DIR/pricetag.json"
   ampctl dataset register "${PRICETAG_DATASET%@*}" "$STATE_DIR/pricetag.json" --tag "${PRICETAG_DATASET#*@}" > /dev/null
   # Unbounded on purpose: --end-block turns off the start filter.
@@ -380,8 +381,7 @@ cmd_start() {
   start_metadb
   start_ampd
   deploy_raw "$start_block"
-  # Backfilling raw blocks uses most of a public RPC's allowance. A failed eth_call fails its batch,
-  # so reference_prices would keep retrying if it ran alongside.
+  # Backfilling raw blocks uses most of a public RPC's allowance, and the dataset is built from them, so it goes after.
   say "Waiting for the raw dataset to reach chain head (block $head when this started)..."
   wait_for_head "$RAW_DATASET blocks" || die "the raw dataset is still behind after $((HEAD_TIMEOUT_SECS / 60)) minutes."
   deploy_pricetag "$start_block"

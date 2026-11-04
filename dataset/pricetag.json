@@ -530,9 +530,9 @@
       },
       "network": "base-mainnet"
     },
-    "reference_prices": {
+    "price_updates": {
       "input": {
-        "sql": "SELECT block_num, timestamp,\n  evm_decode_type(e.data, '(uint80,int256,uint256,uint256,uint80)') AS eth_round,\n  evm_decode_type(u.data, '(uint80,int256,uint256,uint256,uint80)') AS usdc_round\nFROM (\n  SELECT block_num, timestamp,\n    rpc.base_mainnet.eth_call(NULL, evm_encode_hex('0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70'), evm_encode_params('latestRoundData()'), block_num) AS e,\n    rpc.base_mainnet.eth_call(NULL, evm_encode_hex('0x7e860098F58bBFC8648a4311b374B1D669a2bc6B'), evm_encode_params('latestRoundData()'), block_num) AS u\n  FROM base.blocks\n) WHERE block_num() >= 53514029"
+        "sql": "SELECT block_num, timestamp, tx_hash, log_index, CASE WHEN address IN (X'05c84a58FE042275b37db038bAAcD15F410c7bB0') THEN 'eth' ELSE 'usdc' END AS feed,\n  CASE WHEN address IN (X'05c84a58FE042275b37db038bAAcD15F410c7bB0') THEN arrow_cast(1300, 'UInt64') ELSE arrow_cast(45000, 'UInt64') END AS valid_blocks,\n  get_field(t, 'current') AS answer, get_field(t, 'roundId') AS round_id, get_field(t, 'updatedAt') AS updated_at\nFROM (SELECT block_num, timestamp, tx_hash, log_index, address, evm_decode_log(topic1, topic2, topic3, data, 'AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)') AS t\n  FROM base.logs WHERE topic0 = evm_topic('AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)') AND address IN (X'05c84a58FE042275b37db038bAAcD15F410c7bB0', X'68bE4C50235205Ede361ac8244B1ee221CDDA5E2'))\nWHERE block_num() >= 53469029"
       },
       "schema": {
         "arrow": {
@@ -568,120 +568,176 @@
               "nullable": false
             },
             {
-              "name": "eth_round",
+              "name": "tx_hash",
               "type": {
-                "Struct": [
-                  {
-                    "name": "c0",
-                    "data_type": {
-                      "Decimal128": [
-                        38,
-                        0
-                      ]
-                    },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c1",
-                    "data_type": "Utf8",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c2",
-                    "data_type": "Utf8",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c3",
-                    "data_type": "Utf8",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c4",
-                    "data_type": {
-                      "Decimal128": [
-                        38,
-                        0
-                      ]
-                    },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  }
+                "FixedSizeBinary": 32
+              },
+              "nullable": false
+            },
+            {
+              "name": "log_index",
+              "type": "UInt32",
+              "nullable": false
+            },
+            {
+              "name": "feed",
+              "type": "Utf8",
+              "nullable": false
+            },
+            {
+              "name": "valid_blocks",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "answer",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "round_id",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "updated_at",
+              "type": "Utf8",
+              "nullable": true
+            }
+          ]
+        }
+      },
+      "network": "base-mainnet"
+    },
+    "carried": {
+      "input": {
+        "sql": "SELECT b.block_num AS at_block, b.timestamp, u.feed, u.block_num AS update_block, u.log_index, u.tx_hash, u.answer\nFROM base.blocks b\nJOIN self.price_updates u ON b.block_num >= u.block_num AND b.block_num < u.block_num + u.valid_blocks\nWHERE b._block_num >= 53514029 AND block_num() >= 53514029"
+      },
+      "schema": {
+        "arrow": {
+          "fields": [
+            {
+              "name": "_block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "_ts",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
                 ]
               },
               "nullable": false
             },
             {
-              "name": "usdc_round",
+              "name": "at_block",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "timestamp",
               "type": {
-                "Struct": [
-                  {
-                    "name": "c0",
-                    "data_type": {
-                      "Decimal128": [
-                        38,
-                        0
-                      ]
-                    },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c1",
-                    "data_type": "Utf8",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c2",
-                    "data_type": "Utf8",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c3",
-                    "data_type": "Utf8",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c4",
-                    "data_type": {
-                      "Decimal128": [
-                        38,
-                        0
-                      ]
-                    },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  }
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
                 ]
               },
               "nullable": false
+            },
+            {
+              "name": "feed",
+              "type": "Utf8",
+              "nullable": false
+            },
+            {
+              "name": "update_block",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "log_index",
+              "type": "UInt32",
+              "nullable": false
+            },
+            {
+              "name": "tx_hash",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": false
+            },
+            {
+              "name": "answer",
+              "type": "Utf8",
+              "nullable": true
+            }
+          ]
+        }
+      },
+      "network": "base-mainnet"
+    },
+    "reference_prices": {
+      "input": {
+        "sql": "SELECT block_num, timestamp, eth_answer, usdc_answer, eth_tx, usdc_tx FROM (\n  SELECT at_block AS block_num, timestamp,\n    last_value(answer ORDER BY update_block, log_index) FILTER (WHERE feed = 'eth') AS eth_answer,\n    last_value(answer ORDER BY update_block, log_index) FILTER (WHERE feed = 'usdc') AS usdc_answer,\n    last_value(tx_hash ORDER BY update_block, log_index) FILTER (WHERE feed = 'eth') AS eth_tx,\n    last_value(tx_hash ORDER BY update_block, log_index) FILTER (WHERE feed = 'usdc') AS usdc_tx\n  FROM self.carried GROUP BY block_num(), at_block, timestamp\n) WHERE block_num() >= 53514029"
+      },
+      "schema": {
+        "arrow": {
+          "fields": [
+            {
+              "name": "_block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "_ts",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "timestamp",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "eth_answer",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "usdc_answer",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "eth_tx",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": true
+            },
+            {
+              "name": "usdc_tx",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": true
             }
           ]
         }
@@ -1027,7 +1083,7 @@
     },
     "priced_legs": {
       "input": {
-        "sql": "SELECT p.block_num, p.timestamp, p.tx_hash, p.account,\n  p.sold_token, p.sold_amount, p.bought_token, p.bought_amount,\n  get_field(r.eth_round, 'c1') AS eth_usd, get_field(r.usdc_round, 'c1') AS usdc_usd,\n  self.pt_price(evm_decode_hex(p.sold_token), p.sold_amount, evm_decode_hex(p.bought_token), p.bought_amount, get_field(r.eth_round, 'c1'), get_field(r.usdc_round, 'c1')) AS priced\nFROM self.single_pairs p\nJOIN self.reference_prices r ON p._block_num = r._block_num\nWHERE block_num() >= 53514029"
+        "sql": "SELECT p.block_num, p.timestamp, p.tx_hash, p.account,\n  p.sold_token, p.sold_amount, p.bought_token, p.bought_amount,\n  r.eth_answer AS eth_usd, r.usdc_answer AS usdc_usd, r.eth_tx, r.usdc_tx,\n  self.pt_price(evm_decode_hex(p.sold_token), p.sold_amount, evm_decode_hex(p.bought_token), p.bought_amount, r.eth_answer, r.usdc_answer) AS priced\nFROM self.single_pairs p\nJOIN self.reference_prices r ON p._block_num = r._block_num\nWHERE block_num() >= 53514029"
       },
       "schema": {
         "arrow": {
@@ -1108,6 +1164,20 @@
             {
               "name": "usdc_usd",
               "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "eth_tx",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": true
+            },
+            {
+              "name": "usdc_tx",
+              "type": {
+                "FixedSizeBinary": 32
+              },
               "nullable": true
             },
             {

@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { describe, it } from "node:test"
 import { ptGasSource, ptNetSource, ptPriceSource, tablesSql } from "../dataset/build.ts"
 import { gasPaid, type RawTx } from "../server/raw.ts"
-import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, ptNet, ptPrice } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, PRICE_FEEDS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, ptNet, ptPrice } from "@pricetag/sdk/core"
 
 const manifest = JSON.parse(readFileSync(new URL("../dataset/pricetag.json", import.meta.url), "utf8")) as {
   dependencies: Record<string, string>
@@ -56,6 +56,65 @@ describe("the committed manifest", () => {
       assert.ok(manifest.tables.base_legs!.input.sql.includes(token.address.slice(2)), token.symbol)
     }
     assert.deepEqual(manifest.dependencies, { base: "edgeandnode/base_mainnet@0.0.2" })
+  })
+})
+
+describe("prices from logs", () => {
+  const start = Number(/block_num\(\) >= (\d+)/.exec(manifest.tables.legs!.input.sql)![1])
+  const updates = manifest.tables.price_updates!.input.sql
+  const carried = manifest.tables.carried!.input.sql
+  const references = manifest.tables.reference_prices!.input.sql
+  const priced = manifest.tables.priced_legs!.input.sql
+
+  it("makes no eth_calls", () => {
+    for (const [name, table] of Object.entries(manifest.tables)) assert.doesNotMatch(table.input.sql, /eth_call/, name)
+  })
+
+  it("only reads the feeds' aggregators, because 201 contracts emitted this event in a day", () => {
+    for (const feed of PRICE_FEEDS) for (const address of feed.aggregators) assert.ok(updates.includes(`X'${address.slice(2)}'`), feed.pair)
+    assert.match(updates, /topic0 = evm_topic\('AnswerUpdated\(int256 indexed current, uint256 indexed roundId, uint256 updatedAt\)'\) AND address IN/)
+  })
+
+  it("reads updates from the longest window before the start, so every feed has a price at its first block", () => {
+    assert.ok(updates.includes(`block_num() >= ${start - 45_000}`))
+    assert.ok(carried.includes(`block_num() >= ${start}`))
+    assert.ok(references.includes(`block_num() >= ${start}`))
+  })
+
+  it("keeps each update for its own feed's window", () => {
+    assert.match(updates, /THEN arrow_cast\(1300, 'UInt64'\) ELSE arrow_cast\(45000, 'UInt64'\) END AS valid_blocks/)
+    assert.deepEqual(PRICE_FEEDS.map((feed) => feed.validBlocks), [1300, 45_000])
+  })
+
+  it("doesn't let the join rescan all of Base's blocks", () => {
+    assert.ok(carried.includes(`b._block_num >= ${start}`))
+  })
+
+  it("keeps the shapes that run: the join and the aggregate in separate tables, with no subquery on the blocks side", () => {
+    assert.match(carried, /FROM base\.blocks b\s+JOIN self\.price_updates u ON/)
+    assert.doesNotMatch(carried, /GROUP BY/)
+    assert.doesNotMatch(references, /JOIN/)
+    assert.match(references, /FROM self\.carried GROUP BY block_num\(\), at_block, timestamp/)
+  })
+
+  it("takes the newest update per feed, ordered by block and then log", () => {
+    for (const feed of ["eth", "usdc"]) {
+      for (const column of ["answer", "tx_hash"]) assert.ok(references.includes(`last_value(${column} ORDER BY update_block, log_index) FILTER (WHERE feed = '${feed}')`), `${feed} ${column}`)
+    }
+  })
+
+  it("keeps priced_legs on its watermark join, with the transactions behind its prices", () => {
+    assert.match(priced, /JOIN self\.reference_prices r ON p\._block_num = r\._block_num/)
+    assert.match(priced, /r\.eth_tx, r\.usdc_tx/)
+    assert.match(priced, /r\.eth_answer, r\.usdc_answer\) AS priced/)
+  })
+
+  it("gives no price for a feed with no update in its window, because an empty answer arrives as null", () => {
+    const dataset = udf<(...args: (string | null)[]) => unknown>("pt_price")
+    const none = { source: "unknown", token: "", usd_micros: "" }
+    assert.deepEqual(dataset(USDC_ADDRESS, "5", AERO, "5", null, "100000000"), none)
+    assert.deepEqual(dataset(ETH_ADDRESS, "5", AERO, "5", "240000000000", null), none)
+    assert.deepEqual(dataset(USDC_ADDRESS, "5", AERO, "5", null, null), none)
   })
 })
 

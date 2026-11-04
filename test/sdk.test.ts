@@ -106,16 +106,16 @@ describe("getPrices", () => {
     const { token, prices } = await client.getPrices("ETH", { from: 50, to: 150 })
     assert.equal(token, "ETH")
     assert.deepEqual(prices, [{ blockNum: 100, timestamp: new Date(1_800_000_000_000).toISOString(), usdMicros: "2400000000", source: "oracle", txHash: null, account: null, note: null }])
-    assert.ok(queries.some((q) => q.includes("get_field(eth_round, 'c1') AS answer") && q.includes("BETWEEN 50 AND 150")))
+    assert.ok(queries.some((q) => q.includes("eth_answer AS answer") && q.includes("BETWEEN 50 AND 150")))
   })
 
   it("reads USDC from its own feed, and WETH from ETH's", async () => {
     const usdc = fakeAmp({ reference_prices: [{ block_num: "100", timestamp: 0, answer: USDC_ANSWER }] })
     assert.equal((await usdc.client.getPrices(USDC_ADDRESS, { from: 50 })).prices[0]!.usdMicros, "1000000")
-    assert.ok(usdc.queries.some((q) => q.includes("get_field(usdc_round, 'c1') AS answer")))
+    assert.ok(usdc.queries.some((q) => q.includes("usdc_answer AS answer")))
     const weth = fakeAmp({ reference_prices: [] })
     await weth.client.getPrices("WETH", { from: 50 })
-    assert.ok(weth.queries.some((q) => q.includes("get_field(eth_round, 'c1') AS answer")))
+    assert.ok(weth.queries.some((q) => q.includes("eth_answer AS answer")))
   })
 
   it("keeps a failed oracle read as unknown, not $0", async () => {
