@@ -3,7 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { isAddress, isCurrencyCode, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createWallets, describeError, type Source } from "@pricetag/sdk/internal"
+import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createWallets, describeError, sharedMarket, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -279,6 +279,17 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
       return sendJson(res, 200, { verified: await verifyLink(owner, address, signature) })
     }
 
+    const taxMatch = /^\/api\/tax-report\/([^/]+)$/.exec(path)
+    if (taxMatch) {
+      const currency = parseCurrency(typeof body.currency === "string" ? body.currency : null)
+      if (!currency) return sendJson(res, 400, { error: "That currency isn't supported." })
+      const book = body.book === undefined ? emptyBook() : parseBook(body.book)
+      if (!book) return sendJson(res, 400, { error: "Those answers can't be read." })
+      const also: unknown = body.also ?? []
+      if (!Array.isArray(also) || !also.every((address) => typeof address === "string")) return sendJson(res, 400, { error: "Other wallets are a list of Base addresses." })
+      return taxReport(taxMatch[1] as string, { country: body.country, method: body.method, scope: body.scope }, also as string[], currency, book, res)
+    }
+
     const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare))?$/.exec(path)
     if (!match) return sendJson(res, 404, { error: "Not found" })
     const method = parseMethod(typeof body.method === "string" ? body.method : null)
@@ -328,6 +339,52 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
   }
 
   /**
+   * Answers with a report on `address`, the wallets typed in with it, and the ones the answers say are the user's, because
+   * those are in what the apps show. On a wallet nobody's said is theirs, like one being watched, the answers still decide
+   * its costs, so they're read for that, but their sales aren't this wallet's to list. Demo data and real data never mix.
+   */
+  async function taxReport(address: string, choices: { country: unknown; method: unknown; scope: unknown }, also: readonly string[], currency: CurrencyCode, book: Book, res: ServerResponse): Promise<void> {
+    const { country } = choices
+    if (typeof country !== "string" || !isTaxCountryCode(country)) return sendJson(res, 400, { error: "That country isn't supported." })
+    const defaults = TAX_COUNTRIES[country]
+    const method = choices.method === null || choices.method === undefined ? defaults.method : parseMethod(typeof choices.method === "string" ? choices.method : "")
+    if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
+    const scope = choices.scope === null || choices.scope === undefined ? defaults.scope : parseScope(typeof choices.scope === "string" ? choices.scope : "")
+    if (!scope) return sendJson(res, 400, { error: "The calculation is either pooled or per-wallet." })
+
+    const focus = address.toLowerCase()
+    const others = also.map((other) => other.trim().toLowerCase()).filter(Boolean)
+    const bad = others.find((other) => !isAddress(other))
+    if (bad !== undefined) return sendJson(res, 400, { error: `${bad} isn't a Base address.` })
+    const isDemo = (wallet: string) => wallet === "demo" || wallet === DEMO_ADDRESS || demoWallet(wallet) !== null
+    // Whichever way round: demo data must never land in a report on a real wallet.
+    if (others.length > 0 && [focus, ...others].some(isDemo)) return sendJson(res, 400, { error: "The demo wallet can't be combined with other wallets." })
+
+    const answered = linkedWallets(book).filter((wallet) => isDemo(wallet) === isDemo(focus))
+    // The demo's wallets start at different blocks, so their costs couldn't be worked out together, and its report stays its own.
+    const own = !isDemo(focus) && (others.length > 0 || answered.includes(focus))
+    const listed = new Set([focus, ...others, ...(own ? answered : [])])
+    const costsFrom = own ? [] : answered.filter((wallet) => !listed.has(wallet) && wallet !== (focus === "demo" ? DEMO_ADDRESS : focus))
+    if (others.length > MAX_OTHER_WALLETS || listed.size - 1 + costsFrom.length > MAX_OTHER_WALLETS) return sendJson(res, 400, { error: `A report can add up to ${MAX_OTHER_WALLETS} other wallets.` })
+
+    // One at a time, because a read that fails answers the request. A report never quietly leaves a wallet out.
+    const readAll = async (addresses: Iterable<string>): Promise<WalletResponse[] | null> => {
+      const read: WalletResponse[] = []
+      for (const next of addresses) {
+        const wallet = await readWallet(next, res)
+        const converted = wallet && (await inCurrency(wallet, currency, res))
+        if (!converted) return null
+        read.push(converted)
+      }
+      return read
+    }
+    const wallets = await readAll(listed)
+    const context = wallets && (await readAll(costsFrom))
+    if (!wallets || !context) return
+    sendJson(res, 200, taxReportOf(wallets, { country, method, scope }, { book, costsFrom: context }))
+  }
+
+  /**
    * One wallet by both rules, from one set of facts at one block: the first rule's rows, balances, fees and exchange rates
    * go on both sides, and only prices come from each. Answers with why not when that can't be established.
    */
@@ -361,8 +418,12 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
       if (!atA || !atB || atA.blockNum !== atB.blockNum) return notYet()
       const pair = async (wallet: string, withBalances: boolean): Promise<[WalletResponse, WalletResponse] | null | undefined> => {
         const facts = await first.wallets.factsAt(wallet, blockNum, { withBalances })
-        const a = facts && first.wallets.pricedOn(wallet, facts, latestPrices(atA))
-        const b = facts && second.wallets.pricedOn(wallet, facts, latestPrices(atB))
+        if (!facts) return null
+        // Each rule's own market prices at this block, and only where both have one, so a token priced on one side alone
+        // can't look like the rule.
+        const market = sharedMarket(await first.wallets.marketOn(wallet, facts), await second.wallets.marketOn(wallet, facts))
+        const a = first.wallets.pricedOn(wallet, facts, latestPrices(atA), market)
+        const b = second.wallets.pricedOn(wallet, facts, latestPrices(atB), market)
         if (!a || !b) return null
         // A block one side has no price for would look like the rule made a number unavailable.
         const blocksOf = (wallet: WalletResponse) => new Set(wallet.references.map((reference) => reference.blockNum))
@@ -536,47 +597,8 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
 
     const taxMatch = /^\/api\/tax-report\/([^/]+)$/.exec(path)
     if (taxMatch) {
-      const country = params.get("country")
-      if (!isTaxCountryCode(country)) {
-        sendJson(res, 400, { error: "That country isn't supported." })
-        return true
-      }
-      const rules = TAX_COUNTRIES[country]
-      const method = params.has("method") ? parseMethod(params.get("method")) : rules.method
-      if (!method) {
-        sendJson(res, 400, { error: "The method is either average or fifo." })
-        return true
-      }
-      const scope = params.has("scope") ? parseScope(params.get("scope")) : rules.scope
-      if (!scope) {
-        sendJson(res, 400, { error: "The calculation is either pooled or per-wallet." })
-        return true
-      }
-      const address = (taxMatch[1] as string).toLowerCase()
-      const others = (params.get("also") ?? "").split(",").map((other) => other.trim().toLowerCase()).filter(Boolean)
-      if (others.length > MAX_OTHER_WALLETS) {
-        sendJson(res, 400, { error: `A report can add up to ${MAX_OTHER_WALLETS} other wallets.` })
-        return true
-      }
-      const bad = others.find((other) => !isAddress(other))
-      if (bad !== undefined) {
-        sendJson(res, 400, { error: `${bad} isn't a Base address.` })
-        return true
-      }
-      // Whichever way round: demo data must never land in a report on a real wallet.
-      if (others.length > 0 && [address, ...others].some((wallet) => wallet === "demo" || wallet === DEMO_ADDRESS)) {
-        sendJson(res, 400, { error: "The demo wallet can't be combined with other wallets." })
-        return true
-      }
-      // One at a time, because a read that fails answers the request. A report never quietly leaves a wallet out.
-      const wallets: WalletResponse[] = []
-      for (const next of new Set([address, ...others])) {
-        const read = await readWallet(next, res)
-        const wallet = read && (await inCurrency(read, currency, res))
-        if (!wallet) return true
-        wallets.push(wallet)
-      }
-      sendJson(res, 200, taxReportOf(wallets, { country, method, scope }))
+      const also = (params.get("also") ?? "").split(",")
+      await taxReport(taxMatch[1] as string, { country: params.get("country"), method: params.get("method"), scope: params.get("scope") }, also, currency, emptyBook(), res)
       return true
     }
 
