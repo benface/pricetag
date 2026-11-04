@@ -5,6 +5,16 @@ import { worth, type CostLabel, type FoldLeg } from "./fold.ts"
 import { normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
 
 export type PriceSource = "oracle" | "swap" | "market"
+
+/** Why a leg has no usable price. Apps show these as they are, so they stay in plain language. */
+export const PRICE_NOTES = {
+  feedFailed: "The market price feed didn't answer at this block.",
+  rejected: "Ignored the price this exchange implied, because it's far from any plausible value.",
+  unlisted: "This transaction also moved a token we can't price yet, so what was paid or received can't be split between them.",
+  unusable: "This exchange didn't give a usable price for this token.",
+  noExchange: "Nothing was exchanged in this transaction, and this token has no market price feed.",
+  notSimple: "This transaction isn't a simple exchange of one token for another.",
+}
 /**
  * Transfers of tokens off the allowlist. They have no position or price, but they say money went elsewhere.
  * `unlisted`: `amount` is a quantity, or empty when it can't be read, as with ERC-1155.
@@ -216,9 +226,6 @@ function isSaneAgainstOracle(impliedUsdMicros: bigint, oracleUsdMicros: string):
   return ratio >= ORACLE_BAND[0] && ratio <= ORACLE_BAND[1]
 }
 
-const REJECTED_NOTE = "Rejected this swap's implied price, because it's far from any plausible value."
-const UNLISTED_NOTE = "This transaction also moved a token off the allowlist, so what was paid or received can't be split between them."
-
 type Input = {
   account: string
   rows: readonly LegRow[]
@@ -263,7 +270,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         kind: "gas",
         priceMicros: ethMicros,
         priceSource: ethMicros === null ? null : "oracle",
-        priceNote: ethMicros === null ? "The oracle read failed at this block." : null,
+        priceNote: ethMicros === null ? PRICE_NOTES.feedFailed : null,
         costMicros: null,
         proceedsMicros: null,
         costLabel: "unknown",
@@ -302,14 +309,14 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
       let priceSource: PriceSource | null = price === null ? null : "oracle"
       let priceNote: string | null = null
       let rejected = false
-      if (net.token.oracle && price === null) priceNote = "The oracle read failed at this block."
-      if (hasUnlisted) priceNote = UNLISTED_NOTE
+      if (net.token.oracle && price === null) priceNote = PRICE_NOTES.feedFailed
+      if (hasUnlisted) priceNote = PRICE_NOTES.unlisted
       else if (!net.token.oracle) {
         const swap = pricedRow?.priced.source === "swap" && pricedRow.priced.token === net.token.symbol ? pricedRow.priced.usd_micros : null
-        if (swap === null) priceNote = isSwap ? "This swap didn't give a usable price for this token." : "No swap in this transaction, and no oracle for this token."
-        else if (!isSwap) priceNote = "This transaction isn't a simple swap."
+        if (swap === null) priceNote = isSwap ? PRICE_NOTES.unusable : PRICE_NOTES.noExchange
+        else if (!isSwap) priceNote = PRICE_NOTES.notSimple
         else if (!isSanePrice(net.token, swap, ethMicros)) {
-          priceNote = REJECTED_NOTE
+          priceNote = PRICE_NOTES.rejected
           rejected = true
         } else {
           price = swap
@@ -334,8 +341,8 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
       if (other.rejected || !sane) {
         // A wrong trade value must never reach a total, so neither side gets one.
         tradeUsd = null
-        anchor.priceNote = REJECTED_NOTE
-        other.priceNote = REJECTED_NOTE
+        anchor.priceNote = PRICE_NOTES.rejected
+        other.priceNote = PRICE_NOTES.rejected
       }
     }
 

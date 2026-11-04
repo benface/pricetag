@@ -15,8 +15,8 @@ public struct FeedSummary: Equatable, Sendable {
         case .behind: (text, isWarning) = ("Behind", true)
         case .catchingUp: (text, isWarning) = ("Catching up", true)
         case .serverUnreachable: (text, isWarning) = ("Offline", true)
-        case .ampUnavailable: (text, isWarning) = ("Amp offline", true)
-        case .noAmpConfigured: (text, isWarning) = ("No Amp", true)
+        case .ampUnavailable: (text, isWarning) = ("Data offline", true)
+        case .noAmpConfigured: (text, isWarning) = ("No data", true)
         case .rejected: (text, isWarning) = ("Error", true)
         case .live:
             guard let portfolio else {
@@ -45,12 +45,12 @@ extension FeedState {
         case .noWallet, .reading, .live: return nil
         // These numbers are still updating, up to where the dataset has reached.
         case .catchingUp: return portfolio.flatMap(Wording.catchingUp)
-        case .behind(let seconds): problem = "Amp's newest block is \(Self.age(seconds)) old."
+        case .behind(let seconds): problem = "The newest data is \(Self.age(seconds)) old."
         case .serverUnreachable: problem = "Can't reach the server at \(serverURL.absoluteString)."
         case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message): problem = message
         }
         guard let portfolio, portfolio.progress.started else { return problem }
-        return "\(problem) These numbers are through block \(Format.block(portfolio.coverage.toBlock)) and aren't updating."
+        return "\(problem) \(Wording.stale(lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp))"
     }
 
     private static func age(_ seconds: Int) -> String {

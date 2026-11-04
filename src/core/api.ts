@@ -21,7 +21,7 @@ export type WalletResponse = {
   references: ReferenceRow[]
   prices: LatestPrices
   latest: Head
-  /** Transactions this wallet sent whose gas couldn't be worked out, so ETH is overstated by that much. */
+  /** Transactions this wallet sent whose gas couldn't be worked out, so the fees are too low, and ETH worked out from its legs is too high. */
   gasUnknownTxs: string[]
   /** What this response is meant to be shown in. Its money is always USD, and `viewWallet` converts it. */
   currency: CurrencyCode

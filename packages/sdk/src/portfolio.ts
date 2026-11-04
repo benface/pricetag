@@ -32,7 +32,7 @@ export type Position = {
   reconciliation: Reconciliation | null
 }
 
-export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "incomplete history" | "doesn't match its onchain balance" | "not checked against its onchain balance" | "balance couldn't be read" }
+export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "incomplete history" | "doesn't match its actual balance" | "not checked against its actual balance" | "balance couldn't be read" }
 
 /** What a sum is made of. A sum with something missing and nothing known has no answer, which isn't the same as $0. */
 export type Coverage = { known: number; missing: number }
@@ -149,7 +149,7 @@ export function sumTotals(positions: readonly Position[], unread: readonly strin
     }
     const held = BigInt(values.qty) > 0n
     if (isUnconfirmed(position)) {
-      excluded.push({ asset, reason: reconciliation?.status === "incomplete" ? "doesn't match its onchain balance" : "not checked against its onchain balance" })
+      excluded.push({ asset, reason: reconciliation?.status === "incomplete" ? "doesn't match its actual balance" : "not checked against its actual balance" })
       coverage.realized.missing++
       coverage.unrealized.missing++
       // The chain didn't say what it holds right now, so its value is our best estimate, and that isn't a known value.

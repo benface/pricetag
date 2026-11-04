@@ -48,7 +48,7 @@ describe("pricing a wallet's rows", () => {
     const [leg] = legsOf([row("0x1", AERO, "credit", E18)])
     assert.equal(leg!.priceMicros, null)
     assert.equal(leg!.priceSource, null)
-    assert.match(leg!.priceNote!, /No swap/)
+    assert.match(leg!.priceNote!, /Nothing was exchanged/)
   })
 
   it("rejects an absurd swap price, so it can't reach a total", () => {
@@ -56,7 +56,7 @@ describe("pricing a wallet's rows", () => {
     const aero = legs.find((l) => l.asset === "AERO")!
     assert.equal(aero.priceMicros, null)
     assert.equal(aero.costLabel, "unknown")
-    assert.match(aero.priceNote!, /Rejected/)
+    assert.match(aero.priceNote!, /Ignored the price/)
   })
 
   it("checks a token's sanity range against the ETH price where it's set that way", () => {
@@ -69,7 +69,7 @@ describe("pricing a wallet's rows", () => {
   it("a failed oracle read leaves no price, never $0", () => {
     const [leg] = legsOf([row("0x1", ETH_ADDRESS, "credit", E18)], [{ block_num: 100, eth_usd: "", usdc_usd: "" }])
     assert.equal(leg!.priceMicros, null)
-    assert.match(leg!.priceNote!, /oracle/)
+    assert.match(leg!.priceNote!, /market price feed/)
   })
 
   describe("a swap's cost and proceeds come from what changed hands", () => {
@@ -119,7 +119,7 @@ describe("pricing a wallet's rows", () => {
       assert.equal(eth.costLabel, "unknown")
       assert.equal(eth.costMicros, null)
       assert.equal(eth.priceMicros, "2400000000")
-      assert.match(eth.priceNote!, /Rejected/)
+      assert.match(eth.priceNote!, /Ignored the price/)
       assert.equal(legs.find((l) => l.asset === "USDC")!.proceedsMicros, null)
     })
 
@@ -172,7 +172,7 @@ describe("pricing a wallet's rows", () => {
         assert.equal(eth(dust).costLabel, "unknown")
         assert.equal(eth(dust).costMicros, null)
         assert.equal(usdc(dust).proceedsMicros, null)
-        assert.match(eth(dust).priceNote!, /Rejected/)
+        assert.match(eth(dust).priceNote!, /Ignored the price/)
         const reversed = legsOf([row("0x1", ETH_ADDRESS, "debit", E18), row("0x1", USDC_ADDRESS, "credit", 1n)], [noEth])
         assert.equal(eth(reversed).proceedsMicros, null)
         const badUsdc = legsOf([row("0x1", ETH_ADDRESS, "debit", E18), row("0x1", USDC_ADDRESS, "credit", 1n)], [noUsdc])
@@ -194,7 +194,7 @@ describe("pricing a wallet's rows", () => {
       assert.equal(aero.costMicros, "1000000000")
       const absurd = legsOf([row("0x1", USDC_ADDRESS, "debit", 1n), row("0x1", AERO, "credit", 300n * E18), row("0x1", AERO, "credit", 500n * E18)]).find((l) => l.asset === "AERO")!
       assert.equal(absurd.costLabel, "unknown")
-      assert.match(absurd.priceNote!, /Rejected/)
+      assert.match(absurd.priceNote!, /Ignored the price/)
     })
 
     it("a split route gets the price of what it netted to", () => {
@@ -308,7 +308,7 @@ describe("pricing a wallet's rows", () => {
       assert.equal(aero(legs).costLabel, "unknown")
       assert.equal(aero(legs).costMicros, null)
       assert.equal(aero(legs).priceMicros, null)
-      assert.match(aero(legs).priceNote!, /off the allowlist/)
+      assert.match(aero(legs).priceNote!, /a token we can't price yet/)
     })
 
     it("a row from a dataset deployed before unlisted_moves can't price it either", () => {
