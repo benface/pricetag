@@ -9,7 +9,7 @@ import type { RateRound } from "../src/core/currency.ts"
 import { MULTICALL3, balancesByAsset, decodeBalanceResults, decodeEthBalance, encodeBalanceCalls, encodeEthBalanceCall } from "./balances.ts"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRound, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
-export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknownTxs: string[] }
+export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknownTxs: string[]; gasUnknownBlocks: number[] }
 
 export type Source = {
   mode: Mode
@@ -196,7 +196,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
         : []
       const baseFees = await inBlocks<Row>(sentBlocks, (filter) => `SELECT block_num, base_fee_per_gas FROM ${ds}.blocks WHERE ${filter}`)
 
-      const { rows, gasUnknownTxs } = legRowsFromRaw({
+      const { rows, gasUnknownTxs, gasUnknownBlocks } = legRowsFromRaw({
         account: address,
         txs,
         logs,
@@ -206,7 +206,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
           baseFeeByBlock: new Map(baseFees.map((b) => [asNumber(b.block_num), decimalString(b.base_fee_per_gas) ?? "0"])),
         },
       })
-      return { rows, priced: null, gasUnknownTxs }
+      return { rows, priced: null, gasUnknownTxs, gasUnknownBlocks }
     },
   }
 }

@@ -23,7 +23,7 @@ const balances = (before: bigint | string, after: bigint | string, block = BLOCK
     [block, after.toString()],
   ])
 const settle = (rows: LegRow[], ethBalances: ReadonlyMap<number, string>, feeUnknownTxs: string[] = [], priced: PricedRow[] = []) =>
-  settleUnwraps({ rows, priced, references: [REF], ethBalances, feeUnknownTxs })
+  settleUnwraps({ rows, priced, references: [REF], ethBalances, feeUnknownTxs, gasUnknownBlocks: [] })
 const creditsOf = (rows: LegRow[]) => rows.filter((r) => r.kind === "unwrap" && r.side === "credit").map((r) => [r.tx_hash, r.amount, r.settled === true])
 
 // The real transaction 0x23471eb8…, where the sender was credited another account's Withdrawal. Its balance really fell
@@ -153,6 +153,21 @@ describe("a credit that can't be settled", () => {
     unsettled(settle(rows, balances(5000n, 4000n)))
   })
 
+  it("stays a claim when more arrived than it says, since nothing here explains the rest", () => {
+    unsettled(settle(rows, balances(5000n, 5000n - 100n + 1001n)))
+  })
+
+  it("stays a claim while another transaction in the block has an unknown fee, even one that moved no ETH", () => {
+    const withToken = [...rows, row(USDC_ADDRESS, "debit", 5n, "erc20", "0xother")]
+    unsettled(settle(withToken, balances(5000n, 4900n), ["0xother"]))
+  })
+
+  it("stays a claim while the block has a transaction with unknown gas and no rows at all", () => {
+    const eth = balances(5000n, 4900n)
+    unsettled(settleUnwraps({ rows, priced: [], references: [REF], ethBalances: eth, feeUnknownTxs: ["0xnorows"], gasUnknownBlocks: [BLOCK] }))
+    assert.deepEqual(creditsOf(settleUnwraps({ rows, priced: [], references: [REF], ethBalances: eth, feeUnknownTxs: ["0xnorows"], gasUnknownBlocks: [BLOCK - 5] }).rows), [])
+  })
+
   it("settles once the read works", () => {
     assert.deepEqual(creditsOf(settle(rows, balances(5000n, 5900n)).rows), [["0xcb", "1000", true]])
   })
@@ -163,8 +178,8 @@ describe("several of a wallet's transactions in one block", () => {
   const start = 5000n
   const fees = 150n
 
-  it("all settle when the change is exactly what they claim", () => {
-    assert.deepEqual(creditsOf(settle(rows, balances(start, start - fees + 1400n)).rows), [["0xa", "1000", true], ["0xb", "400", true]])
+  it("stay claims even when the change is exactly what they claim, because the total can't say how it split", () => {
+    assert.deepEqual(creditsOf(settle(rows, balances(start, start - fees + 1400n)).rows), [["0xa", "1000", false], ["0xb", "400", false]])
   })
 
   it("all go when nothing arrived", () => {
@@ -180,9 +195,20 @@ describe("several of a wallet's transactions in one block", () => {
     assert.deepEqual(creditsOf(settle(mixed, balances(start, start - fees + 996n)).rows), [["0xa", "1000", false]])
   })
 
-  it("ignores a transaction that moved no ETH", () => {
-    const withToken = [gas(100n), claim(1000n), row(USDC_ADDRESS, "credit", 5n, "erc20", "0xother")]
-    assert.deepEqual(creditsOf(settle(withToken, balances(start, start - 100n + 996n)).rows), [["0xcb", "996", true]])
+  it("counts a transaction that only moved a token, which can still have paid this wallet ETH", () => {
+    const withToken = [gas(100n), claim(1000n), row(USDC_ADDRESS, "debit", 5n, "erc20", "0xother")]
+    assert.deepEqual(creditsOf(settle(withToken, balances(start, start - 100n + 996n)).rows), [["0xcb", "1000", false]])
+    assert.deepEqual(creditsOf(settle(withToken, balances(start, start - 100n + 1000n)).rows), [["0xcb", "1000", false]])
+  })
+
+  it("still drops the claim when nothing arrived, whichever tokens the others moved", () => {
+    const withToken = [gas(100n), claim(1000n), row(USDC_ADDRESS, "debit", 5n, "erc20", "0xother")]
+    assert.deepEqual(creditsOf(settle(withToken, balances(start, start - 100n)).rows), [])
+  })
+
+  it("counts a token that isn't on the allowlist too", () => {
+    const withToken = [gas(100n), claim(1000n), row("0x00000000000000000000000000000000000000dd", "debit", 5n, "unlisted", "0xother")]
+    assert.deepEqual(creditsOf(settle(withToken, balances(start, start - 100n + 996n)).rows), [["0xcb", "1000", false]])
   })
 
   it("settles each block by itself", () => {
@@ -190,6 +216,90 @@ describe("several of a wallet's transactions in one block", () => {
     const eth = new Map([...balances(5000n, 4900n), ...balances(4900n, 5800n, BLOCK + 5)])
     assert.deepEqual(creditsOf(settle(two, eth).rows), [["0xc", "1000", true]])
     assert.deepEqual(unwrapBalanceBlocks(two), [BLOCK - 1, BLOCK, BLOCK + 4, BLOCK + 5])
+  })
+})
+
+describe("what a block's balance can't tell apart", () => {
+  const E18 = 10n ** 18n
+  const start = 5n * E18
+  const usdFold = (rows: LegRow[], amounts: Record<string, bigint>) => {
+    const funded = [...FUNDING, ...PURCHASE, ...rows]
+    const legs = buildPricedLegs({ account: ME, rows: funded, references: [...references, { ...REF, block_num: BLOCK - 20 }], priced: [] })
+    const onchain: Onchain = { balances: { blockNum: BLOCK, amounts: Object.fromEntries(Object.entries(amounts).map(([asset, amount]) => [asset, amount.toString()])) }, l1FeeUnknownTxs: [] }
+    return { legs, positions: foldPositions(legs, "average", PRICES, onchain) }
+  }
+
+  it("a relayed sale's ETH doesn't become another swap's proceeds", () => {
+    // A sells cbBTC for 1 ETH. B, sent by someone else, sells USDC for another 1 ETH, and shows only the USDC leaving.
+    const rows = [gas(100n, "0xa"), row(CBBTC, "debit", CB_SOLD, "erc20", "0xa"), claim(E18, "0xa"), row(USDC_ADDRESS, "debit", 5_000000n, "erc20", "0xb")]
+    const settled = settle(rows, balances(start, start - 100n + 2n * E18)).rows
+    assert.deepEqual(creditsOf(settled), [["0xa", E18.toString(), false]])
+    const { legs, positions } = usdFold(settled, { ETH: BEFORE + start - 100n + 2n * E18, cbBTC: 0n })
+    assert.equal(legs.find((l) => l.asset === "cbBTC" && l.txHash === "0xa")!.proceedsMicros, null)
+    assert.equal(positions.find((p) => p.asset === "cbBTC")!.values.realizedMicros, null)
+  })
+
+  it("two swaps that total what they claim aren't each confirmed", () => {
+    // A sends its router 0.1 ETH, and gets that back plus its 1 ETH. B's router keeps 0.1, paying 0.9.
+    const tenth = E18 / 10n
+    const rows = [
+      gas(100n, "0xa"),
+      row(ETH_ADDRESS, "debit", tenth, "eth", "0xa"),
+      row(CBBTC, "debit", CB_SOLD / 2n, "erc20", "0xa"),
+      claim(E18, "0xa"),
+      gas(100n, "0xb"),
+      row(CBBTC, "debit", CB_SOLD / 2n, "erc20", "0xb"),
+      claim(E18, "0xb"),
+    ]
+    const settled = settle(rows, balances(start, start - 200n - tenth + 2n * E18)).rows
+    assert.deepEqual(creditsOf(settled), [["0xa", E18.toString(), false], ["0xb", E18.toString(), false]])
+    const legs = buildPricedLegs({ account: ME, rows: settled, references, priced: [] })
+    assert.deepEqual(legs.filter((l) => l.asset === "cbBTC").map((l) => l.proceedsMicros), [null, null])
+  })
+})
+
+describe("a claim that cancels out what left", () => {
+  const E18 = 10n ** 18n
+  // cbBTC and 1 WETH leave, with a 1 ETH claim that nets ETH to nothing.
+  const NETTED = [gas(100n), row(CBBTC, "debit", CB_SOLD, "erc20"), row(WETH_ADDRESS, "debit", E18, "erc20"), claim(E18)]
+  const foldNetted = (rows: LegRow[], held = 0n) => {
+    const legs = buildPricedLegs({ account: ME, rows, references: [...references, { ...REF, block_num: BLOCK - 5 }], priced: [] })
+    const onchain: Onchain = { balances: { blockNum: BLOCK, amounts: { cbBTC: held.toString() } }, l1FeeUnknownTxs: [] }
+    return { legs, cbBtc: foldPositions(legs, "average", PRICES, onchain).find((p) => p.asset === "cbBTC")! }
+  }
+
+  it("still leaves the sale's proceeds unknown, rather than a plain send with no gain or loss", () => {
+    const { legs, cbBtc } = foldNetted([...PURCHASE, ...settle(NETTED, new Map()).rows])
+    const sale = saleOf(legs)
+    assert.deepEqual([sale.kind, sale.proceedsMicros, sale.unsettledCredit], ["swap", null, true])
+    assert.equal(cbBtc.reconciliation?.status, "reconciled")
+    assert.equal(cbBtc.state.unresolvedDisposedQty, CB_SOLD.toString())
+    assert.equal(cbBtc.values.realizedMicros, null)
+  })
+
+  it("makes realized unavailable even after a sale with a known gain", () => {
+    const half = CB_SOLD / 2n
+    const earlier = [row(CBBTC, "debit", half, "erc20", "0xsold", BLOCK - 5), row(USDC_ADDRESS, "credit", 2000_000000n, "erc20", "0xsold", BLOCK - 5)]
+    const known = foldNetted([...PURCHASE, ...earlier], CB_SOLD - half)
+    assert.ok(BigInt(known.cbBtc.values.realizedMicros!) > 0n)
+    const rest = [gas(100n), row(CBBTC, "debit", CB_SOLD - half, "erc20"), row(WETH_ADDRESS, "debit", E18, "erc20"), claim(E18)]
+    const { cbBtc } = foldNetted([...PURCHASE, ...earlier, ...settle(rest, new Map()).rows])
+    assert.equal(cbBtc.values.realizedMicros, null)
+  })
+
+  it("is named on ETH, through its fee, though it leaves no other ETH leg", () => {
+    const legs = buildPricedLegs({ account: ME, rows: settle(NETTED, new Map()).rows, references, priced: [] })
+    assert.deepEqual(legs.filter((l) => l.asset === "ETH").map((l) => [l.kind, l.unsettledCredit]), [["gas", true]])
+    const onchain: Onchain = { balances: { blockNum: BLOCK, amounts: { ETH: "1" } }, l1FeeUnknownTxs: [] }
+    const eth = foldPositions(legs, "average", PRICES, onchain).find((p) => p.asset === "ETH")!
+    assert.ok(explainMetric(eth, "onchain", USD_CONTEXT).lines.some((line) => line.includes("couldn't confirm") && line.includes("0xcb")))
+  })
+
+  it("settles as a plain send once the chain says nothing arrived", () => {
+    const settled = settle(NETTED, balances(5n * E18, 5n * E18 - 100n)).rows
+    assert.deepEqual(creditsOf(settled), [])
+    const legs = buildPricedLegs({ account: ME, rows: settled, references, priced: [] })
+    assert.deepEqual(legs.filter((l) => l.kind !== "gas").map((l) => [l.asset, l.delta]), [["cbBTC", (-CB_SOLD).toString()], ["ETH", (-E18).toString()]])
   })
 })
 

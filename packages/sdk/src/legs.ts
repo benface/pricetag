@@ -5,6 +5,17 @@ import { worth, type CostLabel, type FoldLeg } from "./fold.ts"
 import { ETH_ADDRESS, normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
 
 export type PriceSource = "oracle" | "swap" | "market"
+
+/** Why a leg has no usable price. Apps show these as they are, so they stay in plain language. */
+export const PRICE_NOTES = {
+  feedFailed: "The market price feed didn't answer at this block.",
+  rejected: "Ignored the price this exchange implied, because it's far from any plausible value.",
+  unlisted: "This transaction also moved a token we can't price yet, so what was paid or received can't be split between them.",
+  unusable: "This exchange didn't give a usable price for this token.",
+  noExchange: "Nothing was exchanged in this transaction, and this token has no market price feed.",
+  notSimple: "This transaction isn't a simple exchange of one token for another.",
+  unsettled: "A contract turned wrapped ETH into ETH in this transaction, and we couldn't confirm how much of it reached this wallet, so what was paid or received isn't known.",
+}
 /**
  * Transfers of tokens off the allowlist. They have no position or price, but they say money went elsewhere.
  * `unlisted`: `amount` is a quantity, or empty when it can't be read, as with ERC-1155.
@@ -220,44 +231,54 @@ type SettleInput = {
   ethBalances: ReadonlyMap<number, string>
   /** Transactions whose gas or L1 fee isn't known, so their block's balance change can't be explained yet. */
   feeUnknownTxs: readonly string[]
+  /** Blocks with such a transaction, because one with unknown gas can have no rows at all. */
+  gasUnknownBlocks: readonly number[]
 }
 
 /**
  * Checks each unwrap credit against what the wallet's ETH really did across its block. What's left of the change, after
- * everything we can see, is what really arrived. With one transaction moving ETH in the block, that's its credit. With
- * several, it only settles when it's exactly what they all claim, or nothing: we can't split anything else between them.
- * A credit that can't be settled keeps its `isUnwrapClaim` amount, and `buildPricedLegs` values nothing from it.
+ * everything we can see, is what really arrived.
  *
+ * A balance is read per block, so it can only speak for a transaction when that's the wallet's only one in the block,
+ * whichever tokens the others moved: one sent by someone else can pay this wallet ETH and show only a token leaving. Then
+ * its credit is what arrived, up to what it claims, because anything more isn't what the receipt explains. With several,
+ * the total can match while one was short and the other was refunded, so only nothing arriving settles them, since none
+ * of them can have received less than that.
+ *
+ * A credit that can't be settled keeps its `isUnwrapClaim` amount, and `buildPricedLegs` values nothing from it.
  * A credit that changed also changes what the transaction traded, so its priced rows are worked out again.
  */
-export function settleUnwraps({ rows, priced, references, ethBalances, feeUnknownTxs }: SettleInput): { rows: LegRow[]; priced: PricedRow[] } {
+export function settleUnwraps({ rows, priced, references, ethBalances, feeUnknownTxs, gasUnknownBlocks }: SettleInput): { rows: LegRow[]; priced: PricedRow[] } {
   const claimBlocks = new Set(rows.filter(isUnwrapClaim).map((row) => row.block_num))
   if (claimBlocks.size === 0) return { rows: [...rows], priced: [...priced] }
   const feeUnknown = new Set(feeUnknownTxs)
-  const native = new Map<number, LegRow[]>()
+  const gasUnknown = new Set(gasUnknownBlocks)
+  const byBlock = new Map<number, LegRow[]>()
   for (const row of rows) {
-    if (!claimBlocks.has(row.block_num) || row.token !== ETH_ADDRESS) continue
-    native.set(row.block_num, [...(native.get(row.block_num) ?? []), row])
+    if (!claimBlocks.has(row.block_num)) continue
+    const blockRows = byBlock.get(row.block_num)
+    if (blockRows) blockRows.push(row)
+    else byBlock.set(row.block_num, [row])
   }
 
   /** What really arrived in each transaction with a claim, in the blocks that can be settled. */
   const credits = new Map<string, bigint>()
-  for (const [block, blockRows] of native) {
+  for (const [block, blockRows] of byBlock) {
     const before = ethBalances.get(block - 1)
     const after = ethBalances.get(block)
     const txs = new Set(blockRows.map((row) => row.tx_hash))
-    if (before === undefined || after === undefined || [...txs].some((tx) => feeUnknown.has(tx))) continue
+    if (before === undefined || after === undefined || gasUnknown.has(block) || [...txs].some((tx) => feeUnknown.has(tx))) continue
     const claims = new Map<string, bigint>()
     let arrived = BigInt(after) - BigInt(before)
     for (const row of blockRows) {
+      if (row.token !== ETH_ADDRESS) continue
       if (isUnwrapClaim(row)) claims.set(row.tx_hash, (claims.get(row.tx_hash) ?? 0n) + BigInt(row.amount))
       else arrived -= row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
     }
-    // Less than nothing means ETH left in a way we can't see, which says nothing about what arrived.
-    if (arrived < 0n) continue
-    const claimed = [...claims.values()].reduce((sum, amount) => sum + amount, 0n)
-    if (txs.size > 1 && arrived !== claimed && arrived !== 0n) continue
-    for (const [tx, amount] of claims) credits.set(tx, txs.size === 1 ? arrived : arrived === 0n ? 0n : amount)
+    const claimedInBlock = [...claims.values()].reduce((sum, amount) => sum + amount, 0n)
+    // Less than nothing means ETH left in a way we can't see, and more than it claims came from something we can't see.
+    if (arrived < 0n || arrived > claimedInBlock || (txs.size > 1 && arrived !== 0n)) continue
+    for (const tx of claims.keys()) credits.set(tx, arrived)
   }
 
   const claimed = new Map<string, bigint>()
@@ -302,10 +323,6 @@ function isSaneAgainstOracle(impliedUsdMicros: bigint, oracleUsdMicros: string):
   return ratio >= ORACLE_BAND[0] && ratio <= ORACLE_BAND[1]
 }
 
-const REJECTED_NOTE = "Rejected this swap's implied price, because it's far from any plausible value."
-const UNLISTED_NOTE = "This transaction also moved a token off the allowlist, so what was paid or received can't be split between them."
-const UNSETTLED_NOTE = "A contract turned WETH into ETH in this transaction, and we couldn't confirm how much of it reached this wallet, so what was paid or received isn't known."
-
 type Input = {
   account: string
   rows: readonly LegRow[]
@@ -339,6 +356,9 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     const oracle = (t: Token) => (t.oracle === "eth" ? ethMicros : t.oracle === "usdc" ? usdcMicros : null)
     const base = { blockNum: first.block_num, timestamp: first.timestamp, txHash: first.tx_hash, txIndex: first.tx_index }
 
+    // The other token's balance can match while the amount it was traded for is wrong, so nothing here gets a value.
+    const unsettledCredit = txRows.some(isUnwrapClaim)
+    const unsettled = unsettledCredit ? { unsettledCredit } : {}
     const feeRows = txRows.filter(isFeeRow)
     if (feeRows.length > 0) {
       legs.push({
@@ -350,11 +370,12 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         kind: "gas",
         priceMicros: ethMicros,
         priceSource: ethMicros === null ? null : "oracle",
-        priceNote: ethMicros === null ? "The oracle read failed at this block." : null,
+        priceNote: ethMicros === null ? PRICE_NOTES.feedFailed : null,
         costMicros: null,
         proceedsMicros: null,
         costLabel: "unknown",
         parts: feeRows,
+        ...unsettled,
       })
     }
 
@@ -376,14 +397,13 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     // One token out and one in is only a swap if nothing else moved. Otherwise the payment could be for both.
     const { moves: unlistedMoves, unreadable: unlistedUnreadable } = netUnlisted(unlisted)
     const hasUnlisted = unlistedUnreadable || unlistedMoves.length > 0
-    // The other token's balance can match while the amount it was traded for is wrong, so nothing here gets a value.
-    const unsettledCredit = txRows.some(isUnwrapClaim)
     const isSwap = !hasUnlisted && !unsettledCredit && moved.length === 2 && moved.some((n) => n.delta > 0n) && moved.some((n) => n.delta < 0n)
     // Something left and something arrived, but it can't be valued as a swap. It's still not a plain transfer: a debit
     // here was traded for something, so it has unknown proceeds, rather than no gain or loss at all.
     const anyOut = moved.some((n) => n.delta < 0n) || unlistedMoves.some((delta) => delta < 0n)
     const anyIn = moved.some((n) => n.delta > 0n) || unlistedMoves.some((delta) => delta > 0n)
-    const isExchange = isSwap || unlistedUnreadable || (anyOut && anyIn)
+    // A claim can cancel out what left, so whether anything arrived can't decide this while it stands.
+    const isExchange = isSwap || unlistedUnreadable || unsettledCredit || (anyOut && anyIn)
     const pricedRow = priced.find((p) => p.tx_hash === first.tx_hash && p.account === me)
 
     const resolved = moved.map((net) => {
@@ -391,15 +411,15 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
       let priceSource: PriceSource | null = price === null ? null : "oracle"
       let priceNote: string | null = null
       let rejected = false
-      if (net.token.oracle && price === null) priceNote = "The oracle read failed at this block."
-      if (hasUnlisted) priceNote = UNLISTED_NOTE
-      else if (unsettledCredit) priceNote = UNSETTLED_NOTE
+      if (net.token.oracle && price === null) priceNote = PRICE_NOTES.feedFailed
+      if (hasUnlisted) priceNote = PRICE_NOTES.unlisted
+      else if (unsettledCredit) priceNote = PRICE_NOTES.unsettled
       else if (!net.token.oracle) {
         const swap = pricedRow?.priced.source === "swap" && pricedRow.priced.token === net.token.symbol ? pricedRow.priced.usd_micros : null
-        if (swap === null) priceNote = isSwap ? "This swap didn't give a usable price for this token." : "No swap in this transaction, and no oracle for this token."
-        else if (!isSwap) priceNote = "This transaction isn't a simple swap."
+        if (swap === null) priceNote = isSwap ? PRICE_NOTES.unusable : PRICE_NOTES.noExchange
+        else if (!isSwap) priceNote = PRICE_NOTES.notSimple
         else if (!isSanePrice(net.token, swap, ethMicros)) {
-          priceNote = REJECTED_NOTE
+          priceNote = PRICE_NOTES.rejected
           rejected = true
         } else {
           price = swap
@@ -424,8 +444,8 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
       if (other.rejected || !sane) {
         // A wrong trade value must never reach a total, so neither side gets one.
         tradeUsd = null
-        anchor.priceNote = REJECTED_NOTE
-        other.priceNote = REJECTED_NOTE
+        anchor.priceNote = PRICE_NOTES.rejected
+        other.priceNote = PRICE_NOTES.rejected
       }
     }
 
@@ -448,7 +468,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         proceedsMicros: net.delta < 0n ? value : null,
         costLabel,
         parts: net.parts,
-        ...(unsettledCredit ? { unsettledCredit } : {}),
+        ...unsettled,
       })
     }
   }

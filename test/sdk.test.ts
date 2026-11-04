@@ -207,7 +207,7 @@ describe("getPrices", () => {
     })
     const [point] = (await client.getPrices("AERO", { from: 50 })).prices
     assert.deepEqual([point!.usdMicros, point!.source, point!.txHash], [null, "unknown", "0xaa"])
-    assert.match(point!.note!, /off the allowlist/)
+    assert.match(point!.note!, /a token we can't price yet/)
   })
 
   it("rejects an absurd swap price", async () => {

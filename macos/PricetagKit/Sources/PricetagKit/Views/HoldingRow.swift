@@ -18,8 +18,8 @@ public struct HoldingRow: View {
     }
 
     private var cost: String {
-        if !position.isHeld { return "Closed" }
-        if let average = position.values.averageCostMicros { return "Cost \(Format.price(average, currency))" }
+        if !position.isHeld { return "None left" }
+        if let average = position.values.averageCostMicros { return "Average paid \(Format.price(average, currency))" }
         return "Cost unknown"
     }
 
@@ -74,12 +74,8 @@ public struct OnchainCheck: View {
     }
 
     private var label: String? {
-        switch position.reconciliation?.status {
-        case .reconciled: "Reconciled"
-        case .incomplete: "Incomplete"
-        case .unchecked: "Not checked"
-        case nil: position.hasShortfall ? "Incomplete" : nil
-        }
+        if let status = position.reconciliation?.status { return Wording.checkLabel(status) }
+        return position.hasShortfall ? Wording.checkLabel(.incomplete) : nil
     }
 
     private var help: String {

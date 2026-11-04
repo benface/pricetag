@@ -80,18 +80,21 @@ export type RawInput = {
   gas: GasContext
 }
 
-export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInput): { rows: LegRow[]; gasUnknownTxs: string[] } {
+export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInput): { rows: LegRow[]; gasUnknownTxs: string[]; gasUnknownBlocks: number[] } {
   const me = normalizeAddress(account)
   const rows: LegRow[] = []
   const gasUnknownTxs: string[] = []
+  const gasUnknownBlocks: number[] = []
 
   for (const tx of txs) {
     const base = { block_num: tx.block_num, timestamp: tx.timestamp, tx_hash: normalizeAddress(tx.tx_hash), tx_index: tx.tx_index }
     const from = normalizeAddress(tx.from)
     if (from === me && tx.type !== DEPOSIT_TX_TYPE) {
       const paid = gasPaid(tx, gas)
-      if (paid === null) gasUnknownTxs.push(base.tx_hash)
-      else if (paid > 0n) rows.push({ ...base, log_index: 0, token: ETH_ADDRESS, account: me, side: "debit", amount: paid.toString(), kind: "gas" })
+      if (paid === null) {
+        gasUnknownTxs.push(base.tx_hash)
+        gasUnknownBlocks.push(base.block_num)
+      } else if (paid > 0n) rows.push({ ...base, log_index: 0, token: ETH_ADDRESS, account: me, side: "debit", amount: paid.toString(), kind: "gas" })
     }
     if (tx.status && BigInt(tx.value) > 0n) {
       const eth = { ...base, log_index: 0, token: ETH_ADDRESS, account: me, amount: tx.value, kind: "eth" as const }
@@ -153,7 +156,7 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
       kind: "unwrap",
     })
   }
-  return { rows, gasUnknownTxs }
+  return { rows, gasUnknownTxs, gasUnknownBlocks }
 }
 
 /** A `latestRoundData()` result's answer and when it last updated, or null when the read failed or it isn't a positive answer. */

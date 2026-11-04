@@ -41,7 +41,7 @@ function fake(
     processedThrough: async (_, head) => processed(head),
     async readWindow(_, from, to): Promise<WindowRows> {
       windows.push([from, to])
-      return { rows: [...chain.entries()].filter(([b]) => b >= from && b <= to).flatMap(([, r]) => r), priced: null, gasUnknownTxs: [] }
+      return { rows: [...chain.entries()].filter(([b]) => b >= from && b <= to).flatMap(([, r]) => r), priced: null, gasUnknownTxs: [], gasUnknownBlocks: [] }
     },
     async readReferences(blocks) {
       referenceReads.push([...blocks])
@@ -367,7 +367,7 @@ describe("reconciling", () => {
       assert.deepEqual(portfolio.totals.coverage.value.missing > 0, true, "it's an estimate now")
       assert.equal(portfolio.totals.pnlMicros, null)
       assert.equal(portfolio.pnlStatus, "unavailable")
-      assert.ok(portfolio.totals.excluded.some((e) => e.asset === "ETH" && e.reason === "not checked against its onchain balance"))
+      assert.ok(portfolio.totals.excluded.some((e) => e.asset === "ETH" && e.reason === "not checked against its actual balance"))
       assert.equal(portfolio.points.at(-1)!.pnlMicros, null)
     })
 
@@ -403,7 +403,7 @@ describe("reconciling", () => {
       next()
       const portfolio = await read()
       assert.equal(portfolio.positions.find((p) => p.asset === "ETH")!.reconciliation?.status, "reconciled")
-      assert.equal(portfolio.totals.excluded.some((e) => e.reason === "not checked against its onchain balance"), false)
+      assert.equal(portfolio.totals.excluded.some((e) => e.reason === "not checked against its actual balance"), false)
     })
 
     it("adds what's moved since the last read, so the amount isn't stale", async () => {
@@ -646,6 +646,23 @@ describe("settling unwrap credits", () => {
     const wallets = createWallets(source, async () => headAt(head)(), (requests) => fees(requests))
     assert.equal((await wallets.get(ME)).legs.find((l) => l.kind !== "gas")!.unsettledCredit, true)
     fees = allFees
+    head = 1001
+    assert.deepEqual(ethDeltas((await wallets.get(ME)).legs), [])
+  })
+
+  it("doesn't settle a block where a transaction's gas is unknown, until a re-read says otherwise", async () => {
+    let head = 1000
+    let gasKnown = false
+    const { source: base } = fake(new Map([[990, [gas(990), claim(990)]]]), () => reference(head), undefined, undefined, async (blocks) => new Map(blocks.map((b) => [b, b === 990 ? "4900" : "5000"])))
+    const source: Source = {
+      ...base,
+      async readWindow(address, from, to) {
+        return { ...(await base.readWindow(address, from, to)), ...(gasKnown ? {} : { gasUnknownTxs: ["0xnorows"], gasUnknownBlocks: [990] }) }
+      },
+    }
+    const wallets = createWallets(source, async () => headAt(head)(), allFees)
+    assert.equal((await wallets.get(ME)).legs.find((l) => l.kind !== "gas")!.unsettledCredit, true)
+    gasKnown = true
     head = 1001
     assert.deepEqual(ethDeltas((await wallets.get(ME)).legs), [])
   })

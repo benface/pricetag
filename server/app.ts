@@ -59,7 +59,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 /** Query errors can quote our SQL or the endpoint. The browser gets a fixed message, and the detail stays in the server log. */
 function sendAmpError(res: ServerResponse, error: unknown) {
   console.error("Amp query failed:", describeError(error))
-  sendJson(res, 502, { error: "Couldn't read from Amp." })
+  sendJson(res, 502, { error: "Couldn't read this wallet's data." })
 }
 
 export function createApi(env: Env) {
@@ -116,7 +116,7 @@ export function createApi(env: Env) {
       return null
     }
     if (!wallets) {
-      sendJson(res, 503, { error: "No Amp connection is set up, so only the demo wallet is available." })
+      sendJson(res, 503, { error: "No data source is set up, so only the demo wallet is available." })
       return null
     }
     try {

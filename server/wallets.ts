@@ -23,6 +23,8 @@ type Cached = {
   prices: LatestPrices
   latest: Head
   gasUnknownTxs: Set<string>
+  /** Where those transactions are, as far as the last read of each block says. */
+  gasUnknownBlocks: Set<number>
   /** Before `fromBlock`. Fixed once read. */
   opening: BalanceSnapshot | null
   /** At `coveredTo`, the same block the rows reach, or the check would fail whenever a dataset is slightly behind. */
@@ -99,6 +101,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     let priced = cached?.priced ?? []
     const known = new Map(cached?.references ?? [])
     const gasUnknownTxs = new Set(cached?.gasUnknownTxs ?? [])
+    const gasUnknownBlocks = new Set(cached?.gasUnknownBlocks ?? [])
     const ethBalances = new Map(cached?.ethBalances ?? [])
     if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo)) {
       const readFrom = cached ? Math.max(fromBlock, cached.coveredTo - REORG_BLOCKS + 1) : fromBlock
@@ -110,6 +113,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       for (const reference of await source.readReferences(missing)) known.set(reference.block_num, reference)
       priced = window.priced ? [...priced.filter((p) => p.block_num < readFrom), ...window.priced] : derivePricedRows(rows, [...known.values()])
       for (const tx of window.gasUnknownTxs) gasUnknownTxs.add(tx)
+      for (const block of gasUnknownBlocks) if (block >= readFrom) gasUnknownBlocks.delete(block)
+      for (const block of window.gasUnknownBlocks) gasUnknownBlocks.add(block)
     }
 
     const l1Fees = new Map(cached?.l1Fees ?? [])
@@ -140,7 +145,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
     const prices = latestPrices(await source.readLatestReference(head.blockNum))
 
-    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs, opening, closing, lastBalances, l1Fees, ethBalances }
+    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs, gasUnknownBlocks, opening, closing, lastBalances, l1Fees, ethBalances }
     wallets.delete(address)
     wallets.set(address, next)
     if (wallets.size > MAX_WALLETS) wallets.delete(wallets.keys().next().value as string)
@@ -157,6 +162,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       references,
       ethBalances: wallet.ethBalances,
       feeUnknownTxs: [...wallet.gasUnknownTxs, ...l1.unknownTxs],
+      gasUnknownBlocks: [...wallet.gasUnknownBlocks],
     })
     const openedAt = new Date(new Date(wallet.latest.timestamp).getTime() - (wallet.latest.blockNum - wallet.fromBlock + 1) * BLOCK_MS).toISOString()
     return {

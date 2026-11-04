@@ -60,8 +60,9 @@ describe("gas", () => {
 
   it("is null rather than wrong when the previous transaction is missing", () => {
     assert.equal(gasPaid(REAL_TX, { ...CONTEXT, cumulativeGas: new Map() }), null)
-    const { rows, gasUnknownTxs } = legRowsFromRaw({ account: ME, txs: [REAL_TX], logs: [], withdrawals: [], gas: { ...CONTEXT, cumulativeGas: new Map() } })
+    const { rows, gasUnknownTxs, gasUnknownBlocks } = legRowsFromRaw({ account: ME, txs: [REAL_TX], logs: [], withdrawals: [], gas: { ...CONTEXT, cumulativeGas: new Map() } })
     assert.equal(gasUnknownTxs.length, 1)
+    assert.deepEqual(gasUnknownBlocks, [REAL_TX.block_num])
     assert.equal(rows.filter((r) => r.kind === "gas").length, 0)
   })
 })

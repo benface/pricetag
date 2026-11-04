@@ -9,8 +9,8 @@ public enum Mode: String, Codable, Sendable {
     public var label: String {
         switch self {
         case .demo: "Demo data"
-        case .raw: "Raw dataset"
-        case .dataset: "Pricetag dataset"
+        case .raw: "Raw chain data"
+        case .dataset: "Pricetag data"
         }
     }
 }
@@ -21,8 +21,8 @@ public enum CostMethod: String, Codable, Sendable, CaseIterable, Identifiable {
     public var id: Self { self }
     public var label: String {
         switch self {
-        case .average: "Average cost"
-        case .fifo: "FIFO"
+        case .average: "Average"
+        case .fifo: "Oldest first"
         }
     }
 }
