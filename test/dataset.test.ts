@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { ptGasSource, ptPriceSource, tablesSql } from "../dataset/build.ts"
+import { ptGasSource, ptNetSource, ptPriceSource, tablesSql } from "../dataset/build.ts"
 import { gasPaid, type RawTx } from "../server/raw.ts"
-import { ptPrice } from "../src/core/legs.ts"
+import { ptNet, ptPrice } from "../src/core/legs.ts"
 import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS } from "../src/core/tokens.ts"
 
 const manifest = JSON.parse(readFileSync(new URL("../dataset/pricetag.json", import.meta.url), "utf8")) as {
@@ -25,12 +25,23 @@ describe("the committed manifest", () => {
     const expected = tablesSql(start)
     assert.deepEqual(Object.fromEntries(Object.entries(manifest.tables).map(([k, v]) => [k, v.input.sql])), expected)
     assert.equal(manifest.functions.pt_price!.source.source, ptPriceSource())
+    assert.equal(manifest.functions.pt_net!.source.source, ptNetSource())
     assert.equal(manifest.functions.pt_gas!.source.source, ptGasSource())
   })
 
   it("every table has exactly one top-level start filter, or its job walks from genesis", () => {
     for (const [name, table] of Object.entries(manifest.tables)) {
       assert.equal(table.input.sql.match(/block_num\(\) >= \d+/g)?.length, 1, name)
+    }
+  })
+
+  it("a table with a GROUP BY has its start filter at the top level, because Amp can't infer a start through an aggregate", () => {
+    const grouped = Object.entries(manifest.tables).filter(([, table]) => table.input.sql.includes("GROUP BY"))
+    assert.ok(grouped.length >= 2)
+    for (const [name, table] of grouped) {
+      const before = table.input.sql.slice(0, table.input.sql.search(/block_num\(\) >= \d+/))
+      assert.ok(before.includes("GROUP BY"), `${name}: the filter is under its GROUP BY`)
+      assert.equal(before.split("(").length, before.split(")").length, `${name}: the filter is inside a subquery`)
     }
   })
 
@@ -77,6 +88,21 @@ describe("unlisted_legs", () => {
   })
 })
 
+describe("pairing", () => {
+  const net = manifest.tables.net_legs!.input.sql
+
+  it("pairs what each account netted per token, not its raw legs", () => {
+    assert.match(net, /FROM self\.legs WHERE kind <> 'gas'/)
+    assert.match(net, /GROUP BY block_num\(\), block_num, timestamp, tx_hash, account, token/)
+    assert.match(manifest.tables.pairs!.input.sql, /FROM self\.net_legs a\s+JOIN self\.net_legs b/)
+    assert.doesNotMatch(manifest.tables.pairs!.input.sql, /self\.legs/)
+  })
+
+  it("drops what nets to zero", () => {
+    assert.match(net, /WHERE get_field\(net, 'side'\) <> ''/)
+  })
+})
+
 describe("the UDFs match the app", () => {
   const dataset = udf<PtPrice>("pt_price")
   const cases: [string, string, string, string, string, string][] = [
@@ -103,6 +129,31 @@ describe("the UDFs match the app", () => {
 
   it("WORK-319's hand-checked swap still comes to $2,420.50", () => {
     assert.deepEqual(ptPrice(...cases[0]!), { token: "WETH", usd_micros: "2420502736", source: "swap" })
+  })
+
+  const ptNetDataset = udf<(amounts: string | null) => unknown>("pt_net")
+  const MAX = (2n ** 256n - 1n).toString()
+  const nets = ["5", "-5", "5,-3", "3,-5", "5,-5", "-1,-2,4", "4,-2", "4,-3", "1000,-995", `${MAX},${MAX}`, `-${MAX},-${MAX},1`, "", "-", "5,-", "5,", "5,abc", "1.5", "0"]
+
+  for (const amounts of nets) {
+    it(`pt_net(${JSON.stringify(amounts.slice(0, 24))})`, () => assert.deepEqual(ptNetDataset(amounts), ptNet(amounts)))
+  }
+
+  it("pt_net doesn't overflow on several 2^256 amounts", () => {
+    assert.deepEqual(ptNet(`${MAX},${MAX}`), { amount: (2n * (2n ** 256n - 1n)).toString(), side: "credit" })
+    assert.deepEqual(ptNet("-8,1"), { amount: "7", side: "debit" })
+    assert.deepEqual(ptNet("5,-5"), { amount: "", side: "" })
+  })
+
+  it("pt_net keeps an amount until under half of what moved is left", () => {
+    assert.deepEqual(ptNet("-1200,200"), { amount: "1000", side: "debit" })
+    assert.deepEqual(ptNet("-300,100"), { amount: "200", side: "debit" })
+    assert.deepEqual(ptNet("-300,101"), { amount: "", side: "debit" })
+    assert.deepEqual(ptNet("1000,-995"), { amount: "", side: "credit" })
+  })
+
+  it("pt_net never returns null or throws, because that would stop the whole dataset", () => {
+    for (const bad of [null, "", "-", "5,-", ",", "abc", "1e5"]) assert.deepEqual(ptNetDataset(bad), { amount: "", side: "" })
   })
 
   it("pt_gas matches the real receipt, and matches the app", () => {
