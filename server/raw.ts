@@ -186,8 +186,8 @@ export function withCounterparties(rows: readonly LegRow[], logs: readonly Pick<
   })
 }
 
-/** Rows' blocks worth looking up, so a wallet's first read doesn't scan every block for the few that touch it. */
-export const counterpartyBlocks = (rows: readonly LegRow[]): number[] => [...new Set(rows.filter((r) => r.kind === "erc20" || r.kind === "eth").map((r) => r.block_num))]
+/** The blocks worth looking up for one kind of row, so a wallet's first read doesn't scan every block for the few that touch it. */
+export const counterpartyBlocks = (rows: readonly LegRow[], kind: "erc20" | "eth"): number[] => [...new Set(rows.filter((r) => r.kind === kind).map((r) => r.block_num))]
 
 /** The `answer` word of a `latestRoundData()` result, or "" when the read failed. */
 export function decodeRoundAnswer(data: string | null | undefined): string {
