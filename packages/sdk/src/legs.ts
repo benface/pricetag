@@ -48,6 +48,17 @@ export type LegRow = {
   settled?: boolean
   /** On a transaction's rows: `settleUnwraps` found ETH in its block that nothing explains. See `UnseenEth`. */
   unseenEth?: boolean
+  /** On a transaction's rows: what `settleUnwraps` found of its claims. See `SettledCredit`. */
+  settledCredit?: SettledCredit
+}
+
+/**
+ * Two different facts about a transaction whose claims were settled. Its `Withdrawal` logs say how much WETH became ETH,
+ * and they stay as recorded. What reached the wallet is what its balance says, which can be less or nothing, and no log says that.
+ */
+export type SettledCredit = {
+  received: string
+  withdrawals: { logIndex: number; amount: string }[]
 }
 
 /**
@@ -126,6 +137,8 @@ export type PricedLeg = FoldLeg & {
   opening?: boolean
   /** This transaction claims ETH reached the wallet, and the chain hasn't confirmed how much. See `isUnwrapClaim`. */
   unsettledCredit?: boolean
+  /** On what moved in a transaction whose claims were settled. This outlives the credit's rows, which can merge or vanish. */
+  settledCredit?: SettledCredit
 }
 
 /** The same calculation as the dataset's `pt_price` UDF. A test runs both on the same inputs. */
@@ -310,7 +323,8 @@ type SettleInput = {
  * of them can have received less than that.
  *
  * A credit that can't be settled keeps its `isUnwrapClaim` amount, and `buildPricedLegs` values nothing from it.
- * A credit that changed also changes what the transaction traded, so its priced rows are worked out again.
+ * A credit that changed also changes what the transaction traded, so its priced rows are worked out again. Whatever
+ * happens to a settled credit's rows, its transaction's rows keep what the logs recorded, as a `SettledCredit`.
  */
 function settleClaims({ rows, priced, references, ethBalances, feeUnknownTxs, gasUnknownBlocks }: SettleInput): { rows: LegRow[]; priced: PricedRow[] } {
   const claimBlocks = new Set(rows.filter(isUnwrapClaim).map((row) => row.block_num))
@@ -346,17 +360,27 @@ function settleClaims({ rows, priced, references, ethBalances, feeUnknownTxs, ga
   }
 
   const claimed = new Map<string, bigint>()
-  for (const row of rows) if (isUnwrapClaim(row)) claimed.set(row.tx_hash, (claimed.get(row.tx_hash) ?? 0n) + BigInt(row.amount))
+  const withdrawals = new Map<string, SettledCredit["withdrawals"]>()
+  for (const row of rows) {
+    if (!isUnwrapClaim(row)) continue
+    claimed.set(row.tx_hash, (claimed.get(row.tx_hash) ?? 0n) + BigInt(row.amount))
+    withdrawals.set(row.tx_hash, [...(withdrawals.get(row.tx_hash) ?? []), { logIndex: row.log_index, amount: row.amount }])
+  }
   const changed = new Set([...credits].filter(([tx, credit]) => credit !== claimed.get(tx)).map(([tx]) => tx))
   const settled: LegRow[] = []
   const written = new Set<string>()
   for (const row of rows) {
-    const credit = isUnwrapClaim(row) ? credits.get(row.tx_hash) : undefined
-    if (credit === undefined) settled.push(row)
-    else if (!changed.has(row.tx_hash)) settled.push({ ...row, settled: true })
+    const credit = credits.get(row.tx_hash)
+    if (credit === undefined) {
+      settled.push(row)
+      continue
+    }
+    const marked = { ...row, settledCredit: { received: credit.toString(), withdrawals: withdrawals.get(row.tx_hash)! } }
+    if (!isUnwrapClaim(row)) settled.push(marked)
+    else if (!changed.has(row.tx_hash)) settled.push({ ...marked, settled: true })
     // Several withdrawals in one transaction become one credit, and a false one becomes none.
     else if (credit > 0n && !written.has(row.tx_hash)) {
-      settled.push({ ...row, amount: credit.toString(), settled: true })
+      settled.push({ ...marked, amount: credit.toString(), settled: true })
       written.add(row.tx_hash)
     }
   }
@@ -457,6 +481,7 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
     // The other token's balance can match while the amount it was traded for is wrong, so nothing here gets a value.
     const unsettledCredit = txRows.some(isUnwrapClaim)
     const unsettled = unsettledCredit ? { unsettledCredit } : {}
+    const settledCredit = txRows.find((row) => row.settledCredit)?.settledCredit
     const feeRows = txRows.filter(isFeeRow)
     if (feeRows.length > 0) {
       legs.push({
@@ -580,6 +605,7 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
         ...(marketSide && value !== null ? { estimated: true } : {}),
         parts: net.parts.map(partOf),
         ...unsettled,
+        ...(settledCredit ? { settledCredit } : {}),
       })
     }
   }
