@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import type { WalletResponse } from "../core/api.ts"
-import type { CurrencyCode } from "../core/currency.ts"
+import type { CurrencyCode } from "@pricetag/sdk/core"
 
 export type WalletState = {
   wallet: WalletResponse | null

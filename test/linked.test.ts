@@ -5,8 +5,8 @@ import type { AddressInfo } from "node:net"
 import { ASSETS, ETH_ADDRESS, buildPricedLegs, foldPositions, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import { createApi } from "../server/app.ts"
 import { portfolioOf } from "../server/portfolio.ts"
-import type { Source } from "../server/source.ts"
-import { unlistedTokens } from "../server/wallets.ts"
+import type { Source } from "@pricetag/sdk/internal"
+import { unlistedTokens } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { inheritCosts } from "../src/core/linked.ts"
@@ -169,7 +169,7 @@ describe("inheritCosts", () => {
     amount: ONE.toString(),
     kind: "erc20",
   })
-  const batchLeg = (delta: bigint, parts: LegRow[]) => ({ ...leg("0x5", delta, { parts }), blockNum: 500 })
+  const batchLeg = (delta: bigint, rows: LegRow[]) => ({ ...leg("0x5", delta, { parts: rows.map(({ token, account, side, amount, kind, log_index }) => ({ token, account, side, amount, kind, logIndex: log_index })) }), blockNum: 500 })
 
   it("matches same-sized transfers in a batch by their log, whichever wallet is read first", () => {
     const A = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
@@ -322,8 +322,8 @@ describe("the portfolio endpoint with linked wallets", () => {
     head: async () => ({ blockNum: 20, timestamp: "2026-11-04T00:00:00.000Z" }),
     processedThrough: async (_, head) => head,
     readWindow: async (address) => ({ rows: rows[address] ?? [], priced: null, gasUnknown: [] }),
-    readReferences: async (blocks) => blocks.map((block_num) => ({ block_num, eth_usd: "300000000000", usdc_usd: "100000000" })),
-    readLatestReference: async () => ({ block_num: 20, eth_usd: "400000000000", usdc_usd: "100000000" }),
+    readReferences: async (blocks) => blocks.map((block_num) => ({ blockNum: block_num, ethUsd: "300000000000", usdcUsd: "100000000" })),
+    readLatestReference: async () => ({ blockNum: 20, ethUsd: "400000000000", usdcUsd: "100000000" }),
     readEthBalances: async () => new Map(),
     readBalances: async (address, block) => {
       const amounts: Record<string, string> = Object.fromEntries(ASSETS.map((asset) => [asset, "0"]))

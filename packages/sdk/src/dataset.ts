@@ -3,9 +3,11 @@
 // Every query is bounded by block, because a hosted Amp is shared.
 
 import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type Query } from "./amp.ts"
-import type { LegRow, PricedRow, ReferenceRow } from "./legs.ts"
+import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
+import type { LegRow, PricedRow, Reference } from "./legs.ts"
 import type { Head } from "./portfolio.ts"
 import type { PriceFeed } from "./tokens.ts"
+import type { Source } from "./wallets.ts"
 
 export type Row = Record<string, unknown>
 
@@ -52,12 +54,12 @@ const PRICED_COLUMNS = "block_num, tx_hash, account, sold_token, sold_amount, bo
 const ORACLE_COLUMNS = { eth: "eth_answer", usdc: "usdc_answer" }
 const REFERENCE_COLUMNS = `block_num, ${ORACLE_COLUMNS.eth} AS eth_usd, ${ORACLE_COLUMNS.usdc} AS usdc_usd, eth_tx, usdc_tx`
 
-const toReference = (r: Row): ReferenceRow => ({
-  block_num: asNumber(r.block_num),
-  eth_usd: decimalString(r.eth_usd) ?? "",
-  usdc_usd: decimalString(r.usdc_usd) ?? "",
-  eth_tx: r.eth_tx == null ? undefined : prefixed(String(r.eth_tx)),
-  usdc_tx: r.usdc_tx == null ? undefined : prefixed(String(r.usdc_tx)),
+const toReference = (r: Row): Reference => ({
+  blockNum: asNumber(r.block_num),
+  ethUsd: decimalString(r.eth_usd) ?? "",
+  usdcUsd: decimalString(r.usdc_usd) ?? "",
+  ethTx: r.eth_tx == null ? undefined : prefixed(String(r.eth_tx)),
+  usdcTx: r.usdc_tx == null ? undefined : prefixed(String(r.usdc_tx)),
 })
 
 const toLegRow = (l: Row): LegRow => ({
@@ -85,7 +87,7 @@ const toPricedRow = (p: Row): PricedRow => ({
 })
 
 /** A `priced_legs` row, with the timestamp and oracle reads of its block. */
-export type SwapRow = { row: PricedRow; timestamp: string; reference: ReferenceRow }
+export type SwapRow = { row: PricedRow; timestamp: string; reference: Reference }
 
 export type OracleRow = { block_num: number; timestamp: string; answer: string }
 
@@ -142,8 +144,8 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
       }
     },
 
-    async readReferences(blocks: readonly number[]): Promise<ReferenceRow[]> {
-      const result: ReferenceRow[] = []
+    async readReferences(blocks: readonly number[]): Promise<Reference[]> {
+      const result: Reference[] = []
       for (const { filter } of blockFilters(blocks)) {
         const rows = await query<Row>(`SELECT ${REFERENCE_COLUMNS} FROM ${prices}.reference_prices WHERE ${filter}`)
         result.push(...rows.map(toReference))
@@ -152,7 +154,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
     },
 
     /** The newest oracle read at or just before `head`, or null if there's none recent enough to call current. */
-    async readLatestReference(head: number): Promise<ReferenceRow | null> {
+    async readLatestReference(head: number): Promise<Reference | null> {
       const rows = await readOrEmpty(`SELECT ${REFERENCE_COLUMNS} FROM ${prices}.reference_prices WHERE block_num BETWEEN ${head - MAX_PRICE_AGE_BLOCKS} AND ${head} ORDER BY block_num DESC LIMIT 1`)
       return rows[0] ? toReference(rows[0]) : null
     },
@@ -190,5 +192,42 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
       }
       return result
     },
+  }
+}
+
+/**
+ * One query per 200 blocks, in the shape the raw source's `readReferences` explains. A block the table doesn't have, like
+ * the one before a local dataset's start, is read on its own.
+ */
+export async function readEthBalancesAt(query: Query, network: string, baseDataset: string, address: string, blocks: readonly number[]): Promise<Map<number, string>> {
+  const balances = new Map<number, string>()
+  const call = (block: string) => `rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeEthBalanceCall(address)}', ${block}) AS r`
+  const dataOf = (row: Row | undefined) => (row?.r as { data?: string } | null | undefined)?.data
+  const returned = new Set<number>()
+  for (const { filter, count } of blockFilters(blocks)) {
+    for (const row of await query<Row>(`SELECT block_num, ${call("block_num")} FROM (SELECT block_num FROM "${baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)) {
+      const block = asNumber(row.block_num)
+      const balance = decodeEthBalance(dataOf(row))
+      returned.add(block)
+      if (balance !== null) balances.set(block, balance)
+    }
+  }
+  for (const block of blocks) {
+    if (returned.has(block)) continue
+    const [row] = await query<Row>(`SELECT ${call(String(block))}`)
+    const balance = decodeEthBalance(dataOf(row))
+    if (balance !== null) balances.set(block, balance)
+  }
+  return balances
+}
+
+export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock: number | null; network: string }): Source {
+  return {
+    mode: "dataset",
+    startBlock: config.startBlock,
+    historyBlocks: null,
+    readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
+    ...datasetReader(query, config),
   }
 }

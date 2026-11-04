@@ -2,7 +2,8 @@
 // emits no log, so a pinned address just goes quiet, and its price turns `unknown` once its window passes. No table can
 // see that coming, but the proxy can be asked.
 
-import { PRICE_FEEDS, hexOf } from "@pricetag/sdk"
+import { PRICE_FEEDS } from "@pricetag/sdk/core"
+import { hexOf } from "@pricetag/sdk/internal"
 
 /** The first four bytes of the Keccak of `aggregator()`. */
 export const AGGREGATOR_SELECTOR = "0x245a7bfc"

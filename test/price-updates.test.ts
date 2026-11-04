@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { describe, it } from "node:test"
-import { ASSETS, PRICE_FEEDS, datasetReader, type LegRow, type PricedLeg, type PriceFeed, type PriceUpdate, type Query } from "@pricetag/sdk"
+import { ASSETS, PRICE_FEEDS, type LegRow, type PricedLeg, type PriceFeed } from "@pricetag/sdk/core"
+import { datasetReader, type PriceUpdate, type Query, type Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
 import { AGGREGATOR_SELECTOR, warnOfNewAggregators } from "../server/feeds.ts"
 import { createProofs, feedBehind, proofOf, verificationOf, type BlockRead, type PriceBehind } from "../server/proof.ts"
 import { ANSWER_UPDATED_TOPIC } from "../server/raw.ts"
-import type { Source } from "../server/source.ts"
 import { keccak, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "../server/verify.ts"
 import type { ProofResponse, VerificationResponse } from "../src/core/api.ts"
 
@@ -239,7 +239,7 @@ describe("reading an update", () => {
       queries.push(sql)
       return answers(sql)
     }) as Query, { baseDataset: "a/base@1", dataset: "a/pricetag@1" })
-    assert.deepEqual(await reader.readReferences([500000]), [{ block_num: 500000, eth_usd: "300000000000", usdc_usd: "100000000", eth_tx: `0x${TX}`, usdc_tx: undefined }])
+    assert.deepEqual(await reader.readReferences([500000]), [{ blockNum: 500000, ethUsd: "300000000000", usdcUsd: "100000000", ethTx: `0x${TX}`, usdcTx: undefined }])
     assert.match(queries[0] as string, /eth_answer AS eth_usd, usdc_answer AS usdc_usd, eth_tx, usdc_tx/)
   })
 })
@@ -255,9 +255,10 @@ describe("the proof and verify routes", () => {
     head: async () => ({ blockNum: LEG_BLOCK, timestamp: "2024-01-30T00:00:00.000Z" }),
     processedThrough: async (_after, head) => head,
     readWindow: async () => ({ rows: [legRow], priced: [], gasUnknown: [] }),
-    readReferences: async (blocks) => blocks.map((block_num) => ({ block_num, eth_usd: ANSWER, usdc_usd: "100000000" })),
-    readLatestReference: async () => ({ block_num: LEG_BLOCK, eth_usd: ANSWER, usdc_usd: "100000000" }),
+    readReferences: async (blocks) => blocks.map((blockNum) => ({ blockNum, ethUsd: ANSWER, usdcUsd: "100000000" })),
+    readLatestReference: async () => ({ blockNum: LEG_BLOCK, ethUsd: ANSWER, usdcUsd: "100000000" }),
     readBalances: async (_address, block) => ({ blockNum: block, amounts: { ...Object.fromEntries(ASSETS.map((asset) => [asset, "0"])), ETH: "1000000000000000000" } }),
+    readEthBalances: async () => new Map(),
   }
   const serve = async (priceBehind: (f: PriceFeed, at: number) => Promise<PriceBehind | null>) => {
     const blocksRead: number[] = []

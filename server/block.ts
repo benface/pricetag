@@ -1,6 +1,6 @@
 // Reads one block's rows from Amp for `verify.ts`, and what a deposit's hash covers from an RPC.
 
-import { asNumber, decimalString, hexOf, type Query, type Row } from "@pricetag/sdk"
+import { asNumber, decimalString, hexOf, type Query, type Row } from "@pricetag/sdk/internal"
 import { DEPOSIT_TX_TYPE, type AccessListEntry, type Authorization, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "./verify.ts"
 
 export type BlockData = { block: BlockRow; txs: TxRow[]; logs: LogRow[] }

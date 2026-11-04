@@ -1,10 +1,9 @@
 // What's behind one leg's price, and the check of the block it's in. The words are here because the clients only show them.
 // The check only reaches the raw dataset's rows: the block's header covers those, and nothing downstream of them.
 
-import { PRICE_FEEDS, TOKENS, WETH_ADDRESS, answerToMicros, datasetReader, describeError, hexOf, ptPrice, tokenByAddress, type LegRow, type PriceFeed, type PricedLeg, type PriceUpdate, type Query } from "@pricetag/sdk"
+import { PRICE_FEEDS, TOKENS, WETH_ADDRESS, answerToMicros, formatAmount, formatPrice, ptPrice, tokenByAddress, type CurrencyCode, type LegPart, type PriceFeed, type PricedLeg } from "@pricetag/sdk/core"
+import { datasetReader, describeError, hexOf, type PriceUpdate, type Query } from "@pricetag/sdk/internal"
 import type { CheckStatus, ProofCheck, ProofDataset, ProofLink, ProofResponse, VerificationResponse } from "../src/core/api.ts"
-import type { CurrencyCode } from "../src/core/currency.ts"
-import { formatAmount, formatPrice } from "../src/core/format.ts"
 import { tokenLabel } from "../src/core/wording.ts"
 import { depositHashes, readBlock, type BlockData, type ReadDeposits } from "./block.ts"
 import { ANSWER_UPDATED_TOPIC, DEPOSIT_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, gasPaid } from "./raw.ts"
@@ -72,7 +71,7 @@ function priceSource(leg: PricedLeg, legs: readonly PricedLeg[], behind: PriceBe
 }
 
 /** Each thing this leg adds up, and where it's recorded. */
-function describePart(part: LegRow): string {
+function describePart(part: LegPart): string {
   const token = tokenByAddress(part.token)
   const amount = formatAmount(part.amount, token?.decimals ?? 18)
   const symbol = tokenLabel(token?.symbol ?? part.token)
@@ -85,18 +84,18 @@ function describePart(part: LegRow): string {
     case "eth":
       return `Transaction value: ${amount} ETH ${direction}`
     case "wrap":
-      return `Log #${part.log_index}: ${amount} ETH wrapped`
+      return `Log #${part.logIndex}: ${amount} ETH wrapped`
     case "unwrap":
-      return `Log #${part.log_index}: ${amount} ETH unwrapped`
+      return `Log #${part.logIndex}: ${amount} ETH unwrapped`
     default:
-      return `Log #${part.log_index}: ${amount} ${symbol} ${direction}`
+      return `Log #${part.logIndex}: ${amount} ${symbol} ${direction}`
   }
 }
 
-const isFee = (part: LegRow) => part.kind === "gas" || part.kind === "l1_fee"
+const isFee = (part: LegPart) => part.kind === "gas" || part.kind === "l1_fee"
 
 /** Whether this row's account comes from the transaction's stored sender. A log or a recipient is in what's hashed, but the sender is only signed for. */
-const reliesOnSender = (part: LegRow) => isFee(part) || (part.kind === "eth" && part.side === "debit") || (part.kind === "unwrap" && part.side === "credit")
+const reliesOnSender = (part: LegPart) => isFee(part) || (part.kind === "eth" && part.side === "debit") || (part.kind === "unwrap" && part.side === "credit")
 
 /** What checking this leg's block does and doesn't show. Nothing here can be left out for a passing result to read honestly. */
 function scopeOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: CurrencyCode, behind: PriceBehind | null): string[] {
@@ -160,14 +159,14 @@ function gasFrom(tx: TxRow, { block, txs }: BlockData): bigint | null {
 }
 
 /** Whether the checked rows say what a row of this leg says they do. An Ethereum fee can't be compared, because no checked row has it. */
-function partMatches(part: LegRow, tx: TxRow, data: BlockData): boolean {
+function partMatches(part: LegPart, tx: TxRow, data: BlockData): boolean {
   const { logs } = data
   const account = hexOf(part.account)
   if (part.kind === "gas") return hexOf(tx.from) === account && gasFrom(tx, data) === BigInt(part.amount || "-1")
   if (part.kind === "l1_fee") return hexOf(tx.from) === account
   if (part.kind === "eth") return tx.status && tx.value === part.amount && hexOf((part.side === "debit" ? tx.from : tx.to) ?? "") === account
 
-  const log = logs.find((candidate) => candidate.log_index === part.log_index && candidate.tx_index === tx.tx_index)
+  const log = logs.find((candidate) => candidate.log_index === part.logIndex && candidate.tx_index === tx.tx_index)
   if (!log || !part.amount || BigInt(`0x${log.data.slice(0, 64) || "0"}`) !== BigInt(part.amount)) return false
   const weth = hexOf(WETH_ADDRESS)
   if (part.kind === "erc20") return hexOf(log.address) === hexOf(part.token) && log.topics[0] === TRANSFER_TOPIC && log.topics[part.side === "debit" ? 1 : 2] === padded(account)
@@ -326,7 +325,7 @@ export function createProofs(query: Query, config: { baseDataset: string; datase
     async priceBehind(feed, blockNum) {
       if (!reader) return null
       const [reference] = await reader.readReferences([blockNum])
-      const tx = feed.name === "eth" ? reference?.eth_tx : reference?.usdc_tx
+      const tx = feed.name === "eth" ? reference?.ethTx : reference?.usdcTx
       return { feed, update: tx ? await reader.readPriceUpdate(feed, tx, blockNum) : null }
     },
     async datasets() {

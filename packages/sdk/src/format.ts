@@ -1,12 +1,16 @@
 // Display only. Every value here was computed in BigInt. Converting to Number happens only to print it.
+// Money can be null, which means unknown, and prints as that. It never prints as $0. Without a currency, it's USD.
 
 import { CURRENCIES, type CurrencyCode } from "./currency.ts"
+
+const UNKNOWN = "unknown"
 
 const whole = new Map(Object.values(CURRENCIES).map((c) => [c.code, new Intl.NumberFormat(c.locale, { style: "currency", currency: c.code })]))
 
 const twoDecimals = (value: number, currency: CurrencyCode) => (whole.get(currency) as Intl.NumberFormat).format(value)
 
-export function formatMoney(micros: string | bigint, currency: CurrencyCode): string {
+export function formatMoney(micros: string | bigint | null, currency: CurrencyCode = "USD"): string {
+  if (micros === null) return UNKNOWN
   const value = Number(micros) / 1e6
   const size = Math.abs(value)
   if (size === 0) return twoDecimals(0, currency)
@@ -16,14 +20,16 @@ export function formatMoney(micros: string | bigint, currency: CurrencyCode): st
   return twoDecimals(value, currency)
 }
 
-export function formatPrice(micros: string, currency: CurrencyCode): string {
+export function formatPrice(micros: string | null, currency: CurrencyCode = "USD"): string {
+  if (micros === null) return UNKNOWN
   const value = Number(micros) / 1e6
   if (value >= 1) return twoDecimals(value, currency)
   const { locale, symbol } = CURRENCIES[currency]
   return `${symbol}${value.toLocaleString(locale, { maximumSignificantDigits: 4 })}`
 }
 
-export function formatSignedMoney(micros: string | bigint, currency: CurrencyCode): string {
+export function formatSignedMoney(micros: string | bigint | null, currency: CurrencyCode = "USD"): string {
+  if (micros === null) return UNKNOWN
   const value = BigInt(micros)
   return value > 0n ? `+${formatMoney(value, currency)}` : formatMoney(value, currency)
 }

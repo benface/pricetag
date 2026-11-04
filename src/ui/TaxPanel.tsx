@@ -1,8 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import type { Method } from "@pricetag/sdk/core"
+import { formatSignedMoney, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
-import type { CurrencyCode } from "../core/currency.ts"
-import { formatSignedMoney } from "../core/format.ts"
 import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, type TaxCountryCode, type TaxScope } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME } from "../core/wording.ts"
 
