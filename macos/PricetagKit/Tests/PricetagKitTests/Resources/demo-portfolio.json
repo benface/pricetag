@@ -2,6 +2,8 @@
   "address": "0x00000000000000000000000000000000000de300",
   "mode": "demo",
   "method": "average",
+  "currency": "USD",
+  "exchange": null,
   "coverage": {
     "fromBlock": 53500000,
     "toBlock": 53505400
@@ -28,13 +30,13 @@
       "values": {
         "qty": "250000000000000000000",
         "unknownCostQty": "250000000000000000000",
-        "costUsdMicros": null,
-        "averageCostUsdMicros": null,
-        "valueUsdMicros": null,
-        "realizedUsdMicros": "0",
-        "unrealizedUsdMicros": null
+        "costMicros": null,
+        "averageCostMicros": null,
+        "valueMicros": null,
+        "realizedMicros": "0",
+        "unrealizedMicros": null
       },
-      "pnlUsdMicros": null,
+      "pnlMicros": null,
       "shortfallQty": "0",
       "legCount": 1,
       "reconciliation": {
@@ -50,20 +52,20 @@
       "decimals": 6,
       "note": null,
       "price": {
-        "usdMicros": "999800",
+        "micros": "999800",
         "source": "oracle",
         "blockNum": 53505400
       },
       "values": {
         "qty": "3249999999",
         "unknownCostQty": "1521951220",
-        "costUsdMicros": null,
-        "averageCostUsdMicros": null,
-        "valueUsdMicros": "3249349999",
-        "realizedUsdMicros": null,
-        "unrealizedUsdMicros": null
+        "costMicros": null,
+        "averageCostMicros": null,
+        "valueMicros": "3249349999",
+        "realizedMicros": null,
+        "unrealizedMicros": null
       },
-      "pnlUsdMicros": null,
+      "pnlMicros": null,
       "shortfallQty": "0",
       "legCount": 7,
       "reconciliation": {
@@ -79,20 +81,20 @@
       "decimals": 18,
       "note": "incl. WETH",
       "price": {
-        "usdMicros": "2640000000",
+        "micros": "2640000000",
         "source": "oracle",
         "blockNum": 53505400
       },
       "values": {
         "qty": "519720000000000000",
         "unknownCostQty": "10170605906113966",
-        "costUsdMicros": null,
-        "averageCostUsdMicros": null,
-        "valueUsdMicros": "1372060800",
-        "realizedUsdMicros": null,
-        "unrealizedUsdMicros": null
+        "costMicros": null,
+        "averageCostMicros": null,
+        "valueMicros": "1372060800",
+        "realizedMicros": null,
+        "unrealizedMicros": null
       },
-      "pnlUsdMicros": null,
+      "pnlMicros": null,
       "shortfallQty": "0",
       "legCount": 10,
       "reconciliation": {
@@ -111,13 +113,13 @@
       "values": {
         "qty": "500000000000000000000",
         "unknownCostQty": "0",
-        "costUsdMicros": "624875000",
-        "averageCostUsdMicros": "1249750",
-        "valueUsdMicros": null,
-        "realizedUsdMicros": "74985000",
-        "unrealizedUsdMicros": null
+        "costMicros": "624875000",
+        "averageCostMicros": "1249750",
+        "valueMicros": null,
+        "realizedMicros": "74985000",
+        "unrealizedMicros": null
       },
-      "pnlUsdMicros": null,
+      "pnlMicros": null,
       "shortfallQty": "0",
       "legCount": 2,
       "reconciliation": {
@@ -136,13 +138,13 @@
       "values": {
         "qty": "2500000",
         "unknownCostQty": "2500000",
-        "costUsdMicros": null,
-        "averageCostUsdMicros": null,
-        "valueUsdMicros": null,
-        "realizedUsdMicros": null,
-        "unrealizedUsdMicros": null
+        "costMicros": null,
+        "averageCostMicros": null,
+        "valueMicros": null,
+        "realizedMicros": null,
+        "unrealizedMicros": null
       },
-      "pnlUsdMicros": null,
+      "pnlMicros": null,
       "shortfallQty": "0",
       "legCount": 1,
       "reconciliation": {
@@ -161,13 +163,13 @@
       "values": {
         "qty": "50000000000000000000000",
         "unknownCostQty": "50000000000000000000000",
-        "costUsdMicros": null,
-        "averageCostUsdMicros": null,
-        "valueUsdMicros": null,
-        "realizedUsdMicros": "0",
-        "unrealizedUsdMicros": null
+        "costMicros": null,
+        "averageCostMicros": null,
+        "valueMicros": null,
+        "realizedMicros": "0",
+        "unrealizedMicros": null
       },
-      "pnlUsdMicros": null,
+      "pnlMicros": null,
       "shortfallQty": "0",
       "legCount": 1,
       "reconciliation": {
@@ -186,13 +188,13 @@
       "values": {
         "qty": "50000000000000000000",
         "unknownCostQty": "50000000000000000000",
-        "costUsdMicros": null,
-        "averageCostUsdMicros": null,
-        "valueUsdMicros": null,
-        "realizedUsdMicros": "0",
-        "unrealizedUsdMicros": null
+        "costMicros": null,
+        "averageCostMicros": null,
+        "valueMicros": null,
+        "realizedMicros": "0",
+        "unrealizedMicros": null
       },
-      "pnlUsdMicros": null,
+      "pnlMicros": null,
       "shortfallQty": "0",
       "legCount": 1,
       "reconciliation": {
@@ -205,11 +207,11 @@
     }
   ],
   "totals": {
-    "valueUsdMicros": "4621410799",
-    "realizedUsdMicros": "74985000",
-    "unrealizedUsdMicros": null,
-    "gasUsdMicros": "703360",
-    "pnlUsdMicros": "74281640",
+    "valueMicros": "4621410799",
+    "realizedMicros": "74985000",
+    "unrealizedMicros": null,
+    "gasMicros": "703360",
+    "pnlMicros": "74281640",
     "excluded": [
       {
         "asset": "DAI",
@@ -290,77 +292,77 @@
       "blockNum": 53500000,
       "timestamp": "2026-11-04T08:00:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000001",
-      "pnlUsdMicros": null,
+      "pnlMicros": null,
       "excludedCount": 3
     },
     {
       "blockNum": 53500150,
       "timestamp": "2026-11-04T08:05:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000002",
-      "pnlUsdMicros": null,
+      "pnlMicros": null,
       "excludedCount": 4
     },
     {
       "blockNum": 53500300,
       "timestamp": "2026-11-04T08:10:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000003",
-      "pnlUsdMicros": "-96000",
+      "pnlMicros": "-96000",
       "excludedCount": 6
     },
     {
       "blockNum": 53500900,
       "timestamp": "2026-11-04T08:30:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
-      "pnlUsdMicros": "-193440",
+      "pnlMicros": "-193440",
       "excludedCount": 7
     },
     {
       "blockNum": 53501500,
       "timestamp": "2026-11-04T08:50:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000005",
-      "pnlUsdMicros": "-292040",
+      "pnlMicros": "-292040",
       "excludedCount": 7
     },
     {
       "blockNum": 53502400,
       "timestamp": "2026-11-04T09:20:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
-      "pnlUsdMicros": "74592560",
+      "pnlMicros": "74592560",
       "excludedCount": 7
     },
     {
       "blockNum": 53503000,
       "timestamp": "2026-11-04T09:40:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000007",
-      "pnlUsdMicros": "74592560",
+      "pnlMicros": "74592560",
       "excludedCount": 7
     },
     {
       "blockNum": 53503600,
       "timestamp": "2026-11-04T10:00:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000008",
-      "pnlUsdMicros": "74489240",
+      "pnlMicros": "74489240",
       "excludedCount": 8
     },
     {
       "blockNum": 53504200,
       "timestamp": "2026-11-04T10:20:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
-      "pnlUsdMicros": "74385640",
+      "pnlMicros": "74385640",
       "excludedCount": 9
     },
     {
       "blockNum": 53504800,
       "timestamp": "2026-11-04T10:40:00.000Z",
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
-      "pnlUsdMicros": "74281640",
+      "pnlMicros": "74281640",
       "excludedCount": 9
     },
     {
       "blockNum": 53505400,
       "timestamp": "2026-11-04T11:00:00.000Z",
       "txHash": null,
-      "pnlUsdMicros": "74281640",
+      "pnlMicros": "74281640",
       "excludedCount": 9
     }
   ]

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { explainMetric } from "../src/core/explain.ts"
+import { USD_CONTEXT, explainMetric } from "../src/core/explain.ts"
 import { decodeEthBalance, encodeEthBalanceCall } from "../server/balances.ts"
 import { datasetSource } from "../server/source.ts"
 import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, settleUnwraps, sumTotals, unwrapBalanceBlocks, type LegRow, type Onchain, type PricedLeg, type PricedRow, type ReferenceRow } from "@pricetag/sdk/core"
@@ -38,7 +38,7 @@ const PURCHASE_USDC = 2310_000000n
 const PURCHASE: LegRow[] = [row(USDC_ADDRESS, "debit", PURCHASE_USDC, "erc20", "0xbuy", BLOCK - 10), row(CBBTC, "credit", CB_SOLD, "erc20", "0xbuy", BLOCK - 10)]
 const SALE: LegRow[] = [gas(FEE), row(CBBTC, "debit", CB_SOLD, "erc20"), row(WETH_ADDRESS, "credit", WETH_BACK, "erc20"), claim(FALSE_CLAIM)]
 const references = [REF, PRIOR]
-const PRICES = { ETH: { usdMicros: (ETH_USD * 1_000_000n).toString(), source: "oracle" as const, blockNum: BLOCK } }
+const PRICES = { ETH: { micros: (ETH_USD * 1_000_000n).toString(), source: "oracle" as const, blockNum: BLOCK } }
 // USDC starts where the purchase needs it, so the only thing in question is what the sale received.
 const FUNDING = [row(USDC_ADDRESS, "credit", PURCHASE_USDC, "erc20", "0xfund", BLOCK - 20), row(ETH_ADDRESS, "credit", BEFORE, "eth", "0xfund", BLOCK - 20)]
 const ONCHAIN: Onchain = { balances: { blockNum: BLOCK, amounts: { ETH: (AFTER + WETH_BACK).toString(), cbBTC: "0", USDC: "0" } }, l1FeeUnknownTxs: [] }
@@ -65,27 +65,27 @@ describe("a credit the sender never received", () => {
     assert.equal(cbBtc.reconciliation?.status, "reconciled")
     assert.equal(eth.reconciliation?.status, "reconciled")
     // 0.9547 ETH at $2,420, less the $2,310 it cost.
-    assert.equal(cbBtc.values.realizedUsdMicros, "404499")
-    assert.equal(saleOf(legs).proceedsUsdMicros, "2310404499")
+    assert.equal(cbBtc.values.realizedMicros, "404499")
+    assert.equal(saleOf(legs).proceedsMicros, "2310404499")
   })
 
   it("was inflated before: taking the credit at its word shows over $2,000 of profit", () => {
     const { cbBtc } = foldOf(SALE.map((r) => ({ ...r, settled: true })))
     assert.equal(cbBtc.reconciliation?.status, "reconciled")
-    assert.ok(BigInt(cbBtc.values.realizedUsdMicros!) > 2_000_000000n)
+    assert.ok(BigInt(cbBtc.values.realizedMicros!) > 2_000_000000n)
   })
 
   it("the same swap without a balance read has no known PnL, and never the inflated one", () => {
     const { cbBtc, eth, positions, legs } = foldOf(settle(SALE, new Map()).rows)
     // cbBTC's own balance matches the chain, and that doesn't vouch for what it was sold for.
     assert.equal(cbBtc.reconciliation?.status, "reconciled")
-    assert.equal(cbBtc.values.realizedUsdMicros, null)
+    assert.equal(cbBtc.values.realizedMicros, null)
     assert.equal(eth.reconciliation?.status, "incomplete")
     const sale = saleOf(legs)
-    assert.equal(sale.proceedsUsdMicros, null)
+    assert.equal(sale.proceedsMicros, null)
     assert.equal(sale.unsettledCredit, true)
     assert.match(sale.priceNote!, /couldn't confirm/)
-    assert.equal(sumTotals(positions).realizedUsdMicros, null)
+    assert.equal(sumTotals(positions).realizedMicros, null)
   })
 })
 
@@ -96,7 +96,7 @@ describe("settling a credit", () => {
     const settled = settle(rows, balances(5000n, 5000n - 100n + received)).rows
     assert.deepEqual(creditsOf(settled), [["0xcb", received.toString(), true]])
     const legs = buildPricedLegs({ account: ME, rows: settled, references, priced: [] })
-    assert.equal(legs.find((l) => l.asset === "ETH" && l.kind === "swap")!.costUsdMicros, "2420000000")
+    assert.equal(legs.find((l) => l.asset === "ETH" && l.kind === "swap")!.costMicros, "2420000000")
     assert.equal(legs.find((l) => l.asset === "ETH" && l.kind === "swap")!.unsettledCredit, undefined)
   })
 
@@ -223,7 +223,7 @@ describe("the priced rows of a settled transaction", () => {
     const rows = [gas(100n), row(CBBTC, "debit", CB_SOLD, "erc20"), claim(1000n)]
     const settled = settle(rows, balances(5000n, 4900n), [], [SWAP_ROW(1000n)])
     assert.deepEqual(settled.priced, [])
-    assert.equal(buildPricedLegs({ account: ME, rows: settled.rows, references, priced: settled.priced }).find((l) => l.asset === "cbBTC")!.priceUsdMicros, null)
+    assert.equal(buildPricedLegs({ account: ME, rows: settled.rows, references, priced: settled.priced }).find((l) => l.asset === "cbBTC")!.priceMicros, null)
   })
 
   it("give a swap its price when a false credit was splitting it into two pairs", () => {
@@ -238,23 +238,23 @@ describe("the priced rows of a settled transaction", () => {
     const rows = [gas(100n), row(CBBTC, "debit", CB_SOLD, "erc20"), claim(10n ** 18n)]
     const settled = settle(rows, new Map(), [], [{ ...SWAP_ROW(10n ** 18n), priced: { source: "swap", token: "cbBTC", usd_micros: "80000000000" } }])
     const legs = buildPricedLegs({ account: ME, rows: settled.rows, references, priced: settled.priced })
-    assert.equal(legs.find((l) => l.asset === "cbBTC")!.priceUsdMicros, null)
+    assert.equal(legs.find((l) => l.asset === "cbBTC")!.priceMicros, null)
     // ETH's oracle price is a fact whatever happened here. Only what was paid is in question.
     const eth = legs.find((l) => l.asset === "ETH" && l.kind === "swap")!
     assert.equal(eth.priceSource, "oracle")
-    assert.deepEqual([eth.costLabel, eth.costUsdMicros], ["unknown", null])
+    assert.deepEqual([eth.costLabel, eth.costMicros], ["unknown", null])
   })
 })
 
 describe("what the explanation says", () => {
   it("names the transactions it couldn't confirm", () => {
     const { eth } = foldOf(settle(SALE, new Map()).rows)
-    assert.ok(explainMetric(eth, "onchain").lines.some((line) => line.includes("couldn't confirm") && line.includes("0xcb")))
+    assert.ok(explainMetric(eth, "onchain", USD_CONTEXT).lines.some((line) => line.includes("couldn't confirm") && line.includes("0xcb")))
   })
 
   it("names none once they're settled", () => {
     const { eth } = foldOf(settle(SALE, balances(BEFORE, AFTER)).rows)
-    assert.ok(!explainMetric(eth, "onchain").lines.some((line) => line.includes("couldn't confirm")))
+    assert.ok(!explainMetric(eth, "onchain", USD_CONTEXT).lines.some((line) => line.includes("couldn't confirm")))
   })
 })
 

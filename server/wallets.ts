@@ -7,7 +7,7 @@ import type { ReadL1Fees } from "./receipts.ts"
 import type { Source } from "./source.ts"
 
 /** Re-read this many blocks on each refresh, so a reorg near the tip replaces what it changed. */
-const REORG_BLOCKS = 30
+export const REORG_BLOCKS = 30
 const MAX_WALLETS = 20
 /** A busy wallet catches up over a few refreshes, and until then the swaps left say they aren't confirmed. */
 const MAX_ETH_BALANCES_PER_READ = 400
@@ -168,6 +168,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       prices: wallet.prices,
       latest: wallet.latest,
       gasUnknownTxs: [...wallet.gasUnknownTxs],
+      currency: "USD",
+      rates: null,
       l1FeeUnknownTxs: l1.unknownTxs,
       balances: closing,
       openingUnread: ASSETS.filter((asset) => opening?.amounts[asset] === undefined),

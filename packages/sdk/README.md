@@ -52,14 +52,14 @@ Amounts are in a token's smallest unit, and USD values are in micros (millionths
 | `getPrices(token, { from, to? })` | `{ token, prices, blocks }`: a token's prices, by symbol or address. It throws on a token off the allowlist, which has no prices to give. |
 | `getLatestPrices()` | The current prices to value positions at. Only ETH and USDC have one, and only with a recent oracle read. |
 | `buildPortfolio(legs, method, prices?)` | `{ method, positions, totals }`, where `method` is `"average"` or `"fifo"`. It's pure, so it needs no Amp. Without `prices`, values and unrealized PnL stay unknown. |
-| `pnlStatus(totals, gasUnknownTxs?)` | Whether `totals.pnlUsdMicros` can be read as the wallet's PnL: `complete`, `partial` or `unavailable`. |
+| `pnlStatus(totals, gasUnknownTxs?)` | Whether `totals.pnlMicros` can be read as the wallet's PnL: `complete`, `partial` or `unavailable`. |
 
 Browser code should import `@pricetag/sdk/core`. It has `buildPortfolio` and the rest of the pure code, without the Amp client.
 
 Things to check on every result:
 
 - **`blocks`:** what was actually read. `toBlock` can stop short of what you asked for while a table catches up, and it's below `fromBlock` when nothing in the range has been processed yet. So no rows doesn't always mean nothing happened: check this before folding, because a portfolio of no legs adds up to $0. Each call only waits for the tables it reads, so `getPrices` for ETH, WETH or USDC only needs `reference_prices`, and other tokens need `legs`, `unlisted_legs` and `priced_legs`.
-- **Gas:** `gasUnknownTxs` lists transactions whose gas couldn't be worked out. The fold never sees that gas, so `totals` can't say it's missing, and ETH is overstated by that much. Show the list, and pass it to `pnlStatus`. `totals.unpricedGas` means some gas had no price at its block, so it isn't in `totals.gasUsdMicros`.
+- **Gas:** `gasUnknownTxs` lists transactions whose gas couldn't be worked out. The fold never sees that gas, so `totals` can't say it's missing, and ETH is overstated by that much. Show the list, and pass it to `pnlStatus`. `totals.unpricedGas` means some gas had no price at its block, so it isn't in `totals.gasMicros`.
 - **Price:** a leg's `priceSource` is `oracle`, `swap` or null. When it's null, `priceNote` says why. In `getPrices`, an unknown price stays in the list with `source: "unknown"` and a `note`.
 - **Transaction:** a leg has its `txHash` and the rows it nets together in `parts`. A swap price has its `txHash` and `account`. An oracle price is read at a block, so its `txHash` is null. A position's legs are in `effects`.
 
