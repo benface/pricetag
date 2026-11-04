@@ -5,6 +5,7 @@ import type { PricedLeg } from "./legs.ts"
 import type { LegEffect, PnlPoint, Position, Totals } from "./portfolio.ts"
 import { TOKENS, tokenByAddress } from "./tokens.ts"
 import { formatAmount, formatPrice, formatSignedUsd, formatUsd, shortHash } from "./format.ts"
+import { AVERAGE_PRICE_PAID, METHOD_LABELS, NETWORK_FEES, currentPriceSource } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized"
 
@@ -17,7 +18,7 @@ export type Explanation = {
 
 const METRIC_TITLES: Record<Metric, string> = {
   amount: "Amount",
-  average: "Average cost",
+  average: AVERAGE_PRICE_PAID,
   value: "Value",
   realized: "Realized PnL",
   unrealized: "Unrealized PnL",
@@ -39,11 +40,11 @@ export function describeEffect({ leg, before, after }: LegEffect): string {
   const realized = diff(after.realizedUsdMicros, before.realizedUsdMicros)
   const unresolved = diff(after.unresolvedDisposedQty, before.unresolvedDisposedQty)
   const shortfall = diff(after.shortfallQty, before.shortfallQty)
-  if (leg.kind === "gas") parts.push(leg.priceUsdMicros === null ? "Gas, with no price at this block" : `Gas: ${formatUsd(diff(after.gasUsdMicros, before.gasUsdMicros))} spent`)
-  if (leg.kind === "swap") parts.push(leg.proceedsUsdMicros === null ? "Sold, but the proceeds have no usable value" : `Sold for ${formatUsd(leg.proceedsUsdMicros)}`)
+  if (leg.kind === "gas") parts.push(leg.priceUsdMicros === null ? "Network fee, with no price at this block" : `Network fee: ${formatUsd(diff(after.gasUsdMicros, before.gasUsdMicros))} spent`)
+  if (leg.kind === "swap") parts.push(leg.proceedsUsdMicros === null ? "Sold, but what you received has no usable value" : `Sold for ${formatUsd(leg.proceedsUsdMicros)}`)
   if (leg.kind === "transfer") {
     const carried = diff(after.transferredOutCostUsdMicros, before.transferredOutCostUsdMicros)
-    parts.push(`Sent out, carrying ${formatUsd(carried)} of known cost, with no gain or loss`)
+    parts.push(`Sent out with ${formatUsd(carried)} of known cost, so no gain or loss`)
   }
   if (leg.kind !== "transfer") {
     if (realized !== 0n) parts.push(`realized ${formatSignedUsd(realized)}`)
@@ -60,7 +61,7 @@ export function describeNetting(leg: PricedLeg): string | null {
     const token = tokenByAddress(p.token)
     return `${p.side === "credit" ? "+" : "−"}${formatAmount(p.amount, token?.decimals ?? 18)} ${token?.symbol ?? p.token}`
   })
-  return `Nets ${leg.parts.length} rows: ${rows.join(", ")}`
+  return `Combines ${leg.parts.length} movements: ${rows.join(", ")}`
 }
 
 export function explainMetric(position: Position, metric: Metric): Explanation {
@@ -69,17 +70,17 @@ export function explainMetric(position: Position, metric: Metric): Explanation {
   const qty = `${formatAmount(values.qty, decimals)} ${asset}`
   const unknownQty = `${formatAmount(values.unknownCostQty, decimals)} ${asset}`
   const priceLine = price
-    ? `Current price: ${formatPrice(price.usdMicros)}, from the ${price.source} at block ${price.blockNum.toLocaleString("en-US")}.`
+    ? `Current price: ${formatPrice(price.usdMicros)}, from ${currentPriceSource(price.source)} at block ${price.blockNum.toLocaleString("en-US")}.`
     : TOKENS.some((t) => t.symbol === asset && t.oracle)
-      ? `There's no current price for ${asset}, because the latest oracle read failed or is too old. An old price would quietly be wrong.`
-      : `There's no current price for ${asset}. Only ETH and USDC have an oracle so far.`
+      ? `There's no current price for ${asset}, because the market price feed's latest answer failed or is too old. An old price would quietly be wrong.`
+      : `There's no current price for ${asset}. Only ETH and USDC have a market price feed so far.`
   const lines: string[] = []
   let value: string | null = null
 
   switch (metric) {
     case "amount":
       value = qty
-      lines.push("What moved in the blocks this app has read. It isn't checked against the onchain balance yet.")
+      lines.push("What moved during the time this app has read. It isn't checked against the wallet's actual balance yet.")
       if (BigInt(state.shortfallQty) > 0n) {
         lines.push(`${formatAmount(state.shortfallQty, decimals)} ${asset} left that we never saw arrive, so this wallet's history is incomplete.`)
       }
@@ -87,7 +88,7 @@ export function explainMetric(position: Position, metric: Metric): Explanation {
     case "average":
       value = values.averageCostUsdMicros && formatPrice(values.averageCostUsdMicros)
       if (unknown) lines.push(`${unknownQty} of ${qty} has an unknown cost, so there's no average. It's never counted as $0.`)
-      else if (values.costUsdMicros) lines.push(`${formatUsd(values.costUsdMicros)} of cost ÷ ${qty}, by ${state.method === "fifo" ? "FIFO" : "average cost"}.`)
+      else if (values.costUsdMicros) lines.push(`${formatUsd(values.costUsdMicros)} of cost ÷ ${qty}, using the ${METHOD_LABELS[state.method]} method.`)
       break
     case "value":
       value = values.valueUsdMicros && formatUsd(values.valueUsdMicros)
@@ -99,7 +100,7 @@ export function explainMetric(position: Position, metric: Metric): Explanation {
       if (values.realizedUsdMicros === null) {
         const known = BigInt(state.resolvedDisposedQty) > 0n ? ` ${formatSignedUsd(state.realizedUsdMicros)} is the part that is known.` : ""
         lines.push(`${formatAmount(state.unresolvedDisposedQty, decimals)} ${asset} was sold or spent with an unknown cost or no price, so its gain can't be known.${known}`)
-      } else lines.push("Proceeds minus cost, on what was sold or spent on gas. Gas itself is a separate cost in the total.")
+      } else lines.push("What you received minus what it cost, on what was sold or spent on network fees. The fees themselves are a separate cost in the total.")
       break
     case "unrealized":
       value = values.unrealizedUsdMicros && formatSignedUsd(values.unrealizedUsdMicros)
@@ -118,7 +119,7 @@ const TOTAL_TITLES: Record<TotalMetric, string> = {
   value: "Total value",
   realized: "Total realized PnL",
   unrealized: "Total unrealized PnL",
-  gas: "Gas paid",
+  gas: NETWORK_FEES,
 }
 
 const showSigned = (micros: string | null) => (micros === null ? "unavailable" : formatSignedUsd(micros))
@@ -134,7 +135,7 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
   const lines: string[] = []
   if (metric === "pnl") {
     if (value === null) lines.push("Everything here depends on an unknown cost or price, so there's no PnL to show. It isn't $0.")
-    else lines.push(`Realized ${showSigned(totals.realizedUsdMicros)}, unrealized ${showSigned(totals.unrealizedUsdMicros)}, less ${totals.gasUsdMicros === null ? "gas that's unavailable" : `${formatUsd(totals.gasUsdMicros)} of gas`}.`)
+    else lines.push(`Realized ${showSigned(totals.realizedUsdMicros)}, unrealized ${showSigned(totals.unrealizedUsdMicros)}, less ${totals.gasUsdMicros === null ? "network fees that are unavailable" : `${formatUsd(totals.gasUsdMicros)} of network fees`}.`)
   }
   for (const position of positions) {
     const v = valuePosition(position.state, position.price?.usdMicros ?? null)
@@ -147,8 +148,8 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
     }[metric]
     if (part) lines.push(`${position.asset}: ${part}`)
   }
-  if (metric === "gas") lines.push("L2 gas only. Amp's data doesn't have L1 data fees yet, so this is slightly low.")
-  if (totals.unpricedGas && (metric === "gas" || metric === "pnl")) lines.push("Some gas had no price at its block, so it isn't included.")
+  if (metric === "gas") lines.push("Only the fee paid on Base. The part paid to Ethereum isn't in our data yet, so this is slightly low.")
+  if (totals.unpricedGas && (metric === "gas" || metric === "pnl")) lines.push("Some network fees had no price at the time, so they aren't included.")
   const relevant = totals.excluded.filter(({ reason }) => {
     if (metric === "value") return reason === "no current price" || reason === "incomplete history"
     if (metric === "realized") return reason === "sold at an unknown cost"

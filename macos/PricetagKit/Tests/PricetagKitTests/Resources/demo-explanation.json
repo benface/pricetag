@@ -2,7 +2,7 @@
   "title": "AERO: Realized PnL",
   "value": "+$74.99",
   "lines": [
-    "Proceeds minus cost, on what was sold or spent on gas. Gas itself is a separate cost in the total."
+    "What you received minus what it cost, on what was sold or spent on network fees. The fees themselves are a separate cost in the total."
   ],
   "legCount": 2,
   "legs": [

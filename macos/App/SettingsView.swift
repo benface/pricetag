@@ -25,7 +25,7 @@ struct SettingsView: View {
                 Button("Forget This Wallet") { store.setWallet(nil) }
                     .disabled(store.address == nil)
             } footer: {
-                Text("Watch-only. There are no keys in this app, and it doesn't sign anything.")
+                Text("View-only. There are no keys in this app, and it can't send anything.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

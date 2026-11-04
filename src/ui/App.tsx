@@ -1,10 +1,33 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
 import { hasStarted, isAddress, isBehind, type WalletResponse } from "../core/api.ts"
 import type { Method } from "../core/fold.ts"
-import { foldPositions, hasAnswer, pnlOverTime, sumTotals, type Coverage, type Exclusion, type PnlPoint, type Position } from "../core/portfolio.ts"
+import { foldPositions, hasAnswer, pnlOverTime, sumTotals, type Coverage, type PnlPoint, type Position } from "../core/portfolio.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
-import { formatAmount, formatDuration, formatPrice, formatSignedUsd, formatUsd } from "../core/format.ts"
+import { formatAmount, formatPrice, formatSignedUsd, formatTime, formatUsd } from "../core/format.ts"
+import { TOKENS } from "../core/tokens.ts"
+import {
+  AVERAGE_PRICE_PAID,
+  DEMO_NOTICE,
+  ETH_NOTE,
+  METHOD_HELP,
+  METHOD_LABELS,
+  METHOD_NAME,
+  NETWORK_FEES,
+  NOT_AN_ADDRESS,
+  NOT_STARTED,
+  PNL_UNAVAILABLE,
+  READING,
+  REALIZED_HELP,
+  UNPRICED_FEES,
+  UNREALIZED_HELP,
+  behindSentence,
+  coverageSentence,
+  excludedSentence,
+  feedDetail,
+  feesUnknownSentence,
+  staleSentence,
+} from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { useWallet } from "./useWallet.ts"
 
@@ -23,12 +46,6 @@ function Num({ onClick, label, children, tone }: { onClick: () => void; label: s
 
 const toneOf = (micros: string | null) => (micros === null ? "warn" : BigInt(micros) > 0n ? "gain" : BigInt(micros) < 0n ? "loss" : null)
 
-function describeExcluded(excluded: readonly Exclusion[]): string {
-  const byReason = new Map<string, string[]>()
-  for (const { asset, reason } of excluded) byReason.set(reason, [...(byReason.get(reason) ?? []), asset])
-  return [...byReason.entries()].map(([reason, assets]) => `${assets.join(", ")} (${reason})`).join("; ")
-}
-
 function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: (e: Explanation) => void }) {
   const open = (position: Position, metric: Metric) => () => onExplain(explainMetric(position, metric))
   return (
@@ -40,10 +57,14 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
             <tr>
               <th>Asset</th>
               <th className="num">Amount</th>
-              <th className="num">Avg cost</th>
+              <th className="num">{AVERAGE_PRICE_PAID}</th>
               <th className="num">Value</th>
-              <th className="num">Realized</th>
-              <th className="num">Unrealized</th>
+              <th className="num" title={REALIZED_HELP}>
+                Realized
+              </th>
+              <th className="num" title={UNREALIZED_HELP}>
+                Unrealized
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -55,7 +76,7 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
                 <tr key={asset} className={held ? "" : "closed"}>
                   <td>
                     <strong>{asset}</strong>
-                    {asset === "ETH" ? <span className="muted small"> incl. WETH</span> : null}
+                    {asset === "ETH" ? <span className="muted small"> {ETH_NOTE}</span> : null}
                   </td>
                   <td className="num">
                     <Num label={`${asset} amount`} onClick={open(position, "amount")} tone={BigInt(state.shortfallQty) > 0n ? "warn" : null}>
@@ -65,7 +86,7 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
                   </td>
                   <td className="num">
                     {held ? (
-                      <Num label={`${asset} average cost`} onClick={open(position, "average")} tone={unknown ? "warn" : null}>
+                      <Num label={`${asset} ${AVERAGE_PRICE_PAID.toLowerCase()}`} onClick={open(position, "average")} tone={unknown ? "warn" : null}>
                         {values.averageCostUsdMicros ? formatPrice(values.averageCostUsdMicros) : "⚠ Unknown"}
                       </Num>
                     ) : (
@@ -81,15 +102,15 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
                       <span className="muted">—</span>
                     )}
                   </td>
-                  <td className="num">
+                  <td className="num" title={REALIZED_HELP}>
                     <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedUsdMicros)}>
-                      {values.realizedUsdMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.realizedUsdMicros)}
+                      {values.realizedUsdMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : formatSignedUsd(values.realizedUsdMicros)}
                     </Num>
                   </td>
-                  <td className="num">
+                  <td className="num" title={UNREALIZED_HELP}>
                     {held ? (
                       <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedUsdMicros)}>
-                        {values.unrealizedUsdMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.unrealizedUsdMicros)}
+                        {values.unrealizedUsdMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : formatSignedUsd(values.unrealizedUsdMicros)}
                       </Num>
                     ) : (
                       <span className="muted">—</span>
@@ -128,7 +149,7 @@ export function App() {
     e.preventDefault()
     const value = input.trim()
     if (!isAddress(value)) {
-      setInputError("That isn't a Base address. It should be 0x followed by 40 hex characters.")
+      setInputError(NOT_AN_ADDRESS)
       return
     }
     setInputError(null)
@@ -166,7 +187,7 @@ export function App() {
       {!address ? (
         <section className="empty">
           <h1>Every transfer gets a price.</h1>
-          <p>Paste a Base address to see its holdings, cost and PnL, with every number explained. This is watch-only: there are no keys here, and nothing is signed.</p>
+          <p>Paste a Base address to see its holdings, cost and PnL, with every number explained. This is view-only: there are no keys here, and it can't send anything.</p>
           <button type="button" onClick={() => go("demo")}>
             Try the demo wallet
           </button>
@@ -175,7 +196,7 @@ export function App() {
 
       {loading ? (
         <section className="empty">
-          <p>Reading this wallet's history from Amp. The first read can take a minute, then only new blocks are read.</p>
+          <p>{READING}</p>
         </section>
       ) : null}
 
@@ -183,28 +204,18 @@ export function App() {
 
       {wallet ? (
         <main>
-          {error ? <p className="notice warn">⚠ {error} These numbers are through block {wallet.coverage.toBlock.toLocaleString("en-US")} and aren't updating.</p> : null}
+          {error ? <p className="notice warn">⚠ {error} {staleSentence(formatTime(wallet.latest.timestamp))}</p> : null}
           {isBehind(wallet) ? (
-            <p className="notice warn">
-              ⚠{" "}
-              {hasStarted(wallet)
-                ? `The Pricetag dataset has only processed up to block ${wallet.coverage.toBlock.toLocaleString("en-US")}, ${(wallet.latest.blockNum - wallet.coverage.toBlock).toLocaleString("en-US")} blocks behind the chain. Anything after that isn't in these numbers yet.`
-                : `The Pricetag dataset hasn't reached block ${wallet.coverage.fromBlock.toLocaleString("en-US")} yet, so there's nothing to show for this wallet so far.`}
-            </p>
+            <p className="notice warn">⚠ {hasStarted(wallet) ? behindSentence(wallet.latest.blockNum - wallet.coverage.toBlock) : NOT_STARTED}</p>
           ) : null}
-          {wallet.mode === "demo" ? <p className="notice">Demo data, not a real wallet. Every case the app has to get right is in here.</p> : null}
-          {hasStarted(wallet) ? (
-            <p className="notice">
-              Covers blocks {wallet.coverage.fromBlock.toLocaleString("en-US")} to {wallet.coverage.toBlock.toLocaleString("en-US")} (about {formatDuration(wallet.coverage.toBlock - wallet.coverage.fromBlock)}) and 10 tokens plus ETH. Anything earlier or
-              off the list isn't counted, so amounts are what moved in this window, not full balances.
-            </p>
-          ) : null}
-          {wallet.gasUnknownTxs.length > 0 ? <p className="notice warn">⚠ Gas couldn't be worked out for {wallet.gasUnknownTxs.length} transactions, so ETH is overstated by that much.</p> : null}
+          {wallet.mode === "demo" ? <p className="notice">{DEMO_NOTICE}</p> : null}
+          {hasStarted(wallet) ? <p className="notice">{coverageSentence(wallet.coverage, TOKENS.length - 1)}</p> : null}
+          {wallet.gasUnknownTxs.length > 0 ? <p className="notice warn">⚠ {feesUnknownSentence(wallet.gasUnknownTxs.length)}</p> : null}
 
           {wallet.legs.length === 0 && !hasStarted(wallet) ? null : wallet.legs.length === 0 ? (
             <section className="empty">
               <p>
-                No movements for <code>{wallet.address}</code> in these blocks.
+                No activity for <code>{wallet.address}</code> in this time.
               </p>
             </section>
           ) : (
@@ -216,22 +227,22 @@ export function App() {
                     <span className="big">{totals.pnlUsdMicros === null ? "⚠ Unavailable" : formatSignedUsd(totals.pnlUsdMicros)}</span>
                   </Num>
                   {totals.excluded.length > 0 ? (
-                    <p className="excluded">⚠ Excludes {describeExcluded(totals.excluded)}.</p>
+                    <p className="excluded">⚠ {excludedSentence(totals.excluded)}</p>
                   ) : (
                     <p className="muted small">Nothing excluded.</p>
                   )}
-                  {totals.unpricedGas ? <p className="excluded">⚠ Some gas had no price at its block, and isn't in this total.</p> : null}
+                  {totals.unpricedGas ? <p className="excluded">⚠ {UNPRICED_FEES}</p> : null}
                 </div>
                 <dl className="stats">
                   <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value} value={totals.valueUsdMicros && formatUsd(totals.valueUsdMicros)} />
-                  <Stat label="Realized" onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedUsdMicros && formatSignedUsd(totals.realizedUsdMicros)} />
-                  <Stat label="Unrealized" onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedUsdMicros && formatSignedUsd(totals.unrealizedUsdMicros)} />
-                  <Stat label="Gas paid" onClick={() => openTotal("gas")} coverage={{ known: 1, missing: totals.unpricedGas ? 1 : 0 }} value={totals.gasUsdMicros && formatUsd(totals.gasUsdMicros)} />
+                  <Stat label="Realized" help={REALIZED_HELP} onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedUsdMicros && formatSignedUsd(totals.realizedUsdMicros)} />
+                  <Stat label="Unrealized" help={UNREALIZED_HELP} onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedUsdMicros && formatSignedUsd(totals.unrealizedUsdMicros)} />
+                  <Stat label={NETWORK_FEES} onClick={() => openTotal("gas")} coverage={{ known: 1, missing: totals.unpricedGas ? 1 : 0 }} value={totals.gasUsdMicros && formatUsd(totals.gasUsdMicros)} />
                 </dl>
-                <div className="method" role="group" aria-label="Cost method">
+                <div className="method" role="group" aria-label={METHOD_NAME} title={METHOD_HELP}>
                   {(["average", "fifo"] as const).map((m) => (
                     <button key={m} type="button" className={method === m ? "on" : ""} aria-pressed={method === m} onClick={() => setMethod(m)}>
-                      {m === "average" ? "Average cost" : "FIFO"}
+                      {METHOD_LABELS[m]}
                     </button>
                   ))}
                 </div>
@@ -248,10 +259,12 @@ export function App() {
   )
 }
 
-function Stat({ label, onClick, coverage, value }: { label: string; onClick: () => void; coverage: Coverage; value: string | null }) {
+function Stat({ label, help, onClick, coverage, value }: { label: string; help?: string; onClick: () => void; coverage: Coverage; value: string | null }) {
   return (
     <div>
-      <dt className="muted small">{label}</dt>
+      <dt className="muted small" title={help}>
+        {label}
+      </dt>
       <dd>
         <Num label={label} onClick={onClick} tone={value === null ? "warn" : null}>
           {value ?? "⚠ Unavailable"}
@@ -264,9 +277,8 @@ function Stat({ label, onClick, coverage, value }: { label: string; onClick: () 
 
 function LiveBadge({ wallet, stale }: { wallet: WalletResponse; stale: boolean }) {
   if (wallet.mode === "demo") return <span className="badge">Demo data</span>
-  const source = wallet.mode === "dataset" ? "Pricetag dataset" : "raw dataset"
-  const block = wallet.coverage.toBlock.toLocaleString("en-US")
-  if (stale) return <span className="badge warn">⚠ Not updating · block {block} · {source}</span>
-  if (isBehind(wallet)) return <span className="badge warn">⚠ Catching up · block {block} · {source}</span>
-  return <span className="badge live">Live · block {block} · {source}</span>
+  const detail = feedDetail(wallet.mode, wallet.coverage.toBlock)
+  if (stale) return <span className="badge warn" title={detail}>⚠ Not updating</span>
+  if (isBehind(wallet)) return <span className="badge warn" title={detail}>⚠ Catching up</span>
+  return <span className="badge live" title={detail}>Live</span>
 }

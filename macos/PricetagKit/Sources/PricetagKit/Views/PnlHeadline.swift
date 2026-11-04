@@ -39,7 +39,7 @@ public struct PnlHeadline: View {
             }
             .buttonStyle(NumberButtonStyle())
             .accessibilityLabel("Total PnL, \(pnl.map(Format.signedUSD) ?? Wording.pnlUnavailable)")
-            .accessibilityHint("Shows the legs behind this number")
+            .accessibilityHint("Shows the activity behind this number")
             PnlCaveats(portfolio: portfolio)
         }
     }
@@ -60,10 +60,10 @@ public struct PnlCaveats: View {
                 Text("Nothing excluded.").foregroundStyle(.secondary)
             }
             if portfolio.totals.unpricedGas {
-                WarningText(Wording.unpricedGas)
+                WarningText(Wording.unpricedFees)
             }
             if !portfolio.gasUnknownTxs.isEmpty {
-                WarningText(Wording.gasUnknown(portfolio.gasUnknownTxs.count))
+                WarningText(Wording.feesUnknown(portfolio.gasUnknownTxs.count))
             }
         }
         .font(.caption)
@@ -74,14 +74,16 @@ public struct PnlCaveats: View {
 /// One of the sums beside the total. It says when it's partial, and shows no number when nothing's known.
 public struct TotalStat: View {
     let label: String
+    let help: String?
     /// nil when nothing in the sum is known.
     let text: String?
     let coverage: SumCoverage?
     let isLive: Bool
     let onOpen: () -> Void
 
-    public init(label: String, text: String?, coverage: SumCoverage? = nil, isLive: Bool, onOpen: @escaping () -> Void) {
+    public init(label: String, help: String? = nil, text: String?, coverage: SumCoverage? = nil, isLive: Bool, onOpen: @escaping () -> Void) {
         self.label = label
+        self.help = help
         self.text = text
         self.coverage = coverage
         self.isLive = isLive
@@ -91,7 +93,7 @@ public struct TotalStat: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                Text(label).foregroundStyle(.secondary)
+                Text(label).foregroundStyle(.secondary).help(help ?? "")
                 if text != nil, coverage?.isPartial == true {
                     Text("partial").foregroundStyle(Tone.warning.style)
                 }
@@ -118,12 +120,12 @@ public struct TotalStat: View {
 
 extension Portfolio {
     /// The four sums beside the total, in reading order.
-    public var totalStats: [(metric: TotalMetric, label: String, text: String?, coverage: SumCoverage?)] {
+    public var totalStats: [(metric: TotalMetric, label: String, help: String?, text: String?, coverage: SumCoverage?)] {
         [
-            (.value, "Value", totals.valueUsdMicros.map(Format.usd), totals.coverage.value),
-            (.realized, "Realized", totals.realizedUsdMicros.map(Format.signedUSD), totals.coverage.realized),
-            (.unrealized, "Unrealized", totals.unrealizedUsdMicros.map(Format.signedUSD), totals.coverage.unrealized),
-            (.gas, "Gas paid", totals.gasUsdMicros.map(Format.usd), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
+            (.value, "Value", nil, totals.valueUsdMicros.map(Format.usd), totals.coverage.value),
+            (.realized, "Realized", Wording.realizedHelp, totals.realizedUsdMicros.map(Format.signedUSD), totals.coverage.realized),
+            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedUsdMicros.map(Format.signedUSD), totals.coverage.unrealized),
+            (.gas, Wording.networkFees, nil, totals.gasUsdMicros.map(Format.usd), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
     }
 }

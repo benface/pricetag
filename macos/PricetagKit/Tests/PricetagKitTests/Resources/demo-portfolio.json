@@ -42,7 +42,7 @@
     {
       "asset": "ETH",
       "decimals": 18,
-      "note": "incl. WETH",
+      "note": "incl. wrapped ETH",
       "price": {
         "usdMicros": "2640000000",
         "source": "oracle",

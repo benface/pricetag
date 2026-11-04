@@ -1,0 +1,102 @@
+// What the interface calls things, and the sentences the honesty rules depend on. The code, the dataset and the API
+// keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
+// `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
+
+import type { Mode } from "./api.ts"
+import { formatDuration } from "./format.ts"
+import type { CostLabel, FoldLeg, Method } from "./fold.ts"
+import type { PriceSource } from "./legs.ts"
+
+export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
+export const METHOD_NAME = "How cost is worked out"
+export const METHOD_HELP = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
+
+export const AVERAGE_PRICE_PAID = "Average price paid"
+export const NETWORK_FEES = "Network fees"
+export const REALIZED_HELP = "Gain or loss on what you've sold or spent."
+export const UNREALIZED_HELP = "Gain or loss on what you still hold, at the current price."
+
+export const ETH_NOTE = "incl. wrapped ETH"
+export const DEMO_NOTICE = "Demo data, not a real wallet. Every case the app has to get right is in here."
+export const PNL_UNAVAILABLE = "PnL unavailable"
+export const NOTHING_TO_CHART = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't $0."
+export const UNPRICED_FEES = "Some network fees had no price at the time, and aren't in this total."
+export const READING = "Reading this wallet's history. The first read can take a minute, then only new activity is read."
+export const NOT_AN_ADDRESS = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
+
+export const MODE_LABELS: Record<Mode, string> = { demo: "Demo data", raw: "Raw chain data", dataset: "Pricetag data" }
+
+/** Why a leg has no usable price. */
+export const PRICE_NOTES = {
+  feedFailed: "The market price feed didn't answer at this block.",
+  rejected: "Ignored the price this exchange implied, because it's far from any plausible value.",
+  unlisted: "This transaction also moved a token we can't price yet, so what was paid or received can't be split between them.",
+  unusable: "This exchange didn't give a usable price for this token.",
+  noExchange: "Nothing was exchanged in this transaction, and this token has no market price feed.",
+  notSimple: "This transaction isn't a simple exchange of one token for another.",
+}
+
+/** What a leg did, in a word. */
+export function actionLabel(kind: FoldLeg["kind"], incoming: boolean): string {
+  if (kind === "gas") return "Network fee"
+  if (kind === "swap") return incoming ? "Bought" : "Sold"
+  return incoming ? "Received" : "Sent"
+}
+
+export function priceSourceLabel(source: PriceSource): string {
+  return { oracle: "market price feed", swap: "from this exchange", market: "market price" }[source]
+}
+
+/** Where the current price came from, to finish "from …". */
+export function currentPriceSource(source: PriceSource): string {
+  return { oracle: "the market price feed", swap: "a recent exchange", market: "the market" }[source]
+}
+
+/** Where a leg's cost came from. */
+export function costTag(label: CostLabel): string {
+  return {
+    paid: "Cost: what you paid",
+    inherited: "Cost: from your other wallet",
+    "received at market": "Cost: market price when received",
+    "self-reported": "Cost: what you entered",
+    unknown: "Cost unknown",
+  }[label]
+}
+
+/** What a list of movements is called, with how much of it is showing. */
+export function activityTitle(count: number, shown: number): string {
+  const total = count.toLocaleString("en-US")
+  return count > shown ? `Activity (newest ${shown} of ${total})` : `Activity (${total})`
+}
+
+/** What a total leaves out, or null when it leaves out nothing. */
+export function excludedSentence(excluded: readonly { asset: string; reason: string }[]): string | null {
+  if (excluded.length === 0) return null
+  const byReason = new Map<string, string[]>()
+  for (const { asset, reason } of excluded) byReason.set(reason, [...(byReason.get(reason) ?? []), asset])
+  return `Excludes ${[...byReason.entries()].map(([reason, assets]) => `${assets.join(", ")} (${reason})`).join("; ")}.`
+}
+
+export function coverageSentence(coverage: { fromBlock: number; toBlock: number }, trackedTokens: number): string {
+  return `Covers about ${formatDuration(coverage.toBlock - coverage.fromBlock)} of history and ${trackedTokens} tokens plus ETH. Anything earlier or on other tokens isn't counted, so amounts are what moved in this time, not full balances.`
+}
+
+export function feesUnknownSentence(count: number): string {
+  return `Network fees couldn't be worked out for ${count} ${count === 1 ? "transaction" : "transactions"}, so the ETH amount is too high by that much.`
+}
+
+export const NOT_STARTED = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."
+
+export function behindSentence(blocks: number): string {
+  // Under half a minute would round to "0 min", which reads as not behind at all.
+  return `The data is still catching up, ${blocks < 15 ? "less than a minute" : `about ${formatDuration(blocks)}`} behind the network. Anything newer isn't in these numbers yet.`
+}
+
+export function staleSentence(lastUpdate: string): string {
+  return `These numbers aren't updating. Last update: ${lastUpdate}.`
+}
+
+/** The technical side of the status badge, for its tooltip. */
+export function feedDetail(mode: Mode, block: number): string {
+  return mode === "demo" ? MODE_LABELS.demo : `${MODE_LABELS[mode]} · block ${block.toLocaleString("en-US")}`
+}

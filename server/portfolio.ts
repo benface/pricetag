@@ -6,6 +6,7 @@ import { describeEffect, describeNetting, explainMetric, explainPoint, explainTo
 import type { Method } from "../src/core/fold.ts"
 import { foldPositions, pnlOverTime, sumTotals, type LegEffect, type Position, type Totals } from "../src/core/portfolio.ts"
 import { TOKENS } from "../src/core/tokens.ts"
+import { ETH_NOTE } from "../src/core/wording.ts"
 
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS = 200
@@ -36,7 +37,7 @@ function positionOf({ asset, decimals, price, values, state, effects }: Position
     if (!held) return realized
     return unrealized === null ? null : (BigInt(realized) + BigInt(unrealized)).toString()
   })()
-  return { asset, decimals, note: asset === "ETH" ? "incl. WETH" : null, price, values, pnlUsdMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length }
+  return { asset, decimals, note: asset === "ETH" ? ETH_NOTE : null, price, values, pnlUsdMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length }
 }
 
 function pnlStatusOf(totals: Totals, gasUnknownTxs: readonly string[]): PnlStatus {
