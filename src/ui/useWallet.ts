@@ -73,7 +73,7 @@ export function useWallet(address: string | null, currency: CurrencyCode): Walle
         read()
       })
       events.addEventListener("head", read)
-      events.addEventListener("down", () => setState((s) => ({ ...s, error: "Can't reach Amp." })))
+      events.addEventListener("down", () => setState((s) => ({ ...s, error: "Can't reach the data source." })))
       events.addEventListener("error", () => {
         connected = false
         drops++

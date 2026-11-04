@@ -361,7 +361,7 @@ describe("reconciling", () => {
       assert.deepEqual(portfolio.totals.coverage.value.missing > 0, true, "it's an estimate now")
       assert.equal(portfolio.totals.pnlMicros, null)
       assert.equal(portfolio.pnlStatus, "unavailable")
-      assert.ok(portfolio.totals.excluded.some((e) => e.asset === "ETH" && e.reason === "not checked against its onchain balance"))
+      assert.ok(portfolio.totals.excluded.some((e) => e.asset === "ETH" && e.reason === "not checked against its actual balance"))
       assert.equal(portfolio.points.at(-1)!.pnlMicros, null)
     })
 
@@ -397,7 +397,7 @@ describe("reconciling", () => {
       next()
       const portfolio = await read()
       assert.equal(portfolio.positions.find((p) => p.asset === "ETH")!.reconciliation?.status, "reconciled")
-      assert.equal(portfolio.totals.excluded.some((e) => e.reason === "not checked against its onchain balance"), false)
+      assert.equal(portfolio.totals.excluded.some((e) => e.reason === "not checked against its actual balance"), false)
     })
 
     it("adds what's moved since the last read, so the amount isn't stale", async () => {

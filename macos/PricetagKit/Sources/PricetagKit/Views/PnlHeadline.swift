@@ -25,7 +25,7 @@ public struct PnlHeadline: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("Total PnL · \(portfolio.currency.rawValue)").font(.caption).foregroundStyle(.secondary)
+            Text("Total PnL · \(portfolio.currency.rawValue)").font(.caption).foregroundStyle(.secondary).help(Wording.pnlHelp)
             Button(action: onOpen) {
                 Group {
                     if let pnl {
@@ -43,7 +43,7 @@ public struct PnlHeadline: View {
             }
             .buttonStyle(NumberButtonStyle())
             .accessibilityLabel("Total PnL, \(pnl.map(signed) ?? Wording.pnlUnavailable)")
-            .accessibilityHint("Shows the legs behind this number")
+            .accessibilityHint("Shows the activity behind this number")
             PnlCaveats(portfolio: portfolio)
         }
     }
@@ -64,13 +64,13 @@ public struct PnlCaveats: View {
                 Text("Nothing excluded.").foregroundStyle(.secondary)
             }
             if portfolio.totals.unpricedGas {
-                WarningText(Wording.unpricedGas)
+                WarningText(Wording.unpricedFees)
             }
             if !portfolio.gasUnknownTxs.isEmpty {
-                WarningText(Wording.gasUnknown(portfolio.gasUnknownTxs.count))
+                WarningText(Wording.feesUnknown(portfolio.gasUnknownTxs.count))
             }
             if !portfolio.l1FeeUnknownTxs.isEmpty {
-                WarningText(Wording.networkFeeUnknown(portfolio.l1FeeUnknownTxs.count))
+                WarningText(Wording.networkFeeUnknown(portfolio.l1FeeUnknownTxs.count)).help(Wording.pnlHelp)
             }
             ForEach(Wording.missingRates(portfolio), id: \.self) { line in
                 WarningText(line)
@@ -84,14 +84,16 @@ public struct PnlCaveats: View {
 /// One of the sums beside the total. It says when it's partial, and shows no number when nothing's known.
 public struct TotalStat: View {
     let label: String
+    let help: String?
     /// nil when nothing in the sum is known.
     let text: String?
     let coverage: SumCoverage?
     let isLive: Bool
     let onOpen: () -> Void
 
-    public init(label: String, text: String?, coverage: SumCoverage? = nil, isLive: Bool, onOpen: @escaping () -> Void) {
+    public init(label: String, help: String? = nil, text: String?, coverage: SumCoverage? = nil, isLive: Bool, onOpen: @escaping () -> Void) {
         self.label = label
+        self.help = help
         self.text = text
         self.coverage = coverage
         self.isLive = isLive
@@ -101,7 +103,7 @@ public struct TotalStat: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                Text(label).foregroundStyle(.secondary)
+                Text(label).foregroundStyle(.secondary).help(help ?? "")
                 if text != nil, coverage?.isPartial == true {
                     Text("partial").foregroundStyle(Tone.warning.style)
                 }
@@ -128,14 +130,14 @@ public struct TotalStat: View {
 
 extension Portfolio {
     /// The four sums beside the total, in reading order.
-    public var totalStats: [(metric: TotalMetric, label: String, text: String?, coverage: SumCoverage?)] {
+    public var totalStats: [(metric: TotalMetric, label: String, help: String?, text: String?, coverage: SumCoverage?)] {
         let money = { Format.money($0, currency) }
         let signed = { Format.signedMoney($0, currency) }
         return [
-            (.value, "Value", totals.valueMicros.map(money), totals.coverage.value),
-            (.realized, "Realized", totals.realizedMicros.map(signed), totals.coverage.realized),
-            (.unrealized, "Unrealized", totals.unrealizedMicros.map(signed), totals.coverage.unrealized),
-            (.gas, "Gas paid", totals.gasMicros.map(money), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
+            (.value, "Value", nil, totals.valueMicros.map(money), totals.coverage.value),
+            (.realized, "Realized", Wording.realizedHelp, totals.realizedMicros.map(signed), totals.coverage.realized),
+            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map(signed), totals.coverage.unrealized),
+            (.gas, Wording.networkFees, nil, totals.gasMicros.map(money), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
     }
 }

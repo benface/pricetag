@@ -99,7 +99,7 @@
     {
       "asset": "ETH",
       "decimals": 18,
-      "note": "incl. WETH",
+      "note": "incl. wrapped ETH",
       "price": {
         "micros": "3692307692",
         "source": "oracle",
@@ -264,7 +264,7 @@
       },
       {
         "asset": "cbBTC",
-        "reason": "doesn't match its onchain balance"
+        "reason": "doesn't match its actual balance"
       },
       {
         "asset": "cbBTC",

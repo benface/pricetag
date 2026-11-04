@@ -46,12 +46,12 @@ struct MainWindow: View {
                 .help("This Mac's spending money (⇧⌘M)")
         }
         ToolbarItem(placement: .principal) {
-            Picker("Cost method", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
+            Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
                 ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .help("How cost is matched to what's sold (⌘1, ⌘2)")
+            .help("\(Wording.methodHelp) (⌘1, ⌘2)")
         }
         ToolbarItem(placement: .status) {
             FeedBadge(feed: store.feed, portfolio: portfolio)
@@ -84,7 +84,7 @@ struct MainWindow: View {
             ContentUnavailableView {
                 ProgressView().controlSize(.large)
             } description: {
-                Text("Reading this wallet's history from Amp. The first read can take a minute, then only new blocks are read.")
+                Text(Wording.reading)
             }
         } else {
             Unavailable(store: store)
@@ -95,9 +95,9 @@ struct MainWindow: View {
         VStack(alignment: .leading, spacing: 14) {
             notices(portfolio)
             if !portfolio.progress.started {
-                ContentUnavailableView("Nothing to show yet", systemImage: "hourglass", description: Text("The dataset hasn't reached this wallet's first block."))
+                ContentUnavailableView("Nothing to show yet", systemImage: "hourglass", description: Text(Wording.notStarted))
             } else if portfolio.isEmpty {
-                ContentUnavailableView("No movements", systemImage: "tray", description: Text("Nothing moved for \(portfolio.address) in these blocks."))
+                ContentUnavailableView("No activity", systemImage: "tray", description: Text("Nothing moved for \(portfolio.address) in this time."))
             } else {
                 summary(portfolio)
                 history(portfolio)
@@ -126,6 +126,7 @@ struct MainWindow: View {
                 } else {
                     Text(Wording.nothingToChart)
                         .foregroundStyle(.secondary)
+                        .help(Wording.pnlHelp)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
@@ -162,7 +163,7 @@ struct MainWindow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(alignment: .top, spacing: 26) {
                 ForEach(portfolio.totalStats, id: \.metric) { stat in
-                    TotalStat(label: stat.label, text: stat.text, coverage: stat.coverage, isLive: isLive) { navigation.target = .total(stat.metric) }
+                    TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { navigation.target = .total(stat.metric) }
                         .frame(minWidth: 88, alignment: .leading)
                 }
             }
@@ -192,8 +193,8 @@ private struct HoldingsTable: View {
                 }
                 .opacity(position.isHeld ? 1 : 0.6)
             }
-            .width(min: 110, ideal: 140)
-            TableColumn("Onchain") { position in
+            .width(min: 110, ideal: 170)
+            TableColumn(Wording.balanceCheck) { position in
                 Button {
                     target = .asset(position.asset, .onchain)
                 } label: {
@@ -207,13 +208,14 @@ private struct HoldingsTable: View {
                 number(position, .amount, Format.amount(position.values.qty, decimals: position.decimals), tone: warn ? .warning : .neutral, warn: warn)
             }
             .alignment(.numeric)
-            TableColumn("Avg cost") { position in
+            TableColumn(Wording.averagePricePaid) { position in
                 if position.isHeld {
                     number(position, .average, position.values.averageCostMicros.map { Format.price($0, currency) } ?? "Unknown", tone: position.hasUnknownCost ? .warning : .neutral, warn: position.hasUnknownCost)
                 } else {
                     dash
                 }
             }
+            .width(min: 130, ideal: 140)
             .alignment(.numeric)
             TableColumn("Value") { position in
                 if position.isHeld {
@@ -274,7 +276,8 @@ private struct HoldingsTable: View {
             .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
         }
         .buttonStyle(NumberButtonStyle())
-        .accessibilityLabel("\(position.asset) \(metric.rawValue), \(text)")
+        .help(metric.help ?? "")
+        .accessibilityLabel("\(position.asset) \(metric.label), \(text)")
     }
 }
 
@@ -296,15 +299,12 @@ private struct TransactionsTable: View {
             TableColumn("Time") { point in
                 Text(point.date.map(Format.time) ?? point.timestamp)
             }
-            TableColumn("Block") { point in
-                Text(Format.block(point.blockNum)).monospacedDigit()
-            }
-            .alignment(.numeric)
             TableColumn("Total PnL after") { point in
                 HStack(spacing: 4) {
                     if point.pnlMicros == nil { WarningIcon() }
                     LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: isLive ? Tone(signed: point.pnlMicros) : .neutral)
                 }
+                .help(Wording.pnlHelp)
             }
             .alignment(.numeric)
             TableColumn("Leaves out") { point in
@@ -348,7 +348,8 @@ private struct Welcome: View {
         ContentUnavailableView {
             Label("Every transfer gets a price", systemImage: "tag")
         } description: {
-            Text("Add a Base address to see its holdings, cost and PnL, with every number explained. This is watch-only: there are no keys here, and nothing is signed.")
+            Text("Add a Base address to see its holdings, cost and PnL, with every number explained. This is view-only: there are no keys here, and it can't send anything.")
+                .help(Wording.pnlHelp)
         } actions: {
             WalletForm(store: store, onDone: {})
                 .frame(width: 440)
@@ -430,7 +431,7 @@ struct WalletForm: View {
     private func submit() {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard WalletAddress.isValid(value) else {
-            error = "That isn't a Base address. It should be 0x followed by 40 hex characters."
+            error = Wording.notAnAddress
             return
         }
         error = nil

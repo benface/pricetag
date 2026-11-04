@@ -60,19 +60,19 @@ struct PopoverView: View {
             case (_, let portfolio?) where !portfolio.progress.started:
                 Text("Nothing to show yet.").foregroundStyle(.secondary)
             case (_, let portfolio?) where portfolio.isEmpty:
-                Text("No movements for this wallet in the blocks read.").foregroundStyle(.secondary)
+                Text("No activity for this wallet in this time.").foregroundStyle(.secondary)
             case (_, let portfolio?):
                 PnlHeadline(portfolio: portfolio, isLive: isLive, size: 30) { open(.total(.pnl)) }
                 // Two by two, because four across would cut off anything over $9,999.
                 LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 8) {
                     ForEach(portfolio.totalStats, id: \.metric) { stat in
-                        TotalStat(label: stat.label, text: stat.text, coverage: stat.coverage, isLive: isLive) { open(.total(stat.metric)) }
+                        TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { open(.total(stat.metric)) }
                     }
                 }
             case (.reading, nil):
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Reading this wallet's history from Amp. The first read can take a minute.")
+                    Text("Reading this wallet's history. The first read can take a minute.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -98,7 +98,7 @@ struct PopoverView: View {
                     }
                     .buttonStyle(.plain)
                     .onHover { highlighted = $0 ? position.asset : nil }
-                    .accessibilityHint("Opens this position's legs")
+                    .accessibilityHint("Shows this token's activity")
                 }
             }
             .padding(4)
@@ -142,13 +142,14 @@ struct PopoverView: View {
 
     private var footer: some View {
         HStack {
-            Picker("Cost method", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
+            Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
                 ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .controlSize(.small)
             .fixedSize()
+            .help(Wording.methodHelp)
             Spacer()
             Button("Open \(AppName.current)") { open(nil) }
                 .keyboardShortcut("o", modifiers: .command)

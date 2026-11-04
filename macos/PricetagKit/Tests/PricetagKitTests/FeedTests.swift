@@ -87,7 +87,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(store.portfolio != nil)
         let notice = try #require(store.feed.staleNotice(serverURL: store.serverURL, portfolio: store.portfolio))
         #expect(notice.contains("aren't updating"))
-        #expect(notice.contains("53,505,400"))
+        #expect(!notice.contains("block"))
     }
 
     @Test func comesBackWhenTheServerDoes() async throws {
@@ -121,7 +121,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(store.feed == .catchingUp)
         #expect(!store.feed.isStale)
         let notice = try #require(store.feed.staleNotice(serverURL: store.serverURL, portfolio: store.portfolio))
-        #expect(notice.contains("50 blocks behind"))
+        #expect(notice.contains("about 2 min behind"))
         #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Catching up")
     }
 
