@@ -199,12 +199,18 @@ private struct HoldingsTable: View {
         .tableStyle(.inset)
         .alternatingRowBackgrounds(.disabled)
         .onChange(of: selection) { _, asset in
-            if let asset { target = .asset(asset, .amount) }
+            // Moving to a row shows its legs. A number clicked in that row has already said what to show.
+            guard let asset, targetAsset != asset else { return }
+            target = .asset(asset, .amount)
         }
-        .onChange(of: target) { _, next in
-            // Closing the inspector ends the selection too, so picking the same row opens it again.
-            if next == nil { selection = nil }
+        // The row follows the inspector, wherever it was opened from. Closing it ends the selection, so the same row can open it again.
+        .onChange(of: target, initial: true) {
+            selection = targetAsset
         }
+    }
+
+    private var targetAsset: String? {
+        if case .asset(let asset, _) = target { asset } else { nil }
     }
 
     private var dash: some View {
@@ -213,7 +219,6 @@ private struct HoldingsTable: View {
 
     private func number(_ position: Position, _ metric: AssetMetric, _ text: String, tone: Tone, warn: Bool) -> some View {
         Button {
-            selection = position.asset
             target = .asset(position.asset, metric)
         } label: {
             HStack(spacing: 4) {
