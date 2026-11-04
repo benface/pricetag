@@ -197,6 +197,28 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.alarm == nil)
     }
 
+    @Test func theFirstAttemptLandingAfterAReplacementIsntSuspicious() async throws {
+        let clock = Clock()
+        let rig = await Rig(over, now: { clock.now })
+        await rig.wallet.tick()
+        let first = try #require(rig.wallet.records.first?.hash)
+        // Too old to wait for, and fees have moved, so the same nonce goes out again with a different hash.
+        clock.advance(HotWallet.pendingTimeout + 1)
+        let dearer = FeeQuote(maxFeePerGas: cheapFees.maxFeePerGas * 2, maxPriorityFeePerGas: cheapFees.maxPriorityFeePerGas, l1FeeWei: cheapFees.l1FeeWei)
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(500)], fees: dearer))
+        await rig.wallet.tick()
+        #expect(rig.wallet.records.count == 2)
+        #expect(await rig.signer.signed.map(\.nonce) == [0, 0])
+
+        // The first one lands, and the replacement never will.
+        await rig.chain.setReceipt(first, succeeded: true)
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(50)], nonce: 1))
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(rig.wallet.alarm == nil)
+        #expect(rig.wallet.records.first { $0.hash == first }?.status == .confirmed)
+        #expect(rig.wallet.records.first { $0.hash != first }?.status == .dropped)
+    }
+
     @Test func aSweepWaitsForBalancesFromAfterTheLastReceipt() async throws {
         let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)]))
         await rig.wallet.tick()

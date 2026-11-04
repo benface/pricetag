@@ -598,7 +598,12 @@ public final class HotWallet {
     private func settlePending(address: EthereumAddress, snapshot: ChainSnapshot) async throws {
         let records = state.records[address] ?? []
         for record in records where record.status == .pending || wasDroppedButMayHaveLanded(record, among: records, snapshot: snapshot) {
+            // An earlier one in this loop landed with the same nonce, so this one can't.
+            guard state.records[address]?.first(where: { $0.hash == record.hash })?.status == record.status else { continue }
             if let receipt = try await chain.receipt(of: record.hash) {
+                for other in records where other.nonce == record.nonce && other.hash != record.hash {
+                    updateRecord(hash: other.hash, address: address) { $0.status = .dropped }
+                }
                 updateRecord(hash: record.hash, address: address) { $0.status = receipt.succeeded ? .confirmed : .failed }
                 missedReceipts[record.hash] = nil
                 settledThroughBlock = max(settledThroughBlock, receipt.blockNumber)
@@ -629,9 +634,10 @@ public final class HotWallet {
         }
     }
 
-    /// Given up on, but something has used its nonce and nothing else this app signed did. It may have landed late.
+    /// Given up on, but something has used its nonce, and nothing this app signed is known to be what did. It may have landed late,
+    /// even after a replacement with a different fee was sent.
     private func wasDroppedButMayHaveLanded(_ record: SignedRecord, among records: [SignedRecord], snapshot: ChainSnapshot) -> Bool {
-        record.status == .dropped && snapshot.nonce > record.nonce && !records.contains { $0.nonce == record.nonce && $0.status != .dropped }
+        record.status == .dropped && snapshot.nonce > record.nonce && !records.contains { $0.nonce == record.nonce && ($0.status == .confirmed || $0.status == .failed) }
     }
 
     private func checkNonce(address: EthereumAddress, snapshot: ChainSnapshot) {
