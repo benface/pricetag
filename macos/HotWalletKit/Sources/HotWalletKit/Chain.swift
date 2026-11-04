@@ -11,15 +11,18 @@ public struct ChainSnapshot: Equatable, Sendable {
     /// nil when the feed couldn't be read, is old, or says something implausible. It's never replaced with a guess.
     public var ethUsdMicros: UInt128?
     public var usdcUsdMicros: UInt128?
+    /// The rest of the allowlist by asset, for tokens the wallet holds. The same rule: a price that's missing here is no price.
+    public var otherUsdMicros: [String: UInt128]
     public var fees: FeeQuote
 
-    public init(chainID: UInt64, blockNumber: UInt64, nonce: UInt64, balances: [Token: UInt128], ethUsdMicros: UInt128?, usdcUsdMicros: UInt128?, fees: FeeQuote) {
+    public init(chainID: UInt64, blockNumber: UInt64, nonce: UInt64, balances: [Token: UInt128], ethUsdMicros: UInt128?, usdcUsdMicros: UInt128?, otherUsdMicros: [String: UInt128] = [:], fees: FeeQuote) {
         self.chainID = chainID
         self.blockNumber = blockNumber
         self.nonce = nonce
         self.balances = balances
         self.ethUsdMicros = ethUsdMicros
         self.usdcUsdMicros = usdcUsdMicros
+        self.otherUsdMicros = otherUsdMicros
         self.fees = fees
     }
 }
@@ -122,13 +125,26 @@ public struct RPCChainClient: ChainClient {
         let priority = try Self.quantity(answers[4].get())
         let base = try Self.quantity(baseFee)
         let fees = FeeQuote(maxFeePerGas: 2 * base + priority, maxPriorityFeePerGas: priority, l1FeeWei: try Self.quantity(answers[7].get()))
+        let ethUsdMicros = Oracle.price(try? answers[5].get() as? String, feed: .eth, blockTime: blockTime)
+
+        // Only what's held, because the public node limits calls and most wallets hold few of these. Still at the same block.
+        let held = Oracle.others.filter { asset, _ in tokens.contains { $0.asset == asset && balances[$0, default: 0] > 0 } }.sorted { $0.key < $1.key }
+        var otherUsdMicros: [String: UInt128] = [:]
+        if !held.isEmpty {
+            let rounds = try await batch(held.map { call($0.value.address, Calldata.latestRoundData, at: number) })
+            for (entry, round) in zip(held, rounds) {
+                otherUsdMicros[entry.key] = Oracle.price(try? round.get() as? String, feed: entry.value, blockTime: blockTime, ethUsdMicros: ethUsdMicros)
+            }
+        }
+
         return ChainSnapshot(
             chainID: UInt64(chainID),
             blockNumber: UInt64(try Self.quantity(number)),
             nonce: UInt64(try Self.quantity(answers[2].get())),
             balances: balances,
-            ethUsdMicros: Oracle.price(try? answers[5].get() as? String, feed: .eth, blockTime: blockTime),
+            ethUsdMicros: ethUsdMicros,
             usdcUsdMicros: Oracle.price(try? answers[6].get() as? String, feed: .usdc, blockTime: blockTime),
+            otherUsdMicros: otherUsdMicros,
             fees: fees
         )
     }
@@ -197,30 +213,59 @@ public struct RPCChainClient: ChainClient {
     }
 }
 
-/// Reads a Chainlink answer. This is the same pair of feeds the dataset uses, read directly, so the safety loop doesn't need our server.
+/// Reads a Chainlink answer straight from the chain, so the safety loop doesn't need our server. ETH and USDC are the feeds the
+/// dataset uses. The rest only exist here.
 enum Oracle {
-    enum Feed {
-        case eth, usdc
-
+    struct Feed: Sendable {
         /// Past each feed's heartbeat with room to spare. Older than this and the price is gone rather than old.
-        var maxAgeSeconds: UInt128 {
-            switch self {
-            case .eth: 3600
-            case .usdc: 26 * 3600
-            }
-        }
+        static let shortHeartbeat: UInt128 = 3600
+        static let dailyHeartbeat: UInt128 = 26 * 3600
 
         /// The same bounds as `sanity` in `src/core/tokens.ts`.
-        var plausibleUsd: ClosedRange<UInt128> {
-            switch self {
-            case .eth: 100 * Money.dollar...100_000 * Money.dollar
-            case .usdc: 800_000...1_200_000
-            }
+        enum Plausible: Equatable, Sendable {
+            /// In micros.
+            case usd(ClosedRange<UInt128>)
+            /// In thousandths of an ETH.
+            case eth(ClosedRange<UInt128>)
         }
+
+        let address: EthereumAddress
+        /// What `description()` says onchain, which `AnvilTests` checks.
+        let description: String
+        let decimals: Int
+        /// The answer is in ETH rather than USD, so it's only as good as ETH's price.
+        let answersInEth: Bool
+        let maxAgeSeconds: UInt128
+        let plausible: Plausible
+
+        init(_ address: String, _ description: String, decimals: Int = 8, answersInEth: Bool = false, maxAgeSeconds: UInt128, plausible: Plausible) {
+            self.address = EthereumAddress(address)!
+            self.description = description
+            self.decimals = decimals
+            self.answersInEth = answersInEth
+            self.maxAgeSeconds = maxAgeSeconds
+            self.plausible = plausible
+        }
+
+        static let eth = Feed(Base.ethUsdFeed.lowercased, "ETH / USD", maxAgeSeconds: shortHeartbeat, plausible: .usd(100 * Money.dollar...100_000 * Money.dollar))
+        static let usdc = Feed(Base.usdcUsdFeed.lowercased, "USDC / USD", maxAgeSeconds: dailyHeartbeat, plausible: .usd(800_000...1_200_000))
     }
 
-    /// `latestRoundData()`: (roundId, answer, startedAt, updatedAt, answeredInRound), with answers in 1e8 USD.
-    static func price(_ result: String?, feed: Feed, blockTime: UInt128) -> UInt128? {
+    /// Every other asset on the allowlist, which a test checks.
+    static let others: [String: Feed] = [
+        "USDT": Feed("0xf19d560eb8d2adf07bd6d13ed03e1d11215721f9", "USDT / USD", maxAgeSeconds: Feed.dailyHeartbeat, plausible: .usd(800_000...1_200_000)),
+        "DAI": Feed("0x591e79239a7d679378ec8c847e5038150364c78f", "DAI / USD", maxAgeSeconds: Feed.dailyHeartbeat, plausible: .usd(800_000...1_200_000)),
+        "cbETH": Feed("0xd7818272b9e248357d13057aab0b417af31e817d", "CBETH / USD", maxAgeSeconds: Feed.shortHeartbeat, plausible: .eth(800...1600)),
+        // There's no USD feed for this one on Base.
+        "wstETH": Feed("0x43a5c292a453a3bf3606fa856197f09d7b74251a", "WSTETH / ETH", decimals: 18, answersInEth: true, maxAgeSeconds: Feed.dailyHeartbeat, plausible: .eth(800...1600)),
+        "cbBTC": Feed("0x07da0e54543a844a80abe69c8a12f22b3aa59f9d", "cbBTC / USD", maxAgeSeconds: Feed.shortHeartbeat, plausible: .eth(5000...200_000)),
+        "AERO": Feed("0x4ec5970fc728c5f65ba413992cd5ff6fd70fcff0", "AERO / USD", maxAgeSeconds: Feed.dailyHeartbeat, plausible: .usd(1000...1000 * Money.dollar)),
+        "VIRTUAL": Feed("0xeaf310161c9ef7c813a14f8fef6fb271434019f7", "VIRTUAL / USD", maxAgeSeconds: Feed.dailyHeartbeat, plausible: .usd(1000...1000 * Money.dollar)),
+        "DEGEN": Feed("0xe62bce5d7cb9d16ab8b4d622538bc0a50a5799c2", "DEGEN / USD", maxAgeSeconds: Feed.dailyHeartbeat, plausible: .usd(10...100 * Money.dollar)),
+    ]
+
+    /// `latestRoundData()`: (roundId, answer, startedAt, updatedAt, answeredInRound). A feed whose answer or bounds are in ETH has no price without ETH's.
+    static func price(_ result: String?, feed: Feed, blockTime: UInt128, ethUsdMicros: UInt128? = nil) -> UInt128? {
         guard let result, let bytes = Hex.decode(result), bytes.count == 160 else { return nil }
         let word: (Int) -> UInt128? = { index in
             let slice = bytes[(index * 32)..<((index + 1) * 32)]
@@ -228,8 +273,17 @@ enum Oracle {
             return slice.suffix(16).reduce(UInt128(0)) { $0 << 8 | UInt128($1) }
         }
         guard let answer = word(1), let updatedAt = word(3), updatedAt <= blockTime, blockTime - updatedAt <= feed.maxAgeSeconds else { return nil }
-        let micros = answer / 100
-        return feed.plausibleUsd.contains(micros) ? micros : nil
+        guard let unit = feed.answersInEth ? ethUsdMicros : Money.dollar else { return nil }
+        let micros = Money.usdMicros(of: answer, priceMicros: unit, decimals: feed.decimals)
+        switch feed.plausible {
+        case let .usd(range):
+            return range.contains(micros) ? micros : nil
+        case let .eth(thousandths):
+            guard let ethUsdMicros else { return nil }
+            let lowest = Money.usdMicros(of: thousandths.lowerBound, priceMicros: ethUsdMicros, decimals: 3)
+            let highest = Money.usdMicros(of: thousandths.upperBound, priceMicros: ethUsdMicros, decimals: 3)
+            return (lowest...highest).contains(micros) ? micros : nil
+        }
     }
 }
 
