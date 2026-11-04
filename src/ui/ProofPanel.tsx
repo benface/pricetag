@@ -44,7 +44,7 @@ export function ProofPanel({ address, legId, currency }: { address: string; legI
     }
   }
 
-  if (failure) return <div className="proof small unavailable-text">⚠ {failure}</div>
+  if (failure) return <div className="proof small warn-text">⚠ {failure}</div>
   if (!proof) return <div className="proof small muted">Reading…</div>
   return (
     <div className="proof small">
@@ -78,7 +78,7 @@ export function ProofPanel({ address, legId, currency }: { address: string; legI
                     {dataset.hash}
                   </div>
                 ) : (
-                  <div className="unavailable-text">⚠ Its fingerprint couldn't be read.</div>
+                  <div className="warn-text">⚠ Its fingerprint couldn't be read.</div>
                 )}
               </li>
             ))}
@@ -92,7 +92,7 @@ export function ProofPanel({ address, legId, currency }: { address: string; legI
           <button type="button" className="verify" disabled={verifying} onClick={() => void verify()}>
             {verifying ? "Checking this block…" : verification ? "Verify again" : `Verify block ${proof.blockNum.toLocaleString("en-US")}`}
           </button>
-          {verifyFailure ? <p className="unavailable-text">⚠ {verifyFailure}</p> : null}
+          {verifyFailure ? <p className="warn-text">⚠ {verifyFailure}</p> : null}
           {verification ? (
             <div>
               <p className={`proof-result ${verification.status}`}>{verification.summary}</p>

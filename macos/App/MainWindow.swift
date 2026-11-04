@@ -5,6 +5,7 @@ import SwiftUI
 struct MainWindow: View {
     let store: PortfolioStore
     @Bindable var navigation: Navigation
+    @Environment(\.openWindow) private var openWindow
 
     private var portfolio: Portfolio? { store.portfolio }
     private var isLive: Bool { store.feed.isLive }
@@ -19,9 +20,13 @@ struct MainWindow: View {
             .sheet(isPresented: $navigation.isChangingWallet) {
                 WalletSheet(store: store)
             }
+            .sheet(isPresented: $navigation.isExportingTaxReport) {
+                TaxReportView(store: store) { navigation.isExportingTaxReport = false }
+            }
             // What's open belongs to the wallet it was opened on.
             .onChange(of: store.address) {
                 navigation.target = nil
+                navigation.isExportingTaxReport = false
             }
     }
 
@@ -40,6 +45,10 @@ struct MainWindow: View {
             Button("Change Wallet", systemImage: "wallet.bifold") { navigation.isChangingWallet = true }
                 .help("Change wallet (⌘L)")
         }
+        ToolbarItem(placement: .navigation) {
+            Button("Spending Money", systemImage: "banknote") { openWindow(id: WindowID.hotWallet) }
+                .help("This Mac's spending money (⇧⌘M)")
+        }
         ToolbarItem(placement: .principal) {
             Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
                 ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
@@ -47,6 +56,11 @@ struct MainWindow: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .help("\(Wording.methodHelp) (⌘1, ⌘2)")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button("Tax Report", systemImage: "doc.text") { navigation.isExportingTaxReport = true }
+                .disabled(store.address == nil)
+                .help("Export a tax report (⌘E)")
         }
         ToolbarItem(placement: .status) {
             FeedBadge(feed: store.feed, portfolio: portfolio)
