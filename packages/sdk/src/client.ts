@@ -89,7 +89,10 @@ export function pricetagClient(query: Query, config: Pick<PricetagConfig, "datas
   }
 
   return {
-    /** A wallet's legs in the range, priced and labeled the same way the app's are. Feed them to `buildPortfolio`. */
+    /**
+     * A wallet's legs in the range, priced and labeled the same way the app's are. Feed them to `buildPortfolio`.
+     * Unlike the app, there's no opening balance or L1 fee in them, so they're what moved, not what the wallet holds.
+     */
     async getLegs(address: string, range: BlockRange): Promise<WalletLegs> {
       if (!isAddress(address)) throw new Error(`${address} isn't a Base address`)
       const account = normalizeAddress(address)

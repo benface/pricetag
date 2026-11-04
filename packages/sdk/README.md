@@ -76,7 +76,7 @@ The dataset reference is `benface/pricetag@0.0.1`, and it reads `edgeandnode/bas
 | `reference_prices` | One block's Chainlink ETH/USD and USDC/USD reads | `eth_round` and `usdc_round`. Field `c1` is the answer, in 1e8 USD |
 | `priced_legs` | An account's only pair in a transaction, after netting each token: what it sold and what it bought | `sold_token`, `sold_amount`, `bought_token`, `bought_amount`, and `priced` (`source`, `token`, `usd_micros`) |
 
-The other tables are steps on the way to these: `base_legs`, `gas_legs`, `tx_gas`, `unwrap_legs`, `net_legs`, `pairs`, `pair_counts` and `single_pairs`.
+The other tables are steps on the way to these: `base_legs`, `gas_legs`, `tx_gas`, `unwrap_legs`, `net_legs`, `unlisted_moves`, `pairs`, `pair_counts` and `single_pairs`.
 
 A price and a cost are separate. The dataset carries the price, a shared fact about a transaction. Cost is personal, so each client works it out: `cost = fold(pricedLegs, method)`. That's why the dataset has no cost column.
 
@@ -129,23 +129,17 @@ WHERE block_num BETWEEN 53515266 AND 53515658
 ORDER BY block_num
 ```
 
-**Swap prices for a token without an oracle:** skip any transaction that also moved a token off the allowlist, or the price may include what was paid for that token too.
+**Swap prices for a token without an oracle:** `priced_legs` already leaves out a pair when a token off the allowlist moved with it.
 
 ```sql
-SELECT p.block_num, p.tx_hash, p.account, get_field(p.priced, 'usd_micros') AS usd_micros
-FROM "benface/pricetag@0.0.1".priced_legs p
-LEFT JOIN (
-  SELECT tx_hash, account, COUNT(*) AS n
-  FROM "benface/pricetag@0.0.1".unlisted_legs
-  WHERE block_num BETWEEN 53515266 AND 53515658
-  GROUP BY tx_hash, account
-) u ON p.tx_hash = u.tx_hash AND p.account = u.account
-WHERE p.block_num BETWEEN 53515266 AND 53515658
-  AND get_field(p.priced, 'token') = 'AERO' AND u.n IS NULL
-ORDER BY p.block_num
+SELECT block_num, tx_hash, account, get_field(priced, 'usd_micros') AS usd_micros
+FROM "benface/pricetag@0.0.1".priced_legs
+WHERE block_num BETWEEN 53515266 AND 53515658
+  AND get_field(priced, 'token') = 'AERO'
+ORDER BY block_num
 ```
 
-Run on one wallet and range, the legs, balances and oracle queries match the SDK exactly. The swap query can differ from `getPrices` by a little, either way. It skips a transaction whenever an unlisted token moved, while the SDK only skips one where it moved on net. The SDK also rejects implausible prices, and only prices a simple swap. Over one range, AERO matched at 813, USDT gave 1,315 against the SDK's 1,313, and cbBTC gave 4,144 against 4,159.
+Run on one wallet and range, the balance query matches the SDK on every asset, and the oracle query returns a price for each block. The swap query can return a few prices `getPrices` doesn't, because the SDK also rejects implausible prices and only prices a simple swap. Over one range, AERO and USDT matched at 701 and 857, and cbBTC gave 2,780 against the SDK's 2,779.
 
 SQL stops at cost, because a cost depends on every earlier leg. To get cost and PnL without the SDK, go through a wallet's legs in order, keeping lots per asset:
 
@@ -158,8 +152,12 @@ SQL stops at cost, because a cost depends on every earlier leg. To get cost and 
 
 ## Limits
 
-These are the same as the app's, listed in the [main README](../../README.md#known-gaps). The ones you're most likely to hit:
+**Numbers can differ from the app's on the same wallet.** The app's server also reads onchain balances and L1 fees, and this package doesn't yet. On one wallet, the example showed 0.31 ETH and PnL -$1.36, while the app, reading the chain, showed 143 ETH and PnL unavailable.
 
 - Amounts are what moved since the range's first block, not full balances. A short range shows a lot of `unknown`, because most tokens were bought before it.
+- Nothing is checked against the chain, so a total can show a number where the app has none. Read it as what these legs add up to, not as the wallet's PnL.
+- Gas is L2 gas only, without the L1 data fee.
 - Only tokens on the allowlist in [`src/tokens.ts`](src/tokens.ts) get a position or a price.
 - Only ETH and USDC have a current price, so other tokens show a cost but no value yet.
+
+The app's other limits are in the [main README](../../README.md#known-gaps).
