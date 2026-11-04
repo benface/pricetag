@@ -157,6 +157,7 @@ SQL stops at cost, because a cost depends on every earlier leg. To get cost and 
 
 - Amounts are what moved since the range's first block, not full balances. A short range shows a lot of `unknown`, because most tokens were bought before it.
 - Nothing is checked against the chain, so a total can show a number where the app has none. Read it as what these legs add up to, not as the wallet's PnL.
+- A sender's swap paid out in unwrapped ETH has no price or PnL here. An `unwrap` credit in `legs` only says a contract turned WETH into ETH in that transaction, not that the ETH reached the sender, and its amount can be wrong. The app confirms it with `settleUnwraps`, which needs balances and L1 fees this package doesn't read, so `getLegs` and `getPrices` leave those swaps unknown, with a note saying why. `priced_legs` still has a row for them, so if you query it directly, don't take a `bought_token` of ETH on trust.
 - Gas is L2 gas only, without the L1 data fee.
 - Only tokens on the allowlist in [`src/tokens.ts`](src/tokens.ts) get a position or a price.
 - Only ETH and USDC have a current price, so other tokens show a cost but no value yet.

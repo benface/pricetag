@@ -321,9 +321,10 @@ describe("the portfolio endpoint with linked wallets", () => {
     historyBlocks: null,
     head: async () => ({ blockNum: 20, timestamp: "2026-11-04T00:00:00.000Z" }),
     processedThrough: async (_, head) => head,
-    readWindow: async (address) => ({ rows: rows[address] ?? [], priced: null, gasUnknownTxs: [] }),
+    readWindow: async (address) => ({ rows: rows[address] ?? [], priced: null, gasUnknown: [] }),
     readReferences: async (blocks) => blocks.map((block_num) => ({ block_num, eth_usd: "300000000000", usdc_usd: "100000000" })),
     readLatestReference: async () => ({ block_num: 20, eth_usd: "400000000000", usdc_usd: "100000000" }),
+    readEthBalances: async () => new Map(),
     readBalances: async (address, block) => {
       const amounts: Record<string, string> = Object.fromEntries(ASSETS.map((asset) => [asset, "0"]))
       for (const r of rows[address] ?? []) {
@@ -367,7 +368,7 @@ describe("the portfolio endpoint with linked wallets", () => {
   it("answers with the failure when a linked wallet can't be read, rather than a wrong cost", async () => {
     const failing: Source = { ...source, readWindow: async (address) => {
       if (address === HOT) throw new Error("nope")
-      return { rows: rows[address] ?? [], priced: null, gasUnknownTxs: [] }
+      return { rows: rows[address] ?? [], priced: null, gasUnknown: [] }
     } }
     const api = createApi({}, { source: failing, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
     const other = createServer((req, res) => void api(req, res))

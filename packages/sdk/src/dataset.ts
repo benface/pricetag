@@ -137,7 +137,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
         // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
         // An unlisted row stays either way, because it's evidence that something moved.
         rows: [...rows.filter((r) => r.amount !== "" && r.amount !== "0"), ...unlistedRows.map(toLegRow)],
-        gasUnknownTxs: rows.filter((r) => r.kind === "gas" && r.amount === "").map((r) => r.tx_hash),
+        gasUnknown: rows.filter((r) => r.kind === "gas" && r.amount === "").map(({ tx_hash, block_num }) => ({ tx_hash, block_num })),
         priced: pricedRows.map(toPricedRow),
       }
     },

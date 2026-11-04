@@ -254,7 +254,7 @@ describe("the proof and verify routes", () => {
     historyBlocks: null,
     head: async () => ({ blockNum: LEG_BLOCK, timestamp: "2024-01-30T00:00:00.000Z" }),
     processedThrough: async (_after, head) => head,
-    readWindow: async () => ({ rows: [legRow], priced: [], gasUnknownTxs: [] }),
+    readWindow: async () => ({ rows: [legRow], priced: [], gasUnknown: [] }),
     readReferences: async (blocks) => blocks.map((block_num) => ({ block_num, eth_usd: ANSWER, usdc_usd: "100000000" })),
     readLatestReference: async () => ({ block_num: LEG_BLOCK, eth_usd: ANSWER, usdc_usd: "100000000" }),
     readBalances: async (_address, block) => ({ blockNum: block, amounts: { ...Object.fromEntries(ASSETS.map((asset) => [asset, "0"])), ETH: "1000000000000000000" } }),

@@ -3,13 +3,13 @@
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, asIso, asNumber, blockFilters, datasetReader, decimalString, hexOf, prefixed, readHead, type LegRow, type PricedRow, type Query, type ReferenceRow, type Row, type BalanceSnapshot } from "@pricetag/sdk"
+import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, asIso, asNumber, blockFilters, datasetReader, decimalString, hexOf, prefixed, readHead, type GasUnknownTx, type LegRow, type PricedRow, type Query, type ReferenceRow, type Row, type BalanceSnapshot } from "@pricetag/sdk"
 import type { Head, Mode } from "../src/core/api.ts"
 import type { RateRound } from "../src/core/currency.ts"
-import { MULTICALL3, balancesByAsset, decodeBalanceResults, encodeBalanceCalls } from "./balances.ts"
+import { MULTICALL3, balancesByAsset, decodeBalanceResults, decodeEthBalance, encodeBalanceCalls, encodeEthBalanceCall } from "./balances.ts"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRound, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
-export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknownTxs: string[] }
+export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknown: GasUnknownTx[] }
 
 export type Source = {
   mode: Mode
@@ -28,6 +28,8 @@ export type Source = {
   readLatestReference(head: number): Promise<ReferenceRow | null>
   /** What the chain says this wallet holds at `block`, or null when the read gave nothing usable. */
   readBalances(address: string, block: number): Promise<BalanceSnapshot | null>
+  /** This wallet's plain ETH at the end of each block, not counting WETH. A block whose read failed isn't in it. */
+  readEthBalances(address: string, blocks: readonly number[]): Promise<Map<number, string>>
 }
 
 /**
@@ -38,6 +40,32 @@ async function readBalancesAt(query: Query, network: string, address: string, bl
   const [row] = await query<Row>(`SELECT rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeBalanceCalls(address)}', ${block}) AS r`)
   const results = decodeBalanceResults((row?.r as { data?: string } | null | undefined)?.data)
   return results && { blockNum: block, amounts: balancesByAsset(results) }
+}
+
+/**
+ * One query per 200 blocks, in the shape `readReferences` explains. A block the table doesn't have, like the one before a
+ * local dataset's start, is read on its own.
+ */
+async function readEthBalancesAt(query: Query, network: string, baseDataset: string, address: string, blocks: readonly number[]): Promise<Map<number, string>> {
+  const balances = new Map<number, string>()
+  const call = (block: string) => `rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeEthBalanceCall(address)}', ${block}) AS r`
+  const dataOf = (row: Row | undefined) => (row?.r as { data?: string } | null | undefined)?.data
+  const returned = new Set<number>()
+  for (const { filter, count } of blockFilters(blocks)) {
+    for (const row of await query<Row>(`SELECT block_num, ${call("block_num")} FROM (SELECT block_num FROM "${baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)) {
+      const block = asNumber(row.block_num)
+      const balance = decodeEthBalance(dataOf(row))
+      returned.add(block)
+      if (balance !== null) balances.set(block, balance)
+    }
+  }
+  for (const block of blocks) {
+    if (returned.has(block)) continue
+    const [row] = await query<Row>(`SELECT ${call(String(block))}`)
+    const balance = decodeEthBalance(dataOf(row))
+    if (balance !== null) balances.set(block, balance)
+  }
+  return balances
 }
 
 /** A feed's answer at each block, leaving out blocks where the read failed. */
@@ -101,6 +129,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
     readReferences,
     readLatestReference: async (head) => (await readReferences([head]))[0] ?? null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
 
     async readWindow(address, from, to) {
       const me = hexOf(address)
@@ -167,7 +196,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
         : []
       const baseFees = await inBlocks<Row>(sentBlocks, (filter) => `SELECT block_num, base_fee_per_gas FROM ${ds}.blocks WHERE ${filter}`)
 
-      const { rows, gasUnknownTxs } = legRowsFromRaw({
+      const { rows, gasUnknown } = legRowsFromRaw({
         account: address,
         txs,
         logs,
@@ -177,7 +206,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
           baseFeeByBlock: new Map(baseFees.map((b) => [asNumber(b.block_num), decimalString(b.base_fee_per_gas) ?? "0"])),
         },
       })
-      return { rows, priced: null, gasUnknownTxs }
+      return { rows, priced: null, gasUnknown }
     },
   }
 }
@@ -188,6 +217,7 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
     startBlock: config.startBlock,
     historyBlocks: null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     ...datasetReader(query, config),
   }
 }

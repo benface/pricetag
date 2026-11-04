@@ -112,7 +112,9 @@ FROM self.tx_gas g
 JOIN base.blocks b ON g._block_num = b._block_num
 WHERE ${since}`,
 
-    // Without traces, a WETH Withdrawal in a transaction counts as ETH paid to its sender.
+    // Without traces, a WETH Withdrawal in a transaction counts as ETH paid to its sender. That's only a claim, because a
+    // contract can send the ETH elsewhere, and this table can't read balances to check. So its rows keep their own kind,
+    // and clients settle them against the chain. See `settleUnwraps` in the SDK.
     unwrap_legs: `SELECT l.block_num, l.timestamp, l.tx_hash, l.tx_index, l.log_index, ${ethToken} AS token, x."from" AS account, 'credit' AS side,
   get_field(evm_decode_log(l.topic1, l.topic2, l.topic3, l.data, '${WITHDRAWAL}'), 'wad') AS amount, 'unwrap' AS kind
 FROM base.logs l
