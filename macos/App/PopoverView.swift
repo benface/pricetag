@@ -84,7 +84,7 @@ struct PopoverView: View {
             LazyVStack(spacing: 0) {
                 ForEach(portfolio.positions) { position in
                     Button { open(.asset(position.asset, .amount)) } label: {
-                        HoldingRow(position: position, isLive: isLive)
+                        HoldingRow(position: position, currency: portfolio.currency, isLive: isLive)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
                             .background {

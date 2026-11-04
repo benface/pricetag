@@ -1,16 +1,16 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { balancesByAsset, decodeBalanceResults, encodeBalanceCalls, MULTICALL3 } from "../server/balances.ts"
-import { explainMetric, explainTotal, mismatchCause } from "../src/core/explain.ts"
+import { USD_CONTEXT, explainMetric, explainTotal, mismatchCause } from "../src/core/explain.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { feesUnknownSentence } from "../src/core/wording.ts"
-import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, foldPositions, openingLegs, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type LegRow, type Onchain, type ReferenceRow } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, foldPositions, openingLegs, pnlOverTime, referenceMarks, sumTotals, unconfirmedAssets, unreadAssets, type LegRow, type Onchain, type ReferenceRow } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 const E18 = 10n ** 18n
 const E6 = 10n ** 6n
 const REF: ReferenceRow = { block_num: 100, eth_usd: "300000000000", usdc_usd: "100000000" }
-const PRICES = { ETH: { usdMicros: "3000000000", source: "oracle" as const, blockNum: 200 } }
+const PRICES = { ETH: { micros: "3000000000", source: "oracle" as const, blockNum: 200 } }
 
 let counter = 0
 function row(token: string, side: LegRow["side"], amount: bigint, kind: LegRow["kind"] = token === ETH_ADDRESS ? "eth" : "erc20", tx = `0x${(++counter).toString(16)}`): LegRow {
@@ -47,7 +47,7 @@ describe("a wallet that matches the chain", () => {
     const paidFor = WALLET_ROWS.filter((r) => r.kind !== "gas" && r.amount !== FUNDING.toString())
     const known = foldPositions(legsOf(paidFor), "average", PRICES, onchain({ ETH: E18, USDC: 0n }))
     assert.equal(assetOf(known, "ETH").reconciliation?.status, "reconciled")
-    assert.notEqual(assetOf(known, "ETH").values.unrealizedUsdMicros, null)
+    assert.notEqual(assetOf(known, "ETH").values.unrealizedMicros, null)
     assert.deepEqual(sumTotals(known).excluded.filter((e) => e.asset === "ETH"), [])
   })
 
@@ -73,30 +73,30 @@ describe("a missed internal ETH transfer", () => {
   })
 
   it("shows PnL as unavailable, whatever the known part says", () => {
-    assert.equal(eth.values.realizedUsdMicros, null)
-    assert.equal(eth.values.unrealizedUsdMicros, null)
-    assert.equal(eth.values.averageCostUsdMicros, null)
+    assert.equal(eth.values.realizedMicros, null)
+    assert.equal(eth.values.unrealizedMicros, null)
+    assert.equal(eth.values.averageCostMicros, null)
   })
 
   it("holds and values what the chain says, because those are facts", () => {
     assert.equal(eth.values.qty, (COMPUTED_ETH + MISSED).toString())
-    assert.equal(eth.values.valueUsdMicros, ((COMPUTED_ETH + MISSED) * 3000000000n / E18).toString())
+    assert.equal(eth.values.valueMicros, ((COMPUTED_ETH + MISSED) * 3000000000n / E18).toString())
   })
 
   it("is out of the totals, and they say so, with the value still counted", () => {
     const totals = sumTotals(positions)
     assert.deepEqual(totals.excluded.filter((e) => e.asset === "ETH"), [{ asset: "ETH", reason: "doesn't match its actual balance" }])
-    assert.equal(totals.valueUsdMicros, eth.values.valueUsdMicros)
+    assert.equal(totals.valueMicros, eth.values.valueMicros)
     assert.equal(totals.coverage.unrealized.known, 0)
-    assert.equal(totals.unrealizedUsdMicros, null)
+    assert.equal(totals.unrealizedMicros, null)
   })
 
   it("is out of every point on the chart, and the last point still matches the headline", () => {
     const legs = legsOf(WALLET_ROWS)
     const incomplete = new Set(["ETH"])
-    const points = pnlOverTime(legs, "average", PRICES, [REF], { blockNum: 200, timestamp: "2026-11-04T00:00:00.000Z" }, incomplete)
+    const points = pnlOverTime(legs, "average", PRICES, referenceMarks([REF]), { blockNum: 200, timestamp: "2026-11-04T00:00:00.000Z" }, incomplete)
     assert.ok(points.at(-1)!.excludedCount > 0)
-    assert.equal(points.at(-1)!.pnlUsdMicros, sumTotals(positions).pnlUsdMicros)
+    assert.equal(points.at(-1)!.pnlMicros, sumTotals(positions).pnlMicros)
   })
 
   it("a wallet funded only by one has a position, with no legs at all", () => {
@@ -125,7 +125,7 @@ describe("a wallet with an opening balance", () => {
   const legs = [...opening, ...legsOf(spent)]
 
   it("becomes one leg per asset it held, at an unknown cost, and not a $0 one", () => {
-    assert.deepEqual(opening.map((l) => [l.asset, l.delta, l.costLabel, l.costUsdMicros, l.opening]), [["ETH", OPENING.toString(), "unknown", null, true]])
+    assert.deepEqual(opening.map((l) => [l.asset, l.delta, l.costLabel, l.costMicros, l.opening]), [["ETH", OPENING.toString(), "unknown", null, true]])
   })
 
   it("reconciles when what it held plus what moved is what's onchain", () => {
@@ -135,8 +135,8 @@ describe("a wallet with an opening balance", () => {
 
   it("its cost stays unknown, so PnL is unavailable instead of wrong", () => {
     const [eth] = foldPositions(legs, "average", PRICES, onchain({ ETH: OPENING - E18 - 1000n }))
-    assert.equal(eth!.values.costUsdMicros, null)
-    assert.equal(eth!.values.unrealizedUsdMicros, null)
+    assert.equal(eth!.values.costMicros, null)
+    assert.equal(eth!.values.unrealizedMicros, null)
     assert.equal(eth!.state.shortfallQty, "0")
     assert.ok(BigInt(eth!.values.unknownCostQty) > 0n)
   })
@@ -147,7 +147,7 @@ describe("a wallet with an opening balance", () => {
   })
 
   it("makes no point on the chart of its own, since it isn't a transaction", () => {
-    const points = pnlOverTime(legs, "average", PRICES, [REF], null)
+    const points = pnlOverTime(legs, "average", PRICES, referenceMarks([REF]), null)
     assert.ok(points.every((p) => p.txHash !== ""))
   })
 })
@@ -163,7 +163,7 @@ describe("when there's nothing to compare", () => {
     const rows = [row(USDC_ADDRESS, "debit", 3000n * E6, "erc20", SWAP), row(WETH_ADDRESS, "credit", E18, "erc20", SWAP), row(USDC_ADDRESS, "credit", 3000n * E6)]
     const eth = assetOf(foldPositions(legsOf(rows), "average", PRICES, { balances: null, l1FeeUnknownTxs: [] }), "ETH")
     assert.equal(eth.values.qty, E18.toString())
-    assert.equal(eth.values.valueUsdMicros, "3000000000")
+    assert.equal(eth.values.valueMicros, "3000000000")
   })
 
   it("an estimate from the last read leaves the value partial, and says so", () => {
@@ -174,9 +174,9 @@ describe("when there's nothing to compare", () => {
     assert.equal(eth.values.qty, (E18 + 5n).toString())
     const totals = sumTotals(positions)
     assert.deepEqual(totals.coverage.value, { known: 1, missing: 1 })
-    assert.notEqual(totals.valueUsdMicros, null)
-    assert.match(explainTotal(positions, totals, "value").lines.join(" "), /ETH's value is an estimate/)
-    assert.match(explainMetric(eth, "amount").lines.join(" "), /last balance read/)
+    assert.notEqual(totals.valueMicros, null)
+    assert.match(explainTotal(positions, totals, "value", USD_CONTEXT).lines.join(" "), /ETH's value is an estimate/)
+    assert.match(explainMetric(eth, "amount", USD_CONTEXT).lines.join(" "), /last balance read/)
   })
 
   it("an estimate can't go below zero", () => {
@@ -215,7 +215,7 @@ describe("a known mismatch, when the next check can't run", () => {
   const legs = buildPricedLegs({ account: ME, rows, references: [SWAP_REF], priced: [] })
   const fold = (state: Onchain) => foldPositions(legs, "average", PRICES, state)
   const eth = (state: Onchain) => assetOf(fold(state), "ETH")
-  const chartEnd = (state: Onchain) => pnlOverTime(legs, "average", PRICES, [SWAP_REF], { blockNum: 200, timestamp: "2026-11-04T00:00:00.000Z" }, unconfirmedAssets(fold(state))).at(-1)!
+  const chartEnd = (state: Onchain) => pnlOverTime(legs, "average", PRICES, referenceMarks([SWAP_REF]), { blockNum: 200, timestamp: "2026-11-04T00:00:00.000Z" }, unconfirmedAssets(fold(state))).at(-1)!
 
   const mismatch = onchain({ ETH: E18 + E18 / 2n, USDC: 0n })
   const readFailed: Onchain = { balances: null, l1FeeUnknownTxs: [] }
@@ -224,31 +224,31 @@ describe("a known mismatch, when the next check can't run", () => {
 
   it("starts unavailable", () => {
     assert.equal(eth(mismatch).reconciliation?.status, "incomplete")
-    assert.equal(eth(mismatch).values.unrealizedUsdMicros, null)
+    assert.equal(eth(mismatch).values.unrealizedMicros, null)
   })
 
   for (const [name, state] of [["a failed balance read", readFailed], ["a new L1 fee that isn't in yet", feeUnread]] as const) {
     it(`${name} doesn't bring the PnL back, in the position, the totals or the chart`, () => {
       assert.equal(eth(state).reconciliation?.status, "unchecked")
-      assert.equal(eth(state).values.realizedUsdMicros, null)
-      assert.equal(eth(state).values.unrealizedUsdMicros, null)
-      assert.equal(eth(state).values.averageCostUsdMicros, null)
+      assert.equal(eth(state).values.realizedMicros, null)
+      assert.equal(eth(state).values.unrealizedMicros, null)
+      assert.equal(eth(state).values.averageCostMicros, null)
       assert.ok(sumTotals(fold(state)).excluded.some((e) => e.asset === "ETH"))
-      assert.equal(sumTotals(fold(state)).unrealizedUsdMicros, null)
+      assert.equal(sumTotals(fold(state)).unrealizedMicros, null)
       assert.ok(chartEnd(state).excludedCount > 0)
-      assert.equal(chartEnd(state).pnlUsdMicros, sumTotals(fold(state)).pnlUsdMicros)
+      assert.equal(chartEnd(state).pnlMicros, sumTotals(fold(state)).pnlMicros)
     })
   }
 
   it("a check that matches is what brings it back", () => {
     assert.equal(eth(match).reconciliation?.status, "reconciled")
-    assert.equal(eth(match).values.unrealizedUsdMicros, "1000000000")
-    assert.equal(chartEnd(match).pnlUsdMicros, sumTotals(fold(match)).pnlUsdMicros)
+    assert.equal(eth(match).values.unrealizedMicros, "1000000000")
+    assert.equal(chartEnd(match).pnlMicros, sumTotals(fold(match)).pnlMicros)
   })
 
   it("the words say why, for every number that's gone", () => {
     for (const metric of ["average", "realized", "unrealized"] as const) {
-      const explanation = explainMetric(eth(readFailed), metric)
+      const explanation = explainMetric(eth(readFailed), metric, USD_CONTEXT)
       assert.equal(explanation.value, null)
       assert.match(explanation.lines.join(" "), /Not checked/)
     }
@@ -262,23 +262,23 @@ describe("what the chart leaves out", () => {
     // USDC arrives and leaves, so its PnL is a real $0, and 1 ETH shows up from a transfer we can't see.
     const legs = legsOf([row(USDC_ADDRESS, "credit", 5n), row(USDC_ADDRESS, "debit", 5n)])
     const positions = foldPositions(legs, "average", PRICES, onchain({ USDC: 0n, ETH: E18 }))
-    assert.equal(sumTotals(positions).pnlUsdMicros, null)
-    const end = pnlOverTime(legs, "average", PRICES, [REF], latest, unconfirmedAssets(positions)).at(-1)!
-    assert.equal(end.pnlUsdMicros, null)
+    assert.equal(sumTotals(positions).pnlMicros, null)
+    const end = pnlOverTime(legs, "average", PRICES, referenceMarks([REF]), latest, unconfirmedAssets(positions)).at(-1)!
+    assert.equal(end.pnlMicros, null)
     assert.equal(end.excludedCount, 1)
   })
 
   it("counts it at every point, because we can't tell when it started", () => {
     const legs = legsOf([row(USDC_ADDRESS, "credit", 5n), row(USDC_ADDRESS, "debit", 5n)])
-    const points = pnlOverTime(legs, "average", PRICES, [REF], latest, new Set(["ETH"]))
+    const points = pnlOverTime(legs, "average", PRICES, referenceMarks([REF]), latest, new Set(["ETH"]))
     assert.ok(points.every((p) => p.excludedCount >= 1))
   })
 
   it("a wallet with no activity at all still ends on an unavailable point, not an empty chart that disagrees", () => {
     const positions = foldPositions([], "average", PRICES, onchain({ ETH: E18 }))
-    const points = pnlOverTime([], "average", PRICES, [], latest, unconfirmedAssets(positions))
-    assert.deepEqual(points.map((p) => [p.pnlUsdMicros, p.excludedCount]), [[null, 1]])
-    assert.equal(sumTotals(positions).pnlUsdMicros, null)
+    const points = pnlOverTime([], "average", PRICES, referenceMarks([]), latest, unconfirmedAssets(positions))
+    assert.deepEqual(points.map((p) => [p.pnlMicros, p.excludedCount]), [[null, 1]])
+    assert.equal(sumTotals(positions).pnlMicros, null)
   })
 
   it("leaves out assets that were never read, and they make the headline's answer match", () => {
@@ -286,11 +286,11 @@ describe("what the chart leaves out", () => {
     const unread = unreadAssets(positions, { unreadBalances: ["ETH", "USDC"] })
     assert.deepEqual(unread, ["ETH", "USDC"])
     const totals = sumTotals(positions, unread)
-    assert.equal(totals.valueUsdMicros, null)
-    assert.equal(totals.pnlUsdMicros, null)
+    assert.equal(totals.valueMicros, null)
+    assert.equal(totals.pnlMicros, null)
     assert.deepEqual(totals.excluded, [{ asset: "ETH", reason: "balance couldn't be read" }, { asset: "USDC", reason: "balance couldn't be read" }])
-    const end = pnlOverTime([], "average", PRICES, [], latest, unconfirmedAssets(positions, unread)).at(-1)!
-    assert.equal(end.pnlUsdMicros, null)
+    const end = pnlOverTime([], "average", PRICES, referenceMarks([]), latest, unconfirmedAssets(positions, unread)).at(-1)!
+    assert.equal(end.pnlMicros, null)
     assert.equal(end.excludedCount, 2)
   })
 
@@ -300,7 +300,7 @@ describe("what the chart leaves out", () => {
   })
 
   it("a wallet with nothing wrong and no activity has no points", () => {
-    assert.deepEqual(pnlOverTime([], "average", PRICES, [], latest, new Set()), [])
+    assert.deepEqual(pnlOverTime([], "average", PRICES, referenceMarks([]), latest, new Set()), [])
   })
 })
 
@@ -313,7 +313,7 @@ describe("the words", () => {
       for (const position of foldPositions(legsOf(WALLET_ROWS), "average", PRICES, state)) {
         // The price's own wording is WORK-349's, so this looks at the part reconciliation adds.
         for (const metric of ["amount", "average", "value", "realized", "unrealized", "onchain"] as const) {
-          const added = explainMetric(position, metric).lines.filter((line) => !line.startsWith("Current price") && !line.startsWith("There's no current price"))
+          const added = explainMetric(position, metric, USD_CONTEXT).lines.filter((line) => !line.startsWith("Current price") && !line.startsWith("There's no current price"))
           for (const line of added) assert.doesNotMatch(line, /\blegs?\b/i)
         }
       }
@@ -324,7 +324,7 @@ describe("the words", () => {
     const states = [onchain({ ETH: COMPUTED_ETH, USDC: 0n }), onchain({ ETH: COMPUTED_ETH + 1n, USDC: 1n }), onchain({ ETH: COMPUTED_ETH, USDC: 0n }, ["0xabc"]), { balances: null, l1FeeUnknownTxs: [] }]
     for (const state of states) {
       for (const position of foldPositions(legsOf(WALLET_ROWS), "average", PRICES, state)) {
-        const { lines } = explainMetric(position, "onchain")
+        const { lines } = explainMetric(position, "onchain", USD_CONTEXT)
         assert.ok(lines.length > 0)
         for (const line of lines) assert.doesNotMatch(line, JARGON)
         if (position.reconciliation?.status === "unchecked") assert.doesNotMatch(position.reconciliation.reason, JARGON)
@@ -464,7 +464,7 @@ describe("a network fee that couldn't be worked out", () => {
     const state: Onchain = { balances: null, l1FeeUnknownTxs: [], lastBalances: { ETH: { blockNum: 50, amount: E18.toString() } }, unreadBalances: ["ETH"] }
     const eth = assetOf(foldPositions(legs, "average", PRICES, state), "ETH")
     assert.equal(eth.reconciliation?.status, "unchecked")
-    assert.match(explainMetric(eth, "amount").lines.join(" "), /last balance read/)
+    assert.match(explainMetric(eth, "amount", USD_CONTEXT).lines.join(" "), /last balance read/)
     assert.equal(feesUnknownSentence(1), "Network fees couldn't be worked out for 1 transaction, so the network fees shown are too low.")
   })
 })

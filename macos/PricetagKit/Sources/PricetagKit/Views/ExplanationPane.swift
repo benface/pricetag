@@ -40,6 +40,9 @@ public struct ExplanationPane: View {
                     } else {
                         WarningText("Unavailable").font(.title3.weight(.semibold))
                     }
+                    if let sourceValue = explanation.sourceValue {
+                        Text(sourceValue).font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                    }
                     ForEach(explanation.lines, id: \.self) { line in
                         Text(line)
                             .font(.callout)
@@ -56,7 +59,7 @@ public struct ExplanationPane: View {
             }
             Section(Wording.activityTitle(count: explanation.legCount, shown: explanation.legs.count)) {
                 ForEach(explanation.legs) { leg in
-                    LegRow(leg: leg)
+                    LegRow(leg: leg, currency: explanation.currency)
                 }
             }
         }
@@ -65,9 +68,11 @@ public struct ExplanationPane: View {
 
 public struct LegRow: View {
     let leg: ExplanationLeg
+    let currency: CurrencyCode
 
-    public init(leg: ExplanationLeg) {
+    public init(leg: ExplanationLeg, currency: CurrencyCode) {
         self.leg = leg
+        self.currency = currency
     }
 
     public var body: some View {
@@ -88,6 +93,9 @@ public struct LegRow: View {
             }
             if let netting = leg.netting {
                 Text(netting).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if let conversion = leg.conversion {
+                Text(conversion).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 6) {
                 if let url = leg.transactionURL {
@@ -115,8 +123,8 @@ public struct LegRow: View {
     @ViewBuilder
     private var tagList: some View {
         Tag(leg.opening ? Wording.startingBalance : Wording.action(kind: leg.kind, isIncoming: leg.isIncoming))
-        if let price = leg.priceUsdMicros, let source = leg.priceSource {
-            Tag("\(Format.price(price)) · \(Wording.priceSource(source))")
+        if let price = leg.priceMicros, let source = leg.priceSource {
+            Tag("\(Format.price(price, currency)) · \(Wording.priceSource(source))")
         } else {
             Tag("No price", isWarning: true)
         }

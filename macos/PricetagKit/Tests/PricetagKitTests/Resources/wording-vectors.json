@@ -191,7 +191,7 @@
     "unpricedFees": "Some network fees had no price at the time, and aren't in this total.",
     "demo": "Demo data, not a real wallet. Every case the app has to get right is in here.",
     "pnlUnavailable": "PnL unavailable",
-    "nothingToChart": "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't $0.",
+    "nothingToChart": "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero.",
     "reading": "Reading this wallet's history. The first read can take a minute, then only new activity is read.",
     "notAnAddress": "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
   }

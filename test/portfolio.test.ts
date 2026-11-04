@@ -6,8 +6,8 @@ import { after, before, describe, it } from "node:test"
 import { ETH_ADDRESS, PRICE_NOTES, WETH_ADDRESS, buildPricedLegs, foldPositions, sumTotals, type LegRow } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
-import { DEMO_WALLET } from "../src/core/fixtures.ts"
-import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd } from "../src/core/format.ts"
+import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
+import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedMoney, formatMoney } from "../src/core/format.ts"
 import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
@@ -49,19 +49,19 @@ describe("portfolioOf", () => {
   it("never gives a position a PnL when part of it is unknown", () => {
     const portfolio = portfolioOf(DEMO_WALLET, "average")
     const position = (asset: string) => portfolio.positions.find((p) => p.asset === asset)
-    assert.equal(position("USDC")?.pnlUsdMicros, null)
-    assert.equal(position("cbBTC")?.pnlUsdMicros, null)
-    assert.equal(position("AERO")?.pnlUsdMicros, null, "AERO has a known cost, but no current price")
+    assert.equal(position("USDC")?.pnlMicros, null)
+    assert.equal(position("cbBTC")?.pnlMicros, null)
+    assert.equal(position("AERO")?.pnlMicros, null, "AERO has a known cost, but no current price")
   })
 
   it("carries each position's check, and leaves what doesn't match out of the chart too", () => {
     const portfolio = portfolioOf(DEMO_WALLET, "average")
     const cbBtc = portfolio.positions.find((p) => p.asset === "cbBTC")!
     assert.equal(cbBtc.reconciliation?.status, "incomplete")
-    assert.equal(cbBtc.pnlUsdMicros, null)
+    assert.equal(cbBtc.pnlMicros, null)
     assert.ok(portfolio.totals.excluded.some((e) => e.asset === "cbBTC" && e.reason === "doesn't match its actual balance"))
     assert.ok(portfolio.points.at(-1)!.excludedCount > 0)
-    assert.equal(portfolio.points.at(-1)!.pnlUsdMicros, portfolio.totals.pnlUsdMicros)
+    assert.equal(portfolio.points.at(-1)!.pnlMicros, portfolio.totals.pnlMicros)
     assert.equal(portfolio.positions.find((p) => p.asset === "USDC")!.reconciliation?.status, "reconciled")
   })
 
@@ -82,9 +82,9 @@ describe("portfolioOf", () => {
   it("says the total is unavailable when nothing in it is known", () => {
     const onlyUnknown = DEMO_WALLET.legs.filter((l) => l.asset === "cbBTC")
     const portfolio = portfolioOf(walletWith({ legs: onlyUnknown }), "average")
-    assert.equal(portfolio.totals.pnlUsdMicros, null)
+    assert.equal(portfolio.totals.pnlMicros, null)
     assert.equal(portfolio.pnlStatus, "unavailable")
-    assert.deepEqual(portfolio.points.map((p) => p.pnlUsdMicros), [null, null])
+    assert.deepEqual(portfolio.points.map((p) => p.pnlMicros), [null, null])
   })
 
   it("says the total is partial when gas couldn't be worked out, even with nothing excluded", () => {
@@ -95,25 +95,25 @@ describe("portfolioOf", () => {
 
   it("treats a known zero as an answer", () => {
     const portfolio = portfolioOf(walletWith({ legs: [] }), "average")
-    assert.equal(portfolio.totals.pnlUsdMicros, "0")
+    assert.equal(portfolio.totals.pnlMicros, "0")
     assert.equal(portfolio.pnlStatus, "complete")
   })
 
   it("keeps the demo's early unknown points unknown, and explains them that way", () => {
     const portfolio = portfolioOf(DEMO_WALLET, "average")
     const first = portfolio.points[0]
-    assert.equal(first?.pnlUsdMicros, null)
+    assert.equal(first?.pnlMicros, null)
     const explanation = explainPortfolio(DEMO_WALLET, "average", { kind: "tx", txHash: first?.txHash as string })
     assert.equal(explanation?.value, null)
-    assert.ok(portfolio.points.some((p) => p.pnlUsdMicros !== null))
+    assert.ok(portfolio.points.some((p) => p.pnlMicros !== null))
   })
 
   it("gives no PnL to a position whose history is incomplete", () => {
     const leg = DEMO_WALLET.legs.find((l) => l.asset === "AERO" && BigInt(l.delta) > 0n) as (typeof DEMO_WALLET.legs)[number]
-    const out = { ...leg, id: "out", delta: `-${BigInt(leg.delta) * 2n}`, kind: "transfer" as const, costUsdMicros: null, proceedsUsdMicros: null }
+    const out = { ...leg, id: "out", delta: `-${BigInt(leg.delta) * 2n}`, kind: "transfer" as const, costMicros: null, proceedsMicros: null }
     const position = portfolioOf(walletWith({ legs: [leg, out] }), "average").positions[0]
     assert.ok(BigInt(position?.shortfallQty ?? "0") > 0n)
-    assert.equal(position?.pnlUsdMicros, null)
+    assert.equal(position?.pnlMicros, null)
   })
 
   it("says how far what's read is behind the chain", () => {
@@ -128,7 +128,7 @@ describe("portfolioOf", () => {
     const closing = { ...eth[0], id: "closing", delta: `-${eth[0]?.delta}`, kind: "transfer" as const } as (typeof eth)[number]
     const portfolio = portfolioOf(walletWith({ legs: [...eth, closing] }), "average")
     assert.equal(portfolio.positions[0]?.values.qty, "0")
-    assert.equal(portfolio.positions[0]?.pnlUsdMicros, "0")
+    assert.equal(portfolio.positions[0]?.pnlMicros, "0")
   })
 
   it("doesn't explain a total with nothing known in it as $0", () => {
@@ -148,6 +148,9 @@ describe("portfolioOf", () => {
   it("matches the files the Swift package reads", () => {
     assertMatchesFile("demo-portfolio.json", portfolioOf(DEMO_WALLET, "average"))
     assertMatchesFile("demo-explanation.json", explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "AERO", metric: "realized" }))
+    const inCad = walletWith({ currency: "CAD", rates: demoRates("CAD") })
+    assertMatchesFile("demo-portfolio-cad.json", portfolioOf(inCad, "average"))
+    assertMatchesFile("demo-explanation-cad.json", explainPortfolio(inCad, "average", { kind: "asset", asset: "AERO", metric: "realized" }))
   })
 })
 
@@ -252,8 +255,9 @@ describe("the formatters the Swift package repeats", () => {
       ["115792089237316195423570985008687907853269984665640564039457584007913129639935", 18],
     ]
     assertMatchesFile("format-vectors.json", {
-      usd: usd.map((micros) => ({ micros, usd: formatUsd(micros), signed: formatSignedUsd(micros) })),
-      price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros) })),
+      usd: usd.map((micros) => ({ micros, usd: formatMoney(micros, "USD"), signed: formatSignedMoney(micros, "USD") })),
+      cad: usd.map((micros) => ({ micros, usd: formatMoney(micros, "CAD"), signed: formatSignedMoney(micros, "CAD") })),
+      price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, "USD"), cad: formatPrice(micros, "CAD") })),
       amount: units.map(([value, decimals]) => ({ units: value, decimals, amount: formatAmount(value, decimals), signed: formatSignedAmount(value, decimals) })),
       duration: [0, 30, 1800, 3599, 3600, 5400, 100000].map((blocks) => ({ blocks, duration: formatDuration(blocks) })),
     })
@@ -322,19 +326,22 @@ describe("wording", () => {
     const [wrapped] = buildPricedLegs({ account: "0xaa", rows: [incoming(ETH_ADDRESS, "eth"), incoming(WETH_ADDRESS, "erc20")], references: [], priced: [] })
     assert.equal(describeNetting(wrapped!), "Combines 2 movements: +1 ETH, +1 wrapped ETH")
     texts.push(describeNetting(wrapped!) ?? "")
-    for (const method of ["average", "fifo"] as const) {
-      for (const position of foldPositions(DEMO_WALLET.legs, method, DEMO_WALLET.prices)) {
-        for (const effect of position.effects) {
-          texts.push(describeEffect(effect), describeNetting(effect.leg) ?? "", effect.leg.priceNote ?? "")
+    const wallets = [DEMO_WALLET, walletWith({ currency: "CAD", rates: demoRates("CAD") })]
+    for (const wallet of wallets) {
+      for (const method of ["average", "fifo"] as const) {
+        for (const position of foldPositions(DEMO_WALLET.legs, method, DEMO_WALLET.prices)) {
+          for (const effect of position.effects) {
+            texts.push(describeEffect(effect, wallet.currency), describeNetting(effect.leg) ?? "", effect.leg.priceNote ?? "")
+          }
+          for (const metric of ["amount", "average", "value", "realized", "unrealized", "onchain"] as const) {
+            const explanation = explainPortfolio(wallet, method, { kind: "asset", asset: position.asset, metric })
+            texts.push(explanation?.title ?? "", ...(explanation?.lines ?? []))
+          }
         }
-        for (const metric of ["amount", "average", "value", "realized", "unrealized", "onchain"] as const) {
-          const explanation = explainPortfolio(DEMO_WALLET, method, { kind: "asset", asset: position.asset, metric })
+        for (const metric of ["pnl", "value", "realized", "unrealized", "gas"] as const) {
+          const explanation = explainPortfolio(wallet, method, { kind: "total", metric })
           texts.push(explanation?.title ?? "", ...(explanation?.lines ?? []))
         }
-      }
-      for (const metric of ["pnl", "value", "realized", "unrealized", "gas"] as const) {
-        const explanation = explainPortfolio(DEMO_WALLET, method, { kind: "total", metric })
-        texts.push(explanation?.title ?? "", ...(explanation?.lines ?? []))
       }
     }
     for (const text of texts) assert.doesNotMatch(text, JARGON)

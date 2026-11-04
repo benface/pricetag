@@ -14,8 +14,8 @@ public enum FetchError: Error, Equatable, Sendable {
 }
 
 public protocol PortfolioSource: Sendable {
-    func portfolio(address: String, method: CostMethod, timeout: Duration) async throws -> Portfolio
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod) async throws -> Explanation
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, timeout: Duration) async throws -> Portfolio
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode) async throws -> Explanation
 }
 
 public struct PricetagClient: PortfolioSource {
@@ -29,12 +29,16 @@ public struct PricetagClient: PortfolioSource {
         session = URLSession(configuration: configuration)
     }
 
-    public func portfolio(address: String, method: CostMethod, timeout: Duration) async throws -> Portfolio {
-        try await get("/api/portfolio/\(address)", query: [URLQueryItem(name: "method", value: method.rawValue)], timeout: timeout)
+    public func portfolio(address: String, method: CostMethod, currency: CurrencyCode, timeout: Duration) async throws -> Portfolio {
+        try await get("/api/portfolio/\(address)", query: settings(method, currency), timeout: timeout)
     }
 
-    public func explanation(of target: ExplainTarget, address: String, method: CostMethod) async throws -> Explanation {
-        try await get("/api/portfolio/\(address)/explain", query: [URLQueryItem(name: "method", value: method.rawValue)] + target.queryItems, timeout: .seconds(30))
+    public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode) async throws -> Explanation {
+        try await get("/api/portfolio/\(address)/explain", query: settings(method, currency) + target.queryItems, timeout: .seconds(30))
+    }
+
+    private func settings(_ method: CostMethod, _ currency: CurrencyCode) -> [URLQueryItem] {
+        [URLQueryItem(name: "method", value: method.rawValue), URLQueryItem(name: "currency", value: currency.rawValue)]
     }
 
     private func get<Body: Decodable>(_ path: String, query: [URLQueryItem], timeout: Duration) async throws -> Body {

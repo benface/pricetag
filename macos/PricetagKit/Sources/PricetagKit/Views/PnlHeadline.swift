@@ -16,16 +16,20 @@ public struct PnlHeadline: View {
 
     /// nil when there's no number to show, and that says so instead of showing $0.
     private var pnl: String? {
-        portfolio.pnlStatus == .unavailable ? nil : portfolio.totals.pnlUsdMicros
+        portfolio.pnlStatus == .unavailable ? nil : portfolio.totals.pnlMicros
+    }
+
+    private func signed(_ micros: String) -> String {
+        Format.signedMoney(micros, portfolio.currency)
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("Total PnL").font(.caption).foregroundStyle(.secondary).help(Wording.pnlHelp)
+            Text("Total PnL · \(portfolio.currency.rawValue)").font(.caption).foregroundStyle(.secondary).help(Wording.pnlHelp)
             Button(action: onOpen) {
                 Group {
                     if let pnl {
-                        LiveNumber(Format.signedUSD(pnl), tone: isLive ? Tone(signed: pnl) : .neutral)
+                        LiveNumber(signed(pnl), tone: isLive ? Tone(signed: pnl) : .neutral)
                     } else {
                         WarningText(Wording.pnlUnavailable)
                     }
@@ -38,7 +42,7 @@ public struct PnlHeadline: View {
                 .animation(.easeOut(duration: 0.15), value: isLive)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("Total PnL, \(pnl.map(Format.signedUSD) ?? Wording.pnlUnavailable)")
+            .accessibilityLabel("Total PnL, \(pnl.map(signed) ?? Wording.pnlUnavailable)")
             .accessibilityHint("Shows the activity behind this number")
             PnlCaveats(portfolio: portfolio)
         }
@@ -67,6 +71,9 @@ public struct PnlCaveats: View {
             }
             if !portfolio.l1FeeUnknownTxs.isEmpty {
                 WarningText(Wording.networkFeeUnknown(portfolio.l1FeeUnknownTxs.count)).help(Wording.pnlHelp)
+            }
+            ForEach(Wording.missingRates(portfolio), id: \.self) { line in
+                WarningText(line)
             }
         }
         .font(.caption)
@@ -124,11 +131,13 @@ public struct TotalStat: View {
 extension Portfolio {
     /// The four sums beside the total, in reading order.
     public var totalStats: [(metric: TotalMetric, label: String, help: String?, text: String?, coverage: SumCoverage?)] {
-        [
-            (.value, "Value", nil, totals.valueUsdMicros.map(Format.usd), totals.coverage.value),
-            (.realized, "Realized", Wording.realizedHelp, totals.realizedUsdMicros.map(Format.signedUSD), totals.coverage.realized),
-            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedUsdMicros.map(Format.signedUSD), totals.coverage.unrealized),
-            (.gas, Wording.networkFees, nil, totals.gasUsdMicros.map(Format.usd), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
+        let money = { Format.money($0, currency) }
+        let signed = { Format.signedMoney($0, currency) }
+        return [
+            (.value, "Value", nil, totals.valueMicros.map(money), totals.coverage.value),
+            (.realized, "Realized", Wording.realizedHelp, totals.realizedMicros.map(signed), totals.coverage.realized),
+            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map(signed), totals.coverage.unrealized),
+            (.gas, Wording.networkFees, nil, totals.gasMicros.map(money), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
     }
 }

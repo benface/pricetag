@@ -16,12 +16,12 @@ console.log(`Blocks ${blocks.fromBlock} to ${blocks.toBlock}: ${legs.length} leg
 
 for (const { asset, decimals, values: v, price } of positions) {
   const qty = Number(v.qty) / 10 ** decimals
-  console.log(`${asset}: ${qty} | cost ${usd(v.costUsdMicros)} | value ${usd(v.valueUsdMicros)} (${price?.source ?? "no price"}) | realized ${usd(v.realizedUsdMicros)} | unrealized ${usd(v.unrealizedUsdMicros)}`)
+  console.log(`${asset}: ${qty} | cost ${usd(v.costMicros)} | value ${usd(v.valueMicros)} (${price?.source ?? "no price"}) | realized ${usd(v.realizedMicros)} | unrealized ${usd(v.unrealizedMicros)}`)
 }
 const missing = [...new Set(totals.excluded.map((e) => e.asset))]
 if (totals.unpricedGas) missing.push("gas with no price")
 if (gasUnknownTxs.length > 0) missing.push(`gas that couldn't be worked out, in ${gasUnknownTxs.length} tx, so ETH is overstated`)
-console.log(`PnL: ${usd(totals.pnlUsdMicros)} (${pnlStatus(totals, gasUnknownTxs)}), gas ${usd(totals.gasUsdMicros)}, leaving out: ${missing.join(", ") || "nothing"}`)
+console.log(`PnL: ${usd(totals.pnlMicros)} (${pnlStatus(totals, gasUnknownTxs)}), gas ${usd(totals.gasMicros)}, leaving out: ${missing.join(", ") || "nothing"}`)
 
 const last = legs.at(-1)
-if (last) console.log(`Latest: ${last.asset} in ${last.txHash}, price ${usd(last.priceUsdMicros)} (${last.priceSource ?? "unknown"}), cost ${last.costLabel}`)
+if (last) console.log(`Latest: ${last.asset} in ${last.txHash}, price ${usd(last.priceMicros)} (${last.priceSource ?? "unknown"}), cost ${last.costLabel}`)

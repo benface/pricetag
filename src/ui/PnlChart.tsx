@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { PnlPoint } from "@pricetag/sdk/core"
-import { formatClock, formatSignedUsd, formatTime } from "../core/format.ts"
+import { CURRENCIES, type CurrencyCode } from "../core/currency.ts"
+import { formatClock, formatSignedMoney, formatTime } from "../core/format.ts"
 import { NOTHING_TO_CHART, PNL_HELP } from "../core/wording.ts"
-
-const showPnl = (point: PnlPoint) => (point.pnlUsdMicros === null ? "⚠ Unavailable" : formatSignedUsd(point.pnlUsdMicros))
 
 const HEIGHT = 220
 const MARGIN = { top: 16, right: 84, bottom: 26, left: 64 }
@@ -20,14 +19,15 @@ function niceTicks(min: number, max: number, count = 4): { ticks: number[]; step
 }
 
 /** Ticks are as precise as their step, so a chart of cents doesn't label every line $0. */
-function tickFormat(step: number): (value: number) => string {
+function tickFormat(step: number, currency: CurrencyCode): (value: number) => string {
   const digits = step >= 1 ? 0 : Math.ceil(-Math.log10(step)) + (step * 10 ** Math.ceil(-Math.log10(step)) % 1 > 0.001 ? 1 : 0)
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: step >= 1000 ? "compact" : "standard", minimumFractionDigits: digits, maximumFractionDigits: digits }).format
+  return new Intl.NumberFormat(CURRENCIES[currency].locale, { style: "currency", currency, notation: step >= 1000 ? "compact" : "standard", minimumFractionDigits: digits, maximumFractionDigits: digits }).format
 }
 
-type Props = { points: PnlPoint[]; onSelect: (point: PnlPoint) => void }
+type Props = { points: PnlPoint[]; currency: CurrencyCode; onSelect: (point: PnlPoint) => void }
 
-export function PnlChart({ points, onSelect }: Props) {
+export function PnlChart({ points, currency, onSelect }: Props) {
+  const showPnl = (point: PnlPoint) => (point.pnlMicros === null ? "⚠ Unavailable" : formatSignedMoney(point.pnlMicros, currency))
   const box = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(720)
   const [active, setActive] = useState<number | null>(null)
@@ -42,7 +42,7 @@ export function PnlChart({ points, onSelect }: Props) {
 
   const chart = useMemo(() => {
     const times = points.map((p) => new Date(p.timestamp).getTime())
-    const values = points.map((p) => (p.pnlUsdMicros === null ? null : Number(p.pnlUsdMicros) / 1e6))
+    const values = points.map((p) => (p.pnlMicros === null ? null : Number(p.pnlMicros) / 1e6))
     const known = values.filter((v) => v !== null)
     const { ticks, step } = niceTicks(Math.min(0, ...known), Math.max(0, ...known))
     const low = ticks[0] ?? 0
@@ -67,8 +67,8 @@ export function PnlChart({ points, onSelect }: Props) {
       path += drawing ? `H${px}V${y(value)}` : `M${px},${y(value)}`
       drawing = true
     })
-    return { times, values, ticks, x, y, path, plotWidth, hasData: known.length > 0, formatTick: tickFormat(step) }
-  }, [points, width])
+    return { times, values, ticks, x, y, path, plotWidth, hasData: known.length > 0, formatTick: tickFormat(step, currency) }
+  }, [points, width, currency])
 
   const nearest = (clientX: number) => {
     const rect = box.current?.getBoundingClientRect()

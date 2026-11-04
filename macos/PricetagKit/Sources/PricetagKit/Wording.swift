@@ -132,9 +132,25 @@ public enum Wording {
 
     public static let notStarted = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."
     public static let unpricedFees = "Some network fees had no price at the time, and aren't in this total."
+
+    /// What's unavailable because of a missing exchange rate. Empty in USD, or with every rate there.
+    public static func missingRates(_ portfolio: Portfolio) -> [String] {
+        guard let exchange = portfolio.exchange else { return [] }
+        let code = portfolio.currency.rawValue
+        var lines: [String] = []
+        let count = exchange.missingRateTxs.count
+        if count > 0 {
+            lines.append("\(count == 1 ? "1 transaction has" : "\(Format.block(count)) transactions have") no USD to \(code) rate, so what depends on \(count == 1 ? "it" : "them") is unavailable in \(code).")
+        }
+        if exchange.latestRateMicros == nil {
+            lines.append("There's no current USD to \(code) rate, so what's held has no current value.")
+        }
+        return lines
+    }
+
     public static let demo = "Demo data, not a real wallet. Every case the app has to get right is in here."
     public static let pnlUnavailable = "PnL unavailable"
-    public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't $0."
+    public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
     public static let reading = "Reading this wallet's history. The first read can take a minute, then only new activity is read."
     public static let notAnAddress = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 }

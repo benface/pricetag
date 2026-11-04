@@ -114,9 +114,9 @@ struct MainWindow: View {
         GroupBox {
             Group {
                 if navigation.showsTransactions {
-                    TransactionsTable(transactions: portfolio.transactions, isLive: isLive, target: $navigation.target)
+                    TransactionsTable(transactions: portfolio.transactions, currency: portfolio.currency, isLive: isLive, target: $navigation.target)
                 } else if portfolio.hasChartableData {
-                    PnlChartView(points: portfolio.points, isLive: isLive) { navigation.target = .transaction($0) }
+                    PnlChartView(points: portfolio.points, currency: portfolio.currency, isLive: isLive) { navigation.target = .transaction($0) }
                         .padding(6)
                 } else {
                     Text(Wording.nothingToChart)
@@ -175,6 +175,8 @@ private struct HoldingsTable: View {
     @Binding var target: ExplainTarget?
     @State private var selection: Position.ID?
 
+    private var currency: CurrencyCode { portfolio.currency }
+
     var body: some View {
         Table(portfolio.positions, selection: $selection) {
             TableColumn("Asset") { position in
@@ -203,7 +205,7 @@ private struct HoldingsTable: View {
             .alignment(.numeric)
             TableColumn(Wording.averagePricePaid) { position in
                 if position.isHeld {
-                    number(position, .average, position.values.averageCostUsdMicros.map(Format.price) ?? "Unknown", tone: position.hasUnknownCost ? .warning : .neutral, warn: position.hasUnknownCost)
+                    number(position, .average, position.values.averageCostMicros.map { Format.price($0, currency) } ?? "Unknown", tone: position.hasUnknownCost ? .warning : .neutral, warn: position.hasUnknownCost)
                 } else {
                     dash
                 }
@@ -212,23 +214,23 @@ private struct HoldingsTable: View {
             .alignment(.numeric)
             TableColumn("Value") { position in
                 if position.isHeld {
-                    let value = position.values.valueUsdMicros
-                    number(position, .value, value.map(Format.usd) ?? "No price", tone: value == nil ? .warning : .neutral, warn: value == nil)
+                    let value = position.values.valueMicros
+                    number(position, .value, value.map { Format.money($0, currency) } ?? "No price", tone: value == nil ? .warning : .neutral, warn: value == nil)
                 } else {
                     dash
                 }
             }
             .alignment(.numeric)
             TableColumn("Realized") { position in
-                let realized = position.values.realizedUsdMicros
-                number(position, .realized, realized.map(Format.signedUSD) ?? Wording.pnlUnavailable, tone: Tone(signed: realized), warn: realized == nil)
+                let realized = position.values.realizedMicros
+                number(position, .realized, realized.map { Format.signedMoney($0, currency) } ?? Wording.pnlUnavailable, tone: Tone(signed: realized), warn: realized == nil)
             }
             .width(min: 110, ideal: 130)
             .alignment(.numeric)
             TableColumn("Unrealized") { position in
                 if position.isHeld {
-                    let unrealized = position.values.unrealizedUsdMicros
-                    number(position, .unrealized, unrealized.map(Format.signedUSD) ?? Wording.pnlUnavailable, tone: Tone(signed: unrealized), warn: unrealized == nil)
+                    let unrealized = position.values.unrealizedMicros
+                    number(position, .unrealized, unrealized.map { Format.signedMoney($0, currency) } ?? Wording.pnlUnavailable, tone: Tone(signed: unrealized), warn: unrealized == nil)
                 } else {
                     dash
                 }
@@ -277,6 +279,7 @@ private struct HoldingsTable: View {
 /// Each transaction the chart plots. Up and down move through them and show each one's legs.
 private struct TransactionsTable: View {
     let transactions: [PnlPoint]
+    let currency: CurrencyCode
     let isLive: Bool
     @Binding var target: ExplainTarget?
     @State private var selection: PnlPoint.ID?
@@ -293,8 +296,8 @@ private struct TransactionsTable: View {
             }
             TableColumn("Total PnL after") { point in
                 HStack(spacing: 4) {
-                    if point.pnlUsdMicros == nil { WarningIcon() }
-                    LiveNumber(point.pnlUsdMicros.map(Format.signedUSD) ?? "Unavailable", tone: isLive ? Tone(signed: point.pnlUsdMicros) : .neutral)
+                    if point.pnlMicros == nil { WarningIcon() }
+                    LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: isLive ? Tone(signed: point.pnlMicros) : .neutral)
                 }
                 .help(Wording.pnlHelp)
             }

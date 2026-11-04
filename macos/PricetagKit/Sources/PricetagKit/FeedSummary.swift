@@ -28,11 +28,11 @@ public struct FeedSummary: Equatable, Sendable {
                 (text, isWarning) = ("\(prefix)No activity", false)
                 return
             }
-            guard portfolio.pnlStatus != .unavailable, let pnl = portfolio.totals.pnlUsdMicros else {
+            guard portfolio.pnlStatus != .unavailable, let pnl = portfolio.totals.pnlMicros else {
                 (text, isWarning) = (prefix + Wording.pnlUnavailable, true)
                 return
             }
-            (text, isWarning) = (prefix + Format.signedUSD(pnl), portfolio.pnlStatus == .partial)
+            (text, isWarning) = (prefix + Format.signedMoney(pnl, portfolio.currency), portfolio.pnlStatus == .partial)
         }
     }
 }
