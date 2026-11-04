@@ -7,7 +7,7 @@ import type { Head, Mode } from "../src/core/api.ts"
 import type { LegRow, PricedRow, ReferenceRow } from "../src/core/legs.ts"
 import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS } from "../src/core/tokens.ts"
 import { decimalString, isNotStarted, type Query } from "./amp.ts"
-import { DEPOSIT_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
+import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
 export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknownTxs: string[] }
 
@@ -138,9 +138,10 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
       const logs = (
         await query<Row>(
           `SELECT ${logColumns} FROM ${ds}.logs
-           WHERE ${range}
-             AND topic0 IN (X'${TRANSFER_TOPIC}', X'${DEPOSIT_TOPIC}', X'${WITHDRAWAL_TOPIC}')
-             AND (topic1 = ${topic} OR topic2 = ${topic})`,
+           WHERE ${range} AND (
+             (topic0 IN (X'${TRANSFER_TOPIC}', X'${DEPOSIT_TOPIC}', X'${WITHDRAWAL_TOPIC}') AND (topic1 = ${topic} OR topic2 = ${topic}))
+             OR (topic0 IN (X'${TRANSFER_SINGLE_TOPIC}', X'${TRANSFER_BATCH_TOPIC}') AND (topic2 = ${topic} OR topic3 = ${topic}))
+           )`,
         )
       ).map(toLog)
 

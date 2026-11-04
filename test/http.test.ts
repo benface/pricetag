@@ -97,6 +97,13 @@ describe("a dataset whose tables haven't started", () => {
     assert.equal(await datasetSource(query, config).processedThrough(1, 100), 60)
   })
 
+  it("keeps an NFT row's kind and ID, including ID 0, so both data paths net it the same way", async () => {
+    const leg = { block_num: "5", timestamp: 0, tx_hash: "aa", tx_index: 1, log_index: 0, token: "bb", account: "cc", side: "credit" }
+    const query = async <T>(sql: string) => (sql.includes(".unlisted_legs") ? [{ ...leg, amount: "0", kind: "unlisted_nft" }, { ...leg, amount: "0", kind: "unlisted" }] : []) as T[]
+    const window = await datasetSource(query, config).readWindow("0x00000000000000000000000000000000000000cc", 1, 10)
+    assert.deepEqual(window.rows.map((r) => [r.kind, r.amount]), [["unlisted_nft", "0"], ["unlisted", "0"]])
+  })
+
   it("reads unlisted rows as evidence, even with a null amount, and still drops empty gas", async () => {
     const leg = { block_num: "5", timestamp: 0, tx_hash: "aa", tx_index: 1, log_index: 0, token: "bb", account: "cc", side: "credit" }
     const query = async <T>(sql: string) =>

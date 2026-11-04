@@ -15,6 +15,8 @@ const hex = (address: string) => address.replace(/^0x/, "")
 
 const TRANSFER = "Transfer(address indexed from, address indexed to, uint256 value)"
 const NFT_TRANSFER = "Transfer(address indexed from, address indexed to, uint256 indexed id)"
+const TRANSFER_SINGLE = "TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)"
+const TRANSFER_BATCH = "TransferBatch(address indexed operator, address indexed from, address indexed to, uint256[] ids, uint256[] values)"
 const DEPOSIT = "Deposit(address indexed dst, uint256 wad)"
 const WITHDRAWAL = "Withdrawal(address indexed src, uint256 wad)"
 const OP_DEPOSIT_TX_TYPE = 126
@@ -29,11 +31,18 @@ function decoded(signature: string, where: string) {
     FROM base.logs WHERE topic0 = evm_topic('${signature}') AND ${where}`
 }
 
+function unlistedSelect(account: string, side: string, amount: string, kind: string, from: string) {
+  return `SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, ${account} AS account, '${side}' AS side, ${amount} AS amount, '${kind}' AS kind FROM (${from})`
+}
+
 export function tablesSql(start: number): Record<string, string> {
   const since = `block_num() >= ${start}`
   const transfer = decoded(TRANSFER, `topic3 IS NULL AND address IN (${allowlist})`)
   const unlistedTransfer = decoded(TRANSFER, `topic3 IS NULL AND address NOT IN (${allowlist})`)
   const unlistedNft = decoded(NFT_TRANSFER, `topic3 IS NOT NULL AND address NOT IN (${allowlist})`)
+  // ERC-1155 batches hold many IDs and amounts, so an empty amount just says something moved.
+  const transferSingle = decoded(TRANSFER_SINGLE, "TRUE")
+  const transferBatch = decoded(TRANSFER_BATCH, "TRUE")
   const weth = `address = X'${hex(WETH_ADDRESS)}'`
   return {
     // WETH emits Deposit and Withdrawal instead of Transfer when it's wrapped and unwrapped, so those count too.
@@ -54,13 +63,21 @@ export function tablesSql(start: number): Record<string, string> {
     // Tokens off the allowlist have no decimals, so they get no leg or price. This table is only evidence that money
     // went somewhere else in a transaction, without which a payment would look like it was all for the listed token.
     unlisted_legs: `SELECT ${legColumns} FROM (
-  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, t.value AS amount, 'unlisted' AS kind FROM (${unlistedTransfer})
+  ${unlistedSelect("t.from", "debit", "t.value", "unlisted", unlistedTransfer)}
   UNION ALL
-  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, t.value AS amount, 'unlisted' AS kind FROM (${unlistedTransfer})
+  ${unlistedSelect("t.to", "credit", "t.value", "unlisted", unlistedTransfer)}
   UNION ALL
-  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, t.id AS amount, 'unlisted' AS kind FROM (${unlistedNft})
+  ${unlistedSelect("t.from", "debit", "t.id", "unlisted_nft", unlistedNft)}
   UNION ALL
-  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, t.id AS amount, 'unlisted' AS kind FROM (${unlistedNft})
+  ${unlistedSelect("t.to", "credit", "t.id", "unlisted_nft", unlistedNft)}
+  UNION ALL
+  ${unlistedSelect("t.from", "debit", "''", "unlisted", transferSingle)}
+  UNION ALL
+  ${unlistedSelect("t.to", "credit", "''", "unlisted", transferSingle)}
+  UNION ALL
+  ${unlistedSelect("t.from", "debit", "''", "unlisted", transferBatch)}
+  UNION ALL
+  ${unlistedSelect("t.to", "credit", "''", "unlisted", transferBatch)}
 ) WHERE ${since}`,
 
     // transactions.gas_used is cumulative within a block, so a transaction's gas needs the one before it.

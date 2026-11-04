@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { DEPOSIT_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, effectiveGasPrice, gasPaid, legRowsFromRaw, type RawLog, type RawTx } from "../server/raw.ts"
+import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, effectiveGasPrice, gasPaid, legRowsFromRaw, type RawLog, type RawTx } from "../server/raw.ts"
 import { blockFilters } from "../server/source.ts"
 import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS } from "../src/core/tokens.ts"
 
@@ -114,11 +114,29 @@ describe("rows from raw data", () => {
       ])
     })
 
-    it("an NFT counts too, identified by its token id", () => {
-      const logs = [log({ address: JACK, topic1: pad(OTHER), topic2: pad(ME), topic3: pad("2a"), data: "" })]
+    it("an NFT keeps its ID apart from any quantity, including ID 0", () => {
+      const logs = [log({ address: JACK, topic1: pad(OTHER), topic2: pad(ME), topic3: pad("2a"), data: "" }), log({ address: JACK, topic1: pad(ME), topic2: pad(OTHER), topic3: pad("0"), data: "" })]
       const { rows } = legRowsFromRaw({ ...empty, account: ME, logs })
-      assert.deepEqual(rows.map((r) => [r.kind, r.side, r.amount]), [["unlisted", "credit", "42"]])
+      assert.deepEqual(rows.map((r) => [r.kind, r.side, r.amount]), [
+        ["unlisted_nft", "credit", "42"],
+        ["unlisted_nft", "debit", "0"],
+      ])
     })
+
+    for (const [name, topic0] of [["TransferSingle", TRANSFER_SINGLE_TOPIC], ["TransferBatch", TRANSFER_BATCH_TOPIC]] as const) {
+      it(`ERC-1155 ${name} says something moved, by its from and to, not its operator`, () => {
+        const logs = [
+          log({ address: JACK, topic0, topic1: pad(ME), topic2: pad(OTHER), topic3: pad(OTHER) }),
+          log({ address: JACK, topic0, topic1: pad(OTHER), topic2: pad(ME), topic3: pad(OTHER) }),
+          log({ address: JACK, topic0, topic1: pad(OTHER), topic2: pad(OTHER), topic3: pad(ME) }),
+        ]
+        const { rows } = legRowsFromRaw({ ...empty, account: ME, logs })
+        assert.deepEqual(rows.map((r) => [r.kind, r.side, r.amount]), [
+          ["unlisted", "debit", ""],
+          ["unlisted", "credit", ""],
+        ])
+      })
+    }
 
     it("a contract that isn't WETH can't fake a Deposit or a Withdrawal", () => {
       const logs = [log({ address: JACK, topic0: DEPOSIT_TOPIC, topic1: pad(ME) }), log({ address: USDC_ADDRESS.slice(2), topic0: WITHDRAWAL_TOPIC, topic1: pad(ME) })]
