@@ -3,9 +3,9 @@
 
 import { describeError, type Logger } from "./amp.ts"
 import { buildPricedLegs, derivePricedRows, oneWaySendBalanceBlocks, settleUnwraps, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PricedRow, type Reference } from "./legs.ts"
-import { latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
+import { foldPositions, latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
 import type { ReadL1Fees } from "./receipts.ts"
-import { openingLegs, reconcile, type BalanceSnapshot } from "./reconcile.ts"
+import { openingLegs, type BalanceSnapshot } from "./reconcile.ts"
 import { ASSETS } from "./tokens.ts"
 import type { Mode, UnlistedToken, WalletData } from "./wallet.ts"
 
@@ -187,7 +187,9 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const blocks = oneWaySendBalanceBlocks(wallet.rows).filter((block) => !wallet.ethBalances.has(block))
     if (blocks.length === 0) return []
     const data = responseOf(address, wallet)
-    return reconcile("ETH", data.legs.filter((leg) => leg.asset === "ETH"), 0n, data).status === "incomplete" ? blocks : []
+    // The same check the wallet's position gets, because a balance can match after ETH left that never arrived. Whether it did doesn't depend on the method.
+    const eth = foldPositions(data.legs, "average", {}, data).find((position) => position.asset === "ETH")
+    return eth?.reconciliation?.status === "incomplete" ? blocks : []
   }
 
   /** A failed read leaves what's unread as it was. The next refresh tries again. */
