@@ -1,0 +1,342 @@
+{
+  "kind": "manifest",
+  "dependencies": {
+    "pricetag": "benface/pricetag@0.0.1"
+  },
+  "tables": {
+    "reference_prices": {
+      "input": {
+        "sql": "SELECT block_num, timestamp,\n  named_struct('c0', get_field(eth_round, 'c0'), 'c1', self.pt_cautious(get_field(eth_round, 'c1')), 'c2', get_field(eth_round, 'c2'), 'c3', get_field(eth_round, 'c3'), 'c4', get_field(eth_round, 'c4')) AS eth_round, usdc_round\nFROM pricetag.reference_prices WHERE block_num() >= 53515446"
+      },
+      "schema": {
+        "arrow": {
+          "fields": [
+            {
+              "name": "_block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "_ts",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "timestamp",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "eth_round",
+              "type": {
+                "Struct": [
+                  {
+                    "name": "c0",
+                    "data_type": {
+                      "Decimal128": [
+                        38,
+                        0
+                      ]
+                    },
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "c1",
+                    "data_type": "Utf8",
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "c2",
+                    "data_type": "Utf8",
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "c3",
+                    "data_type": "Utf8",
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "c4",
+                    "data_type": {
+                      "Decimal128": [
+                        38,
+                        0
+                      ]
+                    },
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "nullable": true
+            },
+            {
+              "name": "usdc_round",
+              "type": {
+                "Struct": [
+                  {
+                    "name": "c0",
+                    "data_type": {
+                      "Decimal128": [
+                        38,
+                        0
+                      ]
+                    },
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "c1",
+                    "data_type": "Utf8",
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "c2",
+                    "data_type": "Utf8",
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "c3",
+                    "data_type": "Utf8",
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "c4",
+                    "data_type": {
+                      "Decimal128": [
+                        38,
+                        0
+                      ]
+                    },
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "nullable": false
+            }
+          ]
+        }
+      },
+      "network": "base-mainnet"
+    },
+    "priced_legs": {
+      "input": {
+        "sql": "SELECT p.block_num, p.timestamp, p.tx_hash, p.account,\n  p.sold_token, p.sold_amount, p.bought_token, p.bought_amount,\n  get_field(r.eth_round, 'c1') AS eth_usd, get_field(r.usdc_round, 'c1') AS usdc_usd,\n  self.pt_price(evm_decode_hex(p.sold_token), p.sold_amount, evm_decode_hex(p.bought_token), p.bought_amount, get_field(r.eth_round, 'c1'), get_field(r.usdc_round, 'c1')) AS priced\nFROM pricetag.single_pairs p\nJOIN self.reference_prices r ON p._block_num = r._block_num\nWHERE block_num() >= 53515446"
+      },
+      "schema": {
+        "arrow": {
+          "fields": [
+            {
+              "name": "_block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "_ts",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "timestamp",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "tx_hash",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": false
+            },
+            {
+              "name": "account",
+              "type": {
+                "FixedSizeBinary": 20
+              },
+              "nullable": true
+            },
+            {
+              "name": "sold_token",
+              "type": {
+                "FixedSizeBinary": 20
+              },
+              "nullable": false
+            },
+            {
+              "name": "sold_amount",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "bought_token",
+              "type": {
+                "FixedSizeBinary": 20
+              },
+              "nullable": false
+            },
+            {
+              "name": "bought_amount",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "eth_usd",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "usdc_usd",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "priced",
+              "type": {
+                "Struct": [
+                  {
+                    "name": "source",
+                    "data_type": "Utf8",
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "token",
+                    "data_type": "Utf8",
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  },
+                  {
+                    "name": "usd_micros",
+                    "data_type": "Utf8",
+                    "nullable": true,
+                    "dict_id": 0,
+                    "dict_is_ordered": false,
+                    "metadata": {}
+                  }
+                ]
+              },
+              "nullable": true
+            }
+          ]
+        }
+      },
+      "network": "base-mainnet"
+    }
+  },
+  "functions": {
+    "pt_price": {
+      "inputTypes": [
+        "Utf8",
+        "Utf8",
+        "Utf8",
+        "Utf8",
+        "Utf8",
+        "Utf8"
+      ],
+      "outputType": {
+        "Struct": [
+          {
+            "name": "source",
+            "data_type": "Utf8",
+            "nullable": true,
+            "dict_id": 0,
+            "dict_is_ordered": false,
+            "metadata": {}
+          },
+          {
+            "name": "token",
+            "data_type": "Utf8",
+            "nullable": true,
+            "dict_id": 0,
+            "dict_is_ordered": false,
+            "metadata": {}
+          },
+          {
+            "name": "usd_micros",
+            "data_type": "Utf8",
+            "nullable": true,
+            "dict_id": 0,
+            "dict_is_ordered": false,
+            "metadata": {}
+          }
+        ]
+      },
+      "source": {
+        "source": "\nconst TOKENS = {\n  '0000000000000000000000000000000000000000': { symbol: 'ETH', decimals: 18, asset: 'ETH', oracle: 'eth' },\n  '4200000000000000000000000000000000000006': { symbol: 'WETH', decimals: 18, asset: 'ETH', oracle: 'eth' },\n  '833589fcd6edb6e08f4c7c32d4f71b54bda02913': { symbol: 'USDC', decimals: 6, asset: 'USDC', oracle: 'usdc' },\n  'fde4c96c8593536e31f229ea8f37b2ada2699bb2': { symbol: 'USDT', decimals: 6, asset: 'USDT', oracle: null },\n  '50c5725949a6f0c72e6c4a641f24049a917db0cb': { symbol: 'DAI', decimals: 18, asset: 'DAI', oracle: null },\n  '2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22': { symbol: 'cbETH', decimals: 18, asset: 'cbETH', oracle: null },\n  'c1cba3fcea344f92d9239c08c0568f6f2f0ee452': { symbol: 'wstETH', decimals: 18, asset: 'wstETH', oracle: null },\n  'cbb7c0000ab88b473b1f5afd9ef808440eed33bf': { symbol: 'cbBTC', decimals: 8, asset: 'cbBTC', oracle: null },\n  '940181a94a35a4569e4529a3cdfb74e38fd98631': { symbol: 'AERO', decimals: 18, asset: 'AERO', oracle: null },\n  '0b3e328455c4059eeb9e3f84b5543f74e24e7e1b': { symbol: 'VIRTUAL', decimals: 18, asset: 'VIRTUAL', oracle: null },\n  '4ed4e862860bed51a9570b96d89af5e1b0efefed': { symbol: 'DEGEN', decimals: 18, asset: 'DEGEN', oracle: null }\n};\nfunction norm(a) { return String(a).replace(/^0x/, '').toLowerCase(); }\nfunction usdPerToken(pricedAmt, pricedDec, refAmt, refDec, refAnswer) {\n  return (BigInt(refAmt) * BigInt(refAnswer) * (10n ** BigInt(pricedDec)) / (BigInt(pricedAmt) * (10n ** BigInt(refDec)) * 100n)).toString();\n}\nfunction pt_price(soldToken, soldAmount, boughtToken, boughtAmount, ethUsd, usdcUsd) {\n  const none = { source: 'unknown', token: '', usd_micros: '' };\n  const s = TOKENS[norm(soldToken)], b = TOKENS[norm(boughtToken)];\n  if (!s || !b || !ethUsd || !usdcUsd || !soldAmount || !boughtAmount) return none;\n  if (BigInt(soldAmount) === 0n || BigInt(boughtAmount) === 0n) return none;\n  if (s.asset === b.asset) return none;\n  const answer = { eth: ethUsd, usdc: usdcUsd };\n  if (s.oracle) return { source: 'swap', token: b.symbol, usd_micros: usdPerToken(boughtAmount, b.decimals, soldAmount, s.decimals, answer[s.oracle]) };\n  if (b.oracle) return { source: 'swap', token: s.symbol, usd_micros: usdPerToken(soldAmount, s.decimals, boughtAmount, b.decimals, answer[b.oracle]) };\n  return none;\n}\n",
+        "filename": "pt_price.js"
+      }
+    },
+    "pt_cautious": {
+      "inputTypes": [
+        "Utf8"
+      ],
+      "outputType": "Utf8",
+      "source": {
+        "source": "\nfunction pt_cautious(answer) {\n  if (!/^\\d+$/.test(String(answer))) return '';\n  return (BigInt(answer) * 99n / 100n).toString();\n}\n",
+        "filename": "pt_cautious.js"
+      }
+    }
+  }
+}

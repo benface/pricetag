@@ -2,6 +2,11 @@
 //
 //   AMP_ADMIN_URL=http://127.0.0.1:1610 node dataset/build.ts [start block]
 //
+// Writes dataset/cautious-eth.json with --fork: the fork, with one pricing rule changed. FORK_OF names what it forks, which has
+// to be registered where AMP_ADMIN_URL points.
+//
+//   FORK_OF=benface/pricetag@0.0.1 AMP_ADMIN_URL=... node dataset/build.ts --fork [start block]
+//
 // It needs an Amp with edgeandnode/base_mainnet@0.0.2 registered, and only reads from it. What a table can look like
 // comes from WORK-319: every table needs its own top-level `block_num()` filter, at most one join, explicit columns,
 // and UDFs that never return null or throw, because one bad row stops the whole dataset.
@@ -10,6 +15,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, TOKENS, USDC_USD_FEED, WETH_ADDRESS } from "@pricetag/sdk/core"
 
 const MANIFEST = new URL("./pricetag.json", import.meta.url)
+const CAUTIOUS_MANIFEST = new URL("./cautious-eth.json", import.meta.url)
 
 const hex = (address: string) => address.replace(/^0x/, "")
 
@@ -96,7 +102,9 @@ FROM self.tx_gas g
 JOIN base.blocks b ON g._block_num = b._block_num
 WHERE ${since}`,
 
-    // Without traces, a WETH Withdrawal in a transaction counts as ETH paid to its sender.
+    // Without traces, a WETH Withdrawal in a transaction counts as ETH paid to its sender. That's only a claim, because a
+    // contract can send the ETH elsewhere, and this table can't read balances to check. So its rows keep their own kind,
+    // and clients settle them against the chain. See `settleUnwraps` in the SDK.
     unwrap_legs: `SELECT l.block_num, l.timestamp, l.tx_hash, l.tx_index, l.log_index, ${ethToken} AS token, x."from" AS account, 'credit' AS side,
   get_field(evm_decode_log(l.topic1, l.topic2, l.topic3, l.data, '${WITHDRAWAL}'), 'wad') AS amount, 'unwrap' AS kind
 FROM base.logs l
@@ -167,13 +175,33 @@ FROM self.pairs p
 JOIN self.pair_counts c ON p._block_num = c._block_num AND p.tx_hash = c.tx_hash AND p.account = c.account
 WHERE c.pair_count = 1 AND ${since}`,
 
-    priced_legs: `SELECT p.block_num, p.timestamp, p.tx_hash, p.account,
+    priced_legs: pricedLegsSql("self.single_pairs", since),
+  }
+}
+
+function pricedLegsSql(singlePairs: string, since: string) {
+  return `SELECT p.block_num, p.timestamp, p.tx_hash, p.account,
   p.sold_token, p.sold_amount, p.bought_token, p.bought_amount,
   get_field(r.eth_round, 'c1') AS eth_usd, get_field(r.usdc_round, 'c1') AS usdc_usd,
   self.pt_price(evm_decode_hex(p.sold_token), p.sold_amount, evm_decode_hex(p.bought_token), p.bought_amount, get_field(r.eth_round, 'c1'), get_field(r.usdc_round, 'c1')) AS priced
-FROM self.single_pairs p
+FROM ${singlePairs} p
 JOIN self.reference_prices r ON p._block_num = r._block_num
-WHERE ${since}`,
+WHERE ${since}`
+}
+
+/**
+ * The fork: one rule changed, and only the tables that rule reaches. It reads everything else from the dataset it
+ * forks, so it makes no `eth_call`s, and the only thing that can differ between the two is the rule.
+ */
+export function cautiousEthTablesSql(start: number): Record<string, string> {
+  const since = `block_num() >= ${start}`
+  const round = (field: string) => `'${field}', get_field(eth_round, '${field}')`
+  return {
+    // The one rule: ETH counts at 1% below the feed, closer to what selling it would really bring in.
+    reference_prices: `SELECT block_num, timestamp,
+  named_struct(${round("c0")}, 'c1', self.pt_cautious(get_field(eth_round, 'c1')), ${round("c2")}, ${round("c3")}, ${round("c4")}) AS eth_round, usdc_round
+FROM pricetag.reference_prices WHERE ${since}`,
+    priced_legs: pricedLegsSql("pricetag.single_pairs", since),
   }
 }
 
@@ -238,6 +266,16 @@ function pt_gas(cumulative, previous, gasPrice, maxFee, maxPriority, baseFee) {
 `
 }
 
+/** Leaves an empty answer empty, as a failed read is everywhere else, and it can't return null or throw. */
+export function ptCautiousSource(): string {
+  return `
+function pt_cautious(answer) {
+  if (!/^\\d+$/.test(String(answer))) return '';
+  return (BigInt(answer) * 99n / 100n).toString();
+}
+`
+}
+
 const utf8Field = (name: string) => ({ name, data_type: "Utf8", nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 function functions() {
@@ -263,16 +301,15 @@ function functions() {
 
 const DEPENDENCIES = { base: "edgeandnode/base_mainnet@0.0.2" }
 
-async function build() {
-  const admin = process.env.AMP_ADMIN_URL
-  if (!admin) throw new Error("Set AMP_ADMIN_URL to a local Amp's admin API")
-  const previous = process.argv[2] ?? JSON.parse(readFileSync(MANIFEST, "utf8")).tables.legs.input.sql.match(/block_num\(\) >= (\d+)/)[1]
-  const start = Number(previous)
-  const sql = tablesSql(start)
+type Manifest = { dependencies: Record<string, string>; tables: Record<string, string>; functions: Record<string, unknown> }
+
+const startOf = (manifest: URL) => JSON.parse(readFileSync(manifest, "utf8")).tables.reference_prices.input.sql.match(/block_num\(\) >= (\d+)/)[1]
+
+async function write(admin: string, file: URL, { dependencies, tables: sql, functions }: Manifest) {
   const response = await fetch(`${admin}/schema`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ dependencies: DEPENDENCIES, tables: sql, functions: functions() }),
+    headers: { "content-type": "application/json", ...(process.env.AMP_ADMIN_TOKEN ? { authorization: `Bearer ${process.env.AMP_ADMIN_TOKEN}` } : {}) },
+    body: JSON.stringify({ dependencies, tables: sql, functions }),
   })
   if (!response.ok) throw new Error(`/schema: ${response.status} ${await response.text()}`)
   const { schemas } = (await response.json()) as { schemas: Record<string, unknown> }
@@ -283,8 +320,24 @@ async function build() {
       return [name, { input: { sql: query }, schema: inferred, network: "base-mainnet" }]
     }),
   )
-  writeFileSync(MANIFEST, `${JSON.stringify({ kind: "manifest", dependencies: DEPENDENCIES, tables, functions: functions() }, null, 2)}\n`)
-  console.log(`Wrote dataset/pricetag.json with ${Object.keys(tables).length} tables, from block ${start}`)
+  writeFileSync(file, `${JSON.stringify({ kind: "manifest", dependencies, tables, functions }, null, 2)}\n`)
+  console.log(`Wrote ${file.pathname.split("/").pop()} with ${Object.keys(tables).length} tables`)
+}
+
+async function build() {
+  const admin = process.env.AMP_ADMIN_URL
+  if (!admin) throw new Error("Set AMP_ADMIN_URL to a local Amp's admin API")
+  const args = process.argv.slice(2)
+  if (args[0] === "--fork") {
+    const forkOf = process.env.FORK_OF
+    if (!forkOf) throw new Error("Set FORK_OF to the dataset this forks, like benface/pricetag@0.0.1")
+    const start = Number(args[1] ?? startOf(CAUTIOUS_MANIFEST))
+    const { pt_price } = functions()
+    const pt_cautious = { inputTypes: ["Utf8"], outputType: "Utf8", source: { source: ptCautiousSource(), filename: "pt_cautious.js" } }
+    await write(admin, CAUTIOUS_MANIFEST, { dependencies: { pricetag: forkOf }, tables: cautiousEthTablesSql(start), functions: { pt_price, pt_cautious } })
+    return
+  }
+  await write(admin, MANIFEST, { dependencies: DEPENDENCIES, tables: tablesSql(Number(args[0] ?? startOf(MANIFEST))), functions: functions() })
 }
 
 if (import.meta.main) await build()

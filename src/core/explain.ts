@@ -1,10 +1,8 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { TOKENS, foldPositions, pnlOverTime, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals } from "@pricetag/sdk/core"
+import { CURRENCIES, TOKENS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatSignedMoney, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
-import { CURRENCIES, usdView, type CurrencyCode, type WalletView } from "./currency.ts"
-import { formatAmount, formatMoney, formatPrice, formatRate, formatSignedMoney, shortHash } from "./format.ts"
-import { AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, METHOD_LABELS, NETWORK_FEES, currentPriceSource, tokenLabel } from "./wording.ts"
+import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, METHOD_LABELS, NETWORK_FEES, currentPriceSource, tokenLabel, unseenEthCause } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"
 
@@ -36,17 +34,20 @@ function diff(after: string, before: string): bigint {
 export type ExplainContext = {
   view: Pick<WalletView, "currency" | "latestRate" | "missingRateTxs">
   source: { positions: Position[]; totals: Totals; points: PnlPoint[] } | null
+  /** Said on every explanation when a pricing rule other than the default is on. */
+  ruleNote?: string | null
 }
 
 /** Explaining a USD number: there's nothing to convert, and nothing to say about rates. */
 export const USD_CONTEXT: ExplainContext = { view: { currency: "USD", latestRate: null, missingRateTxs: [] }, source: null }
 
 export function explainContext(wallet: WalletResponse, view: WalletView, method: Method): ExplainContext {
-  if (view.currency === "USD") return { view, source: null }
+  const ruleNote = wallet.ruleNote ?? null
+  if (view.currency === "USD") return { view, source: null, ruleNote }
   const usd = usdView(wallet)
   const positions = foldPositions(usd.legs, method, usd.prices, wallet)
   const unread = unreadAssets(positions, wallet)
-  return { view, source: { positions, totals: sumTotals(positions, unread), points: pnlOverTime(usd.legs, method, usd.prices, usd.markPrice, wallet.latest, unconfirmedAssets(positions, unread)) } }
+  return { view, ruleNote, source: { positions, totals: sumTotals(positions, unread), points: pnlOverTime(usd.legs, method, usd.prices, usd.markPrice, wallet.latest, unconfirmedAssets(positions, unread)) } }
 }
 
 /** Where a currency's rates come from, in words. It's said wherever a rate is used, since it isn't the source of the prices. */
@@ -94,8 +95,12 @@ export function describeEffect({ leg, before, after }: LegEffect, currency: Curr
   const amount = `${formatAmount(leg.delta.replace("-", ""), leg.decimals)} ${leg.asset}`
   const parts: string[] = []
   if (BigInt(leg.delta) > 0n) {
-    if (leg.costLabel === "unknown") parts.push(`Adds ${amount} at an unknown cost`)
-    else parts.push(`Adds ${amount} for ${money(leg.costMicros as string)}`)
+    if (leg.pieces?.some((p) => p.costMicros !== null) && leg.costMicros === null) {
+      const known = leg.pieces.filter((p) => p.costMicros !== null).reduce((sum, p) => sum + BigInt(p.costMicros as string), 0n)
+      const unknown = leg.pieces.filter((p) => p.costMicros === null).reduce((sum, p) => sum + BigInt(p.qty), 0n)
+      parts.push(`Adds ${amount}: ${money(known)} of it from ${COST_WORDS[leg.costLabel]}, and ${formatAmount(unknown, leg.decimals)} ${leg.asset} at an unknown cost`)
+    } else if (leg.costLabel === "unknown") parts.push(`Adds ${amount} at an unknown cost`)
+    else parts.push(`Adds ${amount} for ${leg.estimated ? "about " : ""}${money(leg.costMicros as string)}${leg.costLabel === "paid" ? "" : `, from ${COST_WORDS[leg.costLabel]}`}`)
     return parts.join(". ")
   }
   const realized = diff(after.realizedMicros, before.realizedMicros)
@@ -140,11 +145,14 @@ function onchainLines({ asset, decimals, reconciliation, effects }: Position): s
     const opening = effects.some(({ leg }) => leg.opening) ? "what it already held, plus every transaction since," : "its transactions"
     return [`Matches the actual balance exactly: ${opening} add up to ${amount(reconciliation.actualQty)} at block ${block}.`]
   }
+  const unconfirmed = effects.filter(({ leg }) => leg.unsettledCredit).map(({ leg }) => shortHash(leg.txHash))
   return [
     `Worked out from its transactions: ${amount(reconciliation.computedQty)}.`,
     `Actual balance at block ${block}: ${amount(reconciliation.actualQty)}.`,
     `Difference: ${BigInt(reconciliation.differenceQty) > 0n ? "+" : ""}${amount(reconciliation.differenceQty)}.`,
     mismatchCause(asset, reconciliation.differenceQty),
+    ...(reconciliation.unseenEth ? [unseenEthCause(reconciliation.unseenEth)] : []),
+    ...(unconfirmed.length > 0 ? [`We couldn't confirm how much ETH reached this wallet in: ${[...new Set(unconfirmed)].join(", ")}.`] : []),
     "Value uses the actual balance. PnL is unavailable, because we know some of this wallet's activity is missing.",
   ]
 }
@@ -160,6 +168,21 @@ export function describeNetting(leg: PricedLeg): string | null {
   return `Combines ${leg.parts.length} movements: ${rows.join(", ")}`
 }
 
+/** What a position's cost is made of, in words, or null when it has none. */
+function costSourceLine({ state, asset, decimals }: Position, money: (micros: bigint) => string): string | null {
+  const known = new Map<string, bigint>()
+  let unknown = 0n
+  for (const lot of state.lots) {
+    if (lot.costMicros === null) unknown += BigInt(lot.qty)
+    else known.set(lot.label, (known.get(lot.label) ?? 0n) + BigInt(lot.costMicros))
+  }
+  const estimated = state.lots.reduce((sum, lot) => sum + BigInt(lot.estimatedCostMicros ?? "0"), 0n)
+  const parts = [...known].map(([label, amount]) => `${money(amount)} from ${label === "mixed" ? "several sources" : COST_WORDS[label as CostLabel]}`)
+  if (unknown > 0n) parts.push(`${formatAmount(unknown, decimals)} ${asset} unknown`)
+  if (parts.length === 0) return null
+  return `Cost: ${parts.join(", ")}.${estimated > 0n ? ` ${money(estimated)} of that is an estimate.` : ""}`
+}
+
 export function explainMetric(position: Position, metric: Metric, context: ExplainContext): Explanation {
   const { view, source } = context
   const { currency } = view
@@ -170,14 +193,15 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
   const qty = `${formatAmount(values.qty, decimals)} ${asset}`
   const unknownQty = `${formatAmount(values.unknownCostQty, decimals)} ${asset}`
   const priceLine = price
-    ? `Current price: ${formatPrice(price.micros, currency)}${price.usdMicros ? ` (${formatPrice(price.usdMicros, "USD")} USD)` : ""}, from ${currentPriceSource(price.source)} at block ${price.blockNum.toLocaleString("en-US")}.`
+    ? `Current price: ${formatPrice(price.micros, currency)}${price.usdMicros ? ` (${formatPrice(price.usdMicros, "USD")} USD)` : ""}, from ${currentPriceSource(price.source)} at block ${price.blockNum.toLocaleString("en-US")}.${price.source === "market" ? " That makes it an estimate." : ""}`
     : currency !== "USD" && !view.latestRate
       ? `There's no current USD to ${currency} rate, so ${asset} has no current value here.`
       : TOKENS.some((t) => t.symbol === asset && t.oracle)
       ? `There's no current price for ${asset}, because the market price feed's latest answer failed or is too old. An old price would quietly be wrong.`
-      : `There's no current price for ${asset}. Only ETH and USDC have a market price feed so far.`
+      : `There's no current price for ${asset}, because it hasn't traded enough recently for a price to be trusted.`
   const lines: string[] = []
   let value: string | null = null
+  const costSources = costSourceLine(position, money)
 
   const incomplete = reconciliation?.status === "incomplete"
   const unconfirmed = reconciliation !== null && reconciliation.status !== "reconciled"
@@ -201,6 +225,7 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
       value = values.averageCostMicros && formatPrice(values.averageCostMicros, currency)
       if (unknown) lines.push(`${unknownQty} of ${qty} has an unknown cost, so there's no average. It's never counted as zero.`)
       else if (values.costMicros) lines.push(`${money(values.costMicros)} of cost ÷ ${qty}, using the ${METHOD_LABELS[state.method]} method.`)
+      if (costSources) lines.push(costSources)
       break
     case "value":
       value = values.valueMicros && money(values.valueMicros)
@@ -219,6 +244,7 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
       lines.push(priceLine)
       if (unknown) lines.push(`${unknownQty} of ${qty} has an unknown cost, so PnL is unavailable. It's never counted as zero.`)
       else if (values.costMicros && values.valueMicros) lines.push(`${money(values.valueMicros)} value − ${money(values.costMicros)} cost.`)
+      if (costSources) lines.push(costSources)
       break
   }
   const isMoney = metric !== "amount" && metric !== "onchain"
@@ -317,7 +343,12 @@ export function explainPoint(positions: readonly Position[], point: PnlPoint, { 
 export type ExplainTarget = { kind: "total"; metric: TotalMetric } | { kind: "asset"; asset: string; metric: Metric } | { kind: "tx"; txHash: string }
 
 /** What a target says about these numbers, or null when they have no such asset or transaction. */
-export function explainTarget(target: ExplainTarget, { positions, totals, points }: { positions: readonly Position[]; totals: Totals; points: readonly PnlPoint[] }, context: ExplainContext): Explanation | null {
+export function explainTarget(target: ExplainTarget, facts: { positions: readonly Position[]; totals: Totals; points: readonly PnlPoint[] }, context: ExplainContext = USD_CONTEXT): Explanation | null {
+  const explanation = explainNumber(target, facts, context)
+  return explanation && context.ruleNote ? { ...explanation, lines: [...explanation.lines, context.ruleNote] } : explanation
+}
+
+function explainNumber(target: ExplainTarget, { positions, totals, points }: { positions: readonly Position[]; totals: Totals; points: readonly PnlPoint[] }, context: ExplainContext): Explanation | null {
   if (target.kind === "total") return explainTotal(positions, totals, target.metric, context)
   if (target.kind === "asset") {
     const position = positions.find((p) => p.asset === target.asset)

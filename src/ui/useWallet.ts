@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import type { WalletResponse } from "../core/api.ts"
-import type { CurrencyCode } from "../core/currency.ts"
+import type { CurrencyCode } from "@pricetag/sdk/core"
 
 export type WalletState = {
   wallet: WalletResponse | null
@@ -9,8 +9,8 @@ export type WalletState = {
   error: string | null
 }
 
-async function fetchWallet(address: string, currency: CurrencyCode, signal: AbortSignal): Promise<WalletResponse> {
-  const response = await fetch(`/api/wallet/${address}?currency=${currency}`, { signal })
+async function fetchWallet(address: string, currency: CurrencyCode, rule: string | null, signal: AbortSignal): Promise<WalletResponse> {
+  const response = await fetch(`/api/wallet/${address}?currency=${currency}${rule ? `&rule=${encodeURIComponent(rule)}` : ""}`, { signal })
   const body = (await response.json().catch(() => ({ error: "Can't reach the server." }))) as WalletResponse | { error: string }
   if (!response.ok || "error" in body) throw new Error("error" in body ? body.error : "Couldn't read this wallet.")
   return body
@@ -20,12 +20,12 @@ const LOST_CONNECTION = "Lost the connection to the server."
 const RECONNECT_MS = 3000
 
 /** Reads a wallet, then reads it again on each new block. A block that arrives during a read waits for the next one. */
-export function useWallet(address: string | null, currency: CurrencyCode): WalletState {
+export function useWallet(address: string | null, currency: CurrencyCode, rule: string | null): WalletState {
   const [state, setState] = useState<WalletState>({ wallet: null, loading: false, error: null })
   const shownAddress = useRef<string | null>(null)
 
   useEffect(() => {
-    // A change of currency keeps the numbers up until the new ones arrive. They say which currency they're in.
+    // A change of currency or rule keeps the numbers up until the new ones arrive. They say what they're in.
     if (shownAddress.current !== address) setState({ wallet: null, loading: address !== null, error: null })
     shownAddress.current = address
     if (!address) return
@@ -45,7 +45,7 @@ export function useWallet(address: string | null, currency: CurrencyCode): Walle
       busy = true
       readAgain = false
       const dropsAtStart = drops
-      fetchWallet(address, currency, abort.signal)
+      fetchWallet(address, currency, rule, abort.signal)
         .then((wallet) => setState((s) => ({ wallet, loading: false, error: connected && drops === dropsAtStart ? null : s.error })))
         .catch((error: Error) => {
           if (abort.signal.aborted) return
@@ -88,7 +88,7 @@ export function useWallet(address: string | null, currency: CurrencyCode): Walle
       events.close()
       abort.abort()
     }
-  }, [address, currency])
+  }, [address, currency, rule])
 
   return state
 }

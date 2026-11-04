@@ -53,9 +53,28 @@ public struct PositionValues: Codable, Sendable, Equatable {
     public let valueMicros: String?
     public let realizedMicros: String?
     public let unrealizedMicros: String?
+    /// How much of the cost of what's held is an estimate.
+    public let estimatedCostMicros: String
+    /// How much of what `realizedMicros` comes from is an estimate.
+    public let estimatedRealizedMicros: String
+}
+
+/// Which of a position's numbers rest on an estimate, so they can look different from exact ones.
+public struct Estimates: Codable, Sendable, Equatable {
+    public let cost: Bool
+    public let value: Bool
+    public let realized: Bool
+    public let unrealized: Bool
 }
 
 /// How a position's activity compares with what the chain says it holds, at the same block.
+/// ETH that arrived in a block with no transaction showing it, and the ones that took a token from this wallet there.
+public struct UnseenEth: Codable, Sendable, Equatable {
+    public let blockNum: Int
+    public let amount: String
+    public let txHashes: [String]
+}
+
 public struct Reconciliation: Codable, Sendable, Equatable {
     public enum Status: String, Codable, Sendable {
         /// They match, to the smallest unit.
@@ -73,6 +92,8 @@ public struct Reconciliation: Codable, Sendable, Equatable {
     /// Actual minus computed.
     public let differenceQty: String?
     public let reason: String?
+    /// On ETH that doesn't match: the transactions most likely behind it.
+    public let unseenEth: [UnseenEth]?
 }
 
 public struct Position: Codable, Sendable, Equatable, Identifiable {
@@ -85,6 +106,11 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public let shortfallQty: String
     public let legCount: Int
     public let reconciliation: Reconciliation?
+    /// No price, in any form, at any block. Often spam. It's listed apart, and can't affect PnL.
+    public let noMarket: Bool
+    public let estimates: Estimates
+    /// Its cost is unknown, and answering a question could change that.
+    public let resolvable: Bool
 
     public var id: String { asset }
     public var isHeld: Bool { isPositive(values.qty) }
@@ -124,6 +150,19 @@ public struct Totals: Codable, Sendable, Equatable {
     public let excluded: [Exclusion]
     public let unpricedGas: Bool
     public let coverage: TotalsCoverage
+    /// What's held with an unknown cost, at today's price. It's not in any PnL.
+    public let unresolvedMicros: String
+    /// How much of what these sums are made of is an estimate.
+    public let estimatedMicros: String
+    public let estimated: TotalEstimates
+    /// Assets with no market, which aren't in any of this.
+    public let noMarket: [String]
+}
+
+public struct TotalEstimates: Codable, Sendable, Equatable {
+    public let value: Bool
+    public let realized: Bool
+    public let unrealized: Bool
 }
 
 public enum PnlStatus: String, Codable, Sendable {
@@ -176,6 +215,8 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let address: String
     public let mode: Mode
     public let method: CostMethod
+    /// The pricing rule this was read through, or nil when the server has only one.
+    public let rule: String?
     /// What every amount in here is in.
     public let currency: CurrencyCode
     /// nil for USD.
@@ -196,6 +237,18 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let totals: Totals
     public let pnlStatus: PnlStatus
     public let points: [PnlPoint]
+    /// What's left to ask, most useful first.
+    public let questions: [Question]
+    public let meter: Meter
+    /// Linked wallets that aren't read yet, so what came from them shows as unresolved for now.
+    public let linkedReading: [String]
+    /// Linked wallets whose last read failed. It's tried again with each read, and what they sent stays unresolved or out of date until it works.
+    public let linkedFailed: [String]
+    public let marketChecked: Bool
+
+    /// What the holdings table lists. Tokens with no market go in a group of their own, so real warnings stay noticeable.
+    public var listedPositions: [Position] { positions.filter { !$0.noMarket } }
+    public var noMarketPositions: [Position] { positions.filter(\.noMarket) }
 
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
     /// A balance that couldn't be read doesn't count as nothing.
@@ -215,6 +268,10 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let priceSource: String?
     public let priceNote: String?
     public let costLabel: String
+    /// Its cost or proceeds rest on an estimate.
+    public let estimated: Bool
+    /// Some of what arrived has a known cost and some doesn't.
+    public let partlyUnknown: Bool
     public let blockNum: Int
     public let timestamp: String
     public let txHash: String
@@ -241,6 +298,58 @@ public struct Explanation: Codable, Sendable, Equatable {
     public let legs: [ExplanationLeg]
 }
 
+/// A dataset behind a number. `hash` is nil when it couldn't be read, and it's never guessed.
+public struct ProofDataset: Codable, Sendable, Equatable, Identifiable {
+    public let title: String
+    public let name: String
+    public let hash: String?
+
+    public var id: String { name }
+}
+
+public struct ProofLink: Codable, Sendable, Equatable, Identifiable {
+    public let title: String
+    public let url: String
+
+    public var id: String { url }
+    public var destination: URL? { URL(string: url) }
+}
+
+/// What's behind one row's price, in the server's words.
+public struct Proof: Codable, Sendable, Equatable {
+    public let blockNum: Int
+    public let txHash: String
+    public let source: [String]
+    public let movements: [String]
+    public let links: [ProofLink]
+    public let datasets: [ProofDataset]
+    /// What checking the block does and doesn't show for this row.
+    public let scope: [String]
+    /// Why the block can't be checked. nil when it can.
+    public let unavailable: String?
+}
+
+public enum CheckStatus: String, Codable, Sendable {
+    case passed, failed, unchecked
+}
+
+public struct ProofCheck: Codable, Sendable, Equatable, Identifiable {
+    public let title: String
+    public let status: CheckStatus
+    public let detail: String
+
+    public var id: String { title }
+}
+
+/// The block's commitments recomputed from what Amp stored. `status` is the worst of `checks`.
+public struct Verification: Codable, Sendable, Equatable {
+    public let blockNum: Int
+    public let blockHash: String
+    public let status: CheckStatus
+    public let summary: String
+    public let checks: [ProofCheck]
+}
+
 public enum TotalMetric: String, Sendable, Hashable, CaseIterable {
     case pnl, value, realized, unrealized, gas
 }
@@ -264,6 +373,195 @@ public enum ExplainTarget: Sendable, Hashable {
     }
 }
 
+/// A public name for an address. It's only evidence: exchanges send everyone's withdrawals from shared addresses.
+public struct KnownSender: Codable, Sendable, Equatable {
+    public let name: String
+    public let kind: String
+}
+
+public struct Arrival: Codable, Sendable, Equatable, Identifiable {
+    public let asset: String
+    public let decimals: Int
+    public let units: String
+
+    public var id: String { asset }
+}
+
+/// One thing the app can't work out by itself, asked once per address however many transfers it covers.
+public struct Question: Codable, Sendable, Equatable, Identifiable {
+    public enum Kind: String, Codable, Sendable {
+        /// Who is this?
+        case sender
+        /// There's nobody to ask about, so what did it cost?
+        case cost
+    }
+
+    public let id: String
+    public let kind: Kind
+    public let wallet: String
+    public let sender: String?
+    public let known: KnownSender?
+    public let costKey: String?
+    /// They said it's their exchange account, and it still needs a cost.
+    public let needsCost: Bool
+    public let arrivals: [Arrival]
+    /// What an answer about cost would cover. It's kept with the answer, so what arrives later is asked about in turn.
+    public let receipts: [CostReceipt]
+    public let transfers: Int
+    public let firstAt: String
+    public let lastAt: String
+    /// Facts that might help. Never a preselected answer.
+    public let evidence: [String]
+    public let valueMicros: String?
+}
+
+public struct Meter: Codable, Sendable, Equatable {
+    public let open: Int
+    public let answered: Int
+    /// Linked wallets not read yet. What came from them is still unresolved, though nothing's left to ask about it.
+    public let waiting: Int
+
+    /// How far through the questions this is, from 0 to 1.
+    public var progress: Double {
+        let total = open + answered
+        return total == 0 ? 1 : Double(answered) / Double(total)
+    }
+
+    public var isBalanced: Bool { open == 0 && answered > 0 && waiting == 0 }
+}
+
+/// What the headline would say with a different set of answers, before any of them is final.
+public struct BookPreview: Codable, Sendable, Equatable {
+    public let pnlMicros: String?
+    public let pnlStatus: PnlStatus
+    public let estimatedMicros: String
+    public let unresolvedMicros: String
+    public let open: Int
+    /// A wallet these answers link hasn't been read yet, so this can't say yet.
+    public let pending: Bool
+    /// A wallet these answers link couldn't be read.
+    public let failed: Bool
+
+    public init(pnlMicros: String?, pnlStatus: PnlStatus, estimatedMicros: String, unresolvedMicros: String, open: Int, pending: Bool, failed: Bool) {
+        self.pnlMicros = pnlMicros
+        self.pnlStatus = pnlStatus
+        self.estimatedMicros = estimatedMicros
+        self.unresolvedMicros = unresolvedMicros
+        self.open = open
+        self.pending = pending
+        self.failed = failed
+    }
+}
+
+/// A withdrawal found in an exchange's history, with what it cost.
+public struct ExchangeWithdrawal: Codable, Sendable, Equatable {
+    public let exchange: String
+    public let asset: String
+    public let units: String
+    public let at: String
+    public let cost: Money
+    public let toAddress: String?
+}
+
+public struct ExchangeImport: Codable, Sendable, Equatable {
+    public let withdrawals: [ExchangeWithdrawal]
+    /// Withdrawals with no usable cost: bought in a currency this app doesn't have, in several at once, or with a history it can't follow.
+    public let skipped: Int
+}
+
+/// An amount someone entered or imported, in the currency it was in, because that's what it stays true in.
+public struct Money: Codable, Sendable, Equatable, Hashable {
+    public let micros: String
+    public let currency: CurrencyCode
+
+    public init(micros: String, currency: CurrencyCode) {
+        self.micros = micros
+        self.currency = currency
+    }
+}
+
+/// One thing that arrived from a sender, as it was when someone answered for it. Only the server reads what's in it.
+public struct CostReceipt: Codable, Sendable, Equatable, Hashable {
+    public let wallet: String
+    public let legId: String
+    public let asset: String
+    public let units: String
+}
+
+/// What was paid for exactly these receipts. Anything that arrives later isn't covered, so it's asked about in turn.
+public struct ExchangeCost: Codable, Sendable, Equatable, Hashable {
+    public let micros: String
+    public let currency: CurrencyCode
+    public let asset: String
+    public let receipts: [CostReceipt]
+}
+
+public struct SenderAnswer: Codable, Sendable, Equatable {
+    public enum Kind: String, Codable, Sendable {
+        case mine
+        case myExchange = "my-exchange"
+        case someoneElse = "someone-else"
+    }
+
+    public let kind: Kind
+    /// What was paid, and for which receipts.
+    public let costs: [ExchangeCost]?
+
+    public init(kind: Kind, costs: [ExchangeCost]? = nil) {
+        self.kind = kind
+        self.costs = costs
+    }
+
+    public static let mine = SenderAnswer(kind: .mine)
+    public static let someoneElse = SenderAnswer(kind: .someoneElse)
+}
+
+/// The user's answers. They stay on this device, and go along with each request. The server doesn't keep them.
+public struct Book: Codable, Sendable, Equatable, Hashable {
+    public var senders: [String: SenderAnswer]
+    public var costs: [String: Money]
+    public var withdrawals: [ExchangeWithdrawal]
+
+    public init(senders: [String: SenderAnswer] = [:], costs: [String: Money] = [:], withdrawals: [ExchangeWithdrawal] = []) {
+        self.senders = senders
+        self.costs = costs
+        self.withdrawals = withdrawals
+    }
+
+    /// Saying a sender's yours says the wallet you're looking at is yours too.
+    public func answering(_ sender: String, _ answer: SenderAnswer, focus: String?) -> Book {
+        var next = self
+        next.senders[sender.lowercased()] = answer
+        if answer.kind == .mine, let focus, WalletAddress.isValid(focus) { next.senders[focus.lowercased()] = .mine }
+        return next
+    }
+
+    /// Saying what was paid for a sender's open receipts, by asset. It takes over for those receipts, and any others keep their earlier answers.
+    public func enteringExchangeCosts(_ sender: String, receipts: [CostReceipt], amounts: [String: Money], focus: String?) -> Book {
+        let key = sender.lowercased()
+        let earlier = senders[key]?.kind == .myExchange ? (senders[key]?.costs ?? []) : []
+        let costs = amounts.sorted { $0.key < $1.key }.map { asset, money in
+            ExchangeCost(micros: money.micros, currency: money.currency, asset: asset, receipts: receipts.filter { $0.asset == asset })
+        }
+        return answering(sender, SenderAnswer(kind: .myExchange, costs: earlier + costs), focus: focus)
+    }
+
+    public func enteringCost(_ key: String, _ cost: Money) -> Book {
+        var next = self
+        next.costs[key] = cost
+        return next
+    }
+
+    public var linkedWallets: [String] {
+        senders.filter { $0.value.kind == .mine }.keys.sorted()
+    }
+
+    public var isEmpty: Bool { senders.isEmpty && costs.isEmpty && withdrawals.isEmpty }
+}
+
+extension SenderAnswer: Hashable {}
+extension ExchangeWithdrawal: Hashable {}
+
 public enum WalletAddress {
     /// What the server accepts in place of an address, to read its fixtures.
     public static let demo = "demo"
@@ -279,4 +577,71 @@ func isPositive(_ units: String) -> Bool {
 
 func parseTimestamp(_ value: String) -> Date? {
     try? Date(value, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+}
+
+/// A dataset version the server can read a wallet through. Queries are pinned to `hash`, so it's what actually gets read.
+public struct PricingRule: Codable, Sendable, Equatable, Hashable, Identifiable {
+    public let id: String
+    public let name: String
+    public let summary: String
+    public let dataset: String
+    public let hash: String
+
+    public init(id: String, name: String, summary: String, dataset: String, hash: String) {
+        self.id = id
+        self.name = name
+        self.summary = summary
+        self.dataset = dataset
+        self.hash = hash
+    }
+}
+
+/// One number by each rule. A nil is unavailable, not zero.
+public struct RuleRow: Codable, Sendable, Equatable, Identifiable {
+    public let label: String
+    /// `signed` or `money` in the wallet's currency, or `usdPrice`, which is always in USD.
+    public let format: String
+    public let a: String?
+    public let b: String?
+    /// nil unless both sides are made of the same known amounts, because anything else isn't a difference between rules.
+    public let difference: String?
+    /// This side's sum leaves something out. `warnings` says what.
+    public let aPartial: Bool
+    public let bPartial: Bool
+    /// This side rests on an estimate, and so does a difference from it. `warnings` says how much.
+    public let aEstimated: Bool
+    public let bEstimated: Bool
+
+    public var id: String { label }
+}
+
+public struct RuleTransaction: Codable, Sendable, Equatable, Identifiable {
+    public let txHash: String
+    public let blockNum: Int
+    public let timestamp: String
+    public let asset: String
+    public let label: String
+    public let a: String?
+    public let b: String?
+    public let difference: String?
+    public let aEstimated: Bool
+    public let bEstimated: Bool
+
+    public var id: String { "\(txHash):\(asset):\(label)" }
+}
+
+/// What two rules make of one wallet at the same block, so the only difference between them is the rule.
+public struct RuleComparison: Codable, Sendable, Equatable {
+    public let address: String
+    public let currency: CurrencyCode
+    public let blockNum: Int
+    public let a: PricingRule
+    public let b: PricingRule
+    public let why: String
+    /// What the numbers leave out or can't vouch for, the same as they'd say on the main screen.
+    public let warnings: [String]
+    public let rows: [RuleRow]
+    /// The newest few that came out differently. `changedTxs` says how many there are.
+    public let transactions: [RuleTransaction]
+    public let changedTxs: Int
 }

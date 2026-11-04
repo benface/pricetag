@@ -1,8 +1,7 @@
 // Builds rows in the `legs` shape from raw `transactions` and `logs` rows, the same way the dataset's tables do.
 // Pure, so it can be tested without Amp.
 
-import { ETH_ADDRESS, WETH_ADDRESS, normalizeAddress, tokenByAddress, type LegRow } from "@pricetag/sdk/core"
-import type { RateRound } from "../src/core/currency.ts"
+import { ETH_ADDRESS, WETH_ADDRESS, normalizeAddress, tokenByAddress, type GasUnknownTx, type LegRow, type RateRound } from "@pricetag/sdk/core"
 
 export const TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 export const DEPOSIT_TOPIC = "e1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
@@ -80,23 +79,23 @@ export type RawInput = {
   gas: GasContext
 }
 
-export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInput): { rows: LegRow[]; gasUnknownTxs: string[] } {
+export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInput): { rows: LegRow[]; gasUnknown: GasUnknownTx[] } {
   const me = normalizeAddress(account)
   const rows: LegRow[] = []
-  const gasUnknownTxs: string[] = []
+  const gasUnknown: GasUnknownTx[] = []
 
   for (const tx of txs) {
     const base = { block_num: tx.block_num, timestamp: tx.timestamp, tx_hash: normalizeAddress(tx.tx_hash), tx_index: tx.tx_index }
     const from = normalizeAddress(tx.from)
     if (from === me && tx.type !== DEPOSIT_TX_TYPE) {
       const paid = gasPaid(tx, gas)
-      if (paid === null) gasUnknownTxs.push(base.tx_hash)
+      if (paid === null) gasUnknown.push({ tx_hash: base.tx_hash, block_num: base.block_num })
       else if (paid > 0n) rows.push({ ...base, log_index: 0, token: ETH_ADDRESS, account: me, side: "debit", amount: paid.toString(), kind: "gas" })
     }
     if (tx.status && BigInt(tx.value) > 0n) {
       const eth = { ...base, log_index: 0, token: ETH_ADDRESS, account: me, amount: tx.value, kind: "eth" as const }
-      if (from === me) rows.push({ ...eth, side: "debit" })
-      if (tx.to !== null && normalizeAddress(tx.to) === me) rows.push({ ...eth, side: "credit" })
+      if (from === me) rows.push({ ...eth, side: "debit", counterparty: tx.to === null ? null : normalizeAddress(tx.to) })
+      if (tx.to !== null && normalizeAddress(tx.to) === me) rows.push({ ...eth, side: "credit", counterparty: from })
     }
   }
 
@@ -119,8 +118,8 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
       // An ERC-721 transfer has its token ID in topic3, where an ERC-20's amount is in its data.
       const nftId = log.topic3 === null ? null : BigInt(`0x${log.topic3}`).toString()
       const row = nftId !== null ? { ...base, amount: nftId, kind: "unlisted_nft" as const } : { ...base, kind: listed ? ("erc20" as const) : ("unlisted" as const) }
-      if (first === me) rows.push({ ...row, side: "debit" })
-      if (topicToAddress(log.topic2) === me) rows.push({ ...row, side: "credit" })
+      if (first === me) rows.push({ ...row, side: "debit", counterparty: topicToAddress(log.topic2) })
+      if (topicToAddress(log.topic2) === me) rows.push({ ...row, side: "credit", counterparty: first })
     } else if (log.topic0 === TRANSFER_SINGLE_TOPIC || log.topic0 === TRANSFER_BATCH_TOPIC) {
       // A batch can hold many IDs and amounts, so an empty amount just says something moved. That's all the guard needs.
       const row = { ...base, amount: "", kind: "unlisted" as const }
@@ -135,7 +134,7 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
     }
   }
 
-  // Without traces, a WETH Withdrawal in a transaction counts as ETH paid to its sender.
+  // Without traces, a WETH Withdrawal in a transaction counts as ETH paid to its sender. `settleUnwraps` checks it.
   const sentByMe = new Set(txs.filter((t) => normalizeAddress(t.from) === me).map((t) => normalizeAddress(t.tx_hash)))
   for (const log of withdrawals) {
     const hash = normalizeAddress(log.tx_hash)
@@ -153,7 +152,7 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
       kind: "unwrap",
     })
   }
-  return { rows, gasUnknownTxs }
+  return { rows, gasUnknown }
 }
 
 /** A `latestRoundData()` result's answer and when it last updated, or null when the read failed or it isn't a positive answer. */
@@ -163,6 +162,32 @@ export function decodeRound(data: string | null | undefined): RateRound | null {
   if (!answer || answer === "0" || !updatedAt || updatedAt.length !== 64) return null
   return { answer, updatedAt: Number(BigInt(`0x${updatedAt}`)) }
 }
+
+/**
+ * Fills in who was on the other side of each ERC-20 and plain ETH row, from `Transfer` logs and the transactions behind them.
+ * The dataset's `legs` table has one row per side, and doesn't say.
+ */
+export function withCounterparties(rows: readonly LegRow[], logs: readonly Pick<RawLog, "tx_hash" | "log_index" | "topic1" | "topic2">[], txs: readonly Pick<RawTx, "tx_hash" | "from" | "to">[]): LegRow[] {
+  const byLog = new Map(logs.map((log) => [`${normalizeAddress(log.tx_hash)}:${log.log_index}`, log]))
+  const byTx = new Map(txs.map((tx) => [normalizeAddress(tx.tx_hash), tx]))
+  return rows.map((row) => {
+    if (row.kind === "erc20") {
+      const log = byLog.get(`${row.tx_hash}:${row.log_index}`)
+      if (!log) return row
+      return { ...row, counterparty: topicToAddress(row.side === "credit" ? log.topic1 : log.topic2) }
+    }
+    if (row.kind === "eth") {
+      const tx = byTx.get(row.tx_hash)
+      if (!tx) return row
+      if (row.side === "credit") return { ...row, counterparty: normalizeAddress(tx.from) }
+      return { ...row, counterparty: tx.to === null ? null : normalizeAddress(tx.to) }
+    }
+    return row
+  })
+}
+
+/** Rows' blocks worth looking up, so a wallet's first read doesn't scan every block for the few that touch it. */
+export const counterpartyBlocks = (rows: readonly LegRow[]): number[] => [...new Set(rows.filter((r) => r.kind === "erc20" || r.kind === "eth").map((r) => r.block_num))]
 
 /** The `answer` word of a `latestRoundData()` result, or "" when the read failed. */
 export function decodeRoundAnswer(data: string | null | undefined): string {

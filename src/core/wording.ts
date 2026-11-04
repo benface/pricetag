@@ -2,9 +2,8 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import type { CostLabel, FoldLeg, Method, PriceSource } from "@pricetag/sdk/core"
+import { formatAmount, formatDuration, formatMoney, shortHash, type CostLabel, type CurrencyCode, type FoldLeg, type Method, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
-import { formatDuration } from "./format.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
 export const METHOD_NAME = "How cost is worked out"
@@ -32,6 +31,12 @@ export const NOTHING_TO_CHART = "Everything here depends on an unknown cost or p
 export const UNPRICED_FEES = "Some network fees had no price at the time, and aren't in this total."
 export const READING = "Reading this wallet's history. The first read can take a minute, then only new activity is read."
 export const NOT_AN_ADDRESS = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
+
+export const RULES_TITLE = "Pricing rule"
+export const RULES_HELP = "Prices come from a public recipe anyone can copy and change. Each rule here is one version of it, named by its fingerprint. Switching only changes which one this wallet is read through."
+
+/** A dataset version's fingerprint, short enough to read and long enough to recognize. */
+export const shortManifestHash = (hash: string) => `${hash.slice(0, 12)}…${hash.slice(-4)}`
 
 export const MODE_LABELS: Record<Mode, string> = { demo: "Demo data", raw: "Raw chain data", dataset: "Pricetag data" }
 
@@ -62,11 +67,23 @@ export function costTag(label: CostLabel): string {
   }[label]
 }
 
+/** A cost's source, to finish "from …". */
+export const COST_WORDS: Record<CostLabel, string> = {
+  paid: "what you paid",
+  inherited: "what your other wallet paid",
+  "received at market": "the price when it arrived",
+  "self-reported": "what you entered",
+  unknown: "an unknown cost",
+}
+
 /** What a list of movements is called, with how much of it is showing. */
 export function activityTitle(count: number, shown: number): string {
   const total = count.toLocaleString("en-US")
   return count > shown ? `Activity (newest ${shown} of ${total})` : `Activity (${total})`
 }
+
+/** How much of a wallet's PnL rests on an estimate, or null when none does. */
+export const estimatedSentence = (micros: string, currency: CurrencyCode): string | null => (BigInt(micros) > 0n ? `${formatMoney(micros, currency)} of this is an estimate, from market prices.` : null)
 
 /** What a total leaves out, or null when it leaves out nothing. */
 export function excludedSentence(excluded: readonly { asset: string; reason: string }[]): string | null {
@@ -83,6 +100,10 @@ export function coverageSentence(coverage: { fromBlock: number; toBlock: number 
 
 export function networkFeeUnknownSentence(count: number): string {
   return `Couldn't read the network fee of ${count} ${count === 1 ? "transaction" : "transactions"} yet, so fees paid are too low, and ETH's PnL is unavailable until they're read.`
+}
+
+export function linkedFailedSentence(count: number): string {
+  return count === 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : `Couldn't read ${count} of your other wallets, so what came from them may show as unresolved.`
 }
 
 export function feesUnknownSentence(count: number): string {
@@ -103,4 +124,14 @@ export function staleSentence(lastUpdate: string): string {
 /** The technical side of the status badge, for its tooltip. */
 export function feedDetail(mode: Mode, block: number): string {
   return mode === "demo" ? MODE_LABELS.demo : `${MODE_LABELS[mode]} · block ${block.toLocaleString("en-US")}`
+}
+
+/** Keeps a wallet with many of these to a sentence. The rest are still there, as sales with no known value. */
+const MAX_NAMED_UNSEEN = 5
+
+/** The transactions most likely behind ETH that doesn't match. */
+export function unseenEthCause(unseen: readonly UnseenEth[]): string {
+  const named = unseen.slice(0, MAX_NAMED_UNSEEN).map(({ amount, txHashes }) => `${txHashes.map(shortHash).join(", ")} (+${formatAmount(amount, 18)} ETH)`)
+  const more = unseen.length > named.length ? `, and ${unseen.length - named.length} more` : ""
+  return `It lines up with what left this wallet in ${named.join(", ")}${more}: ETH rose by that much in the same block, with no transaction showing it.`
 }

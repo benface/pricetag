@@ -4,6 +4,10 @@ import Testing
 
 /// `test/portfolio.test.ts` writes the vectors from the web app's wording, so both say the same thing.
 struct WordingVectors: Decodable {
+    struct UnseenEthVector: Decodable {
+        let unseen: [UnseenEth]
+        let text: String
+    }
     struct Action: Decodable {
         let kind: String
         let incoming: Bool
@@ -34,8 +38,9 @@ struct WordingVectors: Decodable {
     }
     struct Sentences: Decodable {
         let methodName, methodHelp, averagePricePaid, networkFees, balanceCheck, startingBalance, pnlHelp, realizedHelp, unrealizedHelp: String
-        let notStarted, unpricedFees, demo, pnlUnavailable, nothingToChart, reading, notAnAddress: String
+        let notStarted, unpricedFees, demo, pnlUnavailable, nothingToChart, reading, notAnAddress, rulesTitle, rulesHelp: String
     }
+    let manifestHash: String
     let methods: [String: String]
     let modes: [String: String]
     let actions: [Action]
@@ -49,8 +54,10 @@ struct WordingVectors: Decodable {
     let feesUnknown: [FeesUnknown]
     let behind: [Behind]
     let stale: String
+    let unseenEth: [UnseenEthVector]
     let feedDetail: [String]
     let pnlHelp: [PnlHelp]
+    let linkedFailed: [FeesUnknown]
     let sentences: Sentences
 }
 
@@ -82,10 +89,14 @@ struct WordingVectors: Decodable {
         for vector in vectors.feesUnknown { #expect(Wording.feesUnknown(vector.count) == vector.text) }
         for vector in vectors.behind { #expect(Wording.behind(blocks: vector.blocks) == vector.text) }
         #expect(Wording.stale(lastUpdate: "Nov 4 at 5:40 AM") == vectors.stale)
+        for vector in vectors.unseenEth { #expect(Wording.unseenEthCause(vector.unseen) == vector.text) }
         #expect([Mode.demo, .raw, .dataset].map { Wording.feedDetail($0, block: 1000) } == vectors.feedDetail)
         for vector in vectors.pnlHelp { #expect(Wording.pnlHelp(for: vector.text) == vector.help) }
         let sentences = vectors.sentences
+        for vector in vectors.linkedFailed { #expect(Wording.linkedFailed(vector.count) == vector.text) }
         #expect(Wording.methodName == sentences.methodName)
+        #expect(Wording.rulesTitle == sentences.rulesTitle)
+        #expect(Wording.rulesHelp == sentences.rulesHelp)
         #expect(Wording.methodHelp == sentences.methodHelp)
         #expect(Wording.averagePricePaid == sentences.averagePricePaid)
         #expect(Wording.networkFees == sentences.networkFees)
@@ -101,5 +112,43 @@ struct WordingVectors: Decodable {
         #expect(Wording.nothingToChart == sentences.nothingToChart)
         #expect(Wording.reading == sentences.reading)
         #expect(Wording.notAnAddress == sentences.notAnAddress)
+    }
+}
+
+@Suite struct RuleWordingTests {
+    @Test func aManifestHashReadsTheSameOnBothSides() throws {
+        let vectors = try resource("wording-vectors", as: WordingVectors.self)
+        #expect(Wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1") == vectors.manifestHash)
+    }
+
+    @Test func aComparisonDecodes() throws {
+        let comparison = try resource("demo-rule-comparison", as: RuleComparison.self)
+        #expect(comparison.a.name == "Market price")
+        #expect(comparison.b.name == "Cautious ETH")
+        #expect(comparison.rows.first?.label == "ETH price")
+        #expect(comparison.changedTxs > 0)
+        #expect(comparison.rows.first { $0.label == "Total PnL" }?.aPartial == true)
+        #expect(comparison.rows.first { $0.label == "Total PnL" }?.aEstimated == true)
+        #expect(comparison.rows.first?.aEstimated == false)
+        #expect(!comparison.warnings.isEmpty)
+    }
+
+    @Test func anUnavailableNumberIsNeverZero() {
+        #expect(Format.ruleValue(nil, format: "signed", currency: .USD) == "Unavailable")
+        #expect(Format.ruleDifference(nil, format: "signed", currency: .USD) == "—")
+    }
+
+    @Test func aDifferenceIsSigned() {
+        #expect(Format.ruleDifference("0", format: "money", currency: .USD) == "Same")
+        #expect(Format.ruleDifference("1500000", format: "money", currency: .USD) == "+$1.50")
+        #expect(Format.ruleDifference("-24000000", format: "usdPrice", currency: .CAD) == "-$24.00")
+        #expect(Format.ruleValue("2376000000", format: "usdPrice", currency: .CAD) == "$2,376.00")
+        // An estimate looks like one, and so does a difference from it. What isn't a number stays as it is.
+        #expect(Format.ruleValue("1500000", format: "money", currency: .USD, isEstimate: true) == "≈$1.50")
+        #expect(Format.ruleValue("1500000", format: "signed", currency: .USD, isEstimate: true) == "≈+$1.50")
+        #expect(Format.ruleValue(nil, format: "signed", currency: .USD, isEstimate: true) == "Unavailable")
+        #expect(Format.ruleDifference("1500000", format: "money", currency: .USD, isEstimate: true) == "≈+$1.50")
+        #expect(Format.ruleDifference("0", format: "money", currency: .USD, isEstimate: true) == "Same")
+        #expect(Format.ruleDifference(nil, format: "money", currency: .USD, isEstimate: true) == "—")
     }
 }

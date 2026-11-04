@@ -18,6 +18,9 @@ public final class HotWallet {
 
     public enum RotationHold: Equatable, Sendable {
         case notEnoughGas
+        /// Tokens that gas makes too costly to move right now. They move if that changes, and until then they're
+        /// still the user's, so only the user can say to leave them.
+        case notWorthTheGas([String])
         /// Tokens off the allowlist, which this app never calls, so they can't be moved from here.
         case otherTokens(Int)
         /// Amp is the only way to see those tokens, and it isn't answering.
@@ -188,8 +191,9 @@ public final class HotWallet {
         guard let address else { return }
         let linked = linkedWallets.filter { $0 != address.lowercased }
         do {
-            // Always USD, like the cap and the balances it's compared with.
-            let portfolio = try await portfolioSource().portfolio(address: address.lowercased, method: costMethod(), currency: .USD, linked: linked, timeout: .seconds(180))
+            // Always USD, like the cap and the balances it's compared with. No answers: what someone said about a cost shouldn't move money by itself. `pendingGain` keeps estimates out too.
+            // Always by the default pricing rule. A rule picked to compare numbers must never decide what money moves.
+            let portfolio = try await portfolioSource().portfolio(address: address.lowercased, method: costMethod(), currency: .USD, rule: nil, linked: linked, book: Book(), timeout: .seconds(180))
             guard !Task.isCancelled, address == self.address else { return }
             self.portfolio = portfolio
             ampProblem = false
@@ -233,13 +237,18 @@ public final class HotWallet {
             let everything = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: rotation.destination)
             guard everything.transfers.isEmpty else {
                 resetEmptyReads()
-                rotationHold = everything.blockers.contains(.notEnoughGas) ? .notEnoughGas : nil
+                rotationHold = everything.blockers.contains(.notEnoughGas) ? .notEnoughGas : everything.notWorthTheGas.isEmpty ? nil : .notWorthTheGas(everything.notWorthTheGas.map(\.symbol))
                 try await execute(everything, from: address, to: rotation.destination, reason: .rotation, snapshot: snapshot)
                 return
             }
             guard !everything.blockers.contains(.notEnoughGas) else {
                 resetEmptyReads()
                 rotationHold = .notEnoughGas
+                return
+            }
+            guard everything.notWorthTheGas.isEmpty else {
+                resetEmptyReads()
+                rotationHold = .notWorthTheGas(everything.notWorthTheGas.map(\.symbol))
                 return
             }
             let emptySince = rotationEmptySince ?? (snapshot.blockNumber, now())
@@ -297,9 +306,7 @@ public final class HotWallet {
         switch token.asset {
         case "ETH": return snapshot.ethUsdMicros
         case "USDC": return snapshot.usdcUsdMicros
-        default:
-            // Nothing but the server knows these, and only when the price it has is one it stands behind.
-            return portfolio?.positions.first { $0.asset == token.asset }?.price.flatMap { UInt128($0.micros) }
+        default: return snapshot.otherUsdMicros[token.asset]
         }
     }
 
@@ -328,8 +335,11 @@ public final class HotWallet {
         onLinkedWalletsChange?(linkedWallets)
     }
 
+    /// Only a gain that's all there and all fact gets swept by itself: never one that rests on an estimate, or on a wallet that couldn't be read.
     private func pendingGain(address: EthereumAddress) -> UInt128 {
-        guard let totals = portfolio?.totals, totals.coverage.realized.missing == 0, let text = totals.realizedMicros, let realized = UInt128(text) else { return 0 }
+        guard let portfolio, portfolio.linkedReading.isEmpty, portfolio.linkedFailed.isEmpty else { return 0 }
+        let totals = portfolio.totals
+        guard totals.coverage.realized.missing == 0, !totals.estimated.realized, let text = totals.realizedMicros, let realized = UInt128(text) else { return 0 }
         return realized.subtractingClamped(state.sweptGains[address].flatMap { UInt128($0) } ?? 0)
     }
 
@@ -341,6 +351,7 @@ public final class HotWallet {
         switch rotationHold {
         case .otherTokens(let count): notices.append(.init(.warning, HotWalletWording.rotationHeldByOtherTokens(count)))
         case .cantCheckOtherTokens: notices.append(.init(.warning, HotWalletWording.rotationCantCheck))
+        case .notWorthTheGas(let symbols): notices.append(.init(.warning, HotWalletWording.rotationHeldByGas(symbols)))
         case .notEnoughGas, nil:
             if rotation != nil { notices.append(.init(.info, HotWalletWording.rotating)) }
         }
@@ -475,7 +486,7 @@ public final class HotWallet {
         }
     }
 
-    /// Only when something can't be moved, like tokens with no ETH for gas, and the user has said to leave it behind.
+    /// Only when something can't be moved, like tokens with no ETH for gas or that gas makes too costly to move, and the user has said to leave it behind.
     public func finishRotationLeavingFundsBehind() async {
         guard let rotation else { return }
         await work(confirming: "delete the old key and leave what's on it behind") { [self] in

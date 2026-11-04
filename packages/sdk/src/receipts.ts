@@ -1,6 +1,8 @@
 // Reads L1 data fees from RPC receipts, because Amp's data doesn't have them. They only exist on receipts, and every
 // Base transaction pays one on top of its gas, so computed ETH can't match the chain without them.
 
+import type { Logger } from "./amp.ts"
+
 export const DEFAULT_RPC_URL = "https://mainnet.base.org"
 
 /** Which transactions to read, with the block each was seen in. */
@@ -28,7 +30,7 @@ export function l1FeeOf(receipt: Receipt | undefined, blockNum: number): string 
   return receipt.l1Fee ? BigInt(receipt.l1Fee).toString() : "0"
 }
 
-export function createL1FeeReader(url: string, send: typeof fetch = fetch, pauseAfter429Ms = PAUSE_AFTER_429_MS): ReadL1Fees {
+export function createL1FeeReader(url: string, send: typeof fetch = fetch, pauseAfter429Ms = PAUSE_AFTER_429_MS, logger: Logger = console): ReadL1Fees {
   return async (requests) => {
     const fees = new Map<string, string>()
     const wanted = requests.slice(0, MAX_PER_READ)
@@ -52,7 +54,7 @@ export function createL1FeeReader(url: string, send: typeof fetch = fetch, pause
         }
       } catch (error) {
         // Not the URL: a dedicated RPC's has a key in it. What's missing is retried on the next refresh.
-        console.error("Couldn't read L1 fees:", error instanceof Error ? error.message : "unknown error")
+        logger.warn(`Couldn't read L1 fees: ${error instanceof Error ? error.message : "unknown error"}`)
         break
       }
     }

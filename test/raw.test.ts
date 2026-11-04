@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, effectiveGasPrice, gasPaid, legRowsFromRaw, type RawLog, type RawTx } from "../server/raw.ts"
-import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, blockFilters } from "@pricetag/sdk"
+import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS } from "@pricetag/sdk/core"
+import { blockFilters } from "@pricetag/sdk/internal"
 
 const ME = "dd8795475306152abe5f45f1ce97c017fd2f02e7"
 const OTHER = "f849e0d4a7a1d74cb278361ff29967dfb5a22c67"
@@ -60,8 +61,8 @@ describe("gas", () => {
 
   it("is null rather than wrong when the previous transaction is missing", () => {
     assert.equal(gasPaid(REAL_TX, { ...CONTEXT, cumulativeGas: new Map() }), null)
-    const { rows, gasUnknownTxs } = legRowsFromRaw({ account: ME, txs: [REAL_TX], logs: [], withdrawals: [], gas: { ...CONTEXT, cumulativeGas: new Map() } })
-    assert.equal(gasUnknownTxs.length, 1)
+    const { rows, gasUnknown } = legRowsFromRaw({ account: ME, txs: [REAL_TX], logs: [], withdrawals: [], gas: { ...CONTEXT, cumulativeGas: new Map() } })
+    assert.deepEqual(gasUnknown, [{ tx_hash: REAL_TX.tx_hash, block_num: REAL_TX.block_num }])
     assert.equal(rows.filter((r) => r.kind === "gas").length, 0)
   })
 })
@@ -185,5 +186,23 @@ describe("block filters", () => {
     const filters = blockFilters(Array.from({ length: 450 }, (_, i) => i + 1))
     assert.deepEqual(filters.map((f) => f.count), [200, 200, 50])
     assert.match(filters[1]!.filter, /^block_num BETWEEN 201 AND 400 /)
+  })
+})
+
+describe("who was on the other side", () => {
+  const sender = "00000000000000000000000000000000000000dd"
+  const log = { block_num: 1, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: "aa", tx_index: 1, log_index: 2, address: USDC_ADDRESS, topic0: TRANSFER_TOPIC, topic3: null, data: (5n).toString(16).padStart(64, "0") }
+  const rows = (logs: RawLog[], txs: RawTx[] = []) => legRowsFromRaw({ account: ME, txs, logs, withdrawals: [], gas: CONTEXT }).rows
+
+  it("reads the sender of what arrived, and where what left went", () => {
+    const [credit] = rows([{ ...log, topic1: pad(sender), topic2: pad(ME) }])
+    assert.equal(credit?.counterparty, `0x${sender}`)
+    const [debit] = rows([{ ...log, topic1: pad(ME), topic2: pad(sender) }])
+    assert.equal(debit?.counterparty, `0x${sender}`)
+  })
+
+  it("reads it from a plain ETH transfer too", () => {
+    const tx: RawTx = { ...REAL_TX, from: sender, to: ME, value: "9", status: true }
+    assert.equal(rows([], [tx]).find((r) => r.kind === "eth")?.counterparty, `0x${sender}`)
   })
 })

@@ -12,11 +12,9 @@
 // - US, oldest first in each wallet: Treas. Reg. 1.1012-1(j), for dispositions from January 1, 2025. Average basis in
 //   1.1012-1(e) only covers certain stock. Rev. Proc. 2024-28 and IRS digital asset FAQs cover the move to wallets.
 
-import { foldPositions, isAddress, unreadAssets, worth, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg } from "@pricetag/sdk/core"
+import { foldPositions, formatDuration, isAddress, shortHash, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
-import { viewWallet, type CurrencyCode, type WalletView } from "./currency.ts"
 import { rateSource } from "./explain.ts"
-import { formatDuration, shortHash } from "./format.ts"
 import { METHOD_LABELS } from "./wording.ts"
 
 export type TaxCountryCode = "CA" | "US"
@@ -114,7 +112,9 @@ const UNKNOWN_PROCEEDS = "What this sold for isn't known."
 const NO_RATE = "There's no exchange rate at this block, so this can't be shown in this currency."
 const NO_GAS_PRICE = "ETH had no price at this block."
 const SENT = "Sent to another address, so it's not counted as a sale. If that's your own wallet, add it to this report. If it paid for something or was a gift, it's generally taxable."
-const ESTIMATED_COST = "Part of its cost is an estimate, from the market price when it arrived."
+const ESTIMATED_COST = "Part of its cost is an estimate, from a market price."
+const ESTIMATED_PROCEEDS = "What it sold for is an estimate, from a market price."
+const ESTIMATED_BOTH = "What it sold for and part of its cost are estimates, from market prices."
 const MISMATCH = "This asset's history doesn't match its onchain balance, so its cost can't be trusted."
 const UNCHECKED = "This asset hasn't been checked against its onchain balance yet, so its cost isn't shown."
 const DIFFERENT_STARTS = "These wallets' histories start at different blocks, so their costs can't be worked out together."
@@ -131,12 +131,12 @@ function knownOf(state: PositionState): { qty: bigint; cost: bigint } {
   return { qty, cost }
 }
 
-/** A cost from an estimate carries through a sale, and an average that blends one in can't be told apart from it. */
-function usedEstimate({ before, after }: LegEffect): boolean {
-  return before.lots.some((lot) => {
-    if (lot.costMicros === null || (lot.label !== "received at market" && lot.label !== "mixed")) return false
-    return !after.lots.some((rest) => rest.legId === lot.legId && rest.qty === lot.qty)
-  })
+/** What part of a sale's gain rests on an estimate, or null when none does. The fold keeps count, whatever a lot is labeled. */
+function estimateReason({ leg, before, after }: LegEffect, proceeds: bigint): string | null {
+  const estimated = BigInt(after.estimatedRealizedMicros) - BigInt(before.estimatedRealizedMicros)
+  if (estimated <= 0n) return null
+  if (!leg.estimated) return ESTIMATED_COST
+  return estimated > proceeds ? ESTIMATED_BOTH : ESTIMATED_PROCEEDS
 }
 
 /** The rows a debit becomes: a sale with both a known and an unknown cost splits, so the known part still adds up. */
@@ -179,8 +179,8 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null): 
   const gain = BigInt(after.realizedMicros) - BigInt(before.realizedMicros)
   const resolvedProceeds = resolvedQty > 0n ? gain + knownCost : 0n
   if (resolvedQty > 0n) {
-    const estimated = usedEstimate(effect)
-    rows.push(row({ amount: resolvedQty.toString(), proceedsMicros: resolvedProceeds.toString(), costMicros: knownCost.toString(), gainMicros: gain.toString(), status: estimated ? "estimated" : "resolved", reason: estimated ? ESTIMATED_COST : null }))
+    const estimated = estimateReason(effect, resolvedProceeds)
+    rows.push(row({ amount: resolvedQty.toString(), proceedsMicros: resolvedProceeds.toString(), costMicros: knownCost.toString(), gainMicros: gain.toString(), status: estimated ? "estimated" : "resolved", reason: estimated }))
   }
   if (unknownQty > 0n) {
     const short = BigInt(after.shortfallQty) > BigInt(before.shortfallQty)

@@ -1,10 +1,32 @@
 import PricetagKit
 import SwiftUI
+import UniformTypeIdentifiers
+
+/// The file a CSV export writes.
+struct CSVDocument: FileDocument {
+    static let readableContentTypes: [UTType] = [.commaSeparatedText]
+    let text: String
+
+    init(text: String) {
+        self.text = text
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        text = configuration.file.regularFileContents.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(text.utf8))
+    }
+}
 
 /// The details: every number in here clicks through to its legs, price source and transaction, in the inspector.
 struct MainWindow: View {
     let store: PortfolioStore
     @Bindable var navigation: Navigation
+    @State private var exporting = false
+    @State private var exportDocument: CSVDocument?
+    @State private var exportError: String?
     @Environment(\.openWindow) private var openWindow
 
     private var portfolio: Portfolio? { store.portfolio }
@@ -20,6 +42,31 @@ struct MainWindow: View {
             .sheet(isPresented: $navigation.isChangingWallet) {
                 WalletSheet(store: store)
             }
+            .sheet(isPresented: $navigation.isResolving) {
+                ResolveFlow(store: store, firstAsset: navigation.resolvingAsset)
+            }
+            .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: "\(AppName.current) \(subtitle)") { result in
+                if case .failure(let error) = result { exportError = error.localizedDescription }
+                exportDocument = nil
+            }
+            .alert("Couldn't export", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(exportError ?? "")
+            }
+            // The menu asks for it. The file's written only once the server has answered.
+            .onChange(of: navigation.isExporting) { _, asked in
+                guard asked else { return }
+                navigation.isExporting = false
+                Task {
+                    do {
+                        exportDocument = CSVDocument(text: try await store.exportCSV())
+                        exporting = true
+                    } catch {
+                        exportError = "The server couldn't make this file."
+                    }
+                }
+            }
             .sheet(isPresented: $navigation.isExportingTaxReport) {
                 TaxReportView(store: store) { navigation.isExportingTaxReport = false }
             }
@@ -32,7 +79,8 @@ struct MainWindow: View {
 
     private var subtitle: String {
         guard let address = store.address else { return "" }
-        return address == WalletAddress.demo ? "Demo wallet" : Format.shortHash(address)
+        let wallet = address == WalletAddress.demo ? "Demo wallet" : Format.shortHash(address)
+        return store.activeRuleName.map { "\(wallet) · \($0)" } ?? wallet
     }
 
     private var inspectorBinding: Binding<Bool> {
@@ -58,6 +106,10 @@ struct MainWindow: View {
             .help("\(Wording.methodHelp) (⌘1, ⌘2)")
         }
         ToolbarItem(placement: .primaryAction) {
+            if let open = portfolio?.questions.count, open > 0 {
+                Button("Resolve \(open)", systemImage: "questionmark.circle") { navigation.resolve() }
+                    .help("Answer what the app can't work out by itself (⇧⌘R)")
+            }
             Button("Tax Report", systemImage: "doc.text") { navigation.isExportingTaxReport = true }
                 .disabled(store.address == nil)
                 .help("Export a tax report (⌘E)")
@@ -110,8 +162,14 @@ struct MainWindow: View {
             } else {
                 summary(portfolio)
                 history(portfolio)
-                HoldingsTable(portfolio: portfolio, isLive: isLive, target: $navigation.target)
+                HoldingsTable(portfolio: portfolio, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
                     .frame(minHeight: 150)
+                if let noMarket = Wording.noMarket(portfolio) {
+                    Text(noMarket)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             if portfolio.progress.started {
                 Text(Wording.coverage(portfolio))
@@ -164,11 +222,20 @@ struct MainWindow: View {
         if portfolio.mode == .demo {
             Notice(.info, Wording.demo)
         }
+        if !portfolio.linkedFailed.isEmpty {
+            HStack(spacing: 8) {
+                Notice(.warning, Wording.linkedFailed(portfolio.linkedFailed.count))
+                Button("Try Again") { store.start() }
+            }
+        }
+        if !portfolio.linkedReading.isEmpty {
+            Notice(.info, "Reading your other \(portfolio.linkedReading.count == 1 ? "wallet" : "wallets"). What came from \(portfolio.linkedReading.count == 1 ? "it" : "them") shows as unresolved until that's done.")
+        }
     }
 
     private func summary(_ portfolio: Portfolio) -> some View {
         HStack(alignment: .top, spacing: 32) {
-            PnlHeadline(portfolio: portfolio, isLive: isLive, size: 40) { navigation.target = .total(.pnl) }
+            PnlHeadline(portfolio: portfolio, isLive: isLive, size: 40, onOpen: { navigation.target = .total(.pnl) }, onResolve: { navigation.resolve() })
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(alignment: .top, spacing: 26) {
                 ForEach(portfolio.totalStats, id: \.metric) { stat in
@@ -187,12 +254,13 @@ private struct HoldingsTable: View {
     let portfolio: Portfolio
     let isLive: Bool
     @Binding var target: ExplainTarget?
+    let onResolve: (String) -> Void
     @State private var selection: Position.ID?
 
     private var currency: CurrencyCode { portfolio.currency }
 
     var body: some View {
-        Table(portfolio.positions, selection: $selection) {
+        Table(portfolio.listedPositions, selection: $selection) {
             TableColumn("Asset") { position in
                 HStack(spacing: 5) {
                     Text(position.asset).fontWeight(.medium)
@@ -219,7 +287,7 @@ private struct HoldingsTable: View {
             .alignment(.numeric)
             TableColumn(Wording.averagePricePaid) { position in
                 if position.isHeld {
-                    number(position, .average, position.values.averageCostMicros.map { Format.price($0, currency) } ?? "Unknown", tone: position.hasUnknownCost ? .warning : .neutral, warn: position.hasUnknownCost)
+                    number(position, .average, position.values.averageCostMicros.map { Format.estimate(Format.price($0, currency), position.estimates.cost) } ?? "Unknown", tone: position.hasUnknownCost ? .warning : .neutral, warn: position.hasUnknownCost)
                 } else {
                     dash
                 }
@@ -229,7 +297,7 @@ private struct HoldingsTable: View {
             TableColumn("Value") { position in
                 if position.isHeld {
                     let value = position.values.valueMicros
-                    number(position, .value, value.map { Format.money($0, currency) } ?? "No price", tone: value == nil ? .warning : .neutral, warn: value == nil)
+                    number(position, .value, value.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price", tone: value == nil ? .warning : .neutral, warn: value == nil)
                 } else {
                     dash
                 }
@@ -237,19 +305,26 @@ private struct HoldingsTable: View {
             .alignment(.numeric)
             TableColumn("Realized") { position in
                 let realized = position.values.realizedMicros
-                number(position, .realized, realized.map { Format.signedMoney($0, currency) } ?? Wording.pnlUnavailable, tone: Tone(signed: realized), warn: realized == nil)
+                number(position, .realized, realized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized) } ?? Wording.pnlUnavailable, tone: Tone(signed: realized), warn: realized == nil)
             }
             .width(min: 110, ideal: 130)
             .alignment(.numeric)
             TableColumn("Unrealized") { position in
                 if position.isHeld {
                     let unrealized = position.values.unrealizedMicros
-                    number(position, .unrealized, unrealized.map { Format.signedMoney($0, currency) } ?? Wording.pnlUnavailable, tone: Tone(signed: unrealized), warn: unrealized == nil)
+                    HStack(spacing: 6) {
+                        number(position, .unrealized, unrealized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.unrealized) } ?? Wording.pnlUnavailable, tone: Tone(signed: unrealized), warn: unrealized == nil)
+                        if position.resolvable {
+                            Button("Resolve") { onResolve(position.asset) }
+                                .controlSize(.mini)
+                                .accessibilityLabel("Resolve \(position.asset)")
+                        }
+                    }
                 } else {
                     dash
                 }
             }
-            .width(min: 110, ideal: 130)
+            .width(min: 180, ideal: 200)
             .alignment(.numeric)
         }
         .tableStyle(.inset)

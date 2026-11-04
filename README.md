@@ -30,7 +30,7 @@ It reads from the server on http://127.0.0.1:8787, set in Settings, so it runs o
 
 If the menu bar is full, macOS hides new items. Look under the menu bar's "show hidden items" control, or in System Settings > Menu Bar, and drag it out. The window opens at launch either way.
 
-The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<address>?method=average|fifo&currency=USD|CAD` returns the portfolio the fold computed, and `GET /api/portfolio/<address>/explain?metric=…&asset=…` or `?tx=…` returns what's behind one number. `test/portfolio.test.ts` writes what they send to files the Swift tests read, so the two can't drift apart without a failure: when a change is on purpose, run it with `UPDATE_FIXTURES=1`.
+The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<address>?method=average|fifo&currency=USD|CAD` returns the portfolio the fold computed, `GET /api/portfolio/<address>/explain?metric=…&asset=…` or `?tx=…` returns what's behind one number, and `GET /api/portfolio/<address>/proof?leg=…` and `/verify?leg=…` return what's behind one price and the check of its block. With a [forked pricing rule](#forking-a-pricing-rule), `GET /api/rules` lists the rules, `&rule=<id>` picks one, and `GET /api/portfolio/<address>/compare` returns a wallet by both. `test/portfolio.test.ts` writes what they send to files the Swift tests read, so the two can't drift apart without a failure: when a change is on purpose, run it with `UPDATE_FIXTURES=1`.
 
 - `macos/PricetagKit/`: everything that isn't Mac-specific, like the API models, the live feed, formatting and shared views. It also builds for iOS.
 - `macos/HotWalletKit/`: the hot wallet, which also builds for iOS. `KeyVault` is the only code that touches a key, and `HotWalletKit` decides what to do and can only ask it to sign.
@@ -76,28 +76,61 @@ It adds a marked block to the end of `.env.local` that points the app at the loc
 
 On the public RPC, a fresh start takes about 9 minutes for the default hour of blocks. For a quicker one, use `PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start`, which takes about 2 minutes.
 
+## Forking a pricing rule
+
+A pricing rule is a dataset version, and the server picks one per request with Amp's `amp-alias` header. The SQL never changes, and the app has no code for any rule. Set these and both apps show a switch, in the Mac app's Settings and above the web app's numbers, with each rule's dataset and manifest hash, and a side-by-side comparison of a wallet. The comparison uses one set of facts at one block for both rules: the same transactions, balances, fees and exchange rates, with only prices from each. If it can't establish that, it says so and shows no numbers.
+
+```sh
+PRICETAG_DATASET=benface/pricetag@0.0.1
+PRICETAG_DATASET_HASH=a0a138cdffaa5a4053b1d0744bd2da7c64d368c951e69236142c19ce16f0553d
+PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.0.3
+PRICETAG_FORK_HASH=592d6fa440eacb0977e8a988b8ba638fc33fbdafea415ab45c96f70f3e174a44
+```
+
+Queries are pinned to those hashes, so a hash on screen is what was read, and a wrong one fails instead of showing other numbers. With no fork set, nothing changes: there's no switch and no header.
+
+The fork here is `dataset/cautious-eth.json`, from `cautiousEthTablesSql` in `dataset/build.ts`. Its one rule is that ETH counts at 1% below the Chainlink feed. It only materializes the tables a rule decides, `reference_prices` and `priced_legs`, and reads everything else from the dataset it forks. So it makes no `eth_call`s, starts from the same block, and can only differ by the rule. The transactions always come from the first dataset.
+
+To change the rule, edit that function, then build, register and deploy it under a new tag, and update the hash:
+
+```sh
+FORK_OF=benface/pricetag@0.0.1 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
+ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.0.4
+```
+
+Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.0.4` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging. List the versions first and use a free tag, because registering a tag that exists moves it without saying so.
+
+**Replacing the dataset it forks means replacing the fork too.** The fork reads the job of the version it names, so stopping that job stops the fork. Deploy a fork of the new version before stopping the old one, then change all four lines together.
+
+**A new dataset name needs a new manifest hash.** Amp finds a dataset's active tables by hash and table name, not by dataset name, so one manifest under two names can read and write the same tables. That's why `benface/pricetag@0.0.1` is `dataset/pricetag.json` at this start block plus a one-line SQL comment. A manifest with new SQL already has its own hash.
+
+`pnpm amp:start` turns the fork off while it runs, because it isn't registered on a local Amp. Hot wallet decisions and tax reports always read by the default rule, whatever the switch says.
+
 ## How it's put together
 
 - `packages/sdk/`: `@pricetag/sdk`, what other apps can build on too. [Its quickstart](packages/sdk/README.md) covers the tables, the API and plain SQL.
   - `src/fold.ts`: `applyLeg(state, leg)`, average cost and FIFO. Pure, BigInt, JSON-safe state and no imports, so it can move into a stateful table.
   - `src/legs.ts`: nets each transaction per asset and labels each leg's price and cost.
-  - `src/portfolio.ts`: runs the fold and adds up what's known, in the browser for the web app and on the server for the Mac app.
+  - `src/portfolio.ts`: runs the fold and adds up what's known, in the browser for the web app and on the server for the Mac app and the SDK.
   - `src/reconcile.ts`: compares what a position's legs add up to with what the chain says it holds.
+  - `src/format.ts`: how amounts and money print.
   - `src/amp.ts`, `src/dataset.ts`, `src/client.ts`: the Amp client and the reads from the dataset. The browser imports `@pricetag/sdk/core`, which leaves these out.
-- `src/`: the web app. `src/core/api.ts` is what the server sends its clients, `src/core/currency.ts` converts a wallet out of USD at each transaction's rate, `src/core/explain.ts` says how each number is worked out, for the web and Mac apps, and `src/core/fixtures.ts` is the demo wallet.
-- `server/`: the raw data source, the balance and receipt readers, and the small HTTP server.
+  - `src/wallets.ts`, `src/balances.ts`, `src/receipts.ts`: what a wallet read adds to its legs: opening and closing balances and L1 fees, kept in memory between reads. The app's server and `getPortfolio` both use these, through `@pricetag/sdk/internal`.
+  - `src/currency.ts`: converts a wallet out of USD at each transaction's rate, before the fold.
+- `src/`: the web app. `src/core/api.ts` is what the server sends its clients, `src/core/explain.ts` says how each number is worked out, for the web and Mac apps, and `src/core/fixtures.ts` is the demo wallet.
+- `server/`: the raw data source, exchange rates, the block check, and the small HTTP server.
 - `macos/`: the Mac app.
-- `dataset/`: the manifest. `pricetag.json` is generated by `build.ts`, so change the SQL there.
+- `dataset/`: the manifests. `pricetag.json` and the fork `cautious-eth.json` are generated by `build.ts`, so change the SQL there.
 
 ## Main currency
 
-Both apps show every value in the chosen currency, USD or CAD, and remember the choice: the Mac app in Settings, and the web app in its header. The dataset's base stays USD. `src/core/currency.ts` is the one place that converts, and both apps go through it.
+Both apps show every value in the chosen currency, USD or CAD, and remember the choice: the Mac app in Settings, and the web app in its header. The dataset's base stays USD. `packages/sdk/src/currency.ts` is the one place that converts, and both apps go through it.
 
 - **Each amount converts at the rate when it happened.** A cost or sale uses the rate at its transaction's block, and a current value uses the current rate. Conversion runs before the fold, so a gain in CAD is proceeds in CAD minus cost in CAD, and it includes what the exchange rate did in between.
 - **Rates come from Chainlink's feed on Base**, read at the block with `eth_call`, so a transaction minutes old already has its rate. Clicking through a number names the source, the rate, and the amount in USD.
 - **A missing rate is never filled in.** That amount is unavailable, whatever depends on it says so, and no other day's rate stands in. A feed that hasn't updated in 3 days counts as missing, since forex markets close for only about 2.
 
-To add a currency, add its Chainlink feed to `CURRENCIES` in `src/core/currency.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/Currency.swift`. Base has feeds for EUR, GBP, AUD, CHF, SGD and others.
+To add a currency, add its Chainlink feed to `CURRENCIES` in `packages/sdk/src/currency.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/Currency.swift`. Base has feeds for EUR, GBP, AUD, CHF, SGD and others.
 
 ## Tax report
 
@@ -125,7 +158,7 @@ To add a country, add it to `TAX_COUNTRIES` in `src/core/tax.ts` and a case to `
 
 ## Rules the numbers follow
 
-- Price and cost are separate. A price is a shared fact labeled `oracle` or `swap`. A cost is this wallet's, labeled `paid` or `unknown`. A swap's cost and proceeds are what actually changed hands, valued on the side with an oracle, preferring USDC. They aren't the oracle price of what was bought or sold.
+- Price and cost are separate. A price is a shared fact labeled `oracle`, `swap` or `market`. A cost is this wallet's, labeled `paid`, `inherited`, `self-reported`, `received at market` or `unknown`. A swap's cost and proceeds are what actually changed hands, valued on the side with an oracle, preferring USDC. They aren't the oracle price of what was bought or sold.
 - `unknown` is never $0. A position with an unknown cost shows "PnL unavailable", totals say what they leave out, and a total with nothing known shows as unavailable.
 - Coverage only moves up to the block every table has processed, so a lagging dataset can't skip blocks, and the UI says when it's behind.
 - ETH and WETH are one position, so wrapping is never a sale.
@@ -146,10 +179,57 @@ What a wallet held before the first block read is read from the chain too (`eth_
 
 Each transaction's L1 data fee comes from its RPC receipt, because Amp's data doesn't have it. It's added to the gas leg in the server for both data sources, so the dataset's own `legs` table stays L2 only. A fee is read when it's first seen, and again once its block is past the part of the chain re-read for reorgs, because a reorg can change it without moving the transaction. There's no tolerance anywhere: a wrong fee shows up as a mismatch.
 
+## Resolving what we can't work out
+
+The dataset carries a price. What something cost is personal, so each client works it out, in this order:
+
+1. **Paid:** the wallet paid for it in the same transaction.
+2. **Inherited:** it came from one of the user's linked wallets, so it carries over what that wallet paid and when, through any chain of wallets. What's unresolved upstream stays unresolved here.
+3. **Self-reported:** a cost entered in the app, an exchange history's, or an onchain note. A note only counts from the wallet's own zero-value transaction to itself.
+4. **Received at market:** the price when it arrived, once it's known to be someone else's or came from a bridge. It's always shown as an estimate.
+5. **Unknown:** anything else. An unanswered sender stays here, even when it looks like a stranger, because it could be the user's own wallet.
+
+Wallets are only folded together when they were read the same way, by the same pricing rule and in the same currency. A wallet read another way counts as not read yet, so what came from it stays unresolved rather than becoming a gain nobody made. A comparison marks whatever rests on an estimate the same way the main screen does.
+
+A transaction with a WETH unwrap the chain hasn't confirmed yet stays unknown, and nothing asks about it: what it says arrived is only a claim, so no answer can rest on it. Once it settles, it's treated like anything else.
+
+A token's price goes oracle, swap, then `market`: the median of its last few trades at or before that block, from `priced_legs`. It needs 3 transactions of at least $100, $1,000 in all, within 30 minutes, each one plausible at its own block. `priced_legs` doesn't say how deep a pool is, so that's the stand-in for liquidity. A dataset without the `unlisted_moves` table has the wrong rows WORK-346 removed, so it's never read for this.
+
+**Answers stay on the device.** The Mac app and the browser keep them, and send them with each request (`POST /api/portfolio/<address>`, with `/explain`, `/preview`, `/export` and `/compare`, and the pricing rule when one is chosen). The server folds with them and keeps nothing. Costs are kept in the currency they were entered in, and converted at the rate when they arrived. Without that rate, they stay unknown.
+
+A transfer's cost goes to the wallets it actually went to, whichever wallet is open: oldest lots first for the first transfer, or the same mix for each by average cost. An entered exchange cost covers only what had arrived when it was answered, so anything later is asked about in turn. One withdrawal in an exchange history explains one arrival, and when more than one fits, none of them is resolved from it. Native ETH bought in a swap can be an unwrap the account never received, so those `priced_legs` rows never set a market price.
+
+"Who's this?" asks once per address, most useful first. Each answer shows what it would do before it's picked, Undo is always there, and skipping leaves it flagged. A token with no price anywhere isn't asked about: it's listed apart and can't affect PnL. Totals say how much is unresolved and estimated right next to the number, and exports mark every row `exact`, `estimated`, `unresolved` or `no market`.
+
+## Proving a price
+
+Click a price, or Proof, on any row of an explanation. It shows where that price came from, the logs behind it, and each dataset's manifest hash (the "fingerprint"), which identifies the recipe. **Verify** then recomputes that block's commitments in the server from what Amp returns, using [Amp's documented method](https://github.com/edgeandnode/amp/blob/main/docs/feat/verification.md):
+
+- **Block fingerprint:** the header's fields hash to the block's hash.
+- **Transactions:** every transaction rebuilds the header's `transactions_root`, and each one hashes to its stored `tx_hash`.
+- **Results and logs:** every receipt and log rebuilds the header's `receipts_root`.
+- **This activity:** the row's transaction is in that data, and its Transfer logs or ETH value match its amounts. A network fee's L2 part is worked out again from its gas, the block's base fee, and only the fee fields its transaction type hashes. For a swap price, that includes the other side of the exchange.
+
+It's done here and not with `ampctl verify` because that can't check Base: every Base block starts with an OP Stack deposit (type `0x7e`), which it doesn't support. It fails v0.0.42 and nightly `47b6fa2` alike, and today's source still rejects the type. Amp doesn't store what a deposit's hash also covers (`sourceHash`, `mint`, `isSystemTx`), so those three come from `BASE_RPC_URL`. A wrong answer fails the check, because the result has to hash to the block's commitment. Every log and transaction it counts has to be in what's hashed, at the number it's stored with, or the check fails. If the RPC doesn't answer, Transactions says it's not checked. The fingerprints come from Amp's admin API at `AMP_ADMIN_URL`, with the server's token.
+
+What a pass doesn't show, which the interface also says:
+
+- That the header is on Base's real chain. A consistent fake block would pass.
+- That the derived SQL ran correctly. Only the raw dataset's rows are checked, plus the row's amounts against them.
+- An `oracle` price, or the oracle side of a `swap` price, because `eth_call` results aren't in a block's commitments. The same goes for exchange rates and L1 fees, which aren't in the commitments either, so an L1 fee's amount is never compared.
+- That a transaction's `from` is right. Signatures are in the commitment, but aren't recovered to compare them with the stored sender, so a row that takes its account from the sender (fees, ETH sent, unwrapped ETH received) says so.
+
+`server/verify.ts` is the pure part, tested on real rows and on tampered ones. Keccak comes from `@noble/hashes`, since whether Node has it depends on its build. `server/block.ts` reads a block and `server/proof.ts` puts it into words. It's valid for blocks since Canyon (January 2024), because older deposits' receipts are encoded differently.
+
 ## Known gaps
 
+- Sending isn't in the app yet, so "Is this yours?" at send time and linking every account from one device or recovery phrase wait for that. Neither can the app write a note yet, only read one.
+- Exchange names are only as good as the list in `src/core/senders.ts`. Each is checked on Basescan, but Coinbase withdrawals on Base mostly come from addresses without a public name, so most won't say "From a Coinbase address". An imported history still matches them.
+- A cost entered in CAD can't be shown in USD for a wallet read in USD, because that read has no rates. It shows as unresolved there, and never as the wrong number.
 - Only the allowlist in `packages/sdk/src/tokens.ts` gets a position and a price. A transaction that also moves another token is never valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. Internal ETH isn't seen without traces, so it can't trigger this.
-- Only ETH and USDC have a current price, so other tokens show their cost but no value or unrealized PnL yet.
+- Market prices need the Pricetag dataset, so reading the raw dataset, only ETH and USDC have a current price, and other tokens show their cost but no value yet.
 - The dataset nets per token, then only prices an account's single pair. A split route that nets to one token out and one in gets a price. A token that mostly cancels out (under half of what moved is left) is what a router or pool kept, so it gets no price. Paying with ETH and WETH together makes two pairs, so the other token has no price, though the app still knows what was paid. A pair gets no price either when something off the allowlist moved with it, unless that token netted to zero.
-- There are no traces: a WETH `Withdrawal` counts as ETH paid to the transaction's sender, and other internal ETH transfers aren't seen. Smart wallets, whose transactions are sent by a bundler, won't get that ETH.
+- There are no traces: a WETH `Withdrawal` is only a claim that ETH reached the transaction's sender, because a contract can send it elsewhere or keep a cut. The server settles each claim against the wallet's ETH balance before and after its block (`settleUnwraps`). When that can't say how much arrived, the swap's cost and proceeds stay unknown, even if its other token's balance matches.
+- Other internal ETH transfers aren't seen: a smart wallet's ETH from a swap, because a bundler sends its transactions, a swap through a pool that pays out ETH directly, and a bridge deposit's minted ETH (type 126), because `transactions` has no `mint` column. All of these show up as `incomplete`.
+- When ETH is `incomplete`, the server reads its balance around each transaction that took a token and gave nothing back. If ETH rose in that block by more than its transactions explain, that transaction's proceeds become unknown, and ETH's check names it. It isn't valued from that ETH, because a stranger's payment in the same block looks the same. That also means a real send landing beside such a payment shows as unknown. A wallet whose ETH matches costs no extra reads.
 - Rebasing tokens and internal ETH transfers aren't resolved, only flagged. A flagged position's PnL stays unavailable until they are.

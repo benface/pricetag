@@ -23,10 +23,10 @@ let cheapFees = FeeQuote(maxFeePerGas: 10_000_000, maxPriorityFeePerGas: 1_000_0
 
 func usdcUnits(_ dollars: UInt128) -> UInt128 { dollars * 1_000_000 }
 
-func snapshot(eth: UInt128 = oneEth / 100, tokens: [Token: UInt128] = [:], nonce: UInt64 = 0, chainID: UInt64 = Base.chainID, ethUsd: UInt128? = ethPrice, fees: FeeQuote = cheapFees) -> ChainSnapshot {
+func snapshot(eth: UInt128 = oneEth / 100, tokens: [Token: UInt128] = [:], nonce: UInt64 = 0, chainID: UInt64 = Base.chainID, ethUsd: UInt128? = ethPrice, prices: [String: UInt128] = [:], fees: FeeQuote = cheapFees) -> ChainSnapshot {
     var balances: [Token: UInt128] = [Base.eth: eth]
     for (token, balance) in tokens { balances[token] = balance }
-    return ChainSnapshot(chainID: chainID, blockNumber: 1000, nonce: nonce, balances: balances, ethUsdMicros: ethUsd, usdcUsdMicros: Money.dollar, fees: fees)
+    return ChainSnapshot(chainID: chainID, blockNumber: 1000, nonce: nonce, balances: balances, ethUsdMicros: ethUsd, usdcUsdMicros: Money.dollar, otherUsdMicros: prices, fees: fees)
 }
 
 actor FakeChain: ChainClient {
@@ -139,12 +139,24 @@ actor ScriptedPortfolios: PortfolioSource {
 
     func set(_ next: Result<Portfolio, FetchError>) { self.next = next }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], timeout: Duration) throws -> Portfolio {
+    /// Each read's pricing rule. Money only ever moves by the default.
+    private(set) var rules: [String?] = []
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) throws -> Portfolio {
         self.linked.append(linked)
+        rules.append(rule)
         return try next.get()
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) throws -> Explanation {
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) throws -> Proof {
+        throw FetchError.unreachable
+    }
+
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) throws -> Verification {
+        throw FetchError.unreachable
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -154,7 +166,7 @@ actor ScriptedPortfolios: PortfolioSource {
 }
 
 /// A portfolio as the server would send it, from JSON, so the test uses the same decoding as the app.
-func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, outgoing: [String] = [], realized: String? = "0", realizedMissing: Int = 0, positions: [String] = [], unlisted: [String] = []) -> Portfolio {
+func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, outgoing: [String] = [], realized: String? = "0", realizedMissing: Int = 0, estimatedRealized: Bool = false, linkedFailed: [String] = [], positions: [String] = [], unlisted: [String] = []) -> Portfolio {
     let realizedText = realized.map { "\"\($0)\"" } ?? "null"
     let json = """
     {
@@ -171,9 +183,11 @@ func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, ou
         "coverage": {
           "value": { "known": 0, "missing": 0 }, "realized": { "known": 1, "missing": \(realizedMissing) },
           "unrealized": { "known": 0, "missing": 0 }, "pnl": { "known": 0, "missing": 0 }
-        }
+        },
+        "unresolvedMicros": "0", "estimatedMicros": "0", "estimated": { "value": false, "realized": \(estimatedRealized), "unrealized": false }, "noMarket": []
       },
-      "pnlStatus": "complete", "points": []
+      "pnlStatus": "complete", "points": [],
+      "questions": [], "meter": { "open": 0, "answered": 0, "waiting": 0 }, "linkedReading": [], "linkedFailed": [\(linkedFailed.map { "\"\($0)\"" }.joined(separator: ","))], "marketChecked": true
     }
     """
     return try! JSONDecoder().decode(Portfolio.self, from: Data(json.utf8))
@@ -183,8 +197,9 @@ func position(_ asset: String, decimals: Int, priceMicros: String) -> String {
     """
     { "asset": "\(asset)", "decimals": \(decimals), "note": null,
       "price": { "micros": "\(priceMicros)", "source": "market", "blockNum": 1 },
-      "values": { "qty": "0", "unknownCostQty": "0", "costMicros": null, "averageCostMicros": null, "valueMicros": null, "realizedMicros": null, "unrealizedMicros": null },
-      "pnlMicros": null, "shortfallQty": "0", "legCount": 1, "reconciliation": null }
+      "values": { "qty": "0", "unknownCostQty": "0", "costMicros": null, "averageCostMicros": null, "valueMicros": null, "realizedMicros": null, "unrealizedMicros": null, "estimatedCostMicros": "0", "estimatedRealizedMicros": "0" },
+      "pnlMicros": null, "shortfallQty": "0", "legCount": 1, "reconciliation": null, "noMarket": false, "resolvable": false,
+      "estimates": { "cost": false, "value": false, "realized": false, "unrealized": false } }
     """
 }
 

@@ -177,6 +177,16 @@
       "help": null
     }
   ],
+  "linkedFailed": [
+    {
+      "count": 1,
+      "text": "Couldn't read your other wallet, so what came from it may show as unresolved."
+    },
+    {
+      "count": 2,
+      "text": "Couldn't read 2 of your other wallets, so what came from them may show as unresolved."
+    }
+  ],
   "sentences": {
     "methodName": "How cost is worked out",
     "methodHelp": "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest.",
@@ -193,6 +203,71 @@
     "pnlUnavailable": "PnL unavailable",
     "nothingToChart": "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero.",
     "reading": "Reading this wallet's history. The first read can take a minute, then only new activity is read.",
-    "notAnAddress": "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
-  }
+    "notAnAddress": "That isn't a Base address. It should start with 0x, then 40 letters and numbers.",
+    "rulesTitle": "Pricing rule",
+    "rulesHelp": "Prices come from a public recipe anyone can copy and change. Each rule here is one version of it, named by its fingerprint. Switching only changes which one this wallet is read through."
+  },
+  "unseenEth": [
+    {
+      "unseen": [
+        {
+          "blockNum": 53517245,
+          "amount": "827782101642000000",
+          "txHashes": [
+            "0xde3a000000000000000000000000000000000000000000000000000000000000"
+          ]
+        }
+      ],
+      "text": "It lines up with what left this wallet in 0xde3a…0000 (+0.827 ETH): ETH rose by that much in the same block, with no transaction showing it."
+    },
+    {
+      "unseen": [
+        {
+          "blockNum": 1,
+          "amount": "5",
+          "txHashes": [
+            "0xaaaa000000000000000000000000000000000000000000000000000000000000",
+            "0xbbbb000000000000000000000000000000000000000000000000000000000000"
+          ]
+        },
+        {
+          "blockNum": 2,
+          "amount": "1000000000000000000",
+          "txHashes": [
+            "0x2222222222222222222222222222222222222222222222222222222222222222"
+          ]
+        },
+        {
+          "blockNum": 3,
+          "amount": "1000000000000000000",
+          "txHashes": [
+            "0x3333333333333333333333333333333333333333333333333333333333333333"
+          ]
+        },
+        {
+          "blockNum": 4,
+          "amount": "1000000000000000000",
+          "txHashes": [
+            "0x4444444444444444444444444444444444444444444444444444444444444444"
+          ]
+        },
+        {
+          "blockNum": 5,
+          "amount": "1000000000000000000",
+          "txHashes": [
+            "0x5555555555555555555555555555555555555555555555555555555555555555"
+          ]
+        },
+        {
+          "blockNum": 6,
+          "amount": "1000000000000000000",
+          "txHashes": [
+            "0x6666666666666666666666666666666666666666666666666666666666666666"
+          ]
+        }
+      ],
+      "text": "It lines up with what left this wallet in 0xaaaa…0000, 0xbbbb…0000 (+0.000000000000000005 ETH), 0x2222…2222 (+1 ETH), 0x3333…3333 (+1 ETH), 0x4444…4444 (+1 ETH), 0x5555…5555 (+1 ETH), and 1 more: ETH rose by that much in the same block, with no transaction showing it."
+    }
+  ],
+  "manifestHash": "bea12f7575e7…18a1"
 }

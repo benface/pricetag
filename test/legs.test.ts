@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, isSanePrice, pnlOverTime, referenceMarks, ptPrice, sumTotals, tokenByAddress, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
-import { usdView } from "../src/core/currency.ts"
+import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, isSanePrice, pnlOverTime, referenceMarks, ptPrice, sumTotals, tokenByAddress, usdView, type LegRow, type Reference } from "@pricetag/sdk/core"
 import { DEMO_ADDRESS, DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
 
 const ME = "0x00000000000000000000000000000000000000aa"
@@ -12,13 +11,13 @@ const E6 = 10n ** 6n
 function row(tx: string, token: string, side: LegRow["side"], amount: bigint, kind: LegRow["kind"] = token === ETH_ADDRESS ? "eth" : "erc20"): LegRow {
   return { block_num: 100, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: tx, tx_index: 1, log_index: 0, token, account: ME, side, amount: amount.toString(), kind }
 }
-const REF: ReferenceRow = { block_num: 100, eth_usd: "240000000000", usdc_usd: "100000000" }
+const REF: Reference = { blockNum: 100, ethUsd: "240000000000", usdcUsd: "100000000" }
 
-function legsOf(rows: LegRow[], references: ReferenceRow[] = [REF]) {
+function legsOf(rows: LegRow[], references: Reference[] = [REF]) {
   return buildPricedLegs({ account: ME, rows, references, priced: derivePricedRows(rows, references) })
 }
 
-const marks = (references: ReferenceRow[]) => referenceMarks(references)
+const marks = (references: Reference[]) => referenceMarks(references)
 
 describe("pricing a wallet's rows", () => {
   it("a swap uses the oracle for ETH and USDC, and the implied price for the other token", () => {
@@ -67,13 +66,13 @@ describe("pricing a wallet's rows", () => {
   })
 
   it("a failed oracle read leaves no price, never $0", () => {
-    const [leg] = legsOf([row("0x1", ETH_ADDRESS, "credit", E18)], [{ block_num: 100, eth_usd: "", usdc_usd: "" }])
+    const [leg] = legsOf([row("0x1", ETH_ADDRESS, "credit", E18)], [{ blockNum: 100, ethUsd: "", usdcUsd: "" }])
     assert.equal(leg!.priceMicros, null)
     assert.match(leg!.priceNote!, /market price feed/)
   })
 
   describe("a swap's cost and proceeds come from what changed hands", () => {
-    const refAt = (block: number, ethUsd: string): ReferenceRow => ({ block_num: block, eth_usd: ethUsd, usdc_usd: "100000000" })
+    const refAt = (block: number, ethUsd: string): Reference => ({ blockNum: block, ethUsd: ethUsd, usdcUsd: "100000000" })
     const at = (rows: LegRow[], block: number) => rows.map((r) => ({ ...r, block_num: block }))
     // Buys 1 ETH for 2,500 USDC while the oracle says $2,400, then sells it for 2,500 USDC while the oracle says $2,600.
     const rows = [
@@ -124,8 +123,8 @@ describe("pricing a wallet's rows", () => {
     })
 
     describe("with one oracle unavailable, what was paid is still known", () => {
-      const noEth: ReferenceRow = { block_num: 100, eth_usd: "", usdc_usd: "100000000" }
-      const noUsdc: ReferenceRow = { block_num: 100, eth_usd: "240000000000", usdc_usd: "" }
+      const noEth: Reference = { blockNum: 100, ethUsd: "", usdcUsd: "100000000" }
+      const noUsdc: Reference = { blockNum: 100, ethUsd: "240000000000", usdcUsd: "" }
       const eth = (legs: ReturnType<typeof legsOf>) => legs.find((l) => l.asset === "ETH")!
       const usdc = (legs: ReturnType<typeof legsOf>) => legs.find((l) => l.asset === "USDC")!
 
@@ -146,7 +145,7 @@ describe("pricing a wallet's rows", () => {
             row("0x2", ETH_ADDRESS, "debit", E18),
             row("0x2", USDC_ADDRESS, "credit", 2500n * E6),
           ],
-          [{ block_num: 50, eth_usd: "240000000000", usdc_usd: "100000000" }, noEth],
+          [{ blockNum: 50, ethUsd: "240000000000", usdcUsd: "100000000" }, noEth],
         )
         const sale = legs.find((l) => l.txHash === "0x2" && l.asset === "ETH")!
         assert.equal(sale.priceMicros, null)
@@ -180,7 +179,7 @@ describe("pricing a wallet's rows", () => {
       })
 
       it("with both oracles down, nothing can value it", () => {
-        const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 2500n * E6), row("0x1", ETH_ADDRESS, "credit", E18)], [{ block_num: 100, eth_usd: "", usdc_usd: "" }])
+        const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 2500n * E6), row("0x1", ETH_ADDRESS, "credit", E18)], [{ blockNum: 100, ethUsd: "", usdcUsd: "" }])
         assert.equal(eth(legs).costMicros, null)
         assert.equal(usdc(legs).proceedsMicros, null)
       })
@@ -288,7 +287,7 @@ describe("pricing a wallet's rows", () => {
           { ...row("0x2", AERO, "debit", 500n * E18), block_num: 101 },
           { ...row("0x2", USDC_ADDRESS, "credit", 600n * E6), block_num: 101 },
         ]
-        const legs = legsOf(rows, [REF, { ...REF, block_num: 101 }])
+        const legs = legsOf(rows, [REF, { ...REF, blockNum: 101 }])
         const position = foldPositions(legs, method, {}).find((p) => p.asset === "AERO")!
         assert.equal(position.values.realizedMicros, null)
         assert.equal(sumTotals([position]).realizedMicros, null)
@@ -383,7 +382,7 @@ describe("pricing a wallet's rows", () => {
             { ...row("0x2", AERO, "debit", 500n * E18), block_num: 101 },
             { ...row("0x2", USDC_ADDRESS, "credit", 600n * E6), block_num: 101 },
           ]
-          const position = foldPositions(legsOf(rows, [REF, { ...REF, block_num: 101 }]), method, {}).find((p) => p.asset === "AERO")!
+          const position = foldPositions(legsOf(rows, [REF, { ...REF, blockNum: 101 }]), method, {}).find((p) => p.asset === "AERO")!
           assert.equal(position.values.realizedMicros, null)
         })
       }
@@ -442,7 +441,7 @@ describe("pricing a wallet's rows", () => {
     })
 
     it("a known payment still survives an oracle failure when nothing unlisted moved", () => {
-      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 2500n * E6), row("0x1", ETH_ADDRESS, "credit", E18)], [{ block_num: 100, eth_usd: "", usdc_usd: "100000000" }])
+      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 2500n * E6), row("0x1", ETH_ADDRESS, "credit", E18)], [{ blockNum: 100, ethUsd: "", usdcUsd: "100000000" }])
       assert.equal(legs.find((l) => l.asset === "ETH")!.costMicros, "2500000000")
     })
 
@@ -514,7 +513,7 @@ describe("pricing a wallet's rows", () => {
 })
 
 describe("an entirely unknown result stays unavailable", () => {
-  const gasOnly = legsOf([row("0x1", ETH_ADDRESS, "debit", E18 / 1000n, "gas")], [{ block_num: 100, eth_usd: "", usdc_usd: "" }])
+  const gasOnly = legsOf([row("0x1", ETH_ADDRESS, "debit", E18 / 1000n, "gas")], [{ blockNum: 100, ethUsd: "", usdcUsd: "" }])
   const unknownHolding = legsOf([row("0x1", AERO, "credit", E18)])
 
   it("gas with no price and no cost: every total is null, not $0", () => {
@@ -558,7 +557,7 @@ describe("an entirely unknown result stays unavailable", () => {
       { ...row("0x3", ETH_ADDRESS, "debit", 2n * E18), block_num: 102 },
       { ...row("0x3", USDC_ADDRESS, "credit", saleUsdc * E6), block_num: 102 },
     ]
-    const references = [100, 101, 102].map((block) => ({ ...REF, block_num: block }))
+    const references = [100, 101, 102].map((block) => ({ ...REF, blockNum: block }))
     const ethOnly = (rows: LegRow[]) => legsOf(rows, references).filter((l) => l.asset === "ETH")
 
     for (const method of ["average", "fifo"] as const) {
@@ -632,7 +631,7 @@ describe("totals", () => {
 
   it("say what they leave out, and never count unknown as $0", () => {
     const reasons = (asset: string) => totals.excluded.filter((e) => e.asset === asset).map((e) => e.reason)
-    assert.deepEqual(reasons("cbBTC"), ["no current price", "unknown cost"])
+    assert.deepEqual(reasons("cbBTC"), ["unknown cost"])
     assert.ok(reasons("ETH").includes("unknown cost"))
     assert.ok(totals.coverage.unrealized.missing > 0)
     const known = positions.filter((p) => p.values.unrealizedMicros !== null)
@@ -658,8 +657,10 @@ describe("totals", () => {
     assert.equal(aero.values.averageCostMicros, "1249750")
     assert.equal(aero.values.realizedMicros, "74985000")
     assert.equal(aero.values.qty, (500n * E18).toString())
-    assert.equal(aero.values.unrealizedMicros, null)
-    assert.equal(aero.values.valueMicros, null)
+    // 500 at its $1.40 market price, less the $624.875 they cost. Its value rests on recent trades, so it's an estimate.
+    assert.equal(aero.values.valueMicros, "700000000")
+    assert.equal(aero.values.unrealizedMicros, "75125000")
+    assert.deepEqual(aero.estimates, { cost: false, value: true, realized: false, unrealized: true })
   })
 
   it("the demo wallet's rows are still that wallet's", () => {
