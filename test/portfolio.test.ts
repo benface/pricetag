@@ -277,6 +277,15 @@ describe("the portfolio API", () => {
     assert.equal(after!.pending, false)
   })
 
+  it("says a wallet can't be read when there's no data source, rather than reading it forever", async () => {
+    const stranger = "0x000000000000000000000000000000000000be11"
+    const book = { senders: { [stranger]: { kind: "mine" } } }
+    const { body } = await post("/api/portfolio/demo/preview", { method: "average", candidates: [book] })
+    assert.deepEqual((body.previews as { failed: boolean; pending: boolean }[]).map((p) => [p.failed, p.pending]), [[true, true]])
+    const portfolio = (await post("/api/portfolio/demo", { method: "average", book })).body as unknown as PortfolioResponse
+    assert.deepEqual([portfolio.linkedReading, portfolio.linkedFailed], [[], [stranger]])
+  })
+
   it("explains a number with the answers it's sent", async () => {
     const { status, body } = await post("/api/portfolio/demo/explain?asset=USDC&metric=amount", { method: "average", book: mine })
     assert.equal(status, 200)

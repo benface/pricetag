@@ -212,6 +212,8 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
         )
         wallet = wallets.peek(address)
       }
+      // With no data source, only the demo's own wallets can ever be read, so this one isn't still reading.
+      if (!wallet && !wallets) linkedFailures.add(address)
       if (!wallet) continue
       const converted = await inCurrency(wallet, currency, res)
       if (!converted) return null
