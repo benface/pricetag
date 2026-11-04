@@ -118,15 +118,15 @@ function scopeOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: CurrencyC
   ]
   const update = behind?.update
   const seed = isSeed(update)
-  const called = "Chainlink's price comes from calling a contract, and block headers don't record calls"
-  const notFound = seed ? `this dataset started after Chainlink's last update, so ${called[0]!.toLowerCase()}${called.slice(1)}` : "the update behind it couldn't be found"
+  const called = "block headers don't record calls"
+  const notFound = seed ? `this dataset started after Chainlink's last update, so its price comes from calling a contract, and ${called}` : "the update behind it couldn't be found"
   if (update && !seed) {
     const block = update.block_num.toLocaleString("en-US")
     const covered = leg.priceSource === "oracle" ? `It covers this price, the transaction and ${leg.kind === "gas" ? "the fee paid to Base" : "the amounts"}` : "It covers the amounts exchanged and Chainlink's price, used to value them"
     scope.push(`${covered}: Chainlink publishes each update as a log, so block ${block} is checked too, and its log has to say ${behind?.byRule ? "the price this rule starts from" : "this price"}.`)
     scope.push(`That shows what Chainlink published. It doesn't show that Chainlink's number is right. That this update was still the latest at block ${leg.blockNum.toLocaleString("en-US")} comes from the dataset's calculations.`)
   } else {
-    if (leg.priceSource === "oracle") scope.push(`It doesn't cover this price: ${behind ? notFound : called}. It covers the transaction and ${leg.kind === "gas" ? "the fee paid to Base" : "the amounts"}.`)
+    if (leg.priceSource === "oracle") scope.push(`It doesn't cover this price: ${behind ? notFound : `Chainlink's price comes from calling a contract, and ${called}`}. It covers the transaction and ${leg.kind === "gas" ? "the fee paid to Base" : "the amounts"}.`)
     if (leg.priceSource === "swap") scope.push(`It covers the amounts exchanged. It doesn't cover Chainlink's price, used to value them, because ${behind ? notFound : "block headers don't record calls to a contract"}.`)
   }
   if (hasEthereumFee) scope.push("It doesn't cover the fee paid to Ethereum, which only Base's receipts have.")
