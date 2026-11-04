@@ -54,7 +54,7 @@ Holding a key needs a provisioned build, which `pnpm mac` makes when the team pi
 The server is the only thing that talks to Amp, so the token never reaches the browser or the Mac app. It can read from either:
 
 - **The Pricetag dataset**, when `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` are set. This is the design: the dataset carries the price.
-- **The raw Base dataset**, otherwise. It reads the wallet's transactions and logs, and the oracle with `eth_call`, then derives the same rows at query time. A wallet's first read takes about 15 s for an hour of blocks (longer for a busy wallet), and it only looks back `PRICETAG_HISTORY_BLOCKS`.
+- **The raw Base dataset**, otherwise. It reads the wallet's transactions and logs, and the oracle with `eth_call`, then derives the same rows at query time. A wallet's first read takes about 15 s for an hour of blocks (longer for a busy wallet), and it only looks back an hour, or `PRICETAG_HISTORY_BLOCKS` if that's set.
 
 Both go through the same path after that, and they gave identical legs on the wallet they were compared on.
 
@@ -68,13 +68,21 @@ pnpm dev
 pnpm amp:stop    # stops it and deletes its data
 ```
 
-`amp:start` runs `ampd solo` on localhost with a throwaway Docker Postgres, then deploys a raw Base dataset and the Pricetag dataset (`dataset/pricetag.json`) from `PRICETAG_HISTORY_BLOCKS` before the head, 1,800 blocks (an hour) by default. Every start computes a new start block and begins empty, because `amp:stop` deletes everything. Only one local Amp can run at a time, because its ports are fixed.
+`amp:start` runs `ampd solo` on localhost with a throwaway Docker Postgres, then deploys a raw Base dataset and the Pricetag dataset (`dataset/pricetag.json`) from `PRICETAG_HISTORY_BLOCKS` before the head, 1,800 blocks by default. That's 6 minutes of Base's 200 ms blocks, because each block costs the same requests however long it took. Every start computes a new start block and begins empty, because `amp:stop` deletes everything. Only one local Amp can run at a time, because its ports are fixed.
 
 It adds a marked block to the end of `.env.local` that points the app at the local Amp and sets `PRICETAG_START_BLOCK`. That block overrides your own values while Amp runs, and `amp:stop` removes it, so nothing else changes. To read from a hosted Amp instead, don't start the local one, and set `AMP_QUERY_URL`, `AMP_QUERY_TOKEN`, `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` yourself.
 
 **Use a dedicated RPC for a demo.** `BASE_RPC_URL` in `.env.local` defaults to the public `https://mainnet.base.org`, which allows 25 requests a second per IP and is shared with anything else on your network. A failed `eth_call` stops the whole dataset until its retry succeeds. To avoid that, `amp:start` runs a small relay (`scripts/rpc-throttle.ts`) that holds requests to `BASE_RPC_RATE_LIMIT` a second, 20 by default, and retries 429s. Raise it to whatever a dedicated RPC allows. Of Amp's processes, only the relay gets `BASE_RPC_URL`. The app's server also uses it, for L1 fees. Neither ever logs it. Never commit a key.
 
-On the public RPC, a fresh start takes about 9 minutes for the default hour of blocks. For a quicker one, use `PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start`, which takes about 2 minutes.
+**From Base's 200 ms blocks on (November 5, 2026, 18:00 UTC), a local Amp can't keep up on the public RPC, so run a demo against a hosted Amp.** Five blocks a second cost 10 requests for the raw dataset and 10 `eth_call`s for `reference_prices`. Measured with this script on Base Sepolia, which already has these blocks, starting 300 blocks back:
+
+| RPC, requests a second | Raw dataset | `reference_prices` |
+| --- | --- | --- |
+| `sepolia.base.org`, 20 | Reached the head in about 70 s, then 3–8 blocks behind | Fell further behind, by about 1.4 blocks a second |
+| `sepolia.base.org`, 25 | Reached the head in about 60 s | Stayed about 670 blocks behind and slowly grew |
+| PublicNode, 35 | 3–7 blocks behind, and `legs` too | Fell further behind, by about 0.5 blocks a second |
+
+A higher limit didn't fix it, so the limit looks like how long each `eth_call` takes. `pnpm amp:start` still starts, and says when it gives up waiting. Before those blocks, a fresh start took about 9 minutes for 1,800 blocks.
 
 ## Forking a pricing rule
 

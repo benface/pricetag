@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { LAST_2S_BLOCK as LAST, blockBefore, msBetweenBlocks } from "@pricetag/sdk/core"
+import type { Query } from "@pricetag/sdk/internal"
+import { rawSource } from "../server/source.ts"
 
 describe("Base's block times", () => {
   it("is the first block at or after the upgrade, counting 2 s from genesis", () => {
@@ -41,5 +43,14 @@ describe("Base's block times", () => {
         assert.ok(msBetweenBlocks(before + 1, block) < ms, `${block} ${ms}`)
       }
     }
+  })
+
+  it("reads an hour of history unless it's told how many blocks", () => {
+    const query = (async () => []) as unknown as Query
+    const source = (historyBlocks: number | null) => rawSource(query, { baseDataset: "base", network: "base_mainnet", historyBlocks })
+    assert.equal(source(null).historyFrom?.(1000), 0)
+    assert.equal(source(null).historyFrom?.(5000), 3200)
+    assert.equal(source(null).historyFrom?.(LAST + 20_000), LAST + 2000)
+    assert.equal(source(300).historyFrom?.(LAST + 20_000), LAST + 19_700)
   })
 })

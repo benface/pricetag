@@ -634,8 +634,8 @@ describe("market prices, notes and unlisted tokens", () => {
   })
 
   it("keeps a market read's bucket and age about as long in time after the 200 ms upgrade", async () => {
-    const head = LAST_2S_BLOCK + 9000
-    const { source, reads } = marketFake(new Map([[LAST_2S_BLOCK + 8000, [aeroRow(LAST_2S_BLOCK + 8000)]]]), { startBlock: LAST_2S_BLOCK })
+    const head = LAST_2S_BLOCK + 20_000
+    const { source, reads } = marketFake(new Map([[LAST_2S_BLOCK + 19_000, [aeroRow(LAST_2S_BLOCK + 19_000)]]]), { startBlock: LAST_2S_BLOCK + 18_000 })
     await createWallets(source, headAt(head), noFees).get(ME)
     const bucket = head - (head % 300)
     assert.ok(reads.some(([, from, to]) => to === bucket && msBetweenBlocks(from, to) === 1_800_000), JSON.stringify(reads))

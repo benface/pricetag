@@ -735,6 +735,33 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(await rig.signer.hasKey(hotAddress))
     }
 
+    @Test func historyKeepsItsMinuteOnceBlocksAre200Ms() async throws {
+        var current = snapshot(eth: 0)
+        current.blockNumber = 60_000_000
+        let rig = await Rig(current, portfolio: .success(portfolio(toBlock: 60_000_000)))
+        await rig.wallet.readHistory()
+        await rig.wallet.replaceKey()
+        await rig.wallet.tick()
+        // 20 s later. At 2 s a block this would be over three minutes, and too old to delete a key on.
+        current.blockNumber = 60_000_100
+        await rig.chain.set(current)
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(rig.wallet.address == nextAddress)
+    }
+
+    @Test func historyOverAMinuteOldStaysTooOldOnceBlocksAre200Ms() async throws {
+        var current = snapshot(eth: 0)
+        current.blockNumber = 60_000_000
+        let rig = await Rig(current, portfolio: .success(portfolio(toBlock: 60_000_000)))
+        await rig.wallet.readHistory()
+        await rig.wallet.replaceKey()
+        await rig.wallet.tick()
+        current.blockNumber = 60_000_301
+        await rig.chain.set(current)
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(await rig.signer.hasKey(hotAddress))
+    }
+
     @Test func aTokenThatShowsUpInTheNewerBlocksStopsTheDeletion() async throws {
         var current = snapshot(eth: 0)
         current.blockNumber = 2000

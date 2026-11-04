@@ -10,7 +10,7 @@ Start the dataset, then print any Base wallet's positions and PnL:
 
 ```sh
 pnpm install
-PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start   # a local Amp at chain head, in about 2 minutes. See the main README.
+PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start   # a local Amp. See the main README for how well it keeps up.
 pnpm example 0xb4cb800910b228ed3d0834cf79d697127bbb00e5
 pnpm amp:stop                                # stops it and deletes its data
 ```
@@ -109,7 +109,7 @@ L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anyt
 
 A position's `reconciliation.status` is `reconciled` when its legs add up to its onchain balance to the smallest unit, `incomplete` when they don't, and `unchecked` when a read is missing. Only a reconciled position shows PnL. Otherwise its amount and value come from the chain, and its cost and PnL are `null`.
 
-A client keeps each wallet's rows in memory, so another call on the same client only reads new blocks. A read with a `to` is re-read on each new block until `to` is 30 blocks behind the chain's head, because a reorg can still change it. After that, it's fixed. It also reads at most 200 L1 fees per call, so a busy wallet's ETH stays `unchecked` for its first few calls while they catch up.
+A client keeps each wallet's rows in memory, so another call on the same client only reads new blocks. A read with a `to` is re-read on each new block until `to` is a minute behind the chain's head, because a reorg can still change it. After that, it's fixed. It also reads at most 200 L1 fees per call, so a busy wallet's ETH stays `unchecked` for its first few calls while they catch up.
 
 ### Other things to check
 
