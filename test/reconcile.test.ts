@@ -1,13 +1,9 @@
 import assert from "node:assert/strict"
-import { usdMarkPrice } from "../src/core/currency.ts"
 import { describe, it } from "node:test"
 import { balancesByAsset, decodeBalanceResults, encodeBalanceCalls, MULTICALL3 } from "../server/balances.ts"
 import { USD_CONTEXT, explainMetric, explainTotal, mismatchCause } from "../src/core/explain.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
-import { buildPricedLegs, type LegRow, type ReferenceRow } from "../src/core/legs.ts"
-import { foldPositions, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets } from "../src/core/portfolio.ts"
-import { openingLegs, type Onchain } from "../src/core/reconcile.ts"
-import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS } from "../src/core/tokens.ts"
+import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, foldPositions, openingLegs, pnlOverTime, referenceMarks, sumTotals, unconfirmedAssets, unreadAssets, type LegRow, type Onchain, type ReferenceRow } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 const E18 = 10n ** 18n
@@ -97,7 +93,7 @@ describe("a missed internal ETH transfer", () => {
   it("is out of every point on the chart, and the last point still matches the headline", () => {
     const legs = legsOf(WALLET_ROWS)
     const incomplete = new Set(["ETH"])
-    const points = pnlOverTime(legs, "average", PRICES, usdMarkPrice({ references: [REF] }), { blockNum: 200, timestamp: "2026-11-04T00:00:00.000Z" }, incomplete)
+    const points = pnlOverTime(legs, "average", PRICES, referenceMarks([REF]), { blockNum: 200, timestamp: "2026-11-04T00:00:00.000Z" }, incomplete)
     assert.ok(points.at(-1)!.excludedCount > 0)
     assert.equal(points.at(-1)!.pnlMicros, sumTotals(positions).pnlMicros)
   })
@@ -150,7 +146,7 @@ describe("a wallet with an opening balance", () => {
   })
 
   it("makes no point on the chart of its own, since it isn't a transaction", () => {
-    const points = pnlOverTime(legs, "average", PRICES, usdMarkPrice({ references: [REF] }), null)
+    const points = pnlOverTime(legs, "average", PRICES, referenceMarks([REF]), null)
     assert.ok(points.every((p) => p.txHash !== ""))
   })
 })
@@ -218,7 +214,7 @@ describe("a known mismatch, when the next check can't run", () => {
   const legs = buildPricedLegs({ account: ME, rows, references: [SWAP_REF], priced: [] })
   const fold = (state: Onchain) => foldPositions(legs, "average", PRICES, state)
   const eth = (state: Onchain) => assetOf(fold(state), "ETH")
-  const chartEnd = (state: Onchain) => pnlOverTime(legs, "average", PRICES, usdMarkPrice({ references: [SWAP_REF] }), { blockNum: 200, timestamp: "2026-11-04T00:00:00.000Z" }, unconfirmedAssets(fold(state))).at(-1)!
+  const chartEnd = (state: Onchain) => pnlOverTime(legs, "average", PRICES, referenceMarks([SWAP_REF]), { blockNum: 200, timestamp: "2026-11-04T00:00:00.000Z" }, unconfirmedAssets(fold(state))).at(-1)!
 
   const mismatch = onchain({ ETH: E18 + E18 / 2n, USDC: 0n })
   const readFailed: Onchain = { balances: null, l1FeeUnknownTxs: [] }
@@ -266,20 +262,20 @@ describe("what the chart leaves out", () => {
     const legs = legsOf([row(USDC_ADDRESS, "credit", 5n), row(USDC_ADDRESS, "debit", 5n)])
     const positions = foldPositions(legs, "average", PRICES, onchain({ USDC: 0n, ETH: E18 }))
     assert.equal(sumTotals(positions).pnlMicros, null)
-    const end = pnlOverTime(legs, "average", PRICES, usdMarkPrice({ references: [REF] }), latest, unconfirmedAssets(positions)).at(-1)!
+    const end = pnlOverTime(legs, "average", PRICES, referenceMarks([REF]), latest, unconfirmedAssets(positions)).at(-1)!
     assert.equal(end.pnlMicros, null)
     assert.equal(end.excludedCount, 1)
   })
 
   it("counts it at every point, because we can't tell when it started", () => {
     const legs = legsOf([row(USDC_ADDRESS, "credit", 5n), row(USDC_ADDRESS, "debit", 5n)])
-    const points = pnlOverTime(legs, "average", PRICES, usdMarkPrice({ references: [REF] }), latest, new Set(["ETH"]))
+    const points = pnlOverTime(legs, "average", PRICES, referenceMarks([REF]), latest, new Set(["ETH"]))
     assert.ok(points.every((p) => p.excludedCount >= 1))
   })
 
   it("a wallet with no activity at all still ends on an unavailable point, not an empty chart that disagrees", () => {
     const positions = foldPositions([], "average", PRICES, onchain({ ETH: E18 }))
-    const points = pnlOverTime([], "average", PRICES, usdMarkPrice({ references: [] }), latest, unconfirmedAssets(positions))
+    const points = pnlOverTime([], "average", PRICES, referenceMarks([]), latest, unconfirmedAssets(positions))
     assert.deepEqual(points.map((p) => [p.pnlMicros, p.excludedCount]), [[null, 1]])
     assert.equal(sumTotals(positions).pnlMicros, null)
   })
@@ -292,7 +288,7 @@ describe("what the chart leaves out", () => {
     assert.equal(totals.valueMicros, null)
     assert.equal(totals.pnlMicros, null)
     assert.deepEqual(totals.excluded, [{ asset: "ETH", reason: "balance couldn't be read" }, { asset: "USDC", reason: "balance couldn't be read" }])
-    const end = pnlOverTime([], "average", PRICES, usdMarkPrice({ references: [] }), latest, unconfirmedAssets(positions, unread)).at(-1)!
+    const end = pnlOverTime([], "average", PRICES, referenceMarks([]), latest, unconfirmedAssets(positions, unread)).at(-1)!
     assert.equal(end.pnlMicros, null)
     assert.equal(end.excludedCount, 2)
   })
@@ -303,7 +299,7 @@ describe("what the chart leaves out", () => {
   })
 
   it("a wallet with nothing wrong and no activity has no points", () => {
-    assert.deepEqual(pnlOverTime([], "average", PRICES, usdMarkPrice({ references: [] }), latest, new Set()), [])
+    assert.deepEqual(pnlOverTime([], "average", PRICES, referenceMarks([]), latest, new Set()), [])
   })
 })
 

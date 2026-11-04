@@ -2,11 +2,10 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { isAddress, type Head, type WalletResponse } from "../src/core/api.ts"
+import { createQuery, describeError, isAddress, type Method } from "@pricetag/sdk"
+import type { Head, WalletResponse } from "../src/core/api.ts"
 import { isCurrencyCode, type CurrencyCode } from "../src/core/currency.ts"
 import { DEMO_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
-import type { Method } from "../src/core/fold.ts"
-import { createQuery, describeError } from "./amp.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
 import { createRates } from "./rates.ts"
 import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"

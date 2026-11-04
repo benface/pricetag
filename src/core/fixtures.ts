@@ -2,11 +2,9 @@
 // swaps, gas, a wrap, a plain transfer with an unknown cost, an absurd swap price, a sale of unknown-cost tokens, a swap
 // that also moved a token off the allowlist, an opening balance, and a balance the legs don't explain.
 
+import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, normalizeAddress, openingLegs, type LegKind, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
 import type { CurrencyCode, Rates } from "./currency.ts"
-import { buildPricedLegs, derivePricedRows, type LegKind, type LegRow, type ReferenceRow } from "./legs.ts"
-import { openingLegs } from "./reconcile.ts"
-import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, normalizeAddress } from "./tokens.ts"
 
 export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
 

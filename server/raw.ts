@@ -1,9 +1,8 @@
 // Builds rows in the `legs` shape from raw `transactions` and `logs` rows, the same way the dataset's tables do.
 // Pure, so it can be tested without Amp.
 
+import { ETH_ADDRESS, WETH_ADDRESS, normalizeAddress, tokenByAddress, type LegRow } from "@pricetag/sdk/core"
 import type { RateRound } from "../src/core/currency.ts"
-import type { LegRow } from "../src/core/legs.ts"
-import { ETH_ADDRESS, WETH_ADDRESS, normalizeAddress, tokenByAddress } from "../src/core/tokens.ts"
 
 export const TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 export const DEPOSIT_TOPIC = "e1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"

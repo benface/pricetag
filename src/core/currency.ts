@@ -4,9 +4,8 @@
 // at 1.40 is a real gain in CAD. So this runs before the fold, which then adds up amounts that are already in CAD.
 // A missing rate makes an amount null, which the fold already treats as unknown. It's never filled in from another day.
 
+import { referenceMarks, type LatestPrices, type MarkPrice, type PricedLeg } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
-import { answerToMicros, type PricedLeg } from "./legs.ts"
-import type { LatestPrices, MarkPrice } from "./portfolio.ts"
 
 export type CurrencyCode = "USD" | "CAD"
 
@@ -64,15 +63,6 @@ const convert = (usdMicros: string | null, answer: bigint): string | null => (us
 /** What one USD buys, in millionths of the currency. */
 const rateOf = (answer: bigint) => ((E6 * E8) / answer).toString()
 
-/** What a converted leg was in USD, and the rate that took it there. */
-export type LegConversion = {
-  priceUsdMicros: string | null
-  costUsdMicros: string | null
-  proceedsUsdMicros: string | null
-  /** What one USD bought at this leg's block, or null when there's no rate for it. */
-  rateMicros: string | null
-}
-
 /** A wallet ready to fold: its money in `currency`, and what's needed to say how it got there. */
 export type WalletView = {
   currency: CurrencyCode
@@ -85,20 +75,9 @@ export type WalletView = {
   missingRateTxs: string[]
 }
 
-/** Each block's oracle prices, as they are. */
-export function usdMarkPrice(wallet: Pick<WalletResponse, "references">): MarkPrice {
-  const refs = new Map(wallet.references.map((r) => [r.block_num, r]))
-  return (blockNum, asset) => {
-    const ref = refs.get(blockNum)
-    if (asset === "ETH") return answerToMicros(ref?.eth_usd)
-    if (asset === "USDC") return answerToMicros(ref?.usdc_usd)
-    return null
-  }
-}
-
 /** The wallet as its own USD facts, whatever its currency. */
 export function usdView(wallet: WalletResponse): WalletView {
-  return { currency: "USD", legs: wallet.legs, prices: wallet.prices, markPrice: usdMarkPrice(wallet), latestRate: null, missingRateTxs: [] }
+  return { currency: "USD", legs: wallet.legs, prices: wallet.prices, markPrice: referenceMarks(wallet.references), latestRate: null, missingRateTxs: [] }
 }
 
 export function viewWallet(wallet: WalletResponse): WalletView {
@@ -135,7 +114,7 @@ export function viewWallet(wallet: WalletResponse): WalletView {
     }
   }
 
-  const usdMark = usdMarkPrice(wallet)
+  const usdMark = referenceMarks(wallet.references)
   return {
     currency: wallet.currency,
     legs,

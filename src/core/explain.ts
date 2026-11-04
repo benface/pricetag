@@ -1,11 +1,8 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
+import { TOKENS, foldPositions, pnlOverTime, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
 import { CURRENCIES, usdView, type CurrencyCode, type WalletView } from "./currency.ts"
-import type { Method } from "./fold.ts"
-import type { PricedLeg } from "./legs.ts"
-import { foldPositions, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type PnlPoint, type Position, type Totals } from "./portfolio.ts"
-import { TOKENS, tokenByAddress } from "./tokens.ts"
 import { formatAmount, formatMoney, formatPrice, formatRate, formatSignedMoney, shortHash } from "./format.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"

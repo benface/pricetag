@@ -1,12 +1,10 @@
 // The portfolio a wallet's legs fold into, for clients that don't run the fold themselves.
 // One source of PnL logic: this calls what the browser calls, and adds nothing to the math.
 
-import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PnlStatus, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
+import { TOKENS, foldPositions, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Method, type Position, type Totals } from "@pricetag/sdk/core"
+import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
 import { viewWallet, type CurrencyCode, type WalletView } from "../src/core/currency.ts"
 import { describeConversion, describeEffect, describeNetting, explainContext, explainTarget, rateSource, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
-import type { Method } from "../src/core/fold.ts"
-import { foldPositions, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Position, type Totals } from "../src/core/portfolio.ts"
-import { TOKENS } from "../src/core/tokens.ts"
 
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS = 200
@@ -33,11 +31,6 @@ function positionOf({ asset, decimals, price, values, state, effects, reconcilia
     return unrealized === null ? null : (BigInt(realized) + BigInt(unrealized)).toString()
   })()
   return { asset, decimals, note: asset === "ETH" ? "incl. WETH" : null, price, values, pnlMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length, reconciliation }
-}
-
-function pnlStatusOf(totals: Totals, gasUnknownTxs: readonly string[]): PnlStatus {
-  if (totals.pnlMicros === null) return "unavailable"
-  return totals.excluded.length === 0 && !totals.unpricedGas && gasUnknownTxs.length === 0 ? "complete" : "partial"
 }
 
 function exchangeOf(view: WalletView): PortfolioExchange | null {
@@ -67,7 +60,7 @@ export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioRe
     unreadAssets: unread,
     positions: positions.map(positionOf),
     totals,
-    pnlStatus: pnlStatusOf(totals, wallet.gasUnknownTxs),
+    pnlStatus: pnlStatus(totals, wallet.gasUnknownTxs),
     points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread)),
   }
 }

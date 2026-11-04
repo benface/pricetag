@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef } from "react"
+import type { LegEffect } from "@pricetag/sdk/core"
 import type { CurrencyCode } from "../core/currency.ts"
-import type { LegEffect } from "../core/portfolio.ts"
 import { formatPrice, formatSignedAmount, formatTime, shortHash } from "../core/format.ts"
 import { describeConversion, describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
 
