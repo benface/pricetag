@@ -5,7 +5,8 @@ import { usdOf, type CostLabel, type FoldLeg } from "./fold.ts"
 import { normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
 
 export type PriceSource = "oracle" | "swap" | "market"
-export type LegKind = "erc20" | "eth" | "gas" | "wrap" | "unwrap"
+/** `unlisted`: a transfer of a token off the allowlist. It has no position or price, but it says money went elsewhere. */
+export type LegKind = "erc20" | "eth" | "gas" | "wrap" | "unwrap" | "unlisted"
 
 /** A row of `legs`. `token` and `account` are 0x-prefixed lowercase hex, `amount` a decimal string. */
 export type LegRow = {
@@ -92,7 +93,8 @@ export function derivePricedRows(rows: readonly LegRow[], references: readonly R
   const refs = new Map(references.map((r) => [r.block_num, r]))
   const byTx = new Map<string, LegRow[]>()
   for (const row of rows) {
-    if (row.kind === "gas") continue
+    // Like the dataset's `legs`, which pairs are made from: gas isn't traded, and unlisted tokens have no decimals.
+    if (row.kind === "gas" || row.kind === "unlisted") continue
     const key = `${row.account}:${row.tx_hash}`
     byTx.set(key, [...(byTx.get(key) ?? []), row])
   }
@@ -142,6 +144,9 @@ function isSaneAgainstOracle(impliedUsdMicros: bigint, oracleUsdMicros: string):
 }
 
 const REJECTED_NOTE = "Rejected this swap's implied price, because it's far from any plausible value."
+const UNLISTED_NOTE = "This transaction also moved a token off the allowlist, so what was paid or received can't be split between them."
+
+const isPlainAmount = (amount: string) => /^\d+$/.test(amount)
 
 type Input = {
   account: string
@@ -196,17 +201,31 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     }
 
     const nets = new Map<string, { token: Token; delta: bigint; parts: LegRow[] }>()
+    const unlisted = new Map<string, bigint>()
+    let unlistedUnreadable = false
     for (const row of txRows) {
       if (row.kind === "gas") continue
       const token = tokenByAddress(row.token)
-      if (!token) continue
+      if (!token) {
+        if (isPlainAmount(row.amount)) unlisted.set(row.token, (unlisted.get(row.token) ?? 0n) + (row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)))
+        else unlistedUnreadable = true
+        continue
+      }
       const net = nets.get(token.asset) ?? { token: TOKENS.find((t) => t.symbol === token.asset)!, delta: 0n, parts: [] }
       net.delta += row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
       net.parts.push(row)
       nets.set(token.asset, net)
     }
     const moved = [...nets.values()].filter((n) => n.delta !== 0n)
-    const isSwap = moved.length === 2 && moved.some((n) => n.delta > 0n) && moved.some((n) => n.delta < 0n)
+    // One token out and one in is only a swap if nothing else moved. Otherwise the payment could be for both.
+    const unlistedMoves = [...unlisted.values()].filter((delta) => delta !== 0n)
+    const hasUnlisted = unlistedUnreadable || unlistedMoves.length > 0
+    const isSwap = !hasUnlisted && moved.length === 2 && moved.some((n) => n.delta > 0n) && moved.some((n) => n.delta < 0n)
+    // Something left and something arrived, but it can't be valued as a swap. It's still not a plain transfer: a debit
+    // here was traded for something, so it has unknown proceeds, rather than no gain or loss at all.
+    const anyOut = moved.some((n) => n.delta < 0n) || unlistedMoves.some((delta) => delta < 0n)
+    const anyIn = moved.some((n) => n.delta > 0n) || unlistedMoves.some((delta) => delta > 0n)
+    const isExchange = isSwap || unlistedUnreadable || (anyOut && anyIn)
     const pricedRow = priced.find((p) => p.tx_hash === first.tx_hash && p.account === me)
 
     const resolved = moved.map((net) => {
@@ -215,7 +234,8 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
       let priceNote: string | null = null
       let rejected = false
       if (net.token.oracle && price === null) priceNote = "The oracle read failed at this block."
-      if (!net.token.oracle) {
+      if (hasUnlisted) priceNote = UNLISTED_NOTE
+      else if (!net.token.oracle) {
         const swap = pricedRow?.priced.source === "swap" && pricedRow.priced.token === net.token.symbol ? pricedRow.priced.usd_micros : null
         if (swap === null) priceNote = isSwap ? "This swap didn't give a usable price for this token." : "No swap in this transaction, and no oracle for this token."
         else if (!isSwap) priceNote = "This transaction isn't a simple swap."
@@ -261,7 +281,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         asset: net.token.asset,
         delta: net.delta.toString(),
         decimals: net.token.decimals,
-        kind: isSwap ? "swap" : "transfer",
+        kind: isExchange ? "swap" : "transfer",
         priceUsdMicros: price,
         priceSource,
         priceNote,

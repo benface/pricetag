@@ -40,6 +40,7 @@ const log = (partial: Partial<RawLog>): RawLog => ({
   topic0: TRANSFER_TOPIC,
   topic1: null,
   topic2: null,
+  topic3: null,
   data: (500).toString(16).padStart(64, "0"),
   ...partial,
 })
@@ -99,6 +100,30 @@ describe("rows from raw data", () => {
       ["debit", "500", USDC_ADDRESS, `0x${ME}`],
       ["credit", "500", USDC_ADDRESS, `0x${ME}`],
     ])
+  })
+
+  describe("tokens off the allowlist", () => {
+    const JACK = "000000000000000000000000000000000000f00d"
+
+    it("a transfer is kept as evidence, on both sides", () => {
+      const logs = [log({ address: JACK, topic1: pad(ME), topic2: pad(OTHER) }), log({ address: JACK, topic1: pad(OTHER), topic2: pad(ME) })]
+      const { rows } = legRowsFromRaw({ ...empty, account: ME, logs })
+      assert.deepEqual(rows.map((r) => [r.kind, r.side, r.amount, r.token]), [
+        ["unlisted", "debit", "500", `0x${JACK}`],
+        ["unlisted", "credit", "500", `0x${JACK}`],
+      ])
+    })
+
+    it("an NFT counts too, identified by its token id", () => {
+      const logs = [log({ address: JACK, topic1: pad(OTHER), topic2: pad(ME), topic3: pad("2a"), data: "" })]
+      const { rows } = legRowsFromRaw({ ...empty, account: ME, logs })
+      assert.deepEqual(rows.map((r) => [r.kind, r.side, r.amount]), [["unlisted", "credit", "42"]])
+    })
+
+    it("a contract that isn't WETH can't fake a Deposit or a Withdrawal", () => {
+      const logs = [log({ address: JACK, topic0: DEPOSIT_TOPIC, topic1: pad(ME) }), log({ address: USDC_ADDRESS.slice(2), topic0: WITHDRAWAL_TOPIC, topic1: pad(ME) })]
+      assert.equal(legRowsFromRaw({ ...empty, account: ME, logs }).rows.length, 0)
+    })
   })
 
   it("WETH's Deposit and Withdrawal count, since WETH emits no Transfer for them", () => {

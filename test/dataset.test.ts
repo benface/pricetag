@@ -49,6 +49,23 @@ describe("the committed manifest", () => {
   })
 })
 
+describe("unlisted_legs", () => {
+  const sql = manifest.tables.unlisted_legs!.input.sql
+
+  it("keeps out every allowlisted token, and covers fungible and NFT transfers", () => {
+    for (const token of TOKENS) {
+      if (token.address !== ETH_ADDRESS) assert.ok(sql.includes(token.address.slice(2)), token.symbol)
+    }
+    assert.match(sql, /address NOT IN/)
+    assert.match(sql, /topic3 IS NULL/)
+    assert.match(sql, /topic3 IS NOT NULL/)
+  })
+
+  it("isn't part of legs, so it can't make pairs of tokens with no decimals", () => {
+    assert.doesNotMatch(manifest.tables.legs!.input.sql, /unlisted_legs/)
+  })
+})
+
 describe("the UDFs match the app", () => {
   const dataset = udf<PtPrice>("pt_price")
   const cases: [string, string, string, string, string, string][] = [

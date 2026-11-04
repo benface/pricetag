@@ -54,12 +54,13 @@ On the public RPC, a fresh start takes about 9 minutes for the default hour of b
 - `unknown` is never $0. A position with an unknown cost shows "PnL unavailable", totals say what they leave out, and a total with nothing known shows as unavailable.
 - Coverage only moves up to the block every table has processed, so a lagging dataset can't skip blocks, and the UI says when it's behind.
 - ETH and WETH are one position, so wrapping is never a sale.
+- A swap is one token out and one in, with nothing else moving. Anything else keeps its cost and proceeds unknown.
 - A swap whose implied price is outside a token's plausible range, or far from its oracle, is rejected. It has no value on either side.
 
 ## Known gaps
 
 - Amounts are what moved since the first block read, not full balances. Reconciling against onchain balances is next.
-- Only the allowlist in `src/core/tokens.ts` is tracked. A swap into an unlisted token looks like a transfer out, which carries its cost away with no gain or loss.
+- Only the allowlist in `src/core/tokens.ts` gets a position and a price. A transaction that also moves another token is never valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. ERC-1155 transfers and internal ETH aren't seen, so they can't trigger this.
 - Only ETH and USDC have a current price, so other tokens show their cost but no value or unrealized PnL yet.
 - A split route has no swap price, because the dataset only prices an account's single pair. If it nets to one token out and one in, what was paid is still known, but the token has no price at that block. Anything messier leaves its legs `unknown`.
 - There are no traces: a WETH `Withdrawal` counts as ETH paid to the transaction's sender, and other internal ETH transfers aren't seen. Smart wallets, whose transactions are sent by a bundler, won't get that ETH.

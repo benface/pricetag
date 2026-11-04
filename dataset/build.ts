@@ -14,6 +14,7 @@ const MANIFEST = new URL("./pricetag.json", import.meta.url)
 const hex = (address: string) => address.replace(/^0x/, "")
 
 const TRANSFER = "Transfer(address indexed from, address indexed to, uint256 value)"
+const NFT_TRANSFER = "Transfer(address indexed from, address indexed to, uint256 indexed id)"
 const DEPOSIT = "Deposit(address indexed dst, uint256 wad)"
 const WITHDRAWAL = "Withdrawal(address indexed src, uint256 wad)"
 const OP_DEPOSIT_TX_TYPE = 126
@@ -31,6 +32,8 @@ function decoded(signature: string, where: string) {
 export function tablesSql(start: number): Record<string, string> {
   const since = `block_num() >= ${start}`
   const transfer = decoded(TRANSFER, `topic3 IS NULL AND address IN (${allowlist})`)
+  const unlistedTransfer = decoded(TRANSFER, `topic3 IS NULL AND address NOT IN (${allowlist})`)
+  const unlistedNft = decoded(NFT_TRANSFER, `topic3 IS NOT NULL AND address NOT IN (${allowlist})`)
   const weth = `address = X'${hex(WETH_ADDRESS)}'`
   return {
     // WETH emits Deposit and Withdrawal instead of Transfer when it's wrapped and unwrapped, so those count too.
@@ -46,6 +49,18 @@ export function tablesSql(start: number): Record<string, string> {
   SELECT block_num, timestamp, tx_hash, tx_index, arrow_cast(0, 'UInt32') AS log_index, ${ethToken} AS token, "from" AS account, 'debit' AS side, value AS amount, 'eth' AS kind FROM base.transactions WHERE status AND value <> '0'
   UNION ALL
   SELECT block_num, timestamp, tx_hash, tx_index, arrow_cast(0, 'UInt32') AS log_index, ${ethToken} AS token, "to" AS account, 'credit' AS side, value AS amount, 'eth' AS kind FROM base.transactions WHERE status AND value <> '0' AND "to" IS NOT NULL
+) WHERE ${since}`,
+
+    // Tokens off the allowlist have no decimals, so they get no leg or price. This table is only evidence that money
+    // went somewhere else in a transaction, without which a payment would look like it was all for the listed token.
+    unlisted_legs: `SELECT ${legColumns} FROM (
+  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, t.value AS amount, 'unlisted' AS kind FROM (${unlistedTransfer})
+  UNION ALL
+  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, t.value AS amount, 'unlisted' AS kind FROM (${unlistedTransfer})
+  UNION ALL
+  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, t.id AS amount, 'unlisted' AS kind FROM (${unlistedNft})
+  UNION ALL
+  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, t.id AS amount, 'unlisted' AS kind FROM (${unlistedNft})
 ) WHERE ${since}`,
 
     // transactions.gas_used is cumulative within a block, so a transaction's gas needs the one before it.
