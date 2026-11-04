@@ -66,6 +66,7 @@ struct MainWindow: View {
                         exportError = "The server couldn't make this file."
                     }
                 }
+            }
             .sheet(isPresented: $navigation.isExportingTaxReport) {
                 TaxReportView(store: store) { navigation.isExportingTaxReport = false }
             }
