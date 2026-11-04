@@ -32,7 +32,7 @@ export type WalletLegs = {
   blocks: BlocksRead
   /** In order for the fold. Each has its `txHash`, `priceSource` and, when it has no price, a `priceNote` saying why. */
   legs: PricedLeg[]
-  /** The oracle reads at the blocks of those legs, which `pnlOverTime` takes. */
+  /** The oracle reads at the blocks of those legs. `referenceMarks` turns them into what `pnlOverTime` takes. */
   references: ReferenceRow[]
   /** Transactions this wallet sent whose gas couldn't be worked out, so ETH is overstated by that much. */
   gasUnknownTxs: string[]
@@ -130,7 +130,7 @@ export function pricetagClient(query: Query, config: Pick<PricetagConfig, "datas
         // token off the allowlist, is unknown here too.
         const legs = buildPricedLegs({ account: row.account, rows: moved.get(row.tx_hash) ?? [], references: [reference], priced: [row] })
         const leg = legs.find((l) => l.asset === found.asset)
-        const usdMicros = leg?.priceSource === "swap" ? leg.priceUsdMicros : null
+        const usdMicros = leg?.priceSource === "swap" ? leg.priceMicros : null
         const base = { blockNum: row.block_num, timestamp, txHash: row.tx_hash, account: row.account }
         if (usdMicros !== null) return { ...base, usdMicros, source: "swap", note: null }
         return { ...base, usdMicros: null, source: "unknown", note: leg?.priceNote ?? "This swap didn't give a usable price for this token." }

@@ -6,7 +6,7 @@ import Testing
     func point(_ second: Int, _ pnl: String?, tx: Bool = true) -> PnlPoint {
         let date = Date(timeIntervalSince1970: 1_800_000_000 + Double(second))
         let timestamp = date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
-        return PnlPoint(blockNum: second, timestamp: timestamp, txHash: tx ? "0x\(second)" : nil, pnlUsdMicros: pnl, excludedCount: pnl == nil ? 1 : 0)
+        return PnlPoint(blockNum: second, timestamp: timestamp, txHash: tx ? "0x\(second)" : nil, pnlMicros: pnl, excludedCount: pnl == nil ? 1 : 0)
     }
 
     @Test func aLeadingUnknownIsAGapAndNotAZero() {
