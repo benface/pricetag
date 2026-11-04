@@ -49,8 +49,12 @@ type Cached = {
   prices: LatestPrices
   latest: Head
   gasUnknownTxs: Set<string>
-  /** Before `fromBlock`. Fixed once read. */
+  /** Before `fromBlock`. Fixed once its block is past any reorg, which `openingReadAtHead` says. */
   opening: BalanceSnapshot | null
+  /** The chain's head at the last read that got all of `opening`, or null before that. */
+  openingReadAtHead: number | null
+  /** The chain's head at the last refresh, which a wallet read as of a fixed block can't tell from `latest`. */
+  readAtHead: number
   /** At `coveredTo`, the same block the rows reach, or the check would fail whenever a dataset is slightly behind. */
   closing: BalanceSnapshot | null
   /** Every asset's last successful read, because a failed read mustn't look like an empty wallet. */
@@ -59,25 +63,41 @@ type Cached = {
   l1Fees: Map<string, L1Fee>
 }
 
-type L1Fee = { blockNum: number; fee: string; readAtCoveredTo: number }
+type L1Fee = { blockNum: number; fee: string; readAtTip: number }
 
 /**
  * A reorg can keep a transaction at the same height and still change its fee, because the block's L1 inputs changed.
  * So a fee is read when it's first seen, then once more when its block has left the part of the chain that's re-read
- * for reorgs. A transaction that moved to another block is read again straight away.
+ * for reorgs. A transaction that moved to another block is read again straight away. `tip` is what that part of the
+ * chain is measured from: see `tipOf`.
  */
-function isL1FeeSettled(fee: L1Fee | undefined, blockNum: number, coveredTo: number): boolean {
+function isL1FeeSettled(fee: L1Fee | undefined, blockNum: number, tip: number): boolean {
   if (fee?.blockNum !== blockNum) return false
-  return fee.readAtCoveredTo - blockNum >= REORG_BLOCKS || coveredTo - blockNum < REORG_BLOCKS
+  return fee.readAtTip - blockNum >= REORG_BLOCKS || tip - blockNum < REORG_BLOCKS
 }
 
 const isComplete = (snapshot: BalanceSnapshot | null) => snapshot !== null && ASSETS.every((asset) => snapshot.amounts[asset] !== undefined)
 
-/** A read can fail for one asset and work for the rest. What's already known stays, and only what's missing gets filled in. */
+/** A read can fail for one asset and work for the rest. What it didn't get stays as it was known. */
 function mergeOpening(known: BalanceSnapshot | null, read: BalanceSnapshot | null): BalanceSnapshot | null {
   if (!read) return known
-  return { blockNum: read.blockNum, amounts: { ...read.amounts, ...known?.amounts } }
+  return { blockNum: read.blockNum, amounts: { ...known?.amounts, ...read.amounts } }
 }
+
+/** Whether a reorg could have changed the opening balances since they were read. */
+function openingMayChange(wallet: Cached | undefined, chain: Head): boolean {
+  if (wallet?.openingReadAtHead == null) return false
+  return chain.blockNum > wallet.openingReadAtHead && wallet.openingReadAtHead - (wallet.fromBlock - 1) < REORG_BLOCKS
+}
+
+/**
+ * Whether a wallet read as of a fixed block could have changed since its last refresh. It could until a refresh happens
+ * with its last block past any reorg, and that one is the last. Its coverage stops moving, so a new block is the only sign.
+ */
+const fixedMayChange = (wallet: Cached, chain: Head) => chain.blockNum > wallet.readAtHead && wallet.readAtHead - wallet.coveredTo < REORG_BLOCKS
+
+/** A live read's re-reads follow its coverage, which can lag. A fixed read's coverage stops, so only the chain says what's settled. */
+const tipOf = (range: WalletRange, coveredTo: number, chain: Head) => (range.to === undefined ? coveredTo : chain.blockNum)
 
 /** A gas row's L1 fee, as a row of its own beside it. */
 function l1FeeRows(rows: readonly LegRow[], fees: Cached["l1Fees"]): { rows: LegRow[]; unknownTxs: string[] } {
@@ -117,25 +137,33 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
   }
 
   /** A wallet read as of a fixed block has no new block coming, so what it's still missing has to be read without one. */
-  const isFinished = (wallet: Cached, head: Head) =>
-    wallet.coveredTo >= head.blockNum && isComplete(wallet.opening) && isComplete(wallet.closing) && wallet.rows.every((r) => r.kind !== "gas" || isL1FeeSettled(wallet.l1Fees.get(r.tx_hash), r.block_num, wallet.coveredTo))
+  const isFixedCurrent = (wallet: Cached, head: Head, chain: Head) =>
+    wallet.coveredTo >= head.blockNum &&
+    isComplete(wallet.opening) &&
+    isComplete(wallet.closing) &&
+    wallet.rows.every((r) => r.kind !== "gas" || isL1FeeSettled(wallet.l1Fees.get(r.tx_hash), r.block_num, chain.blockNum)) &&
+    !fixedMayChange(wallet, chain) &&
+    !openingMayChange(wallet, chain)
 
   async function refresh(address: string, key: string, range: WalletRange): Promise<Cached> {
-    const head = headAsOf(await currentHead(), range.to)
+    const chain = await currentHead()
+    const head = headAsOf(chain, range.to)
     const cached = wallets.get(key)
-    if (cached && cached.latest.blockNum >= head.blockNum && (range.to === undefined || isFinished(cached, head))) return cached
+    if (cached && (range.to === undefined ? cached.latest.blockNum >= head.blockNum : isFixedCurrent(cached, head, chain))) return cached
 
     const fromBlock = cached?.fromBlock ?? range.from ?? source.startBlock ?? Math.max(0, head.blockNum - (source.historyBlocks ?? 0))
     // Coverage only moves up to what's been processed. If it followed the chain, a table catching up later would
     // never be read for the blocks it skipped past.
     const processed = await source.processedThrough(cached?.coveredTo ?? fromBlock, head.blockNum)
     const coveredTo = processed ?? cached?.coveredTo ?? fromBlock - 1
+    const tip = tipOf(range, coveredTo, chain)
+    const reorgable = range.to !== undefined && cached !== undefined && fixedMayChange(cached, chain)
 
     let rows = cached?.rows ?? []
     let priced = cached?.priced ?? []
     const known = new Map(cached?.references ?? [])
     const gasUnknownTxs = new Set(cached?.gasUnknownTxs ?? [])
-    if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo)) {
+    if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo || reorgable)) {
       const readFrom = cached ? Math.max(fromBlock, cached.coveredTo - REORG_BLOCKS + 1) : fromBlock
       const window = await source.readWindow(address, readFrom, coveredTo)
       rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
@@ -147,25 +175,30 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     }
 
     const l1Fees = new Map(cached?.l1Fees ?? [])
-    const unread = rows.filter((r) => r.kind === "gas" && !isL1FeeSettled(l1Fees.get(r.tx_hash), r.block_num, coveredTo))
+    const unread = rows.filter((r) => r.kind === "gas" && !isL1FeeSettled(l1Fees.get(r.tx_hash), r.block_num, tip))
     const fees = unread.length > 0 ? await readL1Fees(unread.map((r) => ({ txHash: r.tx_hash, blockNum: r.block_num }))) : new Map<string, string>()
     for (const { tx_hash, block_num } of unread) {
       const fee = fees.get(tx_hash)
-      if (fee !== undefined) l1Fees.set(tx_hash, { blockNum: block_num, fee, readAtCoveredTo: coveredTo })
+      if (fee !== undefined) l1Fees.set(tx_hash, { blockNum: block_num, fee, readAtTip: tip })
     }
 
     let opening = cached?.opening ?? null
+    let openingReadAtHead = cached?.openingReadAtHead ?? null
     let closing = cached?.closing ?? null
     const lastBalances = { ...cached?.lastBalances }
     if (coveredTo >= fromBlock) {
-      if (!isComplete(opening)) opening = mergeOpening(opening, await readBalances(address, fromBlock - 1))
-      if (closing?.blockNum !== coveredTo || !isComplete(closing)) closing = await readBalances(address, coveredTo)
+      if (!isComplete(opening) || openingMayChange(cached, chain)) {
+        const read = await readBalances(address, fromBlock - 1)
+        opening = mergeOpening(opening, read)
+        if (isComplete(read)) openingReadAtHead = chain.blockNum
+      }
+      if (closing?.blockNum !== coveredTo || !isComplete(closing) || reorgable) closing = await readBalances(address, coveredTo)
       for (const [asset, amount] of Object.entries(closing?.amounts ?? {})) lastBalances[asset] = { blockNum: coveredTo, amount }
     }
 
     const prices = latestPrices(await source.readLatestReference(head.blockNum))
 
-    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs, opening, closing, lastBalances, l1Fees }
+    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs, opening, openingReadAtHead, readAtHead: chain.blockNum, closing, lastBalances, l1Fees }
     wallets.delete(key)
     wallets.set(key, next)
     if (wallets.size > MAX_WALLETS) wallets.delete(wallets.keys().next().value as string)

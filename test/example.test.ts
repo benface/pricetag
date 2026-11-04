@@ -49,7 +49,7 @@ describe("the example", () => {
   })
 
   it("starts from what the wallet already held, and checks it against the chain", () => {
-    const { stdout } = runExample({ legs: [leg(USDC, "credit", "1000000", "erc20")], reference_prices: [reference], balances: { 99: { USDC: "5000000" }, 200: { USDC: "6000000" } } })
+    const { stdout } = runExample({ legs: [leg(USDC, "credit", "1000000", "erc20")], reference_prices: [reference, { ...reference, block_num: "199" }], balances: { 99: { USDC: "5000000" }, 200: { USDC: "6000000" } } })
     assert.match(stdout, /USDC: 6 \| cost unknown \| value \$6\.00 \(oracle\) .*\| reconciled/)
     assert.match(stdout, /Latest: USDC in 0xaa/)
   })

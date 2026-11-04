@@ -41,7 +41,10 @@ export function fakeAmp(tables: Tables, through: Through = 200, options: { start
       return (top === null ? [] : [{ block_num: String(top) }]) as T[]
     }
     if (sql.includes(".blocks")) return [{ block_num: "200", timestamp: 1_800_000_000_000 }] as T[]
-    return (tables[table] ?? []) as T[]
+    // Like Amp, only what's in the range, which a re-read after a reorg depends on.
+    const range = /block_num BETWEEN (\d+) AND (\d+)/.exec(sql)
+    const rows = (tables[table] ?? []) as { block_num?: string | number }[]
+    return (range ? rows.filter(({ block_num }) => Number(block_num) >= Number(range[1]) && Number(block_num) <= Number(range[2])) : rows) as T[]
   }
   return { query, queries, client: pricetagClient(query, { dataset: "benface/pricetag@0.0.1", ...options }) }
 }

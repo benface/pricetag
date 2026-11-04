@@ -7,7 +7,7 @@ import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPri
 import { createWallets, datasetSource, pricetagClient, type Query, type ReadL1Fees } from "@pricetag/sdk/internal"
 import { portfolioOf } from "../server/portfolio.ts"
 import { DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
-import { fakeAmp } from "./support/fake-amp.ts"
+import { fakeAmp, type Tables } from "./support/fake-amp.ts"
 
 const ME = "00000000000000000000000000000000000000aa"
 const POOL = "00000000000000000000000000000000000000bb"
@@ -399,6 +399,122 @@ describe("getPortfolio", () => {
     block = 201
     await client.getPortfolio(`0x${ME}`)
     assert.equal(queries.filter((q) => /\.legs WHERE block_num BETWEEN 50 AND/.test(q)).length, 1)
+  })
+
+  describe("a read with a `to`, near the chain's head", () => {
+    const ADDRESS = `0x${ME}`
+    const creditAt = (block: number, amount: bigint) => ({ ...leg("aa", ETH, ME, "credit", String(amount), "eth"), block_num: String(block) })
+    const gasAt = (block: number, tx: string) => ({ ...leg(tx, ETH, ME, "debit", "1000", "gas"), block_num: String(block) })
+    const refsThrough = (block: number) => [{ ...reference, block_num: String(block) }]
+
+    /** A fake chain whose head and tables a test can change, and a client that reads it, the same way each time. */
+    function chainAt(block: number, tables: Tables, readL1Fees?: ReadL1Fees) {
+      const chain = { block, tables, queries: [] as string[] }
+      const query: Query = async <T,>(sql: string) => {
+        chain.queries.push(sql)
+        if (sql.includes(".blocks")) return [{ block_num: String(chain.block), timestamp: 1_800_000_000_000 }] as T[]
+        return fakeAmp(chain.tables, 200).query<T>(sql)
+      }
+      const client = () => pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 50, readL1Fees })
+      return { chain, client }
+    }
+    const summary = async (client: ReturnType<typeof pricetagClient>) => {
+      const { positions, totals } = await client.getPortfolio(ADDRESS, { to: 200 })
+      return { positions: positions.map((p) => [p.asset, p.values.qty, p.values.valueMicros, p.reconciliation?.status]), totals }
+    }
+
+    const before = { legs: [creditAt(195, E18)], reference_prices: refsThrough(195), balances: { 49: {}, 200: { ETH: String(E18) } } }
+    const reorged = { ...before, legs: [creditAt(195, 2n * E18)], balances: { 49: {}, 200: { ETH: String(2n * E18) } } }
+
+    it("matches a fresh client after a shallow reorg", async () => {
+      const { chain, client } = chainAt(200, before)
+      const kept = client()
+      assert.equal((await summary(kept)).positions[0]![1], String(E18))
+      chain.tables = reorged
+      chain.block = 201
+      const after = await summary(kept)
+      assert.equal(after.positions[0]![1], String(2n * E18))
+      assert.deepEqual(after, await summary(client()))
+    })
+
+    it("still catches a reorg on the block that leaves the window, and then stops reading", async () => {
+      const { chain, client } = chainAt(200, before)
+      const kept = client()
+      await summary(kept)
+      // The tables change before anything's read again, and the first read after that is the one past the window.
+      chain.tables = reorged
+      chain.block = 230
+      assert.equal((await summary(kept)).positions[0]![1], String(2n * E18))
+      chain.tables = before
+      chain.block = 231
+      chain.queries.length = 0
+      assert.equal((await summary(kept)).positions[0]![1], String(2n * E18))
+      assert.ok(!chain.queries.some((q) => q.includes("eth_call") || q.includes(".legs")), chain.queries.join("; "))
+    })
+
+    it("doesn't read it again without a new block", async () => {
+      const { chain, client } = chainAt(201, before)
+      const kept = client()
+      await summary(kept)
+      chain.queries.length = 0
+      await summary(kept)
+      assert.ok(!chain.queries.some((q) => q.includes("eth_call") || q.includes(".legs")), chain.queries.join("; "))
+    })
+
+    it("reads what's far from the head once", async () => {
+      const { chain, client } = chainAt(500, before)
+      const kept = client()
+      await summary(kept)
+      chain.block = 501
+      chain.queries.length = 0
+      await summary(kept)
+      assert.ok(!chain.queries.some((q) => q.includes("eth_call") || q.includes(".legs")), chain.queries.join("; "))
+    })
+
+    it("still retries what's missing, without a new block", async () => {
+      const { chain, client } = chainAt(500, { ...before, balances: { 49: {} } })
+      const kept = client()
+      assert.equal((await kept.getPortfolio(ADDRESS, { to: 200 })).positions[0]!.reconciliation?.status, "unchecked")
+      chain.tables = before
+      assert.equal((await kept.getPortfolio(ADDRESS, { to: 200 })).positions[0]!.reconciliation?.status, "reconciled")
+    })
+
+    it("reads a transaction's L1 fee again once it's past the window, and only then", async () => {
+      const tables = { legs: [gasAt(195, "bb")], reference_prices: refsThrough(195), balances: { 49: { ETH: String(E18) }, 200: { ETH: String(E18 - 1000n) } } }
+      const reads: string[] = []
+      const fee = { amount: "0" }
+      const readFees: ReadL1Fees = async (requests) => {
+        reads.push(...requests.map((r) => r.txHash))
+        return new Map(requests.map(({ txHash }) => [txHash, fee.amount]))
+      }
+      const { chain, client } = chainAt(200, tables, readFees)
+      const kept = client()
+      await summary(kept)
+      assert.equal(reads.length, 1)
+      chain.block = 210
+      await summary(kept)
+      assert.equal(reads.length, 1)
+      fee.amount = "24"
+      chain.tables = { ...tables, balances: { ...tables.balances, 200: { ETH: String(E18 - 1024n) } } }
+      chain.block = 230
+      const { positions } = await summary(kept)
+      assert.equal(reads.length, 2)
+      assert.deepEqual(positions[0]!.slice(1, 2).concat(positions[0]![3]), [String(E18 - 1024n), "reconciled"])
+      chain.block = 231
+      await summary(kept)
+      assert.equal(reads.length, 2)
+    })
+
+    it("picks up a reorg of what the wallet held before a first block near the head", async () => {
+      const opening = (amount: bigint) => ({ legs: [creditAt(195, 5n)], reference_prices: refsThrough(195), balances: { 189: { ETH: String(amount) }, 200: { ETH: String(amount + 5n) } } })
+      const { chain, client } = chainAt(200, opening(E18))
+      const kept = client()
+      const read = async () => (await kept.getPortfolio(ADDRESS, { from: 190, to: 200 })).legs.find((l) => l.opening)?.delta
+      assert.equal(await read(), String(E18))
+      chain.tables = opening(2n * E18)
+      chain.block = 201
+      assert.equal(await read(), String(2n * E18))
+    })
   })
 
   it("needs a first block from somewhere, and checks the rest", async () => {
