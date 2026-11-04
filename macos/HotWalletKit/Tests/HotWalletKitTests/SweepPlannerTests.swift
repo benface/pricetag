@@ -184,12 +184,26 @@ private func plan(_ holdings: [Holding], cap: UInt128 = cap, fees: FeeQuote = ch
     @Test func everythingLeavesBehindWhatsWorthLessThanItsGas() {
         let result = SweepPlanner.everything(holdings: holdings(eth: oneEth / 1000, (usdc, 1, Money.dollar)), fees: cheapFees, destination: coldAddress)
         #expect(!result.transfers.contains { $0.token == usdc })
+        #expect(result.notWorthTheGas == [usdc])
     }
 
     @Test func everythingDoesntSpendGasToMoveDustEth() {
         let result = SweepPlanner.everything(holdings: holdings(eth: cheapFees.costWei(of: Base.eth)), fees: cheapFees, destination: coldAddress)
         #expect(result.transfers.isEmpty)
         #expect(result.blockers.isEmpty)
+        #expect(result.notWorthTheGas.isEmpty, "that's what's left after a last transfer")
+    }
+
+    @Test func everythingSaysWhenGasMakesRealEthNotWorthMoving() {
+        let fees = FeeQuote(maxFeePerGas: 100_000_000_000, maxPriorityFeePerGas: 1_000_000, l1FeeWei: 0)
+        let result = SweepPlanner.everything(holdings: holdings(eth: oneEth / 300), fees: fees, destination: coldAddress)
+        #expect(result.transfers.isEmpty)
+        #expect(result.notWorthTheGas == [Base.eth])
+    }
+
+    @Test func everythingDoesntGuessEthsWorthWithoutAPrice() {
+        let result = SweepPlanner.everything(holdings: holdings(eth: cheapFees.costWei(of: Base.eth), ethUsd: nil), fees: cheapFees, destination: coldAddress)
+        #expect(result.notWorthTheGas == [Base.eth])
     }
 }
 
