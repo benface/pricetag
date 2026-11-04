@@ -145,7 +145,7 @@ WHERE p.block_num BETWEEN 53515266 AND 53515658
 ORDER BY p.block_num
 ```
 
-Run on one wallet and range, the legs, balances and oracle queries match the SDK exactly. The swap query can return a few prices `getPrices` doesn't, because the SDK also checks that the transaction is a simple swap, and rejects implausible prices. Over one range, AERO and USDT matched at 674 and 768, and cbBTC gave 2,734 against the SDK's 2,707.
+Run on one wallet and range, the legs, balances and oracle queries match the SDK exactly. The swap query can differ from `getPrices` by a little, either way. It skips a transaction whenever an unlisted token moved, while the SDK only skips one where it moved on net. The SDK also rejects implausible prices, and only prices a simple swap. Over one range, AERO matched at 813, USDT gave 1,315 against the SDK's 1,313, and cbBTC gave 4,144 against 4,159.
 
 SQL stops at cost, because a cost depends on every earlier leg. To get cost and PnL without the SDK, go through a wallet's legs in order, keeping lots per asset:
 
