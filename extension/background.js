@@ -4,7 +4,7 @@
 
 const HOST = "com.benface.patina"
 
-/** @typedef {{ port: chrome.runtime.Port, origin: string, inFlight: Map<number, string> }} Site */
+/** @typedef {{ port: chrome.runtime.Port, origin: string, inFlight: Set<string> }} Site */
 
 /** @type {chrome.runtime.Port | null} */
 let native = null
@@ -73,18 +73,18 @@ function connectNative() {
 /**
  * Sends one request to the app, and calls back with its answer.
  * @param {Record<string, unknown>} request
- * @param {(message: any) => void} done
+ * @param {(message: any, id: string) => void} done
  * @returns {string}
  */
 function toApp(request, done) {
   const id = String(nextId++)
-  routes.set(id, done)
+  routes.set(id, (message) => done(message, id))
   try {
     native ??= connectNative()
     native.postMessage({ ...request, id })
   } catch {
     routes.delete(id)
-    done({ error: { code: 4900, message: problemMessage() } })
+    done({ error: { code: 4900, message: problemMessage() } }, id)
   }
   return id
 }
@@ -103,20 +103,21 @@ chrome.runtime.onConnect.addListener((port) => {
   const origin = port.name === "site" ? siteOrigin(port.sender) : null
   if (!origin) return port.disconnect()
   /** @type {Site} */
-  const site = { port, origin, inFlight: new Map() }
+  const site = { port, origin, inFlight: new Set() }
   sites.add(site)
   port.onMessage.addListener((/** @type {any} */ message) => {
     if (typeof message?.id !== "number" || typeof message.method !== "string") return
-    const appId = toApp({ kind: "site", origin, method: message.method, params: message.params }, ({ result, error }) => {
-      site.inFlight.delete(message.id)
+    // By the ID made here, since the page chooses its own and can use one twice.
+    const appId = toApp({ kind: "site", origin, method: message.method, params: message.params }, ({ result, error }, id) => {
+      site.inFlight.delete(id)
       if (sites.has(site)) port.postMessage({ id: message.id, result, error })
     })
-    if (routes.has(appId)) site.inFlight.set(message.id, appId)
+    if (routes.has(appId)) site.inFlight.add(appId)
   })
   // A closed tab takes its approvals with it.
   port.onDisconnect.addListener(() => {
     sites.delete(site)
-    for (const appId of site.inFlight.values()) {
+    for (const appId of site.inFlight) {
       routes.delete(appId)
       native?.postMessage({ kind: "cancel", id: appId })
     }

@@ -392,6 +392,42 @@ describe("the background script", () => {
     assert.deepEqual(cancels.map((message: any) => message.id), [native.messages[0].id])
   })
 
+  test("a closed tab cancels everything it's waiting for, even when the page uses an ID twice", async () => {
+    const cancelled = (native: any) => native.messages.filter((message: any) => message.kind === "cancel").map((message: any) => message.id)
+    const twoRequests = async () => {
+      const { connect, native } = await loadBackground()
+      const port = fakePort("site", tabSender("https://one.example"))
+      connect(port)
+      port.receive({ id: 1, method: "eth_sendTransaction" })
+      port.receive({ id: 1, method: "eth_sendTransaction" })
+      const [first, second] = native.messages
+      assert.notEqual(first.id, second.id)
+      return { port, native, first, second }
+    }
+
+    const both = await twoRequests()
+    both.port.close()
+    assert.deepEqual(cancelled(both.native), [both.first.id, both.second.id])
+
+    const firstAnswered = await twoRequests()
+    firstAnswered.native.receive({ id: firstAnswered.first.id, result: "0x1" })
+    firstAnswered.port.close()
+    assert.deepEqual(cancelled(firstAnswered.native), [firstAnswered.second.id])
+
+    const secondAnswered = await twoRequests()
+    secondAnswered.native.receive({ id: secondAnswered.second.id, result: "0x1" })
+    secondAnswered.port.close()
+    assert.deepEqual(cancelled(secondAnswered.native), [secondAnswered.first.id])
+
+    const bothAnswered = await twoRequests()
+    bothAnswered.native.receive({ id: bothAnswered.first.id, result: "0x1" })
+    bothAnswered.native.receive({ id: bothAnswered.second.id, result: "0x2" })
+    bothAnswered.port.close()
+    assert.deepEqual(cancelled(bothAnswered.native), [])
+    // Each answer still reaches the page, under the ID it used.
+    assert.deepEqual(bothAnswered.port.messages.map((message: any) => [message.id, message.result]), [[1, "0x1"], [1, "0x2"]])
+  })
+
   test("account changes only go to the origin they're about", async () => {
     const { connect, native } = await loadBackground()
     const one = fakePort("site", tabSender("https://one.example"))
