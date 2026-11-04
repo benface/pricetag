@@ -1,7 +1,7 @@
 // Checks what a position's legs add up to against what the chain says the wallet holds, at the same block.
 // This is what catches what we can't see without traces, like internal ETH transfers.
 
-import type { PricedLeg } from "./legs.ts"
+import type { PricedLeg, UnseenEth } from "./legs.ts"
 import { TOKENS } from "./tokens.ts"
 
 /** Onchain balances at a block, by asset, in smallest units. An asset whose read failed isn't in `amounts`. */
@@ -18,6 +18,8 @@ export type Onchain = {
   lastBalances?: Readonly<Record<string, { blockNum: number; amount: string }>>
   /** Assets missing from `balances`. Without a read, we can't say they're zero. */
   unreadBalances?: readonly string[]
+  /** Where ETH arrived that no row explains, as `settleUnwraps` found. */
+  unseenEth?: readonly UnseenEth[]
   /** Market prices were read, so a token without one really has no market. */
   marketChecked?: boolean
   /** What's priced before any conversion, because a missing exchange rate isn't a missing market. */
@@ -32,6 +34,8 @@ export type Reconciliation =
       actualQty: string
       /** Actual minus computed. Above 0: more is onchain than the legs explain. */
       differenceQty: string
+      /** On ETH that doesn't match: the transactions most likely behind it. */
+      unseenEth?: readonly UnseenEth[]
     }
   | {
       status: "unchecked"
@@ -48,7 +52,7 @@ export function estimateHeld(last: { blockNum: number; amount: string }, legs: r
   return held > 0n ? held : 0n
 }
 
-export function reconcile(asset: string, legs: readonly PricedLeg[], shortfall: bigint, { balances, l1FeeUnknownTxs, openingUnread, lastBalances }: Onchain): Reconciliation {
+export function reconcile(asset: string, legs: readonly PricedLeg[], shortfall: bigint, { balances, l1FeeUnknownTxs, openingUnread, lastBalances, unseenEth }: Onchain): Reconciliation {
   const actual = balances?.amounts[asset]
   if (!balances || actual === undefined) {
     const last = lastBalances?.[asset]
@@ -64,13 +68,15 @@ export function reconcile(asset: string, legs: readonly PricedLeg[], shortfall: 
   // The sum of what moved, not the fold's amount: the fold stops at zero, and what left beyond that still happened.
   const computed = legs.reduce((sum, leg) => sum + BigInt(leg.delta), 0n)
   const difference = BigInt(actual) - computed
+  // Units left that never arrived, so something is missing even if the end balance happens to match.
+  const status = difference === 0n && shortfall === 0n ? "reconciled" : "incomplete"
   return {
-    // Units left that never arrived, so something is missing even if the end balance happens to match.
-    status: difference === 0n && shortfall === 0n ? "reconciled" : "incomplete",
+    status,
     blockNum: balances.blockNum,
     computedQty: computed.toString(),
     actualQty: actual,
     differenceQty: difference.toString(),
+    ...(asset === "ETH" && status === "incomplete" && unseenEth?.length ? { unseenEth } : {}),
   }
 }
 

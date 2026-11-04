@@ -8,13 +8,14 @@ export type PriceSource = "oracle" | "swap" | "market"
 
 /** Why a leg has no usable price. Apps show these as they are, so they stay in plain language. */
 export const PRICE_NOTES = {
-  feedFailed: "The market price feed didn't answer at this block.",
+  feedFailed: "The market price feed has no price for this block.",
   rejected: "Ignored the price this exchange implied, because it's far from any plausible value.",
   unlisted: "This transaction also moved a token we can't price yet, so what was paid or received can't be split between them.",
   unusable: "This exchange didn't give a usable price for this token.",
   noExchange: "Nothing was exchanged in this transaction, and this token has no market price feed.",
   notSimple: "This transaction isn't a simple exchange of one token for another.",
   unsettled: "A contract turned wrapped ETH into ETH in this transaction, and we couldn't confirm how much of it reached this wallet, so what was paid or received isn't known.",
+  unseenEth: "This wallet's ETH rose in this block by more than its transactions explain, so this may have been sold for that ETH, and what it brought in isn't known.",
 }
 /**
  * Transfers of tokens off the allowlist. They have no position or price, but they say money went elsewhere.
@@ -45,6 +46,8 @@ export type LegRow = {
   counterparty?: string | null
   /** On an unwrap credit: `settleUnwraps` confirmed this amount against the chain. Without it, the amount is only a claim. */
   settled?: boolean
+  /** On a transaction's rows: `settleUnwraps` found ETH in its block that nothing explains. See `UnseenEth`. */
+  unseenEth?: boolean
 }
 
 /**
@@ -54,11 +57,21 @@ export type LegRow = {
  */
 export const isUnwrapClaim = (row: LegRow) => row.kind === "unwrap" && row.side === "credit" && !row.settled
 
+/**
+ * ETH that reached a wallet in a block with no row to show for it, and the transactions that took a token from the wallet
+ * there. A swap someone else sends for a wallet looks like this, and so does a pool that pays out ETH directly. So does a
+ * stranger's payment landing in the same block, which is why this never counts as what the token was sold for.
+ */
+export type UnseenEth = { blockNum: number; amount: string; txHashes: string[] }
+
 /** A transaction whose gas couldn't be worked out, and the block it's in. It can have no rows at all. */
 export type GasUnknownTx = Pick<LegRow, "tx_hash" | "block_num">
 
-/** One block's oracle reads, from `reference_prices`, with Chainlink answers in 1e8 USD. Empty when a read failed. */
-export type Reference = { blockNum: number; ethUsd: string; usdcUsd: string }
+/**
+ * One block's Chainlink prices, from `reference_prices`, with answers in 1e8 USD. Empty when a feed has no price at this block.
+ * The transactions are the updates behind those answers, which only the dataset has: the raw path reads them with `eth_call`.
+ */
+export type Reference = { blockNum: number; ethUsd: string; usdcUsd: string; ethTx?: string | undefined; usdcTx?: string | undefined }
 
 /** The result of `pt_price`, in the shape `priced_legs` stores it. */
 export type PtPrice = { token: string; usd_micros: string; source: "swap" | "unknown" }
@@ -235,6 +248,44 @@ export function unwrapBalanceBlocks(rows: readonly LegRow[]): number[] {
   return [...new Set(rows.filter(isUnwrapClaim).flatMap((row) => [row.block_num - 1, row.block_num]))]
 }
 
+/**
+ * Whether a transaction took a token from the wallet and, as far as its rows show, gave nothing back. Plain ETH leaving
+ * isn't a token leaving. Neither is a claim, which says what came back, or an unreadable amount, which is never a plain send.
+ */
+function isOneWaySend(txRows: readonly LegRow[]): boolean {
+  const moved = txRows.filter((row) => !isFeeRow(row))
+  if (moved.some(isUnwrapClaim) || !moved.some((row) => row.side === "debit" && row.token !== ETH_ADDRESS)) return false
+  const isUnlisted = (row: LegRow) => row.kind === "unlisted" || row.kind === "unlisted_nft"
+  const { moves, unreadable } = netUnlisted(moved.filter(isUnlisted))
+  if (unreadable) return false
+  const nets = new Map<string, bigint>()
+  for (const row of moved) {
+    const asset = tokenByAddress(row.token)?.asset
+    if (asset && !isUnlisted(row)) nets.set(asset, (nets.get(asset) ?? 0n) + (row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)))
+  }
+  const deltas = [...nets.values(), ...moves]
+  return deltas.some((delta) => delta < 0n) && !deltas.some((delta) => delta > 0n)
+}
+
+function byTx(rows: readonly LegRow[]): Map<string, LegRow[]> {
+  const txs = new Map<string, LegRow[]>()
+  for (const row of rows) {
+    const txRows = txs.get(row.tx_hash)
+    if (txRows) txRows.push(row)
+    else txs.set(row.tx_hash, [row])
+  }
+  return txs
+}
+
+/**
+ * The blocks whose balances can show ETH arriving for a token that left, each with the one before it. There can be far
+ * more of these than `unwrapBalanceBlocks`, so they're only worth reading for a wallet whose ETH doesn't add up.
+ */
+export function oneWaySendBalanceBlocks(rows: readonly LegRow[]): number[] {
+  const sends = [...byTx(rows).values()].filter(isOneWaySend)
+  return [...new Set(sends.flatMap(([row]) => [row!.block_num - 1, row!.block_num]))]
+}
+
 type SettleInput = {
   /** One wallet's rows, with its gas and L1 fees. */
   rows: readonly LegRow[]
@@ -261,7 +312,7 @@ type SettleInput = {
  * A credit that can't be settled keeps its `isUnwrapClaim` amount, and `buildPricedLegs` values nothing from it.
  * A credit that changed also changes what the transaction traded, so its priced rows are worked out again.
  */
-export function settleUnwraps({ rows, priced, references, ethBalances, feeUnknownTxs, gasUnknownBlocks }: SettleInput): { rows: LegRow[]; priced: PricedRow[] } {
+function settleClaims({ rows, priced, references, ethBalances, feeUnknownTxs, gasUnknownBlocks }: SettleInput): { rows: LegRow[]; priced: PricedRow[] } {
   const claimBlocks = new Set(rows.filter(isUnwrapClaim).map((row) => row.block_num))
   if (claimBlocks.size === 0) return { rows: [...rows], priced: [...priced] }
   const feeUnknown = new Set(feeUnknownTxs)
@@ -315,6 +366,43 @@ export function settleUnwraps({ rows, priced, references, ethBalances, feeUnknow
   }
 }
 
+/**
+ * Finds ETH that rose in a block by more than its rows explain, where a token left the wallet with nothing back. A balance
+ * can't say which transaction it came from, so each of those in the block is marked, and none is valued from it: it stays
+ * unknown rather than a plain send that realizes nothing. A claim that stands is left out of what explains the rise, since
+ * it's the one thing that doesn't vouch for itself. Read after `settleClaims`, whose credits count as explained.
+ */
+function markUnseenEth({ rows, ethBalances, feeUnknownTxs, gasUnknownBlocks }: Pick<SettleInput, "rows" | "ethBalances" | "feeUnknownTxs" | "gasUnknownBlocks">): { rows: LegRow[]; unseenEth: UnseenEth[] } {
+  const sends = new Map<number, string[]>()
+  for (const [tx, txRows] of byTx(rows)) {
+    const block = txRows[0]!.block_num
+    if (isOneWaySend(txRows)) sends.set(block, [...(sends.get(block) ?? []), tx])
+  }
+  const feeUnknown = new Set(feeUnknownTxs)
+  const gasUnknown = new Set(gasUnknownBlocks)
+  const unseenEth: UnseenEth[] = []
+  for (const [block, txHashes] of sends) {
+    const before = ethBalances.get(block - 1)
+    const after = ethBalances.get(block)
+    if (before === undefined || after === undefined || gasUnknown.has(block)) continue
+    const blockRows = rows.filter((row) => row.block_num === block)
+    if (blockRows.some((row) => feeUnknown.has(row.tx_hash))) continue
+    let arrived = BigInt(after) - BigInt(before)
+    for (const row of blockRows) {
+      if (row.token === ETH_ADDRESS && !isUnwrapClaim(row)) arrived -= row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
+    }
+    if (arrived > 0n) unseenEth.push({ blockNum: block, amount: arrived.toString(), txHashes })
+  }
+  const marked = new Set(unseenEth.flatMap((unseen) => unseen.txHashes))
+  return { rows: marked.size === 0 ? [...rows] : rows.map((row) => (marked.has(row.tx_hash) ? { ...row, unseenEth: true } : row)), unseenEth }
+}
+
+/** Checks a wallet's rows against what its ETH really did: first what its claims say arrived, then what nothing says did. */
+export function settleUnwraps(input: SettleInput): { rows: LegRow[]; priced: PricedRow[]; unseenEth: UnseenEth[] } {
+  const { rows, priced } = settleClaims(input)
+  return { ...markUnseenEth({ ...input, rows }), priced }
+}
+
 export const answerToMicros = (answer: string | undefined): string | null =>
   answer && BigInt(answer) > 0n ? (BigInt(answer) / 100n).toString() : null
 
@@ -355,14 +443,7 @@ type Input = {
 export function buildPricedLegs({ account, rows, references, priced, market }: Input): PricedLeg[] {
   const me = normalizeAddress(account)
   const refs = new Map(references.map((r) => [r.blockNum, r]))
-  const txs = new Map<string, LegRow[]>()
-  for (const row of rows) {
-    if (row.account !== me) continue
-    const txRows = txs.get(row.tx_hash)
-    if (txRows) txRows.push(row)
-    else txs.set(row.tx_hash, [row])
-  }
-  const ordered = [...txs.values()].sort((a, b) => a[0]!.block_num - b[0]!.block_num || a[0]!.tx_index - b[0]!.tx_index)
+  const ordered = [...byTx(rows.filter((row) => row.account === me)).values()].sort((a, b) => a[0]!.block_num - b[0]!.block_num || a[0]!.tx_index - b[0]!.tx_index)
 
   const legs: PricedLeg[] = []
   for (const txRows of ordered) {
@@ -419,8 +500,9 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
     // here was traded for something, so it has unknown proceeds, rather than no gain or loss at all.
     const anyOut = moved.some((n) => n.delta < 0n) || unlistedMoves.some((delta) => delta < 0n)
     const anyIn = moved.some((n) => n.delta > 0n) || unlistedMoves.some((delta) => delta > 0n)
+    const unseenEth = txRows.some((row) => row.unseenEth)
     // A claim can cancel out what left, so whether anything arrived can't decide this while it stands.
-    const isExchange = isSwap || unlistedUnreadable || unsettledCredit || (anyOut && anyIn)
+    const isExchange = isSwap || unlistedUnreadable || unsettledCredit || unseenEth || (anyOut && anyIn)
     const pricedRow = priced.find((p) => p.tx_hash === first.tx_hash && p.account === me)
 
     const resolved = moved.map((net) => {
@@ -431,6 +513,7 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
       if (net.token.oracle && price === null) priceNote = PRICE_NOTES.feedFailed
       if (hasUnlisted) priceNote = PRICE_NOTES.unlisted
       else if (unsettledCredit) priceNote = PRICE_NOTES.unsettled
+      else if (unseenEth) priceNote = PRICE_NOTES.unseenEth
       else if (!net.token.oracle) {
         const swap = pricedRow?.priced.source === "swap" && pricedRow.priced.token === net.token.symbol ? pricedRow.priced.usd_micros : null
         if (swap === null) priceNote = isSwap ? PRICE_NOTES.unusable : PRICE_NOTES.noExchange
@@ -448,7 +531,7 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
       if (marketPrice !== null) {
         price = marketPrice
         priceSource = "market"
-        if (!rejected && !hasUnlisted && !unsettledCredit) priceNote = null
+        if (!rejected && !hasUnlisted && !unsettledCredit && !unseenEth) priceNote = null
       }
       return { net, price, priceSource, priceNote, rejected }
     })

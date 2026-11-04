@@ -26,11 +26,11 @@ actor ScriptedSource: PortfolioSource {
         throw FetchError.unreachable
     }
 
-    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
         throw FetchError.unreachable
     }
 
-    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
         throw FetchError.unreachable
     }
 }
@@ -51,11 +51,11 @@ actor GatedSource: PortfolioSource {
         throw FetchError.unreachable
     }
 
-    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
         throw FetchError.unreachable
     }
 
-    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
         throw FetchError.unreachable
     }
 
@@ -361,6 +361,7 @@ actor RuledSource: PortfolioSource {
     static let market = PricingRule(id: "market-price", name: "Market price", summary: "", dataset: "a/b@0.0.1", hash: String(repeating: "a", count: 64))
     static let cautious = PricingRule(id: "cautious-eth", name: "Cautious ETH", summary: "", dataset: "a/c@0.0.1", hash: String(repeating: "b", count: 64))
     private(set) var asked: [String?] = []
+    private(set) var askedAboutProof: [String?] = []
     var failing = false
 
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
@@ -380,12 +381,14 @@ actor RuledSource: PortfolioSource {
         throw FetchError.unreachable
     }
 
-    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
-        throw FetchError.unreachable
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
+        askedAboutProof.append(rule)
+        return try resource("proof", as: Proof.self)
     }
 
-    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
-        throw FetchError.unreachable
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
+        askedAboutProof.append(rule)
+        return try resource("verification", as: Verification.self)
     }
 
     func rules() async throws -> [PricingRule] { [Self.market, Self.cautious] }
@@ -453,5 +456,17 @@ actor RuledSource: PortfolioSource {
         store.setRule(RuledSource.cautious.id)
         store.stop()
         #expect(before != store.explanationRequest(for: .total(.pnl)))
+    }
+
+    @Test func aProofIsAboutTheRuleOnScreen() async throws {
+        let source = RuledSource()
+        let store = makeStore(source)
+        await store.refreshRules()
+        _ = try await store.proof(leg: "x", address: "demo")
+        store.setRule(RuledSource.cautious.id)
+        store.stop()
+        _ = try await store.proof(leg: "x", address: "demo")
+        _ = try await store.verification(leg: "x", address: "demo")
+        #expect(await source.askedAboutProof == [nil, RuledSource.cautious.id, RuledSource.cautious.id])
     }
 }

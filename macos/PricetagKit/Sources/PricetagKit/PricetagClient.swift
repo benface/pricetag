@@ -26,8 +26,8 @@ public protocol PortfolioSource: Sendable {
     func rules() async throws -> [PricingRule]
     func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
-    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof
-    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification
 }
 
 /// Nothing here needs to be there for a source that only reads, like one in a test.
@@ -37,8 +37,8 @@ extension PortfolioSource {
     public func importCoinbase(csv: String) async throws -> ExchangeImport { throw FetchError.unreachable }
     public func verifyLink(owner: String, address: String, signature: String) async throws -> Bool { throw FetchError.unreachable }
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
-    public func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof { throw FetchError.unreachable }
-    public func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification { throw FetchError.unreachable }
+    public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof { throw FetchError.unreachable }
+    public func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
     public func rules() async throws -> [PricingRule] { [] }
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
 }
@@ -62,17 +62,19 @@ public struct PricetagClient: PortfolioSource {
         try await decoded(post("/api/portfolio/\(address)/explain", query: target.queryItems, body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book), timeout: .seconds(30)))
     }
 
-    public func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
-        try await get("/api/portfolio/\(address)/proof", query: legQuery(leg, currency), timeout: .seconds(30))
+    public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
+        try await get("/api/portfolio/\(address)/proof", query: legQuery(leg, currency, rule), timeout: .seconds(30))
     }
 
     /// A block's rows can take a while on a busy server, and the read is one query at a time.
-    public func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
-        try await get("/api/portfolio/\(address)/verify", query: legQuery(leg, currency), timeout: .seconds(120))
+    public func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
+        try await get("/api/portfolio/\(address)/verify", query: legQuery(leg, currency, rule), timeout: .seconds(120))
     }
 
-    private func legQuery(_ leg: String, _ currency: CurrencyCode) -> [URLQueryItem] {
-        [URLQueryItem(name: "leg", value: leg), URLQueryItem(name: "currency", value: currency.rawValue)]
+    private func legQuery(_ leg: String, _ currency: CurrencyCode, _ rule: String?) -> [URLQueryItem] {
+        var items = [URLQueryItem(name: "leg", value: leg), URLQueryItem(name: "currency", value: currency.rawValue)]
+        if let rule { items.append(URLQueryItem(name: "rule", value: rule)) }
+        return items
     }
 
     /// Reads every wallet in it, so it gets as long as a first read.
