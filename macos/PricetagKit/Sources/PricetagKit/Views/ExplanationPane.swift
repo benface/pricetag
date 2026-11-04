@@ -120,7 +120,7 @@ public struct LegRow: View {
             }
             .font(.caption)
             if showsProof, let address = store.address {
-                ProofPanel(leg: leg.id, address: address, store: store).id("\(address):\(leg.id):\(currency.rawValue)")
+                ProofPanel(leg: leg.id, address: address, store: store).id("\(address):\(leg.id):\(currency.rawValue):\(store.selectedRule ?? "")")
             }
         }
         .padding(.vertical, 3)

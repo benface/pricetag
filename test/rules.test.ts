@@ -1,12 +1,14 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, type LegRow } from "@pricetag/sdk/core"
-import type { PortfolioResponse } from "../src/core/api.ts"
+import type { PortfolioResponse, ProofResponse, VerificationResponse, WalletResponse } from "../src/core/api.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule, type RuleComparison } from "../src/core/rules.ts"
 import { createApi } from "../server/app.ts"
-import type { Proofs } from "../server/proof.ts"
+import type { BlockData } from "../server/block.ts"
+import { createProofs, type Proofs } from "../server/proof.ts"
 import type { Source } from "../server/source.ts"
 
 const ME = "0x00000000000000000000000000000000000000aa"
@@ -53,10 +55,10 @@ const NO_PROOFS: Proofs = { datasets: async () => [], readBlock: async () => nul
 
 const rule = (id: string): PricingRule => ({ id, ...RULE_TEXT[id]!, dataset: `a/${id}@0.0.1`, hash: "a".repeat(64) })
 
-async function serve(forkThrough: number, forkReads: string[] = []): Promise<{ server: Server; base: string }> {
+async function serve(forkThrough: number, forkReads: string[] = [], proofs: Proofs = NO_PROOFS): Promise<{ server: Server; base: string }> {
   const market = sourceAt(ETH_ANSWER)
   const cautious = sourceAt((ETH_ANSWER * 99n) / 100n, forkThrough, forkReads)
-  const api = createApi({}, { source: market, readRates: async () => ({ byBlock: {}, latest: null }), proofs: NO_PROOFS, rules: [{ rule: rule(MARKET_RULE_ID), source: market }, { rule: rule(CAUTIOUS_RULE_ID), source: cautious }] })
+  const api = createApi({}, { source: market, readRates: async () => ({ byBlock: {}, latest: null }), proofs, rules: [{ rule: rule(MARKET_RULE_ID), source: market }, { rule: rule(CAUTIOUS_RULE_ID), source: cautious }] })
   const server = createServer((req, res) => void api(req, res))
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   return { server, base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }
@@ -120,6 +122,80 @@ describe("reading by a pricing rule", () => {
   it("refuses a bad compare request", async () => {
     assert.equal((await fetch(`${base}/api/portfolio/${ME}/compare?linked=nope`)).status, 400)
     assert.equal((await fetch(`${base}/api/portfolio/demo/compare`)).status, 400)
+  })
+})
+
+describe("proof by a pricing rule", () => {
+  // A real block, which isn't this test's wallet's, so its result doesn't matter. Only that no rule changes it.
+  const { block } = JSON.parse(readFileSync(new URL("./support/base-blocks.json", import.meta.url), "utf8")) as { block: BlockData }
+  const MAIN_HASH = "c".repeat(64)
+  const proofs: Proofs = {
+    ...createProofs((async () => []) as never, { baseDataset: "a/base@0.0.1", dataset: `a/${MARKET_RULE_ID}@0.0.1`, readDeposits: async () => new Map(), readManifestHash: async () => MAIN_HASH }),
+    readBlock: async () => ({ data: block, deposits: null }),
+  }
+  const NOTE = ruleNote(RULE_TEXT[CAUTIOUS_RULE_ID]!)
+  let server: Server
+  let base: string
+  const forkReads: string[] = []
+  before(async () => ({ server, base } = await serve(HEAD, forkReads, proofs)))
+  after(() => server.close())
+  const get = async <T>(path: string) => (await (await fetch(`${base}${path}`)).json()) as T
+  const legOf = async (asset: string, query: string) => (await get<WalletResponse>(`/api/wallet/${ME}${query}`)).legs.find((leg) => leg.asset === asset && !leg.opening)!.id
+  const proof = (leg: string, query = "") => get<ProofResponse>(`/api/portfolio/${ME}/proof?leg=${encodeURIComponent(leg)}${query}`)
+  const cautious = `&rule=${CAUTIOUS_RULE_ID}`
+
+  it("reads the wallet by the rule it's asked about", async () => {
+    forkReads.length = 0
+    const leg = await legOf("ETH", "")
+    assert.ok(!forkReads.includes(ME), "the default doesn't read the fork")
+    await proof(leg, cautious)
+    assert.ok(forkReads.includes(ME))
+  })
+
+  it("says which rule set the price, and lists the fork's dataset next to the one it forks", async () => {
+    const answer = await proof(await legOf("ETH", `?rule=${CAUTIOUS_RULE_ID}`), cautious)
+    assert.ok(answer.source.includes(NOTE))
+    assert.deepEqual(answer.datasets, [
+      { title: "Prices, by Cautious ETH", name: `a/${CAUTIOUS_RULE_ID}@0.0.1`, hash: "a".repeat(64) },
+      { title: "Activity, and the prices that rule starts from", name: `a/${MARKET_RULE_ID}@0.0.1`, hash: MAIN_HASH },
+      { title: "Base's blocks", name: "a/base@0.0.1", hash: MAIN_HASH },
+    ])
+  })
+
+  it("says the same on a price that rule doesn't change, and that it doesn't change it", async () => {
+    const answer = await proof(await legOf("USDC", `?rule=${CAUTIOUS_RULE_ID}`), cautious)
+    assert.match(answer.source[0] as string, /Chainlink's USDC\/USD price/)
+    assert.ok(answer.source.includes(NOTE))
+    assert.match(NOTE, /1% below Chainlink's price.*Every other price is the same/)
+  })
+
+  it("says nothing about a rule when it's the default, asked for or not", async () => {
+    const leg = await legOf("ETH", "")
+    for (const query of ["", `&rule=${MARKET_RULE_ID}`]) {
+      const answer = await proof(leg, query)
+      assert.ok(!answer.source.some((line) => line.includes("pricing rule")))
+      assert.deepEqual(answer.datasets.map(({ title }) => title), ["Prices and activity", "Base's blocks"])
+    }
+  })
+
+  it("checks the same block the same way, because no rule changes a block", async () => {
+    const leg = encodeURIComponent(await legOf("ETH", ""))
+    const verification = await get<VerificationResponse>(`/api/portfolio/${ME}/verify?leg=${leg}`)
+    assert.equal(verification.blockHash, `0x${block.block.hash}`)
+    assert.deepEqual(await get<VerificationResponse>(`/api/portfolio/${ME}/verify?leg=${leg}${cautious}`), verification)
+  })
+
+  it("refuses a rule that isn't here", async () => {
+    const leg = encodeURIComponent(await legOf("ETH", ""))
+    assert.equal((await fetch(`${base}/api/portfolio/${ME}/proof?leg=${leg}&rule=nope`)).status, 400)
+    assert.equal((await fetch(`${base}/api/portfolio/${ME}/verify?leg=${leg}&rule=nope`)).status, 400)
+  })
+
+  it("has no rule on the demo wallet, which isn't read through one", async () => {
+    const leg = await get<WalletResponse>("/api/wallet/demo").then(({ legs }) => legs.find((candidate) => !candidate.opening)!.id)
+    const answer = await get<ProofResponse>(`/api/portfolio/demo/proof?leg=${encodeURIComponent(leg)}${cautious}`)
+    assert.ok(!answer.source.includes(NOTE))
+    assert.deepEqual(answer.datasets, [])
   })
 })
 

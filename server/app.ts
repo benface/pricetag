@@ -311,7 +311,7 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
 
     const proofMatch = /^\/api\/portfolio\/([^/]+)\/(proof|verify)$/.exec(path)
     if (proofMatch) {
-      const wallet = await readWallet(proofMatch[1] as string, res, { fresh: false, rule: null })
+      const wallet = await readWallet(proofMatch[1] as string, res, { fresh: false, rule })
       if (!wallet) return true
       const leg = wallet.legs.find(({ id }) => id === params.get("leg"))
       if (!leg || leg.opening) {
@@ -320,7 +320,7 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
       }
       const proofs = wallet.mode === "demo" ? null : (created?.proofs ?? null)
       if (proofMatch[2] === "proof") {
-        sendJson(res, 200, proofOf(leg, wallet.legs, currency, proofs ? await proofs.datasets() : [], proofs ? null : DEMO_UNVERIFIABLE))
+        sendJson(res, 200, proofOf(leg, wallet.legs, currency, proofs ? await proofs.datasets(rule?.note ? rule.rule : null) : [], proofs ? null : DEMO_UNVERIFIABLE, wallet.ruleNote ?? null))
         return true
       }
       if (!proofs) {

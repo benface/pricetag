@@ -4,6 +4,7 @@
 import { ETH_USD_FEED, TOKENS, USDC_USD_FEED, WETH_ADDRESS, describeError, hexOf, tokenByAddress, type LegRow, type PricedLeg, type Query } from "@pricetag/sdk"
 import type { CheckStatus, ProofCheck, ProofDataset, ProofLink, ProofResponse, VerificationResponse } from "../src/core/api.ts"
 import type { CurrencyCode } from "../src/core/currency.ts"
+import type { PricingRule } from "../src/core/rules.ts"
 import { formatAmount } from "../src/core/format.ts"
 import { tokenLabel } from "../src/core/wording.ts"
 import { depositHashes, readBlock, type BlockData, type ReadDeposits } from "./block.ts"
@@ -89,12 +90,13 @@ function scopeOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: CurrencyC
   return scope
 }
 
-export function proofOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: CurrencyCode, datasets: ProofDataset[], unavailable: string | null): ProofResponse {
+/** `ruleNote` is set when the wallet was read through a rule other than the default, since the number on screen is then that rule's. */
+export function proofOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: CurrencyCode, datasets: ProofDataset[], unavailable: string | null, ruleNote: string | null = null): ProofResponse {
   const { source, links } = priceSource(leg, legs)
   return {
     blockNum: leg.blockNum,
     txHash: leg.txHash,
-    source,
+    source: ruleNote ? [...source, ruleNote] : source,
     movements: partsBehind(leg, legs).map(describePart),
     links: [{ title: "This transaction's logs on Basescan", url: `${BASESCAN}/tx/${leg.txHash}#eventlog` }, ...links],
     datasets,
@@ -222,7 +224,8 @@ export function createManifestReader(adminUrl: string, token: string | undefined
 export type BlockRead = { data: BlockData; deposits: ReadonlyMap<string, DepositDetails> | null }
 
 export type Proofs = {
-  datasets(): Promise<ProofDataset[]>
+  /** What's behind a number. `fork` is the rule it was read through, when that isn't the default: its prices come from its own dataset. */
+  datasets(fork?: PricingRule | null): Promise<ProofDataset[]>
   /** What checking a block needs, or null when Amp doesn't have the block. Only this talks to Amp, so a failure here is Amp's and one after it is ours. */
   readBlock(blockNum: number): Promise<BlockRead | null>
 }
@@ -248,9 +251,11 @@ function retrying(query: Query, pauseMs: number): Query {
 export function createProofs(query: Query, config: { baseDataset: string; dataset: string | null; readDeposits: ReadDeposits; readManifestHash: ReadManifestHash; retryPauseMs?: number }): Proofs {
   const blockQuery = retrying(query, config.retryPauseMs ?? READ_PAUSE_MS)
   return {
-    async datasets() {
-      const wanted = [...(config.dataset ? [{ title: "Prices and activity", name: config.dataset }] : []), { title: "Base's blocks", name: config.baseDataset }]
-      return Promise.all(wanted.map(async ({ title, name }) => ({ title, name, hash: await config.readManifestHash(name) })))
+    async datasets(fork) {
+      const wanted = [...(config.dataset ? [{ title: fork ? "Activity, and the prices that rule starts from" : "Prices and activity", name: config.dataset }] : []), { title: "Base's blocks", name: config.baseDataset }]
+      const read = await Promise.all(wanted.map(async ({ title, name }) => ({ title, name, hash: await config.readManifestHash(name) })))
+      // Its hash is the one the query was pinned to, so it's what was read.
+      return fork ? [{ title: `Prices, by ${fork.name}`, name: fork.dataset, hash: fork.hash }, ...read] : read
     },
     async readBlock(blockNum) {
       const data = await readBlock(blockQuery, config.baseDataset, blockNum)
