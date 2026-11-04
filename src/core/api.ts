@@ -1,11 +1,10 @@
 // What the server sends the browser. The browser runs the fold itself, because cost is personal.
 
-import type { PricedLeg, ReferenceRow } from "./legs.ts"
-import type { LatestPrices } from "./portfolio.ts"
+import type { Head, LatestPrices, PricedLeg, ReferenceRow } from "@pricetag/sdk/core"
+
+export type { Head }
 
 export type Mode = "demo" | "raw" | "dataset"
-
-export type Head = { blockNum: number; timestamp: string }
 
 export type WalletResponse = {
   address: string
@@ -21,10 +20,4 @@ export type WalletResponse = {
   latest: Head
   /** Transactions this wallet sent whose gas couldn't be worked out, so ETH is overstated by that much. */
   gasUnknownTxs: string[]
-}
-
-const ADDRESS = /^0x[0-9a-fA-F]{40}$/
-
-export function isAddress(value: string): boolean {
-  return ADDRESS.test(value)
 }

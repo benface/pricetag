@@ -1,8 +1,7 @@
 // Keeps each wallet's rows in memory: one full read, then only new blocks, because a wallet read scans the whole range.
 
+import { buildPricedLegs, derivePricedRows, latestPrices, type LatestPrices, type LegRow, type PricedRow, type ReferenceRow } from "@pricetag/sdk/core"
 import type { Head, WalletResponse } from "../src/core/api.ts"
-import { buildPricedLegs, derivePricedRows, answerToMicros, type LegRow, type PricedRow, type ReferenceRow } from "../src/core/legs.ts"
-import type { LatestPrices } from "../src/core/portfolio.ts"
 import type { Source } from "./source.ts"
 
 /** Re-read this many blocks on each refresh, so a reorg near the tip replaces what it changed. */
@@ -50,13 +49,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>) 
       for (const tx of window.gasUnknownTxs) gasUnknownTxs.add(tx)
     }
 
-    // Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong.
-    const latest = await source.readLatestReference(head.blockNum)
-    const eth = answerToMicros(latest?.eth_usd)
-    const usdc = answerToMicros(latest?.usdc_usd)
-    const prices: LatestPrices = {}
-    if (latest && eth) prices.ETH = { usdMicros: eth, source: "oracle", blockNum: latest.block_num }
-    if (latest && usdc) prices.USDC = { usdMicros: usdc, source: "oracle", blockNum: latest.block_num }
+    const prices = latestPrices(await source.readLatestReference(head.blockNum))
 
     const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs }
     wallets.delete(address)

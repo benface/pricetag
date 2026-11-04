@@ -1,8 +1,6 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { valuePosition } from "../core/fold.ts"
-import type { LegEffect, Position, Totals } from "../core/portfolio.ts"
-import { TOKENS } from "../core/tokens.ts"
+import { TOKENS, valuePosition, type LegEffect, type Position, type Totals } from "@pricetag/sdk/core"
 import { formatAmount, formatPrice, formatSignedUsd, formatUsd } from "./format.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized"

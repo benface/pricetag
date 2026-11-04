@@ -2,8 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { createWallets } from "../server/wallets.ts"
 import type { Source, WindowRows } from "../server/source.ts"
-import type { LegRow, ReferenceRow } from "../src/core/legs.ts"
-import { ETH_ADDRESS } from "../src/core/tokens.ts"
+import { ETH_ADDRESS, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 

@@ -3,8 +3,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { describe, it } from "node:test"
 import { ptGasSource, ptPriceSource, tablesSql } from "../dataset/build.ts"
 import { gasPaid, type RawTx } from "../server/raw.ts"
-import { ptPrice } from "../src/core/legs.ts"
-import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS } from "../src/core/tokens.ts"
+import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, ptPrice } from "@pricetag/sdk/core"
 
 const manifest = JSON.parse(readFileSync(new URL("../dataset/pricetag.json", import.meta.url), "utf8")) as {
   dependencies: Record<string, string>

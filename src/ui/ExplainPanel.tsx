@@ -1,8 +1,7 @@
 import { useLayoutEffect, useRef } from "react"
-import type { LegEffect } from "../core/portfolio.ts"
+import { tokenByAddress, type LegEffect } from "@pricetag/sdk/core"
 import { formatAmount, formatPrice, formatSignedAmount, formatTime, shortHash } from "./format.ts"
 import { describeEffect, type Explanation } from "./explain.ts"
-import { tokenByAddress } from "../core/tokens.ts"
 
 /** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS_SHOWN = 200

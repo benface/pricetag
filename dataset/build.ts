@@ -7,7 +7,7 @@
 // and UDFs that never return null or throw, because one bad row stops the whole dataset.
 
 import { readFileSync, writeFileSync } from "node:fs"
-import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, TOKENS, USDC_USD_FEED, WETH_ADDRESS } from "../src/core/tokens.ts"
+import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, TOKENS, USDC_USD_FEED, WETH_ADDRESS } from "@pricetag/sdk/core"
 
 const MANIFEST = new URL("./pricetag.json", import.meta.url)
 
@@ -148,7 +148,7 @@ WHERE ${since}`,
   }
 }
 
-/** The dataset's copy of `ptPrice` in src/core/legs.ts. test/dataset.test.ts runs both on the same inputs. */
+/** The dataset's copy of `ptPrice` in packages/sdk/src/legs.ts. test/dataset.test.ts runs both on the same inputs. */
 export function ptPriceSource(): string {
   const tokens = TOKENS.map((t) => `  '${hex(t.address)}': { symbol: '${t.symbol}', decimals: ${t.decimals}, asset: '${t.asset}', oracle: ${t.oracle ? `'${t.oracle}'` : "null"} }`).join(",\n")
   return `

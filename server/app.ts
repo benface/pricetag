@@ -2,9 +2,9 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { isAddress, type Head } from "../src/core/api.ts"
+import { createQuery, describeError, isAddress } from "@pricetag/sdk"
+import type { Head } from "../src/core/api.ts"
 import { DEMO_ADDRESS, DEMO_WALLET } from "../src/core/fixtures.ts"
-import { createQuery, describeError } from "./amp.ts"
 import { datasetSource, rawSource, type Source } from "./source.ts"
 import { createWallets } from "./wallets.ts"
 

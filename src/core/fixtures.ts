@@ -2,9 +2,8 @@
 // swaps, gas, a wrap, a plain transfer with an unknown cost, an absurd swap price, a sale of unknown-cost tokens, and a
 // swap that also moved a token off the allowlist.
 
+import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, normalizeAddress, type LegKind, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
-import { buildPricedLegs, derivePricedRows, type LegKind, type LegRow, type ReferenceRow } from "./legs.ts"
-import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, normalizeAddress } from "./tokens.ts"
 
 export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
 

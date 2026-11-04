@@ -1,9 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { buildPricedLegs, derivePricedRows, isSanePrice, ptPrice, type LegRow, type ReferenceRow } from "../src/core/legs.ts"
-import { foldPositions, pnlOverTime, sumTotals } from "../src/core/portfolio.ts"
+import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, isSanePrice, pnlOverTime, ptPrice, sumTotals, tokenByAddress, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
 import { DEMO_ADDRESS, DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
-import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, tokenByAddress } from "../src/core/tokens.ts"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"

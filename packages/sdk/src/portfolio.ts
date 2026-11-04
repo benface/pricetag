@@ -3,6 +3,8 @@
 import { applyLeg, emptyPosition, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
 import { answerToMicros, type PricedLeg, type ReferenceRow } from "./legs.ts"
 
+export type Head = { blockNum: number; timestamp: string }
+
 export type LatestPrice = { usdMicros: string; source: "oracle" | "swap" | "market"; blockNum: number }
 export type LatestPrices = Record<string, LatestPrice | undefined>
 
@@ -54,6 +56,16 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
     const price = prices[asset] ?? null
     return { asset, decimals, state, effects, price, values: valuePosition(state, price?.usdMicros ?? null) }
   })
+}
+
+/** Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong. */
+export function latestPrices(reference: ReferenceRow | null): LatestPrices {
+  const prices: LatestPrices = {}
+  const eth = answerToMicros(reference?.eth_usd)
+  const usdc = answerToMicros(reference?.usdc_usd)
+  if (reference && eth) prices.ETH = { usdMicros: eth, source: "oracle", blockNum: reference.block_num }
+  if (reference && usdc) prices.USDC = { usdMicros: usdc, source: "oracle", blockNum: reference.block_num }
+  return prices
 }
 
 const answer = (sum: bigint, coverage: Coverage) => (hasAnswer(coverage) ? sum.toString() : null)
@@ -115,6 +127,14 @@ export function sumTotals(positions: readonly Position[]): Totals {
     unpricedGas,
     coverage,
   }
+}
+
+export type Portfolio = { method: Method; positions: Position[]; totals: Totals }
+
+/** cost = fold(pricedLegs, method). Without `prices`, every position's value and unrealized PnL stay unknown. */
+export function buildPortfolio(legs: readonly PricedLeg[], method: Method, prices: LatestPrices = {}): Portfolio {
+  const positions = foldPositions(legs, method, prices)
+  return { method, positions, totals: sumTotals(positions) }
 }
 
 export type PnlPoint = {
