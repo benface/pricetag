@@ -82,6 +82,91 @@ describe("getLegs", () => {
     assert.deepEqual(prices.map((p) => [p.usdMicros, p.source]), [[null, "unknown"]])
   })
 
+  describe("with an RPC URL and a swap paid out in unwrapped ETH", () => {
+    const ETH = "0000000000000000000000000000000000000000"
+    const HEAD = { blockNum: 200, timestamp: new Date(1_800_000_000_000).toISOString() }
+    const reference = { block_num: "100", eth_usd: ETH_ANSWER, usdc_usd: USDC_ANSWER }
+    const readFees: ReadL1Fees = async (requests) => new Map(requests.map(({ txHash }) => [txHash, "24"]))
+    const before = E18
+    // It sells AERO, pays gas and a fee, and the claimed ETH arrives, or only `arrived` of it does.
+    const tables = (arrived: bigint) => ({
+      legs: [leg("aa", ETH, ME, "debit", "1000", "gas"), leg("aa", AERO, ME, "debit", String(500n * E18), "erc20"), leg("aa", ETH, ME, "credit", String(E18), "unwrap")],
+      priced_legs: [pricedRow("aa", AERO, String(500n * E18), ETH, String(E18), swapTo("4800000"))],
+      reference_prices: [reference, { ...reference, block_num: "199" }],
+      balances: { 49: { ETH: String(before), AERO: String(500n * E18) }, 200: { ETH: String(before + arrived - 1024n) } },
+      ethBalances: { 99: String(before), 100: String(before + arrived - 1024n) },
+    })
+    const appLegs = async (query: Query) => {
+      const source = datasetSource(query, { dataset: "benface/pricetag@0.0.1", baseDataset: "edgeandnode/base_mainnet@0.0.2", startBlock: 50, network: "base_mainnet" })
+      return (await createWallets(source, async () => HEAD, readFees).get(`0x${ME}`)).legs
+    }
+
+    for (const [name, arrived] of [["all of it arrived", E18], ["only part of it arrived", E18 / 2n]] as const) {
+      it(`gives the same legs as the app when ${name}`, async () => {
+        const { query, client } = fakeAmp(tables(arrived), 200, { readL1Fees: readFees })
+        const { legs, l1Fees, l1FeeUnknownTxs } = await client.getLegs(`0x${ME}`, { from: 50 })
+        assert.deepEqual(legs, (await appLegs(query)).filter((l) => !l.opening))
+        assert.deepEqual([l1Fees, l1FeeUnknownTxs], ["read", []])
+        const aero = legs.find((l) => l.asset === "AERO")!
+        assert.equal(aero.priceSource, "swap")
+        assert.equal(aero.priceNote, null)
+        assert.equal(aero.proceedsMicros, String(arrived * 2400n * 10n ** 6n / E18))
+        assert.equal(legs.find((l) => l.asset === "ETH" && l.kind === "swap")!.delta, String(arrived))
+        assert.equal(legs.find((l) => l.kind === "gas")!.delta, "-1024")
+      })
+    }
+
+    it("matches `getPortfolio`'s legs, without the opening ones", async () => {
+      const { client } = fakeAmp(tables(E18), 200, { readL1Fees: readFees })
+      const legs = (await client.getLegs(`0x${ME}`, { from: 50 })).legs
+      assert.deepEqual(legs, (await client.getPortfolio(`0x${ME}`, { from: 50 })).legs.filter((l) => !l.opening))
+    })
+
+    it("stops at `to`, like the app's read as of a block", async () => {
+      const { client } = fakeAmp(tables(E18), 200, { readL1Fees: readFees })
+      const { legs, blocks } = await client.getLegs(`0x${ME}`, { from: 50, to: 99 })
+      assert.deepEqual(blocks, { fromBlock: 50, toBlock: 99 })
+      assert.deepEqual(legs, [])
+    })
+
+    it("stays unknown while the L1 fee can't be read, and says so", async () => {
+      const { client } = fakeAmp(tables(E18), 200, { readL1Fees: async () => new Map() })
+      const { legs, l1Fees, l1FeeUnknownTxs } = await client.getLegs(`0x${ME}`, { from: 50 })
+      assert.deepEqual([l1Fees, l1FeeUnknownTxs], ["pending", ["0xaa"]])
+      const aero = legs.find((l) => l.asset === "AERO")!
+      assert.deepEqual([aero.priceMicros, aero.proceedsMicros], [null, null])
+      assert.match(aero.priceNote!, /couldn't confirm/)
+    })
+
+    it("stays unknown while the balance can't be read", async () => {
+      const { client } = fakeAmp({ ...tables(E18), ethBalances: {} }, 200, { readL1Fees: readFees })
+      const { legs, l1Fees } = await client.getLegs(`0x${ME}`, { from: 50 })
+      assert.equal(l1Fees, "read")
+      assert.match(legs.find((l) => l.asset === "AERO")!.priceNote!, /couldn't confirm/)
+    })
+
+    it("stays unknown when more ETH arrived than it claims", async () => {
+      const { client } = fakeAmp(tables(2n * E18), 200, { readL1Fees: readFees })
+      const aero = (await client.getLegs(`0x${ME}`, { from: 50 })).legs.find((l) => l.asset === "AERO")!
+      assert.deepEqual([aero.priceMicros, aero.proceedsMicros], [null, null])
+    })
+
+    it("keeps today's unknown without one, and doesn't read balances that couldn't confirm it", async () => {
+      const { client, queries } = fakeAmp(tables(E18))
+      const { legs, l1Fees, l1FeeUnknownTxs } = await client.getLegs(`0x${ME}`, { from: 50 })
+      assert.deepEqual([l1Fees, l1FeeUnknownTxs], ["no rpc url", ["0xaa"]])
+      assert.match(legs.find((l) => l.asset === "AERO")!.priceNote!, /couldn't confirm/)
+      assert.equal(legs.find((l) => l.kind === "gas")!.delta, "-1000")
+      assert.ok(!queries.some((q) => q.includes("eth_call")), queries.join("; "))
+    })
+
+    it("still leaves `getPrices` on the sender's row unknown", async () => {
+      const { client } = fakeAmp(tables(E18), 200, { readL1Fees: readFees })
+      const { prices } = await client.getPrices("AERO", { from: 50 })
+      assert.deepEqual(prices.map((p) => [p.usdMicros, p.source]), [[null, "unknown"]])
+    })
+  })
+
   it("stops at what every table has processed, and says so", async () => {
     const { client, queries } = fakeAmp({}, 150)
     assert.deepEqual((await client.getLegs(`0x${ME}`, { from: 50 })).blocks, { fromBlock: 50, toBlock: 150 })
