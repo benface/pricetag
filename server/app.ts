@@ -42,6 +42,17 @@ function createSource(env: Env): { source: Source; readRates: ReturnType<typeof 
   return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates }
 }
 
+/** Each one is a wallet read, so this stays well under what the server keeps in memory. */
+const MAX_LINKED_WALLETS = 10
+
+/** The user's other wallets, or null when that isn't what was sent. */
+function parseLinked(value: string | null): string[] | null {
+  if (value === null || value === "") return []
+  const addresses = value.split(",")
+  if (addresses.length > MAX_LINKED_WALLETS || !addresses.every(isAddress)) return null
+  return [...new Set(addresses.map((address) => address.toLowerCase()))]
+}
+
 /** The request's decoded path, or null when the URL is malformed. Clients can send anything here. */
 export function pathOf(req: IncomingMessage): string | null {
   try {
@@ -62,8 +73,7 @@ function sendAmpError(res: ServerResponse, error: unknown) {
   sendJson(res, 502, { error: "Couldn't read this wallet's data." })
 }
 
-export function createApi(env: Env) {
-  const created = createSource(env)
+export function createApi(env: Env, created: ReturnType<typeof createSource> = createSource(env)) {
   const source = created?.source ?? null
 
   let head: Head | null = null
@@ -188,14 +198,27 @@ export function createApi(env: Env) {
         sendJson(res, 400, { error: "That isn't a number this can explain." })
         return true
       }
+      const linked = parseLinked(params.get("linked"))
+      if (!linked) {
+        sendJson(res, 400, { error: "Linked wallets are a comma-separated list of Base addresses." })
+        return true
+      }
       const read = await readWallet(portfolioMatch[1] as string, res, { fresh: !target })
       const wallet = read && (await inCurrency(read, currency, res))
       if (!wallet) return true
+      const linkedWallets: WalletResponse[] = []
+      for (const address of wallet.mode === "demo" ? [] : linked.filter((address) => address !== wallet.address)) {
+        // A cost that can't be read isn't a cost of zero, so this answers with the failure instead of a wrong number.
+        const other = await readWallet(address, res, { fresh: !target })
+        const converted = other && (await inCurrency(other, currency, res))
+        if (!converted) return true
+        linkedWallets.push(converted)
+      }
       if (!target) {
-        sendJson(res, 200, portfolioOf(wallet, method))
+        sendJson(res, 200, portfolioOf(wallet, method, linkedWallets))
         return true
       }
-      const explanation = explainPortfolio(wallet, method, target)
+      const explanation = explainPortfolio(wallet, method, target, linkedWallets)
       if (explanation) sendJson(res, 200, explanation)
       else sendJson(res, 404, { error: "This wallet has nothing like that." })
       return true
