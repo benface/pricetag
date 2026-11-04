@@ -1,11 +1,15 @@
-// What another app builds on: a wallet's priced legs and a token's prices, read from the Pricetag dataset.
+// What another app builds on: a wallet's portfolio, its priced legs and a token's prices, read from the Pricetag dataset.
 // Everything keeps its price source and transaction, and what can't be priced stays unknown.
 
-import { createQuery, type Query } from "./amp.ts"
-import { ORACLE_TABLES, SWAP_TABLES, WALLET_TABLES, datasetReader } from "./dataset.ts"
-import { answerToMicros, buildPricedLegs, type LegRow, type PricedLeg, type PriceSource, type ReferenceRow } from "./legs.ts"
-import { latestPrices, type LatestPrices } from "./portfolio.ts"
-import { TOKENS, isAddress, normalizeAddress, tokenByAddress, type Token } from "./tokens.ts"
+import { createQuery, type Logger, type Query } from "./amp.ts"
+import { ORACLE_TABLES, SWAP_TABLES, WALLET_TABLES, datasetReader, datasetSource } from "./dataset.ts"
+import type { Method } from "./fold.ts"
+import { answerToMicros, buildPricedLegs, type LegRow, type PricedLeg, type PriceSource, type Reference } from "./legs.ts"
+import { latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
+import { createL1FeeReader, type ReadL1Fees } from "./receipts.ts"
+import { ASSETS, TOKENS, isAddress, normalizeAddress, tokenByAddress, type Token } from "./tokens.ts"
+import { describeMissing, foldWallet, hasStarted, type FoldedWallet, type WalletData } from "./wallet.ts"
+import { createWallets } from "./wallets.ts"
 
 export type PricetagConfig = {
   /** Amp's query URL. */
@@ -16,10 +20,31 @@ export type PricetagConfig = {
   dataset: string
   /** The raw dataset the chain's head is read from. */
   baseDataset?: string | undefined
+  /** The dataset's first block, which every read starts from unless it says otherwise. */
+  startBlock?: number | undefined
+  /** Where `getPortfolio` reads L1 fees from. Without one, it can't check ETH against the chain for a wallet that sent anything, and says so. */
+  rpcUrl?: string | undefined
+  /** The network name Amp knows the chain by, as in `rpc.base_mainnet.eth_call`, which reads onchain balances. */
+  network?: string | undefined
+  /** How long one query can take, in ms. It defaults to 60 s. Queries still run one at a time, because a hosted Amp is shared. */
+  timeoutMs?: number | undefined
+  /** Gets slow queries, and reads that failed and will be retried. It defaults to `console`. */
+  logger?: Logger | undefined
 }
 
-/** Blocks to read, inclusive. Without `to`, it reads up to the chain's head. */
-export type BlockRange = { from: number; to?: number | undefined }
+/** Blocks to read, inclusive. Without `from`, it starts at the config's `startBlock`. Without `to`, it reads up to the chain's head. */
+export type BlockRange = { from?: number | undefined; to?: number | undefined }
+
+export type PortfolioOptions = BlockRange & {
+  /** How to work out the cost of what's sold. It defaults to `average`. */
+  method?: Method | undefined
+}
+
+/**
+ * read: every L1 fee this wallet paid is in the numbers. pending: some couldn't be read yet, and the next call tries again.
+ * no rpc url: they're missing, because the config has no `rpcUrl`.
+ */
+export type L1FeeStatus = "read" | "pending" | "no rpc url"
 
 /**
  * The blocks actually read, which `toBlock` can leave short of what was asked while a table this read uses catches up.
@@ -33,9 +58,27 @@ export type WalletLegs = {
   /** In order for the fold. Each has its `txHash`, `priceSource` and, when it has no price, a `priceNote` saying why. */
   legs: PricedLeg[]
   /** The oracle reads at the blocks of those legs. `referenceMarks` turns them into what `pnlOverTime` takes. */
-  references: ReferenceRow[]
+  references: Reference[]
   /** Transactions this wallet sent whose gas couldn't be worked out, so ETH is overstated by that much. */
   gasUnknownTxs: string[]
+}
+
+/** A wallet's holdings, cost and PnL in USD, the same way the app works them out. */
+export type WalletPortfolio = Omit<FoldedWallet, "view"> & {
+  address: string
+  method: Method
+  blocks: BlocksRead
+  /** False until the dataset has processed `blocks.fromBlock`. Until then there are no totals, and no rows doesn't mean nothing happened. */
+  started: boolean
+  /** What these numbers leave out, in words. Show it next to any total. Empty when nothing is. */
+  missing: string[]
+  /** In order for the fold, starting with what the wallet already held, as opening legs. */
+  legs: PricedLeg[]
+  gasUnknownTxs: string[]
+  l1Fees: L1FeeStatus
+  l1FeeUnknownTxs: string[]
+  /** Assets whose balance before `blocks.fromBlock` couldn't be read, so they can't be compared yet. */
+  openingUnread: string[]
 }
 
 export type PricePoint = {
@@ -59,10 +102,7 @@ export type TokenPrices = {
   prices: PricePoint[]
 }
 
-function checkRange({ from, to }: BlockRange) {
-  const valid = Number.isSafeInteger(from) && from > 0 && (to === undefined || (Number.isSafeInteger(to) && to >= from))
-  if (!valid) throw new Error(`Bad block range: from ${from} to ${to}. It needs a first block, and the dataset's start block is the earliest with data.`)
-}
+const isBlock = (block: number) => Number.isSafeInteger(block) && block > 0
 
 function findToken(token: string): Token {
   const found = isAddress(token) ? tokenByAddress(token) : TOKENS.find((t) => t.symbol === token)
@@ -72,28 +112,75 @@ function findToken(token: string): Token {
 
 export function createPricetag(config: PricetagConfig) {
   if (!config.url) throw new Error("Pricetag needs Amp's query URL")
-  return pricetagClient(createQuery(config.url, config.token || undefined), config)
+  const { timeoutMs, logger, rpcUrl } = config
+  return pricetagClient(createQuery(config.url, config.token || undefined, { timeoutMs, logger }), { ...config, readL1Fees: rpcUrl ? createL1FeeReader(rpcUrl, fetch, undefined, logger) : undefined })
 }
 
-export function pricetagClient(query: Query, config: Pick<PricetagConfig, "dataset" | "baseDataset">) {
+type ClientConfig = Pick<PricetagConfig, "dataset" | "baseDataset" | "startBlock" | "network" | "logger"> & { readL1Fees?: ReadL1Fees | undefined }
+
+export function pricetagClient(query: Query, config: ClientConfig) {
   if (!config.dataset) throw new Error("Pricetag needs a dataset, like benface/pricetag@0.0.1")
-  const reader = datasetReader(query, { dataset: config.dataset, baseDataset: config.baseDataset ?? "edgeandnode/base_mainnet@0.0.2" })
+  const { startBlock, readL1Fees } = config
+  if (startBlock !== undefined && !isBlock(startBlock)) throw new Error(`Bad start block: ${startBlock}. It's the block number the dataset starts from.`)
+  const baseDataset = config.baseDataset ?? "edgeandnode/base_mainnet@0.0.2"
+  const source = datasetSource(query, { dataset: config.dataset, baseDataset, startBlock: startBlock ?? null, network: config.network ?? "base_mainnet" })
+  const reader = datasetReader(query, { dataset: config.dataset, baseDataset })
+
+  // Read just before a wallet is. A wallet's history stays in memory between calls, so each call only reads what's new.
+  let chainHead: Head | null = null
+  const wallets = createWallets(source, async () => chainHead as Head, readL1Fees ?? (async () => new Map()), config.logger)
+
+  /** A range with its first block filled in, or an error saying what's wrong with it. */
+  function resolveRange({ from = startBlock, to }: BlockRange): { from: number; to: number | undefined } {
+    if (from === undefined) throw new Error("No first block: pass `from`, or `startBlock` in createPricetag's config.")
+    if (!isBlock(from) || (to !== undefined && (!Number.isSafeInteger(to) || to < from))) throw new Error(`Bad block range: from ${from} to ${to}. The dataset's start block is the earliest with data.`)
+    return { from, to }
+  }
 
   async function blocksRead(range: BlockRange, tables: readonly string[]): Promise<BlocksRead> {
-    checkRange(range)
-    const nothing = { fromBlock: range.from, toBlock: range.from - 1 }
-    const head = range.to ?? (await reader.head(range.from))?.blockNum
+    const { from, to } = resolveRange(range)
+    const nothing = { fromBlock: from, toBlock: from - 1 }
+    const head = to ?? (await reader.head(from))?.blockNum
     if (head === undefined) return nothing
-    const processed = await reader.processedThrough(range.from, head, tables)
-    return processed === null ? nothing : { fromBlock: range.from, toBlock: processed }
+    const processed = await reader.processedThrough(from, head, tables)
+    return processed === null ? nothing : { fromBlock: from, toBlock: processed }
   }
 
   return {
     /**
-     * A wallet's legs in the range, priced and labeled the same way the app's are. Feed them to `buildPortfolio`.
-     * Unlike the app, there's no opening balance or L1 fee in them, so they're what moved, not what the wallet holds.
+     * A wallet's holdings, cost and PnL, the same way the app works them out: what it held before the range, its L1 fees,
+     * and every position checked against the chain. Check `started`, and show `pnlStatus` and `missing` next to any total.
+     * With a `to`, it's the wallet as of that block, valued at that block's prices.
      */
-    async getLegs(address: string, range: BlockRange): Promise<WalletLegs> {
+    async getPortfolio(address: string, { method = "average", ...range }: PortfolioOptions = {}): Promise<WalletPortfolio> {
+      if (!isAddress(address)) throw new Error(`${address} isn't a Base address`)
+      const account = normalizeAddress(address)
+      const { from, to } = resolveRange(range)
+      chainHead = (await reader.head(chainHead?.blockNum ?? null)) ?? chainHead
+      const wallet = chainHead ? await wallets.get(account, { from, to }) : emptyWallet(account, from)
+      const { coverage, legs, gasUnknownTxs, l1FeeUnknownTxs, openingUnread } = wallet
+      const { view: _, ...folded } = foldWallet(wallet, method)
+      const started = hasStarted(wallet)
+      return {
+        ...folded,
+        address: account,
+        method,
+        blocks: coverage,
+        started,
+        missing: started ? describeMissing({ totals: folded.totals, gasUnknownTxs, l1FeeUnknownTxs }) : [`everything, because the dataset hasn't processed block ${from}`],
+        legs,
+        gasUnknownTxs,
+        l1Fees: l1FeeUnknownTxs.length === 0 ? "read" : readL1Fees ? "pending" : "no rpc url",
+        l1FeeUnknownTxs,
+        openingUnread,
+      }
+    },
+
+    /**
+     * A wallet's legs in the range, priced and labeled the same way the app's are. They're what moved, not what the wallet
+     * holds: there's no opening balance or L1 fee in them. For that, and to match the app, use `getPortfolio`.
+     */
+    async getLegs(address: string, range: BlockRange = {}): Promise<WalletLegs> {
       if (!isAddress(address)) throw new Error(`${address} isn't a Base address`)
       const account = normalizeAddress(address)
       const blocks = await blocksRead(range, WALLET_TABLES)
@@ -107,7 +194,7 @@ export function pricetagClient(query: Query, config: Pick<PricetagConfig, "datas
      * A token's prices in the range, by symbol or address. A token with an oracle has one price a block, and any other
      * token has one for each swap that gave one. A swap that couldn't be priced is still there, as unknown.
      */
-    async getPrices(token: string, range: BlockRange): Promise<TokenPrices> {
+    async getPrices(token: string, range: BlockRange = {}): Promise<TokenPrices> {
       const found = findToken(token)
       const blocks = await blocksRead(range, found.oracle ? ORACLE_TABLES : SWAP_TABLES)
       const result = { token: found.symbol, blocks }
@@ -143,6 +230,28 @@ export function pricetagClient(query: Query, config: Pick<PricetagConfig, "datas
       const head = await reader.head(null)
       return latestPrices(head && (await reader.readLatestReference(head.blockNum)))
     },
+  }
+}
+
+/** A chain with no blocks yet, so nothing can be read. */
+function emptyWallet(address: string, from: number): WalletData {
+  return {
+    address,
+    mode: "dataset",
+    currency: "USD",
+    rates: null,
+    coverage: { fromBlock: from, toBlock: from - 1 },
+    legs: [],
+    references: [],
+    prices: {},
+    latest: { blockNum: from - 1, timestamp: new Date(0).toISOString() },
+    gasUnknownTxs: [],
+    unlisted: [],
+    l1FeeUnknownTxs: [],
+    balances: null,
+    openingUnread: [...ASSETS],
+    lastBalances: {},
+    unreadBalances: [],
   }
 }
 

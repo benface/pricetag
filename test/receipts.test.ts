@@ -1,16 +1,16 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { createL1FeeReader, l1FeeOf } from "../server/receipts.ts"
+import { createL1FeeReader, l1FeeOf } from "@pricetag/sdk/internal"
 
 const HASH = (n: number) => `0x${n.toString(16).padStart(64, "0")}`
 const request = (n: number) => ({ txHash: HASH(n), blockNum: 100 })
 const silence = (run: () => Promise<void>) => async () => {
-  const original = console.error
-  console.error = () => {}
+  const original = console.warn
+  console.warn = () => {}
   try {
     await run()
   } finally {
-    console.error = original
+    console.warn = original
   }
 }
 
@@ -74,8 +74,8 @@ describe("the receipt reader", () => {
 
   it("a network failure or odd body isn't fatal, and the URL isn't logged, since it can hold a key", async () => {
     const logged: unknown[] = []
-    const original = console.error
-    console.error = (...args: unknown[]) => logged.push(...args)
+    const original = console.warn
+    console.warn = (...args: unknown[]) => logged.push(...args)
     try {
       const failing = (async () => {
         throw new TypeError("fetch failed")
@@ -84,7 +84,7 @@ describe("the receipt reader", () => {
       const odd = answering(() => Response.json({ error: "nope" }))
       assert.equal((await createL1FeeReader("http://secret-key.example", odd.send)([request(1)])).size, 0)
     } finally {
-      console.error = original
+      console.warn = original
     }
     assert.ok(logged.length > 0)
     assert.ok(!logged.join(" ").includes("secret-key"))

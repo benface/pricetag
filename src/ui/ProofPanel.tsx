@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
+import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { CheckStatus, ProofResponse, VerificationResponse } from "../core/api.ts"
-import type { CurrencyCode } from "../core/currency.ts"
 
 const MARKS: Record<CheckStatus, string> = { passed: "✓", failed: "✕", unchecked: "?" }
 const STATUS_LABELS: Record<CheckStatus, string> = { passed: "Passed", failed: "Failed", unchecked: "Not checked" }

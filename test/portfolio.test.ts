@@ -3,12 +3,10 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ETH_ADDRESS, PRICE_NOTES, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, ETH_USD_FEED, PRICE_NOTES, TOKENS, USDC_USD_FEED, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
-import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedMoney, formatMoney } from "../src/core/format.ts"
-import { ETH_USD_FEED, TOKENS, USDC_USD_FEED } from "@pricetag/sdk/core"
 import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
@@ -385,7 +383,7 @@ describe("comparing pricing rules", () => {
     balances: DEMO_WALLET.balances,
     legs: DEMO_WALLET.legs.map((leg) => (leg.asset === "ETH" ? { ...leg, priceMicros: lower(leg.priceMicros), costMicros: lower(leg.costMicros), proceedsMicros: lower(leg.proceedsMicros) } : leg)),
   })
-  const reference = (eth_usd: string) => ({ block_num: 1, eth_usd, usdc_usd: "100000000" })
+  const reference = (eth_usd: string) => ({ blockNum: 1, ethUsd: eth_usd, usdcUsd: "100000000" })
   const compared = compareRules({ rule: market, wallet: walletWith({}), reference: reference("240000000000") }, { rule: cautious, wallet: forked, reference: reference("237600000000") }, "average", 1)
   const row = (label: string) => compared.rows.find((r) => r.label === label)
 
@@ -449,7 +447,7 @@ describe("comparing pricing rules", () => {
 
   it("counts a network fee that changed, and says so", () => {
     const gas: LegRow = { block_num: 5, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: "0xfee", tx_index: 1, log_index: 0, token: ETH_ADDRESS, account: "0xaa", side: "debit", amount: "1000000000000000", kind: "gas" }
-    const by = (eth_usd: string) => walletWith({ address: "0xaa", prices: {}, legs: buildPricedLegs({ account: "0xaa", rows: [gas], references: [{ block_num: 5, eth_usd, usdc_usd: "100000000" }], priced: [] }), balances: null })
+    const by = (eth_usd: string) => walletWith({ address: "0xaa", prices: {}, legs: buildPricedLegs({ account: "0xaa", rows: [gas], references: [{ blockNum: 5, ethUsd: eth_usd, usdcUsd: "100000000" }], priced: [] }), balances: null })
     const fees = compareRules({ rule: market, wallet: by("300000000000"), reference: reference("300000000000") }, { rule: cautious, wallet: by("297000000000"), reference: reference("297000000000") }, "average", 5)
     assert.equal(fees.changedTxs, 1)
     assert.deepEqual(fees.transactions.map((tx) => [tx.label, tx.a, tx.b, tx.difference]), [["Network fee", "3000000", "2970000", "-30000"]])
@@ -463,7 +461,7 @@ describe("comparing pricing rules", () => {
     const THOUSANDS = "10000000000000000000000"
     const moved = (tx: string, block: number, account: string, token: string, side: LegRow["side"], amount: string): LegRow => ({ block_num: block, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: tx, tx_index: 1, log_index: 0, token, account, side, amount, kind: "erc20" })
     const walletOf = (address: string, rows: LegRow[], eth_usd: string) => {
-      const references = [...new Set(rows.map((r) => r.block_num))].map((block_num) => ({ block_num, eth_usd, usdc_usd: "100000000" }))
+      const references = [...new Set(rows.map((r) => r.block_num))].map((block_num) => ({ blockNum: block_num, ethUsd: eth_usd, usdcUsd: "100000000" }))
       return walletWith({ address, legs: buildPricedLegs({ account: address, rows, references, priced: derivePricedRows(rows, references) }), references, prices: {} })
     }
     const fund = moved("0xfund", 2, OTHER, ETH_ADDRESS, "credit", "300000000000000000")
