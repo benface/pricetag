@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { isAddress, type Method } from "@pricetag/sdk/core"
+import type { Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
 import type { CurrencyCode } from "../core/currency.ts"
 import { formatSignedMoney } from "../core/format.ts"
-import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, type TaxCountryCode, type TaxScope } from "../core/tax.ts"
+import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, type TaxCountryCode, type TaxScope } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME } from "../core/wording.ts"
 
 const COUNTRY_KEY = "pricetag.taxCountry"
@@ -64,10 +64,9 @@ export function TaxPanel({ address, currency, onClose }: { address: string; curr
   const rules = TAX_COUNTRIES[country]
   const method = chosenMethod ?? rules.method
   const scope = chosenScope ?? rules.scope
-  const others = useMemo(() => othersText.split(/[\s,]+/).filter(Boolean), [othersText])
-  const badOther = others.find((other) => !isAddress(other)) ?? null
+  const { others, bad: badOther } = useMemo(() => readOtherWallets(othersText, address), [othersText, address])
   const isDemo = address === "demo"
-  const also = badOther || isDemo ? "" : others.map((other) => other.toLowerCase()).join(",")
+  const also = badOther ? "" : others.join(",")
 
   // As in `ExplainPanel`: a native modal keeps focus inside, and closing by unmounting doesn't restore it.
   useLayoutEffect(() => {
@@ -229,7 +228,7 @@ export function TaxPanel({ address, currency, onClose }: { address: string; curr
         ) : null}
 
         <button type="button" className="primary" disabled={!ready} onClick={() => report && download(report)}>
-          {loading ? "Working it out…" : "Download CSV"}
+          {loading && !badOther ? "Working it out…" : "Download CSV"}
         </button>
 
         {report && !badOther ? (

@@ -12,7 +12,7 @@
 // - US, oldest first in each wallet: Treas. Reg. 1.1012-1(j), for dispositions from January 1, 2025. Average basis in
 //   1.1012-1(e) only covers certain stock. Rev. Proc. 2024-28 and IRS digital asset FAQs cover the move to wallets.
 
-import { foldPositions, unreadAssets, worth, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg } from "@pricetag/sdk/core"
+import { foldPositions, isAddress, unreadAssets, worth, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { viewWallet, type CurrencyCode, type WalletView } from "./currency.ts"
 import { rateSource } from "./explain.ts"
@@ -117,6 +117,7 @@ const SENT = "Sent to another address, so it's not counted as a sale. If that's 
 const ESTIMATED_COST = "Part of its cost is an estimate, from the market price when it arrived."
 const MISMATCH = "This asset's history doesn't match its onchain balance, so its cost can't be trusted."
 const UNCHECKED = "This asset hasn't been checked against its onchain balance yet, so its cost isn't shown."
+const DIFFERENT_STARTS = "These wallets' histories start at different blocks, so their costs can't be worked out together."
 
 /** Units with a known cost, and what they cost. */
 function knownOf(state: PositionState): { qty: bigint; cost: bigint } {
@@ -222,6 +223,30 @@ function movesBetween(sources: readonly Source[]): Set<string> {
 
 const isMove = (leg: PricedLeg, moves: ReadonlySet<string>) => leg.kind === "transfer" && !leg.opening && moves.has(moveKey(leg))
 
+/**
+ * What can be worked out across wallets. Each wallet is read up to its own block, so one can have sales another has
+ * no purchases for yet, and a pool that mixed them would show a wrong cost as if it were known. So a pool stops at the
+ * last block every wallet has reached. A pool also needs the same first block: before a wallet's first block, its
+ * holdings and sales aren't in the pool, which changes what everyone else's sales took.
+ */
+function poolOf(sources: readonly Source[]) {
+  const through = Math.min(...sources.map(({ wallet }) => wallet.coverage.toBlock))
+  const sameStart = new Set(sources.map(({ wallet }) => wallet.coverage.fromBlock)).size === 1
+  const pending = new Set<string>()
+  const within = sources.map((source) => ({
+    ...source,
+    view: {
+      ...source.view,
+      legs: source.view.legs.filter((leg) => {
+        if (leg.opening || leg.blockNum <= through) return true
+        pending.add(leg.txHash)
+        return false
+      }),
+    },
+  }))
+  return { through, sameStart, within, pendingTxs: pending.size }
+}
+
 function poolLegs(sources: readonly Source[], moves: ReadonlySet<string>): { legs: PricedLeg[]; walletOf: Map<PricedLeg, string> } {
   const walletOf = new Map<PricedLeg, string>()
   for (const { wallet, view } of sources) for (const leg of view.legs) if (!isMove(leg, moves)) walletOf.set(leg, wallet.address)
@@ -232,19 +257,19 @@ function poolLegs(sources: readonly Source[], moves: ReadonlySet<string>): { leg
 
 export type TaxSettings = { country: TaxCountryCode; method: Method; scope: TaxScope }
 
-/** Every row, oldest first, with a transaction's fee before what it did, the way the fold reads them. */
-export function taxRows(wallets: readonly WalletResponse[], { method, scope }: Pick<TaxSettings, "method" | "scope">): TaxRow[] {
-  const sources = wallets.map((wallet) => sourceOf(wallet, method))
-  const moves = movesBetween(sources)
+function rowsFrom(sources: readonly Source[], method: Method, scope: TaxScope): TaxRow[] {
   const rows: TaxRow[] = []
   if (scope === "pooled") {
-    const { legs, walletOf } = poolLegs(sources, moves)
-    // An asset one wallet can't confirm leaves its share of the pool unknown, and that touches every sale of it.
-    const unconfirmed = new Map(sources.flatMap((source) => [...source.unconfirmed, ...source.unread.map((asset) => [asset, UNCHECKED] as [string, string])]))
+    const { sameStart, within } = poolOf(sources)
+    const { legs, walletOf } = poolLegs(within, movesBetween(within))
+    // What one wallet can't confirm leaves its share of the pool unknown, and that touches every sale of the asset.
+    const unconfirmed = new Map(sources.flatMap(({ wallet, unconfirmed, unread }) => [...[...unread, ...wallet.openingUnread].map((asset) => [asset, UNCHECKED] as [string, string]), ...unconfirmed]))
     for (const position of foldPositions(legs, method, {})) {
-      for (const effect of position.effects) rows.push(...rowsOf(effect, walletOf.get(effect.leg) as string, unconfirmed.get(position.asset) ?? null))
+      const reason = sameStart ? (unconfirmed.get(position.asset) ?? null) : DIFFERENT_STARTS
+      for (const effect of position.effects) rows.push(...rowsOf(effect, walletOf.get(effect.leg) as string, reason))
     }
   } else {
+    const moves = movesBetween(sources)
     for (const { wallet, view, unconfirmed } of sources) {
       for (const position of foldPositions(view.legs, method, {})) {
         for (const effect of position.effects) {
@@ -255,6 +280,21 @@ export function taxRows(wallets: readonly WalletResponse[], { method, scope }: P
   }
   const feeFirst = (row: TaxRow) => (row.type === "Network fee" ? 0 : 1)
   return rows.sort((a, b) => a.blockNum - b.blockNum || a.txIndex - b.txIndex || feeFirst(a) - feeFirst(b))
+}
+
+/** Every row, oldest first, with a transaction's fee before what it did, the way the fold reads them. */
+export function taxRows(wallets: readonly WalletResponse[], { method, scope }: Pick<TaxSettings, "method" | "scope">): TaxRow[] {
+  return rowsFrom(wallets.map((wallet) => sourceOf(wallet, method)), method, scope)
+}
+
+/**
+ * The wallets someone typed in, and the first that can't be one. The demo wallet can't be combined with anything, so
+ * what's saved from another wallet is ignored there: it mustn't block a report whose field for fixing it isn't shown.
+ */
+export function readOtherWallets(text: string, address: string): { others: string[]; bad: string | null } {
+  if (address === "demo") return { others: [], bad: null }
+  const others = text.split(/[\s,]+/).filter(Boolean)
+  return { others: others.map((other) => other.toLowerCase()), bad: others.find((other) => !isAddress(other)) ?? null }
 }
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`
@@ -332,7 +372,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const { currency } = first
   const sources = wallets.map((wallet) => sourceOf(wallet, method))
   const named = wallets.length > 1
-  const rows = taxRows(wallets, settings)
+  const rows = rowsFrom(sources, method, scope)
   const count = (status: TaxRowStatus) => rows.filter((row) => row.status === status).length
   const unresolved = count("unresolved")
   const estimated = count("estimated")
@@ -345,6 +385,9 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   if (method !== country.method) warnings.push(country.methodWarning)
   if (scope !== country.scope) warnings.push(country.scopeWarning)
   if (currency !== country.currency) warnings.push(`This is in ${currency}, and ${country.inSentence} reports in ${country.currency}. Change your main currency to export it in ${country.currency}.`)
+  const pool = poolOf(sources)
+  if (scope === "pooled" && !pool.sameStart) warnings.push(`${DIFFERENT_STARTS} Their costs and gains say "unknown". Calculating each wallet on its own avoids this.`)
+  if (scope === "pooled" && pool.pendingTxs > 0) warnings.push(`This stops at block ${pool.through.toLocaleString("en-US")}, the last one every wallet has reached, so ${plural(pool.pendingTxs, "newer transaction")} ${pool.pendingTxs === 1 ? "isn't" : "aren't"} here yet.`)
   if (scope === "per-wallet" && movesBetween(sources).size > 0) warnings.push("Moves between your wallets aren't sales, so they aren't listed, but their cost doesn't carry over yet. What arrived has an unknown cost until it does.")
 
   const notes = [

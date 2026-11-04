@@ -101,6 +101,8 @@ Canada's "all together" is our reading: s. 47 averages what a taxpayer owns and 
 
 Wallets are the address on screen plus any others typed into the report. A transfer between them, netting to zero, isn't a sale. All together, its cost stays in the pool. Each on its own, what arrives has an unknown cost until WORK-323 carries it over.
 
+All together needs one consistent history, because a cost worked out from part of it would look known and be wrong. So the report stops at the last block every wallet has reached and says what that leaves out. If their histories start at different blocks, which can only happen reading the raw dataset, every cost and gain says `unknown`. The demo wallet can't be combined with anything.
+
 The report doesn't check Canada's superficial loss rule, split US short-term from long-term gains, or list what was received, and it says so. Anything before the first block read has an unknown cost, so most rows on an older wallet are unresolved for now.
 
 To add a country, add it to `TAX_COUNTRIES` in `src/core/tax.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/TaxReport.swift`.

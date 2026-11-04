@@ -19,8 +19,12 @@ public struct TaxReportView: View {
         model.request(address: store.address, currency: store.currency, serverURL: store.serverURL)
     }
 
+    private var badWallet: String? {
+        model.badWallet(for: store.address)
+    }
+
     private var report: TaxReport? {
-        if model.badWallet == nil, case .ready(let report) = model.state { return report }
+        if badWallet == nil, case .ready(let report) = model.state { return report }
         return nil
     }
 
@@ -78,7 +82,7 @@ public struct TaxReportView: View {
                     .font(.callout.monospaced())
                     .autocorrectionDisabled()
                     .frame(height: 54)
-                if let bad = model.badWallet {
+                if let bad = badWallet {
                     WarningText("\(bad) isn't a Base address.").font(.callout)
                 }
             } header: {
@@ -94,9 +98,9 @@ public struct TaxReportView: View {
     @ViewBuilder
     private var results: some View {
         switch model.state {
-        case .failed(let message) where model.badWallet == nil:
+        case .failed(let message) where badWallet == nil:
             Section { WarningText(message).font(.callout) }
-        case .loading where model.badWallet == nil:
+        case .loading where badWallet == nil:
             Section {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)

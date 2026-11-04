@@ -238,7 +238,8 @@ export function createApi(env: Env) {
         sendJson(res, 400, { error: `${bad} isn't a Base address.` })
         return true
       }
-      if ((address === "demo" || address === DEMO_ADDRESS) && others.length > 0) {
+      // Whichever way round: demo data must never land in a report on a real wallet.
+      if (others.length > 0 && [address, ...others].some((wallet) => wallet === "demo" || wallet === DEMO_ADDRESS)) {
         sendJson(res, 400, { error: "The demo wallet can't be combined with other wallets." })
         return true
       }

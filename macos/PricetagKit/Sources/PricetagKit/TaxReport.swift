@@ -134,9 +134,10 @@ public final class TaxReportModel {
         otherWalletsText.split(whereSeparator: { $0.isWhitespace || $0 == "," }).map { $0.lowercased() }
     }
 
-    /// The first thing typed that can't be a wallet. Nothing's asked of the server until it's fixed.
-    public var badWallet: String? {
-        otherWallets.first { !WalletAddress.isValid($0) }
+    /// The first thing typed that can't be a wallet. Nothing's asked of the server until it's fixed. The demo wallet can't
+    /// be combined with anything, so what's saved from another wallet is ignored there: its field for fixing it isn't shown.
+    public func badWallet(for address: String?) -> String? {
+        address == WalletAddress.demo ? nil : otherWallets.first { !WalletAddress.isValid($0) }
     }
 
     public func setCountry(_ next: TaxCountry) {
@@ -167,9 +168,9 @@ public final class TaxReportModel {
         defaults.set(next, forKey: Keys.otherWallets)
     }
 
-    /// nil with no wallet, or while what's typed can't be sent. The demo wallet can't be combined with anything.
+    /// nil with no wallet, or while what's typed can't be sent.
     public func request(address: String?, currency: CurrencyCode, serverURL: URL) -> TaxReportRequest? {
-        guard let address, badWallet == nil else { return nil }
+        guard let address, badWallet(for: address) == nil else { return nil }
         let isDemo = address == WalletAddress.demo
         return TaxReportRequest(address: address, country: country, method: method, scope: scope, currency: currency, otherWallets: isDemo ? [] : otherWallets, serverURL: serverURL)
     }

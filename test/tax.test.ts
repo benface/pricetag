@@ -5,8 +5,8 @@ import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { foldPositions, type PricedLeg } from "@pricetag/sdk/core"
 import type { TaxReportResponse, WalletResponse } from "../src/core/api.ts"
-import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
-import { TAX_COUNTRIES, taxReportOf, taxRows } from "../src/core/tax.ts"
+import { DEMO_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
+import { TAX_COUNTRIES, readOtherWallets, taxReportOf, taxRows } from "../src/core/tax.ts"
 import { createApi } from "../server/app.ts"
 
 const E18 = 10n ** 18n
@@ -192,6 +192,67 @@ describe("taxRows", () => {
       assert.deepEqual([row?.costMicros, row?.gainMicros, row?.status], [null, null, "unresolved"])
     })
 
+    describe("read up to different blocks", () => {
+      // A's buy at 102 is past where A was read. B's sale at 105 would take A's older, cheaper buy instead of the right average.
+      const buys = [buy(10, 1n, 1000), buy(102, 1n, 5000)]
+      const seller = [buy(20, 1n, 3000), sell(105, 1n, 4000)]
+      const behind = walletOf(A, buys.slice(0, 1), { coverage: { fromBlock: 1, toBlock: 100 }, balances: { blockNum: 100, amounts: { ETH: E18.toString() } } })
+      const ahead = walletOf(B, seller, { coverage: { fromBlock: 1, toBlock: 110 }, balances: { blockNum: 110, amounts: { ETH: "0" } } })
+
+      it("pooled, stops at the last block they've all reached, rather than show a wrong gain as known", () => {
+        const report = taxReportOf([behind, ahead], { country: "CA", method: "average", scope: "pooled" })
+        assert.equal(report.rowCount, 0)
+        assert.equal(report.gainMicros, null)
+        assert.ok(report.warnings.some((warning) => /stops at block 100.*1 newer transaction isn't here/.test(warning)))
+      })
+
+      it("pooled, gives the right gain once they've caught up", () => {
+        const caughtUp = walletOf(A, buys, { coverage: { fromBlock: 1, toBlock: 110 }, balances: { blockNum: 110, amounts: { ETH: (2n * E18).toString() } } })
+        const rows = taxRows([caughtUp, ahead], { method: "average", scope: "pooled" })
+        // 1,000 + 3,000 + 5,000 over 3 is 3,000 each, for a gain of 1,000.
+        assert.deepEqual(rows.map((row) => [row.costMicros, row.gainMicros, row.status]), [[usd(3000), usd(1000), "resolved"]])
+        const report = taxReportOf([caughtUp, ahead], { country: "CA", method: "average", scope: "pooled" })
+        assert.ok(!report.warnings.some((warning) => /stops at block/.test(warning)))
+      })
+
+      it("a move between them is only left out once both sides are in", () => {
+        const from = walletOf(A, [buy(10, 1n, 1000), leg(105, -E18, { kind: "transfer" })], { coverage: { fromBlock: 1, toBlock: 110 }, balances: { blockNum: 110, amounts: { ETH: "0" } } })
+        const to = walletOf(B, [], { coverage: { fromBlock: 1, toBlock: 100 }, balances: { blockNum: 100, amounts: { ETH: "0" } } })
+        assert.deepEqual(taxRows([from, to], { method: "average", scope: "pooled" }), [])
+      })
+
+      it("per wallet, each keeps everything it has, because one's cost doesn't depend on another", () => {
+        const rows = taxRows([behind, ahead], { method: "fifo", scope: "per-wallet" })
+        assert.deepEqual(rows.map((row) => [row.blockNum, row.costMicros, row.gainMicros, row.wallet]), [[105, usd(3000), usd(1000), B]])
+      })
+    })
+
+    describe("with histories that start at different blocks", () => {
+      const late = walletOf(A, [leg(49, E18, { opening: true, txHash: "", txIndex: -1, kind: "transfer" })], { coverage: { fromBlock: 50, toBlock: 100 }, balances: { blockNum: 100, amounts: { ETH: E18.toString() } } })
+      const early = walletOf(B, [buy(10, 1n, 1000), sell(60, 1n, 2000)], { coverage: { fromBlock: 1, toBlock: 100 }, balances: { blockNum: 100, amounts: { ETH: "0" } } })
+
+      it("pooled, keeps every cost and gain unknown, and says why", () => {
+        const report = taxReportOf([late, early], { country: "CA", method: "average", scope: "pooled" })
+        const [row] = eventsOf(report)
+        assert.deepEqual([row?.Proceeds, row?.Cost, row?.Gain, row?.Status], ["2000.000000", "unknown", "unknown", "UNRESOLVED"])
+        assert.match(row?.Notes ?? "", /start at different blocks/)
+        assert.equal(report.gainMicros, null)
+        assert.ok(report.warnings.some((warning) => /start at different blocks/.test(warning)))
+      })
+
+      it("per wallet, doesn't mind", () => {
+        const rows = taxRows([late, early], { method: "fifo", scope: "per-wallet" })
+        assert.deepEqual(rows.map((row) => [row.gainMicros, row.status]), [[usd(1000), "resolved"]])
+      })
+    })
+
+    it("pooled, an asset one wallet couldn't read at its start has no cost, even if that wallet never moved it", () => {
+      const unread = walletOf(A, [], { openingUnread: ["ETH"], balances: { blockNum: 1000, amounts: {} } })
+      const seller = walletOf(B, [buy(10, 1n, 1000), sell(30, 1n, 2000)])
+      const [row] = taxRows([unread, seller], { method: "average", scope: "pooled" })
+      assert.deepEqual([row?.costMicros, row?.gainMicros, row?.status], [null, null, "unresolved"])
+    })
+
     it("pooled keeps sales in order across wallets", () => {
       const first = walletOf(A, [buy(10, 1n, 1000), sell(40, 1n, 2000)])
       const second = walletOf(B, [buy(20, 1n, 3000), sell(30, 1n, 2000)])
@@ -204,6 +265,18 @@ describe("taxRows", () => {
   it("gives one wallet the same rows either way", () => {
     const wallet = walletOf(A, [buy(10, 1n, 1000), sell(30, 1n, 2000), leg(40, -1n, { kind: "transfer" })])
     assert.deepEqual(taxRows([wallet], { method: "fifo", scope: "pooled" }), taxRows([wallet], { method: "fifo", scope: "per-wallet" }))
+  })
+})
+
+describe("readOtherWallets", () => {
+  it("reads several however they're separated, and finds the first typo", () => {
+    const upper = `0x${"A".repeat(40)}`
+    assert.deepEqual(readOtherWallets(`${upper}\n ${B}, `, A), { others: [A, B], bad: null })
+    assert.equal(readOtherWallets(`${B}\n0xnope`, A).bad, "0xnope")
+  })
+
+  it("ignores what's saved on the demo wallet, where the field for fixing it isn't shown", () => {
+    assert.deepEqual(readOtherWallets(`0xnope\n${B}`, "demo"), { others: [], bad: null })
   })
 })
 
@@ -335,8 +408,17 @@ describe("GET /api/tax-report", () => {
     assert.equal((await get("demo?country=CA&scope=everything")).status, 400)
     assert.equal((await get("demo?country=CA&currency=EUR")).status, 400)
     assert.equal((await get(`demo?country=CA&also=${A}`)).status, 400)
+    assert.equal((await get(`${DEMO_ADDRESS}?country=CA&also=${A}`)).status, 400)
     assert.equal((await get(`${A}?country=CA&also=nope`)).status, 400)
     assert.equal((await get(`${A}?country=CA&also=${Array(21).fill(B).join(",")}`)).status, 400)
+  })
+
+  it("never puts demo data in a report on a real wallet, whichever way round they're asked for", async () => {
+    for (const query of [`${A}?country=CA&also=${DEMO_ADDRESS}`, `${A}?country=CA&also=${B},${DEMO_ADDRESS}`, `${DEMO_ADDRESS}?country=CA&also=${A}`, `demo?country=CA&also=${DEMO_ADDRESS}`]) {
+      const { status, body } = await get(query)
+      assert.equal(status, 400, query)
+      assert.match(body.error ?? "", /demo wallet can't be combined/)
+    }
   })
 
   it("fails rather than leave a wallet out", async () => {

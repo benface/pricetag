@@ -76,8 +76,19 @@ import Testing
     @Test func aBadWalletAsksTheServerNothing() {
         let model = model()
         model.setOtherWalletsText("0xnope")
-        #expect(model.badWallet == "0xnope")
-        #expect(model.request(address: "demo", currency: .USD, serverURL: server) == nil)
+        let real = "0x\(String(repeating: "a", count: 40))"
+        #expect(model.badWallet(for: real) == "0xnope")
+        #expect(model.request(address: real, currency: .USD, serverURL: server) == nil)
+    }
+
+    @Test func aSavedTypoDoesntBlockTheDemoWallet() {
+        let defaults = freshDefaults()
+        model(defaults: defaults).setOtherWalletsText("0xnope")
+        // Reopened on the demo wallet, where the field for fixing it isn't shown.
+        let reopened = model(defaults: defaults)
+        #expect(reopened.otherWalletsText == "0xnope")
+        #expect(reopened.badWallet(for: WalletAddress.demo) == nil)
+        #expect(reopened.request(address: WalletAddress.demo, currency: .USD, serverURL: server)?.otherWallets == [])
     }
 
     @Test func readsSeveralWalletsHoweverTheyreSeparated() {
