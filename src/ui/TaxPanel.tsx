@@ -3,7 +3,8 @@ import { isAddress, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
 import type { CurrencyCode } from "../core/currency.ts"
 import { formatSignedMoney } from "../core/format.ts"
-import { METHOD_LABELS, SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, type TaxCountryCode, type TaxScope } from "../core/tax.ts"
+import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, type TaxCountryCode, type TaxScope } from "../core/tax.ts"
+import { METHOD_LABELS, METHOD_NAME } from "../core/wording.ts"
 
 const COUNTRY_KEY = "pricetag.taxCountry"
 const METHOD_KEY = "pricetag.taxMethod"
@@ -153,7 +154,7 @@ export function TaxPanel({ address, currency, onClose }: { address: string; curr
           </select>
         </label>
         <label className="field">
-          <span className="small muted">How cost is worked out</span>
+          <span className="small muted">{METHOD_NAME}</span>
           <select value={method} onChange={(e) => {
               // What's remembered has to say which country this override is for.
               remember(COUNTRY_KEY, country)

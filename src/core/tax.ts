@@ -1,8 +1,9 @@
 // The tax report: one row per thing that may be taxable, in the user's currency, for an accountant or tax software.
 // Pure, like the fold it runs on. The server calls it, so the web and Mac apps export the same file.
 //
-// Each row comes from what the fold did to a position, so the gains here add up to the same Realized the apps show. A
-// gap stays a gap: a row that can't be worked out says "unknown", is never $0, and isn't in the gain total.
+// Each row comes from what the fold did to a position. On a position with nothing unresolved, its gains add up to the
+// Realized the apps show. With something unresolved, the apps leave out the whole position, and this keeps each row it
+// knows. A gap stays a gap: a row that can't be worked out says "unknown", is never $0, and isn't in the gain total.
 //
 // What each country's defaults rest on, from official sources only:
 // - Canada, average across all wallets: Income Tax Act s. 47(1) averages "identical properties" a taxpayer owns, and says
@@ -16,6 +17,7 @@ import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } fro
 import { viewWallet, type CurrencyCode, type WalletView } from "./currency.ts"
 import { rateSource } from "./explain.ts"
 import { formatDuration, shortHash } from "./format.ts"
+import { METHOD_LABELS } from "./wording.ts"
 
 export type TaxCountryCode = "CA" | "US"
 /** Whether cost is worked out across all of a person's wallets, or separately in each. */
@@ -36,7 +38,7 @@ export type TaxCountry = {
   notes: string[]
 }
 
-/** Adding a country takes an entry here and a case in `TaxCountry.swift`. */
+/** Adding a country takes an entry here and a case in `TaxReport.swift`. */
 export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
   CA: {
     code: "CA",
@@ -71,13 +73,13 @@ export function isTaxCountryCode(value: string | null | undefined): value is Tax
   return TAX_COUNTRY_CODES.includes(value as TaxCountryCode)
 }
 
-export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
 export const SCOPE_LABELS: Record<TaxScope, string> = { pooled: "All wallets together", "per-wallet": "Each wallet on its own" }
 
 export const TAX_DISCLAIMER = "Not tax advice. Rules differ by country and change over time, so check this with an accountant before relying on it."
 
 const COMMON_NOTES = [
   "Network fees are their own rows, because paying one in ETH counts as selling that ETH. They aren't added to what you bought or taken off what you sold, which an accountant may want to adjust.",
+  "The gain total adds up every row it knows. Realized in the app leaves out a whole asset when any of its sales is unknown, so the two can differ.",
   "What you received isn't listed. Some of it, like pay or rewards, may be income when it arrives.",
 ]
 

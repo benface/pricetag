@@ -1,5 +1,5 @@
 // The tax report: see `src/core/tax.ts`. The server works it out and writes the file, and this only asks and saves.
-// A test checks each country's defaults against what the server sends.
+// A test checks the defaults against what the server sends.
 
 import Foundation
 import Observation
