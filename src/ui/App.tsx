@@ -1,16 +1,25 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
 import { hasStarted, isAddress, isBehind, type WalletResponse } from "../core/api.ts"
+import { CURRENCIES, CURRENCY_CODES, isCurrencyCode, viewWallet, type CurrencyCode } from "../core/currency.ts"
 import type { Method } from "../core/fold.ts"
 import { foldPositions, hasAnswer, pnlOverTime, sumTotals, type Coverage, type Exclusion, type PnlPoint, type Position } from "../core/portfolio.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
-import { explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
-import { formatAmount, formatDuration, formatPrice, formatSignedUsd, formatUsd } from "../core/format.ts"
+import { explainContext, explainMetric, explainPoint, explainTotal, missingRatesLine, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
+import { formatAmount, formatDuration, formatMoney, formatPrice, formatSignedMoney } from "../core/format.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { useWallet } from "./useWallet.ts"
 
 function readAddress(): string | null {
   const value = new URLSearchParams(window.location.search).get("address")
   return value && (value === "demo" || isAddress(value)) ? value : null
+}
+
+const CURRENCY_KEY = "pricetag.currency"
+
+/** Remembered in this browser, since there are no accounts. USD until it's changed. */
+function readCurrency(): CurrencyCode {
+  const value = localStorage.getItem(CURRENCY_KEY)
+  return isCurrencyCode(value) ? value : "USD"
 }
 
 function Num({ onClick, label, children, tone }: { onClick: () => void; label: string; children: ReactNode; tone?: "gain" | "loss" | "warn" | null }) {
@@ -29,8 +38,10 @@ function describeExcluded(excluded: readonly Exclusion[]): string {
   return [...byReason.entries()].map(([reason, assets]) => `${assets.join(", ")} (${reason})`).join("; ")
 }
 
-function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: (e: Explanation) => void }) {
-  const open = (position: Position, metric: Metric) => () => onExplain(explainMetric(position, metric))
+function Holdings({ positions, currency, explain }: { positions: Position[]; currency: CurrencyCode; explain: (position: Position, metric: Metric) => void }) {
+  const open = (position: Position, metric: Metric) => () => explain(position, metric)
+  const money = (micros: string) => formatMoney(micros, currency)
+  const signed = (micros: string) => formatSignedMoney(micros, currency)
   return (
     <section className="card">
       <h2>Holdings</h2>
@@ -66,7 +77,7 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
                   <td className="num">
                     {held ? (
                       <Num label={`${asset} average cost`} onClick={open(position, "average")} tone={unknown ? "warn" : null}>
-                        {values.averageCostMicros ? formatPrice(values.averageCostMicros) : "⚠ Unknown"}
+                        {values.averageCostMicros ? formatPrice(values.averageCostMicros, currency) : "⚠ Unknown"}
                       </Num>
                     ) : (
                       <span className="muted">—</span>
@@ -75,7 +86,7 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
                   <td className="num">
                     {held ? (
                       <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueMicros === null ? "warn" : null}>
-                        {values.valueMicros ? formatUsd(values.valueMicros) : "⚠ No price"}
+                        {values.valueMicros ? money(values.valueMicros) : "⚠ No price"}
                       </Num>
                     ) : (
                       <span className="muted">—</span>
@@ -83,13 +94,13 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
                   </td>
                   <td className="num">
                     <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedMicros)}>
-                      {values.realizedMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.realizedMicros)}
+                      {values.realizedMicros === null ? "⚠ PnL unavailable" : signed(values.realizedMicros)}
                     </Num>
                   </td>
                   <td className="num">
                     {held ? (
                       <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedMicros)}>
-                        {values.unrealizedMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.unrealizedMicros)}
+                        {values.unrealizedMicros === null ? "⚠ PnL unavailable" : signed(values.unrealizedMicros)}
                       </Num>
                     ) : (
                       <span className="muted">—</span>
@@ -111,7 +122,8 @@ export function App() {
   const [inputError, setInputError] = useState<string | null>(null)
   const [method, setMethod] = useState<Method>("average")
   const [explanation, setExplanation] = useState<Explanation | null>(null)
-  const { wallet, loading, error } = useWallet(address)
+  const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
+  const { wallet, loading, error } = useWallet(address, chosenCurrency)
 
   useEffect(() => {
     const onPop = () => setAddress(readAddress())
@@ -135,12 +147,23 @@ export function App() {
     go(value.toLowerCase())
   }
 
-  const positions = useMemo(() => (wallet ? foldPositions(wallet.legs, method, wallet.prices) : []), [wallet, method])
+  const chooseCurrency = (next: CurrencyCode) => {
+    localStorage.setItem(CURRENCY_KEY, next)
+    setChosenCurrency(next)
+    setExplanation(null)
+  }
+
+  const view = useMemo(() => (wallet ? viewWallet(wallet) : null), [wallet])
+  // Whatever's on screen says what it's in, which for a moment after a change isn't what was just chosen.
+  const currency = view?.currency ?? chosenCurrency
+  const positions = useMemo(() => (view ? foldPositions(view.legs, method, view.prices) : []), [view, method])
   const totals = useMemo(() => sumTotals(positions), [positions])
-  const points = useMemo(() => (wallet ? pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest) : []), [wallet, method])
+  const points = useMemo(() => (view && wallet ? pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest) : []), [view, wallet, method])
   const close = useCallback(() => setExplanation(null), [])
-  const openTotal = (metric: TotalMetric) => setExplanation(explainTotal(positions, totals, metric))
-  const openPoint = (point: PnlPoint) => setExplanation(explainPoint(positions, point))
+  const context = () => explainContext(wallet as WalletResponse, view as NonNullable<typeof view>, method)
+  const openTotal = (metric: TotalMetric) => setExplanation(explainTotal(positions, totals, metric, context()))
+  const openPoint = (point: PnlPoint) => setExplanation(explainPoint(positions, point, context()))
+  const openMetric = (position: Position, metric: Metric) => setExplanation(explainMetric(position, metric, context()))
 
   return (
     <div className="page">
@@ -159,6 +182,16 @@ export function App() {
           />
           <button type="submit">Look up</button>
         </form>
+        <label className="currency">
+          <span className="muted small">Main currency</span>
+          <select value={chosenCurrency} onChange={(e) => chooseCurrency(e.target.value as CurrencyCode)}>
+            {CURRENCY_CODES.map((code) => (
+              <option key={code} value={code}>
+                {code} · {CURRENCIES[code].name}
+              </option>
+            ))}
+          </select>
+        </label>
         {wallet ? <LiveBadge wallet={wallet} stale={error !== null} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
@@ -200,6 +233,8 @@ export function App() {
             </p>
           ) : null}
           {wallet.gasUnknownTxs.length > 0 ? <p className="notice warn">⚠ Gas couldn't be worked out for {wallet.gasUnknownTxs.length} transactions, so ETH is overstated by that much.</p> : null}
+          {view && view.missingRateTxs.length > 0 ? <p className="notice warn">⚠ {missingRatesLine(view.missingRateTxs.length, currency)}</p> : null}
+          {currency !== "USD" && view && !view.latestRate ? <p className="notice warn">⚠ There's no current USD to {currency} rate, so what's held has no current value.</p> : null}
 
           {wallet.legs.length === 0 && !hasStarted(wallet) ? null : wallet.legs.length === 0 ? (
             <section className="empty">
@@ -211,9 +246,9 @@ export function App() {
             <>
               <section className="summary">
                 <div className="headline">
-                  <span className="muted small">Total PnL</span>
+                  <span className="muted small">Total PnL · {currency}</span>
                   <Num label="Total PnL" onClick={() => openTotal("pnl")} tone={toneOf(totals.pnlMicros)}>
-                    <span className="big">{totals.pnlMicros === null ? "⚠ Unavailable" : formatSignedUsd(totals.pnlMicros)}</span>
+                    <span className="big">{totals.pnlMicros === null ? "⚠ Unavailable" : formatSignedMoney(totals.pnlMicros, currency)}</span>
                   </Num>
                   {totals.excluded.length > 0 ? (
                     <p className="excluded">⚠ Excludes {describeExcluded(totals.excluded)}.</p>
@@ -223,10 +258,10 @@ export function App() {
                   {totals.unpricedGas ? <p className="excluded">⚠ Some gas had no price at its block, and isn't in this total.</p> : null}
                 </div>
                 <dl className="stats">
-                  <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value} value={totals.valueMicros && formatUsd(totals.valueMicros)} />
-                  <Stat label="Realized" onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedMicros && formatSignedUsd(totals.realizedMicros)} />
-                  <Stat label="Unrealized" onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedMicros && formatSignedUsd(totals.unrealizedMicros)} />
-                  <Stat label="Gas paid" onClick={() => openTotal("gas")} coverage={{ known: 1, missing: totals.unpricedGas ? 1 : 0 }} value={totals.gasMicros && formatUsd(totals.gasMicros)} />
+                  <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value} value={totals.valueMicros && formatMoney(totals.valueMicros, currency)} />
+                  <Stat label="Realized" onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedMicros && formatSignedMoney(totals.realizedMicros, currency)} />
+                  <Stat label="Unrealized" onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedMicros && formatSignedMoney(totals.unrealizedMicros, currency)} />
+                  <Stat label="Gas paid" onClick={() => openTotal("gas")} coverage={{ known: 1, missing: totals.unpricedGas ? 1 : 0 }} value={totals.gasMicros && formatMoney(totals.gasMicros, currency)} />
                 </dl>
                 <div className="method" role="group" aria-label="Cost method">
                   {(["average", "fifo"] as const).map((m) => (
@@ -236,14 +271,14 @@ export function App() {
                   ))}
                 </div>
               </section>
-              <PnlChart points={points} onSelect={openPoint} />
-              <Holdings positions={positions} onExplain={setExplanation} />
+              <PnlChart points={points} currency={currency} onSelect={openPoint} />
+              <Holdings positions={positions} currency={currency} explain={openMetric} />
             </>
           )}
         </main>
       ) : null}
 
-      {explanation ? <ExplainPanel explanation={explanation} onClose={close} /> : null}
+      {explanation ? <ExplainPanel explanation={explanation} currency={currency} onClose={close} /> : null}
     </div>
   )
 }

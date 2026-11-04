@@ -1,15 +1,17 @@
 import { useLayoutEffect, useRef } from "react"
+import type { CurrencyCode } from "../core/currency.ts"
 import type { LegEffect } from "../core/portfolio.ts"
 import { formatPrice, formatSignedAmount, formatTime, shortHash } from "../core/format.ts"
-import { describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
+import { describeConversion, describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
 
 /** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS_SHOWN = 200
 
-function LegRow({ effect }: { effect: LegEffect }) {
+function LegRow({ effect, currency }: { effect: LegEffect; currency: CurrencyCode }) {
   const { leg } = effect
   const incoming = BigInt(leg.delta) > 0n
   const netting = describeNetting(leg)
+  const conversion = describeConversion(leg, currency)
   return (
     <li className="leg">
       <div className="leg-main">
@@ -24,16 +26,17 @@ function LegRow({ effect }: { effect: LegEffect }) {
         <span className="tag">{leg.kind}</span>
         {leg.priceMicros !== null && leg.priceSource ? (
           <span className="tag">
-            {formatPrice(leg.priceMicros)} · {leg.priceSource}
+            {formatPrice(leg.priceMicros, currency)} · {leg.priceSource}
           </span>
         ) : (
           <span className="tag warn">⚠ no price</span>
         )}
         {incoming ? <span className={leg.costLabel === "unknown" ? "tag warn" : "tag"}>{leg.costLabel === "unknown" ? "⚠ cost unknown" : `cost: ${leg.costLabel}`}</span> : null}
       </div>
-      <p className="small">{describeEffect(effect)}.</p>
+      <p className="small">{describeEffect(effect, currency)}.</p>
       {leg.priceNote ? <p className="small muted">{leg.priceNote}</p> : null}
       {netting ? <p className="small muted">{netting}</p> : null}
+      {conversion ? <p className="small muted">{conversion}</p> : null}
       <a className="small" href={`https://basescan.org/tx/${leg.txHash}`} target="_blank" rel="noreferrer noopener">
         {shortHash(leg.txHash)} on Basescan ↗
       </a>
@@ -41,7 +44,7 @@ function LegRow({ effect }: { effect: LegEffect }) {
   )
 }
 
-export function ExplainPanel({ explanation, onClose }: { explanation: Explanation; onClose: () => void }) {
+export function ExplainPanel({ explanation, currency, onClose }: { explanation: Explanation; currency: CurrencyCode; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const close = useRef<HTMLButtonElement>(null)
 
@@ -80,6 +83,7 @@ export function ExplainPanel({ explanation, onClose }: { explanation: Explanatio
           </button>
         </header>
         <p className="panel-value">{explanation.value ?? <span className="unavailable">⚠ Unavailable</span>}</p>
+        {explanation.sourceValue ? <p className="small muted">{explanation.sourceValue}</p> : null}
         {explanation.lines.map((line) => (
           <p key={line} className="small">
             {line}
@@ -91,7 +95,7 @@ export function ExplainPanel({ explanation, onClose }: { explanation: Explanatio
         </h3>
         <ul className="legs">
           {explanation.effects.slice(0, MAX_LEGS_SHOWN).map((effect) => (
-            <LegRow key={effect.leg.id} effect={effect} />
+            <LegRow key={effect.leg.id} effect={effect} currency={currency} />
           ))}
         </ul>
       </div>

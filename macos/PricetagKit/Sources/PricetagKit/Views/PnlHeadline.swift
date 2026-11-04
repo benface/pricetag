@@ -19,13 +19,17 @@ public struct PnlHeadline: View {
         portfolio.pnlStatus == .unavailable ? nil : portfolio.totals.pnlMicros
     }
 
+    private func signed(_ micros: String) -> String {
+        Format.signedMoney(micros, portfolio.currency)
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("Total PnL").font(.caption).foregroundStyle(.secondary)
+            Text("Total PnL · \(portfolio.currency.rawValue)").font(.caption).foregroundStyle(.secondary)
             Button(action: onOpen) {
                 Group {
                     if let pnl {
-                        LiveNumber(Format.signedUSD(pnl), tone: isLive ? Tone(signed: pnl) : .neutral)
+                        LiveNumber(signed(pnl), tone: isLive ? Tone(signed: pnl) : .neutral)
                     } else {
                         WarningText(Wording.pnlUnavailable)
                     }
@@ -38,7 +42,7 @@ public struct PnlHeadline: View {
                 .animation(.easeOut(duration: 0.15), value: isLive)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("Total PnL, \(pnl.map(Format.signedUSD) ?? Wording.pnlUnavailable)")
+            .accessibilityLabel("Total PnL, \(pnl.map(signed) ?? Wording.pnlUnavailable)")
             .accessibilityHint("Shows the legs behind this number")
             PnlCaveats(portfolio: portfolio)
         }
@@ -64,6 +68,9 @@ public struct PnlCaveats: View {
             }
             if !portfolio.gasUnknownTxs.isEmpty {
                 WarningText(Wording.gasUnknown(portfolio.gasUnknownTxs.count))
+            }
+            ForEach(Wording.missingRates(portfolio), id: \.self) { line in
+                WarningText(line)
             }
         }
         .font(.caption)
@@ -119,11 +126,13 @@ public struct TotalStat: View {
 extension Portfolio {
     /// The four sums beside the total, in reading order.
     public var totalStats: [(metric: TotalMetric, label: String, text: String?, coverage: SumCoverage?)] {
-        [
-            (.value, "Value", totals.valueMicros.map(Format.usd), totals.coverage.value),
-            (.realized, "Realized", totals.realizedMicros.map(Format.signedUSD), totals.coverage.realized),
-            (.unrealized, "Unrealized", totals.unrealizedMicros.map(Format.signedUSD), totals.coverage.unrealized),
-            (.gas, "Gas paid", totals.gasMicros.map(Format.usd), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
+        let money = { Format.money($0, currency) }
+        let signed = { Format.signedMoney($0, currency) }
+        return [
+            (.value, "Value", totals.valueMicros.map(money), totals.coverage.value),
+            (.realized, "Realized", totals.realizedMicros.map(signed), totals.coverage.realized),
+            (.unrealized, "Unrealized", totals.unrealizedMicros.map(signed), totals.coverage.unrealized),
+            (.gas, "Gas paid", totals.gasMicros.map(money), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
     }
 }

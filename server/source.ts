@@ -4,10 +4,11 @@
 // Every query is bounded by block, because staging is shared.
 
 import type { Head, Mode } from "../src/core/api.ts"
+import type { RateRound } from "../src/core/currency.ts"
 import type { LegRow, PricedRow, ReferenceRow } from "../src/core/legs.ts"
 import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS } from "../src/core/tokens.ts"
 import { decimalString, isNotStarted, type Query } from "./amp.ts"
-import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
+import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRound, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
 export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknownTxs: string[] }
 
@@ -60,6 +61,30 @@ async function readHead(query: Query, dataset: string, after: number | null): Pr
 
 /** About 2 minutes. A derived table runs a block or two behind the head, and older than this isn't a current price. */
 const MAX_PRICE_AGE_BLOCKS = 60
+
+/** A feed's answer at each block, leaving out blocks where the read failed. */
+export type RoundReader = (feed: string, blocks: readonly number[]) => Promise<Map<number, RateRound>>
+
+/**
+ * Exchange rates read the way `rawSource` reads the oracle, whichever source a wallet comes from: the Pricetag dataset's
+ * base is USD, so it doesn't hold them. See the note on the query's shape in `readReferences`.
+ */
+export function feedRounds(query: Query, config: { baseDataset: string; network: string }): RoundReader {
+  return async (feed, blocks) => {
+    const rounds = new Map<number, RateRound>()
+    for (const { filter, count } of blockFilters(blocks)) {
+      const rows = await query<Row>(
+        `SELECT block_num, rpc.${config.network}.eth_call(NULL, evm_encode_hex('${feed}'), evm_encode_params('latestRoundData()'), block_num) AS round
+         FROM (SELECT block_num FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`,
+      )
+      for (const row of rows) {
+        const round = decodeRound((row.round as { data?: string } | null)?.data)
+        if (round) rounds.set(asNumber(row.block_num), round)
+      }
+    }
+    return rounds
+  }
+}
 
 export function rawSource(query: Query, config: { baseDataset: string; network: string; historyBlocks: number }): Source {
   const ds = `"${config.baseDataset}"`

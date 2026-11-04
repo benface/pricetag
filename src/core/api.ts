@@ -1,6 +1,7 @@
 // What the server sends its clients. The browser runs the fold itself, because cost is personal.
 // Clients that can't run it, like the Mac app, read the portfolio it computes instead.
 
+import type { CurrencyCode, Rates } from "./currency.ts"
 import type { Method, PositionValues } from "./fold.ts"
 import type { PricedLeg, ReferenceRow } from "./legs.ts"
 import type { LatestPrice, LatestPrices, PnlPoint, Totals } from "./portfolio.ts"
@@ -23,6 +24,10 @@ export type WalletResponse = {
   latest: Head
   /** Transactions this wallet sent whose gas couldn't be worked out, so ETH is overstated by that much. */
   gasUnknownTxs: string[]
+  /** What this response is meant to be shown in. Its money is always USD, and `viewWallet` converts it. */
+  currency: CurrencyCode
+  /** Null for USD. */
+  rates: Rates | null
 }
 
 export type PortfolioPosition = {
@@ -44,11 +49,24 @@ export type PortfolioPosition = {
  */
 export type PnlStatus = "complete" | "partial" | "unavailable"
 
-/** A wallet's holdings, cost and PnL, already folded by one method. */
+/** How a portfolio's money got out of USD. */
+export type PortfolioExchange = {
+  /** Where the rates came from, in words. */
+  source: string
+  /** What one USD buys now, or null when there's no current rate, so nothing held has a current value. */
+  latestRateMicros: string | null
+  /** Transactions with an amount that had no rate at its block, so that amount is unavailable. */
+  missingRateTxs: string[]
+}
+
+/** A wallet's holdings, cost and PnL, already folded by one method, in one currency. */
 export type PortfolioResponse = {
   address: string
   mode: Mode
   method: Method
+  currency: CurrencyCode
+  /** Null for USD. */
+  exchange: PortfolioExchange | null
   coverage: WalletResponse["coverage"]
   /** How many tokens the allowlist tracks, on top of ETH. Anything off it isn't counted. */
   trackedTokens: number
@@ -64,8 +82,11 @@ export type PortfolioResponse = {
 
 /** One number's explanation: how it's worked out, and the legs behind it, newest first. */
 export type ExplanationResponse = {
+  currency: CurrencyCode
   title: string
   value: string | null
+  /** The same number in USD, when that isn't what `value` is in. */
+  sourceValue: string | null
   lines: string[]
   /** All of them, which can be more than `legs` holds. */
   legCount: number
@@ -89,6 +110,8 @@ export type ExplanationLeg = {
   effect: string
   /** The rows this leg nets together, in words, or null when it's just one. */
   netting: string | null
+  /** What this leg was in USD and the rate that converted it, in words, or null when it's in USD. */
+  conversion: string | null
 }
 
 /** A derived table is normally a block or two behind the chain. More than this is worth saying out loud. */

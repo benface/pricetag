@@ -6,7 +6,7 @@ import type { LatestPrices } from "../src/core/portfolio.ts"
 import type { Source } from "./source.ts"
 
 /** Re-read this many blocks on each refresh, so a reorg near the tip replaces what it changed. */
-const REORG_BLOCKS = 30
+export const REORG_BLOCKS = 30
 const MAX_WALLETS = 20
 
 type Cached = {
@@ -76,6 +76,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>) 
       prices: wallet.prices,
       latest: wallet.latest,
       gasUnknownTxs: [...wallet.gasUnknownTxs],
+      currency: "USD",
+      rates: null,
     }
   }
 

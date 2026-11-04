@@ -41,6 +41,34 @@ import Testing
         #expect(leg.date != nil)
     }
 
+    @Test func readsAPortfolioInAnotherCurrency() throws {
+        let portfolio = try resource("demo-portfolio-cad", as: Portfolio.self)
+        #expect(portfolio.currency == .CAD)
+        #expect(portfolio.exchange?.source == "Chainlink's CAD / USD price on Base")
+        #expect(Wording.missingRates(portfolio).isEmpty)
+        #expect(try demoPortfolio().exchange == nil)
+        #expect(try Wording.missingRates(demoPortfolio()).isEmpty)
+    }
+
+    @Test func readsAnExplanationInAnotherCurrency() throws {
+        let explanation = try resource("demo-explanation-cad", as: Explanation.self)
+        #expect(explanation.currency == .CAD)
+        #expect(explanation.sourceValue?.hasSuffix(" USD") == true)
+        #expect(explanation.legs.allSatisfy { $0.conversion != nil })
+    }
+
+    @Test func saysWhatAMissingRateLeavesUnavailable() throws {
+        func portfolio(missing: [String], latest: String?) throws -> Portfolio {
+            var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
+            object["currency"] = "CAD"
+            object["exchange"] = ["source": "A feed", "latestRateMicros": latest as Any, "missingRateTxs": missing]
+            return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        }
+        #expect(try Wording.missingRates(portfolio(missing: ["0xa"], latest: "1400000")) == ["1 transaction has no USD to CAD rate, so what depends on it is unavailable in CAD."])
+        #expect(try Wording.missingRates(portfolio(missing: ["0xa", "0xb"], latest: "1400000")) == ["2 transactions have no USD to CAD rate, so what depends on them is unavailable in CAD."])
+        #expect(try Wording.missingRates(portfolio(missing: [], latest: nil)) == ["There's no current USD to CAD rate, so what's held has no current value."])
+    }
+
     @Test func checksAddresses() {
         #expect(WalletAddress.isValid("0x" + String(repeating: "aB", count: 20)))
         #expect(!WalletAddress.isValid("0x123"))

@@ -2,6 +2,8 @@
   "address": "0x00000000000000000000000000000000000de300",
   "mode": "demo",
   "method": "average",
+  "currency": "USD",
+  "exchange": null,
   "coverage": {
     "fromBlock": 53500000,
     "toBlock": 53505400

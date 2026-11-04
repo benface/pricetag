@@ -1,6 +1,7 @@
 // Turns a wallet's rows in the dataset's shapes into the priced legs the fold reads.
 // Pure, so it can run on fixtures, on the raw dataset's rows and on the Pricetag dataset's rows alike.
 
+import type { LegConversion } from "./currency.ts"
 import { worth, type CostLabel, type FoldLeg } from "./fold.ts"
 import { normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
 
@@ -62,6 +63,8 @@ export type PricedLeg = FoldLeg & {
   priceNote: string | null
   /** The rows this leg nets together, so a click can show them. */
   parts: LegRow[]
+  /** Only on a leg converted out of USD. */
+  conversion?: LegConversion
 }
 
 /** The same calculation as the dataset's `pt_price` UDF. A test runs both on the same inputs. */

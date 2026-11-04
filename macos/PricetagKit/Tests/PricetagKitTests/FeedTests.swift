@@ -6,17 +6,19 @@ import Testing
 actor ScriptedSource: PortfolioSource {
     var answers: [Result<Portfolio, FetchError>]
     private(set) var methods: [CostMethod] = []
+    private(set) var currencies: [CurrencyCode] = []
 
     init(_ answers: [Result<Portfolio, FetchError>]) {
         self.answers = answers
     }
 
-    func portfolio(address: String, method: CostMethod, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, timeout: Duration) async throws -> Portfolio {
         methods.append(method)
+        currencies.append(currency)
         return try answers.removeFirst().get()
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode) async throws -> Explanation {
         throw FetchError.unreachable
     }
 }
@@ -25,11 +27,11 @@ actor ScriptedSource: PortfolioSource {
 actor GatedSource: PortfolioSource {
     private var waiting: CheckedContinuation<Portfolio, any Error>?
 
-    func portfolio(address: String, method: CostMethod, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, timeout: Duration) async throws -> Portfolio {
         try await withCheckedThrowingContinuation { waiting = $0 }
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -44,10 +46,11 @@ actor GatedSource: PortfolioSource {
 }
 
 /// `demoPortfolio()`, but from a real source, and with its newest block at a given time.
-func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod = .average, progress: ReadProgress? = nil) throws -> Portfolio {
+func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod = .average, currency: CurrencyCode = .USD, progress: ReadProgress? = nil) throws -> Portfolio {
     var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
     object["mode"] = "raw"
     object["method"] = method.rawValue
+    object["currency"] = currency.rawValue
     object["latest"] = ["blockNum": 53_505_400, "timestamp": date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))]
     if let status { object["pnlStatus"] = status.rawValue }
     if let progress { object["progress"] = ["started": progress.started, "behindBlocks": progress.behindBlocks] }
@@ -227,6 +230,46 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     @Test func ignoresALateFailureFromTheOldMethod() async throws {
         let store = try await answerLate(after: { $0.setMethod(.fifo) }, answer: .failure(.unreachable))
         #expect(store.feed == .reading)
+    }
+
+    @Test func asksInTheChosenCurrencyAndKeepsTheOldNumbersLabeledUntilTheNewOnesArrive() async throws {
+        let (store, source, _) = makeStore([.success(try realPortfolio(at: now)), .success(try realPortfolio(at: now, currency: .CAD))])
+        await _ = store.poll()
+        store.setCurrency(.CAD)
+        store.stop()
+        #expect(store.currency == .CAD)
+        #expect(store.feed == .reading)
+        #expect(store.portfolio?.currency == .USD)
+        await _ = store.poll()
+        #expect(store.portfolio?.currency == .CAD)
+        #expect(await source.currencies.last == .CAD)
+        #expect(store.feed == .live)
+    }
+
+    @Test func dropsNumbersInTheOtherCurrencyWhenItCantGetNewOnes() async throws {
+        let (store, _, _) = makeStore([.success(try realPortfolio(at: now)), .failure(.ampUnavailable("Couldn't read from Amp."))])
+        await _ = store.poll()
+        store.setCurrency(.CAD)
+        store.stop()
+        await _ = store.poll()
+        #expect(store.portfolio == nil)
+    }
+
+    @Test func aCurrencyIsPartOfWhatAnExplanationIsAbout() {
+        let (store, _, _) = makeStore([])
+        let before = store.explanationRequest(for: .total(.pnl))
+        store.setCurrency(.CAD)
+        store.stop()
+        #expect(before != store.explanationRequest(for: .total(.pnl)))
+        #expect(store.explanationRequest(for: .total(.pnl))?.currency == .CAD)
+    }
+
+    @Test func startsInUSDAndRemembersTheCurrencyAcrossARestart() {
+        let (store, _, defaults) = makeStore([])
+        #expect(store.currency == .USD)
+        store.setCurrency(.CAD)
+        store.stop()
+        #expect(PortfolioStore(defaults: defaults).currency == .CAD)
     }
 
     @Test func remembersTheWalletAndMethodAcrossARestart() {

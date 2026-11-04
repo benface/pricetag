@@ -4,10 +4,12 @@ import SwiftUI
 /// Every line is one line tall whatever it says, so nothing moves when a value changes.
 public struct HoldingRow: View {
     let position: Position
+    let currency: CurrencyCode
     let isLive: Bool
 
-    public init(position: Position, isLive: Bool) {
+    public init(position: Position, currency: CurrencyCode, isLive: Bool) {
         self.position = position
+        self.currency = currency
         self.isLive = isLive
     }
 
@@ -17,17 +19,17 @@ public struct HoldingRow: View {
 
     private var cost: String {
         if !position.isHeld { return "Closed" }
-        if let average = position.values.averageCostMicros { return "Cost \(Format.price(average))" }
+        if let average = position.values.averageCostMicros { return "Cost \(Format.price(average, currency))" }
         return "Cost unknown"
     }
 
     private var pnlText: String {
-        position.pnlMicros.map(Format.signedUSD) ?? Wording.pnlUnavailable
+        position.pnlMicros.map { Format.signedMoney($0, currency) } ?? Wording.pnlUnavailable
     }
 
     private var valueText: String {
         if !position.isHeld { return "—" }
-        return position.values.valueMicros.map(Format.usd) ?? "No price"
+        return position.values.valueMicros.map { Format.money($0, currency) } ?? "No price"
     }
 
     public var body: some View {

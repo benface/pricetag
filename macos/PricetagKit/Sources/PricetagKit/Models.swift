@@ -131,10 +131,24 @@ public struct ReadProgress: Codable, Sendable, Equatable {
     public let behindBlocks: Int
 }
 
+/// How a portfolio's money got out of USD. The server converts each amount at the rate when it happened.
+public struct PortfolioExchange: Codable, Sendable, Equatable {
+    /// Where the rates came from, in words.
+    public let source: String
+    /// nil when there's no current rate, so nothing held has a current value.
+    public let latestRateMicros: String?
+    /// Transactions with an amount that had no rate at its block, so that amount is unavailable.
+    public let missingRateTxs: [String]
+}
+
 public struct Portfolio: Codable, Sendable, Equatable {
     public let address: String
     public let mode: Mode
     public let method: CostMethod
+    /// What every amount in here is in.
+    public let currency: CurrencyCode
+    /// nil for USD.
+    public let exchange: PortfolioExchange?
     public let coverage: Coverage
     public let trackedTokens: Int
     public let latest: Head
@@ -167,6 +181,8 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let txHash: String
     public let effect: String
     public let netting: String?
+    /// What this leg was in USD and the rate that converted it, in words. nil when it's in USD.
+    public let conversion: String?
 
     public var isIncoming: Bool { !delta.hasPrefix("-") }
     public var date: Date? { parseTimestamp(timestamp) }
@@ -174,8 +190,11 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
 }
 
 public struct Explanation: Codable, Sendable, Equatable {
+    public let currency: CurrencyCode
     public let title: String
     public let value: String?
+    /// The same number in USD, when that isn't what `value` is in.
+    public let sourceValue: String?
     public let lines: [String]
     public let legCount: Int
     public let legs: [ExplanationLeg]

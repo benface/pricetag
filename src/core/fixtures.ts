@@ -3,6 +3,7 @@
 // swap that also moved a token off the allowlist.
 
 import type { WalletResponse } from "./api.ts"
+import type { CurrencyCode, Rates } from "./currency.ts"
 import { buildPricedLegs, derivePricedRows, type LegKind, type LegRow, type ReferenceRow } from "./legs.ts"
 import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, normalizeAddress } from "./tokens.ts"
 
@@ -100,6 +101,32 @@ export const DEMO_WALLET: WalletResponse = {
   },
   latest: { blockNum: START_BLOCK + HEAD_OFFSET, timestamp: new Date(START_TIME + HEAD_OFFSET * 2000).toISOString() },
   gasUnknownTxs: [],
+  currency: "USD",
+  rates: null,
+}
+
+/** USD for one Canadian dollar, moving enough that converting at the wrong moment would show. */
+const CAD_USD: [blockOffset: number, usd: number][] = [
+  [0, 0.742],
+  [150, 0.741],
+  [300, 0.738],
+  [900, 0.734],
+  [1500, 0.731],
+  [2400, 0.728],
+  [3000, 0.725],
+  [3600, 0.723],
+  [4200, 0.72],
+  [4800, 0.718],
+  [HEAD_OFFSET, 0.715],
+]
+
+/** What the feed would have answered for the demo's blocks. A currency with no demo data has no rates, like any other missing rate. */
+export function demoRates(currency: CurrencyCode): Rates {
+  const rounds = (currency === "CAD" ? CAD_USD : []).map(([offset, usd]) => ({
+    blockNum: START_BLOCK + offset,
+    round: { answer: String(Math.round(usd * 1e8)), updatedAt: (START_TIME + offset * 2000) / 1000 },
+  }))
+  return { byBlock: Object.fromEntries(rounds.map((r) => [r.blockNum, r.round])), latest: rounds.at(-1) ?? null }
 }
 
 export const DEMO_ROWS = rows

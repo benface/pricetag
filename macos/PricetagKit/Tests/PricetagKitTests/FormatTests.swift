@@ -5,7 +5,7 @@ import Testing
 /// `test/portfolio.test.ts` writes the vectors from the web app's formatters, so both print the same thing.
 struct FormatVectors: Decodable {
     struct USD: Decodable { let micros, usd, signed: String }
-    struct Price: Decodable { let micros, price: String }
+    struct Price: Decodable { let micros, price, cad: String }
     struct Amount: Decodable {
         let units: String
         let decimals: Int
@@ -16,6 +16,7 @@ struct FormatVectors: Decodable {
         let duration: String
     }
     let usd: [USD]
+    let cad: [USD]
     let price: [Price]
     let amount: [Amount]
     let duration: [Span]
@@ -30,14 +31,22 @@ struct FormatVectors: Decodable {
 
     @Test func usdMatchesTheWebApp() {
         for vector in vectors.usd {
-            #expect(Format.usd(vector.micros) == vector.usd, "\(vector.micros)")
-            #expect(Format.signedUSD(vector.micros) == vector.signed, "\(vector.micros)")
+            #expect(Format.money(vector.micros, .USD) == vector.usd, "\(vector.micros)")
+            #expect(Format.signedMoney(vector.micros, .USD) == vector.signed, "\(vector.micros)")
+        }
+    }
+
+    @Test func cadMatchesTheWebApp() {
+        for vector in vectors.cad {
+            #expect(Format.money(vector.micros, .CAD) == vector.usd, "\(vector.micros)")
+            #expect(Format.signedMoney(vector.micros, .CAD) == vector.signed, "\(vector.micros)")
         }
     }
 
     @Test func priceMatchesTheWebApp() {
         for vector in vectors.price {
-            #expect(Format.price(vector.micros) == vector.price, "\(vector.micros)")
+            #expect(Format.price(vector.micros, .USD) == vector.price, "\(vector.micros)")
+            #expect(Format.price(vector.micros, .CAD) == vector.cad, "\(vector.micros)")
         }
     }
 

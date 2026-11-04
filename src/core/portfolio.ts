@@ -1,9 +1,15 @@
 // Runs the fold over a wallet's priced legs, and adds up what can honestly be added up.
 
 import { applyLeg, emptyPosition, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
-import { answerToMicros, type PricedLeg, type ReferenceRow } from "./legs.ts"
+import type { PricedLeg } from "./legs.ts"
 
-export type LatestPrice = { micros: string; source: "oracle" | "swap" | "market"; blockNum: number }
+export type LatestPrice = {
+  micros: string
+  source: "oracle" | "swap" | "market"
+  blockNum: number
+  /** What `micros` was before converting, when it isn't already in USD. */
+  usdMicros?: string
+}
 export type LatestPrices = Record<string, LatestPrice | undefined>
 
 export type LegEffect = {
@@ -117,6 +123,9 @@ export function sumTotals(positions: readonly Position[]): Totals {
   }
 }
 
+/** A token's price at a block, in the currency being folded, for marking what's held at that moment. */
+export type MarkPrice = (blockNum: number, asset: string) => string | null
+
 export type PnlPoint = {
   blockNum: number
   timestamp: string
@@ -135,10 +144,9 @@ export function pnlOverTime(
   legs: readonly PricedLeg[],
   method: Method,
   prices: LatestPrices,
-  references: readonly ReferenceRow[],
+  markPrice: MarkPrice,
   latest: { blockNum: number; timestamp: string } | null,
 ): PnlPoint[] {
-  const refs = new Map(references.map((r) => [r.block_num, r]))
   const states = new Map<string, PositionState>()
   const points: PnlPoint[] = []
   const measure = (priceOf: (asset: string) => string | null) => {
@@ -171,13 +179,7 @@ export function pnlOverTime(
   legs.forEach((leg, i) => {
     states.set(leg.asset, applyLeg(states.get(leg.asset) ?? emptyPosition(method, leg.decimals), leg))
     if (legs[i + 1]?.txHash === leg.txHash) return
-    const ref = refs.get(leg.blockNum)
-    const priceOf = (asset: string) => {
-      if (asset === "ETH") return answerToMicros(ref?.eth_usd)
-      if (asset === "USDC") return answerToMicros(ref?.usdc_usd)
-      return null
-    }
-    points.push({ blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure(priceOf) })
+    points.push({ blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure((asset) => markPrice(leg.blockNum, asset)) })
   })
   if (latest && states.size > 0) {
     points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.micros ?? null) })

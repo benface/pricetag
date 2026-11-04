@@ -1,25 +1,37 @@
 // Display only. Every value here was computed in BigInt. Converting to Number happens only to print it.
 
-const usd2 = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
+import { CURRENCIES, type CurrencyCode } from "./currency.ts"
 
-export function formatUsd(micros: string | bigint): string {
+const whole = new Map(Object.values(CURRENCIES).map((c) => [c.code, new Intl.NumberFormat(c.locale, { style: "currency", currency: c.code })]))
+
+const twoDecimals = (value: number, currency: CurrencyCode) => (whole.get(currency) as Intl.NumberFormat).format(value)
+
+export function formatMoney(micros: string | bigint, currency: CurrencyCode): string {
   const value = Number(micros) / 1e6
   const size = Math.abs(value)
-  if (size === 0) return "$0.00"
+  if (size === 0) return twoDecimals(0, currency)
+  const { locale, symbol } = CURRENCIES[currency]
   // Small amounts matter here: gas is often a fraction of a cent, and "$0.00" would read as nothing.
-  if (size < 0.01) return `${value < 0 ? "-" : ""}$${size.toLocaleString("en-US", { maximumSignificantDigits: 2, maximumFractionDigits: 6 })}`
-  return usd2.format(value)
+  if (size < 0.01) return `${value < 0 ? "-" : ""}${symbol}${size.toLocaleString(locale, { maximumSignificantDigits: 2, maximumFractionDigits: 6 })}`
+  return twoDecimals(value, currency)
 }
 
-export function formatPrice(micros: string): string {
+export function formatPrice(micros: string, currency: CurrencyCode): string {
   const value = Number(micros) / 1e6
-  if (value >= 1) return usd2.format(value)
-  return `$${value.toLocaleString("en-US", { maximumSignificantDigits: 4 })}`
+  if (value >= 1) return twoDecimals(value, currency)
+  const { locale, symbol } = CURRENCIES[currency]
+  return `${symbol}${value.toLocaleString(locale, { maximumSignificantDigits: 4 })}`
 }
 
-export function formatSignedUsd(micros: string | bigint): string {
+export function formatSignedMoney(micros: string | bigint, currency: CurrencyCode): string {
   const value = BigInt(micros)
-  return value > 0n ? `+${formatUsd(value)}` : formatUsd(value)
+  return value > 0n ? `+${formatMoney(value, currency)}` : formatMoney(value, currency)
+}
+
+/** What one USD buys, to four decimals, which is how far exchange rates are usually quoted. */
+export function formatRate(rateMicros: string, currency: CurrencyCode): string {
+  const { locale, symbol } = CURRENCIES[currency]
+  return `${symbol}${(Number(rateMicros) / 1e6).toLocaleString(locale, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`
 }
 
 /** Whole tokens from smallest units, cut to a readable length. Cuts instead of rounding, so it never shows more than there is. */

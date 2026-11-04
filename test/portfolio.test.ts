@@ -4,8 +4,8 @@ import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
-import { DEMO_WALLET } from "../src/core/fixtures.ts"
-import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd } from "../src/core/format.ts"
+import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
+import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedMoney, formatMoney } from "../src/core/format.ts"
 import { foldPositions, sumTotals } from "../src/core/portfolio.ts"
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
@@ -116,6 +116,9 @@ describe("portfolioOf", () => {
   it("matches the files the Swift package reads", () => {
     assertMatchesFile("demo-portfolio.json", portfolioOf(DEMO_WALLET, "average"))
     assertMatchesFile("demo-explanation.json", explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "AERO", metric: "realized" }))
+    const inCad = walletWith({ currency: "CAD", rates: demoRates("CAD") })
+    assertMatchesFile("demo-portfolio-cad.json", portfolioOf(inCad, "average"))
+    assertMatchesFile("demo-explanation-cad.json", explainPortfolio(inCad, "average", { kind: "asset", asset: "AERO", metric: "realized" }))
   })
 })
 
@@ -220,8 +223,9 @@ describe("the formatters the Swift package repeats", () => {
       ["115792089237316195423570985008687907853269984665640564039457584007913129639935", 18],
     ]
     assertMatchesFile("format-vectors.json", {
-      usd: usd.map((micros) => ({ micros, usd: formatUsd(micros), signed: formatSignedUsd(micros) })),
-      price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros) })),
+      usd: usd.map((micros) => ({ micros, usd: formatMoney(micros, "USD"), signed: formatSignedMoney(micros, "USD") })),
+      cad: usd.map((micros) => ({ micros, usd: formatMoney(micros, "CAD"), signed: formatSignedMoney(micros, "CAD") })),
+      price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, "USD"), cad: formatPrice(micros, "CAD") })),
       amount: units.map(([value, decimals]) => ({ units: value, decimals, amount: formatAmount(value, decimals), signed: formatSignedAmount(value, decimals) })),
       duration: [0, 30, 1800, 3599, 3600, 5400, 100000].map((blocks) => ({ blocks, duration: formatDuration(blocks) })),
     })

@@ -34,6 +34,21 @@ public enum Wording {
         return "The Pricetag dataset has only processed up to block \(Format.block(portfolio.coverage.toBlock)), \(Format.block(portfolio.progress.behindBlocks)) blocks behind the chain. Anything after that isn't in these numbers yet."
     }
 
+    /// What's unavailable because of a missing exchange rate. Empty in USD, or with every rate there.
+    public static func missingRates(_ portfolio: Portfolio) -> [String] {
+        guard let exchange = portfolio.exchange else { return [] }
+        let code = portfolio.currency.rawValue
+        var lines: [String] = []
+        let count = exchange.missingRateTxs.count
+        if count > 0 {
+            lines.append("\(count == 1 ? "1 transaction has" : "\(Format.block(count)) transactions have") no USD to \(code) rate, so what depends on \(count == 1 ? "it" : "them") is unavailable in \(code).")
+        }
+        if exchange.latestRateMicros == nil {
+            lines.append("There's no current USD to \(code) rate, so what's held has no current value.")
+        }
+        return lines
+    }
+
     public static let unpricedGas = "Some gas had no price at its block, and isn't in this total."
     public static let demo = "Demo data, not a real wallet. Every case the app has to get right is in here."
     public static let pnlUnavailable = "PnL unavailable"

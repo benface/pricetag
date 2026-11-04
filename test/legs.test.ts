@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { buildPricedLegs, derivePricedRows, isSanePrice, ptPrice, type LegRow, type ReferenceRow } from "../src/core/legs.ts"
+import { usdView } from "../src/core/currency.ts"
 import { foldPositions, pnlOverTime, sumTotals } from "../src/core/portfolio.ts"
 import { DEMO_ADDRESS, DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
 import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, tokenByAddress } from "../src/core/tokens.ts"
@@ -18,6 +19,8 @@ const REF: ReferenceRow = { block_num: 100, eth_usd: "240000000000", usdc_usd: "
 function legsOf(rows: LegRow[], references: ReferenceRow[] = [REF]) {
   return buildPricedLegs({ account: ME, rows, references, priced: derivePricedRows(rows, references) })
 }
+
+const marks = (references: ReferenceRow[]) => usdView({ ...DEMO_WALLET, references }).markPrice
 
 describe("pricing a wallet's rows", () => {
   it("a swap uses the oracle for ETH and USDC, and the implied price for the other token", () => {
@@ -497,7 +500,7 @@ describe("an entirely unknown result stays unavailable", () => {
   it("sending out more than we saw arrive, with no sale, has no PnL answer in the headline or the chart", () => {
     const legs = legsOf([row("0x1", AERO, "debit", E18)])
     assert.equal(sumTotals(foldPositions(legs, "fifo", {})).pnlMicros, null)
-    assert.equal(pnlOverTime(legs, "fifo", {}, [REF], null).at(-1)!.pnlMicros, null)
+    assert.equal(pnlOverTime(legs, "fifo", {}, marks([REF]), null).at(-1)!.pnlMicros, null)
   })
 
   it("a holding with no cost and no price: PnL, value and unrealized are null, and nothing sold is a real $0", () => {
@@ -509,7 +512,7 @@ describe("an entirely unknown result stays unavailable", () => {
   })
 
   it("the chart agrees, at every point", () => {
-    const points = pnlOverTime(unknownHolding, "average", {}, [REF], { blockNum: 101, timestamp: "2026-11-04T00:00:00.000Z" })
+    const points = pnlOverTime(unknownHolding, "average", {}, marks([REF]), { blockNum: 101, timestamp: "2026-11-04T00:00:00.000Z" })
     assert.ok(points.length > 0)
     assert.ok(points.every((p) => p.pnlMicros === null))
   })
@@ -540,7 +543,7 @@ describe("an entirely unknown result stays unavailable", () => {
           assert.equal(totals.pnlMicros, null)
           assert.deepEqual(totals.coverage.realized, { known: 0, missing: 1 })
           assert.ok(totals.excluded.some((e) => e.asset === "ETH" && e.reason === "sold at an unknown cost"))
-          assert.equal(pnlOverTime(legs, method, {}, references, null).at(-1)!.pnlMicros, null)
+          assert.equal(pnlOverTime(legs, method, {}, marks(references), null).at(-1)!.pnlMicros, null)
         })
 
         it(`${name} doesn't hide another position's known result (${method})`, () => {
@@ -555,7 +558,7 @@ describe("an entirely unknown result stays unavailable", () => {
           assert.equal(totals.realizedMicros, "200000000")
           assert.deepEqual(totals.coverage.realized, { known: 1, missing: 1 })
           assert.equal(totals.pnlMicros, "200000000")
-          assert.equal(pnlOverTime(legs, method, {}, references, null).at(-1)!.pnlMicros, "200000000")
+          assert.equal(pnlOverTime(legs, method, {}, marks(references), null).at(-1)!.pnlMicros, "200000000")
         })
       }
     }
@@ -580,7 +583,7 @@ describe("an entirely unknown result stays unavailable", () => {
     const totals = sumTotals(positions)
     assert.equal(totals.pnlMicros, "0")
     assert.equal(totals.realizedMicros, "0")
-    assert.equal(pnlOverTime(legsOf(flat).filter((l) => l.asset === "ETH"), "fifo", {}, [REF], null).at(-1)!.pnlMicros, "0")
+    assert.equal(pnlOverTime(legsOf(flat).filter((l) => l.asset === "ETH"), "fifo", {}, marks([REF]), null).at(-1)!.pnlMicros, "0")
   })
 
   it("known gas alone is an answer: it's a real, negative PnL", () => {
@@ -611,7 +614,7 @@ describe("totals", () => {
   it("the chart's last point matches the headline, for both methods", () => {
     for (const method of ["average", "fifo"] as const) {
       const headline = sumTotals(foldPositions(DEMO_WALLET.legs, method, prices))
-      const points = pnlOverTime(DEMO_WALLET.legs, method, prices, DEMO_WALLET.references, DEMO_WALLET.latest)
+      const points = pnlOverTime(DEMO_WALLET.legs, method, prices, usdView(DEMO_WALLET).markPrice, DEMO_WALLET.latest)
       assert.equal(points.at(-1)!.pnlMicros, headline.pnlMicros)
       assert.equal(points.at(-1)!.txHash, null)
     }

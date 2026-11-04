@@ -1,0 +1,399 @@
+import assert from "node:assert/strict"
+import { createServer, type Server } from "node:http"
+import type { AddressInfo } from "node:net"
+import { after, before, describe, it } from "node:test"
+import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
+import { CURRENCIES, viewWallet, type Rates } from "../src/core/currency.ts"
+import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
+import { formatMoney, formatPrice, formatRate, formatSignedMoney } from "../src/core/format.ts"
+import type { PricedLeg } from "../src/core/legs.ts"
+import { foldPositions, sumTotals } from "../src/core/portfolio.ts"
+import { createApi } from "../server/app.ts"
+import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
+import { createRates } from "../server/rates.ts"
+import { feedRounds, type RoundReader } from "../server/source.ts"
+import { decodeRound } from "../server/raw.ts"
+
+const E18 = 10n ** 18n
+const BUY_BLOCK = 100
+const SELL_BLOCK = 200
+const GAS_BLOCK = 300
+const HEAD = 400
+const time = (block: number) => new Date(Date.UTC(2026, 10, 4) + block * 2000).toISOString()
+const seconds = (block: number) => Date.parse(time(block)) / 1000
+
+const leg = (fields: Partial<PricedLeg> & Pick<PricedLeg, "id" | "blockNum" | "delta">): PricedLeg => ({
+  asset: "ETH",
+  decimals: 18,
+  kind: "swap",
+  priceMicros: null,
+  costMicros: null,
+  proceedsMicros: null,
+  costLabel: "unknown",
+  priceSource: "oracle",
+  priceNote: null,
+  timestamp: time(fields.blockNum),
+  txHash: `0x${fields.id}`,
+  txIndex: 0,
+  parts: [],
+  ...fields,
+})
+
+// Buys 1 ETH for $2,000, then sells it for the same $2,000: nothing in USD, but the US dollar went up against CAD.
+const buy = leg({ id: "buy", blockNum: BUY_BLOCK, delta: E18.toString(), priceMicros: "2000000000", costMicros: "2000000000", costLabel: "paid" })
+const sell = leg({ id: "sell", blockNum: SELL_BLOCK, delta: `-${E18 / 2n}`, priceMicros: "2000000000", proceedsMicros: "1000000000" })
+const gas = leg({ id: "gas", blockNum: GAS_BLOCK, kind: "gas", delta: `-${E18 / 1000n}`, priceMicros: "2000000000" })
+
+/** USD for one CAD, with 8 decimals, for a rate given as CAD for one USD. */
+const answerFor = (cadPerUsd: number) => String(Math.round(1e8 / cadPerUsd))
+const round = (block: number, cadPerUsd: number) => ({ answer: answerFor(cadPerUsd), updatedAt: seconds(block) })
+
+const RATES: Rates = {
+  byBlock: { [BUY_BLOCK]: round(BUY_BLOCK, 1.25), [SELL_BLOCK]: round(SELL_BLOCK, 1.6), [GAS_BLOCK]: round(GAS_BLOCK, 1.6) },
+  latest: { blockNum: HEAD, round: round(HEAD, 2) },
+}
+
+const walletWith = (changes: Partial<WalletResponse>): WalletResponse => ({
+  ...DEMO_WALLET,
+  address: "0xabc",
+  mode: "raw",
+  legs: [buy, sell],
+  references: [],
+  prices: { ETH: { micros: "3000000000", source: "oracle", blockNum: HEAD } },
+  latest: { blockNum: HEAD, timestamp: time(HEAD) },
+  currency: "CAD",
+  rates: RATES,
+  ...changes,
+})
+
+const withoutRate = (block: number): Rates => {
+  const byBlock = { ...RATES.byBlock }
+  delete byBlock[block]
+  return { ...RATES, byBlock }
+}
+
+const foldOf = (wallet: WalletResponse) => {
+  const view = viewWallet(wallet)
+  const positions = foldPositions(view.legs, "average", view.prices)
+  return { view, positions, totals: sumTotals(positions), eth: positions[0]! }
+}
+
+describe("converting a wallet", () => {
+  it("converts cost and proceeds at each transaction's own rate, not at one rate", () => {
+    const { eth } = foldOf(walletWith({}))
+    // Half of a C$2,500 cost (at 1.25), sold for US$1,000 at 1.60: C$1,600 − C$1,250. In USD this sale made nothing.
+    assert.equal(eth.values.realizedMicros, "350000000")
+    assert.equal(eth.values.costMicros, "1250000000")
+    assert.equal(foldOf(walletWith({ currency: "USD", rates: null })).eth.values.realizedMicros, "0")
+  })
+
+  it("values what's held at the current rate, against the cost at the old one", () => {
+    const { eth } = foldOf(walletWith({}))
+    // 0.5 ETH at US$3,000 is US$1,500, which at 2.00 is C$3,000, on a cost of C$1,250.
+    assert.equal(eth.values.valueMicros, "3000000000")
+    assert.equal(eth.values.unrealizedMicros, "1750000000")
+    assert.equal(eth.price?.usdMicros, "3000000000")
+  })
+
+  it("is the same whichever method runs, for a sale of everything", () => {
+    const all = leg({ id: "all", blockNum: SELL_BLOCK, delta: `-${E18}`, priceMicros: "2000000000", proceedsMicros: "2000000000" })
+    const view = viewWallet(walletWith({ legs: [buy, all] }))
+    for (const method of ["average", "fifo"] as const) {
+      assert.equal(foldPositions(view.legs, method, view.prices)[0]?.values.realizedMicros, "700000000")
+    }
+  })
+
+  it("leaves USD alone, and marks nothing as converted", () => {
+    const view = viewWallet(walletWith({ currency: "USD", rates: null }))
+    assert.deepEqual(view.legs, [buy, sell])
+    assert.equal(view.latestRate, null)
+    assert.deepEqual(view.missingRateTxs, [])
+  })
+
+  it("keeps what each leg was in USD, and its rate", () => {
+    const [converted] = viewWallet(walletWith({})).legs
+    assert.equal(converted?.costMicros, "2500000000")
+    assert.equal(converted?.conversion?.costUsdMicros, "2000000000")
+    assert.equal(converted?.conversion?.rateMicros, "1250000")
+  })
+
+  it("marks the chart at each transaction's own rate", () => {
+    const usd = walletWith({ references: [{ block_num: BUY_BLOCK, eth_usd: "200000000000", usdc_usd: "100000000" }] })
+    assert.equal(viewWallet(usd).markPrice(BUY_BLOCK, "ETH"), "2500000000")
+    assert.equal(viewWallet({ ...usd, rates: withoutRate(BUY_BLOCK) }).markPrice(BUY_BLOCK, "ETH"), null)
+  })
+})
+
+describe("a missing rate", () => {
+  it("makes a purchase's cost unknown, so PnL on it is unavailable and not zero", () => {
+    const { view, eth, totals } = foldOf(walletWith({ rates: withoutRate(BUY_BLOCK) }))
+    assert.deepEqual(view.missingRateTxs, ["0xbuy"])
+    assert.equal(view.legs[0]?.costMicros, null)
+    assert.equal(view.legs[0]?.costLabel, "unknown")
+    assert.equal(eth.values.costMicros, null)
+    assert.equal(eth.values.unrealizedMicros, null)
+    assert.equal(eth.values.realizedMicros, null, "its cost is what the sale needs")
+    assert.equal(totals.pnlMicros, null)
+  })
+
+  it("makes a sale's proceeds unknown, without touching the cost of what's left", () => {
+    const { view, eth, totals } = foldOf(walletWith({ rates: withoutRate(SELL_BLOCK) }))
+    assert.equal(view.legs[1]?.proceedsMicros, null)
+    assert.equal(eth.values.realizedMicros, null)
+    assert.equal(eth.values.unrealizedMicros, "1750000000")
+    assert.ok(totals.excluded.some((e) => e.reason === "sold at an unknown cost"))
+  })
+
+  it("never borrows a rate from another block, even the current one", () => {
+    const { view } = foldOf(walletWith({ rates: withoutRate(BUY_BLOCK) }))
+    assert.equal(view.legs[0]?.priceMicros, null)
+    assert.equal(view.legs[0]?.priceSource, null)
+    assert.equal(view.legs[0]?.conversion?.rateMicros, null)
+    assert.equal(view.legs[0]?.conversion?.priceUsdMicros, "2000000000", "what it was in USD is still a fact")
+  })
+
+  it("leaves gas out of the total, and says so", () => {
+    const { totals, view } = foldOf(walletWith({ legs: [buy, gas], rates: withoutRate(GAS_BLOCK) }))
+    assert.equal(totals.unpricedGas, true)
+    assert.equal(totals.gasMicros, null)
+    assert.deepEqual(view.missingRateTxs, ["0xgas"])
+  })
+
+  it("gives what's held no current value when there's no current rate, but keeps its cost", () => {
+    const { view, eth, totals } = foldOf(walletWith({ rates: { ...RATES, latest: null } }))
+    assert.equal(view.latestRate, null)
+    assert.equal(eth.price, null)
+    assert.equal(eth.values.valueMicros, null)
+    assert.equal(eth.values.unrealizedMicros, null)
+    assert.equal(eth.values.costMicros, "1250000000")
+    assert.equal(eth.values.realizedMicros, "350000000", "what's already been sold doesn't need today's rate")
+    assert.ok(totals.excluded.some((e) => e.reason === "no current price"))
+  })
+
+  it("treats a feed that stopped updating, or answered nothing usable, as no rate", () => {
+    const stale = { answer: answerFor(1.25), updatedAt: seconds(BUY_BLOCK) - 4 * 24 * 60 * 60 }
+    assert.deepEqual(foldOf(walletWith({ rates: { ...RATES, byBlock: { ...RATES.byBlock, [BUY_BLOCK]: stale } } })).view.missingRateTxs, ["0xbuy"])
+    const closedMarket = { answer: answerFor(1.25), updatedAt: seconds(BUY_BLOCK) - 2.5 * 24 * 60 * 60 }
+    assert.deepEqual(foldOf(walletWith({ rates: { ...RATES, byBlock: { ...RATES.byBlock, [BUY_BLOCK]: closedMarket } } })).view.missingRateTxs, [])
+    const empty = { answer: "0", updatedAt: seconds(BUY_BLOCK) }
+    assert.deepEqual(foldOf(walletWith({ rates: { ...RATES, byBlock: { ...RATES.byBlock, [BUY_BLOCK]: empty } } })).view.missingRateTxs, ["0xbuy"])
+  })
+
+  it("doesn't count a transaction that had nothing to convert", () => {
+    const nothing = leg({ id: "free", blockNum: BUY_BLOCK, delta: E18.toString(), priceMicros: null })
+    assert.deepEqual(foldOf(walletWith({ legs: [nothing], rates: withoutRate(BUY_BLOCK) })).view.missingRateTxs, [])
+  })
+})
+
+describe("explaining a converted number", () => {
+  it("shows the number in both currencies, and where the rate came from", () => {
+    const explanation = explainPortfolio(walletWith({}), "average", { kind: "asset", asset: "ETH", metric: "realized" })
+    assert.equal(explanation?.value, "+$350.00")
+    assert.equal(explanation?.sourceValue, "$0.00 USD")
+    assert.equal(explanation?.currency, "CAD")
+    assert.ok(explanation?.lines.some((line) => line.includes("Chainlink's CAD / USD price on Base")))
+  })
+
+  it("says what each transaction was in USD and at what rate", () => {
+    const explanation = explainPortfolio(walletWith({}), "average", { kind: "asset", asset: "ETH", metric: "amount" })
+    const bought = explanation?.legs.find((l) => l.id === "buy")
+    assert.equal(bought?.conversion, "In USD: $2,000.00 each, $2,000.00 paid. 1 USD = $1.2500 CAD at this block, from Chainlink's CAD / USD price on Base.")
+    assert.match(bought?.effect ?? "", /for \$2,500\.00$/)
+  })
+
+  it("says the current rate where a current value uses it", () => {
+    const explanation = explainPortfolio(walletWith({}), "average", { kind: "asset", asset: "ETH", metric: "value" })
+    assert.equal(explanation?.value, "$3,000.00")
+    assert.equal(explanation?.sourceValue, "$1,500.00 USD")
+    assert.ok(explanation?.lines.some((line) => line.includes("1 USD = $2.0000 CAD at block 400")))
+  })
+
+  it("says why there's no number when a rate is missing, and still gives the USD one", () => {
+    const explanation = explainPortfolio(walletWith({ rates: withoutRate(BUY_BLOCK) }), "average", { kind: "asset", asset: "ETH", metric: "realized" })
+    assert.equal(explanation?.value, null)
+    assert.equal(explanation?.sourceValue, "$0.00 USD")
+    assert.ok(explanation?.lines.some((line) => line.startsWith("1 transaction has no USD to CAD rate")))
+    assert.match(explanation?.legs.find((l) => l.id === "buy")?.conversion ?? "", /^⚠ No USD to CAD rate for this transaction, so it has no CAD value\. In USD: /)
+    const current = explainPortfolio(walletWith({ rates: { ...RATES, latest: null } }), "average", { kind: "asset", asset: "ETH", metric: "value" })
+    assert.equal(current?.value, null)
+    assert.ok(current?.lines.some((line) => line.startsWith("There's no current USD to CAD rate")))
+    assert.ok(current?.lines.every((line) => !line.includes("oracle read")))
+  })
+
+  it("says nothing about rates in USD", () => {
+    const explanation = explainPortfolio(walletWith({ currency: "USD", rates: null }), "average", { kind: "total", metric: "pnl" })
+    assert.equal(explanation?.sourceValue, null)
+    assert.equal(explanation?.currency, "USD")
+    assert.ok(explanation?.lines.every((line) => !line.includes("Chainlink")))
+    assert.equal(explanation?.legs[0]?.conversion, null)
+  })
+
+  it("gives a transaction on the chart both values", () => {
+    const explanation = explainPortfolio(walletWith({ prices: {} }), "average", { kind: "tx", txHash: "0xsell" })
+    assert.equal(explanation?.value, "+$350.00", "half the ETH is still held with no mark at this block, so this is only what's known")
+    assert.match(explanation?.lines[0] ?? "", /Leaves out 1 unknown amount/)
+    const closed = leg({ id: "all", blockNum: SELL_BLOCK, delta: `-${E18}`, priceMicros: "2000000000", proceedsMicros: "2000000000" })
+    const both = explainPortfolio(walletWith({ legs: [buy, closed] }), "average", { kind: "tx", txHash: "0xall" })
+    assert.equal(both?.value, "+$700.00")
+    assert.equal(both?.sourceValue, "$0.00 USD")
+  })
+})
+
+describe("a portfolio in another currency", () => {
+  it("says what it's in, where its rates came from and what's missing", () => {
+    const portfolio = portfolioOf(walletWith({ rates: withoutRate(BUY_BLOCK) }), "average")
+    assert.equal(portfolio.currency, "CAD")
+    assert.equal(portfolio.exchange?.source, "Chainlink's CAD / USD price on Base")
+    assert.equal(portfolio.exchange?.latestRateMicros, "2000000")
+    assert.deepEqual(portfolio.exchange?.missingRateTxs, ["0xbuy"])
+  })
+
+  it("has no exchange in USD", () => {
+    assert.equal(portfolioOf(DEMO_WALLET, "average").exchange, null)
+  })
+
+  it("gives the demo wallet different numbers in CAD than one rate would", () => {
+    const usd = portfolioOf(DEMO_WALLET, "average")
+    const cad = portfolioOf({ ...DEMO_WALLET, currency: "CAD", rates: demoRates("CAD") }, "average")
+    assert.deepEqual(cad.exchange?.missingRateTxs, [])
+    assert.equal(cad.positions.length, usd.positions.length)
+    const realized = (p: PortfolioResponse) => BigInt(p.positions.find((x) => x.asset === "AERO")?.values.realizedMicros as string)
+    const latest = Number(demoRates("CAD").latest?.round.answer) / 1e8
+    assert.notEqual(Number(realized(cad)), Math.round(Number(realized(usd)) / latest))
+  })
+})
+
+describe("formatting a currency", () => {
+  it("prints each with its own symbol and locale", () => {
+    assert.equal(formatMoney("1234560000", "CAD"), "$1,234.56")
+    assert.equal(formatMoney("1234560000", "USD"), "$1,234.56")
+    assert.equal(formatSignedMoney("1234560000", "CAD"), "+$1,234.56")
+    assert.equal(formatSignedMoney("-1234560000", "CAD"), "-$1,234.56")
+    assert.equal(formatMoney("1234", "CAD"), "$0.0012")
+    assert.equal(formatPrice("999800", "CAD"), "$0.9998")
+    assert.equal(formatRate("1397310", "CAD"), "$1.3973")
+  })
+
+  it("knows a feed for every currency but USD", () => {
+    for (const currency of Object.values(CURRENCIES)) assert.equal(currency.feed === null, currency.code === "USD", currency.code)
+  })
+})
+
+describe("reading rates", () => {
+  const word = (value: bigint) => value.toString(16).padStart(64, "0")
+  const data = (answer: bigint, updatedAt: bigint) => word(2n) + word(answer) + word(updatedAt) + word(updatedAt) + word(2n)
+  const walletAt = (head: number, blocks: number[]) => ({ legs: blocks.map((b) => leg({ id: `b${b}`, blockNum: b, delta: "1" })), latest: { blockNum: head, timestamp: time(head) } })
+
+  it("decodes a round, and refuses what isn't one", () => {
+    assert.deepEqual(decodeRound(data(71566080n, 1_800_000_000n)), { answer: "71566080", updatedAt: 1_800_000_000 })
+    assert.equal(decodeRound(data(0n, 1_800_000_000n)), null)
+    assert.equal(decodeRound(data((1n << 256n) - 1n, 1_800_000_000n)), null, "a negative answer")
+    assert.equal(decodeRound(""), null)
+    assert.equal(decodeRound(null), null)
+  })
+
+  it("reads the feed through the same query shape as the oracle, leaving out failed reads", async () => {
+    const sql: string[] = []
+    const read = feedRounds(
+      (async <T>(text: string) => {
+        sql.push(text)
+        return [{ block_num: "5", round: { data: data(71566080n, 1_800_000_000n) } }, { block_num: "6", round: null }, { block_num: "7", round: { data: "" } }] as T[]
+      }),
+      { baseDataset: "base", network: "base_mainnet" },
+    )
+    const rounds = await read("0xfeed", [5, 6, 7])
+    assert.deepEqual([...rounds.keys()], [5])
+    assert.match(sql[0] as string, /rpc\.base_mainnet\.eth_call\(NULL, evm_encode_hex\('0xfeed'\), evm_encode_params\('latestRoundData\(\)'\), block_num\)/)
+    assert.match(sql[0] as string, /FROM \(SELECT block_num FROM "base"\.blocks WHERE block_num BETWEEN 5 AND 7 AND block_num IN \(5, 6, 7\) LIMIT 3\)/)
+  })
+
+  const scripted = () => {
+    const asked: number[][] = []
+    const failing = new Set<number>()
+    const read: RoundReader = async (_feed, blocks) => {
+      asked.push([...blocks])
+      return new Map(blocks.filter((b) => !failing.has(b)).map((b) => [b, round(b, 1.4)]))
+    }
+    return { asked, failing, read }
+  }
+
+  it("reads a settled block once, and keeps asking about the head and recent blocks", async () => {
+    const { asked, read } = scripted()
+    const ratesFor = createRates(read)
+    await ratesFor("CAD", walletAt(1000, [100, 990]))
+    await ratesFor("CAD", walletAt(1002, [100, 990]))
+    assert.deepEqual(asked, [[100, 990, 1000], [990, 1002]])
+  })
+
+  it("doesn't ask again for a head it just read", async () => {
+    const { asked, read } = scripted()
+    const ratesFor = createRates(read)
+    await ratesFor("CAD", walletAt(1000, [100]))
+    const rates = await ratesFor("CAD", walletAt(1000, [100]))
+    assert.deepEqual(asked, [[100, 1000]])
+    assert.equal(rates?.latest?.blockNum, 1000)
+  })
+
+  it("leaves out what the feed didn't answer, and tries it again next time", async () => {
+    const { asked, failing, read } = scripted()
+    const ratesFor = createRates(read)
+    failing.add(100).add(1000)
+    const first = await ratesFor("CAD", walletAt(1000, [100]))
+    assert.deepEqual(first, { byBlock: {}, latest: null })
+    failing.clear()
+    const second = await ratesFor("CAD", walletAt(1000, [100]))
+    assert.deepEqual(asked.at(-1), [100, 1000])
+    assert.ok(second?.byBlock[100])
+    assert.equal(second?.latest?.blockNum, 1000)
+  })
+
+  it("reads nothing for USD", async () => {
+    const { asked, read } = scripted()
+    assert.equal(await createRates(read)("USD", walletAt(1000, [100])), null)
+    assert.deepEqual(asked, [])
+  })
+})
+
+describe("the API with a currency", () => {
+  let server: Server
+  let base: string
+
+  before(async () => {
+    const handle = createApi({})
+    server = createServer((req, res) => void handle(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+  after(() => server.close())
+
+  const get = async <T>(path: string) => {
+    const response = await fetch(base + path)
+    return { status: response.status, body: (await response.json()) as T }
+  }
+
+  it("defaults to USD", async () => {
+    const { body } = await get<PortfolioResponse>("/api/portfolio/demo")
+    assert.equal(body.currency, "USD")
+    assert.equal(body.exchange, null)
+  })
+
+  it("serves a portfolio and an explanation in CAD", async () => {
+    const { body } = await get<PortfolioResponse>("/api/portfolio/demo?currency=CAD")
+    assert.equal(body.currency, "CAD")
+    assert.equal(body.exchange?.source, "Chainlink's CAD / USD price on Base")
+    const explained = await get<ExplanationResponse>("/api/portfolio/demo/explain?metric=pnl&currency=CAD")
+    assert.match(explained.body.sourceValue ?? "", / USD$/)
+  })
+
+  it("gives the browser USD money and the rates to convert it, since it folds for itself", async () => {
+    const { body } = await get<WalletResponse>("/api/wallet/demo?currency=CAD")
+    assert.equal(body.currency, "CAD")
+    assert.ok(body.rates?.latest)
+    assert.deepEqual(body.legs, JSON.parse(JSON.stringify(DEMO_WALLET.legs)))
+  })
+
+  it("refuses a currency it doesn't have, rather than showing USD as if it were", async () => {
+    assert.equal((await get("/api/portfolio/demo?currency=XXX")).status, 400)
+    assert.equal((await get("/api/wallet/demo?currency=usd")).status, 400)
+  })
+})

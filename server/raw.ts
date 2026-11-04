@@ -1,6 +1,7 @@
 // Builds rows in the `legs` shape from raw `transactions` and `logs` rows, the same way the dataset's tables do.
 // Pure, so it can be tested without Amp.
 
+import type { RateRound } from "../src/core/currency.ts"
 import type { LegRow } from "../src/core/legs.ts"
 import { ETH_ADDRESS, WETH_ADDRESS, normalizeAddress, tokenByAddress } from "../src/core/tokens.ts"
 
@@ -154,6 +155,14 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
     })
   }
   return { rows, gasUnknownTxs }
+}
+
+/** A `latestRoundData()` result's answer and when it last updated, or null when the read failed or it isn't a positive answer. */
+export function decodeRound(data: string | null | undefined): RateRound | null {
+  const answer = decodeRoundAnswer(data)
+  const updatedAt = data?.slice(192, 256)
+  if (!answer || answer === "0" || !updatedAt || updatedAt.length !== 64) return null
+  return { answer, updatedAt: Number(BigInt(`0x${updatedAt}`)) }
 }
 
 /** The `answer` word of a `latestRoundData()` result, or "" when the read failed. */
