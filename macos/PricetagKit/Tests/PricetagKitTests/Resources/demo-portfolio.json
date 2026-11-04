@@ -16,7 +16,35 @@
     "behindBlocks": 0
   },
   "gasUnknownTxs": [],
+  "l1FeeUnknownTxs": [],
+  "openingUnread": [],
+  "unreadAssets": [],
   "positions": [
+    {
+      "asset": "DAI",
+      "decimals": 18,
+      "note": null,
+      "price": null,
+      "values": {
+        "qty": "250000000000000000000",
+        "unknownCostQty": "250000000000000000000",
+        "costUsdMicros": null,
+        "averageCostUsdMicros": null,
+        "valueUsdMicros": null,
+        "realizedUsdMicros": "0",
+        "unrealizedUsdMicros": null
+      },
+      "pnlUsdMicros": null,
+      "shortfallQty": "0",
+      "legCount": 1,
+      "reconciliation": {
+        "status": "reconciled",
+        "blockNum": 53505400,
+        "computedQty": "250000000000000000000",
+        "actualQty": "250000000000000000000",
+        "differenceQty": "0"
+      }
+    },
     {
       "asset": "USDC",
       "decimals": 6,
@@ -37,7 +65,14 @@
       },
       "pnlUsdMicros": null,
       "shortfallQty": "0",
-      "legCount": 7
+      "legCount": 7,
+      "reconciliation": {
+        "status": "reconciled",
+        "blockNum": 53505400,
+        "computedQty": "3249999999",
+        "actualQty": "3249999999",
+        "differenceQty": "0"
+      }
     },
     {
       "asset": "ETH",
@@ -59,7 +94,14 @@
       },
       "pnlUsdMicros": null,
       "shortfallQty": "0",
-      "legCount": 10
+      "legCount": 10,
+      "reconciliation": {
+        "status": "reconciled",
+        "blockNum": 53505400,
+        "computedQty": "519720000000000000",
+        "actualQty": "519720000000000000",
+        "differenceQty": "0"
+      }
     },
     {
       "asset": "AERO",
@@ -77,7 +119,14 @@
       },
       "pnlUsdMicros": null,
       "shortfallQty": "0",
-      "legCount": 2
+      "legCount": 2,
+      "reconciliation": {
+        "status": "reconciled",
+        "blockNum": 53505400,
+        "computedQty": "500000000000000000000",
+        "actualQty": "500000000000000000000",
+        "differenceQty": "0"
+      }
     },
     {
       "asset": "cbBTC",
@@ -85,17 +134,24 @@
       "note": null,
       "price": null,
       "values": {
-        "qty": "2000000",
-        "unknownCostQty": "2000000",
+        "qty": "2500000",
+        "unknownCostQty": "2500000",
         "costUsdMicros": null,
         "averageCostUsdMicros": null,
         "valueUsdMicros": null,
-        "realizedUsdMicros": "0",
+        "realizedUsdMicros": null,
         "unrealizedUsdMicros": null
       },
       "pnlUsdMicros": null,
       "shortfallQty": "0",
-      "legCount": 1
+      "legCount": 1,
+      "reconciliation": {
+        "status": "incomplete",
+        "blockNum": 53505400,
+        "computedQty": "2000000",
+        "actualQty": "2500000",
+        "differenceQty": "500000"
+      }
     },
     {
       "asset": "DEGEN",
@@ -113,7 +169,14 @@
       },
       "pnlUsdMicros": null,
       "shortfallQty": "0",
-      "legCount": 1
+      "legCount": 1,
+      "reconciliation": {
+        "status": "reconciled",
+        "blockNum": 53505400,
+        "computedQty": "50000000000000000000000",
+        "actualQty": "50000000000000000000000",
+        "differenceQty": "0"
+      }
     },
     {
       "asset": "VIRTUAL",
@@ -131,7 +194,14 @@
       },
       "pnlUsdMicros": null,
       "shortfallQty": "0",
-      "legCount": 1
+      "legCount": 1,
+      "reconciliation": {
+        "status": "reconciled",
+        "blockNum": 53505400,
+        "computedQty": "50000000000000000000",
+        "actualQty": "50000000000000000000",
+        "differenceQty": "0"
+      }
     }
   ],
   "totals": {
@@ -141,6 +211,14 @@
     "gasUsdMicros": "703360",
     "pnlUsdMicros": "74281640",
     "excluded": [
+      {
+        "asset": "DAI",
+        "reason": "no current price"
+      },
+      {
+        "asset": "DAI",
+        "reason": "unknown cost"
+      },
       {
         "asset": "USDC",
         "reason": "sold at an unknown cost"
@@ -163,11 +241,11 @@
       },
       {
         "asset": "cbBTC",
-        "reason": "no current price"
+        "reason": "doesn't match its actual balance"
       },
       {
         "asset": "cbBTC",
-        "reason": "unknown cost"
+        "reason": "no current price"
       },
       {
         "asset": "DEGEN",
@@ -190,19 +268,19 @@
     "coverage": {
       "value": {
         "known": 2,
-        "missing": 4
+        "missing": 5
       },
       "realized": {
         "known": 1,
-        "missing": 2
+        "missing": 3
       },
       "unrealized": {
         "known": 0,
-        "missing": 6
+        "missing": 7
       },
       "pnl": {
         "known": 2,
-        "missing": 8
+        "missing": 10
       }
     }
   },
@@ -213,77 +291,77 @@
       "timestamp": "2026-11-04T08:00:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000001",
       "pnlUsdMicros": null,
-      "excludedCount": 1
+      "excludedCount": 3
     },
     {
       "blockNum": 53500150,
       "timestamp": "2026-11-04T08:05:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000002",
       "pnlUsdMicros": null,
-      "excludedCount": 2
+      "excludedCount": 4
     },
     {
       "blockNum": 53500300,
       "timestamp": "2026-11-04T08:10:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000003",
       "pnlUsdMicros": "-96000",
-      "excludedCount": 4
+      "excludedCount": 6
     },
     {
       "blockNum": 53500900,
       "timestamp": "2026-11-04T08:30:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
       "pnlUsdMicros": "-193440",
-      "excludedCount": 5
+      "excludedCount": 7
     },
     {
       "blockNum": 53501500,
       "timestamp": "2026-11-04T08:50:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000005",
       "pnlUsdMicros": "-292040",
-      "excludedCount": 5
+      "excludedCount": 7
     },
     {
       "blockNum": 53502400,
       "timestamp": "2026-11-04T09:20:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
       "pnlUsdMicros": "74592560",
-      "excludedCount": 5
+      "excludedCount": 7
     },
     {
       "blockNum": 53503000,
       "timestamp": "2026-11-04T09:40:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000007",
       "pnlUsdMicros": "74592560",
-      "excludedCount": 6
+      "excludedCount": 7
     },
     {
       "blockNum": 53503600,
       "timestamp": "2026-11-04T10:00:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000008",
       "pnlUsdMicros": "74489240",
-      "excludedCount": 7
+      "excludedCount": 8
     },
     {
       "blockNum": 53504200,
       "timestamp": "2026-11-04T10:20:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
       "pnlUsdMicros": "74385640",
-      "excludedCount": 8
+      "excludedCount": 9
     },
     {
       "blockNum": 53504800,
       "timestamp": "2026-11-04T10:40:00.000Z",
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
       "pnlUsdMicros": "74281640",
-      "excludedCount": 8
+      "excludedCount": 9
     },
     {
       "blockNum": 53505400,
       "timestamp": "2026-11-04T11:00:00.000Z",
       "txHash": null,
       "pnlUsdMicros": "74281640",
-      "excludedCount": 8
+      "excludedCount": 9
     }
   ]
 }

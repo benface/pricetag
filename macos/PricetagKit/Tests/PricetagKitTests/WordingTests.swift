@@ -17,6 +17,7 @@ struct WordingVectors: Decodable {
     }
     struct CoverageVector: Decodable {
         let fromBlock, toBlock, trackedTokens: Int
+        let openingUnread: Bool
         let text: String
     }
     struct FeesUnknown: Decodable {
@@ -32,7 +33,7 @@ struct WordingVectors: Decodable {
         let help: String?
     }
     struct Sentences: Decodable {
-        let methodName, methodHelp, averagePricePaid, networkFees, pnlHelp, realizedHelp, unrealizedHelp: String
+        let methodName, methodHelp, averagePricePaid, networkFees, balanceCheck, startingBalance, pnlHelp, realizedHelp, unrealizedHelp: String
         let notStarted, unpricedFees, demo, pnlUnavailable, nothingToChart, reading, notAnAddress: String
     }
     let methods: [String: String]
@@ -42,7 +43,9 @@ struct WordingVectors: Decodable {
     let costs: [Cost]
     let activity: [Activity]
     let excluded: String
-    let coverage: CoverageVector
+    let coverage: [CoverageVector]
+    let networkFeeUnknown: [FeesUnknown]
+    let checkLabels: [String: String]
     let feesUnknown: [FeesUnknown]
     let behind: [Behind]
     let stale: String
@@ -70,8 +73,12 @@ struct WordingVectors: Decodable {
     @Test func sentencesMatchTheWebApp() {
         let excluded = [Exclusion(asset: "USDC", reason: "unknown cost"), Exclusion(asset: "AERO", reason: "no current price"), Exclusion(asset: "ETH", reason: "unknown cost")]
         #expect(Wording.excluded(excluded) == vectors.excluded)
-        let span = Coverage(fromBlock: vectors.coverage.fromBlock, toBlock: vectors.coverage.toBlock)
-        #expect(Wording.coverage(span, trackedTokens: vectors.coverage.trackedTokens) == vectors.coverage.text)
+        for vector in vectors.coverage {
+            let span = Coverage(fromBlock: vector.fromBlock, toBlock: vector.toBlock)
+            #expect(Wording.coverage(span, trackedTokens: vector.trackedTokens, openingUnread: vector.openingUnread) == vector.text)
+        }
+        for vector in vectors.networkFeeUnknown { #expect(Wording.networkFeeUnknown(vector.count) == vector.text) }
+        for status in [Reconciliation.Status.reconciled, .incomplete, .unchecked] { #expect(Wording.checkLabel(status) == vectors.checkLabels[status.rawValue]) }
         for vector in vectors.feesUnknown { #expect(Wording.feesUnknown(vector.count) == vector.text) }
         for vector in vectors.behind { #expect(Wording.behind(blocks: vector.blocks) == vector.text) }
         #expect(Wording.stale(lastUpdate: "Nov 4 at 5:40 AM") == vectors.stale)
@@ -82,6 +89,8 @@ struct WordingVectors: Decodable {
         #expect(Wording.methodHelp == sentences.methodHelp)
         #expect(Wording.averagePricePaid == sentences.averagePricePaid)
         #expect(Wording.networkFees == sentences.networkFees)
+        #expect(Wording.balanceCheck == sentences.balanceCheck)
+        #expect(Wording.startingBalance == sentences.startingBalance)
         #expect(Wording.pnlHelp == sentences.pnlHelp)
         #expect(Wording.realizedHelp == sentences.realizedHelp)
         #expect(Wording.unrealizedHelp == sentences.unrealizedHelp)

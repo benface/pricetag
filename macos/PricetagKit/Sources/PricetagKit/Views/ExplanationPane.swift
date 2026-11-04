@@ -114,7 +114,7 @@ public struct LegRow: View {
 
     @ViewBuilder
     private var tagList: some View {
-        Tag(Wording.action(kind: leg.kind, isIncoming: leg.isIncoming))
+        Tag(leg.opening ? Wording.startingBalance : Wording.action(kind: leg.kind, isIncoming: leg.isIncoming))
         if let price = leg.priceUsdMicros, let source = leg.priceSource {
             Tag("\(Format.price(price)) · \(Wording.priceSource(source))")
         } else {

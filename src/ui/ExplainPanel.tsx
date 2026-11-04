@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef } from "react"
 import type { LegEffect } from "../core/portfolio.ts"
 import { formatPrice, formatSignedAmount, formatTime, shortHash } from "../core/format.ts"
 import { describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
-import { actionLabel, activityTitle, costTag, pnlHelp, priceSourceLabel } from "../core/wording.ts"
+import { STARTING_BALANCE, actionLabel, activityTitle, costTag, pnlHelp, priceSourceLabel } from "../core/wording.ts"
 
 /** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS_SHOWN = 200
@@ -22,8 +22,8 @@ function LegRow({ effect }: { effect: LegEffect }) {
         </span>
       </div>
       <div className="leg-tags">
-        <span className="tag">{actionLabel(leg.kind, incoming)}</span>
-        {leg.priceUsdMicros !== null && leg.priceSource ? (
+        <span className="tag">{leg.opening ? STARTING_BALANCE : actionLabel(leg.kind, incoming)}</span>
+        {leg.opening ? null : leg.priceUsdMicros !== null && leg.priceSource ? (
           <span className="tag">
             {formatPrice(leg.priceUsdMicros)} · {priceSourceLabel(leg.priceSource)}
           </span>
@@ -37,9 +37,11 @@ function LegRow({ effect }: { effect: LegEffect }) {
       </p>
       {leg.priceNote ? <p className="small muted">{leg.priceNote}</p> : null}
       {netting ? <p className="small muted">{netting}</p> : null}
-      <a className="small" href={`https://basescan.org/tx/${leg.txHash}`} target="_blank" rel="noreferrer noopener">
-        {shortHash(leg.txHash)} on Basescan ↗
-      </a>
+      {leg.opening ? null : (
+        <a className="small" href={`https://basescan.org/tx/${leg.txHash}`} target="_blank" rel="noreferrer noopener">
+          {shortHash(leg.txHash)} on Basescan ↗
+        </a>
+      )}
     </li>
   )
 }

@@ -13,6 +13,9 @@ export const METHOD_HELP = "Average spreads what you paid across all you hold. O
 
 export const AVERAGE_PRICE_PAID = "Average price paid"
 export const NETWORK_FEES = "Network fees"
+export const BALANCE_CHECK = "Balance check"
+export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Incomplete", unchecked: "Not checked" }
+export const STARTING_BALANCE = "Starting balance"
 export const PNL_HELP = "PnL is profit and loss: what you've gained or lost so far."
 export const REALIZED_HELP = "Gain or loss on what you've sold or spent."
 export const UNREALIZED_HELP = "Gain or loss on what you still hold, at the current price."
@@ -81,8 +84,13 @@ export function excludedSentence(excluded: readonly { asset: string; reason: str
   return `Excludes ${[...byReason.entries()].map(([reason, assets]) => `${assets.join(", ")} (${reason})`).join("; ")}.`
 }
 
-export function coverageSentence(coverage: { fromBlock: number; toBlock: number }, trackedTokens: number): string {
-  return `Covers about ${formatDuration(coverage.toBlock - coverage.fromBlock)} of history and ${trackedTokens} tokens plus ETH. Anything earlier or on other tokens isn't counted, so amounts are what moved in this time, not full balances.`
+export function coverageSentence(coverage: { fromBlock: number; toBlock: number }, trackedTokens: number, openingUnread: boolean): string {
+  const opening = openingUnread ? "What the wallet held before that couldn't all be read yet, so some amounts may not be full balances." : "What the wallet held before that is included, at an unknown cost."
+  return `Covers about ${formatDuration(coverage.toBlock - coverage.fromBlock)} of history and ${trackedTokens} tokens plus ETH. ${opening} Other tokens aren't counted.`
+}
+
+export function networkFeeUnknownSentence(count: number): string {
+  return `Couldn't read the network fee of ${count} ${count === 1 ? "transaction" : "transactions"} yet, so fees paid are too low, and ETH's PnL is unavailable until they're read.`
 }
 
 export function feesUnknownSentence(count: number): string {

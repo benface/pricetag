@@ -5,8 +5,10 @@
 
 import type { Head, Mode } from "../src/core/api.ts"
 import type { LegRow, PricedRow, ReferenceRow } from "../src/core/legs.ts"
+import type { BalanceSnapshot } from "../src/core/reconcile.ts"
 import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS } from "../src/core/tokens.ts"
 import { decimalString, isNotStarted, type Query } from "./amp.ts"
+import { MULTICALL3, balancesByAsset, decodeBalanceResults, encodeBalanceCalls } from "./balances.ts"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
 export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknownTxs: string[] }
@@ -26,6 +28,8 @@ export type Source = {
   readReferences(blocks: readonly number[]): Promise<ReferenceRow[]>
   /** The newest oracle read at or just before `head`, or null if there's none recent enough to call current. */
   readLatestReference(head: number): Promise<ReferenceRow | null>
+  /** What the chain says this wallet holds at `block`, or null when the read gave nothing usable. */
+  readBalances(address: string, block: number): Promise<BalanceSnapshot | null>
 }
 
 const hexOf = (address: string) => address.replace(/^0x/, "").toLowerCase()
@@ -56,6 +60,16 @@ async function readHead(query: Query, dataset: string, after: number | null): Pr
   const rows = await query<Row>(`SELECT block_num, timestamp FROM "${dataset}".blocks ${where} ORDER BY block_num DESC LIMIT 1`, 15_000)
   const row = rows[0]
   return row ? { blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) } : null
+}
+
+/**
+ * With no table in the query, this makes exactly one `eth_call`, and it can read a block no table has, like the one
+ * before a local dataset's start.
+ */
+async function readBalancesAt(query: Query, network: string, address: string, block: number): Promise<BalanceSnapshot | null> {
+  const [row] = await query<Row>(`SELECT rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeBalanceCalls(address)}', ${block}) AS r`)
+  const results = decodeBalanceResults((row?.r as { data?: string } | null | undefined)?.data)
+  return results && { blockNum: block, amounts: balancesByAsset(results) }
 }
 
 /** About 2 minutes. A derived table runs a block or two behind the head, and older than this isn't a current price. */
@@ -97,6 +111,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
     processedThrough: async (_after, head) => head,
     readReferences,
     readLatestReference: async (head) => (await readReferences([head]))[0] ?? null,
+    readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
 
     async readWindow(address, from, to) {
       const me = hexOf(address)
@@ -178,7 +193,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
   }
 }
 
-export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; startBlock: number }): Source {
+export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; startBlock: number; network: string }): Source {
   const ds = `"${config.dataset}"`
   const readOrEmpty = (sql: string) =>
     query<Row>(sql).catch((error: unknown) => {
@@ -196,6 +211,7 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
     startBlock: config.startBlock,
     historyBlocks: null,
     head: (after) => readHead(query, config.baseDataset, after),
+    readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
 
     async processedThrough(after, head) {
       let through = head

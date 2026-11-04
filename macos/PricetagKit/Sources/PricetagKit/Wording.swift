@@ -8,6 +8,8 @@ public enum Wording {
     public static let methodHelp = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
     public static let averagePricePaid = "Average price paid"
     public static let networkFees = "Network fees"
+    public static let balanceCheck = "Balance check"
+    public static let startingBalance = "Starting balance"
     public static let pnlHelp = "PnL is profit and loss: what you've gained or lost so far."
     public static let realizedHelp = "Gain or loss on what you've sold or spent."
     public static let unrealizedHelp = "Gain or loss on what you still hold, at the current price."
@@ -66,15 +68,45 @@ public enum Wording {
     }
 
     public static func coverage(_ portfolio: Portfolio) -> String {
-        coverage(portfolio.coverage, trackedTokens: portfolio.trackedTokens)
+        coverage(portfolio.coverage, trackedTokens: portfolio.trackedTokens, openingUnread: !portfolio.openingUnread.isEmpty)
     }
 
-    static func coverage(_ span: Coverage, trackedTokens: Int) -> String {
-        "Covers about \(Format.duration(blocks: span.toBlock - span.fromBlock)) of history and \(trackedTokens) tokens plus ETH. Anything earlier or on other tokens isn't counted, so amounts are what moved in this time, not full balances."
+    static func coverage(_ span: Coverage, trackedTokens: Int, openingUnread: Bool) -> String {
+        let opening = openingUnread
+            ? "What the wallet held before that couldn't all be read yet, so some amounts may not be full balances."
+            : "What the wallet held before that is included, at an unknown cost."
+        return "Covers about \(Format.duration(blocks: span.toBlock - span.fromBlock)) of history and \(trackedTokens) tokens plus ETH. \(opening) Other tokens aren't counted."
     }
 
     public static func feesUnknown(_ count: Int) -> String {
         "Network fees couldn't be worked out for \(count) \(count == 1 ? "transaction" : "transactions"), so the ETH amount is too high by that much."
+    }
+
+    public static func networkFeeUnknown(_ count: Int) -> String {
+        "Couldn't read the network fee of \(count) \(count == 1 ? "transaction" : "transactions") yet, so fees paid are too low, and ETH's PnL is unavailable until they're read."
+    }
+
+    public static func checkLabel(_ status: Reconciliation.Status) -> String {
+        switch status {
+        case .reconciled: "Matches"
+        case .incomplete: "Incomplete"
+        case .unchecked: "Not checked"
+        }
+    }
+
+    /// What the onchain check found, or nil when there's nothing to say.
+    public static func check(_ position: Position) -> String? {
+        guard let check = position.reconciliation else { return nil }
+        switch check.status {
+        case .reconciled:
+            return "Matches the actual balance exactly."
+        case .unchecked:
+            return "Not checked. \(check.reason ?? "") PnL is unavailable until this balance is confirmed."
+        case .incomplete:
+            guard let computed = check.computedQty, let actual = check.actualQty, let difference = check.differenceQty else { return nil }
+            let signed = difference.hasPrefix("-") ? "" : "+"
+            return "Worked out \(Format.amount(computed, decimals: position.decimals)), actual \(Format.amount(actual, decimals: position.decimals)), difference \(signed)\(Format.amount(difference, decimals: position.decimals)) \(position.asset). PnL is unavailable."
+        }
     }
 
     /// What's missing while a dataset catches up to the chain. nil when it isn't behind.
@@ -116,6 +148,7 @@ extension AssetMetric {
         case .value: "value"
         case .realized: "realized PnL"
         case .unrealized: "unrealized PnL"
+        case .onchain: Wording.balanceCheck.lowercased()
         }
     }
 

@@ -94,11 +94,36 @@
     }
   ],
   "excluded": "Excludes USDC, ETH (unknown cost); AERO (no current price).",
-  "coverage": {
-    "fromBlock": 53500000,
-    "toBlock": 53505400,
-    "trackedTokens": 10,
-    "text": "Covers about 3 h of history and 10 tokens plus ETH. Anything earlier or on other tokens isn't counted, so amounts are what moved in this time, not full balances."
+  "coverage": [
+    {
+      "fromBlock": 53500000,
+      "toBlock": 53505400,
+      "trackedTokens": 10,
+      "openingUnread": false,
+      "text": "Covers about 3 h of history and 10 tokens plus ETH. What the wallet held before that is included, at an unknown cost. Other tokens aren't counted."
+    },
+    {
+      "fromBlock": 53500000,
+      "toBlock": 53505400,
+      "trackedTokens": 10,
+      "openingUnread": true,
+      "text": "Covers about 3 h of history and 10 tokens plus ETH. What the wallet held before that couldn't all be read yet, so some amounts may not be full balances. Other tokens aren't counted."
+    }
+  ],
+  "networkFeeUnknown": [
+    {
+      "count": 1,
+      "text": "Couldn't read the network fee of 1 transaction yet, so fees paid are too low, and ETH's PnL is unavailable until they're read."
+    },
+    {
+      "count": 2,
+      "text": "Couldn't read the network fee of 2 transactions yet, so fees paid are too low, and ETH's PnL is unavailable until they're read."
+    }
+  ],
+  "checkLabels": {
+    "reconciled": "Matches",
+    "incomplete": "Incomplete",
+    "unchecked": "Not checked"
   },
   "feesUnknown": [
     {
@@ -157,6 +182,8 @@
     "methodHelp": "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest.",
     "averagePricePaid": "Average price paid",
     "networkFees": "Network fees",
+    "balanceCheck": "Balance check",
+    "startingBalance": "Starting balance",
     "pnlHelp": "PnL is profit and loss: what you've gained or lost so far.",
     "realizedHelp": "Gain or loss on what you've sold or spent.",
     "unrealizedHelp": "Gain or loss on what you still hold, at the current price.",

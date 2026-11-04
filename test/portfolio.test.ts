@@ -22,12 +22,23 @@ function assertMatchesFile(name: string, actual: unknown) {
   assert.equal(readFileSync(url, "utf8"), text, `${name} is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.`)
 }
 
-const walletWith = (changes: Partial<WalletResponse>): WalletResponse => ({ ...DEMO_WALLET, ...changes })
+/** Balances that match whatever legs it's given, so a test about something else isn't also a test of a mismatch. */
+function balancesOf(legs: WalletResponse["legs"], blockNum: number): WalletResponse["balances"] {
+  const amounts: Record<string, string> = {}
+  for (const leg of legs) amounts[leg.asset] = (BigInt(amounts[leg.asset] ?? 0) + BigInt(leg.delta)).toString()
+  return { blockNum, amounts }
+}
+
+const walletWith = (changes: Partial<WalletResponse>): WalletResponse => ({
+  ...DEMO_WALLET,
+  ...(changes.legs ? { balances: balancesOf(changes.legs, DEMO_WALLET.coverage.toBlock) } : {}),
+  ...changes,
+})
 
 describe("portfolioOf", () => {
   it("returns exactly what the browser's fold gives", () => {
     for (const method of ["average", "fifo"] as const) {
-      const positions = foldPositions(DEMO_WALLET.legs, method, DEMO_WALLET.prices)
+      const positions = foldPositions(DEMO_WALLET.legs, method, DEMO_WALLET.prices, DEMO_WALLET)
       const portfolio = portfolioOf(DEMO_WALLET, method)
       assert.deepEqual(portfolio.totals, sumTotals(positions))
       assert.deepEqual(portfolio.positions.map((p) => p.values), positions.map((p) => p.values))
@@ -41,6 +52,25 @@ describe("portfolioOf", () => {
     assert.equal(position("USDC")?.pnlUsdMicros, null)
     assert.equal(position("cbBTC")?.pnlUsdMicros, null)
     assert.equal(position("AERO")?.pnlUsdMicros, null, "AERO has a known cost, but no current price")
+  })
+
+  it("carries each position's check, and leaves what doesn't match out of the chart too", () => {
+    const portfolio = portfolioOf(DEMO_WALLET, "average")
+    const cbBtc = portfolio.positions.find((p) => p.asset === "cbBTC")!
+    assert.equal(cbBtc.reconciliation?.status, "incomplete")
+    assert.equal(cbBtc.pnlUsdMicros, null)
+    assert.ok(portfolio.totals.excluded.some((e) => e.asset === "cbBTC" && e.reason === "doesn't match its actual balance"))
+    assert.ok(portfolio.points.at(-1)!.excludedCount > 0)
+    assert.equal(portfolio.points.at(-1)!.pnlUsdMicros, portfolio.totals.pnlUsdMicros)
+    assert.equal(portfolio.positions.find((p) => p.asset === "USDC")!.reconciliation?.status, "reconciled")
+  })
+
+  it("explains the check, and marks an opening balance so it isn't linked as a transaction", () => {
+    const check = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "cbBTC", metric: "onchain" })!
+    assert.equal(check.value, "⚠ Incomplete")
+    assert.match(check.lines.join(" "), /Difference/)
+    const dai = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "DAI", metric: "amount" })!
+    assert.deepEqual(dai.legs.map((l) => [l.opening, l.txHash]), [[true, ""]])
   })
 
   it("says the total is partial when it leaves something out", () => {
@@ -180,7 +210,7 @@ describe("the portfolio API", () => {
   })
 
   it("explains a transaction", async () => {
-    const txHash = DEMO_WALLET.legs[0]?.txHash as string
+    const txHash = DEMO_WALLET.legs.find((l) => !l.opening)?.txHash as string
     const { status, body } = await get(`/api/portfolio/demo/explain?tx=${txHash}`)
     assert.equal(status, 200)
     assert.ok((body as unknown as ExplanationResponse).legs.every((l) => l.txHash === txHash))
@@ -241,7 +271,9 @@ describe("wording", () => {
     costs: costLabels.map((cost) => ({ cost, tag: wording.costTag(cost) })),
     activity: [[1, 1], [10, 10], [1203, 200]].map(([count, shown]) => ({ count, shown, title: wording.activityTitle(count as number, shown as number) })),
     excluded: wording.excludedSentence([{ asset: "USDC", reason: "unknown cost" }, { asset: "AERO", reason: "no current price" }, { asset: "ETH", reason: "unknown cost" }]),
-    coverage: { fromBlock: 53500000, toBlock: 53505400, trackedTokens: 10, text: wording.coverageSentence({ fromBlock: 53500000, toBlock: 53505400 }, 10) },
+    coverage: [false, true].map((openingUnread) => ({ fromBlock: 53500000, toBlock: 53505400, trackedTokens: 10, openingUnread, text: wording.coverageSentence({ fromBlock: 53500000, toBlock: 53505400 }, 10, openingUnread) })),
+    networkFeeUnknown: [1, 2].map((count) => ({ count, text: wording.networkFeeUnknownSentence(count) })),
+    checkLabels: wording.CHECK_LABELS,
     feesUnknown: [1, 2].map((count) => ({ count, text: wording.feesUnknownSentence(count) })),
     behind: [6, 14, 15, 50, 5400].map((blocks) => ({ blocks, text: wording.behindSentence(blocks) })),
     stale: wording.staleSentence("Nov 4 at 5:40 AM"),
@@ -252,6 +284,8 @@ describe("wording", () => {
       methodHelp: wording.METHOD_HELP,
       averagePricePaid: wording.AVERAGE_PRICE_PAID,
       networkFees: wording.NETWORK_FEES,
+      balanceCheck: wording.BALANCE_CHECK,
+      startingBalance: wording.STARTING_BALANCE,
       pnlHelp: wording.PNL_HELP,
       realizedHelp: wording.REALIZED_HELP,
       unrealizedHelp: wording.UNREALIZED_HELP,
@@ -276,7 +310,7 @@ describe("wording", () => {
   })
 
   it("uses none of the old terms in anything people read", () => {
-    const JARGON = /\b(fifo|avg|average cost|legs?|proceeds|oracles?|allowlist|off the list|swaps?|inherited|self-reported|received at market|gas|dataset|onchain|L[12])\b/i
+    const JARGON = /\b(fifo|avg|average cost|legs?|proceeds|oracles?|allowlist|off the list|swaps?|inherited|self-reported|received at market|gas|dataset|onchain|weth|reconcil\w*|L[12])\b/i
     // The vectors also name the API's own values, as inputs, so only what they print is held to this.
     const printed = (value: unknown): string[] => {
       if (typeof value === "string") return [value]
@@ -289,7 +323,7 @@ describe("wording", () => {
         for (const effect of position.effects) {
           texts.push(describeEffect(effect), describeNetting(effect.leg) ?? "", effect.leg.priceNote ?? "")
         }
-        for (const metric of ["amount", "average", "value", "realized", "unrealized"] as const) {
+        for (const metric of ["amount", "average", "value", "realized", "unrealized", "onchain"] as const) {
           const explanation = explainPortfolio(DEMO_WALLET, method, { kind: "asset", asset: position.asset, metric })
           texts.push(explanation?.title ?? "", ...(explanation?.lines ?? []))
         }

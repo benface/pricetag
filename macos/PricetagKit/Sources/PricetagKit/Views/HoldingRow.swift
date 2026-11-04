@@ -35,12 +35,7 @@ public struct HoldingRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(position.asset).fontWeight(.medium)
-                    if position.hasShortfall {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.caption2)
-                            .foregroundStyle(Tone.warning.style)
-                            .help("More left this wallet than we saw arrive, so its history is incomplete.")
-                    }
+                    OnchainCheck(position: position, showsLabel: false)
                 }
                 LiveNumber(amount, tone: .secondary)
                     .font(.caption)
@@ -63,5 +58,42 @@ public struct HoldingRow: View {
         .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Whether a position matches the chain: a check mark when it does, and a warning when it doesn't or we can't tell.
+public struct OnchainCheck: View {
+    let position: Position
+    let showsLabel: Bool
+
+    public init(position: Position, showsLabel: Bool) {
+        self.position = position
+        self.showsLabel = showsLabel
+    }
+
+    private var label: String? {
+        if let status = position.reconciliation?.status { return Wording.checkLabel(status) }
+        return position.hasShortfall ? Wording.checkLabel(.incomplete) : nil
+    }
+
+    private var help: String {
+        Wording.check(position) ?? "More left this wallet than we saw arrive, so its history is incomplete."
+    }
+
+    public var body: some View {
+        if let label {
+            let tone: Tone = position.isReconciled ? .gain : .warning
+            HStack(spacing: 4) {
+                Image(systemName: position.isReconciled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(tone.style)
+                if showsLabel {
+                    Text(label).foregroundStyle(tone.style)
+                }
+            }
+            .help(help)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(position.asset): \(label)")
+        }
     }
 }

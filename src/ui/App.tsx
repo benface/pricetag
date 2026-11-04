@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
 import { hasStarted, isAddress, isBehind, type WalletResponse } from "../core/api.ts"
 import type { Method } from "../core/fold.ts"
-import { foldPositions, hasAnswer, pnlOverTime, sumTotals, type Coverage, type PnlPoint, type Position } from "../core/portfolio.ts"
+import { foldPositions, hasAnswer, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type Coverage, type PnlPoint, type Position } from "../core/portfolio.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
-import { explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
-import { formatAmount, formatPrice, formatSignedUsd, formatTime, formatUsd } from "../core/format.ts"
+import { explainMetric, explainPoint, explainTotal, mismatchCause, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
+import { formatAmount, formatPrice, formatSignedAmount, formatSignedUsd, formatTime, formatUsd } from "../core/format.ts"
 import { TOKENS } from "../core/tokens.ts"
 import {
   AVERAGE_PRICE_PAID,
+  BALANCE_CHECK,
+  CHECK_LABELS,
   DEMO_NOTICE,
   ETH_NOTE,
   METHOD_HELP,
@@ -27,6 +29,7 @@ import {
   excludedSentence,
   feedDetail,
   feesUnknownSentence,
+  networkFeeUnknownSentence,
   staleSentence,
 } from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
@@ -47,6 +50,13 @@ function Num({ onClick, label, children, tone }: { onClick: () => void; label: s
 
 const toneOf = (micros: string | null) => (micros === null ? "warn" : BigInt(micros) > 0n ? "gain" : BigInt(micros) < 0n ? "loss" : null)
 
+function OnchainCheck({ position, onClick }: { position: Position; onClick: () => void }) {
+  const status = position.reconciliation?.status
+  if (status === "reconciled") return <Num label={`${position.asset} matches its actual balance`} onClick={onClick} tone="gain">✓ {CHECK_LABELS.reconciled}</Num>
+  if (status === "incomplete") return <Num label={`${position.asset} doesn't match its actual balance`} onClick={onClick} tone="warn">⚠ {CHECK_LABELS.incomplete}</Num>
+  return <Num label={`${position.asset} not checked against its actual balance`} onClick={onClick} tone="warn">⚠ {CHECK_LABELS.unchecked}</Num>
+}
+
 function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: (e: Explanation) => void }) {
   const open = (position: Position, metric: Metric) => () => onExplain(explainMetric(position, metric))
   return (
@@ -57,6 +67,7 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
           <thead>
             <tr>
               <th>Asset</th>
+              <th>{BALANCE_CHECK}</th>
               <th className="num">Amount</th>
               <th className="num">{AVERAGE_PRICE_PAID}</th>
               <th className="num">Value</th>
@@ -73,51 +84,65 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
               const { asset, decimals, values, state } = position
               const held = BigInt(values.qty) > 0n
               const unknown = BigInt(values.unknownCostQty) > 0n
+              const mismatch = position.reconciliation?.status === "incomplete" ? position.reconciliation : null
+              const flagged = mismatch !== null || BigInt(state.shortfallQty) > 0n
               return (
-                <tr key={asset} className={held ? "" : "closed"}>
-                  <td>
-                    <strong>{asset}</strong>
-                    {asset === "ETH" ? <span className="muted small"> {ETH_NOTE}</span> : null}
-                  </td>
-                  <td className="num">
-                    <Num label={`${asset} amount`} onClick={open(position, "amount")} tone={BigInt(state.shortfallQty) > 0n ? "warn" : null}>
-                      {BigInt(state.shortfallQty) > 0n ? "⚠ " : ""}
-                      {formatAmount(values.qty, decimals)}
-                    </Num>
-                  </td>
-                  <td className="num">
-                    {held ? (
-                      <Num label={`${asset} ${AVERAGE_PRICE_PAID.toLowerCase()}`} onClick={open(position, "average")} tone={unknown ? "warn" : null}>
-                        {values.averageCostUsdMicros ? formatPrice(values.averageCostUsdMicros) : "⚠ Unknown"}
+                <Fragment key={asset}>
+                  <tr className={`${held ? "" : "closed"} ${mismatch ? "mismatched" : ""}`}>
+                    <td>
+                      <strong>{asset}</strong>
+                      {asset === "ETH" ? <span className="muted small"> {ETH_NOTE}</span> : null}
+                    </td>
+                    <td>
+                      <OnchainCheck position={position} onClick={open(position, "onchain")} />
+                    </td>
+                    <td className="num">
+                      <Num label={`${asset} amount`} onClick={open(position, "amount")} tone={flagged ? "warn" : null}>
+                        {flagged ? "⚠ " : ""}
+                        {formatAmount(values.qty, decimals)}
                       </Num>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                  <td className="num">
-                    {held ? (
-                      <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueUsdMicros === null ? "warn" : null}>
-                        {values.valueUsdMicros ? formatUsd(values.valueUsdMicros) : "⚠ No price"}
+                    </td>
+                    <td className="num">
+                      {held ? (
+                        <Num label={`${asset} ${AVERAGE_PRICE_PAID.toLowerCase()}`} onClick={open(position, "average")} tone={unknown ? "warn" : null}>
+                          {values.averageCostUsdMicros ? formatPrice(values.averageCostUsdMicros) : "⚠ Unknown"}
+                        </Num>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td className="num">
+                      {held ? (
+                        <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueUsdMicros === null ? "warn" : null}>
+                          {values.valueUsdMicros ? formatUsd(values.valueUsdMicros) : "⚠ No price"}
+                        </Num>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td className="num" title={REALIZED_HELP}>
+                      <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedUsdMicros)}>
+                        {values.realizedUsdMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : formatSignedUsd(values.realizedUsdMicros)}
                       </Num>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                  <td className="num" title={REALIZED_HELP}>
-                    <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedUsdMicros)}>
-                      {values.realizedUsdMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : formatSignedUsd(values.realizedUsdMicros)}
-                    </Num>
-                  </td>
-                  <td className="num" title={UNREALIZED_HELP}>
-                    {held ? (
-                      <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedUsdMicros)}>
-                        {values.unrealizedUsdMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : formatSignedUsd(values.unrealizedUsdMicros)}
-                      </Num>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                </tr>
+                    </td>
+                    <td className="num" title={UNREALIZED_HELP}>
+                      {held ? (
+                        <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedUsdMicros)}>
+                          {values.unrealizedUsdMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : formatSignedUsd(values.unrealizedUsdMicros)}
+                        </Num>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                  </tr>
+                  {mismatch ? (
+                    <tr className="mismatch">
+                      <td colSpan={7}>
+                        Worked out {formatAmount(mismatch.computedQty, decimals)} · Actual {formatAmount(mismatch.actualQty, decimals)} · Difference {formatSignedAmount(mismatch.differenceQty, decimals)} {asset}. {mismatchCause(asset, mismatch.differenceQty)}
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               )
             })}
           </tbody>
@@ -157,9 +182,10 @@ export function App() {
     go(value.toLowerCase())
   }
 
-  const positions = useMemo(() => (wallet ? foldPositions(wallet.legs, method, wallet.prices) : []), [wallet, method])
-  const totals = useMemo(() => sumTotals(positions), [positions])
-  const points = useMemo(() => (wallet ? pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest) : []), [wallet, method])
+  const positions = useMemo(() => (wallet ? foldPositions(wallet.legs, method, wallet.prices, wallet) : []), [wallet, method])
+  const unread = useMemo(() => (wallet ? unreadAssets(positions, wallet) : []), [wallet, positions])
+  const totals = useMemo(() => sumTotals(positions, unread), [positions, unread])
+  const points = useMemo(() => (wallet ? pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)) : []), [wallet, method, positions, unread])
   const close = useCallback(() => setExplanation(null), [])
   const openTotal = (metric: TotalMetric) => setExplanation(explainTotal(positions, totals, metric))
   const openPoint = (point: PnlPoint) => setExplanation(explainPoint(positions, point))
@@ -210,10 +236,11 @@ export function App() {
             <p className="notice warn">⚠ {hasStarted(wallet) ? behindSentence(wallet.latest.blockNum - wallet.coverage.toBlock) : NOT_STARTED}</p>
           ) : null}
           {wallet.mode === "demo" ? <p className="notice">{DEMO_NOTICE}</p> : null}
-          {hasStarted(wallet) ? <p className="notice">{coverageSentence(wallet.coverage, TOKENS.length - 1)}</p> : null}
+          {hasStarted(wallet) ? <p className="notice">{coverageSentence(wallet.coverage, TOKENS.length - 1, wallet.openingUnread.length > 0)}</p> : null}
           {wallet.gasUnknownTxs.length > 0 ? <p className="notice warn">⚠ {feesUnknownSentence(wallet.gasUnknownTxs.length)}</p> : null}
+          {wallet.l1FeeUnknownTxs.length > 0 ? <p className="notice warn" title={PNL_HELP}>⚠ {networkFeeUnknownSentence(wallet.l1FeeUnknownTxs.length)}</p> : null}
 
-          {wallet.legs.length === 0 && !hasStarted(wallet) ? null : wallet.legs.length === 0 ? (
+          {positions.length === 0 && !hasStarted(wallet) ? null : positions.length === 0 && unread.length === 0 ? (
             <section className="empty">
               <p>
                 No activity for <code>{wallet.address}</code> in this time.
@@ -251,7 +278,7 @@ export function App() {
                 </div>
               </section>
               <PnlChart points={points} onSelect={openPoint} />
-              <Holdings positions={positions} onExplain={setExplanation} />
+              {positions.length > 0 ? <Holdings positions={positions} onExplain={setExplanation} /> : null}
             </>
           )}
         </main>

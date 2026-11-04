@@ -187,8 +187,17 @@ private struct HoldingsTable: View {
                 .opacity(position.isHeld ? 1 : 0.6)
             }
             .width(min: 110, ideal: 170)
+            TableColumn(Wording.balanceCheck) { position in
+                Button {
+                    target = .asset(position.asset, .onchain)
+                } label: {
+                    OnchainCheck(position: position, showsLabel: true)
+                }
+                .buttonStyle(NumberButtonStyle())
+            }
+            .width(min: 100, ideal: 120)
             TableColumn("Amount") { position in
-                let warn = position.hasShortfall
+                let warn = position.hasShortfall || position.isIncomplete
                 number(position, .amount, Format.amount(position.values.qty, decimals: position.decimals), tone: warn ? .warning : .neutral, warn: warn)
             }
             .alignment(.numeric)
