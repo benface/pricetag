@@ -32,7 +32,9 @@ function LegRow({ effect }: { effect: LegEffect }) {
         )}
         {incoming ? <span className={leg.costLabel === "unknown" ? "tag warn" : "tag"}>{leg.costLabel === "unknown" ? `⚠ ${costTag(leg.costLabel)}` : costTag(leg.costLabel)}</span> : null}
       </div>
-      <p className="small">{describeEffect(effect)}.</p>
+      <p className="small" title={pnlHelp(describeEffect(effect))}>
+        {describeEffect(effect)}.
+      </p>
       {leg.priceNote ? <p className="small muted">{leg.priceNote}</p> : null}
       {netting ? <p className="small muted">{netting}</p> : null}
       <a className="small" href={`https://basescan.org/tx/${leg.txHash}`} target="_blank" rel="noreferrer noopener">

@@ -82,7 +82,7 @@ public struct LegRow: View {
                 }
             }
             tags
-            Text("\(leg.effect).").font(.callout).fixedSize(horizontal: false, vertical: true)
+            Text("\(leg.effect).").font(.callout).fixedSize(horizontal: false, vertical: true).help(Wording.pnlHelp(for: leg.effect) ?? "")
             if let note = leg.priceNote {
                 Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
