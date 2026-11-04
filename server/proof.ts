@@ -38,11 +38,9 @@ export function feedBehind(leg: PricedLeg, legs: readonly PricedLeg[]): PriceFee
  */
 export type PriceBehind = { feed: PriceFeed; update: PriceUpdate | null }
 
-const updateTitle = (feed: PriceFeed) => `Chainlink's ${feed.pair} update on Basescan`
-
 const contractLink = (feed: PriceFeed): ProofLink => ({ title: `Chainlink's ${feed.pair} contract on Basescan`, url: `${BASESCAN}/address/${feed.proxy}` })
 
-const updateLink = (feed: PriceFeed, update: PriceUpdate): ProofLink => ({ title: updateTitle(feed), url: `${BASESCAN}/tx/${update.tx_hash}#eventlog` })
+const updateLink = (feed: PriceFeed, update: PriceUpdate): ProofLink => ({ title: `Chainlink's ${feed.pair} update on Basescan`, url: `${BASESCAN}/tx/${update.tx_hash}#eventlog` })
 
 /** One update, named so anyone can look it up. */
 const describeUpdate = (feed: PriceFeed, update: PriceUpdate) => {
@@ -216,11 +214,9 @@ function priceFrom(leg: PricedLeg, legs: readonly PricedLeg[], answer: string): 
   return ptPrice(address(paid.asset), paid.delta.replace("-", ""), address(leg.asset), leg.delta.replace("-", ""), answer, answer).usd_micros
 }
 
-const TITLE_UPDATE = "Chainlink's update"
-
 /** The update's block checked like the leg's own, then its log against the update and the update against the price. */
 function updateCheck(leg: PricedLeg, legs: readonly PricedLeg[], { feed, update }: PriceBehind, read: BlockRead | null): ProofCheck {
-  const title = TITLE_UPDATE
+  const title = "Chainlink's update"
   if (!update) return { title, status: "unchecked", detail: "The update behind this price couldn't be found, so the price isn't confirmed." }
   const block = update.block_num.toLocaleString("en-US")
   if (!read) return { title, status: "unchecked", detail: `Amp doesn't have block ${block}, which has this update, so the price isn't confirmed.` }
