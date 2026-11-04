@@ -82,6 +82,9 @@ public struct DeviceWalletState: Codable, Equatable, Sendable {
     /// Nonces below this have been looked at and said to be fine, so they're no longer a gap.
     public var acknowledgedThroughNonce: UInt64?
     public var rotation: Rotation?
+    /// The newest block a settled transaction of this key's is in. A read from before it still counts what that transaction moved,
+    /// so nothing signs from one, including right after a restart.
+    public var settledThroughBlock: UInt64?
 
     public init() {}
 }

@@ -219,6 +219,35 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.records.first { $0.hash != first }?.status == .dropped)
     }
 
+    @Test func thatWaitSurvivesARestartForAutomaticAndManualSends() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)]))
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.wallet.tick()
+        #expect(rig.stateStore.saved.settledThroughBlock == 1001)
+
+        let settings = MemorySettingsStore()
+        settings.save(rig.wallet.settings)
+        let chain = rig.chain, signer = rig.signer, portfolios = rig.portfolios
+        let restarted = HotWallet(signer: signer, settingsStore: settings, stateStore: rig.stateStore, presence: FakePresence(allows: true), portfolioSource: { portfolios }, makeChain: { _ in chain })
+        await restarted.tick()
+        await restarted.sweepEverything()
+        #expect(await rig.chain.sent.count == 1)
+
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1))
+        await restarted.tick()
+        #expect(await rig.chain.sent.count == 2, "and ends once a read is from after it")
+    }
+
+    @Test func aNewKeyDoesntWaitOnTheOldKeysBlocks() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)]))
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.wallet.tick()
+        await rig.wallet.deleteWallet()
+        #expect(rig.stateStore.saved.settledThroughBlock == nil)
+    }
+
     @Test func aSweepWaitsForBalancesFromAfterTheLastReceipt() async throws {
         let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)]))
         await rig.wallet.tick()
@@ -451,6 +480,40 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.alarm?.findings == [.nonceAhead(signed: 0, onchain: 2)])
     }
 
+    @Test func aDismissalDoesntOutliveADeletedKey() async throws {
+        let chain = FakeChain(snapshot(eth: 0, nonce: 1))
+        let signer = FakeSigner(keys: [hotAddress], next: [nextAddress])
+        let store = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hotAddress
+        try store.save(state)
+        let portfolios = ScriptedPortfolios(.success(portfolio()))
+        let wallet = HotWallet(signer: signer, settingsStore: MemorySettingsStore(), stateStore: store, presence: FakePresence(allows: true), portfolioSource: { portfolios }, makeChain: { _ in chain })
+        for _ in 0..<HotWallet.readsBeforeAlarm { await wallet.tick() }
+        #expect(wallet.alarm != nil)
+        wallet.dismissAlarm()
+        await wallet.deleteWallet()
+        #expect(store.saved.acknowledged.isEmpty)
+        #expect(store.saved.acknowledgedThroughNonce == nil)
+
+        await wallet.createWallet()
+        wallet.stop()
+        #expect(wallet.address == nextAddress)
+        for _ in 0..<HotWallet.readsBeforeAlarm { await wallet.tick() }
+        #expect(wallet.alarm?.findings == [.nonceAhead(signed: 0, onchain: 1)], "the same finding on a new key is a new finding")
+        #expect(!wallet.canTopUp)
+    }
+
+    @Test func aDismissedTransactionStillSurvivesARestart() async throws {
+        let rig = await Rig(portfolio: .success(portfolio(outgoing: [otherHash])))
+        await rig.wallet.readHistory()
+        rig.wallet.dismissAlarm()
+        let chain = rig.chain, signer = rig.signer, portfolios = rig.portfolios
+        let restarted = HotWallet(signer: signer, settingsStore: MemorySettingsStore(), stateStore: rig.stateStore, portfolioSource: { portfolios }, makeChain: { _ in chain })
+        await restarted.readHistory()
+        #expect(restarted.alarm == nil)
+    }
+
     @Test func anAbsurdNonceFromANodeDoesntHang() {
         #expect(AlarmCheck.findings(onchainNonce: .max, records: []) == [.nonceAhead(signed: 0, onchain: .max)])
     }
@@ -515,7 +578,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         var state = DeviceWalletState()
         state.active = hotAddress
         try store.save(state)
-        let wallet = HotWallet(signer: signer, settingsStore: MemorySettingsStore(), stateStore: store, presence: FakePresence(allows: true), portfolioSource: { ScriptedPortfolios(.success(portfolio())) }, makeChain: { _ in chain })
+        let wallet = HotWallet(signer: signer, settingsStore: MemorySettingsStore(), stateStore: store, presence: FakePresence(allows: true), portfolioSource: { ScriptedPortfolios(.success(portfolio(toBlock: 2000))) }, makeChain: { _ in chain })
 
         await wallet.replaceKey()
         #expect(wallet.rotation?.to == nextAddress)
@@ -561,7 +624,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await wallet.tick()
         #expect(await signer.signed.contains { $0.to == usdc.contract && recipient($0) == coldAddress })
 
-        await portfolios.set(.success(portfolio()))
+        await portfolios.set(.success(portfolio(toBlock: 2000)))
         await wallet.readHistory()
         await chain.confirmAll()
         await chain.set(snapshot(eth: 0, nonce: 2))
@@ -610,6 +673,67 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.wallet.readHistory()
         for _ in 0..<HotWallet.readsBeforeAlarm { await rig.wallet.tick() }
         #expect(rig.wallet.address == nextAddress, "and carries on once it can")
+    }
+
+    @Test func aRotationWaitsQuietlyForHistoryThatReachesNowThenSaysSoIfItDoesnt() async throws {
+        let clock = Clock()
+        var current = snapshot(eth: 0)
+        current.blockNumber = 2000
+        let rig = await Rig(current, portfolio: .success(portfolio(toBlock: 1000)), now: { clock.now })
+        await rig.wallet.readHistory()
+        await rig.wallet.replaceKey()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(rig.wallet.rotationHold == nil, "a read just hasn't come back yet")
+        #expect(await rig.signer.hasKey(hotAddress))
+
+        clock.advance(HotWallet.historyGrace + 1)
+        await rig.wallet.tick()
+        #expect(rig.wallet.rotationHold == .cantCheckOtherTokens)
+        #expect(await rig.signer.hasKey(hotAddress))
+
+        await rig.portfolios.set(.success(portfolio(toBlock: 2000)))
+        await rig.wallet.readHistory()
+        for _ in 0..<HotWallet.readsBeforeAlarm { await rig.wallet.tick() }
+        #expect(rig.wallet.address == nextAddress, "and carries on once history reaches now")
+    }
+
+    @Test func historyHasToReachTheBlockWhereTheKeyFirstReadEmpty() async throws {
+        var current = snapshot(eth: 0)
+        current.blockNumber = 2000
+        // Close enough to now to count as fresh, but it doesn't cover the block this decision is about.
+        let rig = await Rig(current, portfolio: .success(portfolio(toBlock: 1990)))
+        await rig.wallet.readHistory()
+        await rig.wallet.replaceKey()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(await rig.signer.hasKey(hotAddress))
+    }
+
+    @Test func historyThatReachedTheBlockButHasFallenBehindDoesntCount() async throws {
+        var current = snapshot(eth: 0)
+        current.blockNumber = 2000
+        let rig = await Rig(current, portfolio: .success(portfolio(toBlock: 2000)))
+        await rig.wallet.readHistory()
+        await rig.wallet.replaceKey()
+        await rig.wallet.tick()
+        current.blockNumber = 2000 + HotWallet.historyFreshnessBlocks + 1
+        await rig.chain.set(current)
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(await rig.signer.hasKey(hotAddress))
+    }
+
+    @Test func aTokenThatShowsUpInTheNewerBlocksStopsTheDeletion() async throws {
+        var current = snapshot(eth: 0)
+        current.blockNumber = 2000
+        let spam = "0x00000000000000000000000000000000000000f1"
+        let rig = await Rig(current, portfolio: .success(portfolio(toBlock: 2000)))
+        await rig.wallet.readHistory()
+        await rig.wallet.replaceKey()
+        await rig.wallet.tick()
+        await rig.portfolios.set(.success(portfolio(toBlock: 2001, unlisted: [spam])))
+        await rig.wallet.readHistory()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(rig.wallet.rotationHold == .otherTokens(1))
+        #expect(await rig.signer.hasKey(hotAddress))
     }
 
     @Test func aRotationStuckWithoutGasSaysSoAndOffersAWayOut() async throws {
@@ -753,6 +877,14 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         state.alarm = StolenKeyAlarm(address: hotAddress, findings: [.nonceAhead(signed: 1, onchain: 2), .unknownTransaction(hash: otherHash)], raisedAt: Date(timeIntervalSince1970: 2))
         try store.save(state)
         #expect(try store.load() == state)
+    }
+
+    @Test func aFileFromBeforeTheNewFieldsStillLoads() throws {
+        let url = URL.temporaryDirectory.appending(path: "work331-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        // What an earlier build of this branch wrote.
+        try Data(#"{"retired":[],"records":[],"sweptGains":[],"acknowledged":[]}"#.utf8).write(to: url)
+        #expect(try FileDeviceStateStore(url: url).load().settledThroughBlock == nil)
     }
 
     @Test func aCorruptFileStopsTheWalletInsteadOfForgettingWhatItSigned() throws {

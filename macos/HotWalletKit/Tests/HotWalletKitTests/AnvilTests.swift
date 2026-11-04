@@ -113,7 +113,8 @@ struct AnvilTests {
         for _ in 0..<6 where running.rotationHold == nil { await running.tick() }
         #expect(running.rotationHold == .cantCheckOtherTokens)
         #expect(try await vault.hasKey(hot))
-        await unreachable.set(.success(portfolio(address: hot)))
+        let head = try await client.snapshot(of: hot).blockNumber
+        await unreachable.set(.success(portfolio(address: hot, toBlock: head + 1000)))
         await running.readHistory()
         for _ in 0..<6 where running.rotation != nil { await running.tick() }
         #expect(running.rotation == nil)

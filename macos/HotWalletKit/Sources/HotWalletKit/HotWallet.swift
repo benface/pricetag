@@ -64,13 +64,17 @@ public final class HotWallet {
     @ObservationIgnored private var emptyReads = 0
     @ObservationIgnored private var pausedUntil: Date?
     @ObservationIgnored private var lastInLine: Task<Void, Never>?
-    /// The newest block a settled transaction is in. A snapshot from before it still counts what that transaction moved.
-    @ObservationIgnored private var settledThroughBlock: UInt64 = 0
+    /// When the old key first read as empty in a rotation. History has to reach that block before it can say there's nothing else.
+    @ObservationIgnored private var rotationEmptySince: (block: UInt64, date: Date)?
 
     /// How long a sweep that didn't work waits before trying again.
     static let pauseAfterFailure: TimeInterval = 300
     /// How long a transaction can go unseen before its nonce counts as free again.
     static let pendingTimeout: TimeInterval = 180
+    /// About a minute of Base. History from further back than this says nothing about what the key holds now.
+    static let historyFreshnessBlocks: UInt64 = 30
+    /// How long a rotation can wait for current history before it says so. A first read can take this long.
+    static let historyGrace: TimeInterval = 180
     /// Nodes behind a load balancer can disagree for a moment, so these have to hold for a few reads before they count.
     static let readsBeforeAlarm = 3
 
@@ -167,7 +171,7 @@ public final class HotWallet {
             try await settlePending(address: address, snapshot: snapshot)
             checkNonce(address: address, snapshot: snapshot)
             refreshPlan(snapshot: snapshot, address: address)
-            guard snapshot.blockNumber >= settledThroughBlock else { return }
+            guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { return }
             try await act(address: address, snapshot: snapshot)
         } catch is CancellationError {
         } catch let error as ChainError {
@@ -228,16 +232,30 @@ public final class HotWallet {
         if let rotation = state.rotation, rotation.from == address {
             let everything = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: rotation.destination)
             guard everything.transfers.isEmpty else {
-                emptyReads = 0
+                resetEmptyReads()
                 rotationHold = everything.blockers.contains(.notEnoughGas) ? .notEnoughGas : nil
                 try await execute(everything, from: address, to: rotation.destination, reason: .rotation, snapshot: snapshot)
                 return
             }
-            rotationHold = rotationHold(after: everything, address: address)
-            guard rotationHold == nil else {
-                emptyReads = 0
+            guard !everything.blockers.contains(.notEnoughGas) else {
+                resetEmptyReads()
+                rotationHold = .notEnoughGas
                 return
             }
+            let emptySince = rotationEmptySince ?? (snapshot.blockNumber, now())
+            rotationEmptySince = emptySince
+            guard let tokens = otherTokens(on: address, emptySinceBlock: emptySince.block, snapshot: snapshot) else {
+                // A normal rotation waits here for the next read of its history, so that's not worth a warning until it's been a while.
+                emptyReads = 0
+                rotationHold = ampProblem || now().timeIntervalSince(emptySince.date) > Self.historyGrace ? .cantCheckOtherTokens : nil
+                return
+            }
+            guard tokens == 0 else {
+                emptyReads = 0
+                rotationHold = .otherTokens(tokens)
+                return
+            }
+            rotationHold = nil
             // Deleting a key can't be undone, so one read saying it's empty isn't enough.
             emptyReads += 1
             if emptyReads >= Self.readsBeforeAlarm { try await finishRotation(rotation) }
@@ -248,11 +266,19 @@ public final class HotWallet {
         try await execute(plan, from: address, to: destination, reason: .aboveCap, snapshot: snapshot)
     }
 
-    /// Why the old key has to stay, now that what this app can move has moved. It can't see tokens off the allowlist itself.
-    private func rotationHold(after plan: SweepPlan, address: EthereumAddress) -> RotationHold? {
-        if plan.blockers.contains(.notEnoughGas) { return .notEnoughGas }
-        guard !ampProblem, let portfolio, portfolio.address == address.lowercased, portfolio.progress.started, portfolio.progress.behindBlocks == 0 else { return .cantCheckOtherTokens }
-        return portfolio.unlisted.isEmpty ? nil : .otherTokens(portfolio.unlisted.count)
+    /// How many tokens off the allowlist this key holds, or nil when there's no answer that can be trusted to delete a key on.
+    /// This app can't see them itself, so it has to be from history that reaches the block where the key first read as empty,
+    /// and that's close to now. What a history read says stops being true as new blocks go by.
+    private func otherTokens(on address: EthereumAddress, emptySinceBlock: UInt64, snapshot: ChainSnapshot) -> Int? {
+        guard !ampProblem, let portfolio, portfolio.address == address.lowercased, portfolio.progress.started else { return nil }
+        let reached = UInt64(max(portfolio.coverage.toBlock, 0))
+        guard reached >= emptySinceBlock, reached + Self.historyFreshnessBlocks >= snapshot.blockNumber else { return nil }
+        return portfolio.unlisted.count
+    }
+
+    private func resetEmptyReads() {
+        emptyReads = 0
+        rotationEmptySince = nil
     }
 
     // MARK: - What's here
@@ -426,7 +452,7 @@ public final class HotWallet {
             let snapshot = try await chain.snapshot(of: address)
             self.snapshot = snapshot
             guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
-            guard snapshot.blockNumber >= settledThroughBlock else { throw ChainError.rejected("The last sweep is still showing up. Try again in a moment.") }
+            guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected("The last sweep is still showing up. Try again in a moment.") }
             guard !(state.records[address] ?? []).contains(where: { $0.status == .pending }) else { throw ChainError.rejected("A sweep is still on its way. Try again in a moment.") }
             let everything = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: destination)
             if everything.blockers.contains(.notEnoughGas), everything.transfers.isEmpty { throw ChainError.rejected(HotWalletWording.noGas) }
@@ -460,19 +486,9 @@ public final class HotWallet {
     private func finishRotation(_ rotation: Rotation) async throws {
         state.retired.append(rotation.from)
         state.active = rotation.to
-        state.rotation = nil
-        state.alarm = nil
-        state.acknowledgedThroughNonce = nil
+        forgetTheOldKeysState()
         try persist()
         try await signer.deleteKey(rotation.from)
-        snapshot = nil
-        plan = nil
-        portfolio = nil
-        rotationHold = nil
-        nonceAheadTicks = 0
-        emptyReads = 0
-        missedReceipts = [:]
-        settledThroughBlock = 0
         publishLinkedWallets()
     }
 
@@ -483,17 +499,28 @@ public final class HotWallet {
             try await signer.deleteKey(address)
             state.retired.append(address)
             state.active = nil
-            state.rotation = nil
-            state.alarm = nil
-            state.acknowledgedThroughNonce = nil
+            forgetTheOldKeysState()
             try persist()
-            snapshot = nil
-            plan = nil
-            portfolio = nil
-            rotationHold = nil
-            settledThroughBlock = 0
             publishLinkedWallets()
         }
+    }
+
+    /// Everything that was about one key, whose alarms, dismissals, block numbers and reads say nothing about the next one.
+    private func forgetTheOldKeysState() {
+        state.rotation = nil
+        state.alarm = nil
+        state.acknowledged = []
+        state.acknowledgedThroughNonce = nil
+        state.settledThroughBlock = nil
+        snapshot = nil
+        plan = nil
+        portfolio = nil
+        rotationHold = nil
+        sweepProblem = nil
+        pausedUntil = nil
+        nonceAheadTicks = 0
+        missedReceipts = [:]
+        resetEmptyReads()
     }
 
     /// When the user knows better, say after restoring this device's records from an older copy.
@@ -606,7 +633,7 @@ public final class HotWallet {
                 }
                 updateRecord(hash: record.hash, address: address) { $0.status = receipt.succeeded ? .confirmed : .failed }
                 missedReceipts[record.hash] = nil
-                settledThroughBlock = max(settledThroughBlock, receipt.blockNumber)
+                state.settledThroughBlock = max(state.settledThroughBlock ?? 0, receipt.blockNumber)
                 if receipt.succeeded, let gain = UInt128(record.gainUsdMicros), gain > 0 {
                     let swept = state.sweptGains[address].flatMap { UInt128($0) } ?? 0
                     state.sweptGains[address] = String(swept + gain)
