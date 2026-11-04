@@ -32,6 +32,90 @@ private func makeStore() -> PortfolioStore {
     PortfolioStore(defaults: UserDefaults(suiteName: "send-tests-\(UUID().uuidString)")!, makeSource: { _ in NoServer() })
 }
 
+/// Runs something during gas estimation, which is the wait in the middle of a send.
+private actor WaitingChain: ChainClient {
+    let current = HotWalletKitTests.snapshot(eth: oneEth / 200, tokens: [usdc: usdcUnits(20)])
+    var onEstimate: (@MainActor @Sendable () async -> Void)?
+    private(set) var sent: [SignedTransaction] = []
+
+    func setOnEstimate(_ hook: @escaping @MainActor @Sendable () async -> Void) { onEstimate = hook }
+    func snapshot(of address: EthereumAddress) -> ChainSnapshot { current }
+    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async -> UInt64 {
+        await onEstimate?()
+        return 60000
+    }
+    func send(_ transaction: SignedTransaction) { sent.append(transaction) }
+    func receipt(of hash: String) -> Receipt? { nil }
+}
+
+@MainActor
+private func waitingRig() throws -> (HotWallet, WaitingChain, FakeSigner, ScriptedPortfolios) {
+    let chain = WaitingChain()
+    let signer = FakeSigner(keys: [hotAddress], next: [nextAddress])
+    let stateStore = MemoryStateStore()
+    var state = DeviceWalletState()
+    state.active = hotAddress
+    try stateStore.save(state)
+    let source = ScriptedPortfolios(.success(portfolio()))
+    let wallet = HotWallet(signer: signer, settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { source }, makeChain: { _ in chain })
+    return (wallet, chain, signer, source)
+}
+
+private let stolen = "0x" + String(repeating: "ab", count: 32)
+
+@MainActor
+@Suite struct WhileItWaitsTests {
+    @Test func anAlarmDuringTheWaitStopsASend() async throws {
+        let (wallet, chain, signer, source) = try waitingRig()
+        await source.set(.success(portfolio(outgoing: [stolen])))
+        await chain.setOnEstimate { await wallet.readHistory() }
+        #expect(await wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: coldAddress)) == false)
+        #expect(wallet.alarm != nil)
+        #expect(await signer.signed.isEmpty)
+        #expect(await chain.sent.isEmpty)
+        #expect(wallet.records.isEmpty)
+    }
+
+    @Test func anAlarmDuringTheWaitStopsANote() async throws {
+        let (wallet, chain, signer, source) = try waitingRig()
+        await source.set(.success(portfolio(outgoing: [stolen])))
+        await chain.setOnEstimate { await wallet.readHistory() }
+        let note = try #require(CostNote.calldata(txHash: stolen, asset: "USDC", usdMicros: "1"))
+        #expect(await wallet.writeNote(note, asset: "USDC", from: hotAddress.lowercased) == false)
+        #expect(await signer.signed.isEmpty)
+        #expect(await chain.sent.isEmpty)
+    }
+
+    @Test func aNoteOnlyEverComesFromTheWalletItWasOfferedFor() async throws {
+        let (wallet, _, signer, _) = try waitingRig()
+        await wallet.replaceKey()
+        await wallet.finishRotationLeavingFundsBehind()
+        #expect(wallet.address == nextAddress)
+        let note = try #require(CostNote.calldata(txHash: stolen, asset: "USDC", usdMicros: "1"))
+        #expect(await wallet.writeNote(note, asset: "USDC", from: hotAddress.lowercased) == false)
+        #expect(await signer.signed.allSatisfy { !$0.data.starts(with: Array("patina:cost:1:".utf8)) })
+    }
+
+    @Test func theAnswerStaysWithTheAddressItWasFor() async throws {
+        let (wallet, chain, _, source) = try waitingRig()
+        await wallet.tick()
+        let store = PortfolioStore(defaults: UserDefaults(suiteName: "send-tests-\(UUID().uuidString)")!, makeSource: { _ in source })
+        defer { store.stop() }
+        let model = SendModel(wallet: wallet, store: store)
+        model.token = usdc
+        model.amountText = "5"
+        model.addressText = friend.lowercased
+        model.ownership = .mine
+        await chain.setOnEstimate {
+            model.addressText = nextAddress.lowercased
+            model.ownership = .someoneElse
+        }
+        #expect(await model.send())
+        #expect(store.book.senders[friend.lowercased]?.kind == .mine)
+        #expect(store.book.senders[nextAddress.lowercased] == nil)
+    }
+}
+
 @MainActor
 @Suite struct SendTests {
     @Test func aTokenGoesToWhoeverWasChosenAfterAsking() async throws {
@@ -347,7 +431,7 @@ private func makeStore() -> PortfolioStore {
 
     @Test func itsAZeroValueSendToItself() async throws {
         let rig = await Rig(funded)
-        #expect(await rig.wallet.writeNote(note, asset: "USDC"))
+        #expect(await rig.wallet.writeNote(note, asset: "USDC", from: hotAddress.lowercased))
         let transaction = try #require(await rig.signer.signed.first)
         #expect(transaction.to == hotAddress)
         #expect(transaction.value == 0)
@@ -365,19 +449,19 @@ private func makeStore() -> PortfolioStore {
 
     @Test func nothingIsSignedWithoutThePerson() async throws {
         let rig = await Rig(funded, presence: false)
-        #expect(await rig.wallet.writeNote(note, asset: "USDC") == false)
+        #expect(await rig.wallet.writeNote(note, asset: "USDC", from: hotAddress.lowercased) == false)
         #expect(await rig.signer.signed.isEmpty)
     }
 
     @Test func itNeedsEthForTheFee() async throws {
         let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(5)]))
-        #expect(await rig.wallet.writeNote(note, asset: "USDC") == false)
+        #expect(await rig.wallet.writeNote(note, asset: "USDC", from: hotAddress.lowercased) == false)
         #expect(rig.wallet.noteProblem == HotWalletWording.noGasToSend)
     }
 
     @Test func aFailedOneSaysItWasntPublished() async throws {
         let rig = await Rig(funded)
-        #expect(await rig.wallet.writeNote(note, asset: "USDC"))
+        #expect(await rig.wallet.writeNote(note, asset: "USDC", from: hotAddress.lowercased))
         let hash = try #require(rig.wallet.records.first?.hash)
         await rig.chain.setReceipt(hash, succeeded: false)
         await rig.wallet.tick()
@@ -388,6 +472,6 @@ private func makeStore() -> PortfolioStore {
         let rig = await Rig(funded)
         await rig.wallet.replaceKey()
         #expect(!rig.wallet.canWriteNote(from: hotAddress.lowercased))
-        #expect(await rig.wallet.writeNote(note, asset: "USDC") == false)
+        #expect(await rig.wallet.writeNote(note, asset: "USDC", from: hotAddress.lowercased) == false)
     }
 }

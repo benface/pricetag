@@ -25,6 +25,7 @@ struct SendSheet: View {
                     Button("Max") { model.useMaximum() }
                         .disabled(model.maximum == 0)
                 }
+                .disabled(model.isSending)
             }
             if let problem = model.amountProblem {
                 WarningText(problem.message).font(.callout).fixedSize(horizontal: false, vertical: true)
@@ -36,6 +37,7 @@ struct SendSheet: View {
             TextField("To", text: $model.addressText, prompt: Text("0x…"))
                 .font(.body.monospaced())
                 .autocorrectionDisabled()
+                .disabled(model.isSending)
             recipient
             Text("A send can't be undone. Check the address where you got it. Touch ID or your password confirms it.")
                 .font(.caption)
@@ -89,6 +91,7 @@ struct SendSheet: View {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
+            .disabled(model.isSending)
             Text("Saying whose it is keeps your costs right later, and it stays on this Mac. You can leave it for now.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

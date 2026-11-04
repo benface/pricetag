@@ -393,6 +393,8 @@ public struct Question: Codable, Sendable, Equatable, Identifiable {
     public let sender: String?
     public let known: KnownSender?
     public let costKey: String?
+    /// The transaction a note could answer this about, when it's about all of one token in that transaction, which is what a note says.
+    public let noteAbout: String?
     /// They said it's their exchange account, and it still needs a cost.
     public let needsCost: Bool
     public let arrivals: [Arrival]
@@ -543,7 +545,7 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
         return next
     }
 
-    /// Accounts in this wallet are the user's, so nobody's asked. That replaces anything said about them earlier.
+    /// Accounts in this wallet are the user's, so nobody's asked. That outranks anything said about them earlier.
     public func linking(_ accounts: [String]) -> Book {
         var next = self
         for account in accounts { next.senders[account.lowercased()] = .mine }

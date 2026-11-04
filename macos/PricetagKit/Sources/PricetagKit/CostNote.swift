@@ -31,11 +31,9 @@ public struct CostNoteDraft: Equatable, Identifiable, Sendable {
 }
 
 extension Question {
-    /// A note covers one token in one transaction, so a question about several can't be one note. An opening balance has no transaction.
+    /// The server says when a note could answer this. One that covered less than what it names would replace the cost of the rest.
     public var noteDraft: CostNoteDraft? {
-        guard arrivals.count == 1, receipts.count == 1, let arrival = arrivals.first, let receipt = receipts.first else { return nil }
-        guard receipt.legId.hasSuffix(":\(arrival.asset)") else { return nil }
-        let txHash = String(receipt.legId.dropLast(arrival.asset.count + 1))
+        guard let txHash = noteAbout, arrivals.count == 1, receipts.count == 1, let arrival = arrivals.first, let receipt = receipts.first else { return nil }
         guard CostNote.calldata(txHash: txHash, asset: arrival.asset, usdMicros: "0") != nil else { return nil }
         return CostNoteDraft(wallet: receipt.wallet, txHash: txHash, asset: arrival.asset, decimals: arrival.decimals, units: arrival.units)
     }
@@ -46,6 +44,7 @@ extension Question {
 public protocol CostNoteWriter: AnyObject {
     func canWriteNote(from wallet: String) -> Bool
     /// True once it's on its way. False if it didn't go out, with `noteProblem` saying why, or nil if they changed their mind.
-    func writeNote(_ calldata: [UInt8], asset: String) async -> Bool
+    /// Only ever from `wallet`, because a note counts for whoever sent it. A wallet that's changed since it was offered gets nothing signed.
+    func writeNote(_ calldata: [UInt8], asset: String, from wallet: String) async -> Bool
     var noteProblem: String? { get }
 }

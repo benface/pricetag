@@ -139,6 +139,8 @@ public final class SendModel {
     /// True once it's on its way, and the answer's been saved.
     public func send() async -> Bool {
         guard canSend, let recipient, let amount else { return false }
+        // Together, because the answer is about this address, whatever's on screen by the time this lands.
+        let answer = asksIfItsYours ? ownership?.answer : nil
         isSending = true
         defer { isSending = false }
         failure = nil
@@ -146,8 +148,8 @@ public final class SendModel {
             failure = wallet.sweepProblem
             return false
         }
-        if let ownership, asksIfItsYours {
-            store.setBook(store.book.answering(recipient.lowercased, ownership.answer, focus: wallet.address?.lowercased))
+        if let answer, store.book.senders[recipient.lowercased] == nil {
+            store.setBook(store.book.answering(recipient.lowercased, answer, focus: wallet.address?.lowercased))
         }
         return true
     }

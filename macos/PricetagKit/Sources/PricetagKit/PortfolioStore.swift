@@ -58,8 +58,8 @@ public final class PortfolioStore {
     public private(set) var currency: CurrencyCode
     public private(set) var serverURL: URL
     /// What the user has said about where things came from. It stays on this device.
-    public private(set) var book: Book
-    /// What each answer replaced, newest last, so Undo is always there.
+    private var answers: Book
+    /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
     public private(set) var undoStack: [Book] = []
     /// The server's pricing rules. Empty when it has only one, so there's nothing to choose.
     public private(set) var rules: [PricingRule] = []
@@ -94,7 +94,7 @@ public final class PortfolioStore {
         self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
         self.currency = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
         self.serverURL = serverURL
-        self.book = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
+        self.answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.selectedRule = defaults.string(forKey: Keys.rule)
         self.feed = address == nil ? .noWallet : .reading
         self.source = makeSource(serverURL)
@@ -138,20 +138,22 @@ public final class PortfolioStore {
         start()
     }
 
-    /// They go in the book with no question, and no Undo, because nobody answered anything. One that's gone comes out, or a
-    /// mistyped savings wallet would stay linked.
     public func setLinkedWallets(_ wallets: [String]) {
         let next = wallets.map { $0.lowercased() }
         guard next != linkedWallets else { return }
-        let gone = linkedWallets.filter { !next.contains($0) }
         linkedWallets = next
-        keep(book.unlinking(gone).linking(next))
         if address != nil, pollTask != nil { start() }
     }
 
-    /// Whether there's anything of the user's own to forget, apart from the accounts that are always linked.
+    /// The answers, with the accounts in this wallet as `mine`. Nobody's asked about those, so there's nothing to undo or save, and
+    /// one that's removed is simply gone, or a mistyped savings wallet would stay linked.
+    public var book: Book {
+        answers.linking(linkedWallets)
+    }
+
+    /// Whether there's anything of the user's own to forget.
     public var hasAnswers: Bool {
-        !book.unlinking(linkedWallets).isEmpty
+        !answers.isEmpty
     }
 
     public func setCurrency(_ currency: CurrencyCode) {
@@ -209,9 +211,10 @@ public final class PortfolioStore {
 
     /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced.
     public func setBook(_ next: Book) {
-        guard next != book else { return }
-        undoStack.append(book)
-        store(next)
+        let nextAnswers = answers(in: next)
+        guard nextAnswers != answers else { return }
+        undoStack.append(answers)
+        store(nextAnswers)
     }
 
     public func undo() {
@@ -220,13 +223,16 @@ public final class PortfolioStore {
     }
 
     private func store(_ next: Book) {
-        keep(next.linking(linkedWallets))
+        answers = next
+        defaults.set(try? JSONEncoder().encode(next), forKey: Keys.book)
         start()
     }
 
-    private func keep(_ next: Book) {
-        book = next
-        defaults.set(try? JSONEncoder().encode(next), forKey: Keys.book)
+    /// A book built on `book` has the accounts in it, and they aren't answers. What was said about one before it was an account stays.
+    private func answers(in next: Book) -> Book {
+        var kept = next.unlinking(linkedWallets)
+        for account in linkedWallets where next.senders[account]?.kind == .mine { kept.senders[account] = answers.senders[account] }
+        return kept
     }
 
     /// What goes along with a read. A wallet being watched could be anyone's, and it didn't get its costs from this user's accounts

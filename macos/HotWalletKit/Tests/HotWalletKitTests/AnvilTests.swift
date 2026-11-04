@@ -171,7 +171,7 @@ struct AnvilTests {
 
         await wallet.tick()
         let calldata = try #require(CostNote.calldata(txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", usdMicros: "250000000"))
-        #expect(await wallet.writeNote(calldata, asset: "USDC"))
+        #expect(await wallet.writeNote(calldata, asset: "USDC", from: hot.lowercased))
         #expect(wallet.sweepProblem == nil)
         let note = try #require(wallet.records.first)
         let onchain = try #require(try await anvil("eth_getTransactionByHash", [note.hash]) as? [String: Any])

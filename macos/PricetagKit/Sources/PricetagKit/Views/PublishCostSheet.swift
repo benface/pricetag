@@ -30,6 +30,7 @@ public struct PublishCostSheet: View {
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.trailing)
                     .frame(width: 140)
+                    .disabled(isPublishing)
             }
             if let micros {
                 Text("This wallet would publish that it paid \(Format.money(micros, .USD)) in transaction \(Format.shortHash(draft.txHash)).")

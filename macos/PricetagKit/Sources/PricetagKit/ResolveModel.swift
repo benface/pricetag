@@ -152,13 +152,18 @@ public final class ResolveModel {
     /// Publishes what was paid, and keeps it here too, so the question's answered before the note's been read back. `usd` is as typed,
     /// because a note is always in USD. True once it's on its way.
     public func publish(_ draft: CostNoteDraft, usd: String) async -> Bool {
-        guard let question = current, question.noteDraft == draft, let noteWriter, let book = candidate(costs: [draft.asset: usd], in: .USD, for: question), let micros = Format.micros(fromDollars: usd), let calldata = CostNote.calldata(txHash: draft.txHash, asset: draft.asset, usdMicros: micros) else { return false }
+        guard let question = current, question.noteDraft == draft, let noteWriter, let micros = Format.micros(fromDollars: usd), let calldata = CostNote.calldata(txHash: draft.txHash, asset: draft.asset, usdMicros: micros) else { return false }
         failure = nil
-        guard await noteWriter.writeNote(calldata, asset: draft.asset) else {
+        guard noteWriter.canWriteNote(from: draft.wallet) else {
+            failure = "That wallet can't publish this any more, so nothing was signed."
+            return false
+        }
+        guard await noteWriter.writeNote(calldata, asset: draft.asset, from: draft.wallet) else {
             failure = noteWriter.noteProblem
             return false
         }
-        store.setBook(book)
+        // Worked out now, because answers can change during the wait, and this shouldn't undo them.
+        if let book = candidate(costs: [draft.asset: usd], in: .USD, for: question) { store.setBook(book) }
         advance()
         return true
     }

@@ -611,16 +611,20 @@ public final class HotWallet {
 
     /// A transaction asked for by hand, with everything before it settled, because it's checked against what this read says.
     private func readToSign(_ address: EthereumAddress) async throws -> ChainSnapshot {
-        guard address == self.address, canSend else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
+        try checkStillAllowed(address)
         let snapshot = try await chain.snapshot(of: address)
         self.snapshot = snapshot
         guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
         guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
         try await settlePending(address: address, snapshot: snapshot)
-        guard canSend else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
+        try checkStillAllowed(address)
         guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected(HotWalletWording.lastOneStillShowingUp) }
         guard !(state.records[address] ?? []).contains(where: { $0.status == .pending }) else { throw ChainError.rejected(HotWalletWording.lastOneOnItsWay) }
         return snapshot
+    }
+
+    private func checkStillAllowed(_ address: EthereumAddress) throws {
+        guard address == self.address, canSend else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
     }
 
     private func signAndSend(to: EthereumAddress, value: UInt128, data: [UInt8], from address: EthereumAddress, snapshot: ChainSnapshot, record: (String, UInt64) -> SignedRecord) async throws {
@@ -628,6 +632,8 @@ public final class HotWallet {
         // A plain send to a plain address uses exactly what it's quoted.
         let gasLimit = data.isEmpty && estimate == 21000 ? estimate : estimate + estimate / 4
         guard snapshot.balances[Base.eth] ?? 0 >= value + snapshot.fees.costWei(gas: UInt128(gasLimit)) else { throw ChainError.rejected(HotWalletWording.noGasToSend) }
+        // History is read outside the line, so an alarm can arrive during any wait, and that stops this as much as it would have before.
+        try checkStillAllowed(address)
         let nonce = AlarmCheck.nextNonce(records: state.records[address] ?? [], onchainNonce: snapshot.nonce)
         let transaction = UnsignedTransaction(
             chainID: Base.chainID,
@@ -640,6 +646,7 @@ public final class HotWallet {
             data: data
         )
         let signed = try await signer.sign(transaction, from: address)
+        try checkStillAllowed(address)
         do {
             try await recordAndSend(signed, from: address, record: record(signed.hash, nonce))
         } catch ChainError.unreachable {
@@ -802,8 +809,8 @@ extension HotWallet: CostNoteWriter {
     }
 
     /// From this wallet to itself, with no value, so all it does is say this in public. Only ever from this app's own screens.
-    public func writeNote(_ calldata: [UInt8], asset: String) async -> Bool {
-        guard let address, canSend else { return false }
+    public func writeNote(_ calldata: [UInt8], asset: String, from wallet: String) async -> Bool {
+        guard let address, canWriteNote(from: wallet) else { return false }
         var isOnItsWay = false
         await work(confirming: "publish what you paid for \(asset), which anyone can read") { [self] in
             let snapshot = try await readToSign(address)
