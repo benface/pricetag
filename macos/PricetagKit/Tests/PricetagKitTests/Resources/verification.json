@@ -22,7 +22,7 @@
     {
       "title": "This activity",
       "status": "passed",
-      "detail": "This transaction is in the checked data, sent by this wallet."
+      "detail": "This transaction is in the checked data."
     }
   ]
 }

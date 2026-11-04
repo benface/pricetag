@@ -151,18 +151,18 @@ Click a price, or Proof, on any row of an explanation. It shows where that price
 - **Block fingerprint:** the header's fields hash to the block's hash.
 - **Transactions:** every transaction rebuilds the header's `transactions_root`, and each one hashes to its stored `tx_hash`.
 - **Results and logs:** every receipt and log rebuilds the header's `receipts_root`.
-- **This activity:** the row's transaction is in that data, and its Transfer logs or ETH value match its amounts. For a swap price, that includes the other side of the exchange.
+- **This activity:** the row's transaction is in that data, and its Transfer logs or ETH value match its amounts. A network fee's L2 part is worked out again from the transaction's fees, its gas and the block's base fee. For a swap price, that includes the other side of the exchange.
 
-It's done here and not with `ampctl verify` because that can't check Base: every Base block starts with an OP Stack deposit (type `0x7e`), which it doesn't support. It fails v0.0.42 and nightly `47b6fa2` alike, and today's source still rejects the type. Amp doesn't store what a deposit's hash also covers (`sourceHash`, `mint`, `isSystemTx`), so those three come from `BASE_RPC_URL`. A wrong answer fails the check, because the result has to hash to the block's commitment. If the RPC doesn't answer, Transactions says it's not checked. The fingerprints come from Amp's admin API at `AMP_ADMIN_URL`, with the server's token.
+It's done here and not with `ampctl verify` because that can't check Base: every Base block starts with an OP Stack deposit (type `0x7e`), which it doesn't support. It fails v0.0.42 and nightly `47b6fa2` alike, and today's source still rejects the type. Amp doesn't store what a deposit's hash also covers (`sourceHash`, `mint`, `isSystemTx`), so those three come from `BASE_RPC_URL`. A wrong answer fails the check, because the result has to hash to the block's commitment. Every log and transaction it counts has to be in what's hashed, at the number it's stored with, or the check fails. If the RPC doesn't answer, Transactions says it's not checked. The fingerprints come from Amp's admin API at `AMP_ADMIN_URL`, with the server's token.
 
 What a pass doesn't show, which the interface also says:
 
 - That the header is on Base's real chain. A consistent fake block would pass.
 - That the derived SQL ran correctly. Only the raw dataset's rows are checked, plus the row's amounts against them.
-- An `oracle` price, or the oracle side of a `swap` price, because `eth_call` results aren't in a block's commitments. The same goes for exchange rates and L1 fees, which aren't in the commitments either.
-- That a transaction's `from` is right. Signatures are in the commitment, but aren't recovered to compare them with the stored sender.
+- An `oracle` price, or the oracle side of a `swap` price, because `eth_call` results aren't in a block's commitments. The same goes for exchange rates and L1 fees, which aren't in the commitments either, so an L1 fee's amount is never compared.
+- That a transaction's `from` is right. Signatures are in the commitment, but aren't recovered to compare them with the stored sender, so a row that takes its account from the sender (fees, ETH sent, unwrapped ETH received) says so.
 
-`server/verify.ts` is the pure part, tested on real rows and on tampered ones. `server/block.ts` reads a block and `server/proof.ts` puts it into words. It's valid for blocks since Canyon (January 2024), because older deposits' receipts are encoded differently.
+`server/verify.ts` is the pure part, tested on real rows and on tampered ones. Keccak comes from `@noble/hashes`, since whether Node has it depends on its build. `server/block.ts` reads a block and `server/proof.ts` puts it into words. It's valid for blocks since Canyon (January 2024), because older deposits' receipts are encoded differently.
 
 ## Known gaps
 

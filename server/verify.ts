@@ -1,9 +1,10 @@
 // Recomputes a Base block's commitments from the rows Amp returns, the way Amp's verification does (its docs/feat/verification.md).
 // `ampctl verify` can't do this on Base: every block starts with an OP Stack deposit, and it rejects that transaction type.
 //
-// Pure, so it can run on fixtures. The hashing is OpenSSL's, through Node. Valid for blocks since Canyon (January 2024).
+// Pure, so it can run on fixtures. Valid for blocks since Canyon (January 2024).
+// Keccak comes from @noble/hashes, because Node's depends on how it was built: 26.13.0 has it, and 26.8.1 and 22 don't.
 
-import { createHash } from "node:crypto"
+import { keccak_256 } from "@noble/hashes/sha3"
 
 export type BlockRow = {
   hash: string
@@ -105,7 +106,7 @@ export function rlp(item: Rlp): Buffer {
   return Buffer.concat([lengthPrefix(payload.length, 0xc0), payload])
 }
 
-export const keccak = (data: Uint8Array) => createHash("keccak-256").update(data).digest()
+export const keccak = (data: Uint8Array) => Buffer.from(keccak_256(data))
 
 const toHex = (data: Uint8Array) => Buffer.from(data).toString("hex")
 
@@ -244,7 +245,7 @@ export function encodeReceipt(tx: TxRow, logs: readonly LogRow[]): Buffer {
   return tx.type === 0 ? body : Buffer.concat([Buffer.from([tx.type]), body])
 }
 
-export type Commitment = { status: "passed" } | { status: "failed"; computed: string; expected: string } | { status: "unchecked"; reason: string }
+export type Commitment = { status: "passed" } | { status: "failed"; computed: string; expected: string } | { status: "failed"; reason: string } | { status: "unchecked"; reason: string }
 
 const compare = (computed: string, expected: string): Commitment => (computed === expected ? { status: "passed" } : { status: "failed", computed, expected })
 
@@ -253,6 +254,9 @@ export function checkHeader(block: BlockRow): Commitment {
 }
 
 export function checkTransactions(block: BlockRow, txs: readonly TxRow[], deposits: ReadonlyMap<string, DepositDetails> | null): Commitment {
+  // A transaction's position is what the trie commits to, and what its logs and the activity check find it by.
+  const misplaced = txs.findIndex((tx, i) => tx.tx_index !== i)
+  if (misplaced >= 0) return { status: "failed", reason: `The transaction stored at position ${misplaced} says it's at position ${(txs[misplaced] as TxRow).tx_index}.` }
   if (deposits === null && txs.some((tx) => tx.type === DEPOSIT_TX_TYPE)) return { status: "unchecked", reason: "Amp doesn't store everything a deposit's hash covers, and Base's node didn't answer." }
   try {
     const encoded = txs.map((tx) => encodeTransaction(tx, deposits?.get(tx.tx_hash)))
@@ -266,11 +270,14 @@ export function checkTransactions(block: BlockRow, txs: readonly TxRow[], deposi
 }
 
 export function checkReceipts(block: BlockRow, txs: readonly TxRow[], logs: readonly LogRow[]): Commitment {
-  const logsByTx = new Map<number, LogRow[]>()
-  for (const log of logs) {
+  const logsByTx = new Map<number, LogRow[]>(txs.map((tx) => [tx.tx_index, []]))
+  // Every log counted has to be in what's hashed, and a log's number is only as good as its place in the block.
+  for (const [position, log] of logs.entries()) {
     const list = logsByTx.get(log.tx_index)
-    if (list) list.push(log)
-    else logsByTx.set(log.tx_index, [log])
+    if (!list) return { status: "failed", reason: `Log #${log.log_index} says it's from a transaction this block doesn't have.` }
+    if (log.log_index !== position) return { status: "failed", reason: `The log stored at position ${position} says it's #${log.log_index}.` }
+    if (log.tx_index < (logs[position - 1]?.tx_index ?? 0)) return { status: "failed", reason: `Log #${log.log_index} is out of order.` }
+    list.push(log)
   }
-  return compare(orderedRoot(txs.map((tx) => encodeReceipt(tx, logsByTx.get(tx.tx_index) ?? []))), block.receipt_root)
+  return compare(orderedRoot(txs.map((tx) => encodeReceipt(tx, logsByTx.get(tx.tx_index) as LogRow[]))), block.receipt_root)
 }

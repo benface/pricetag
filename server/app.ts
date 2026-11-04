@@ -10,7 +10,7 @@ import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.t
 import { createRates } from "./rates.ts"
 import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
 import { createDepositReader } from "./block.ts"
-import { createManifestReader, createProofs, proofOf, type Proofs } from "./proof.ts"
+import { createManifestReader, createProofs, proofOf, verificationOf, type BlockRead, type Proofs } from "./proof.ts"
 import { datasetSource, feedRounds, rawSource, type Source } from "./source.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 import { createWallets } from "./wallets.ts"
@@ -221,13 +221,15 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
         sendJson(res, 400, { error: DEMO_UNVERIFIABLE })
         return true
       }
+      let read: BlockRead | null
       try {
-        const verification = await proofs.verify(leg, wallet.legs)
-        if (verification) sendJson(res, 200, verification)
-        else sendJson(res, 404, { error: "Amp doesn't have this block." })
+        read = await proofs.readBlock(leg.blockNum)
       } catch (error) {
         sendAmpError(res, error, "Couldn't read this block.")
+        return true
       }
+      if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits))
+      else sendJson(res, 404, { error: "Amp doesn't have this block." })
       return true
     }
 

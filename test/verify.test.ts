@@ -102,6 +102,25 @@ describe("checking a block", () => {
     assert.equal(checkReceipts(block, txs, [{ ...first, topics: [] }, ...rest]).status, "failed")
   })
 
+  it("fails a log that wouldn't be hashed, rather than counting it as checked", () => {
+    const stray = { ...(logs[0] as LogRow), tx_index: 999, log_index: 999 }
+    assert.deepEqual(checkReceipts(block, txs, [...logs, stray]).status, "failed")
+    const check = verificationOf(legOf({}), [], { ...data, logs: [...logs, stray] }, deposits).checks[2]!
+    assert.equal(check.status, "failed")
+    assert.match(check.detail, /#999 says it's from a transaction this block doesn't have/)
+  })
+
+  it("fails a log whose number isn't its place in the block, which the activity check relies on", () => {
+    const [first, second, third] = logs as [LogRow, LogRow, LogRow]
+    assert.equal(checkReceipts(block, txs, [first, second, { ...third, log_index: 50 }]).status, "failed")
+    assert.equal(checkReceipts(block, txs, [{ ...first, log_index: 1 }, { ...second, log_index: 0 }, third]).status, "failed")
+  })
+
+  it("fails a transaction whose stored position isn't its place in the block", () => {
+    const [deposit, user] = txs as [TxRow, TxRow]
+    assert.equal(checkTransactions(block, [deposit, { ...user, tx_index: 5 }], deposits).status, "failed")
+  })
+
   it("fails a changed result", () => {
     const [deposit, user] = txs as [TxRow, TxRow]
     assert.equal(checkReceipts(block, [deposit, { ...user, status: !user.status }], logs).status, "failed")
@@ -119,6 +138,15 @@ const BOB = "bb".repeat(20)
 /** Added to the fixture block for the activity check, which is why its summaries don't match in these tests. */
 const transferLog: LogRow = { tx_index: user.tx_index, log_index: 50, address: USDC, topics: [TRANSFER, ALICE.padStart(64, "0"), BOB.padStart(64, "0")], data: (5_000_000n).toString(16).padStart(64, "0") }
 
+/** What the fixture's transaction paid for gas, by hand: its gas in the block at its effective price. */
+const paidForGas = (() => {
+  const deposit = txs[0] as TxRow
+  const baseFee = BigInt(block.base_fee_per_gas as string)
+  const tipped = baseFee + BigInt(user.max_priority_fee_per_gas as string)
+  const cap = BigInt(user.max_fee_per_gas as string)
+  return (BigInt(user.gas_used) - BigInt(deposit.gas_used)) * (tipped < cap ? tipped : cap)
+})()
+
 const legRow = (changes: Partial<LegRow>): LegRow => ({
   block_num: 9200017,
   timestamp: "2024-01-30T00:00:00.000Z",
@@ -128,7 +156,7 @@ const legRow = (changes: Partial<LegRow>): LegRow => ({
   token: "0x0000000000000000000000000000000000000000",
   account,
   side: "debit",
-  amount: "0",
+  amount: paidForGas.toString(),
   kind: "gas",
   ...changes,
 })
@@ -209,10 +237,48 @@ describe("a leg against its checked block", () => {
     assert.equal(activity(legOf({ parts: [{ ...row, amount: `${user.value}1` }] })).status, "failed")
   })
 
-  it("doesn't say a network fee's amount was compared", () => {
-    const check = activity(legOf({ parts: [legRow({ amount: "123" })] }))
+  it("works out the fee paid to Base from what's hashed, and compares it", () => {
+    const row = legRow({ amount: paidForGas.toString() })
+    const check = activity(legOf({ kind: "gas", parts: [row] }))
     assert.equal(check.status, "passed")
-    assert.doesNotMatch(check.detail, /amounts?/)
+    assert.match(check.detail, /fee paid to Base matches/)
+    const wrong = activity(legOf({ kind: "gas", parts: [{ ...row, amount: "999999999999999999999999" }] }))
+    assert.equal(wrong.status, "failed")
+    assert.match(wrong.detail, /disagrees with Network fee/)
+    assert.equal(activity(legOf({ kind: "gas", parts: [{ ...row, amount: "" }] })).status, "failed")
+  })
+
+  it("says the fee paid to Ethereum wasn't compared, whatever it claims", () => {
+    const leg = legOf({ kind: "gas", parts: [legRow({ amount: paidForGas.toString() }), legRow({ kind: "l1_fee", amount: "999999999999999999999999" })] })
+    const check = activity(leg)
+    assert.equal(check.status, "passed")
+    assert.match(check.detail, /fee paid to Ethereum wasn't compared/)
+    assert.ok(proofOf(leg, [], "USD", [], null).scope.some((line) => /doesn't cover the fee paid to Ethereum/.test(line)))
+  })
+
+  it("says a sender isn't checked, since changing it and the row together still passes", () => {
+    const stranger = "cc".repeat(20)
+    const forged = { block, txs: [txs[0] as TxRow, { ...user, from: stranger }], logs }
+    const leg = legOf({ kind: "gas", parts: [legRow({ amount: paidForGas.toString(), account: `0x${stranger}` })] })
+    const verification = verificationOf(leg, [], forged, deposits)
+    assert.equal(verification.status, "passed")
+    assert.match(verification.checks.at(-1)!.detail, /sender is as Amp stored it, and isn't checked against the signature/)
+    assert.ok(proofOf(leg, [], "USD", [], null).scope.some((line) => /doesn't confirm who sent this transaction/.test(line)))
+    assert.match(activity(legOf({ parts: [legRow({ kind: "eth", amount: user.value, side: "debit" })] })).detail, /sender is as Amp stored it/)
+  })
+
+  it("doesn't bring up the sender when logs or the recipient already name the account", () => {
+    const row = legRow({ kind: "erc20", token: `0x${USDC}`, log_index: transferLog.log_index, amount: "5000000", account: `0x${ALICE}`, side: "debit" })
+    const leg = legOf({ parts: [row] })
+    assert.doesNotMatch(activity(leg).detail, /sender/)
+    assert.ok(!proofOf(leg, [], "USD", [], null).scope.some((line) => /who sent/.test(line)))
+  })
+
+  it("says what's covered for a network fee, and not that its amounts all are", () => {
+    const leg = legOf({ kind: "gas", parts: [legRow({ amount: "1" }), legRow({ kind: "l1_fee", amount: "5" })] })
+    const scope = proofOf(leg, [], "USD", [], null).scope.join(" ")
+    assert.match(scope, /covers the transaction and the fee paid to Base/)
+    assert.doesNotMatch(scope, /the amounts/)
   })
 })
 
@@ -244,7 +310,7 @@ describe("what the proof says", () => {
   })
 
   it("says the Ethereum fee and exchange rate aren't covered, when they're used", () => {
-    const leg = legOf({ parts: [legRow({}), legRow({ kind: "l1_fee", amount: "5" })] })
+    const leg = legOf({ kind: "gas", parts: [legRow({}), legRow({ kind: "l1_fee", amount: "5" })] })
     const scope = proofOf(leg, [], "CAD", [], null).scope
     assert.ok(scope.some((line) => /fee paid to Ethereum/.test(line)))
     assert.ok(scope.some((line) => /USD to CAD rate/.test(line)))
@@ -321,11 +387,11 @@ describe("reading a block", () => {
     console.warn = () => {}
     try {
       const config = { baseDataset: "a/b@1", dataset: null, readDeposits: async () => new Map(), readManifestHash: async () => null, retryPauseMs: 0 }
-      assert.equal(await createProofs(query, config).verify(legOf({}), []), null)
+      assert.equal(await createProofs(query, config).readBlock(5), null)
       const down = (async () => {
         throw new Error("down")
       }) as Query
-      await assert.rejects(createProofs(down, config).verify(legOf({}), []), /down/)
+      await assert.rejects(createProofs(down, config).readBlock(5), /down/)
     } finally {
       console.warn = quiet.warn
     }
