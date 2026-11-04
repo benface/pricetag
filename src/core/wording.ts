@@ -111,6 +111,7 @@ export function holdCaveatSentence({ status, unavailable, putInMicros, unknownAm
   if (status === "complete") return null
   if (unavailable === "no current eth price") return "Unavailable, because there's no current ETH price to compare with."
   if (unavailable === "left with no known value") return "Unavailable, because something left this wallet with no known value, so what holding ETH would have left can't be worked out."
+  if (unavailable === "left with no known share") return "Unavailable, because something left this wallet after an exchange of several tokens at once, so how much of it came from what was put in can't be worked out."
   if (unavailable === "nothing known put in") return "Unavailable, because nothing put in this wallet has a known value yet."
   const amounts = unknownAmounts === 1 ? "1 other amount has no known value, and isn't counted." : `${unknownAmounts.toLocaleString("en-US")} other amounts have no known value, and aren't counted.`
   return [`Partial, so the two don't cover the same money. Holding ETH counts the ${formatMoney(putInMicros, currency)} put in with a known value.`, unknownAmounts > 0 ? amounts : null, walletLeavesOut ? "This wallet's total leaves some things out." : null].filter((part) => part !== null).join(" ")

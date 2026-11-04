@@ -170,7 +170,7 @@ struct HoldComparisonTests {
 
     @Test func saysTheSameAsTheWeb() throws {
         let vectors = try resource("hold-vectors", as: [Vector].self)
-        #expect(vectors.count == 8)
+        #expect(vectors.count == 9)
         for vector in vectors {
             #expect(Wording.holdCaveat(vector.comparison, vector.currency) == vector.caveat)
             #expect(vector.comparison.differenceMicros.map { Wording.holdDifference($0, vector.currency) } == vector.difference)

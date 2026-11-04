@@ -190,5 +190,29 @@
     "difference": null,
     "aboutDifference": null,
     "caveat": "Unavailable, because there's no current ETH price to compare with."
+  },
+  {
+    "currency": "USD",
+    "comparison": {
+      "walletLeavesOut": true,
+      "putInMicros": "1000000000",
+      "takenOutMicros": "0",
+      "ethPriceMicros": "2000000000",
+      "unknownAmounts": 1,
+      "ranOut": false,
+      "status": "unavailable",
+      "unavailable": "left with no known share",
+      "walletMicros": null,
+      "gainThatLeftMicros": "0",
+      "walletEstimated": false,
+      "holdMicros": null,
+      "differenceMicros": null,
+      "ethQty": "0",
+      "ethValueMicros": null,
+      "estimated": false
+    },
+    "difference": null,
+    "aboutDifference": null,
+    "caveat": "Unavailable, because something left this wallet after an exchange of several tokens at once, so how much of it came from what was put in can't be worked out."
   }
 ]

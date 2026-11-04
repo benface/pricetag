@@ -38,8 +38,8 @@ export type FoldLeg = {
   timestamp?: string
 }
 
-/** Part of a cost, and the block it was paid at. */
-export type PaidAt = { costMicros: string; blockNum: number }
+/** Part of a cost, how many units it paid for, and the block it was paid at. */
+export type PaidAt = { costMicros: string; qty: string; blockNum: number }
 
 /** Part of a credit, or what a debit took: how much, what it cost, and when it was first acquired. */
 export type CostPiece = {
@@ -123,33 +123,45 @@ export function worth(qty: bigint, unitMicros: bigint, decimals: number): bigint
   return (qty * unitMicros) / 10n ** BigInt(decimals)
 }
 
-/** Each part's share of `share`, out of their `total`. They add up to exactly `share`, and none is more than its part. */
-export function sharePaidAt(paidAt: readonly PaidAt[], share: bigint, total: bigint): PaidAt[] {
-  let sum = 0n
-  let given = 0n
-  return paidAt.map(({ costMicros, blockNum }) => {
-    sum += BigInt(costMicros)
-    const upTo = total === 0n ? 0n : (sum * share) / total
-    const part = upTo - given
-    given = upTo
-    return { costMicros: part.toString(), blockNum }
+/**
+ * Each part's share of a cost and of its units, when `cost` of `totalCost` and `qty` of `totalQty` are taken.
+ * The shares add up to exactly what's taken, and none is more than its part.
+ */
+export function sharePaidAt(paidAt: readonly PaidAt[], cost: bigint, totalCost: bigint, qty: bigint, totalQty: bigint): PaidAt[] {
+  const running = { cost: 0n, qty: 0n, givenCost: 0n, givenQty: 0n }
+  return paidAt.map((part) => {
+    running.cost += BigInt(part.costMicros)
+    running.qty += BigInt(part.qty)
+    const upToCost = totalCost === 0n ? 0n : (running.cost * cost) / totalCost
+    const upToQty = totalQty === 0n ? 0n : (running.qty * qty) / totalQty
+    const share = { costMicros: (upToCost - running.givenCost).toString(), qty: (upToQty - running.givenQty).toString(), blockNum: part.blockNum }
+    running.givenCost = upToCost
+    running.givenQty = upToQty
+    return share
   })
 }
 
 /** What's left once `taken`, a share of these same parts, is gone. */
-export const lessPaidAt = (paidAt: readonly PaidAt[], taken: readonly PaidAt[]): PaidAt[] => paidAt.map(({ costMicros, blockNum }, i) => ({ costMicros: (BigInt(costMicros) - BigInt((taken[i] as PaidAt).costMicros)).toString(), blockNum }))
+export const lessPaidAt = (paidAt: readonly PaidAt[], taken: readonly PaidAt[]): PaidAt[] =>
+  paidAt.map(({ costMicros, qty, blockNum }, i) => {
+    const gone = taken[i] as PaidAt
+    return { costMicros: (BigInt(costMicros) - BigInt(gone.costMicros)).toString(), qty: (BigInt(qty) - BigInt(gone.qty)).toString(), blockNum }
+  })
 
 function paidAtOf(lot: Lot): readonly PaidAt[] | null {
   if (lot.paidAt) return lot.paidAt
-  return lot.acquiredBlock === undefined || lot.costMicros === null ? null : [{ costMicros: lot.costMicros, blockNum: lot.acquiredBlock }]
+  return lot.acquiredBlock === undefined || lot.costMicros === null ? null : [{ costMicros: lot.costMicros, qty: lot.qty, blockNum: lot.acquiredBlock }]
 }
 
 function mergedPaidAt(a: Lot, b: Lot): PaidAt[] | null {
   const [x, y] = [paidAtOf(a), paidAtOf(b)]
   if (!x || !y) return null
-  const byBlock = new Map<number, bigint>()
-  for (const { costMicros, blockNum } of [...x, ...y]) byBlock.set(blockNum, (byBlock.get(blockNum) ?? 0n) + BigInt(costMicros))
-  return [...byBlock].map(([blockNum, cost]) => ({ costMicros: cost.toString(), blockNum }))
+  const byBlock = new Map<number, { cost: bigint; qty: bigint }>()
+  for (const { costMicros, qty, blockNum } of [...x, ...y]) {
+    const sum = byBlock.get(blockNum) ?? { cost: 0n, qty: 0n }
+    byBlock.set(blockNum, { cost: sum.cost + BigInt(costMicros), qty: sum.qty + BigInt(qty) })
+  }
+  return [...byBlock].map(([blockNum, { cost, qty }]) => ({ costMicros: cost.toString(), qty: qty.toString(), blockNum }))
 }
 
 function lotOf(piece: CostPiece, legId: string): Lot {
@@ -213,7 +225,7 @@ function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint; estima
   const cost = lotCost === null ? 0n : (lotCost * qty) / lotQty
   const estimated = (lotEstimated * qty) / lotQty
   const left = lotEstimated - estimated
-  const paidAt = lot.paidAt && lotCost !== null ? sharePaidAt(lot.paidAt, cost, lotCost) : null
+  const paidAt = lot.paidAt && lotCost !== null ? sharePaidAt(lot.paidAt, cost, lotCost, qty, lotQty) : null
   const { estimatedCostMicros: _, ...plain } = lot
   const rest: Lot = {
     ...plain,

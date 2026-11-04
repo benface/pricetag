@@ -39,7 +39,7 @@ function slice(piece: CostPiece, qty: bigint): CostPiece {
   const whole = BigInt(piece.qty)
   const share = (micros: string) => (qty === whole ? BigInt(micros) : (BigInt(micros) * qty) / whole).toString()
   const cost = piece.costMicros === null ? null : share(piece.costMicros)
-  const paidAt = piece.paidAt && cost !== null ? { paidAt: sharePaidAt(piece.paidAt, BigInt(cost), BigInt(piece.costMicros as string)) } : {}
+  const paidAt = piece.paidAt && cost !== null ? { paidAt: sharePaidAt(piece.paidAt, BigInt(cost), BigInt(piece.costMicros as string), qty, whole) } : {}
   return { ...piece, qty: qty.toString(), costMicros: cost, estimatedCostMicros: share(piece.estimatedCostMicros), ...paidAt }
 }
 

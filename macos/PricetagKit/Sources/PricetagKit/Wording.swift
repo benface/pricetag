@@ -81,6 +81,7 @@ public enum Wording {
         switch comparison.unavailable {
         case .noCurrentEthPrice: return "Unavailable, because there's no current ETH price to compare with."
         case .leftWithNoKnownValue: return "Unavailable, because something left this wallet with no known value, so what holding ETH would have left can't be worked out."
+        case .leftWithNoKnownShare: return "Unavailable, because something left this wallet after an exchange of several tokens at once, so how much of it came from what was put in can't be worked out."
         case .nothingKnownPutIn: return "Unavailable, because nothing put in this wallet has a known value yet."
         case nil: break
         }

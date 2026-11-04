@@ -226,6 +226,7 @@ public struct HoldComparison: Codable, Sendable, Equatable {
         case noCurrentEthPrice = "no current eth price"
         case nothingKnownPutIn = "nothing known put in"
         case leftWithNoKnownValue = "left with no known value"
+        case leftWithNoKnownShare = "left with no known share"
     }
 
     public let status: Status

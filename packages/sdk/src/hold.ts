@@ -6,6 +6,8 @@
 //
 // Only what came from an amount in that ETH can leave it. So a second fold follows those amounts through the wallet, by
 // the same method, across exchanges too. To it, everything else has an unknown cost, whatever the wallet paid for it.
+// An exchange of several tokens at once doesn't say how much of what it got came from which, so there are two of these
+// folds, at the least and the most it could be. When they disagree about what left, nobody can say how much of the ETH left.
 //
 // So both sides count what left at its value when it left. Total PnL counts it at the cost it carried, because a transfer
 // isn't a sale, so the wallet's side adds the gain that left with it, for whatever total PnL includes. Otherwise a wallet
@@ -13,7 +15,7 @@
 // what's held now, less what that ETH would be worth now.
 
 import { applyLegTaking, emptyPosition, worth, type CostPiece, type FoldLeg, type PositionState } from "./fold.ts"
-import type { PricedLeg } from "./legs.ts"
+import { PRICE_NOTES, type PricedLeg } from "./legs.ts"
 import { isUnconfirmed, type LatestPrices, type LegEffect, type MarkPrice, type PnlStatus, type Position, type Totals } from "./portfolio.ts"
 
 const ETH_DECIMALS = 18
@@ -25,7 +27,7 @@ const ETH_DECIMALS = 18
  */
 export type HoldStatus = "complete" | "partial" | "unavailable"
 
-export type HoldUnavailable = "no current eth price" | "nothing known put in" | "left with no known value"
+export type HoldUnavailable = "no current eth price" | "nothing known put in" | "left with no known value" | "left with no known share"
 
 export type HoldComparison = {
   status: HoldStatus
@@ -63,21 +65,12 @@ export type HoldComparison = {
 
 type AmountIn = { qty: bigint; micros: string | null; blockNum: number; estimated: boolean }
 
-/** The parts of a cost and the units each one paid for. They add up to exactly the piece's units. */
+/** The parts of a cost and the units each one paid for. */
 function amountsOf(piece: CostPiece, blockNum: number): AmountIn[] {
   const estimated = BigInt(piece.estimatedCostMicros) > 0n
   const micros = piece.label === "unknown" ? null : piece.costMicros
-  const total = micros === null ? 0n : BigInt(micros)
-  if (!piece.paidAt || total === 0n) return [{ qty: BigInt(piece.qty), micros, blockNum, estimated }]
-  let sum = 0n
-  let given = 0n
-  return piece.paidAt.flatMap((part) => {
-    sum += BigInt(part.costMicros)
-    const upTo = (sum * BigInt(piece.qty)) / total
-    const qty = upTo - given
-    given = upTo
-    return BigInt(part.costMicros) > 0n ? [{ qty, micros: part.costMicros, blockNum: part.blockNum, estimated }] : []
-  })
+  if (!piece.paidAt || micros === null) return [{ qty: BigInt(piece.qty), micros, blockNum, estimated }]
+  return piece.paidAt.filter((part) => BigInt(part.qty) > 0n || BigInt(part.costMicros) > 0n).map((part) => ({ qty: BigInt(part.qty), micros: part.costMicros, blockNum: part.blockNum, estimated }))
 }
 
 /**
@@ -116,7 +109,8 @@ function gainThatLeft(positions: readonly Position[]): { micros: bigint; estimat
       const known = -delta - (BigInt(after.transferredOutUnknownQty) - BigInt(before.transferredOutUnknownQty))
       if (known === 0n) continue
       micros += worth(known, BigInt(leg.priceMicros), leg.decimals) - (BigInt(after.transferredOutCostMicros) - BigInt(before.transferredOutCostMicros))
-      estimated ||= leg.priceSource === "market"
+      // Either end of the gain can be an estimate: what it left at, or the cost it carried.
+      estimated ||= leg.priceSource === "market" || BigInt(after.transferredOutEstimatedMicros) > BigInt(before.transferredOutEstimatedMicros)
     }
   }
   return { micros, estimated }
@@ -127,6 +121,15 @@ const followed = (leg: PricedLeg, pieces?: CostPiece[]): FoldLeg => ({ id: leg.i
 
 const followedPiece = (qty: bigint, inEth: boolean, acquiredBlock: number): CostPiece => ({ qty: qty.toString(), costMicros: inEth ? "0" : null, label: inEth ? "paid" : "unknown", estimatedCostMicros: "0", acquiredBlock, acquiredAt: "" })
 
+/** How much of what an exchange gave up came from an amount in the ETH. */
+type Share = { inEth: bigint; qty: bigint }
+
+/** One way of following amounts through the wallet: `pick` says which share of several it goes by. */
+type Follower = { states: Map<string, PositionState>; gave: Map<string, Share>; pick: (a: Share, b: Share) => Share; theLeast: boolean }
+
+const isSmaller = (a: Share, b: Share) => a.inEth * b.qty < b.inEth * a.qty
+const followerOf = (theLeast: boolean): Follower => ({ states: new Map(), gave: new Map(), theLeast, pick: (a, b) => (isSmaller(a, b) === theLeast ? a : b) })
+
 /** `prices` and `markPrice` are in the currency the positions were folded in, and so is everything this returns. */
 export function compareWithHoldingEth(positions: readonly Position[], totals: Totals, pnlStatus: PnlStatus, prices: LatestPrices, markPrice: MarkPrice): HoldComparison {
   const ethPrice = prices.ETH?.micros ?? null
@@ -135,9 +138,9 @@ export function compareWithHoldingEth(positions: readonly Position[], totals: To
     return price !== null && BigInt(price) > 0n ? BigInt(price) : null
   }
   const method = positions[0]?.state.method ?? "average"
-  const states = new Map<string, PositionState>()
-  /** The share of what each exchange gave up that came from an amount in the ETH, which is the share of what it got. */
-  const exchanged = new Map<string, { inEth: bigint; qty: bigint }>()
+  const followers = [followerOf(true), followerOf(false)] as const
+  const stateOf = ({ states }: Follower, leg: PricedLeg) => states.get(leg.asset) ?? emptyPosition(method, leg.decimals)
+  const credit = (follower: Follower, leg: PricedLeg, pieces: CostPiece[]) => follower.states.set(leg.asset, applyLegTaking(stateOf(follower, leg), followed(leg, pieces)).state)
   let eth = 0n
   let putIn = 0n
   let knownAmounts = 0
@@ -145,6 +148,7 @@ export function compareWithHoldingEth(positions: readonly Position[], totals: To
   let takenOut = 0n
   let beyond = 0n
   let unvalued = false
+  let unshared = false
   let estimated = false
 
   const legs = positions
@@ -154,11 +158,10 @@ export function compareWithHoldingEth(positions: readonly Position[], totals: To
     .sort((a, b) => a.blockNum - b.blockNum || a.txIndex - b.txIndex || Number(BigInt(a.delta) > 0n) - Number(BigInt(b.delta) > 0n))
 
   for (const leg of legs) {
-    const state = states.get(leg.asset) ?? emptyPosition(method, leg.decimals)
     const delta = BigInt(leg.delta)
     if (delta > 0n) {
-      const pieces: CostPiece[] = []
       if (leg.kind === "transfer") {
+        const pieces: CostPiece[] = []
         let unknown = false
         for (const { qty, micros, blockNum, estimated: isEstimate } of amountsIn(leg)) {
           const price = ethAt(blockNum)
@@ -172,31 +175,39 @@ export function compareWithHoldingEth(positions: readonly Position[], totals: To
           if (qty > 0n) pieces.push(followedPiece(qty, inEth, blockNum))
         }
         if (unknown) unknownAmounts++
-      } else {
-        const gave = exchanged.get(leg.txHash)
-        const qty = gave && gave.qty > 0n ? (delta * gave.inEth) / gave.qty : 0n
-        if (qty > 0n) pieces.push(followedPiece(qty, true, leg.blockNum))
-        if (delta > qty) pieces.push(followedPiece(delta - qty, false, leg.blockNum))
+        for (const follower of followers) credit(follower, leg, pieces)
+        continue
       }
-      states.set(leg.asset, applyLegTaking(state, followed(leg, pieces)).state)
+      for (const follower of followers) {
+        const gave = follower.gave.get(leg.txHash)
+        // It also gave up a token nothing here can see, which could be what paid for all of this.
+        const qty = gave && gave.qty > 0n && !(follower.theLeast && leg.priceNote === PRICE_NOTES.unlisted) ? (delta * gave.inEth) / gave.qty : 0n
+        credit(follower, leg, [...(qty > 0n ? [followedPiece(qty, true, leg.blockNum)] : []), ...(delta > qty ? [followedPiece(delta - qty, false, leg.blockNum)] : [])])
+      }
       continue
     }
-    const { state: next, taken } = applyLegTaking(state, followed(leg))
-    states.set(leg.asset, next)
-    const inEth = taken.reduce((sum, piece) => (piece.costMicros === null ? sum : sum + BigInt(piece.qty)), 0n)
-    if (leg.kind === "swap") {
-      const qty = -delta
-      const gave = exchanged.get(leg.txHash)
-      // Different tokens can't be added up, and more than one left, so it goes by whichever has the smallest share.
-      if (!gave || inEth * gave.qty < gave.inEth * qty) exchanged.set(leg.txHash, { inEth, qty })
-    }
-    if (leg.kind !== "transfer" || inEth === 0n) continue
+    const [least, most] = followers.map((follower) => {
+      const { state, taken } = applyLegTaking(stateOf(follower, leg), followed(leg))
+      follower.states.set(leg.asset, state)
+      const inEth = taken.reduce((sum, piece) => (piece.costMicros === null ? sum : sum + BigInt(piece.qty)), 0n)
+      if (leg.kind === "swap") {
+        const share = { inEth, qty: -delta }
+        const gave = follower.gave.get(leg.txHash)
+        follower.gave.set(leg.txHash, gave ? follower.pick(gave, share) : share)
+      }
+      return inEth
+    }) as [bigint, bigint]
+    if (leg.kind !== "transfer" || most === 0n) continue
     const price = ethAt(leg.blockNum)
     if (leg.priceMicros === null || price === null) {
       unvalued = true
       continue
     }
-    const value = worth(inEth, BigInt(leg.priceMicros), leg.decimals)
+    if (least !== most) {
+      unshared = true
+      continue
+    }
+    const value = worth(most, BigInt(leg.priceMicros), leg.decimals)
     takenOut += value
     estimated ||= leg.priceSource === "market"
     const units = (value * 10n ** BigInt(ETH_DECIMALS)) / price
@@ -207,7 +218,7 @@ export function compareWithHoldingEth(positions: readonly Position[], totals: To
     } else eth -= units
   }
 
-  const unavailable: HoldUnavailable | null = ethPrice === null ? "no current eth price" : unvalued ? "left with no known value" : knownAmounts === 0 ? "nothing known put in" : null
+  const unavailable: HoldUnavailable | null = ethPrice === null ? "no current eth price" : unvalued ? "left with no known value" : unshared ? "left with no known share" : knownAmounts === 0 ? "nothing known put in" : null
   const walletLeavesOut = pnlStatus !== "complete"
   const pnlEstimated = BigInt(totals.estimatedMicros) > 0n
   const facts = { walletLeavesOut, putInMicros: putIn.toString(), takenOutMicros: takenOut.toString(), ethPriceMicros: ethPrice, unknownAmounts, ranOut: beyond > 0n }
