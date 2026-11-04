@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.local
+.env
+.env.*
+!.env.example
+.DS_Store
+# Multica's per-run files; never commit these.
+.multica/
+.claude/
