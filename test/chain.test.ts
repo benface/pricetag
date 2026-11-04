@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { LAST_2S_BLOCK as LAST, blockBefore, msBetweenBlocks } from "@pricetag/sdk/core"
+import { LAST_2S_BLOCK as LAST, blockBefore, msBetweenBlocks, timestampOfBlock } from "@pricetag/sdk/core"
 import type { Query } from "@pricetag/sdk/internal"
 import { rawSource } from "../server/source.ts"
 
@@ -43,6 +43,31 @@ describe("Base's block times", () => {
         assert.ok(msBetweenBlocks(before + 1, block) < ms, `${block} ${ms}`)
       }
     }
+  })
+
+  describe("a block's timestamp", () => {
+    // What the chain would say: `LAST` at 18:00:01.000, in whole seconds from then on, and 2 s apart before it.
+    const FIRST_MS = Date.UTC(2026, 10, 5, 18, 0, 1)
+    const chainTimestamp = (block: number) => new Date(block <= LAST ? FIRST_MS - (LAST - block) * 2000 : FIRST_MS + Math.floor(((block - LAST) * 200) / 1000) * 1000).toISOString()
+    const head = (blockNum: number) => ({ blockNum, timestamp: chainTimestamp(blockNum) })
+
+    it("is the chain's, from any block after it, wherever in its second that block is", () => {
+      for (const block of [LAST - 40, LAST - 1, LAST, LAST + 1, LAST + 4, LAST + 5, LAST + 6, LAST + 7, LAST + 8, LAST + 9, LAST + 10, LAST + 1234]) {
+        for (let later = block; later <= block + 12; later++) {
+          assert.equal(timestampOfBlock(block, head(later)), chainTimestamp(block), `${block} from ${later}`)
+        }
+      }
+    })
+
+    it("stays on the right day at midnight", () => {
+      const midnight = LAST + ((Date.UTC(2026, 10, 6) - FIRST_MS) / 1000) * 5
+      for (let later = midnight; later < midnight + 10; later++) assert.equal(timestampOfBlock(midnight, head(later)), "2026-11-06T00:00:00.000Z")
+      assert.equal(timestampOfBlock(midnight - 1, head(midnight + 3)), "2026-11-05T23:59:59.000Z")
+    })
+
+    it("counts 2 s blocks as it always did", () => {
+      assert.equal(timestampOfBlock(899, { blockNum: 1000, timestamp: "2026-11-04T00:00:00.000Z" }), new Date(Date.UTC(2026, 10, 4) - 202_000).toISOString())
+    })
   })
 
   it("reads an hour of history unless it's told how many blocks", () => {

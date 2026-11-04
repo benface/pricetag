@@ -2,7 +2,7 @@
 // Keeps each wallet's rows in memory: one full read, then only new blocks, because a wallet read scans the whole range.
 
 import { describeError, type Logger } from "./amp.ts"
-import { LAST_2S_BLOCK, blockBefore, msBetweenBlocks } from "./chain.ts"
+import { LAST_2S_BLOCK, blockBefore, timestampOfBlock } from "./chain.ts"
 import { buildPricedLegs, derivePricedRows, oneWaySendBalanceBlocks, settleUnwraps, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PricedRow, type Reference } from "./legs.ts"
 import { MARKET_MAX_AGE_MS, marketPrice, type MarketPrice, type MarketTrade } from "./market.ts"
 import type { CostNote } from "./notes.ts"
@@ -193,7 +193,7 @@ function l1FeeRows(rows: readonly LegRow[], fees: Cached["l1Fees"]): { rows: Leg
 /** A block in the past, as if it were the head. Base's block times are exact, so its timestamp doesn't need a read. */
 function headAsOf(head: Head, to: number | undefined): Head {
   if (to === undefined || to >= head.blockNum) return head
-  return { blockNum: to, timestamp: new Date(new Date(head.timestamp).getTime() - msBetweenBlocks(to, head.blockNum)).toISOString() }
+  return { blockNum: to, timestamp: timestampOfBlock(to, head) }
 }
 
 const keyOf = (address: string, { from, to }: WalletRange) => `${address.toLowerCase()}:${from ?? ""}:${to ?? ""}`
@@ -393,7 +393,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       feeUnknownTxs: [...wallet.gasUnknown.keys(), ...l1.unknownTxs, ...wallet.staleFeeTxs],
       gasUnknownBlocks: [...wallet.gasUnknown.values()],
     })
-    const openedAt = new Date(new Date(wallet.latest.timestamp).getTime() - msBetweenBlocks(wallet.fromBlock - 1, wallet.latest.blockNum)).toISOString()
+    const openedAt = timestampOfBlock(wallet.fromBlock - 1, wallet.latest)
     return {
       address,
       mode: source.mode,
@@ -443,7 +443,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         fromBlock: wallet.fromBlock,
         coveredTo: through,
         rows: wallet.rows.filter((r) => r.block_num <= through),
-        latest: { blockNum: through, timestamp: new Date(new Date(wallet.latest.timestamp).getTime() - msBetweenBlocks(through, wallet.latest.blockNum)).toISOString() },
+        latest: { blockNum: through, timestamp: timestampOfBlock(through, wallet.latest) },
         gasUnknown: wallet.gasUnknown,
         opening: wallet.opening,
         closing,

@@ -261,6 +261,50 @@ describe("reconciling", () => {
     assert.deepEqual(windows.at(-1), [LAST_2S_BLOCK + 701, head])
   })
 
+  describe("dating blocks at 200 ms", () => {
+    // Block `LAST_2S_BLOCK` at 18:00:01.000, and the chain's timestamps in whole seconds after it.
+    const FIRST_MS = Date.UTC(2026, 10, 5, 18, 0, 1)
+    const secondOf = (block: number) => new Date(FIRST_MS + Math.floor(((block - LAST_2S_BLOCK) * 200) / 1000) * 1000).toISOString()
+    const headOf = (block: number) => async () => ({ blockNum: block, timestamp: secondOf(block) })
+    const balances = async (): Promise<Record<string, string>> => ({ ETH: "7", USDC: "0" })
+    const BLOCK = LAST_2S_BLOCK + 5
+
+    it("keeps a fixed read's block on its own second, wherever the head is in its second", async () => {
+      for (let head = BLOCK + 1; head <= BLOCK + 10; head++) {
+        const { source } = fake(new Map(), () => reference(head), undefined, balances)
+        const { latest } = await createWallets(source, headOf(head), noFees).get(ME, { from: BLOCK - 2, to: BLOCK })
+        assert.deepEqual(latest, { blockNum: BLOCK, timestamp: secondOf(BLOCK) }, `head ${head}`)
+      }
+    })
+
+    it("keeps a wallet's opening on its own second as the head moves", async () => {
+      for (let head = BLOCK + 1; head <= BLOCK + 10; head++) {
+        const { source } = fake(new Map(), () => reference(head), undefined, balances)
+        const { legs } = await createWallets(source, headOf(head), noFees).get(ME, { from: BLOCK + 1 })
+        assert.equal(legs[0]?.timestamp, secondOf(BLOCK), `head ${head}`)
+      }
+    })
+
+    it("keeps factsAt's block on its own second too", async () => {
+      for (let head = BLOCK + 1; head <= BLOCK + 10; head++) {
+        const { source } = fake(new Map(), () => reference(head), undefined, balances)
+        const wallets = createWallets(source, headOf(head), noFees)
+        await wallets.get(ME)
+        const facts = await wallets.factsAt(ME, BLOCK, { withBalances: false })
+        assert.deepEqual(facts?.latest, { blockNum: BLOCK, timestamp: secondOf(BLOCK) }, `head ${head}`)
+      }
+    })
+
+    it("puts an opening just past midnight on the new day", async () => {
+      const midnight = LAST_2S_BLOCK + ((Date.UTC(2026, 10, 6) - FIRST_MS) / 1000) * 5
+      for (let head = midnight + 1; head <= midnight + 5; head++) {
+        const { source } = fake(new Map(), () => reference(head), undefined, balances)
+        const { legs } = await createWallets(source, headOf(head), noFees).get(ME, { from: midnight + 1 })
+        assert.equal(legs[0]?.timestamp, "2026-11-06T00:00:00.000Z", `head ${head}`)
+      }
+    })
+  })
+
   it("dates a wallet's opening across the change to 200 ms blocks", async () => {
     const head = LAST_2S_BLOCK + 50
     const { source } = fake(new Map(), () => reference(head), undefined, async (): Promise<Record<string, string>> => ({ ETH: "7", USDC: "0" }))
