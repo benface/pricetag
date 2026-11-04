@@ -12,6 +12,9 @@
     "test": "node --test 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && node --test 'test/**/*.test.ts' && vite build",
+    "mac": "macos/run.sh",
+    "mac:build": "macos/run.sh --build-only",
+    "check:mac": "swift test --package-path macos/PricetagKit && macos/run.sh --build-only && cd macos/PricetagKit && xcodebuild -quiet -scheme PricetagKit -destination 'generic/platform=iOS' -derivedDataPath ../build/ios build",
     "amp:start": "scripts/amp start",
     "amp:stop": "scripts/amp stop",
     "example": "node --env-file-if-exists=.env.local packages/sdk/examples/portfolio.ts"

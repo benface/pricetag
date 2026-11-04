@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { PnlPoint } from "@pricetag/sdk/core"
-import { formatClock, formatSignedUsd, formatTime } from "./format.ts"
+import { formatClock, formatSignedUsd, formatTime } from "../core/format.ts"
 
 const showPnl = (point: PnlPoint) => (point.pnlUsdMicros === null ? "⚠ Unavailable" : formatSignedUsd(point.pnlUsdMicros))
 
