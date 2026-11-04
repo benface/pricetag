@@ -110,6 +110,7 @@ export const DEMO_WALLET: WalletResponse = {
   },
   latest: { blockNum: START_BLOCK + HEAD_OFFSET, timestamp: new Date(START_TIME + HEAD_OFFSET * 2000).toISOString() },
   gasUnknownTxs: [],
+  unlisted: [{ token: "0x00000000000000000000000000000000000000f1", transfers: 1 }],
   l1FeeUnknownTxs: [],
   openingUnread: [],
   lastBalances: {},

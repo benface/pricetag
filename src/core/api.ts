@@ -1,10 +1,13 @@
 // What the server sends its clients. The browser runs the fold itself, because cost is personal.
 // Clients that can't run it, like the Mac app, read the portfolio it computes instead.
 
-import { hasStarted, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type WalletData } from "@pricetag/sdk/core"
+import { hasStarted, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type UnlistedToken, type WalletData } from "@pricetag/sdk/core"
+import type { TaxCountryCode, TaxScope } from "./tax.ts"
 
 export { hasStarted }
 export type { Head, Mode, PnlStatus }
+
+export type { UnlistedToken }
 
 export type WalletResponse = WalletData
 
@@ -37,6 +40,8 @@ export type PortfolioResponse = {
   address: string
   mode: Mode
   method: Method
+  /** The pricing rule this was read through, or null when the server has only one. */
+  rule: string | null
   currency: CurrencyCode
   /** Null for USD. */
   exchange: PortfolioExchange | null
@@ -47,6 +52,9 @@ export type PortfolioResponse = {
   /** Whether what's read has reached the chain. `behindBlocks` is 0 until it's far enough behind to say so. */
   progress: { started: boolean; behindBlocks: number }
   gasUnknownTxs: string[]
+  /** Every transaction that took something from this wallet or that it paid gas for. A hot wallet compares these with what it signed. */
+  outgoingTxs: string[]
+  unlisted: UnlistedToken[]
   l1FeeUnknownTxs: string[]
   openingUnread: string[]
   /** Assets with no position because nothing could be read about them, which isn't the same as holding none. */
@@ -93,7 +101,63 @@ export type ExplanationLeg = {
   conversion: string | null
 }
 
+/** A tax report, ready to save. See `src/core/tax.ts`. */
+export type TaxReportResponse = {
+  /** The one asked about comes first. */
+  wallets: string[]
+  country: TaxCountryCode
+  method: Method
+  scope: TaxScope
+  currency: CurrencyCode
+  /** What this country calls for, so a client can tell an override. */
+  defaults: { method: Method; scope: TaxScope }
+  rowCount: number
+  unresolvedCount: number
+  estimatedCount: number
+  /** Only rows whose gain is known, and null when none is. Read it next to `unresolvedCount`. */
+  gainMicros: string | null
+  disclaimer: string
+  /** What's wrong with this file in particular. */
+  warnings: string[]
+  /** What this report never does, and what it covers. */
+  notes: string[]
+  filename: string
+  csv: string
+}
+
 /** A derived table is normally a block or two behind the chain. More than this is worth saying out loud. */
 const BEHIND_BLOCKS = 5
 
 export const isBehind = ({ coverage, latest }: Pick<WalletResponse, "coverage" | "latest">) => latest.blockNum - coverage.toBlock > BEHIND_BLOCKS
+
+/** A dataset behind a number, by name and manifest hash. The hash is null when it couldn't be read, and is never guessed. */
+export type ProofDataset = { title: string; name: string; hash: string | null }
+
+export type ProofLink = { title: string; url: string }
+
+/** What's behind one leg's price. All of it is in words, because clients only show it. */
+export type ProofResponse = {
+  blockNum: number
+  txHash: string
+  source: string[]
+  movements: string[]
+  links: ProofLink[]
+  datasets: ProofDataset[]
+  /** What checking the block does and doesn't show for this leg. */
+  scope: string[]
+  /** Why the block can't be checked, or null when it can. */
+  unavailable: string | null
+}
+
+export type CheckStatus = "passed" | "failed" | "unchecked"
+
+export type ProofCheck = { title: string; status: CheckStatus; detail: string }
+
+/** The block's commitments recomputed from what Amp stored, and whether this leg is in them. `status` is the worst of `checks`. */
+export type VerificationResponse = {
+  blockNum: number
+  blockHash: string
+  status: CheckStatus
+  summary: string
+  checks: ProofCheck[]
+}

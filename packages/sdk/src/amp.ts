@@ -1,6 +1,7 @@
 // The only file that talks to Amp, and the only place the token is used. `core.ts` must never reach this, so it stays out of browsers.
 
 import { createAuthInterceptor, createClient } from "@edgeandnode/amp"
+import type { Interceptor } from "@connectrpc/connect"
 import { createGrpcTransport } from "@connectrpc/connect-node"
 
 export type Query = <T>(sql: string, timeoutMs?: number) => Promise<T[]>
@@ -13,6 +14,15 @@ export type QueryOptions = {
   timeoutMs?: number | undefined
   /** It defaults to `console`. */
   logger?: Logger | undefined
+}
+
+/** A query that can also read through dataset aliases. */
+export type AmpQuery = Query & {
+  /**
+   * The same query, sending Amp's `amp-alias` header, which binds names in the SQL to datasets for that one request. So
+   * the SQL can stay the same, and the header alone picks what it reads. A local Amp may be too old to read the header.
+   */
+  aliased(aliases: Record<string, string>): Query
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000
@@ -37,12 +47,23 @@ export function describeError(error: unknown): string {
 /** What Amp answers when a table's job hasn't written anything yet. It isn't an outage: that table just has no blocks. */
 export const isNotStarted = (error: unknown) => describeError(error).includes("no common canonical watermark")
 
-export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console }: QueryOptions = {}): Query {
-  const client = createClient(createGrpcTransport({ baseUrl: url, interceptors: token ? [createAuthInterceptor(token)] : [] }))
-  // Staging is shared, so run one query at a time.
+export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console }: QueryOptions = {}): AmpQuery {
+  const clientWith = (aliases?: Record<string, string>) => {
+    const auth: Interceptor[] = token ? [createAuthInterceptor(token)] : []
+    const alias: Interceptor[] = aliases
+      ? [
+          (next) => (request) => {
+            request.header.set("amp-alias", JSON.stringify(aliases))
+            return next(request)
+          },
+        ]
+      : []
+    return createClient(createGrpcTransport({ baseUrl: url, interceptors: [...auth, ...alias] }))
+  }
+  // Staging is shared, so run one query at a time, whatever it reads through.
   let queue: Promise<unknown> = Promise.resolve()
 
-  const run = async <T>(sql: string, timeoutMs: number): Promise<T[]> => {
+  const run = async <T>(client: ReturnType<typeof clientWith>, sql: string, timeoutMs: number): Promise<T[]> => {
     const iterator = client.query(sql)[Symbol.asyncIterator]()
     const rows: T[] = []
     let timer: NodeJS.Timeout | undefined
@@ -65,10 +86,10 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
   }
 
   // A caller's limit is the most any query gets, including ones that normally ask for less.
-  return <T>(sql: string, timeoutMs = maxTimeoutMs) => {
+  const queryWith = (client: ReturnType<typeof clientWith>): Query => <T>(sql: string, timeoutMs = maxTimeoutMs) => {
     const result = queue.then(async () => {
       const started = Date.now()
-      const rows = await run<T>(sql, Math.min(timeoutMs, maxTimeoutMs))
+      const rows = await run<T>(client, sql, Math.min(timeoutMs, maxTimeoutMs))
       const took = Date.now() - started
       if (took > 5000) logger.warn(`Slow Amp query: ${took} ms, ${rows.length} rows: ${sql.replace(/\s+/g, " ").slice(0, 100)}…`)
       return rows
@@ -76,4 +97,5 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
     queue = result.catch(() => {})
     return result
   }
+  return Object.assign(queryWith(clientWith()), { aliased: (aliases: Record<string, string>) => queryWith(clientWith(aliases)) })
 }

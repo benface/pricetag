@@ -32,6 +32,12 @@ export const UNPRICED_FEES = "Some network fees had no price at the time, and ar
 export const READING = "Reading this wallet's history. The first read can take a minute, then only new activity is read."
 export const NOT_AN_ADDRESS = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 
+export const RULES_TITLE = "Pricing rule"
+export const RULES_HELP = "Prices come from a public recipe anyone can copy and change. Each rule here is one version of it, named by its fingerprint. Switching only changes which one this wallet is read through."
+
+/** A dataset version's fingerprint, short enough to read and long enough to recognize. */
+export const shortManifestHash = (hash: string) => `${hash.slice(0, 12)}…${hash.slice(-4)}`
+
 export const MODE_LABELS: Record<Mode, string> = { demo: "Demo data", raw: "Raw chain data", dataset: "Pricetag data" }
 
 /** What a leg did, in a word. */

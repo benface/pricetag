@@ -15,23 +15,39 @@ pnpm dev                     # http://localhost:5173
 
 ## The Mac app
 
-Patina is a native menu bar app: live total PnL in the bar, holdings, cost and PnL in its popover, and a window where any number clicks through to its activity, price source and transaction. It's watch-only, with no keys.
+Patina is a native menu bar app: live total PnL in the bar, holdings, cost and PnL in its popover, and a window where any number clicks through to its activity, price source and transaction. The wallet it shows is only read. The one key it holds is this Mac's spending money, below.
 
 ```sh
 pnpm mac         # builds the app, opens it, and runs the server until you press Ctrl-C
 pnpm mac:build   # only builds it, to macos/build/
-pnpm check:mac   # the Swift tests, the app's build, and the shared package's build for iOS
+pnpm check:mac   # the Swift tests, the app's build, and the shared packages' builds for iOS
+pnpm check:keychain  # the real Secure Enclave and Keychain, with a throwaway key, from a signed debug build
+pnpm check:anvil     # real signing and sweeps against a local fork of Base, with no real funds. It needs Foundry
+pnpm mac:shot    # screenshots from fixtures that never open a window you'd see or take focus. See macos/TESTING.md
 ```
 
 It reads from the server on http://127.0.0.1:8787, set in Settings, so it runs on whatever the server runs on: with no `.env.local`, that's the demo wallet. It remembers the wallet, method and currency across restarts.
 
 If the menu bar is full, macOS hides new items. Look under the menu bar's "show hidden items" control, or in System Settings > Menu Bar, and drag it out. The window opens at launch either way.
 
-The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<address>?method=average|fifo&currency=USD|CAD` returns the portfolio the fold computed, and `GET /api/portfolio/<address>/explain?metric=…&asset=…` or `?tx=…` returns what's behind one number. `test/portfolio.test.ts` writes what they send to files the Swift tests read, so the two can't drift apart without a failure: when a change is on purpose, run it with `UPDATE_FIXTURES=1`.
+The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<address>?method=average|fifo&currency=USD|CAD` returns the portfolio the fold computed, `GET /api/portfolio/<address>/explain?metric=…&asset=…` or `?tx=…` returns what's behind one number, and `GET /api/portfolio/<address>/proof?leg=…` and `/verify?leg=…` return what's behind one price and the check of its block. With a [forked pricing rule](#forking-a-pricing-rule), `GET /api/rules` lists the rules, `&rule=<id>` picks one, and `GET /api/portfolio/<address>/compare` returns a wallet by both. `test/portfolio.test.ts` writes what they send to files the Swift tests read, so the two can't drift apart without a failure: when a change is on purpose, run it with `UPDATE_FIXTURES=1`.
 
 - `macos/PricetagKit/`: everything that isn't Mac-specific, like the API models, the live feed, formatting and shared views. It also builds for iOS.
+- `macos/HotWalletKit/`: the hot wallet, which also builds for iOS. `KeyVault` is the only code that touches a key, and `HotWalletKit` decides what to do and can only ask it to sign.
 - `macos/App/`: the menu bar item, popover, window and settings.
 - `macos/Config/App.xcconfig`: the app's name, in one place.
+- `macos/TESTING.md`: how to test and screenshot the app without interrupting whoever's using this Mac.
+
+### Spending money and savings
+
+The Mac app has a capped hot wallet, this Mac's "spending money", for everyday use with no recovery phrase. Anything above the cap goes to a hardware wallet, your "savings", by itself while the app runs. Open it from the popover or with ⇧⌘M. It's an unreviewed hackathon build, for small funds only. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what it protects against and what it doesn't.
+
+- **The key** comes from `SecRandomCopyBytes`, is wrapped by the Secure Enclave, and stays in a device-only Keychain item. It can't be restored or exported: lose the Mac and you lose what's on it, up to the cap.
+- **The cap** is yours to set, $50 by default and $100 at most, or $25 at most until you add a savings wallet. A plain address can't enforce a cap, so it's what triggers a sweep and not a hard limit.
+- **Sweeps** send whatever is above the cap, and realized gains unless you turn that off, to your chosen savings wallet. They only move tokens with a trusted price, they keep enough ETH for gas, and they skip dust. Costs carry over as `inherited`, because the app tells the server which wallets are yours: `GET /api/portfolio/<address>?linked=<addresses>`.
+- **The alarm** compares what Amp and the chain say this wallet did with what the app signed. If they differ, it alerts loudly, stops top-ups, and offers to sweep what's left and replace the key.
+
+Holding a key needs a provisioned build, which `pnpm mac` makes when the team pinned in `macos/run.sh` is signed in to Xcode. Without that, the app says it can't hold a key, and everything else works. It reads balances from `https://mainnet.base.org` directly, set in Settings, so sweeps don't depend on the server. Debug builds have their own wallet.
 
 ## Where the data comes from
 
@@ -60,6 +76,34 @@ It adds a marked block to the end of `.env.local` that points the app at the loc
 
 On the public RPC, a fresh start takes about 9 minutes for the default hour of blocks. For a quicker one, use `PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start`, which takes about 2 minutes.
 
+## Forking a pricing rule
+
+A pricing rule is a dataset version, and the server picks one per request with Amp's `amp-alias` header. The SQL never changes, and the app has no code for any rule. Set these and both apps show a switch, in the Mac app's Settings and above the web app's numbers, with each rule's dataset and manifest hash, and a side-by-side comparison of a wallet. The comparison uses one set of facts at one block for both rules: the same transactions, balances, fees and exchange rates, with only prices from each. If it can't establish that, it says so and shows no numbers.
+
+```sh
+PRICETAG_DATASET=benface/pricetag_scratch@0.0.5
+PRICETAG_DATASET_HASH=bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1
+PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.0.1
+PRICETAG_FORK_HASH=6dc99aea92570362b5157d3367f125613a2a9573e5d98dadca5312075738696b
+```
+
+Queries are pinned to those hashes, so a hash on screen is what was read, and a wrong one fails instead of showing other numbers. With no fork set, nothing changes: there's no switch and no header.
+
+The fork here is `dataset/cautious-eth.json`, from `cautiousEthTablesSql` in `dataset/build.ts`. Its one rule is that ETH counts at 1% below the Chainlink feed. It only materializes the tables a rule decides, `reference_prices` and `priced_legs`, and reads everything else from the dataset it forks. So it makes no `eth_call`s, starts from the same block, and can only differ by the rule. The transactions always come from the first dataset.
+
+To change the rule, edit that function, then build, register and deploy it under a new tag, and update the hash:
+
+```sh
+FORK_OF=benface/pricetag_scratch@0.0.5 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
+ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.0.2
+```
+
+Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.0.2` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging.
+
+**Replacing the dataset it forks means replacing the fork too.** The fork reads the job of the version it names, so stopping that job stops the fork. Deploy a fork of the new version before stopping the old one, then change all four lines together.
+
+`pnpm amp:start` turns the fork off while it runs, because it isn't registered on a local Amp. Hot wallet decisions and tax reports always read by the default rule, whatever the switch says.
+
 ## How it's put together
 
 - `packages/sdk/`: `@pricetag/sdk`, what other apps can build on too. [Its quickstart](packages/sdk/README.md) covers the tables, the API and plain SQL.
@@ -72,9 +116,9 @@ On the public RPC, a fresh start takes about 9 minutes for the default hour of b
   - `src/wallets.ts`, `src/balances.ts`, `src/receipts.ts`: what a wallet read adds to its legs: opening and closing balances and L1 fees, kept in memory between reads. The app's server and `getPortfolio` both use these, through `@pricetag/sdk/internal`.
   - `src/currency.ts`: converts a wallet out of USD at each transaction's rate, before the fold.
 - `src/`: the web app. `src/core/api.ts` is what the server sends its clients, `src/core/explain.ts` says how each number is worked out, for the web and Mac apps, and `src/core/fixtures.ts` is the demo wallet.
-- `server/`: the raw data source, exchange rates, and the small HTTP server.
+- `server/`: the raw data source, exchange rates, the block check, and the small HTTP server.
 - `macos/`: the Mac app.
-- `dataset/`: the manifest. `pricetag.json` is generated by `build.ts`, so change the SQL there.
+- `dataset/`: the manifests. `pricetag.json` and the fork `cautious-eth.json` are generated by `build.ts`, so change the SQL there.
 
 ## Main currency
 
@@ -85,6 +129,30 @@ Both apps show every value in the chosen currency, USD or CAD, and remember the 
 - **A missing rate is never filled in.** That amount is unavailable, whatever depends on it says so, and no other day's rate stands in. A feed that hasn't updated in 3 days counts as missing, since forex markets close for only about 2.
 
 To add a currency, add its Chainlink feed to `CURRENCIES` in `packages/sdk/src/currency.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/Currency.swift`. Base has feeds for EUR, GBP, AUD, CHF, SGD and others.
+
+## Tax report
+
+Both apps export the same CSV, because the server writes it (`GET /api/tax-report/<address>?country=CA|US`, and `src/core/tax.ts` does the work). This isn't tax advice, and the report says so first.
+
+- **One row per thing that may be taxable:** a sale, a network fee (paying one in ETH counts as selling that ETH) or something sent. Each has its date, asset, amount, proceeds, cost, gain, method, price source and transaction link, in the main currency. The gains come from what the fold did, so a position with nothing unresolved adds up to the Realized the apps show. With something unresolved, the apps leave out the whole position and this keeps each row it knows, so the report's total can differ, and it says so.
+- **Gaps say so.** A cost, proceeds or gain that can't be worked out says `unknown`, its row is `UNRESOLVED` with a reason, and it isn't in the gain total. It's never 0. A sale that's part known and part unknown becomes two rows. A cost from an estimate is `ESTIMATED`.
+- **Notes are rows too**, right under the header, so the file still parses and the warnings are the first thing anyone sees.
+- **The country picks the defaults, and both can be overridden**, with a warning when that may not be accepted:
+
+| Country | Method | Wallets | Official sources |
+| --- | --- | --- | --- |
+| Canada | Average | All together | [Income Tax Act s. 47](https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-47.html), [CRA guide T4037](https://www.canada.ca/en/revenue-agency/services/forms-publications/publications/t4037/capital-gains.html), [CRA crypto guide](https://www.canada.ca/en/revenue-agency/programs/about-canada-revenue-agency-cra/compliance/cryptocurrency-guide/income-crypto-transactions.html) |
+| United States | Oldest first | Each on its own | [Treas. Reg. 1.1012-1(j)](https://www.ecfr.gov/current/title-26/section-1.1012-1), [Rev. Proc. 2024-28](https://www.irs.gov/pub/irs-drop/rp-24-28.pdf), [IRS digital asset FAQs](https://www.irs.gov/individuals/international-taxpayers/frequently-asked-questions-on-digital-asset-transactions) |
+
+Canada's "all together" is our reading: s. 47 averages what a taxpayer owns and says nothing about where it's held, but CRA's crypto guide doesn't address wallets directly.
+
+Wallets are the address on screen plus any others typed into the report. A transfer between them, netting to zero, isn't a sale. All together, its cost stays in the pool. Each on its own, what arrives has an unknown cost in the report, until WORK-371 uses the costs the apps now carry between linked wallets.
+
+All together needs one consistent history, because a cost worked out from part of it would look known and be wrong. So the report stops at the last block every wallet has reached and says what that leaves out. If their histories start at different blocks, which can only happen reading the raw dataset, every cost and gain says `unknown`. The demo wallet can't be combined with anything.
+
+The report doesn't check Canada's superficial loss rule, split US short-term from long-term gains, or list what was received, and it says so. Anything before the first block read has an unknown cost, so most rows on an older wallet are unresolved for now.
+
+To add a country, add it to `TAX_COUNTRIES` in `src/core/tax.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/TaxReport.swift`.
 
 ## Rules the numbers follow
 
@@ -108,6 +176,26 @@ Whether something is held is a separate question from whether it can be checked.
 What a wallet held before the first block read is read from the chain too (`eth_call` at the block before), and becomes an opening leg with an unknown cost. So amounts are full balances, and an old wallet can still reconcile, but its PnL stays unavailable until that cost is known.
 
 Each transaction's L1 data fee comes from its RPC receipt, because Amp's data doesn't have it. It's added to the gas leg in the server for both data sources, so the dataset's own `legs` table stays L2 only. A fee is read when it's first seen, and again once its block is past the part of the chain re-read for reorgs, because a reorg can change it without moving the transaction. There's no tolerance anywhere: a wrong fee shows up as a mismatch.
+
+## Proving a price
+
+Click a price, or Proof, on any row of an explanation. It shows where that price came from, the logs behind it, and each dataset's manifest hash (the "fingerprint"), which identifies the recipe. **Verify** then recomputes that block's commitments in the server from what Amp returns, using [Amp's documented method](https://github.com/edgeandnode/amp/blob/main/docs/feat/verification.md):
+
+- **Block fingerprint:** the header's fields hash to the block's hash.
+- **Transactions:** every transaction rebuilds the header's `transactions_root`, and each one hashes to its stored `tx_hash`.
+- **Results and logs:** every receipt and log rebuilds the header's `receipts_root`.
+- **This activity:** the row's transaction is in that data, and its Transfer logs or ETH value match its amounts. A network fee's L2 part is worked out again from its gas, the block's base fee, and only the fee fields its transaction type hashes. For a swap price, that includes the other side of the exchange.
+
+It's done here and not with `ampctl verify` because that can't check Base: every Base block starts with an OP Stack deposit (type `0x7e`), which it doesn't support. It fails v0.0.42 and nightly `47b6fa2` alike, and today's source still rejects the type. Amp doesn't store what a deposit's hash also covers (`sourceHash`, `mint`, `isSystemTx`), so those three come from `BASE_RPC_URL`. A wrong answer fails the check, because the result has to hash to the block's commitment. Every log and transaction it counts has to be in what's hashed, at the number it's stored with, or the check fails. If the RPC doesn't answer, Transactions says it's not checked. The fingerprints come from Amp's admin API at `AMP_ADMIN_URL`, with the server's token.
+
+What a pass doesn't show, which the interface also says:
+
+- That the header is on Base's real chain. A consistent fake block would pass.
+- That the derived SQL ran correctly. Only the raw dataset's rows are checked, plus the row's amounts against them.
+- An `oracle` price, or the oracle side of a `swap` price, because `eth_call` results aren't in a block's commitments. The same goes for exchange rates and L1 fees, which aren't in the commitments either, so an L1 fee's amount is never compared.
+- That a transaction's `from` is right. Signatures are in the commitment, but aren't recovered to compare them with the stored sender, so a row that takes its account from the sender (fees, ETH sent, unwrapped ETH received) says so.
+
+`server/verify.ts` is the pure part, tested on real rows and on tampered ones. Keccak comes from `@noble/hashes`, since whether Node has it depends on its build. `server/block.ts` reads a block and `server/proof.ts` puts it into words. It's valid for blocks since Canyon (January 2024), because older deposits' receipts are encoded differently.
 
 ## Known gaps
 

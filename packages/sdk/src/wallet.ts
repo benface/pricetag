@@ -9,6 +9,9 @@ import type { BalanceSnapshot } from "./reconcile.ts"
 
 export type Mode = "demo" | "raw" | "dataset"
 
+/** A token off the allowlist that this wallet holds. It has no trusted price and may be malicious, so nothing ever calls it. */
+export type UnlistedToken = { token: string; transfers: number }
+
 /** Everything read about a wallet, before any method folds it. The app's server sends this to the browser as is. */
 export type WalletData = {
   address: string
@@ -24,6 +27,11 @@ export type WalletData = {
   latest: Head
   /** Transactions this wallet sent whose gas couldn't be worked out, so the fees are too low, and ETH worked out from its legs is too high. */
   gasUnknownTxs: string[]
+  /** The pricing rule this was read through, when the server has more than one. */
+  rule?: string
+  /** Set when that rule isn't the default, because the prices it shows aren't what their labels alone would say. */
+  ruleNote?: string | null
+  unlisted: UnlistedToken[]
   /** What this is meant to be shown in. Its money is always USD, and `viewWallet` converts it. */
   currency: CurrencyCode
   /** Null for USD. */
@@ -58,8 +66,8 @@ export type FoldedWallet = {
 /** With nothing read, there's no sum at all. Adding up no legs would otherwise say $0. */
 const noTotals = (): Totals => ({ ...sumTotals([]), valueMicros: null, realizedMicros: null, unrealizedMicros: null, gasMicros: null, pnlMicros: null })
 
-export function foldWallet(wallet: WalletData, method: Method): FoldedWallet {
-  const view = viewWallet(wallet)
+/** `view` is for a wallet that's been changed since it was converted, as when its costs come from the user's other wallets. */
+export function foldWallet(wallet: WalletData, method: Method, view: WalletView = viewWallet(wallet)): FoldedWallet {
   const positions = foldPositions(view.legs, method, view.prices, wallet)
   const unread = unreadAssets(positions, wallet)
   const totals = hasStarted(wallet) ? sumTotals(positions, unread) : noTotals()

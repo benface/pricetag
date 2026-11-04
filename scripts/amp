@@ -96,8 +96,11 @@ write_env_block() {
     printf '%s\n' "$ENV_BLOCK_BEGIN"
     printf 'AMP_QUERY_URL=%s\n' "$FLIGHT_URL"
     printf 'AMP_QUERY_TOKEN=\n'
+    printf 'AMP_ADMIN_URL=%s\n' "$ADMIN_URL"
     printf 'PRICETAG_BASE_DATASET=%s\n' "$RAW_DATASET"
     printf 'PRICETAG_DATASET=%s\n' "$PRICETAG_DATASET"
+    # A fork set for a hosted Amp isn't registered on this one.
+    printf 'PRICETAG_FORK_DATASET=\n'
     printf 'PRICETAG_RPC_NETWORK=%s\n' "$RPC_NETWORK"
     printf 'PRICETAG_START_BLOCK=%s\n' "$start_block"
     printf '%s\n' "$ENV_BLOCK_END"

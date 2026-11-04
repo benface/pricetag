@@ -67,9 +67,9 @@ export type PricedRow = {
 }
 
 /** One of the rows a leg nets together. */
-export type LegPart = Pick<LegRow, "token" | "side" | "amount" | "kind"> & { logIndex: number }
+export type LegPart = Pick<LegRow, "token" | "account" | "side" | "amount" | "kind"> & { logIndex: number }
 
-const partOf = ({ token, side, amount, kind, log_index }: LegRow): LegPart => ({ token, side, amount, kind, logIndex: log_index })
+const partOf = ({ token, account, side, amount, kind, log_index }: LegRow): LegPart => ({ token, account, side, amount, kind, logIndex: log_index })
 
 /** What a leg converted out of USD was before that, and the rate that took it there. */
 export type LegConversion = {
