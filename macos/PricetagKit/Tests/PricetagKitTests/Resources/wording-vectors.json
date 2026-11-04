@@ -203,6 +203,9 @@
     "pnlUnavailable": "PnL unavailable",
     "nothingToChart": "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero.",
     "reading": "Reading this wallet's history. The first read can take a minute, then only new activity is read.",
-    "notAnAddress": "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
-  }
+    "notAnAddress": "That isn't a Base address. It should start with 0x, then 40 letters and numbers.",
+    "rulesTitle": "Pricing rule",
+    "rulesHelp": "Prices come from a public recipe anyone can copy and change. Each rule here is one version of it, named by its fingerprint. Switching only changes which one this wallet is read through."
+  },
+  "manifestHash": "bea12f7575e7…18a1"
 }

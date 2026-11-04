@@ -257,6 +257,21 @@ describe("the cost of an incoming leg", () => {
       assert.equal(totals.unresolvedMicros, "100000000")
     })
 
+    it("doesn't lean on a credit the chain hasn't confirmed: no answer settles it, and nothing asks about it", () => {
+      const claim: LegRow = { ...move(10, "0xc", A, "credit", E18, null, ETH_ADDRESS), kind: "unwrap" }
+      const arrived = move(10, "0xc", A, "credit", 5n * E18, STRANGER, AERO)
+      const legs = buildPricedLegs({ account: A, rows: [claim, arrived], references: references([10]), priced: [], market: () => "1300000" })
+      const answered: Book = { ...answerSender(emptyBook(), A, STRANGER, { kind: "someone-else" }), costs: { [costKey(A, "0xc:ETH")]: { micros: "2000000000", currency: "USD" } } }
+      const open = { ...wallet(A, [], { legs }), notes: [{ noteTx: "0xn", blockNum: 11, txHash: "0xc", asset: "ETH", usdMicros: "1" }] }
+      const fold = foldBook(open, [], "average", answered)
+      const resolved = fold.legs.filter((leg) => leg.kind !== "gas")
+      assert.deepEqual(resolved.map((leg) => [leg.asset, leg.costLabel, leg.costMicros]), [["ETH", "unknown", null], ["AERO", "unknown", null]])
+      assert.deepEqual(fold.questions, [])
+      const aero = resolved.find((leg) => leg.asset === "AERO")!
+      assert.deepEqual([aero.priceSource, aero.priceMicros], ["market", "1300000"], "what it's worth is a fact about the token")
+      assert.ok(aero.priceNote, "and it still says why there's no cost")
+    })
+
     it("a sale of what has an unknown cost has no realized PnL", () => {
       const rows = [...send(10, "0x1", STRANGER, A, 100n * E6), move(20, "0x2", A, "debit", 100n * E6, null), move(20, "0x2", A, "credit", E18 / 20n, null, ETH_ADDRESS)]
       const usdc = position(wallet(A, rows), [], emptyBook())

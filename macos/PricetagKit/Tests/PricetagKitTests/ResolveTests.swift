@@ -7,6 +7,7 @@ actor BookSource: PortfolioSource {
     var portfolios: [Portfolio]
     private(set) var books: [Book] = []
     private(set) var previewed: [[Book]] = []
+    private(set) var previewRules: [String?] = []
     var previewAnswers: [BookPreview] = []
 
     init(_ portfolios: [Portfolio]) {
@@ -17,17 +18,18 @@ actor BookSource: PortfolioSource {
         previewAnswers = answers
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         books.append(book)
         return portfolios.count > 1 ? portfolios.removeFirst() : portfolios[0]
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
-    func previews(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], candidates: [Book]) async throws -> [BookPreview] {
+    func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview] {
         previewed.append(candidates)
+        previewRules.append(rule)
         return previewAnswers
     }
 
@@ -86,6 +88,13 @@ actor BookSource: PortfolioSource {
         #expect(await source.books.last?.senders[sender] == .someoneElse)
         let again = PortfolioStore(defaults: defaults, makeSource: { _ in source })
         #expect(again.book.senders[sender] == .someoneElse)
+    }
+
+    @Test func previewsGoByTheRuleOnScreen() async throws {
+        let (store, source, _) = try makeStore()
+        store.setRule("cautious-eth")
+        _ = try await store.previews(of: [Book()])
+        #expect(await source.previewRules == ["cautious-eth"])
     }
 
     @Test func undoGoesBackOneAnswerAtATime() throws {

@@ -118,7 +118,8 @@ function exchangeShare(costs: readonly ExchangeCost[], wallet: string, legId: st
   return null
 }
 
-const isOpenCredit = (leg: PricedLeg) => BigInt(leg.delta) > 0n && leg.costLabel === "unknown"
+/** A credit the chain hasn't confirmed yet stays unknown: its amount is only what the transaction claims, so nothing can rest on it, and there's nothing to ask until it settles. */
+const isOpenCredit = (leg: PricedLeg) => BigInt(leg.delta) > 0n && leg.costLabel === "unknown" && !leg.unsettledCredit
 
 const sum = (pieces: readonly CostPiece[]) => pieces.reduce((total, p) => total + BigInt(p.costMicros ?? "0"), 0n)
 

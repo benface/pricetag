@@ -201,7 +201,7 @@ private final class FixtureSource: PortfolioSource {
         self.feed = feed
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         let read = reads.withLock { reads in
             reads += 1
             return reads
@@ -220,8 +220,16 @@ private final class FixtureSource: PortfolioSource {
         return try decode("demo-portfolio")
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
         try decode("demo-explanation")
+    }
+
+    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+        throw FetchError.unreachable
+    }
+
+    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+        throw FetchError.unreachable
     }
 
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
@@ -229,7 +237,7 @@ private final class FixtureSource: PortfolioSource {
     }
 
     /// What each answer would do, as the demo's own numbers, so a card shows them in place.
-    func previews(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], candidates: [Book]) async throws -> [BookPreview] {
+    func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview] {
         let totals = (try decode("demo-portfolio") as Portfolio).totals
         return candidates.map { _ in BookPreview(pnlMicros: totals.pnlMicros, pnlStatus: .partial, estimatedMicros: totals.estimatedMicros, unresolvedMicros: totals.unresolvedMicros, open: 4, pending: false, failed: false) }
     }

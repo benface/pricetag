@@ -89,6 +89,17 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .method { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .method button { background: none; border: 0; padding: 6px 12px; font-size: 13px; white-space: nowrap; }
 .method button.on { background: var(--text-primary); color: var(--surface-1); font-weight: 600; }
+.rule-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin: 10px 0; }
+.rule-choice { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: none; }
+.rule-choice.on { border-color: var(--text-primary); box-shadow: inset 0 0 0 1px var(--text-primary); }
+.rule-choice code { color: var(--text-secondary); overflow-wrap: anywhere; }
+.comparison { margin-top: 12px; }
+.comparison p { margin-bottom: 8px; }
+.comparison h3 { margin: 14px 0 4px; font-size: 13px; }
+.rule-table { width: 100%; table-layout: fixed; border-collapse: collapse; margin-bottom: 8px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.rule-table th, .rule-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: right; font-weight: 400; }
+.rule-table th:first-child { width: 34%; text-align: left; }
+.rule-table thead th { color: var(--text-secondary); font-size: 12px; }
 .card-head { display: flex; justify-content: space-between; align-items: center; }
 .card h2 { margin-bottom: 4px; }
 .card > .muted { margin-bottom: 8px; }

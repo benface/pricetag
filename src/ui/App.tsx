@@ -35,6 +35,8 @@ import {
 import { PnlChart } from "./PnlChart.tsx"
 import { ResolvePanel } from "./ResolvePanel.tsx"
 import { useBook, useOtherWallets } from "./useBook.ts"
+import { RulesPanel } from "./RulesPanel.tsx"
+import { useRules } from "./useRules.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
 import { linkedWallets } from "../core/book.ts"
@@ -185,12 +187,13 @@ export function App() {
   const [target, setTarget] = useState<ExplainTarget | null>(null)
   const [taxOpen, setTaxOpen] = useState(false)
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
-  const { wallet, loading, error } = useWallet(address, chosenCurrency)
+  const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
+  const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule)
   const { book, change, undo, canUndo } = useBook()
   const [resolving, setResolving] = useState<{ asset: string | null } | null>(null)
   const [cardSender, setCardSender] = useState<string | null>(null)
   const wanted = useMemo(() => [...new Set([...linkedWallets(book), ...(cardSender ? [cardSender] : [])])].filter((a) => a !== wallet?.address), [book, cardSender, wallet?.address])
-  const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, wallet?.latest.blockNum ?? null)
+  const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, wallet?.latest.blockNum ?? null)
   const linkedFailed = useMemo(() => failed.filter((address) => linkedWallets(book).includes(address)), [failed, book])
 
   useEffect(() => {
@@ -249,7 +252,7 @@ export function App() {
   const explanation = useMemo(() => {
     if (!target || !fold || !wallet) return null
     const usd = fold.view.currency === "USD" ? null : foldBook(wallet, others, method, book, { usd: true })
-    return explainTarget(target, fold, { view: fold.view, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points } })
+    return explainTarget(target, fold, { view: fold.view, ruleNote: wallet.ruleNote ?? null, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points } })
   }, [target, fold, wallet, others, method, book])
   const close = useCallback(() => setTarget(null), [])
   const openTotal = (metric: TotalMetric) => setTarget({ kind: "total", metric })
@@ -284,6 +287,7 @@ export function App() {
         {wallet ? <LiveBadge wallet={wallet} stale={error !== null} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
+      {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={wallet?.rule ?? null} address={address} method={method} currency={currency} book={book} /> : null}
 
       {!address ? (
         <section className="empty">

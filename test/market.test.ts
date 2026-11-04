@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
+import type { Query } from "@pricetag/sdk"
+import { datasetSource } from "../server/source.ts"
 import { MARKET_MAX_AGE_BLOCKS, marketPrice, marketTrades, type MarketRow, type MarketTrade } from "../src/core/market.ts"
 
 const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
@@ -145,5 +147,27 @@ describe("the price of a leg, in order", () => {
     const legs = legsOf(rows("0x1", [AERO, "debit", 1000n * E18], [DEGEN, "credit", 500_000n * E18]), (asset) => (asset === "AERO" ? "1300000" : "1"))
     assert.equal(legs.find((l) => l.asset === "DEGEN")?.costMicros, null)
     assert.equal(legs.find((l) => l.asset === "AERO")?.proceedsMicros, null)
+  })
+})
+
+describe("a trade in a transaction with an unconfirmed credit", () => {
+  it("gets no value from its market price, even with what's sold and bought both priced", () => {
+    const at = (token: string, side: LegRow["side"], amount: string, kind: LegRow["kind"] = "erc20"): LegRow => ({ block_num: 5, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: "0xc", tx_index: 1, log_index: 0, token, account: ME, side, amount, kind })
+    const rows = [at(AERO, "debit", (5n * E18).toString()), at(DEGEN, "credit", (5n * E18).toString()), at(ETH_ADDRESS, "credit", E18.toString(), "unwrap")]
+    const legs = buildPricedLegs({ account: ME, rows, references: [{ block_num: 5, eth_usd: "200000000000", usdc_usd: "100000000" }], priced: [], market: () => "1300000" })
+    assert.deepEqual(legs.map((l) => [l.asset, l.kind, l.costMicros, l.proceedsMicros, l.estimated ?? false]), [["AERO", "swap", null, null, false], ["DEGEN", "swap", null, null, false], ["ETH", "swap", null, null, false]])
+  })
+})
+
+describe("where a rule's market prices come from", () => {
+  it("reads a fork's own priced_legs, so its trades are priced by its rule", async () => {
+    const asked: string[] = []
+    const query = (async (sql: string) => {
+      asked.push(sql)
+      return []
+    }) as unknown as Query
+    const source = datasetSource(query, { baseDataset: "base", dataset: "pricetag", priceDataset: "pricing", startBlock: 1, network: "base" })
+    await source.readMarketTrades?.("AERO", 1, 2)
+    assert.ok(asked[0]?.includes(`"pricing".priced_legs`))
   })
 })
