@@ -16,7 +16,7 @@ public struct TaxReportView: View {
     }
 
     private var request: TaxReportRequest? {
-        model.request(address: store.address, currency: store.currency, serverURL: store.serverURL)
+        model.request(address: store.address, currency: store.currency, serverURL: store.serverURL, book: store.book, linked: store.address.map(store.linked(for:)) ?? [])
     }
 
     private var badWallet: String? {
