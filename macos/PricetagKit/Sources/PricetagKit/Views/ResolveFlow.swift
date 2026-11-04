@@ -300,6 +300,12 @@ public struct ResolveFlow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            if let waiting = model.meter?.waiting, waiting > 0 {
+                Text("Still reading your other \(waiting == 1 ? "wallet" : "wallets"). What came from \(waiting == 1 ? "it" : "them") stays unresolved until that's done.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
             if !model.skipped.isEmpty {
                 Text("\(model.skipped.count) skipped, and still flagged.").font(.callout).foregroundStyle(Tone.warning.style)
                 Button("Go Back to Them") { model.revisitSkipped() }

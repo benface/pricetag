@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import type { Method } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "../core/api.ts"
-import { answerSender, linkMessage, type Book, type Money, type SenderAnswer } from "../core/book.ts"
+import { answerSender, enterExchangeCosts, linkMessage, type Book, type Money, type SenderAnswer } from "../core/book.ts"
 import type { CurrencyCode } from "../core/currency.ts"
 import { parseCoinbaseCsv } from "../core/exchange-import.ts"
 import { formatAmount, formatMoney, formatSignedMoney, shortHash } from "../core/format.ts"
-import { foldBook, previewBook, type Question } from "../core/resolve.ts"
+import { foldBook, isBalanced, previewBook, type Question } from "../core/resolve.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
 
@@ -86,7 +86,7 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
   const current = questions[0] ?? null
   const sender = current?.sender ?? null
   const takingCost = current !== null && (current.kind === "cost" || asking || current.needsCost)
-  const balanced = fold.meter.open === 0 && fold.meter.answered > 0
+  const balanced = isBalanced(fold.meter)
   const progress = fold.meter.open + fold.meter.answered === 0 ? 1 : fold.meter.answered / (fold.meter.open + fold.meter.answered)
 
   useEffect(() => onCurrentSender(sender), [sender, onCurrentSender])
@@ -97,13 +97,10 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
 
   const answer = (next: SenderAnswer) => sender && onChange(answerSender(book, wallet.address, sender, next))
   const choose = (kind: Ownership) => {
-    if (kind === "my-exchange") {
-      answer({ kind })
-      setAsking(true)
-    } else {
-      answer({ kind })
-      setAsking(false)
-    }
+    // What was entered for this sender before stays, because it covers what had arrived by then.
+    const earlier = sender ? book.senders[sender] : undefined
+    answer(kind === "my-exchange" && earlier?.kind === "my-exchange" ? earlier : { kind })
+    setAsking(kind === "my-exchange")
   }
   const skip = () => {
     if (!current) return
@@ -139,7 +136,7 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
     const entered = Object.fromEntries(current.arrivals.map((a) => [a.asset, microsOf(costs[a.asset] ?? "")]))
     if (Object.values(entered).includes(null)) return null
     const money = (micros: string | null): Money => ({ micros: micros as string, currency })
-    if (current.sender) return answerSender(book, wallet.address, current.sender, { kind: "my-exchange", costs: Object.fromEntries(Object.entries(entered).map(([asset, micros]) => [asset, money(micros)])) })
+    if (current.sender) return enterExchangeCosts(book, wallet.address, current.sender, current.receipts, Object.fromEntries(Object.entries(entered).map(([asset, micros]) => [asset, money(micros)])))
     return current.costKey ? { ...book, costs: { ...book.costs, [current.costKey]: money(Object.values(entered)[0] as string) } } : null
   }, [current, costs, book, wallet.address, currency])
   const saveCost = () => {
@@ -180,6 +177,7 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
       <p className="small">
         <span className="muted">Now </span>
         {pnlWords(fold.totals.pnlMicros, fold.totals.estimatedMicros, fold.totals.unresolvedMicros, currency)}
+        {BigInt(fold.totals.estimatedMicros) > 0n ? ` · ${formatMoney(fold.totals.estimatedMicros, currency)} estimated` : ""}
       </p>
 
       {current ? (
@@ -187,7 +185,8 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
           className="who-card"
           style={drag ? { transform: `translate(${drag.x}px, ${drag.y}px) rotate(${drag.x / 40}deg)` } : undefined}
           onPointerDown={(e) => {
-            if (takingCost || e.target instanceof HTMLButtonElement || e.target instanceof HTMLInputElement) return
+            // A press on something that does its own thing is its own, or the card would take its click away.
+            if (takingCost || (e.target instanceof Element && e.target.closest("button, input, label, a"))) return
             start.current = { x: e.clientX, y: e.clientY }
             e.currentTarget.setPointerCapture(e.pointerId)
           }}
@@ -254,6 +253,7 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
       ) : (
         <div className="finish">
           <div className={balanced ? "seal done" : "seal"}>{balanced ? "✓" : "…"}</div>
+          {fold.meter.waiting > 0 ? <p className="small muted">Still reading your other {fold.meter.waiting === 1 ? "wallet" : "wallets"}. What came from {fold.meter.waiting === 1 ? "it" : "them"} stays unresolved until that's done.</p> : null}
           {fold.totals.excluded.length > 0 ? <p className="small muted">Every question's answered. What's left isn't a question, like a balance that doesn't match the chain.</p> : null}
           {skipped.size > 0 ? (
             <>

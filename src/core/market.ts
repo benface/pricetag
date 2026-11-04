@@ -1,6 +1,6 @@
 // A token's `market` price: what it recently traded at, from `priced_legs`, with guards so a thin pool can't set it.
 
-import { TOKENS, answerToMicros, isSanePrice, tokenByAddress, worth, type PricedRow } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, TOKENS, answerToMicros, isSanePrice, normalizeAddress, tokenByAddress, worth, type PricedRow } from "@pricetag/sdk/core"
 
 /** One account's trade of a token. A trade shows up once per account it went through, which is why these group by transaction. */
 export type MarketTrade = { blockNum: number; txHash: string; asset: string; usdMicros: string; notionalUsdMicros: string }
@@ -21,10 +21,15 @@ export type MarketPrice = { usdMicros: string; blockNum: number }
 
 const median = (values: readonly bigint[]) => [...values].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))[(values.length - 1) >> 1] as bigint
 
-/** The trades in these rows whose price is plausible at their own block. Anything else has no usable price. */
+/**
+ * The trades in these rows whose price is plausible at their own block. Anything else has no usable price.
+ * Without traces, native ETH bought in a swap can be a WETH unwrap credited to the sender, who may never have received it.
+ * Nobody's checked that here, and it could set the price of what someone else holds, so those rows are left out.
+ */
 export function marketTrades(rows: readonly MarketRow[]): MarketTrade[] {
   return rows.flatMap((row) => {
     if (row.priced.source !== "swap" || !row.priced.usd_micros) return []
+    if (normalizeAddress(row.bought_token) === ETH_ADDRESS) return []
     const token = TOKENS.find((t) => t.symbol === row.priced.token)
     if (!token || token.oracle) return []
     if (!isSanePrice(token, row.priced.usd_micros, answerToMicros(row.eth_usd))) return []

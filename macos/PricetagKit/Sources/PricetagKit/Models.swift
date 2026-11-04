@@ -332,6 +332,8 @@ public struct Question: Codable, Sendable, Equatable, Identifiable {
     /// They said it's their exchange account, and it still needs a cost.
     public let needsCost: Bool
     public let arrivals: [Arrival]
+    /// What an answer about cost would cover. It's kept with the answer, so what arrives later is asked about in turn.
+    public let receipts: [Receipt]
     public let transfers: Int
     public let firstAt: String
     public let lastAt: String
@@ -343,6 +345,8 @@ public struct Question: Codable, Sendable, Equatable, Identifiable {
 public struct Meter: Codable, Sendable, Equatable {
     public let open: Int
     public let answered: Int
+    /// Linked wallets not read yet. What came from them is still unresolved, though nothing's left to ask about it.
+    public let waiting: Int
 
     /// How far through the questions this is, from 0 to 1.
     public var progress: Double {
@@ -350,7 +354,7 @@ public struct Meter: Codable, Sendable, Equatable {
         return total == 0 ? 1 : Double(answered) / Double(total)
     }
 
-    public var isBalanced: Bool { open == 0 && answered > 0 }
+    public var isBalanced: Bool { open == 0 && answered > 0 && waiting == 0 }
 }
 
 /// What the headline would say with a different set of answers, before any of them is final.
@@ -391,6 +395,22 @@ public struct Money: Codable, Sendable, Equatable, Hashable {
     }
 }
 
+/// One thing that arrived from a sender, as it was when someone answered for it. Only the server reads what's in it.
+public struct Receipt: Codable, Sendable, Equatable, Hashable {
+    public let wallet: String
+    public let legId: String
+    public let asset: String
+    public let units: String
+}
+
+/// What was paid for exactly these receipts. Anything that arrives later isn't covered, so it's asked about in turn.
+public struct ExchangeCost: Codable, Sendable, Equatable, Hashable {
+    public let micros: String
+    public let currency: CurrencyCode
+    public let asset: String
+    public let receipts: [Receipt]
+}
+
 public struct SenderAnswer: Codable, Sendable, Equatable {
     public enum Kind: String, Codable, Sendable {
         case mine
@@ -399,10 +419,10 @@ public struct SenderAnswer: Codable, Sendable, Equatable {
     }
 
     public let kind: Kind
-    /// What was paid for everything from this address, by asset.
-    public let costs: [String: Money]?
+    /// What was paid, and for which receipts.
+    public let costs: [ExchangeCost]?
 
-    public init(kind: Kind, costs: [String: Money]? = nil) {
+    public init(kind: Kind, costs: [ExchangeCost]? = nil) {
         self.kind = kind
         self.costs = costs
     }
@@ -429,6 +449,16 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
         next.senders[sender.lowercased()] = answer
         if answer.kind == .mine, let focus, WalletAddress.isValid(focus) { next.senders[focus.lowercased()] = .mine }
         return next
+    }
+
+    /// Saying what was paid for a sender's open receipts, by asset. What earlier answers covered stays as it was.
+    public func enteringExchangeCosts(_ sender: String, receipts: [Receipt], amounts: [String: Money], focus: String?) -> Book {
+        let key = sender.lowercased()
+        let earlier = senders[key]?.kind == .myExchange ? (senders[key]?.costs ?? []) : []
+        let costs = amounts.sorted { $0.key < $1.key }.map { asset, money in
+            ExchangeCost(micros: money.micros, currency: money.currency, asset: asset, receipts: receipts.filter { $0.asset == asset })
+        }
+        return answering(sender, SenderAnswer(kind: .myExchange, costs: earlier + costs), focus: focus)
     }
 
     public func enteringCost(_ key: String, _ cost: Money) -> Book {

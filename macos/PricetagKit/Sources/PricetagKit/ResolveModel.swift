@@ -82,7 +82,9 @@ public final class ResolveModel {
         guard let question = current, let sender = question.sender else { return }
         switch ownership {
         case .myExchange:
-            store.setBook(store.book.answering(sender, SenderAnswer(kind: .myExchange), focus: store.portfolio?.address))
+            // What was entered for this sender before stays, because it covers what had arrived by then.
+            let earlier = store.book.senders[sender.lowercased()]
+            store.setBook(store.book.answering(sender, earlier?.kind == .myExchange ? earlier! : SenderAnswer(kind: .myExchange), focus: store.portfolio?.address))
             isAskingCost = true
         case .mine, .someoneElse:
             if let book = candidate(ownership, for: question) { store.setBook(book) }
@@ -98,7 +100,7 @@ public final class ResolveModel {
             micros[arrival.asset] = Money(micros: amount, currency: store.currency)
         }
         if let sender = question.sender {
-            return store.book.answering(sender, SenderAnswer(kind: .myExchange, costs: micros), focus: store.portfolio?.address)
+            return store.book.enteringExchangeCosts(sender, receipts: question.receipts, amounts: micros, focus: store.portfolio?.address)
         }
         guard let key = question.costKey, let cost = micros.values.first else { return nil }
         return store.book.enteringCost(key, cost)

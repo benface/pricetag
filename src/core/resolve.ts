@@ -6,9 +6,9 @@
 
 import { applyLegTaking, emptyPosition, foldPositions, normalizeAddress, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, worth, type CostPiece, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "./api.ts"
-import { costKey, linkedWallets, type Book, type Money } from "./book.ts"
+import { costKey, linkedWallets, type Book, type ExchangeCost, type Money, type Receipt } from "./book.ts"
 import { usableAnswer, usdView, viewWallet, type WalletView } from "./currency.ts"
-import { matchWithdrawal } from "./exchange-import.ts"
+import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
 import { formatAmount } from "./format.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
 
@@ -36,6 +36,61 @@ function moneyIn({ wallet, view }: Side, money: Money, leg: PricedLeg): string |
   return view.currency === "USD" && money.currency === wallet.currency ? ((BigInt(money.micros) * answer) / E8).toString() : null
 }
 
+/** Part of a piece, with its share of the cost. Taking it all takes all of the cost, so rounding never loses any. */
+function slice(piece: CostPiece, qty: bigint): CostPiece {
+  const whole = BigInt(piece.qty)
+  const share = (micros: string) => (qty === whole ? BigInt(micros) : (BigInt(micros) * qty) / whole).toString()
+  return { ...piece, qty: qty.toString(), costMicros: piece.costMicros === null ? null : share(piece.costMicros), estimatedCostMicros: share(piece.estimatedCostMicros) }
+}
+
+/** What's left of a piece after a slice of it is gone. */
+function without(piece: CostPiece, taken: CostPiece): CostPiece {
+  const less = (micros: string | null, gone: string | null) => (micros === null ? null : (BigInt(micros) - BigInt(gone as string)).toString())
+  return { ...piece, qty: (BigInt(piece.qty) - BigInt(taken.qty)).toString(), costMicros: less(piece.costMicros, taken.costMicros), estimatedCostMicros: less(piece.estimatedCostMicros, taken.estimatedCostMicros) as string }
+}
+
+/** Who each part of a debit went to, in the order it went. Null when the leg isn't simply that, as when something also came back. */
+function recipientsOf(leg: PricedLeg): Source[] | null {
+  const recipients = new Map<string, bigint>()
+  for (const part of [...leg.parts].sort((a, b) => a.log_index - b.log_index)) {
+    if (part.side === "credit" || !part.counterparty) return null
+    const address = normalizeAddress(part.counterparty)
+    recipients.set(address, (recipients.get(address) ?? 0n) + BigInt(part.amount))
+  }
+  const total = [...recipients.values()].reduce((sum, units) => sum + units, 0n)
+  return total === -BigInt(leg.delta) ? [...recipients].map(([address, units]) => ({ address, units })) : null
+}
+
+/**
+ * What a debit took, split between everyone it went to, whether or not their wallets are read. That way a recipient's cost
+ * can't depend on which wallet is open, and nothing's counted twice or lost. Oldest first gives the first transfer the oldest
+ * lots. Average gives each one the same mix, because that's what it means: every unit cost the same.
+ */
+export function allocateTaken(taken: readonly CostPiece[], recipients: readonly Source[], method: Method): Map<string, CostPiece[]> {
+  let left = [...taken]
+  const allocated = new Map<string, CostPiece[]>()
+  for (const { address, units } of recipients) {
+    const pieces: CostPiece[] = []
+    const remaining = left.reduce((sum, piece) => sum + BigInt(piece.qty), 0n)
+    let need = units
+    const takeFrom = (index: number, qty: bigint) => {
+      const piece = left[index] as CostPiece
+      const size = qty < BigInt(piece.qty) ? qty : BigInt(piece.qty)
+      if (size === 0n) return
+      const part = slice(piece, size)
+      pieces.push(part)
+      left[index] = without(piece, part)
+      need -= size
+    }
+    if (method === "average" && remaining > 0n) left.forEach((piece, index) => takeFrom(index, (BigInt(piece.qty) * units) / remaining))
+    // What rounding left over, or for oldest first, all of it, in order.
+    left.forEach((_, index) => takeFrom(index, need))
+    left = left.filter((piece) => BigInt(piece.qty) > 0n)
+    allocated.set(address, [...(allocated.get(address) ?? []), ...pieces])
+  }
+  return allocated
+}
+
 /** Who each part of a credit came from, or null when they can't be told apart, as when something also left. */
 function sourcesOf(leg: PricedLeg): Source[] | null {
   const sources = new Map<string, bigint>()
@@ -45,6 +100,22 @@ function sourcesOf(leg: PricedLeg): Source[] | null {
     sources.set(address, (sources.get(address) ?? 0n) + BigInt(part.amount))
   }
   return sources.size === 0 ? null : [...sources].map(([address, units]) => ({ address, units }))
+}
+
+/**
+ * This receipt's share of what was entered for it, or null when nothing covers it, or the chain no longer says what was
+ * answered. Shares add up to the whole amount, and only depend on the receipts it was entered for.
+ */
+function exchangeShare(costs: readonly ExchangeCost[], wallet: string, legId: string, units: bigint): Money | null {
+  for (const { micros, currency, receipts } of costs) {
+    const at = receipts.findIndex((r) => r.wallet === wallet && r.legId === legId)
+    if (at < 0) continue
+    if (BigInt((receipts[at] as Receipt).units) !== units) return null
+    const total = receipts.reduce((sum, r) => sum + BigInt(r.units), 0n)
+    const upTo = (end: number) => (BigInt(micros) * receipts.slice(0, end).reduce((sum, r) => sum + BigInt(r.units), 0n)) / total
+    return { micros: (upTo(at + 1) - upTo(at)).toString(), currency }
+  }
+  return null
 }
 
 const isOpenCredit = (leg: PricedLeg) => BigInt(leg.delta) > 0n && leg.costLabel === "unknown"
@@ -71,14 +142,15 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
   const read = new Set(sides.map(({ wallet }) => normalizeAddress(wallet.address)))
   const open: OpenItem[] = []
 
-  // What each sender sent, by asset, so a total someone entered for it can be split across its transfers.
-  const fromSender = new Map<string, bigint>()
-  for (const { view } of sides) {
-    for (const leg of view.legs) {
-      if (leg.kind !== "transfer" || !isOpenCredit(leg)) continue
-      for (const { address, units } of sourcesOf(leg) ?? []) fromSender.set(`${address}:${leg.asset}`, (fromSender.get(`${address}:${leg.asset}`) ?? 0n) + units)
-    }
-  }
+  // Everything that could be an exchange withdrawal, across every wallet read, so one withdrawal can't explain two of them.
+  const arrivals: ExchangeArrival[] = sides.flatMap(({ wallet, view }) =>
+    view.legs.flatMap((leg) => {
+      const sources = leg.kind === "transfer" && !leg.opening && isOpenCredit(leg) ? sourcesOf(leg) : null
+      const someoneElses = sources?.some(({ address }) => book.senders[address]?.kind === "someone-else" || linked.has(address) || address === normalizeAddress(wallet.address))
+      return sources && !someoneElses ? [{ key: costKey(wallet.address, leg.id), wallet: wallet.address, asset: leg.asset, units: BigInt(leg.delta), timestamp: leg.timestamp }] : []
+    }),
+  )
+  const withdrawals = matchWithdrawals(book.withdrawals, arrivals)
 
   const steps = sides
     .flatMap((side) => side.view.legs.map((leg, index) => ({ side, leg, index })))
@@ -89,26 +161,13 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
   const carried = new Map<string, CostPiece[]>()
   const output = new Map(sides.map(({ wallet, view }) => [normalizeAddress(wallet.address), [...view.legs]]))
 
-  const pull = (leg: PricedLeg, sender: string, units: bigint): CostPiece[] => {
-    const key = `${leg.txHash}:${sender}:${leg.asset}`
-    const pool = carried.get(key) ?? []
-    const pieces: CostPiece[] = []
-    let left = units
-    while (left > 0n && pool.length > 0) {
-      const next = pool[0] as CostPiece
-      const qty = BigInt(next.qty)
-      const size = qty < left ? qty : left
-      const whole = size === qty
-      const cost = next.costMicros === null ? null : whole ? BigInt(next.costMicros) : (BigInt(next.costMicros) * size) / qty
-      const estimated = whole ? BigInt(next.estimatedCostMicros) : (BigInt(next.estimatedCostMicros) * size) / qty
-      pieces.push({ ...next, qty: size.toString(), costMicros: cost === null ? null : cost.toString(), label: cost === null ? "unknown" : "inherited", estimatedCostMicros: estimated.toString() })
-      if (whole) pool.shift()
-      else pool[0] = { ...next, qty: (qty - size).toString(), costMicros: cost === null ? null : (BigInt(next.costMicros as string) - cost).toString(), estimatedCostMicros: (BigInt(next.estimatedCostMicros) - estimated).toString() }
-      left -= size
-    }
-    // Nothing left that we can trace, so it stays unresolved here too.
-    if (left > 0n) pieces.push({ qty: left.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" })
-    return pieces
+  /** What a sender's debit in this transaction allotted this wallet. Whatever isn't there can't be traced, so it stays unresolved. */
+  const pull = (leg: PricedLeg, sender: string, recipient: string, units: bigint): CostPiece[] => {
+    const pool = carried.get(`${leg.txHash}:${sender}:${leg.asset}:${recipient}`) ?? []
+    const [pieces] = allocateTaken(pool, [{ address: recipient, units }], "fifo").values()
+    const traced = (pieces ?? []).map((piece): CostPiece => ({ ...piece, label: piece.costMicros === null ? "unknown" : "inherited" }))
+    const left = traced.reduce((rest, piece) => rest - BigInt(piece.qty), units)
+    return left > 0n ? [...traced, { qty: left.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" }] : traced
   }
 
   const resolve = (side: Side, leg: PricedLeg): PricedLeg => {
@@ -118,19 +177,18 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const units = BigInt(leg.delta)
     const note = wallet.notes.filter((n) => n.txHash === leg.txHash && n.asset === leg.asset).at(-1)
     const sources = leg.kind === "transfer" && !leg.opening ? sourcesOf(leg) : null
-    const reportedMoney: Money | undefined = book.costs[costKey(address, leg.id)] ?? (note ? { micros: note.usdMicros, currency: "USD" } : undefined) ?? (sources ? matchWithdrawal(book.withdrawals, address, leg.asset, units, leg.timestamp)?.cost : undefined)
+    const reportedMoney: Money | undefined = book.costs[costKey(address, leg.id)] ?? (note ? { micros: note.usdMicros, currency: "USD" } : undefined) ?? withdrawals.get(costKey(address, leg.id))?.cost
     const report = reportedMoney ? moneyIn(side, reportedMoney, leg) : null
 
     const pending: OpenItem[] = []
     const pieces = (sources ?? []).flatMap(({ address: sender, units: part }): CostPiece[] => {
       const unknown: CostPiece = { qty: part.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" }
       const answer = book.senders[sender]
-      if (answer?.kind === "mine" || linked.has(sender) || sender === address) return read.has(sender) ? pull(leg, sender, part) : [unknown]
+      if (answer?.kind === "mine" || linked.has(sender) || sender === address) return read.has(sender) ? pull(leg, sender, address, part) : [unknown]
       if (answer?.kind === "my-exchange") {
-        const entered = answer.costs?.[leg.asset]
-        const total = entered ? moneyIn(side, entered, leg) : null
-        const of = fromSender.get(`${sender}:${leg.asset}`) ?? 0n
-        if (total !== null && of > 0n) return [{ qty: part.toString(), costMicros: ((BigInt(total) * part) / of).toString(), label: "self-reported", estimatedCostMicros: "0" }]
+        const share = exchangeShare(answer.costs ?? [], address, leg.id, part)
+        const cost = share ? moneyIn(side, share, leg) : null
+        if (cost !== null) return [{ qty: part.toString(), costMicros: cost, label: "self-reported", estimatedCostMicros: "0" }]
         pending.push({ wallet: address, leg, sender, units: part })
         return [unknown]
       }
@@ -146,7 +204,8 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
 
     if (!pieces.some((p) => p.label === "inherited" && p.costMicros !== null) && report !== null) return reported(leg, report)
     if (sources === null) {
-      open.push({ wallet: address, leg, sender: null, units })
+      // What it cost is known, in USD, and only the rate is missing. Nobody can answer that, and it may yet be read.
+      if (leg.conversion?.rateMicros !== null || leg.conversion.costUsdMicros === null) open.push({ wallet: address, leg, sender: null, units })
       return leg
     }
     open.push(...pending)
@@ -160,7 +219,8 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const key = `${address}:${next.asset}`
     const { state, taken } = applyLegTaking(states.get(key) ?? emptyPosition(method, next.decimals), next)
     states.set(key, state)
-    if (next.kind === "transfer" && taken.length > 0) carried.set(`${next.txHash}:${address}:${next.asset}`, taken)
+    const recipients = next.kind === "transfer" && taken.length > 0 ? recipientsOf(next) : null
+    for (const [recipient, pieces] of allocateTaken(taken, recipients ?? [], method)) carried.set(`${next.txHash}:${address}:${next.asset}:${recipient}`, pieces)
   }
   return { legs: output, open }
 }
@@ -175,6 +235,8 @@ export type Question = {
   wallet: string
   sender: string | null
   known: KnownSender | null
+  /** What an answer about cost would cover. It's kept with the answer, so what arrives later is asked about in turn. */
+  receipts: Receipt[]
   /** The cost to enter, for a `cost` question. */
   costKey: string | null
   /** They said it's their exchange account, and it still needs a cost. */
@@ -189,7 +251,14 @@ export type Question = {
   valueMicros: string | null
 }
 
-export type Meter = { open: number; answered: number }
+export type Meter = {
+  open: number
+  answered: number
+  /** Linked wallets not read yet. What came from them is still unresolved, though nothing's left to ask about it. */
+  waiting: number
+}
+
+export const isBalanced = ({ open, answered, waiting }: Meter) => open === 0 && answered > 0 && waiting === 0
 
 const day = (timestamp: string) => new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
 
@@ -211,7 +280,8 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
   const questions = new Map<string, Question & { arrived: Map<string, Arrival>; value: bigint; priced: boolean }>()
   for (const { wallet, leg, sender, units } of open) {
     const owner = sideOf.get(wallet) as Side
-    if (leg.priceMicros === null && owner.wallet.prices[leg.asset] === undefined && owner.wallet.marketChecked) continue
+    // A missing exchange rate takes the price away in this currency, but it's still a real token worth asking about.
+    if (leg.priceMicros === null && leg.conversion?.priceUsdMicros == null && owner.wallet.prices[leg.asset] === undefined && owner.wallet.marketChecked) continue
     const id = sender ? `sender:${sender}` : `cost:${wallet}:${leg.id}`
     const known = sender ? knownSender(sender) : null
     const question = questions.get(id) ?? {
@@ -223,6 +293,7 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
       costKey: sender ? null : costKey(wallet, leg.id),
       needsCost: sender ? book.senders[sender]?.kind === "my-exchange" : false,
       arrivals: [],
+      receipts: [],
       transfers: 0,
       firstAt: leg.timestamp,
       lastAt: leg.timestamp,
@@ -234,6 +305,7 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
     }
     const arrival = question.arrived.get(leg.asset) ?? { asset: leg.asset, decimals: leg.decimals, units: "0" }
     question.arrived.set(leg.asset, { ...arrival, units: (BigInt(arrival.units) + units).toString() })
+    question.receipts.push({ wallet, legId: leg.id, asset: leg.asset, units: units.toString() })
     question.transfers++
     if (leg.timestamp < question.firstAt) question.firstAt = leg.timestamp
     if (leg.timestamp > question.lastAt) question.lastAt = leg.timestamp
@@ -252,10 +324,10 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
     })
 }
 
-export function meterOf(questions: readonly Question[], book: Book, focus: string): Meter {
+export function meterOf(questions: readonly Question[], book: Book, focus: string, waiting: number): Meter {
   const open = new Set(questions.map((q) => q.sender).filter((s) => s !== null))
   const senders = Object.keys(book.senders).filter((address) => address !== normalizeAddress(focus) && !open.has(address)).length
-  return { open: questions.length, answered: senders + Object.keys(book.costs).length }
+  return { open: questions.length, answered: senders + Object.keys(book.costs).length, waiting }
 }
 
 export type BookFold = {
@@ -295,7 +367,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
     pnlStatus: pnlStatus(totals, focus.gasUnknownTxs),
     points: pnlOverTime(legs, method, view.prices, view.markPrice, focus.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket)),
     questions,
-    meter: meterOf(questions, book, address),
+    meter: meterOf(questions, book, address, missingWallets(book, address, others).length),
   }
 }
 
@@ -310,4 +382,3 @@ export function previewBook(focus: WalletResponse, others: readonly WalletRespon
   const { totals, pnlStatus: status, questions } = foldBook(focus, others, method, book)
   return { pnlMicros: totals.pnlMicros, pnlStatus: status, estimatedMicros: totals.estimatedMicros, unresolvedMicros: totals.unresolvedMicros, open: questions.length, pending: missingWallets(book, focus.address, others).length > 0 }
 }
-

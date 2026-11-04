@@ -122,7 +122,10 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
     const confirmed = reconciliation === null || reconciliation.status === "reconciled"
     const cost = confirmed && BigInt(values.estimatedCostMicros) > 0n
     const value = price?.source === "market"
-    const hasPrice = price !== null || effects.some(({ leg }) => leg.priceMicros !== null || leg.costMicros !== null || leg.proceedsMicros !== null || leg.pieces?.some((piece) => piece.costMicros !== null))
+    const hasPrice =
+      price !== null ||
+      onchain?.prices?.[asset] !== undefined ||
+      effects.some(({ leg }) => leg.priceMicros !== null || leg.costMicros !== null || leg.proceedsMicros !== null || leg.pieces?.some((piece) => piece.costMicros !== null) || leg.conversion?.priceUsdMicros != null || leg.conversion?.costUsdMicros != null || leg.conversion?.proceedsUsdMicros != null)
     return {
       asset,
       decimals,

@@ -80,6 +80,10 @@ export type PositionState = {
   shortfallQty: string
   /** Cost carried away by outgoing transfers. It's not a loss, so it's not in any PnL. */
   transferredOutCostMicros: string
+  /** Units sent out with no cost anyone can carry, so what they carried isn't all known. */
+  transferredOutUnknownQty: string
+  /** How much of `transferredOutCostMicros` is an estimate. */
+  transferredOutEstimatedMicros: string
   /** How much of what `realizedMicros` comes from, in cost and proceeds, is an estimate. */
   estimatedRealizedMicros: string
 }
@@ -96,6 +100,8 @@ export function emptyPosition(method: Method, decimals: number): PositionState {
     unpricedGasQty: "0",
     shortfallQty: "0",
     transferredOutCostMicros: "0",
+    transferredOutUnknownQty: "0",
+    transferredOutEstimatedMicros: "0",
     estimatedRealizedMicros: "0",
   }
 }
@@ -146,7 +152,8 @@ function addLot(method: Method, lots: readonly Lot[], lot: Lot): Lot[] {
 function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
   const dated = leg.blockNum === undefined ? {} : { acquiredBlock: leg.blockNum, acquiredAt: leg.timestamp as string }
   const estimated = leg.estimated && leg.costMicros !== null ? leg.costMicros : "0"
-  const pieces = leg.pieces ?? [{ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...dated }]
+  // A piece with its own date got it from the wallet that first acquired it. Any other was acquired here and now.
+  const pieces = leg.pieces?.map((piece) => ({ ...dated, ...piece })) ?? [{ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...dated }]
   return pieces.reduce<Lot[]>((lots, piece) => addLot(state.method, lots, lotOf(piece, leg.id)), state.lots)
 }
 
@@ -225,6 +232,8 @@ export function applyLegTaking(state: PositionState, leg: FoldLeg): { state: Pos
 
   if (leg.kind === "transfer") {
     next.transferredOutCostMicros = (BigInt(state.transferredOutCostMicros) + taken.knownCost).toString()
+    next.transferredOutUnknownQty = (BigInt(state.transferredOutUnknownQty) + taken.unknownQty + taken.shortfall).toString()
+    next.transferredOutEstimatedMicros = (BigInt(state.transferredOutEstimatedMicros) + taken.estimatedCost).toString()
     return { state: next, taken: taken.pieces }
   }
 

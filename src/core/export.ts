@@ -11,8 +11,9 @@ function statusOf({ leg, before, after }: LegEffect, noMarket: boolean): string 
     if (leg.costLabel === "unknown" || leg.costMicros === null) return "unresolved"
     return leg.estimated ? "estimated" : "exact"
   }
-  if (BigInt(after.unresolvedDisposedQty) > BigInt(before.unresolvedDisposedQty) || BigInt(after.unpricedGasQty) > BigInt(before.unpricedGasQty) || BigInt(after.shortfallQty) > BigInt(before.shortfallQty)) return "unresolved"
-  return BigInt(after.estimatedRealizedMicros) > BigInt(before.estimatedRealizedMicros) ? "estimated" : "exact"
+  const grew = (field: "unresolvedDisposedQty" | "unpricedGasQty" | "shortfallQty" | "transferredOutUnknownQty" | "estimatedRealizedMicros" | "transferredOutEstimatedMicros") => BigInt(after[field]) > BigInt(before[field])
+  if (grew("unresolvedDisposedQty") || grew("unpricedGasQty") || grew("shortfallQty") || grew("transferredOutUnknownQty")) return "unresolved"
+  return grew("estimatedRealizedMicros") || grew("transferredOutEstimatedMicros") ? "estimated" : "exact"
 }
 
 const money = (micros: string | null) => {

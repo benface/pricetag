@@ -108,18 +108,28 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
 const MATCH_BEFORE_MS = 5 * 60_000
 const MATCH_AFTER_MS = 60 * 60_000
 
+/** Something that arrived and might be a withdrawal. */
+export type ExchangeArrival = { key: string; wallet: string; asset: string; units: bigint; timestamp: string }
+
+function fits(withdrawal: ExchangeWithdrawal, { wallet, asset, units, timestamp }: ExchangeArrival): boolean {
+  const sent = BigInt(withdrawal.units)
+  const after = Date.parse(timestamp) - Date.parse(withdrawal.at)
+  if (withdrawal.asset !== asset || after < -MATCH_BEFORE_MS || after > MATCH_AFTER_MS) return false
+  if (withdrawal.toAddress !== null && withdrawal.toAddress !== normalizeAddress(wallet)) return false
+  return units <= sent && units * 100n >= sent * 99n
+}
+
 /**
- * The one withdrawal that explains something arriving: same asset, close in time, and the same amount less at most 1% for
- * the network fee. Two that fit is no match, because picking one would be a guess.
+ * Which withdrawal explains what arrived: same asset, close in time, and the same amount less at most 1% for the network fee.
+ * Each withdrawal explains one arrival, and only when neither has another that fits. Choosing between them would be a guess,
+ * and letting a withdrawal explain two would count what it cost twice.
  */
-export function matchWithdrawal(withdrawals: readonly ExchangeWithdrawal[], wallet: string, asset: string, units: bigint, timestamp: string): ExchangeWithdrawal | null {
-  const time = Date.parse(timestamp)
-  const fits = withdrawals.filter((w) => {
-    const sent = BigInt(w.units)
-    const after = time - Date.parse(w.at)
-    if (w.asset !== asset || after < -MATCH_BEFORE_MS || after > MATCH_AFTER_MS) return false
-    if (w.toAddress !== null && w.toAddress !== normalizeAddress(wallet)) return false
-    return units <= sent && units * 100n >= sent * 99n
-  })
-  return fits.length === 1 ? (fits[0] as ExchangeWithdrawal) : null
+export function matchWithdrawals(withdrawals: readonly ExchangeWithdrawal[], arrivals: readonly ExchangeArrival[]): Map<string, ExchangeWithdrawal> {
+  const matches = new Map<string, ExchangeWithdrawal>()
+  for (const arrival of arrivals) {
+    const fitting = withdrawals.filter((w) => fits(w, arrival))
+    const [withdrawal] = fitting
+    if (withdrawal && fitting.length === 1 && arrivals.filter((a) => fits(withdrawal, a)).length === 1) matches.set(arrival.key, withdrawal)
+  }
+  return matches
 }

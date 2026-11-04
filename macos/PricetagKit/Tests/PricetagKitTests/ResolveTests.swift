@@ -163,7 +163,30 @@ actor BookSource: PortfolioSource {
         await model.previewCost(["USDC": "nope"])
         #expect(model.costPreview == nil)
         #expect(model.enterCost(["USDC": "$1,234.50"]))
-        #expect(store.book.senders[try #require(first.sender)]?.costs == ["USDC": Money(micros: "1234500000", currency: .USD)])
+        let firstSender = try #require(first.sender)
+        let cost = try #require(store.book.senders[firstSender]?.costs?.first)
+        #expect(cost.micros == "1234500000")
+        #expect(cost.currency == .USD)
+        #expect(cost.asset == "USDC")
+        #expect(cost.receipts == first.receipts, "it covers what had arrived, and nothing that comes later")
+    }
+
+    @Test func isntBalancedWhileAWalletIsStillBeingRead() {
+        #expect(Meter(open: 0, answered: 2, waiting: 0).isBalanced)
+        #expect(!Meter(open: 0, answered: 2, waiting: 1).isBalanced)
+        #expect(!Meter(open: 1, answered: 2, waiting: 0).isBalanced)
+        #expect(!Meter(open: 0, answered: 0, waiting: 0).isBalanced)
+    }
+
+    @Test func anExchangeCostKeepsWhatEarlierAnswersCovered() throws {
+        let earlier = Receipt(wallet: wallet, legId: "0x1:USDC", asset: "USDC", units: "5")
+        let later = Receipt(wallet: wallet, legId: "0x2:USDC", asset: "USDC", units: "7")
+        let other = Receipt(wallet: wallet, legId: "0x3:ETH", asset: "ETH", units: "9")
+        let first = Book().enteringExchangeCosts(sender, receipts: [earlier], amounts: ["USDC": Money(micros: "1", currency: .USD)], focus: wallet)
+        let second = first.enteringExchangeCosts(sender, receipts: [later, other], amounts: ["USDC": Money(micros: "2", currency: .CAD), "ETH": Money(micros: "3", currency: .CAD)], focus: wallet)
+        let costs = try #require(second.senders[sender]?.costs)
+        #expect(costs.map(\.micros) == ["1", "3", "2"])
+        #expect(costs.map(\.receipts) == [[earlier], [other], [later]], "each asset's cost only covers its own")
     }
 
     @Test func aHoldingsQuestionsComeFirstWhenThatsWhatWasClicked() async throws {

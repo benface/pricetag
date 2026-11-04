@@ -76,6 +76,18 @@ describe("reading trades from priced_legs", () => {
     assert.deepEqual(marketTrades([row("2400000000", "ETH")]), [])
   })
 
+  it("leaves out native ETH bought in a swap, which may be an unwrap the account never received", () => {
+    const claim = { ...row("500000000"), sold_token: AERO, sold_amount: (E18).toString(), bought_token: ETH_ADDRESS, bought_amount: (E18 / 4n).toString() }
+    assert.deepEqual(marketTrades([claim]), [])
+    const weth = { ...claim, bought_token: "0x4200000000000000000000000000000000000006" }
+    assert.equal(marketTrades([{ ...weth, priced: { token: "AERO", usd_micros: "600000", source: "swap" } }]).length, 1, "wrapped ETH is a real transfer, so it counts")
+  })
+
+  it("can't set a price from those rows however many there are", () => {
+    const claims = ["0xa", "0xb", "0xc"].map((tx_hash) => ({ ...row("1000000"), tx_hash, sold_token: AERO, sold_amount: (500n * E18).toString(), bought_token: ETH_ADDRESS, bought_amount: (E18 / 4n).toString() }))
+    assert.equal(marketPrice(marketTrades(claims), "AERO", 1000), null)
+  })
+
   it("skips an amount that mostly cancelled out", () => {
     assert.deepEqual(marketTrades([{ ...row("1250000"), bought_amount: "" }]), [])
   })

@@ -7,10 +7,15 @@ import { isCurrencyCode, type CurrencyCode } from "./currency.ts"
 /** An amount someone entered or imported, in the currency it was in, because that's what it stays true in. */
 export type Money = { micros: string; currency: CurrencyCode }
 
+/** One thing that arrived from a sender, as it was when someone answered for it. */
+export type Receipt = { wallet: string; legId: string; asset: string; units: string }
+
+/** What was paid for exactly these receipts. Anything that arrives later isn't covered, so it's asked about in turn. */
+export type ExchangeCost = Money & { asset: string; receipts: Receipt[] }
+
 export type SenderAnswer =
   | { kind: "mine" }
-  /** `costs` is what was paid for everything from this address, by asset. */
-  | { kind: "my-exchange"; costs?: Record<string, Money> }
+  | { kind: "my-exchange"; costs?: ExchangeCost[] }
   | { kind: "someone-else" }
 
 /** A withdrawal found in an exchange's history. See `exchange-import.ts`. */
@@ -41,6 +46,13 @@ export function answerSender(book: Book, focus: string, sender: string, answer: 
   return { ...book, senders }
 }
 
+/** Saying what was paid for a sender's open receipts, by asset. What earlier answers covered stays as it was. */
+export function enterExchangeCosts(book: Book, focus: string, sender: string, receipts: readonly Receipt[], amounts: Readonly<Record<string, Money>>): Book {
+  const earlier = book.senders[sender]?.kind === "my-exchange" ? (book.senders[sender].costs ?? []) : []
+  const costs = Object.entries(amounts).map(([asset, money]) => ({ ...money, asset, receipts: receipts.filter((r) => r.asset === asset) }))
+  return answerSender(book, focus, sender, { kind: "my-exchange", costs: [...earlier, ...costs] })
+}
+
 export const linkedWallets = (book: Book) => Object.entries(book.senders).flatMap(([address, answer]) => (answer.kind === "mine" ? [address] : []))
 
 const plainRecord = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
@@ -52,18 +64,31 @@ function parseMoney(value: unknown): Money | null {
   return money && isMicros(money.micros) && typeof money.currency === "string" && isCurrencyCode(money.currency) ? { micros: money.micros, currency: money.currency } : null
 }
 
+function parseReceipt(value: unknown): Receipt | null {
+  const receipt = plainRecord(value)
+  if (!receipt || typeof receipt.wallet !== "string" || !isAddress(receipt.wallet) || typeof receipt.legId !== "string" || typeof receipt.asset !== "string" || !isMicros(receipt.units)) return null
+  return { wallet: normalizeAddress(receipt.wallet), legId: receipt.legId, asset: receipt.asset, units: receipt.units }
+}
+
+function parseExchangeCost(value: unknown): ExchangeCost | null {
+  const cost = plainRecord(value)
+  const money = parseMoney(value)
+  if (!cost || !money || typeof cost.asset !== "string" || !Array.isArray(cost.receipts)) return null
+  const receipts = cost.receipts.map(parseReceipt)
+  return receipts.includes(null) ? null : { ...money, asset: cost.asset, receipts: receipts as Receipt[] }
+}
+
 function parseAnswer(value: unknown): SenderAnswer | null {
   const answer = plainRecord(value)
   if (answer?.kind === "mine" || answer?.kind === "someone-else") return { kind: answer.kind }
   if (answer?.kind !== "my-exchange") return null
   if (answer.costs === undefined) return { kind: "my-exchange" }
-  const raw = plainRecord(answer.costs)
-  if (!raw) return null
-  const costs: Record<string, Money> = {}
-  for (const [asset, value] of Object.entries(raw)) {
-    const money = parseMoney(value)
-    if (!money) return null
-    costs[asset] = money
+  if (!Array.isArray(answer.costs)) return null
+  const costs: ExchangeCost[] = []
+  for (const value of answer.costs) {
+    const cost = parseExchangeCost(value)
+    if (!cost) return null
+    costs.push(cost)
   }
   return { kind: "my-exchange", costs }
 }
