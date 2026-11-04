@@ -11,7 +11,9 @@
     "start": "node --env-file-if-exists=.env.local server/index.ts",
     "test": "node --test 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
-    "check": "tsc --noEmit && node --test 'test/**/*.test.ts' && vite build"
+    "check": "tsc --noEmit && node --test 'test/**/*.test.ts' && vite build",
+    "amp:start": "scripts/amp start",
+    "amp:stop": "scripts/amp stop"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.16.0",

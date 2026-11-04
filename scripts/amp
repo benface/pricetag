@@ -1,0 +1,365 @@
+#!/usr/bin/env bash
+# Runs the Pricetag dataset on a local, throwaway Amp. See README.md.
+#   scripts/amp start   Fresh Amp from a recent Base block, up to chain head.
+#   scripts/amp stop    Stops it and deletes everything it created.
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ENV_FILE="$REPO_DIR/.env.local"
+
+AMP_BIN="$HOME/.amp/bin"
+STATE_DIR="${PRICETAG_AMP_DIR:-$HOME/Library/Caches/pricetag-amp}"
+CONTAINER="pricetag-amp-metadb"
+POSTGRES_IMAGE="postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
+
+FLIGHT_PORT=1602
+ADMIN_PORT=1610
+WORKER_HEALTH_PORT=1620
+RPC_THROTTLE_PORT=1650
+ADMIN_URL="http://127.0.0.1:$ADMIN_PORT"
+FLIGHT_URL="http://127.0.0.1:$FLIGHT_PORT"
+RPC_THROTTLE_URL="http://127.0.0.1:$RPC_THROTTLE_PORT"
+
+NETWORK="base-mainnet"
+RPC_NETWORK="base_mainnet"
+RAW_DATASET="edgeandnode/base_mainnet@0.0.2"
+PRICETAG_DATASET="benface/pricetag@0.0.1"
+MANIFEST="$REPO_DIR/dataset/pricetag.json"
+DEFAULT_RPC_URL="https://mainnet.base.org"
+# Requests a second. The public RPC allows 25, and following the chain's head needs about 2.
+DEFAULT_RPC_RATE_LIMIT=20
+DEFAULT_HISTORY_BLOCKS=1800
+
+MICROBATCH_BLOCKS=50
+RAW_FLUSH_SECS=20
+RPC_CONCURRENCY=8
+
+# How far behind the chain still counts as "at head", and how long start waits to get there.
+HEAD_TOLERANCE_BLOCKS=5
+HEAD_TIMEOUT_SECS=1200
+
+ENV_BLOCK_BEGIN="# >>> scripts/amp start (removed by scripts/amp stop)"
+ENV_BLOCK_END="# <<< scripts/amp start"
+
+say() { printf '%s\n' "$*" >&2; }
+die() { say "error: $*"; exit 1; }
+
+# Always the local Amp, even if the shell has staging's AMP_ADMIN_URL or AMP_AUTH_TOKEN.
+ampctl() { env -u AMP_AUTH_TOKEN AMP_ADMIN_URL="$ADMIN_URL" "$AMP_BIN/ampctl" "$@"; }
+
+# A value from .env.local, ignoring the block this script manages. The shell's value wins.
+env_value() {
+  local name="$1" value="${!1:-}"
+  if [ -z "$value" ] && [ -f "$ENV_FILE" ]; then
+    value="$(strip_env_block < "$ENV_FILE" | sed -n "s/^$name=//p" | tail -n 1)"
+    value="${value%\"}"; value="${value#\"}"; value="${value%\'}"; value="${value#\'}"
+  fi
+  printf '%s' "$value"
+}
+
+strip_env_block() {
+  sed "\|^$ENV_BLOCK_BEGIN\$|,\|^$ENV_BLOCK_END\$|d"
+}
+
+remove_env_block() {
+  [ -f "$ENV_FILE" ] || return 0
+  grep -qF "$ENV_BLOCK_BEGIN" "$ENV_FILE" || return 0
+  strip_env_block < "$ENV_FILE" > "$ENV_FILE.tmp"
+  cat "$ENV_FILE.tmp" > "$ENV_FILE"
+  rm "$ENV_FILE.tmp"
+  [ -s "$ENV_FILE" ] || rm "$ENV_FILE"
+}
+
+# The app loads .env.local, and the last value of a repeated name wins, so this block overrides
+# anything above it for as long as the local Amp runs.
+write_env_block() {
+  local start_block="$1"
+  remove_env_block
+  (umask 077; touch "$ENV_FILE")
+  {
+    printf '%s\n' "$ENV_BLOCK_BEGIN"
+    printf 'AMP_QUERY_URL=%s\n' "$FLIGHT_URL"
+    printf 'AMP_QUERY_TOKEN=\n'
+    printf 'PRICETAG_BASE_DATASET=%s\n' "$RAW_DATASET"
+    printf 'PRICETAG_DATASET=%s\n' "$PRICETAG_DATASET"
+    printf 'PRICETAG_RPC_NETWORK=%s\n' "$RPC_NETWORK"
+    printf 'PRICETAG_START_BLOCK=%s\n' "$start_block"
+    printf '%s\n' "$ENV_BLOCK_END"
+  } >> "$ENV_FILE"
+}
+
+# Prints a recorded PID if it's still that process.
+running_pid() {
+  local pid
+  pid="$(cat "$STATE_DIR/$1.pid" 2>/dev/null)" || return 1
+  ps -p "$pid" -o command= 2>/dev/null | grep -q "$2" || return 1
+  printf '%s' "$pid"
+}
+running_ampd_pid() { running_pid ampd 'ampd solo'; }
+running_throttle_pid() { running_pid rpc-throttle 'rpc-throttle'; }
+
+stop_process() {
+  local pid attempt
+  pid="$("$1")" || return 0
+  say "Stopping $2 (PID $pid)..."
+  kill "$pid"
+  for attempt in $(seq 1 20); do
+    "$1" > /dev/null || return 0
+    sleep 1
+  done
+  kill -9 "$pid"
+}
+
+rpc_head() {
+  local response
+  response="$(curl -fsS --max-time 15 -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' "$RPC_URL")" || return 1
+  printf '%d' "$(jq -er .result <<< "$response")"
+}
+
+rpc_head_with_retries() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    rpc_head && return 0
+    sleep "$attempt"
+  done
+  return 1
+}
+
+# Highest block a table has written, or nothing if it isn't queryable yet.
+table_head() {
+  env -u AMP_AUTH_TOKEN "$AMP_BIN/ampsql" --flight-url "$FLIGHT_URL" --format json \
+    "SELECT max(block_num) AS head FROM \"$1\".$2" 2> /dev/null \
+    | jq -er '.[0].head // empty' 2> /dev/null
+}
+
+check_tools() {
+  [ -x "$AMP_BIN/ampd" ] && [ -x "$AMP_BIN/ampctl" ] && [ -x "$AMP_BIN/ampsql" ] \
+    || die "Amp isn't installed in $AMP_BIN. Install it with ampup."
+  command -v jq > /dev/null || die "jq is required."
+  command -v node > /dev/null || die "node is required."
+  docker info > /dev/null 2>&1 || die "Docker isn't running. Start Docker Desktop and try again."
+}
+
+check_ports() {
+  local port
+  for port in "$FLIGHT_PORT" "$ADMIN_PORT" "$WORKER_HEALTH_PORT" "$RPC_THROTTLE_PORT"; do
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN > /dev/null 2>&1; then
+      die "port $port is already in use, so another Amp may be running."
+    fi
+  done
+}
+
+# The URL and any key in it stay in this process's environment, so ampd and its files never see them.
+start_rpc_throttle() {
+  say "Starting the RPC throttle at $RPC_RATE_LIMIT requests a second..."
+  (
+    cd "$STATE_DIR"
+    set -m
+    BASE_RPC_URL="$BASE_RPC_URL" BASE_RPC_RATE_LIMIT="$RPC_RATE_LIMIT" \
+      nohup node "$REPO_DIR/scripts/rpc-throttle.ts" "$RPC_THROTTLE_PORT" \
+      > "$STATE_DIR/rpc-throttle.log" 2>&1 < /dev/null &
+    echo $! > "$STATE_DIR/rpc-throttle.pid"
+  )
+  RPC_URL="$RPC_THROTTLE_URL"
+  local attempt
+  for attempt in $(seq 1 20); do
+    rpc_head > /dev/null 2>&1 && return 0
+    sleep 1
+  done
+  die "couldn't reach Base through the RPC throttle. See $STATE_DIR/rpc-throttle.log"
+}
+
+start_metadb() {
+  say "Starting a throwaway Postgres..."
+  # Bound to localhost on a free port, and removed with its data when stopped.
+  docker run -d --rm --name "$CONTAINER" \
+    -e POSTGRES_HOST_AUTH_METHOD=trust \
+    -p 127.0.0.1::5432 \
+    "$POSTGRES_IMAGE" > /dev/null
+  local attempt
+  # Over TCP, because the image's first-run server only listens on its socket.
+  for attempt in $(seq 1 60); do
+    docker exec "$CONTAINER" pg_isready -q -h 127.0.0.1 -U postgres && return 0
+    sleep 1
+  done
+  die "Postgres didn't start. Check it with: docker logs $CONTAINER"
+}
+
+start_ampd() {
+  local metadb_port
+  metadb_port="$(docker port "$CONTAINER" 5432/tcp | sed 's/.*://' | head -n 1)"
+  mkdir -p "$STATE_DIR/providers"
+
+  # Localhost only: neither endpoint checks tokens, and this shouldn't be reachable on venue wifi.
+  cat > "$STATE_DIR/config.toml" <<EOF
+[metadb]
+url = "postgresql://postgres@127.0.0.1:$metadb_port/postgres"
+
+[server]
+flight_addr = "127.0.0.1:$FLIGHT_PORT"
+
+[worker]
+health_addr = "127.0.0.1:$WORKER_HEALTH_PORT"
+# A failed RPC call restarts the job from its last commit, so commit often: eth_call batches stay small,
+# and the raw backfill keeps what it has every few seconds.
+microbatch_max_interval = $MICROBATCH_BLOCKS
+segment_flush_interval_secs = $RAW_FLUSH_SECS
+
+[controller]
+admin_api_addr = "127.0.0.1:$ADMIN_PORT"
+EOF
+
+  cat > "$STATE_DIR/providers/base.toml" <<EOF
+kind = "evm-rpc"
+network = "$NETWORK"
+url = "$RPC_THROTTLE_URL"
+concurrent_request_limit = $RPC_CONCURRENCY
+EOF
+
+  say "Starting ampd (logs: $STATE_DIR/ampd.log)..."
+  # In its own process group, so it outlives this command and Ctrl-C while waiting for chain head.
+  (
+    cd "$STATE_DIR"
+    set -m
+    env -u BASE_RPC_URL nohup "$AMP_BIN/ampd" solo --amp-dir "$STATE_DIR" \
+      > "$STATE_DIR/ampd.log" 2>&1 < /dev/null &
+    echo $! > "$STATE_DIR/ampd.pid"
+  )
+
+  local attempt
+  for attempt in $(seq 1 60); do
+    running_ampd_pid > /dev/null || die "ampd exited. See $STATE_DIR/ampd.log"
+    curl -fsS --max-time 2 "$ADMIN_URL/providers" > /dev/null 2>&1 && return 0
+    sleep 1
+  done
+  die "ampd's Admin API didn't come up. See $STATE_DIR/ampd.log"
+}
+
+deploy_raw() {
+  local start_block="$1"
+  say "Deploying $RAW_DATASET from block $start_block..."
+  ampctl manifest generate --kind evm-rpc --network "$NETWORK" --start-block "$start_block" \
+    --out "$STATE_DIR/base_mainnet.json" > /dev/null
+  ampctl dataset register "${RAW_DATASET%@*}" "$STATE_DIR/base_mainnet.json" --tag "${RAW_DATASET#*@}" > /dev/null
+  ampctl dataset deploy "$RAW_DATASET" > /dev/null
+}
+
+deploy_pricetag() {
+  local start_block="$1"
+  say "Deploying $PRICETAG_DATASET from block $start_block..."
+  # A table without its own top-level block_num() filter walks from genesis, which here would mean
+  # about 2 eth_calls per block for the whole chain. Refuse to deploy one.
+  jq -e '.tables | map_values(.input.sql | test("block_num\\(\\) >= [0-9]+")) | all' "$MANIFEST" > /dev/null \
+    || die "every table in $MANIFEST needs a top-level block_num() >= <block> filter."
+  jq --argjson start "$start_block" \
+    '.tables |= map_values(.input.sql |= gsub("block_num\\(\\) >= [0-9]+"; "block_num() >= \($start)"))' \
+    "$MANIFEST" > "$STATE_DIR/pricetag.json"
+  ampctl dataset register "${PRICETAG_DATASET%@*}" "$STATE_DIR/pricetag.json" --tag "${PRICETAG_DATASET#*@}" > /dev/null
+  # Unbounded on purpose: --end-block turns off the start filter.
+  ampctl dataset deploy "$PRICETAG_DATASET" > /dev/null
+}
+
+# Waits until every "dataset table" pair is within HEAD_TOLERANCE_BLOCKS of the chain.
+wait_for_head() {
+  local started=$SECONDS chain pair line ready at
+  while [ $((SECONDS - started)) -lt "$HEAD_TIMEOUT_SECS" ]; do
+    running_ampd_pid > /dev/null || die "ampd exited. See $STATE_DIR/ampd.log"
+    chain="$(rpc_head 2> /dev/null || true)"
+    if [ -n "$chain" ]; then
+      ready=1
+      line=""
+      for pair in "$@"; do
+        at="$(table_head "${pair% *}" "${pair#* }" || true)"
+        if [ -z "$at" ]; then
+          ready=0
+          line="$line, ${pair#* } still backfilling"
+        else
+          [ $((chain - at)) -le "$HEAD_TOLERANCE_BLOCKS" ] || ready=0
+          line="$line, ${pair#* } $((chain - at)) behind"
+        fi
+      done
+      say "  block $chain$line"
+      [ "$ready" = 0 ] || return 0
+    fi
+    sleep 10
+  done
+  return 1
+}
+
+cmd_start() {
+  local pid
+  if pid="$(running_ampd_pid)"; then
+    die "the local Amp is already running (PID $pid). Run scripts/amp stop first."
+  fi
+  check_tools
+  # Whatever a crash or a restart left behind.
+  cmd_stop > /dev/null 2>&1
+  check_ports
+
+  BASE_RPC_URL="$(env_value BASE_RPC_URL)"
+  BASE_RPC_URL="${BASE_RPC_URL:-$DEFAULT_RPC_URL}"
+  case "$BASE_RPC_URL" in
+    http://* | https://*) ;;
+    *) die "BASE_RPC_URL must be an http or https URL." ;;
+  esac
+  RPC_URL="$BASE_RPC_URL"
+  RPC_RATE_LIMIT="$(env_value BASE_RPC_RATE_LIMIT)"
+  RPC_RATE_LIMIT="${RPC_RATE_LIMIT:-$DEFAULT_RPC_RATE_LIMIT}"
+  if [ "$BASE_RPC_URL" = "$DEFAULT_RPC_URL" ]; then
+    say "Using the public Base RPC. Set BASE_RPC_URL in .env.local for a demo (see README.md)."
+  else
+    say "Using BASE_RPC_URL from your environment."
+  fi
+
+  local history_blocks head start_block
+  history_blocks="$(env_value PRICETAG_HISTORY_BLOCKS)"
+  history_blocks="${history_blocks:-$DEFAULT_HISTORY_BLOCKS}"
+  head="$(rpc_head_with_retries)" || die "couldn't read Base's chain head from BASE_RPC_URL."
+  start_block=$((head - history_blocks))
+
+  mkdir -p "$STATE_DIR"
+  printf '%s' "$ENV_FILE" > "$STATE_DIR/env_file"
+  trap 'say "Start failed. See $STATE_DIR/ampd.log, then clean up with: scripts/amp stop"' EXIT
+  start_rpc_throttle
+  start_metadb
+  start_ampd
+  deploy_raw "$start_block"
+  # Backfilling raw blocks uses most of a public RPC's allowance. A failed eth_call fails its batch,
+  # so reference_prices would keep retrying if it ran alongside.
+  say "Waiting for the raw dataset to reach chain head (block $head when this started)..."
+  wait_for_head "$RAW_DATASET blocks" || die "the raw dataset is still behind after $((HEAD_TIMEOUT_SECS / 60)) minutes."
+  deploy_pricetag "$start_block"
+  write_env_block "$start_block"
+  trap - EXIT
+
+  # reference_prices has a row per block and priced_legs is last in the chain.
+  say "Waiting for the Pricetag dataset to reach chain head..."
+  if wait_for_head "$PRICETAG_DATASET reference_prices" "$PRICETAG_DATASET priced_legs"; then
+    say "At chain head. Query URL: $FLIGHT_URL. Stop it with: scripts/amp stop"
+  else
+    say "Still behind after $((HEAD_TIMEOUT_SECS / 60)) minutes, but it's still running. A rate-limited RPC is the likely cause."
+    say "Check $STATE_DIR/ampd.log, or set a dedicated BASE_RPC_URL (see README.md) and start again."
+    exit 1
+  fi
+}
+
+cmd_stop() {
+  local env_file
+  env_file="$(cat "$STATE_DIR/env_file" 2> /dev/null || printf '%s' "$ENV_FILE")"
+  stop_process running_ampd_pid ampd
+  stop_process running_throttle_pid "the RPC throttle"
+  docker rm -f -v "$CONTAINER" > /dev/null 2>&1 || true
+  # By name, so a mistyped PRICETAG_AMP_DIR can't delete anything else.
+  rm -rf "$STATE_DIR"/{config.toml,providers,manifests,data,ampd.log,ampd.pid,rpc-throttle.log,rpc-throttle.pid,env_file,base_mainnet.json,pricetag.json}
+  rmdir "$STATE_DIR" 2> /dev/null || true
+  # The folder it was started from, which may be another checkout.
+  ENV_FILE="$env_file" remove_env_block
+  say "Stopped. Nothing is left running, and its data and settings are gone."
+}
+
+case "${1:-}" in
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  *) say "Usage: scripts/amp start|stop"; exit 2 ;;
+esac

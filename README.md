@@ -22,6 +22,24 @@ The server is the only thing that talks to Amp, so the token never reaches the b
 
 Both go through the same path after that, and they gave identical legs on the wallet they were compared on.
 
+## Run the dataset locally
+
+This runs the whole dataset on your Mac, with no token. It needs Docker running and Amp installed with `ampup`.
+
+```sh
+pnpm amp:start   # a fresh Amp from a recent Base block, and waits for chain head
+pnpm dev
+pnpm amp:stop    # stops it and deletes its data
+```
+
+`amp:start` runs `ampd solo` on localhost with a throwaway Docker Postgres, then deploys a raw Base dataset and the Pricetag dataset (`dataset/pricetag.json`) from `PRICETAG_HISTORY_BLOCKS` before the head, 1,800 blocks (an hour) by default. Every start computes a new start block and begins empty, because `amp:stop` deletes everything.
+
+It adds a marked block to the end of `.env.local` that points the app at the local Amp and sets `PRICETAG_START_BLOCK`. That block overrides your own values while Amp runs, and `amp:stop` removes it, so nothing else changes. To read from a hosted Amp instead, don't start the local one, and set `AMP_QUERY_URL`, `AMP_QUERY_TOKEN`, `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` yourself.
+
+**Use a dedicated RPC for a demo.** `BASE_RPC_URL` in `.env.local` defaults to the public `https://mainnet.base.org`, which allows 25 requests a second per IP and is shared with anything else on your network. A failed `eth_call` stops the whole dataset until its retry succeeds. To avoid that, `amp:start` runs a small relay (`scripts/rpc-throttle.ts`) that holds requests to `BASE_RPC_RATE_LIMIT` a second, 20 by default, and retries 429s. Raise it to whatever a dedicated RPC allows. The relay is the only process that gets `BASE_RPC_URL`, and it's never written to disk or logged. Never commit a key.
+
+On the public RPC, a fresh start takes about 9 minutes for the default hour of blocks. For a quicker one, use `PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start`, which takes about 3 minutes.
+
 ## How it's put together
 
 - `src/core/fold.ts`: `applyLeg(state, leg)`, average cost and FIFO. Pure, BigInt, JSON-safe state and no imports, so it can move into a stateful table.
