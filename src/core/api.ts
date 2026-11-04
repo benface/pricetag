@@ -1,14 +1,11 @@
 // What the server sends its clients. The browser runs the fold itself, because cost is personal.
 // Clients that can't run it, like the Mac app, read the portfolio it computes instead.
 
-import type { Method, PositionValues } from "./fold.ts"
-import type { PricedLeg, ReferenceRow } from "./legs.ts"
-import type { LatestPrice, LatestPrices, PnlPoint, Totals } from "./portfolio.ts"
-import type { BalanceSnapshot, Reconciliation } from "./reconcile.ts"
+import type { BalanceSnapshot, Head, LatestPrice, LatestPrices, Method, PnlPoint, PnlStatus, PositionValues, PricedLeg, Reconciliation, ReferenceRow, Totals } from "@pricetag/sdk/core"
+
+export type { Head, PnlStatus }
 
 export type Mode = "demo" | "raw" | "dataset"
-
-export type Head = { blockNum: number; timestamp: string }
 
 export type WalletResponse = {
   address: string
@@ -49,12 +46,6 @@ export type PortfolioPosition = {
   legCount: number
   reconciliation: Reconciliation | null
 }
-
-/**
- * Whether `totals.pnlUsdMicros` can be read as the wallet's PnL.
- * partial: it leaves something out, and `totals.excluded` says what. unavailable: it's null, because nothing in it is known.
- */
-export type PnlStatus = "complete" | "partial" | "unavailable"
 
 /** A wallet's holdings, cost and PnL, already folded by one method. */
 export type PortfolioResponse = {
@@ -116,9 +107,3 @@ type Progress = Pick<WalletResponse, "coverage" | "latest">
 
 export const hasStarted = ({ coverage }: Progress) => coverage.toBlock >= coverage.fromBlock
 export const isBehind = ({ coverage, latest }: Progress) => latest.blockNum - coverage.toBlock > BEHIND_BLOCKS
-
-const ADDRESS = /^0x[0-9a-fA-F]{40}$/
-
-export function isAddress(value: string): boolean {
-  return ADDRESS.test(value)
-}

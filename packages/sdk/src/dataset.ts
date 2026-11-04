@@ -1,0 +1,174 @@
+// Reads the Pricetag dataset's tables into the shapes the pricing code takes.
+//
+// Every query is bounded by block, because a hosted Amp is shared.
+
+import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type Query } from "./amp.ts"
+import type { LegRow, PricedRow, ReferenceRow } from "./legs.ts"
+import type { Head } from "./portfolio.ts"
+
+export type Row = Record<string, unknown>
+
+const BLOCKS_PER_QUERY = 200
+
+/**
+ * WHERE clauses for a list of blocks, split so no query names too many.
+ * Amp only skips files on a range: `block_num IN (...)` alone timed out on staging, and with the BETWEEN it took 1 s.
+ */
+export function blockFilters(blocks: readonly number[]): { filter: string; count: number }[] {
+  const sorted = [...new Set(blocks)].sort((a, b) => a - b)
+  const result: { filter: string; count: number }[] = []
+  for (let i = 0; i < sorted.length; i += BLOCKS_PER_QUERY) {
+    const part = sorted.slice(i, i + BLOCKS_PER_QUERY)
+    result.push({ filter: `block_num BETWEEN ${part[0]} AND ${part[part.length - 1]} AND block_num IN (${part.join(", ")})`, count: part.length })
+  }
+  return result
+}
+
+/** WHERE clauses for a list of transactions, with the same block range for Amp to skip files on. */
+export function txFilters(txs: readonly { block_num: number; tx_hash: string }[]): string[] {
+  const sorted = [...txs].sort((a, b) => a.block_num - b.block_num)
+  const result: string[] = []
+  for (let i = 0; i < sorted.length; i += BLOCKS_PER_QUERY) {
+    const part = sorted.slice(i, i + BLOCKS_PER_QUERY)
+    const hashes = [...new Set(part.map((t) => `X'${hexOf(t.tx_hash)}'`))].join(", ")
+    result.push(`block_num BETWEEN ${part[0]!.block_num} AND ${part[part.length - 1]!.block_num} AND tx_hash IN (${hashes})`)
+  }
+  return result
+}
+
+export async function readHead(query: Query, dataset: string, after: number | null): Promise<Head | null> {
+  const where = after === null ? "" : `WHERE block_num >= ${after}`
+  const rows = await query<Row>(`SELECT block_num, timestamp FROM "${dataset}".blocks ${where} ORDER BY block_num DESC LIMIT 1`, 15_000)
+  const row = rows[0]
+  return row ? { blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) } : null
+}
+
+/** About 2 minutes. A derived table runs a block or two behind the head, and older than this isn't a current price. */
+const MAX_PRICE_AGE_BLOCKS = 60
+
+const LEG_COLUMNS = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
+const PRICED_COLUMNS = "block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced"
+const ORACLE_COLUMNS = { eth: "get_field(eth_round, 'c1')", usdc: "get_field(usdc_round, 'c1')" }
+const REFERENCE_COLUMNS = `block_num, ${ORACLE_COLUMNS.eth} AS eth_usd, ${ORACLE_COLUMNS.usdc} AS usdc_usd`
+
+const toReference = (r: Row): ReferenceRow => ({
+  block_num: asNumber(r.block_num),
+  eth_usd: decimalString(r.eth_usd) ?? "",
+  usdc_usd: decimalString(r.usdc_usd) ?? "",
+})
+
+const toLegRow = (l: Row): LegRow => ({
+  block_num: asNumber(l.block_num),
+  timestamp: asIso(l.timestamp),
+  tx_hash: prefixed(String(l.tx_hash)),
+  tx_index: asNumber(l.tx_index),
+  log_index: asNumber(l.log_index),
+  token: prefixed(String(l.token)),
+  account: prefixed(String(l.account)),
+  side: l.side as LegRow["side"],
+  amount: l.amount == null ? "" : String(l.amount),
+  kind: l.kind as LegRow["kind"],
+})
+
+const toPricedRow = (p: Row): PricedRow => ({
+  block_num: asNumber(p.block_num),
+  tx_hash: prefixed(String(p.tx_hash)),
+  account: prefixed(String(p.account)),
+  sold_token: prefixed(String(p.sold_token)),
+  sold_amount: String(p.sold_amount),
+  bought_token: prefixed(String(p.bought_token)),
+  bought_amount: String(p.bought_amount),
+  priced: p.priced as PricedRow["priced"],
+})
+
+/** A `priced_legs` row, with the timestamp and oracle reads of its block. */
+export type SwapRow = { row: PricedRow; timestamp: string; reference: ReferenceRow }
+
+export type OracleRow = { block_num: number; timestamp: string; answer: string }
+
+/** Each read only waits for the tables it uses, so a lagging table doesn't hide what's ready in another. */
+export const WALLET_TABLES = ["legs", "unlisted_legs", "priced_legs", "reference_prices"]
+export const ORACLE_TABLES = ["reference_prices"]
+export const SWAP_TABLES = ["legs", "unlisted_legs", "priced_legs"]
+
+export function datasetReader(query: Query, config: { baseDataset: string; dataset: string }) {
+  const ds = `"${config.dataset}"`
+  const readOrEmpty = (sql: string) =>
+    query<Row>(sql).catch((error: unknown) => {
+      if (isNotStarted(error)) return []
+      throw error
+    })
+  return {
+    head: (after: number | null) => readHead(query, config.baseDataset, after),
+
+    /**
+     * The newest block, in `after`..`head`, that all these tables have processed, or null if one has none.
+     * Reads never go past this. A derived table can lag the chain, and a block read before it's processed looks empty.
+     */
+    async processedThrough(after: number, head: number, tables: readonly string[] = WALLET_TABLES): Promise<number | null> {
+      let through = head
+      for (const table of tables) {
+        const rows = await readOrEmpty(`SELECT block_num FROM ${ds}.${table} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`)
+        if (!rows[0]) return null
+        through = Math.min(through, asNumber(rows[0].block_num))
+      }
+      return through
+    },
+
+    async readWindow(address: string, from: number, to: number) {
+      const me = hexOf(address)
+      const range = `block_num BETWEEN ${from} AND ${to}`
+      const legRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
+      const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
+      const pricedRows = await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${ds}.priced_legs WHERE ${range} AND account = X'${me}'`)
+      const rows = legRows.map(toLegRow)
+      return {
+        // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
+        // An unlisted row stays either way, because it's evidence that something moved.
+        rows: [...rows.filter((r) => r.amount !== "" && r.amount !== "0"), ...unlistedRows.map(toLegRow)],
+        gasUnknownTxs: rows.filter((r) => r.kind === "gas" && r.amount === "").map((r) => r.tx_hash),
+        priced: pricedRows.map(toPricedRow),
+      }
+    },
+
+    async readReferences(blocks: readonly number[]): Promise<ReferenceRow[]> {
+      const result: ReferenceRow[] = []
+      for (const { filter } of blockFilters(blocks)) {
+        const rows = await query<Row>(`SELECT ${REFERENCE_COLUMNS} FROM ${ds}.reference_prices WHERE ${filter}`)
+        result.push(...rows.map(toReference))
+      }
+      return result
+    },
+
+    /** The newest oracle read at or just before `head`, or null if there's none recent enough to call current. */
+    async readLatestReference(head: number): Promise<ReferenceRow | null> {
+      const rows = await readOrEmpty(`SELECT ${REFERENCE_COLUMNS} FROM ${ds}.reference_prices WHERE block_num BETWEEN ${head - MAX_PRICE_AGE_BLOCKS} AND ${head} ORDER BY block_num DESC LIMIT 1`)
+      return rows[0] ? toReference(rows[0]) : null
+    },
+
+    async readOracle(oracle: "eth" | "usdc", from: number, to: number): Promise<OracleRow[]> {
+      const rows = await query<Row>(`SELECT block_num, timestamp, ${ORACLE_COLUMNS[oracle]} AS answer FROM ${ds}.reference_prices WHERE block_num BETWEEN ${from} AND ${to} ORDER BY block_num`)
+      return rows.map((r) => ({ block_num: asNumber(r.block_num), timestamp: asIso(r.timestamp), answer: decimalString(r.answer) ?? "" }))
+    },
+
+    /** Every swap in the range that sold or bought this token, whichever account made it. */
+    async readSwaps(token: string, from: number, to: number): Promise<SwapRow[]> {
+      const hex = `X'${hexOf(token)}'`
+      const rows = await query<Row>(
+        `SELECT ${PRICED_COLUMNS}, timestamp, eth_usd, usdc_usd FROM ${ds}.priced_legs WHERE block_num BETWEEN ${from} AND ${to} AND (sold_token = ${hex} OR bought_token = ${hex}) ORDER BY block_num`,
+      )
+      return rows.map((r) => ({ row: toPricedRow(r), timestamp: asIso(r.timestamp), reference: toReference(r) }))
+    },
+
+    /** Everything these transactions moved, for every account, leaving out gas: what a swap's price has to be checked against. */
+    async readTxRows(txs: readonly { block_num: number; tx_hash: string }[]): Promise<LegRow[]> {
+      const result: LegRow[] = []
+      for (const filter of txFilters(txs)) {
+        const legs = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${filter} AND kind <> 'gas'`)
+        const unlisted = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${filter}`)
+        result.push(...legs.map(toLegRow), ...unlisted.map(toLegRow))
+      }
+      return result
+    },
+  }
+}

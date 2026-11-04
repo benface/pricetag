@@ -1,7 +1,7 @@
 // Reads every allowlisted balance at a block with one `eth_call`, through Multicall3's `aggregate3`.
 // Encoding is by hand because it's the only ABI this app writes, and it stays pure so a test can run it on real bytes.
 
-import { ETH_ADDRESS, TOKENS, normalizeAddress } from "../src/core/tokens.ts"
+import { ETH_ADDRESS, TOKENS, normalizeAddress } from "@pricetag/sdk/core"
 
 /** Deployed on Base, and long before any block this app reads. */
 export const MULTICALL3 = "0xca11bde05977b3631167028862be2a173976ca11"
