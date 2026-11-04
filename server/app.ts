@@ -421,9 +421,10 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
         if (!facts) return null
         // Each rule's own market prices at this block, and only where both have one, so a token priced on one side alone
         // can't look like the rule.
-        const market = sharedMarket(await first.wallets.marketOn(wallet, facts), await second.wallets.marketOn(wallet, facts))
-        const a = first.wallets.pricedOn(wallet, facts, latestPrices(atA), market)
-        const b = second.wallets.pricedOn(wallet, facts, latestPrices(atB), market)
+        const [pricesA, pricesB] = [latestPrices(atA), latestPrices(atB)]
+        const market = sharedMarket(await first.wallets.marketOn(wallet, facts, pricesA), await second.wallets.marketOn(wallet, facts, pricesB))
+        const a = first.wallets.pricedOn(wallet, facts, pricesA, market)
+        const b = second.wallets.pricedOn(wallet, facts, pricesB, market)
         if (!a || !b) return null
         // A block one side has no price for would look like the rule made a number unavailable.
         const blocksOf = (wallet: WalletResponse) => new Set(wallet.references.map((reference) => reference.blockNum))

@@ -1,9 +1,10 @@
 // Runs the fold over a wallet's priced legs, and adds up what can honestly be added up.
 
 import { applyLeg, emptyPosition, worth, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
-import { answerToMicros, type PricedLeg, type Reference } from "./legs.ts"
+import type { RateRound } from "./currency.ts"
+import { answerToMicros, isSanePrice, type PricedLeg, type Reference } from "./legs.ts"
 import { decimalsOf, estimateHeld, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
-import { TOKENS } from "./tokens.ts"
+import { TOKENS, TOKEN_FEEDS } from "./tokens.ts"
 
 export type Head = { blockNum: number; timestamp: string }
 
@@ -151,6 +152,25 @@ export function latestPrices(reference: Reference | null): LatestPrices {
   if (reference && eth) prices.ETH = { micros: eth, source: "oracle", blockNum: reference.blockNum }
   if (reference && usdc) prices.USDC = { micros: usdc, source: "oracle", blockNum: reference.blockNum }
   return prices
+}
+
+/** A feed's latest answer at a block, and when that block was. */
+export type FeedRound = RateRound & { blockNum: number; timestamp: string }
+
+/**
+ * What a feed in `TOKEN_FEEDS` makes this asset worth at its block, or null when it's too old or implausible. `Oracle.price`
+ * in `Chain.swift` does the same for the hot wallet. An answer or bound in ETH means no price without ETH's.
+ */
+export function feedPrice(asset: string, round: FeedRound, ethUsdMicros: string | null): string | null {
+  const feed = TOKEN_FEEDS[asset]
+  const token = TOKENS.find((t) => t.symbol === asset)
+  if (!feed || !token) return null
+  const age = Math.floor(new Date(round.timestamp).getTime() / 1000) - round.updatedAt
+  if (!(age >= 0 && age <= feed.maxAgeSeconds)) return null
+  if (feed.answersInEth && ethUsdMicros === null) return null
+  const unit = feed.answersInEth ? BigInt(ethUsdMicros as string) : 1_000_000n
+  const micros = worth(BigInt(round.answer), unit, feed.decimals).toString()
+  return isSanePrice(token, micros, ethUsdMicros) ? micros : null
 }
 
 const answer = (sum: bigint, coverage: Coverage) => (hasAnswer(coverage) ? sum.toString() : null)

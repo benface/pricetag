@@ -214,7 +214,7 @@ public struct RPCChainClient: ChainClient {
 }
 
 /// Reads a Chainlink answer straight from the chain, so the safety loop doesn't need our server. ETH and USDC are the feeds the
-/// dataset uses. The rest only exist here.
+/// dataset uses. The server reads the rest for current prices too.
 enum Oracle {
     struct Feed: Sendable {
         /// Past each feed's heartbeat with room to spare. Older than this and the price is gone rather than old.
@@ -251,7 +251,7 @@ enum Oracle {
         static let usdc = Feed(Base.usdcUsdFeed.lowercased, "USDC / USD", maxAgeSeconds: dailyHeartbeat, plausible: .usd(800_000...1_200_000))
     }
 
-    /// Every other asset on the allowlist, which a test checks.
+    /// Every other asset on the allowlist. It's `TOKEN_FEEDS` in `packages/sdk/src/tokens.ts`, and a test compares the two.
     static let others: [String: Feed] = [
         "USDT": Feed("0xf19d560eb8d2adf07bd6d13ed03e1d11215721f9", "USDT / USD", maxAgeSeconds: Feed.dailyHeartbeat, plausible: .usd(800_000...1_200_000)),
         "DAI": Feed("0x591e79239a7d679378ec8c847e5038150364c78f", "DAI / USD", maxAgeSeconds: Feed.dailyHeartbeat, plausible: .usd(800_000...1_200_000)),
