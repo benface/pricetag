@@ -696,8 +696,72 @@ describe("current prices from the token feeds", () => {
     const eth = (usd: string) => ({ ETH: { micros: usd, source: "oracle" as const, blockNum: 995 } })
     assert.equal(a.pricedOn(ME, facts, eth("2400000000"))!.prices.wstETH?.micros, "3000000000")
     assert.equal(b.pricedOn(ME, facts, eth("2000000000"))!.prices.wstETH?.micros, "2500000000", "the other rule's read failed, and the facts still say this")
-    const older = (await a.factsAt(ME, 985, { withBalances: false }))!
-    assert.equal(a.pricedOn(ME, older, eth("2400000000"))!.prices.wstETH?.source, undefined, "an answer from after that block would be the wrong one")
+  })
+
+  it("reads a comparison's feeds at its own block, not at what the last refresh read", async () => {
+    const { source, reads } = feedFake([held(950, AERO)], {}, {
+      async readFeedRounds(assets, block) {
+        reads.push([assets, block])
+        return { AERO: round("63000000", block) }
+      },
+    })
+    const wallets = createWallets(source, headAt(1000), noFees)
+    await wallets.get(ME)
+    const facts = (await wallets.factsAt(ME, 985, { withBalances: false }))!
+    assert.deepEqual(reads, [[["AERO"], 990], [["AERO"], 960]], "the bucket at or before 985")
+    assert.deepEqual(wallets.pricedOn(ME, facts, {})!.prices.AERO, { micros: "630000", source: "oracle", blockNum: 960 })
+  })
+
+  it("isn't \"no market\" when a comparison's feed read fails or is too old", async () => {
+    let answer: "fine" | "old" | "fail" = "fine"
+    const { source } = feedFake([held(950, AERO)], {}, {
+      readMarketTrades: async () => [],
+      async readFeedRounds(_, block) {
+        if (answer === "fail") throw new Error("boom")
+        return { AERO: round("63000000", block, answer === "old" ? NOW - 26 * 3600 - 1 : NOW - 60) }
+      },
+    })
+    const wallets = createWallets(source, headAt(1000), noFees, { ...console, warn: () => {} })
+    assert.equal((await wallets.get(ME)).marketChecked, true)
+    for (const [through, broken] of [[985, "fail"], [955, "old"]] as const) {
+      answer = broken
+      const compared = wallets.pricedOn(ME, (await wallets.factsAt(ME, through, { withBalances: false }))!, {})!
+      assert.equal(compared.prices.AERO, undefined, broken)
+      assert.equal(compared.marketChecked, false, broken)
+    }
+  })
+
+  it("reads a stalled wallet's feeds at the head, so its price keeps moving and can go old", async () => {
+    let head = 1000
+    let updatedAt = NOW - 60
+    const { source, reads } = feedFake([held(950, AERO)], {}, {
+      processedThrough: async () => 960,
+      readMarketTrades: async () => [],
+      readFeedRounds: async (assets, block) => {
+        reads.push([assets, block])
+        return { AERO: round("63000000", block, updatedAt) }
+      },
+    })
+    const wallets = createWallets(source, async () => headAt(head)(), noFees)
+    assert.equal((await wallets.get(ME)).prices.AERO?.blockNum, 990, "not 960, where the tables stopped")
+    head = 1030
+    updatedAt = NOW - 26 * 3600 - 1
+    const later = await wallets.get(ME)
+    assert.deepEqual(reads.map(([, block]) => block), [990, 1020])
+    assert.equal(later.prices.AERO, undefined, "the feed itself has gone quiet")
+    assert.equal(later.marketChecked, false)
+  })
+
+  it("reads a wallet as of a fixed block at that block", async () => {
+    const { source, reads } = feedFake([held(950, AERO)], {}, {
+      readFeedRounds: async (assets, block) => {
+        reads.push([assets, block])
+        return { AERO: round("63000000", block) }
+      },
+    })
+    const wallet = await createWallets(source, headAt(1000), noFees).get(ME, { to: 955 })
+    assert.deepEqual(reads, [[["AERO"], 930]])
+    assert.equal(wallet.prices.AERO?.blockNum, 930)
   })
 })
 
