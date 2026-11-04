@@ -13,7 +13,12 @@ import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
 /** What arrived with no cost, and who could say. A null sender means there's no one to ask about, only what it cost. */
 type OpenItem = { wallet: string; leg: PricedLeg; sender: string | null; units: bigint }
 
-export type Resolved = { legs: Map<string, PricedLeg[]>; open: OpenItem[] }
+export type Resolved = {
+  legs: Map<string, PricedLeg[]>
+  open: OpenItem[]
+  /** What `distrusted` kept from carrying over: a wallet's asset, which arrived somewhere with its cost left unknown. */
+  withheld: { wallet: string; asset: string }[]
+}
 
 type Source = { address: string; units: bigint }
 
@@ -39,15 +44,27 @@ function slice(piece: CostPiece, qty: bigint): CostPiece {
   const whole = BigInt(piece.qty)
   const share = (micros: string) => (qty === whole ? BigInt(micros) : (BigInt(micros) * qty) / whole).toString()
   const cost = piece.costMicros === null ? null : share(piece.costMicros)
-  const paidAt = piece.paidAt && cost !== null ? { paidAt: sharePaidAt(piece.paidAt, BigInt(cost), BigInt(piece.costMicros as string), qty, whole) } : {}
-  return { ...piece, qty: qty.toString(), costMicros: cost, estimatedCostMicros: share(piece.estimatedCostMicros), ...paidAt }
+  return {
+    ...piece,
+    qty: qty.toString(),
+    costMicros: cost,
+    estimatedCostMicros: share(piece.estimatedCostMicros),
+    ...(piece.givenCostMicros === undefined ? {} : { givenCostMicros: share(piece.givenCostMicros) }),
+    ...(piece.paidAt && cost !== null ? { paidAt: sharePaidAt(piece.paidAt, BigInt(cost), BigInt(piece.costMicros as string), qty, whole) } : {}),
+  }
 }
 
 /** What's left of a piece after a slice of it is gone. */
 function without(piece: CostPiece, taken: CostPiece): CostPiece {
   const less = (micros: string | null, gone: string | null) => (micros === null ? null : (BigInt(micros) - BigInt(gone as string)).toString())
-  const paidAt = piece.paidAt && taken.paidAt ? { paidAt: lessPaidAt(piece.paidAt, taken.paidAt) } : {}
-  return { ...piece, qty: (BigInt(piece.qty) - BigInt(taken.qty)).toString(), costMicros: less(piece.costMicros, taken.costMicros), estimatedCostMicros: less(piece.estimatedCostMicros, taken.estimatedCostMicros) as string, ...paidAt }
+  return {
+    ...piece,
+    qty: (BigInt(piece.qty) - BigInt(taken.qty)).toString(),
+    costMicros: less(piece.costMicros, taken.costMicros),
+    estimatedCostMicros: less(piece.estimatedCostMicros, taken.estimatedCostMicros) as string,
+    ...(piece.givenCostMicros === undefined ? {} : { givenCostMicros: less(piece.givenCostMicros, taken.givenCostMicros as string) as string }),
+    ...(piece.paidAt && taken.paidAt ? { paidAt: lessPaidAt(piece.paidAt, taken.paidAt) } : {}),
+  }
 }
 
 /** Each transfer in a debit, in the order it went. Null when the leg isn't simply that, as when something also came back. */
@@ -139,10 +156,12 @@ function withPieces(leg: PricedLeg, pieces: CostPiece[]): PricedLeg {
 
 const reported = (leg: PricedLeg, usdMicros: string): PricedLeg => ({ ...leg, costLabel: "self-reported", costMicros: usdMicros })
 
-export function resolveLegs(sides: readonly Side[], method: Method, book: Book): Resolved {
+/** `distrusted` says when what a wallet holds of an asset can't vouch for a cost, so what it sends arrives with its cost unknown. */
+export function resolveLegs(sides: readonly Side[], method: Method, book: Book, distrusted?: (wallet: string, asset: string) => boolean): Resolved {
   const linked = new Set(linkedWallets(book))
   const read = new Set(sides.map(({ wallet }) => normalizeAddress(wallet.address)))
   const open: OpenItem[] = []
+  const withheld = new Map<string, { wallet: string; asset: string }>()
 
   // Everything that could be an exchange withdrawal, across every wallet read, so one withdrawal can't explain two of them.
   const arrivals: ExchangeArrival[] = sides.flatMap(({ wallet, view }) =>
@@ -186,7 +205,14 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const pieces = (sources ?? []).flatMap(({ address: sender, units: part }): CostPiece[] => {
       const unknown: CostPiece = { qty: part.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" }
       const answer = book.senders[sender]
-      if (answer?.kind === "mine" || linked.has(sender) || sender === address) return read.has(sender) ? pull(leg, sender, address, part) : [unknown]
+      if (answer?.kind === "mine" || linked.has(sender) || sender === address) {
+        if (!read.has(sender)) return [unknown]
+        if (sender !== address && distrusted?.(sender, leg.asset)) {
+          withheld.set(`${sender}:${leg.asset}`, { wallet: sender, asset: leg.asset })
+          return [unknown]
+        }
+        return pull(leg, sender, address, part)
+      }
       if (answer?.kind === "my-exchange") {
         const share = exchangeShare(answer.costs ?? [], address, leg.id, part)
         const cost = share ? moneyIn(side, share, leg) : null
@@ -194,11 +220,13 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
         pending.push({ wallet: address, leg, sender, units: part })
         return [unknown]
       }
-      const someoneElse = answer?.kind === "someone-else" || knownSender(sender)?.kind === "bridge" || sender === MINT_ADDRESS
+      // A bridge or a mint could be the user's own money arriving from elsewhere. Only an answer says it came from someone else.
+      const given = answer?.kind === "someone-else"
+      const someoneElse = given || knownSender(sender)?.kind === "bridge" || sender === MINT_ADDRESS
       if (someoneElse) {
         if (leg.priceMicros === null) return [unknown]
         const cost = worth(part, BigInt(leg.priceMicros), leg.decimals).toString()
-        return [{ qty: part.toString(), costMicros: cost, label: "received at market", estimatedCostMicros: cost }]
+        return [{ qty: part.toString(), costMicros: cost, label: "received at market", estimatedCostMicros: cost, ...(given ? { givenCostMicros: cost } : {}) }]
       }
       pending.push({ wallet: address, leg, sender, units: part })
       return [unknown]
@@ -224,7 +252,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const recipients = next.kind === "transfer" && taken.length > 0 ? recipientsOf(next) : null
     for (const [recipient, pieces] of allocateTaken(taken, recipients ?? [], method)) carried.set(`${next.txHash}:${address}:${next.asset}:${recipient}`, pieces)
   }
-  return { legs: output, open }
+  return { legs: output, open, withheld: [...withheld.values()] }
 }
 
 export type Arrival = { asset: string; decimals: number; units: string }

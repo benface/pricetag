@@ -148,6 +148,8 @@ export type TaxReportResponse = {
   rowCount: number
   unresolvedCount: number
   estimatedCount: number
+  /** Rows with a known gain that partly rests on a cost the user gave. */
+  selfReportedCount: number
   /** Only rows whose gain is known, and null when none is. Read it next to `unresolvedCount`. */
   gainMicros: string | null
   disclaimer: string
