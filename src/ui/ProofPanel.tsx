@@ -13,8 +13,8 @@ async function read<T>(url: string, signal?: AbortSignal): Promise<T> {
 }
 
 /** Where a row's price comes from, the datasets behind it, and a check of its block that says plainly what it doesn't cover. */
-export function ProofPanel({ address, legId, currency }: { address: string; legId: string; currency: CurrencyCode }) {
-  const query = `leg=${encodeURIComponent(legId)}&currency=${currency}`
+export function ProofPanel({ address, legId, currency, rule }: { address: string; legId: string; currency: CurrencyCode; rule: string | null }) {
+  const query = `leg=${encodeURIComponent(legId)}&currency=${currency}${rule ? `&rule=${encodeURIComponent(rule)}` : ""}`
   const [proof, setProof] = useState<ProofResponse | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [verification, setVerification] = useState<VerificationResponse | null>(null)

@@ -8,7 +8,7 @@ export type PriceSource = "oracle" | "swap" | "market"
 
 /** Why a leg has no usable price. Apps show these as they are, so they stay in plain language. */
 export const PRICE_NOTES = {
-  feedFailed: "The market price feed didn't answer at this block.",
+  feedFailed: "The market price feed has no price for this block.",
   rejected: "Ignored the price this exchange implied, because it's far from any plausible value.",
   unlisted: "This transaction also moved a token we can't price yet, so what was paid or received can't be split between them.",
   unusable: "This exchange didn't give a usable price for this token.",
@@ -67,8 +67,11 @@ export type UnseenEth = { blockNum: number; amount: string; txHashes: string[] }
 /** A transaction whose gas couldn't be worked out, and the block it's in. It can have no rows at all. */
 export type GasUnknownTx = Pick<LegRow, "tx_hash" | "block_num">
 
-/** One block's oracle reads, from `reference_prices`, with Chainlink answers in 1e8 USD. Empty when a read failed. */
-export type Reference = { blockNum: number; ethUsd: string; usdcUsd: string }
+/**
+ * One block's Chainlink prices, from `reference_prices`, with answers in 1e8 USD. Empty when a feed has no price at this block.
+ * The transactions are the updates behind those answers, which only the dataset has: the raw path reads them with `eth_call`.
+ */
+export type Reference = { blockNum: number; ethUsd: string; usdcUsd: string; ethTx?: string | undefined; usdcTx?: string | undefined }
 
 /** The result of `pt_price`, in the shape `priced_legs` stores it. */
 export type PtPrice = { token: string; usd_micros: string; source: "swap" | "unknown" }

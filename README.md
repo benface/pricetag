@@ -53,7 +53,7 @@ Holding a key needs a provisioned build, which `pnpm mac` makes when the team pi
 
 The server is the only thing that talks to Amp, so the token never reaches the browser or the Mac app. It can read from either:
 
-- **The Pricetag dataset**, when `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` are set. This is the design: the dataset carries the price.
+- **The Pricetag dataset**, when `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` are set. This is the design: the dataset carries the price, and reads it from Chainlink's logs, as [below](#where-prices-come-from).
 - **The raw Base dataset**, otherwise. It reads the wallet's transactions and logs, and the oracle with `eth_call`, then derives the same rows at query time. A wallet's first read takes about 15 s for an hour of blocks (longer for a busy wallet), and it only looks back `PRICETAG_HISTORY_BLOCKS`.
 
 Both go through the same path after that, and they gave identical legs on the wallet they were compared on.
@@ -72,33 +72,35 @@ pnpm amp:stop    # stops it and deletes its data
 
 It adds a marked block to the end of `.env.local` that points the app at the local Amp and sets `PRICETAG_START_BLOCK`. That block overrides your own values while Amp runs, and `amp:stop` removes it, so nothing else changes. To read from a hosted Amp instead, don't start the local one, and set `AMP_QUERY_URL`, `AMP_QUERY_TOKEN`, `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` yourself.
 
-**Use a dedicated RPC for a demo.** `BASE_RPC_URL` in `.env.local` defaults to the public `https://mainnet.base.org`, which allows 25 requests a second per IP and is shared with anything else on your network. A failed `eth_call` stops the whole dataset until its retry succeeds. To avoid that, `amp:start` runs a small relay (`scripts/rpc-throttle.ts`) that holds requests to `BASE_RPC_RATE_LIMIT` a second, 20 by default, and retries 429s. Raise it to whatever a dedicated RPC allows. Of Amp's processes, only the relay gets `BASE_RPC_URL`. The app's server also uses it, for L1 fees. Neither ever logs it. Never commit a key.
+**Use a dedicated RPC for a demo.** `BASE_RPC_URL` in `.env.local` defaults to the public `https://mainnet.base.org`, which allows 25 requests a second per IP and is shared with anything else on your network. A failed call stops the raw dataset, and everything built on it, until its retry succeeds. To avoid that, `amp:start` runs a small relay (`scripts/rpc-throttle.ts`) that holds requests to `BASE_RPC_RATE_LIMIT` a second, 20 by default, and retries 429s. Raise it to whatever a dedicated RPC allows. Of Amp's processes, only the relay gets `BASE_RPC_URL`. The app's server also uses it, for L1 fees. Neither ever logs it. Never commit a key.
 
 On the public RPC, a fresh start takes about 9 minutes for the default hour of blocks. For a quicker one, use `PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start`, which takes about 2 minutes.
+
+**A local Amp's first prices come from `eth_call`.** It only has logs from its start block, and USDC/USD's last update can be up to a day older. So `amp:start` reads each feed's latest round from its contract at the start block (`dataset/local.ts`), and those stand in as updates, with an all-zero transaction, for as long as the real ones would have lasted. If that read fails, `amp:start` stops before the backfill. Proof says a price came from the contract, and Verify doesn't claim to cover it. It covers the price from the first real log onward.
 
 ## Forking a pricing rule
 
 A pricing rule is a dataset version, and the server picks one per request with Amp's `amp-alias` header. The SQL never changes, and the app has no code for any rule. Set these and both apps show a switch, in the Mac app's Settings and above the web app's numbers, with each rule's dataset and manifest hash, and a side-by-side comparison of a wallet. The comparison uses one set of facts at one block for both rules: the same transactions, balances, fees and exchange rates, with only prices from each. If it can't establish that, it says so and shows no numbers.
 
 ```sh
-PRICETAG_DATASET=benface/pricetag@0.0.1
-PRICETAG_DATASET_HASH=a0a138cdffaa5a4053b1d0744bd2da7c64d368c951e69236142c19ce16f0553d
-PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.0.3
-PRICETAG_FORK_HASH=592d6fa440eacb0977e8a988b8ba638fc33fbdafea415ab45c96f70f3e174a44
+PRICETAG_DATASET=benface/pricetag@0.1.0
+PRICETAG_DATASET_HASH=a94e5237dd3eae583eda6f5aefa74800e6778d0c9c2ed14c4d5383f6f67137b2
+PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.1.0
+PRICETAG_FORK_HASH=c5c66a117461e8990c4a5638919ddf9ca3c9ae9333982d9583d127d93ab1705e
 ```
 
 Queries are pinned to those hashes, so a hash on screen is what was read, and a wrong one fails instead of showing other numbers. With no fork set, nothing changes: there's no switch and no header.
 
-The fork here is `dataset/cautious-eth.json`, from `cautiousEthTablesSql` in `dataset/build.ts`. Its one rule is that ETH counts at 1% below the Chainlink feed. It only materializes the tables a rule decides, `reference_prices` and `priced_legs`, and reads everything else from the dataset it forks. So it makes no `eth_call`s, starts from the same block, and can only differ by the rule. The transactions always come from the first dataset.
+The fork here is `dataset/cautious-eth.json`, from `cautiousEthTablesSql` in `dataset/build.ts`. Its one rule is that ETH counts at 1% below the Chainlink feed. It only materializes the tables a rule decides, `reference_prices` and `priced_legs`, and reads everything else from the dataset it forks. So it starts from the same block, and can only differ by the rule. The transactions always come from the first dataset.
 
 To change the rule, edit that function, then build, register and deploy it under a new tag, and update the hash:
 
 ```sh
-FORK_OF=benface/pricetag@0.0.1 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
-ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.0.4
+FORK_OF=benface/pricetag@0.1.0 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
+ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.1.1
 ```
 
-Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.0.4` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging. List the versions first and use a free tag, because registering a tag that exists moves it without saying so.
+Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.1.1` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging. List the versions first and use a free tag, because registering a tag that exists moves it without saying so.
 
 **Replacing the dataset it forks means replacing the fork too.** The fork reads the job of the version it names, so stopping that job stops the fork. Deploy a fork of the new version before stopping the old one, then change all four lines together.
 
@@ -121,6 +123,24 @@ Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/ve
 - `server/`: the raw data source, exchange rates, the block check, and the small HTTP server.
 - `macos/`: the Mac app.
 - `dataset/`: the manifests. `pricetag.json` and the fork `cautious-eth.json` are generated by `build.ts`, so change the SQL there.
+
+## Where prices come from
+
+The dataset reads Chainlink's prices from the `AnswerUpdated` logs its contracts emit, not from `eth_call`. So it makes no RPC calls, replaying the logs gives the same table, and Verify can check the log behind a price.
+
+| Table | What it does |
+| --- | --- |
+| `price_updates` | Every update from the aggregators in `PRICE_FEEDS` (`packages/sdk/src/tokens.ts`). It starts one window before the dataset, 45,000 blocks at today's start, so USDC/USD, which only updates about daily, has a price at the first block. |
+| `carried` | For each block, every update that could still be the latest. It's a join of `blocks` to `price_updates`, from the update's block until its window ends, which is how a table carries a value forward. Its `b._block_num` filter has to stay, or each batch can rescan all of Base. |
+| `reference_prices` | The latest update per feed, one row per block: `eth_answer` and `usdc_answer` (1e8 USD), and `eth_tx` and `usdc_tx`, the transactions they came from. |
+
+`priced_legs` joins `reference_prices` on the block, and carries the same answers and transactions.
+
+- **An update only counts for so long.** ETH/USD's lasts 2,600 s (longest gap seen in a day: 1,236 s), and USDC/USD's 25 hours (longest gap in 76 rounds: 86,490 s). They're in time because feeds update on a clock, and Base's blocks go from 2 s to 200 ms on 2026-11-05. `blocksWithin` turns a window into blocks for reads and start filters. After that, that price is `unknown`, never stale. Exchanges lose their price too, because `pt_price` needs both feeds. If both feeds lapsed together, a block would have no row at all, and the app would show as behind until a fix.
+- **When Chainlink changes a feed's aggregator, a new dataset version is needed.** Proxies emit no log when that happens, so no table can notice: the old address just goes quiet. The server asks each proxy for its `aggregator()` when it starts, and warns if it isn't listed. To fix it, add the address to `PRICE_FEEDS` and deploy a new version. Both feeds last changed about 2 months ago, and about 5 months before that.
+- **ETH/USD leads what its proxy returns.** A log comes 15 or 16 blocks before the proxy shows the new round (once in a while, just 1). The price is the newer published value, so it isn't delayed to match. Compared block by block with `eth_call`, that's the only difference.
+
+The raw mode, exchange rates to other currencies, and balances still use `eth_call`. Those aren't in a dataset table, so there's no log to read them from, or they aren't prices at all.
 
 ## Main currency
 
@@ -209,6 +229,7 @@ Click a price, or Proof, on any row of an explanation. It shows where that price
 - **Transactions:** every transaction rebuilds the header's `transactions_root`, and each one hashes to its stored `tx_hash`.
 - **Results and logs:** every receipt and log rebuilds the header's `receipts_root`.
 - **This activity:** the row's transaction is in that data, and its Transfer logs or ETH value match its amounts. A network fee's L2 part is worked out again from its gas, the block's base fee, and only the fee fields its transaction type hashes. For a swap price, that includes the other side of the exchange.
+- **Chainlink's update:** the block with the update behind the price, which can be a different one, passes the same three checks. Its log has to be an `AnswerUpdated` from that feed's aggregator, in the transaction `reference_prices` names, with the answer `price_updates` stored. That answer then has to work out to the row's price, directly or, for a swap price, through what was paid. Reading the raw dataset, there's no update to check, so this check doesn't appear.
 
 It's done here and not with `ampctl verify` because that can't check Base: every Base block starts with an OP Stack deposit (type `0x7e`), which it doesn't support. It fails v0.0.42 and nightly `47b6fa2` alike, and today's source still rejects the type. Amp doesn't store what a deposit's hash also covers (`sourceHash`, `mint`, `isSystemTx`), so those three come from `BASE_RPC_URL`. A wrong answer fails the check, because the result has to hash to the block's commitment. Every log and transaction it counts has to be in what's hashed, at the number it's stored with, or the check fails. If the RPC doesn't answer, Transactions says it's not checked. The fingerprints come from Amp's admin API at `AMP_ADMIN_URL`, with the server's token.
 
@@ -216,7 +237,9 @@ What a pass doesn't show, which the interface also says:
 
 - That the header is on Base's real chain. A consistent fake block would pass.
 - That the derived SQL ran correctly. Only the raw dataset's rows are checked, plus the row's amounts against them.
-- An `oracle` price, or the oracle side of a `swap` price, because `eth_call` results aren't in a block's commitments. The same goes for exchange rates and L1 fees, which aren't in the commitments either, so an L1 fee's amount is never compared.
+- That Chainlink's number is right. It only shows that Chainlink published it.
+- That the update was still the latest at the row's block. That comes from `carried` and `reference_prices`, so it's the derived SQL again.
+- An `oracle` price, or the oracle side of a `swap` price, when reading the raw dataset or a local Amp before its first real update, because `eth_call` results aren't in a block's commitments. The same goes for exchange rates and L1 fees, which aren't in the commitments either, so an L1 fee's amount is never compared.
 - That a transaction's `from` is right. Signatures are in the commitment, but aren't recovered to compare them with the stored sender, so a row that takes its account from the sender (fees, ETH sent, unwrapped ETH received) says so.
 
 `server/verify.ts` is the pure part, tested on real rows and on tampered ones. Keccak comes from `@noble/hashes`, since whether Node has it depends on its build. `server/block.ts` reads a block and `server/proof.ts` puts it into words. It's valid for blocks since Canyon (January 2024), because older deposits' receipts are encoded differently.

@@ -401,7 +401,7 @@ export function App() {
         </main>
       ) : null}
 
-      {explanation && wallet ? <ExplainPanel explanation={explanation} address={wallet.address} onClose={close} /> : null}
+      {explanation && wallet ? <ExplainPanel explanation={explanation} address={wallet.address} rule={wallet.rule ?? null} onClose={close} /> : null}
       {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
       {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} onClose={() => setTaxOpen(false)} /> : null}
     </div>

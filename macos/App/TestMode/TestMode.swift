@@ -253,11 +253,11 @@ private final class FixtureSource: PortfolioSource {
         try decode(target == .holdComparison ? "demo-hold-explanation" : "demo-explanation")
     }
 
-    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
         throw FetchError.unreachable
     }
 
-    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
         throw FetchError.unreachable
     }
 

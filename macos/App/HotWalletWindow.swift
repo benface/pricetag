@@ -323,7 +323,7 @@ private struct HotWalletDetails: View {
                 Button("Sweep Everything to Savings Instead") { Task { await wallet.sweepEverything() } }
             }
         } message: {
-            Text("Makes a new key, moves every token this app tracks to it, then deletes the old one. If the old key holds other tokens, it stays until you choose to leave them. This costs gas, and publicly links the two addresses. It also clears any token approvals the old key gave.")
+            Text("Makes a new key, moves every token this app tracks to it, then deletes the old one. If the old key holds other tokens, or some that gas makes too costly to move, it stays until you choose to leave them. This costs gas, and publicly links the two addresses. It also clears any token approvals the old key gave.")
         }
         .confirmationDialog("Delete the old key?", isPresented: $isConfirmingAbandon) {
             Button("Delete and Leave It Behind", role: .destructive) { Task { await wallet.finishRotationLeavingFundsBehind() } }
@@ -337,6 +337,7 @@ private struct HotWalletDetails: View {
         return switch wallet.rotationHold {
         case .otherTokens(let count): "It holds \(count) \(count == 1 ? "token" : "tokens") this app doesn't track. \(lost)"
         case .cantCheckOtherTokens: "This app can't check right now whether it holds other tokens. \(lost)"
+        case .notWorthTheGas(let symbols): "It holds \(HotWalletWording.tooCostlyToMove(symbols)). \(lost)"
         case .notEnoughGas, nil: "It holds tokens with no ETH to move them. \(lost)"
         }
     }
