@@ -106,6 +106,7 @@ L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anyt
 | `points` | PnL after each transaction, for a chart. |
 | `gasUnknownTxs` | Transactions whose gas couldn't be worked out, so ETH is overstated by that much. |
 | `l1Fees`, `l1FeeUnknownTxs` | `read`, `pending` (some couldn't be read yet, and the next call tries again) or `no rpc url`, and the transactions affected. |
+| `unsettledFrom` | The first block a reorg replaced that the dataset may not have rewritten yet, or null. The numbers can still hold the old blocks from there on, and later reads replace them. |
 | `openingUnread`, `unreadAssets` | Assets whose balance before the first block couldn't be read, and assets with no position because nothing could be read about them, which isn't the same as holding none. |
 
 A position's `reconciliation.status` is `reconciled` when its legs add up to its onchain balance to the smallest unit, `incomplete` when they don't, and `unchecked` when a read is missing. Only a reconciled position shows PnL. Otherwise its amount and value come from the chain, and its cost and PnL are `null`.
@@ -125,7 +126,8 @@ for await (const { blocks, totals, pnlStatus, reorgFrom, via } of pricetag.watch
 Each update is everything `getPortfolio` returns, for the whole wallet, so replace the last one with it. That's what makes a reorg safe: an update after one has what the reorg changed, and nothing it took away. `reorgFrom` says from which block, if you want to tell someone. `via` says what reported the block, `stream` or `polling`, and is null on the first update.
 
 - **Where it comes from:** Amp's stream says when `priced_legs`, the last table to finish a block, has finished one, and when blocks were replaced. It sends no rows. The wallet is then read the same way `getPortfolio` reads it, since balances, L1 fees and current prices aren't in any one stream.
-- **When the stream fails:** it polls every 2 s and tries the stream again every 30 s. A stream with no new block for 60 s counts as failed, even if it's still connected. While polling, a new reorg is only seen at the head, and a deeper one is replaced by the same re-read of the last 30 blocks that every read does. One the stream reported before it failed is still replaced in full.
+- **When the stream fails:** it polls every 2 s and tries the stream again every 30 s. A stream with no new block for 60 s counts as failed, even if it's still connected. While polling, a new reorg is only seen at the head, and a deeper one is replaced by the same re-read of the last 30 blocks that every read does. One the stream reported before it failed is still replaced in full, as below.
+- **After a reorg:** being told about one doesn't mean the dataset has rewritten those blocks yet, and until it has, a read gets the old ones back. So every read goes back to the reorg's first block until the wallet's `blocks.toBlock` is 30 blocks past the old chain's tip, about a minute, and `unsettledFrom` says that block until then. The update that has the new blocks can come after the one with `reorgFrom`, with `reorgFrom` null.
 - **Failed reads:** they go to `logger`, and the next block tries again, so the iterable doesn't end because Amp had a bad moment. It ends when you leave the loop or abort `signal`.
 - **Slow code:** a loop that takes longer than a block doesn't fall behind. It gets the newest block next, with any reorg it missed.
 

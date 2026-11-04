@@ -85,6 +85,11 @@ export type WalletPortfolio = Omit<FoldedWallet, "view"> & {
   l1FeeUnknownTxs: string[]
   /** Assets whose balance before `blocks.fromBlock` couldn't be read, so they can't be compared yet. */
   openingUnread: string[]
+  /**
+   * The first block a reorg replaced that the dataset may not have rewritten yet, or null. These numbers can still hold the
+   * old blocks from here on, and the next reads replace them.
+   */
+  unsettledFrom: number | null
 }
 
 /** A wallet's portfolio, after a block, in full. Replace the last one with it. Nothing in it adds to what came before. */
@@ -190,6 +195,7 @@ export function pricetagClient(query: Query, config: ClientConfig) {
       l1Fees: l1FeeUnknownTxs.length === 0 ? "read" : readL1Fees ? "pending" : "no rpc url",
       l1FeeUnknownTxs,
       openingUnread,
+      unsettledFrom: wallets.unsettledFrom(account, { from, to }),
     }
   }
 
@@ -243,7 +249,7 @@ export function pricetagClient(query: Query, config: ClientConfig) {
             via = value.via
             if (value.reorgFrom !== null) {
               reorgFrom = Math.min(reorgFrom ?? value.reorgFrom, value.reorgFrom)
-              await wallets.rewind(value.reorgFrom)
+              await wallets.rewind(value.reorgFrom, Math.max(chainHead?.blockNum ?? 0, value.blockNum))
               // The new chain can be shorter, and the head is only read from the last one on.
               if (chainHead && chainHead.blockNum >= value.reorgFrom) chainHead = { ...chainHead, blockNum: value.reorgFrom - 1 }
             }

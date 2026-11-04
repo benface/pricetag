@@ -147,8 +147,8 @@ export function createApi(env: Env, created: Created | null = createSource(env))
   }
 
   /** Blocks some already-read wallets hold were replaced. The next read of each replaces them, however far back it was. */
-  async function rewindTo(block: number) {
-    await Promise.all([...new Set([wallets, ...rules.map((r) => r.wallets)])].map((w) => w?.rewind(block)))
+  async function rewindTo(block: number, tip: number) {
+    await Promise.all([...new Set([wallets, ...rules.map((r) => r.wallets)])].map((w) => w?.rewind(block, Math.max(head?.blockNum ?? 0, tip))))
     // The new chain can be shorter, and the head is only read from the last one on.
     if (head && head.blockNum >= block) head = { ...head, blockNum: block - 1 }
   }
@@ -165,7 +165,7 @@ export function createApi(env: Env, created: Created | null = createSource(env))
         continue
       }
       try {
-        if (tick.reorgFrom !== null) await rewindTo(tick.reorgFrom)
+        if (tick.reorgFrom !== null) await rewindTo(tick.reorgFrom, tick.blockNum)
         // Every tick, even under the same head: it can be a block the dataset has only now finished.
         const current = await pollHead()
         send(`event: head\ndata: ${JSON.stringify({ ...current, via: tick.via })}\n\n`)

@@ -260,9 +260,10 @@ describe("Amp's stream on the wire", () => {
 })
 
 /** A chain a test can move and reorg: what its tables hold, how far it's gone, and a stream of what happened. */
-function chainAt(block: number, tables: Tables) {
+function chainAt(block: number, tables: Tables, onQuery: (sql: string) => void = () => {}) {
   const chain: { block: number; tables: Tables; through?: number } = { block, tables }
   const query: Query = async <T,>(sql: string) => {
+    onQuery(sql)
     if (sql.includes(".blocks")) return [{ block_num: String(chain.block), hash: `${chain.block}`.padStart(64, "0"), timestamp: 1_800_000_000_000 }] as T[]
     return fakeAmp(chain.tables, chain.through ?? chain.block).query<T>(sql)
   }
@@ -341,6 +342,135 @@ describe("watchWallet", () => {
     await updates.return()
   })
 
+  describe("a reorg the tables haven't rewritten yet", () => {
+    const OLD: Tables = { legs: [creditAt(100, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(300, "5") }
+    const NEW: Tables = { legs: [creditAt(120, "bb", "7")], reference_prices: [{ ...REFERENCE, block_num: "120" }], balances: balancesThrough(300, "7") }
+    const legsAt = async (updates: AsyncGenerator<WalletUpdate, void, void>) => (await updates.next()).value as WalletUpdate
+
+    it("replaces the blocks once they do, past the ones it would re-read anyway", async () => {
+      const { chain, hand, client } = chainAt(150, OLD)
+      const updates = client.watchWallet(ADDRESS)
+      await updates.next()
+
+      // The chain has switched, and the tables still answer with the old rows, so this read looks like any other.
+      chain.block = 151
+      chain.through = 150
+      hand.send(dataOf(151, 100, "0xnew"), new Error("gone before the block was complete"))
+      const provisional = await legsAt(updates)
+      assert.equal(provisional.reorgFrom, 100)
+      assert.equal(provisional.unsettledFrom, 100)
+      assert.deepEqual(legsOf(provisional), ["100:0xaa:5"])
+
+      chain.tables = NEW
+      chain.block = chain.through = 152
+      const replaced = await legsAt(updates)
+      assert.equal(replaced.reorgFrom, null)
+      assert.equal(replaced.unsettledFrom, 100)
+      assert.deepEqual(legsOf(replaced), ["120:0xbb:7"])
+      await updates.return()
+    })
+
+    it("goes on for as long as the tables take, then goes back to reading recent blocks", async () => {
+      const windows: string[] = []
+      const { chain, hand, client } = chainAt(150, OLD, (sql) => {
+        const window = /\.legs WHERE block_num BETWEEN (\d+) AND/.exec(sql)?.[1]
+        if (window) windows.push(window)
+      })
+      const updates = client.watchWallet(ADDRESS)
+      await updates.next()
+      chain.block = 151
+      chain.through = 150
+      hand.send(dataOf(151, 100, "0xnew"), new Error("gone before the block was complete"))
+      await legsAt(updates)
+
+      // Still the old rows for 29 blocks past the old tip, then the new ones at the last read that goes back.
+      for (const block of [160, 180]) {
+        chain.block = chain.through = block
+        assert.deepEqual(legsOf(await legsAt(updates)), ["100:0xaa:5"])
+      }
+      chain.tables = NEW
+      chain.block = chain.through = 181
+      const settled = await legsAt(updates)
+      assert.deepEqual(legsOf(settled), ["120:0xbb:7"])
+      assert.equal(settled.unsettledFrom, null)
+      assert.equal(windows.at(-1), "100")
+
+      chain.block = chain.through = 182
+      await legsAt(updates)
+      assert.equal(windows.at(-1), "152")
+      await updates.return()
+    })
+
+    it("replaces a wallet nobody read while it settled", async () => {
+      const { chain, hand, client } = chainAt(150, OLD)
+      const other = `0x${"00".repeat(19)}bb`
+      assert.deepEqual(legsOf({ ...(await client.getPortfolio(ADDRESS)), via: null, reorgFrom: null }), ["100:0xaa:5"])
+      const updates = client.watchWallet(other)
+      await updates.next()
+      chain.block = 151
+      chain.through = 150
+      hand.send(dataOf(151, 100, "0xnew"), new Error("gone before the block was complete"))
+      await legsAt(updates)
+      assert.equal((await client.getPortfolio(ADDRESS)).unsettledFrom, 100)
+
+      // Only the other wallet follows the chain, well past the point where it's settled. Then this one is read again.
+      for (const block of [190, 191]) {
+        chain.block = chain.through = block
+        await legsAt(updates)
+      }
+      assert.equal((await client.getPortfolio(other)).unsettledFrom, null)
+      chain.tables = NEW
+      const late = await client.getPortfolio(ADDRESS)
+      assert.deepEqual(late.legs.filter((leg) => !leg.opening).map((leg) => leg.txHash), ["0xbb"])
+      assert.equal(late.unsettledFrom, null)
+      await updates.return()
+    })
+
+    it("replaces them when the reorg reaches back past the wallet's first block", async () => {
+      const { chain, hand, client } = chainAt(150, OLD)
+      const updates = client.watchWallet(ADDRESS, { from: 110 })
+      await updates.next()
+      chain.block = 151
+      chain.through = 150
+      chain.tables = { ...OLD, legs: [creditAt(115, "cc", "1")], reference_prices: [{ ...REFERENCE, block_num: "115" }] }
+      hand.send(dataOf(151, 100, "0xnew"), new Error("gone before the block was complete"))
+      assert.deepEqual(legsOf(await legsAt(updates)), ["115:0xcc:1"])
+
+      chain.tables = NEW
+      chain.block = chain.through = 152
+      assert.deepEqual(legsOf(await legsAt(updates)), ["120:0xbb:7"])
+      await updates.return()
+    })
+
+    it("replaces a read as of a fixed block, which never gets past the reorg itself", async () => {
+      const { chain, hand, client } = chainAt(150, OLD)
+      const asOf = { to: 125 }
+      const hashes = async () => (await client.getPortfolio(ADDRESS, asOf)).legs.filter((leg) => !leg.opening).map((leg) => leg.txHash)
+      assert.deepEqual(await hashes(), ["0xaa"])
+      // Past any ordinary reorg: this read is fixed now.
+      chain.block = chain.through = 180
+      await hashes()
+      chain.block = chain.through = 181
+      await hashes()
+
+      const updates = client.watchWallet(ADDRESS)
+      await updates.next()
+      chain.block = 182
+      chain.through = 181
+      hand.send(dataOf(182, 100, "0xnew"), new Error("gone before the block was complete"))
+      await legsAt(updates)
+      assert.deepEqual(await hashes(), ["0xaa"])
+      assert.equal((await client.getPortfolio(ADDRESS, asOf)).unsettledFrom, 100)
+
+      chain.tables = NEW
+      assert.deepEqual(await hashes(), ["0xbb"])
+      chain.block = chain.through = 212
+      await hashes()
+      assert.equal((await client.getPortfolio(ADDRESS, asOf)).unsettledFrom, null)
+      await updates.return()
+    })
+  })
+
   it("gives each block the dataset finishes while it's behind a head that doesn't move", async () => {
     const { chain, hand, client } = chainAt(105, { legs: [], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(120, "0") })
     chain.through = 100
@@ -416,7 +546,7 @@ describe("wallets.rewind", () => {
     held = true
     const reading = wallets.get(ADDRESS, { from: 50 })
     let rewound = false
-    const rewinding = wallets.rewind(100).then(() => (rewound = true))
+    const rewinding = wallets.rewind(100, 100).then(() => (rewound = true))
     await new Promise((resolve) => setTimeout(resolve, 5))
     assert.equal(rewound, false)
     held = false
@@ -470,6 +600,55 @@ describe("the server's live events while the dataset catches up", () => {
       assert.match((await reader.read()).value!, /^event: head\ndata: \{"blockNum":105,/)
       assert.equal(await toBlock(), through)
     }
+    stop.abort()
+    await reader.cancel().catch(() => {})
+  })
+})
+
+describe("the server after a reorg the tables haven't rewritten yet", () => {
+  const hand = handStream()
+  const state: { head: number; through: number; tables: Tables } = { head: 150, through: 150, tables: { legs: [creditAt(100, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(200, "5") } }
+  let server: Server
+  let base: string
+
+  before(async () => {
+    const query: Query = async <T,>(sql: string) => fakeAmp(state.tables, state.through).query<T>(sql)
+    const source = { ...datasetSource(query, { dataset: "benface/pricetag@0.0.1", baseDataset: "b", startBlock: 50, network: "base_mainnet" }), head: async () => ({ blockNum: state.head, timestamp: new Date(1_800_000_000_000).toISOString() }) }
+    const readMark = async () => ({ blockNum: state.head, hash: `0x${state.head}` })
+    const api = createApi({}, {
+      source,
+      readRates: async () => ({ byBlock: {}, latest: null }),
+      proofs: { datasets: async () => [], readBlock: async () => null },
+      follow: { stream: hand.stream, sql: "SELECT 1", readMark, logger: QUIET, pollMs: 1, retryMs: 60_000 },
+    })
+    server = createServer((req, res) => void api(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+  after(() => {
+    server.closeAllConnections()
+    server.close()
+  })
+
+  it("replaces the blocks once they do", async () => {
+    const hashes = async () => ((await (await fetch(`${base}/api/wallet/${ADDRESS}`)).json()) as { legs: { txHash: string; opening?: boolean }[] }).legs.filter((l) => !l.opening).map((l) => l.txHash)
+    assert.deepEqual(await hashes(), ["0xaa"])
+
+    const stop = new AbortController()
+    const events = await fetch(`${base}/api/events`, { signal: stop.signal })
+    const reader = events.body!.pipeThrough(new TextDecoderStream()).getReader()
+    await reader.read()
+    while (hand.resumes.length === 0) await new Promise((resolve) => setTimeout(resolve, 1))
+
+    state.head = 151
+    hand.send(dataOf(151, 100, "0xnew"), new Error("gone before the block was complete"))
+    assert.match((await reader.read()).value!, /"via":"polling"/)
+    assert.deepEqual(await hashes(), ["0xaa"])
+
+    state.tables = { legs: [creditAt(120, "bb", "7")], reference_prices: [{ ...REFERENCE, block_num: "120" }], balances: balancesThrough(200, "7") }
+    state.head = state.through = 152
+    await reader.read()
+    assert.deepEqual(await hashes(), ["0xbb"])
     stop.abort()
     await reader.cancel().catch(() => {})
   })
