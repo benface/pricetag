@@ -54,16 +54,17 @@ Both go through the same path after that, and they gave identical legs on the wa
 
 ## Rules the numbers follow
 
-- Price and cost are separate. A price is a shared fact labeled `oracle` or `swap`. A cost is this wallet's, labeled `paid` or `unknown`.
-- `unknown` is never $0. A position with an unknown cost shows "PnL unavailable", and totals say what they leave out.
+- Price and cost are separate. A price is a shared fact labeled `oracle` or `swap`. A cost is this wallet's, labeled `paid` or `unknown`. A swap's cost and proceeds are what actually changed hands, valued on the side with an oracle, preferring USDC. They aren't the oracle price of what was bought or sold.
+- `unknown` is never $0. A position with an unknown cost shows "PnL unavailable", totals say what they leave out, and a total with nothing known shows as unavailable.
+- Coverage only moves up to the block every table has processed, so a lagging dataset can't skip blocks, and the UI says when it's behind.
 - ETH and WETH are one position, so wrapping is never a sale.
-- A swap price outside a token's plausible range is rejected, and the leg has no price.
+- A swap whose implied price is outside a token's plausible range, or far from its oracle, is rejected. It has no value on either side.
 
 ## Known gaps
 
 - Amounts are what moved since the first block read, not full balances. Reconciling against onchain balances is next.
 - Only the allowlist in `src/core/tokens.ts` is tracked. A swap into an unlisted token looks like a transfer out, which carries its cost away with no gain or loss.
 - Only ETH and USDC have a current price, so other tokens show their cost but no value or unrealized PnL yet.
-- A transaction that isn't one token out and one in, like a split route, has no swap price and leaves its legs `unknown`.
+- A split route has no swap price, because the dataset only prices an account's single pair. If it nets to one token out and one in, what was paid is still known, but the token has no price at that block. Anything messier leaves its legs `unknown`.
 - There are no traces: a WETH `Withdrawal` counts as ETH paid to the transaction's sender, and other internal ETH transfers aren't seen. Smart wallets, whose transactions are sent by a bundler, won't get that ETH.
 - Gas is L2 gas only, because Amp's data has no L1 data fee.

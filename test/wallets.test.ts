@@ -21,7 +21,7 @@ const row = (block: number, amount = "5"): LegRow => ({
 })
 const reference = (block: number): ReferenceRow => ({ block_num: block, eth_usd: "240000000000", usdc_usd: "100000000" })
 
-function fake(chain: Map<number, LegRow[]>, latest: () => ReferenceRow | null) {
+function fake(chain: Map<number, LegRow[]>, latest: () => ReferenceRow | null, processed: (head: number) => number | null = (head) => head) {
   const windows: [number, number][] = []
   const referenceReads: number[][] = []
   const source: Source = {
@@ -29,6 +29,7 @@ function fake(chain: Map<number, LegRow[]>, latest: () => ReferenceRow | null) {
     startBlock: null,
     historyBlocks: 100,
     head: async () => null,
+    processedThrough: async (_, head) => processed(head),
     async readWindow(_, from, to): Promise<WindowRows> {
       windows.push([from, to])
       return { rows: [...chain.entries()].filter(([b]) => b >= from && b <= to).flatMap(([, r]) => r), priced: null, gasUnknownTxs: [] }
@@ -60,6 +61,69 @@ describe("the wallet cache", () => {
     assert.deepEqual(windows[1], [971, 1002])
     assert.deepEqual(next.legs.map((l) => l.blockNum), [950, 1001])
     assert.deepEqual(next.coverage, { fromBlock: 900, toBlock: 1002 })
+  })
+
+  describe("when the dataset lags the chain", () => {
+    it("a lag past the reorg tail, then recovery, loses nothing", async () => {
+      let head = 1000
+      let through = 960
+      const chain = new Map([
+        [950, [row(950)]],
+        [970, [row(970)]],
+      ])
+      const { source, windows } = fake(chain, () => reference(head), () => through)
+      const wallets = createWallets(source, async () => headAt(head)())
+
+      const behind = await wallets.get(ME)
+      assert.deepEqual(behind.legs.map((l) => l.blockNum), [950])
+      assert.deepEqual(behind.coverage, { fromBlock: 900, toBlock: 960 })
+      assert.equal(behind.latest.blockNum, 1000)
+
+      head = 1001
+      through = 1001
+      const recovered = await wallets.get(ME)
+      assert.deepEqual(recovered.legs.map((l) => l.blockNum), [950, 970])
+      assert.deepEqual(recovered.coverage, { fromBlock: 900, toBlock: 1001 })
+      assert.deepEqual(windows.at(-1), [931, 1001])
+    })
+
+    it("no progress means no wallet read, but the head still moves", async () => {
+      let head = 1000
+      const { source, windows } = fake(new Map(), () => reference(head), () => 960)
+      const wallets = createWallets(source, async () => headAt(head)())
+      await wallets.get(ME)
+      head = 1005
+      const wallet = await wallets.get(ME)
+      assert.equal(windows.length, 1)
+      assert.equal(wallet.latest.blockNum, 1005)
+      assert.equal(wallet.coverage.toBlock, 960)
+    })
+
+    it("a stalled dataset's price expires instead of going stale", async () => {
+      let head = 1000
+      let latest: ReferenceRow | null = reference(960)
+      const { source } = fake(new Map(), () => latest, () => 960)
+      const wallets = createWallets(source, async () => headAt(head)())
+      assert.ok((await wallets.get(ME)).prices.ETH)
+      head = 1100
+      latest = null
+      assert.equal((await wallets.get(ME)).prices.ETH, undefined)
+    })
+
+    it("a dataset that hasn't started says so, and reads from its start once it has", async () => {
+      let head = 1000
+      let through: number | null = null
+      const chain = new Map([[905, [row(905)]]])
+      const { source, windows } = fake(chain, () => null, () => through)
+      const wallets = createWallets(source, async () => headAt(head)())
+      const empty = await wallets.get(ME)
+      assert.deepEqual(empty.coverage, { fromBlock: 900, toBlock: 899 })
+      assert.equal(windows.length, 0)
+      head = 1001
+      through = 910
+      assert.deepEqual((await wallets.get(ME)).legs.map((l) => l.blockNum), [905])
+      assert.deepEqual(windows[0], [900, 910])
+    })
   })
 
   it("doesn't read again until there's a new block", async () => {

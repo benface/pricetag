@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { isAddress } from "../core/api.ts"
+import { hasStarted, isAddress, isBehind, type WalletResponse } from "../core/api.ts"
 import type { Method } from "../core/fold.ts"
-import { foldPositions, pnlOverTime, sumTotals, type Exclusion, type PnlPoint, type Position } from "../core/portfolio.ts"
+import { foldPositions, hasAnswer, pnlOverTime, sumTotals, type Coverage, type Exclusion, type PnlPoint, type Position } from "../core/portfolio.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
 import { formatAmount, formatDuration, formatPrice, formatSignedUsd, formatUsd } from "../core/format.ts"
@@ -159,7 +159,7 @@ export function App() {
           />
           <button type="submit">Look up</button>
         </form>
-        {wallet ? <LiveBadge mode={wallet.mode} block={wallet.latest.blockNum} stale={error !== null} /> : null}
+        {wallet ? <LiveBadge wallet={wallet} stale={error !== null} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
 
@@ -183,15 +183,25 @@ export function App() {
 
       {wallet ? (
         <main>
-          {error ? <p className="notice warn">⚠ {error} These numbers are from block {wallet.latest.blockNum.toLocaleString("en-US")} and aren't updating.</p> : null}
+          {error ? <p className="notice warn">⚠ {error} These numbers are through block {wallet.coverage.toBlock.toLocaleString("en-US")} and aren't updating.</p> : null}
+          {isBehind(wallet) ? (
+            <p className="notice warn">
+              ⚠{" "}
+              {hasStarted(wallet)
+                ? `The Pricetag dataset has only processed up to block ${wallet.coverage.toBlock.toLocaleString("en-US")}, ${(wallet.latest.blockNum - wallet.coverage.toBlock).toLocaleString("en-US")} blocks behind the chain. Anything after that isn't in these numbers yet.`
+                : `The Pricetag dataset hasn't reached block ${wallet.coverage.fromBlock.toLocaleString("en-US")} yet, so there's nothing to show for this wallet so far.`}
+            </p>
+          ) : null}
           {wallet.mode === "demo" ? <p className="notice">Demo data, not a real wallet. Every case the app has to get right is in here.</p> : null}
-          <p className="notice">
-            Covers blocks {wallet.coverage.fromBlock.toLocaleString("en-US")} to {wallet.coverage.toBlock.toLocaleString("en-US")} (about {formatDuration(wallet.coverage.toBlock - wallet.coverage.fromBlock)}) and 10 tokens plus ETH. Anything earlier or
-            off the list isn't counted, so amounts are what moved in this window, not full balances.
-          </p>
+          {hasStarted(wallet) ? (
+            <p className="notice">
+              Covers blocks {wallet.coverage.fromBlock.toLocaleString("en-US")} to {wallet.coverage.toBlock.toLocaleString("en-US")} (about {formatDuration(wallet.coverage.toBlock - wallet.coverage.fromBlock)}) and 10 tokens plus ETH. Anything earlier or
+              off the list isn't counted, so amounts are what moved in this window, not full balances.
+            </p>
+          ) : null}
           {wallet.gasUnknownTxs.length > 0 ? <p className="notice warn">⚠ Gas couldn't be worked out for {wallet.gasUnknownTxs.length} transactions, so ETH is overstated by that much.</p> : null}
 
-          {wallet.legs.length === 0 ? (
+          {wallet.legs.length === 0 && !hasStarted(wallet) ? null : wallet.legs.length === 0 ? (
             <section className="empty">
               <p>
                 No movements for <code>{wallet.address}</code> in these blocks.
@@ -203,7 +213,7 @@ export function App() {
                 <div className="headline">
                   <span className="muted small">Total PnL</span>
                   <Num label="Total PnL" onClick={() => openTotal("pnl")} tone={toneOf(totals.pnlUsdMicros)}>
-                    <span className="big">{formatSignedUsd(totals.pnlUsdMicros)}</span>
+                    <span className="big">{totals.pnlUsdMicros === null ? "⚠ Unavailable" : formatSignedUsd(totals.pnlUsdMicros)}</span>
                   </Num>
                   {totals.excluded.length > 0 ? (
                     <p className="excluded">⚠ Excludes {describeExcluded(totals.excluded)}.</p>
@@ -213,18 +223,10 @@ export function App() {
                   {totals.unpricedGas ? <p className="excluded">⚠ Some gas had no price at its block, and isn't in this total.</p> : null}
                 </div>
                 <dl className="stats">
-                  <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value}>
-                    {formatUsd(totals.valueUsdMicros)}
-                  </Stat>
-                  <Stat label="Realized" onClick={() => openTotal("realized")} coverage={totals.coverage.realized}>
-                    {formatSignedUsd(totals.realizedUsdMicros)}
-                  </Stat>
-                  <Stat label="Unrealized" onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized}>
-                    {formatSignedUsd(totals.unrealizedUsdMicros)}
-                  </Stat>
-                  <Stat label="Gas paid" onClick={() => openTotal("gas")}>
-                    {formatUsd(totals.gasUsdMicros)}
-                  </Stat>
+                  <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value} value={totals.valueUsdMicros && formatUsd(totals.valueUsdMicros)} />
+                  <Stat label="Realized" onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedUsdMicros && formatSignedUsd(totals.realizedUsdMicros)} />
+                  <Stat label="Unrealized" onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedUsdMicros && formatSignedUsd(totals.unrealizedUsdMicros)} />
+                  <Stat label="Gas paid" onClick={() => openTotal("gas")} coverage={{ known: 1, missing: totals.unpricedGas ? 1 : 0 }} value={totals.gasUsdMicros && formatUsd(totals.gasUsdMicros)} />
                 </dl>
                 <div className="method" role="group" aria-label="Cost method">
                   {(["average", "fifo"] as const).map((m) => (
@@ -246,26 +248,25 @@ export function App() {
   )
 }
 
-function Stat({ label, onClick, coverage, children }: { label: string; onClick: () => void; coverage?: { known: number; missing: number }; children: ReactNode }) {
-  const nothingKnown = coverage !== undefined && coverage.missing > 0 && coverage.known === 0
+function Stat({ label, onClick, coverage, value }: { label: string; onClick: () => void; coverage: Coverage; value: string | null }) {
   return (
     <div>
       <dt className="muted small">{label}</dt>
       <dd>
-        <Num label={label} onClick={onClick} tone={nothingKnown ? "warn" : null}>
-          {nothingKnown ? "⚠ Unavailable" : children}
+        <Num label={label} onClick={onClick} tone={value === null ? "warn" : null}>
+          {value ?? "⚠ Unavailable"}
         </Num>
-        {!nothingKnown && coverage && coverage.missing > 0 ? <span className="partial">⚠ partial</span> : null}
+        {value !== null && hasAnswer(coverage) && coverage.missing > 0 ? <span className="partial">⚠ partial</span> : null}
       </dd>
     </div>
   )
 }
 
-function LiveBadge({ mode, block, stale }: { mode: string; block: number; stale: boolean }) {
-  if (mode === "demo") return <span className="badge">Demo data</span>
-  return (
-    <span className={stale ? "badge warn" : "badge live"}>
-      {stale ? "⚠ Not updating" : "Live"} · block {block.toLocaleString("en-US")} · {mode === "dataset" ? "Pricetag dataset" : "raw dataset"}
-    </span>
-  )
+function LiveBadge({ wallet, stale }: { wallet: WalletResponse; stale: boolean }) {
+  if (wallet.mode === "demo") return <span className="badge">Demo data</span>
+  const source = wallet.mode === "dataset" ? "Pricetag dataset" : "raw dataset"
+  const block = wallet.coverage.toBlock.toLocaleString("en-US")
+  if (stale) return <span className="badge warn">⚠ Not updating · block {block} · {source}</span>
+  if (isBehind(wallet)) return <span className="badge warn">⚠ Catching up · block {block} · {source}</span>
+  return <span className="badge live">Live · block {block} · {source}</span>
 }

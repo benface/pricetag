@@ -1,7 +1,7 @@
 // The portfolio a wallet's legs fold into, for clients that don't run the fold themselves.
 // One source of PnL logic: this calls what the browser calls, and adds nothing to the math.
 
-import type { ExplanationLeg, ExplanationResponse, PnlStatus, PortfolioPosition, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
+import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PnlStatus, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting, explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../src/core/explain.ts"
 import type { Method } from "../src/core/fold.ts"
 import { foldPositions, pnlOverTime, sumTotals, type LegEffect, type Position, type Totals } from "../src/core/portfolio.ts"
@@ -30,14 +30,18 @@ export function parseExplainTarget(params: URLSearchParams): ExplainTarget | nul
 function positionOf({ asset, decimals, price, values, state, effects }: Position): PortfolioPosition {
   const held = BigInt(values.qty) > 0n
   const { realizedUsdMicros: realized, unrealizedUsdMicros: unrealized } = values
-  const pnl = realized === null ? null : !held ? realized : unrealized === null ? null : (BigInt(realized) + BigInt(unrealized)).toString()
+  const pnl = (() => {
+    // Units left that we never saw arrive, so whatever this position shows isn't all of it. Totals leave it out for the same reason.
+    if (realized === null || BigInt(state.shortfallQty) > 0n) return null
+    if (!held) return realized
+    return unrealized === null ? null : (BigInt(realized) + BigInt(unrealized)).toString()
+  })()
   return { asset, decimals, note: asset === "ETH" ? "incl. WETH" : null, price, values, pnlUsdMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length }
 }
 
 function pnlStatusOf(totals: Totals, gasUnknownTxs: readonly string[]): PnlStatus {
-  if (totals.excluded.length === 0 && !totals.unpricedGas && gasUnknownTxs.length === 0) return "complete"
-  const anythingKnown = totals.coverage.unrealized.known > 0 || BigInt(totals.realizedUsdMicros) !== 0n || BigInt(totals.gasUsdMicros) !== 0n
-  return anythingKnown ? "partial" : "unavailable"
+  if (totals.pnlUsdMicros === null) return "unavailable"
+  return totals.excluded.length === 0 && !totals.unpricedGas && gasUnknownTxs.length === 0 ? "complete" : "partial"
 }
 
 export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioResponse {
@@ -51,6 +55,7 @@ export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioRe
     // ETH is the allowlist's first entry, and everything else is a token.
     trackedTokens: TOKENS.length - 1,
     latest: wallet.latest,
+    progress: { started: hasStarted(wallet), behindBlocks: isBehind(wallet) ? wallet.latest.blockNum - wallet.coverage.toBlock : 0 },
     gasUnknownTxs: wallet.gasUnknownTxs,
     positions: positions.map(positionOf),
     totals,
@@ -79,21 +84,11 @@ function legOf(effect: LegEffect): ExplanationLeg {
   }
 }
 
-/** A total with nothing known in it isn't an answer, so it has no value and no sum. What it leaves out still gets said. */
-function explainKnownTotal(wallet: WalletResponse, positions: Position[], metric: TotalMetric): Explanation {
-  const totals = sumTotals(positions)
-  const explanation = explainTotal(positions, totals, metric)
-  if (metric === "pnl") return pnlStatusOf(totals, wallet.gasUnknownTxs) === "unavailable" ? { ...explanation, value: null, lines: explanation.lines.slice(1) } : explanation
-  if (metric === "gas") return explanation
-  const { known, missing } = totals.coverage[metric]
-  return missing > 0 && known === 0 ? { ...explanation, value: null } : explanation
-}
-
 /** The same explanation the web panel shows for a click on this number. null when the wallet has no such asset or transaction. */
 export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget): ExplanationResponse | null {
   const positions = foldPositions(wallet.legs, method, wallet.prices)
   const explanation = ((): Explanation | null => {
-    if (target.kind === "total") return explainKnownTotal(wallet, positions, target.metric)
+    if (target.kind === "total") return explainTotal(positions, sumTotals(positions), target.metric)
     if (target.kind === "asset") {
       const position = positions.find((p) => p.asset === target.asset)
       return position ? explainMetric(position, target.metric) : null

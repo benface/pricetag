@@ -11,9 +11,11 @@ export default defineConfig(({ command, mode }) => ({
         // Runs the API inside Vite in dev. Env vars reach this Node process only; Vite exposes just VITE_* to the browser.
         const handle = createApi({ ...process.env, ...loadEnv(mode, process.cwd(), "") })
         server.middlewares.use((req, res, next) => {
-          void handle(req, res).then((handled) => {
-            if (!handled) next()
-          })
+          handle(req, res)
+            .then((handled) => {
+              if (!handled) next()
+            })
+            .catch(next)
         })
       },
     },

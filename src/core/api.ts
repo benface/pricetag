@@ -12,7 +12,10 @@ export type Head = { blockNum: number; timestamp: string }
 export type WalletResponse = {
   address: string
   mode: Mode
-  /** The blocks read. Anything before `fromBlock` isn't seen, so balances are only what moved since then. */
+  /**
+   * The blocks read. Anything before `fromBlock` isn't seen, so balances are only what moved since then.
+   * `toBlock` can be behind `latest` while a derived table catches up, and is below `fromBlock` until it starts.
+   */
   coverage: { fromBlock: number; toBlock: number }
   legs: PricedLeg[]
   references: ReferenceRow[]
@@ -29,7 +32,7 @@ export type PortfolioPosition = {
   note: string | null
   price: LatestPrice | null
   values: PositionValues
-  /** Realized plus unrealized. null when either is unknown on what's still held. Never 0 in that case. */
+  /** Realized plus unrealized. null when either is unknown on what's still held, or units left that we never saw arrive. */
   pnlUsdMicros: string | null
   shortfallQty: string
   legCount: number
@@ -37,7 +40,7 @@ export type PortfolioPosition = {
 
 /**
  * Whether `totals.pnlUsdMicros` can be read as the wallet's PnL.
- * partial: it leaves something out, and `totals.excluded` says what. unavailable: it has nothing known in it.
+ * partial: it leaves something out, and `totals.excluded` says what. unavailable: it's null, because nothing in it is known.
  */
 export type PnlStatus = "complete" | "partial" | "unavailable"
 
@@ -50,6 +53,8 @@ export type PortfolioResponse = {
   /** How many tokens the allowlist tracks, on top of ETH. Anything off it isn't counted. */
   trackedTokens: number
   latest: Head
+  /** Whether what's read has reached the chain. `behindBlocks` is 0 until it's far enough behind to say so. */
+  progress: { started: boolean; behindBlocks: number }
   gasUnknownTxs: string[]
   positions: PortfolioPosition[]
   totals: Totals
@@ -85,6 +90,14 @@ export type ExplanationLeg = {
   /** The rows this leg nets together, in words, or null when it's just one. */
   netting: string | null
 }
+
+/** A derived table is normally a block or two behind the chain. More than this is worth saying out loud. */
+const BEHIND_BLOCKS = 5
+
+type Progress = Pick<WalletResponse, "coverage" | "latest">
+
+export const hasStarted = ({ coverage }: Progress) => coverage.toBlock >= coverage.fromBlock
+export const isBehind = ({ coverage, latest }: Progress) => latest.blockNum - coverage.toBlock > BEHIND_BLOCKS
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/
 

@@ -11,6 +11,10 @@
     "blockNum": 53505400,
     "timestamp": "2026-11-04T11:00:00.000Z"
   },
+  "progress": {
+    "started": true,
+    "behindBlocks": 0
+  },
   "gasUnknownTxs": [],
   "positions": [
     {
@@ -115,7 +119,7 @@
   "totals": {
     "valueUsdMicros": "4721496399",
     "realizedUsdMicros": "74985000",
-    "unrealizedUsdMicros": "0",
+    "unrealizedUsdMicros": null,
     "gasUsdMicros": "599760",
     "pnlUsdMicros": "74385240",
     "excluded": [
@@ -163,12 +167,16 @@
         "missing": 3
       },
       "realized": {
-        "known": 3,
+        "known": 1,
         "missing": 2
       },
       "unrealized": {
         "known": 0,
         "missing": 5
+      },
+      "pnl": {
+        "known": 2,
+        "missing": 7
       }
     }
   },
@@ -178,14 +186,14 @@
       "blockNum": 53500000,
       "timestamp": "2026-11-04T08:00:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000001",
-      "pnlUsdMicros": "0",
+      "pnlUsdMicros": null,
       "excludedCount": 1
     },
     {
       "blockNum": 53500150,
       "timestamp": "2026-11-04T08:05:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000002",
-      "pnlUsdMicros": "0",
+      "pnlUsdMicros": null,
       "excludedCount": 2
     },
     {

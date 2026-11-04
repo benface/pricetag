@@ -50,14 +50,45 @@ describe("portfolioOf", () => {
   it("says the total is unavailable when nothing in it is known", () => {
     const onlyUnknown = DEMO_WALLET.legs.filter((l) => l.asset === "cbBTC")
     const portfolio = portfolioOf(walletWith({ legs: onlyUnknown }), "average")
-    assert.equal(portfolio.totals.pnlUsdMicros, "0")
+    assert.equal(portfolio.totals.pnlUsdMicros, null)
     assert.equal(portfolio.pnlStatus, "unavailable")
+    assert.deepEqual(portfolio.points.map((p) => p.pnlUsdMicros), [null, null])
   })
 
   it("says the total is partial when gas couldn't be worked out, even with nothing excluded", () => {
     const portfolio = portfolioOf(walletWith({ legs: [], gasUnknownTxs: ["0xabc"] }), "average")
     assert.equal(portfolio.totals.excluded.length, 0)
-    assert.notEqual(portfolio.pnlStatus, "complete")
+    assert.equal(portfolio.pnlStatus, "partial")
+  })
+
+  it("treats a known zero as an answer", () => {
+    const portfolio = portfolioOf(walletWith({ legs: [] }), "average")
+    assert.equal(portfolio.totals.pnlUsdMicros, "0")
+    assert.equal(portfolio.pnlStatus, "complete")
+  })
+
+  it("keeps the demo's early unknown points unknown, and explains them that way", () => {
+    const portfolio = portfolioOf(DEMO_WALLET, "average")
+    const first = portfolio.points[0]
+    assert.equal(first?.pnlUsdMicros, null)
+    const explanation = explainPortfolio(DEMO_WALLET, "average", { kind: "tx", txHash: first?.txHash as string })
+    assert.equal(explanation?.value, null)
+    assert.ok(portfolio.points.some((p) => p.pnlUsdMicros !== null))
+  })
+
+  it("gives no PnL to a position whose history is incomplete", () => {
+    const leg = DEMO_WALLET.legs.find((l) => l.asset === "AERO" && BigInt(l.delta) > 0n) as (typeof DEMO_WALLET.legs)[number]
+    const out = { ...leg, id: "out", delta: `-${BigInt(leg.delta) * 2n}`, kind: "transfer" as const, costUsdMicros: null, proceedsUsdMicros: null }
+    const position = portfolioOf(walletWith({ legs: [leg, out] }), "average").positions[0]
+    assert.ok(BigInt(position?.shortfallQty ?? "0") > 0n)
+    assert.equal(position?.pnlUsdMicros, null)
+  })
+
+  it("says how far what's read is behind the chain", () => {
+    const at = (toBlock: number, fromBlock = 100) => portfolioOf(walletWith({ legs: [], coverage: { fromBlock, toBlock }, latest: { blockNum: 200, timestamp: DEMO_WALLET.latest.timestamp } }), "average").progress
+    assert.deepEqual(at(199), { started: true, behindBlocks: 0 })
+    assert.deepEqual(at(150), { started: true, behindBlocks: 50 })
+    assert.deepEqual(at(99), { started: false, behindBlocks: 101 })
   })
 
   it("keeps a closed position's realized PnL, with nothing unrealized to add", () => {
@@ -72,7 +103,7 @@ describe("portfolioOf", () => {
     const wallet = walletWith({ legs: DEMO_WALLET.legs.filter((l) => l.asset === "cbBTC") })
     const pnl = explainPortfolio(wallet, "average", { kind: "total", metric: "pnl" })
     assert.equal(pnl?.value, null)
-    assert.ok(pnl?.lines.every((line) => !line.includes("$0.00")))
+    assert.ok(pnl?.lines.every((line) => !line.includes("$0.00 ")))
     assert.ok(pnl?.lines.some((line) => line.includes("Not included: cbBTC")))
     assert.equal(explainPortfolio(wallet, "average", { kind: "total", metric: "value" })?.value, null)
     assert.equal(explainPortfolio(wallet, "average", { kind: "total", metric: "unrealized" })?.value, null)
