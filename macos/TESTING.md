@@ -58,7 +58,7 @@ Don't do it yourself. Finish, and put a short checklist for benface in your hand
 
 - All of it is in `App/TestMode/` and `OffscreenRenderer.swift`, inside `#if DEBUG`. The fixtures are left out of release builds in `App.xcconfig`.
 - Debug builds have their own bundle ID, and the test mode's settings are only registered in memory, so it never reads or writes anyone's settings.
-- It never touches a key. Its hot wallet is never started, has a signer that can't make or sign with one, and keeps nothing, so it never reaches the Keychain or the Secure Enclave. The spending money screens aren't scenes yet.
+- It never touches a key. Its hot wallet is never started, has a signer that can't make or sign with one, and keeps nothing, so it never reaches the Keychain or the Secure Enclave. The Send scenes read once from a chain that's only a fixture, and can't send anything. The rest of the spending money screens aren't scenes yet.
 - `shot.sh` builds without the sandbox. A sandboxed build's container is tied to its signature, and macOS stops the launch to ask about it when that changes.
 - A real window quits itself after 60 seconds if `shot.sh` is gone by then.
 

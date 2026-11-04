@@ -44,7 +44,7 @@ struct MacApp: App {
         .menuBarExtraStyle(.window)
 
         Window(AppName.current, id: WindowID.main) {
-            MainWindow(store: store, navigation: navigation)
+            MainWindow(store: store, navigation: navigation, noteWriter: hotWallet)
                 .holdsDockPresence()
         }
         .defaultSize(width: 1120, height: 760)

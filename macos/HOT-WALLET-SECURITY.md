@@ -19,13 +19,18 @@ To check it yourself: `pnpm check:mac` for the logic, `pnpm check:keychain` for 
 
 ## Touch ID
 
-Manual sends (Sweep Everything, Replace Key, Delete) ask for Touch ID, or the login password where there's none. Automatic sweeps don't, because they have to run with nobody there.
+Manual sends (Send, Publish a Cost, Sweep Everything, Replace Key, Delete) ask for Touch ID, or the login password where there's none. Automatic sweeps don't, because they have to run with nobody there.
 
 - [ ] **It isn't enforced by the enclave.** The same wrapping key has to open with no prompt for sweeps, so the prompt lives in the app. It stops someone at an unlocked Mac, not malware running as this user.
 
 ## Where money can go
 
 - [x] Automatic sweeps only go to the chosen cold wallet, and only ever call a contract on the compiled-in allowlist. A test checks both the allowlist and the feeds against `src/core/tokens.ts`.
+- [x] A send goes wherever the user says, after Touch ID, but only ever moves ETH or calls a token on the allowlist. It refuses zero, this wallet, retired keys and token contracts, and an address with a wrong EIP-55 checksum. It's checked again against a fresh read before signing, and it stops during an alarm or a rotation.
+- [x] A send of ETH leaves the gas reserve, so it can't strand the tokens that are left.
+- [x] Publishing a cost signs a zero-value transaction from this wallet to itself, with data that says only the transaction, token and amount, and warns first that it's public for good. It can only come from this app's Resolve screen.
+- [x] Sends and notes are written to disk before they're broadcast, like sweeps, so they can't raise the alarm.
+- [ ] **A send's address is only as good as this screen.** Malware running as this user could change what's pasted, or what's shown. That's why there's a cap, and why Touch ID's prompt repeats the amount and the address.
 - [x] Unknown tokens are never called, not even to read their balance. They're listed separately, from Amp's data.
 - [x] Every signature includes chain ID 8453, so nothing signed can be replayed on another chain. Nothing is signed if the node says it's on another chain.
 - [x] Sweeps move tokens as they are, with no selling.

@@ -102,6 +102,9 @@ enum TestScene: String, CaseIterable {
     case popoverNoWallet = "popover-no-wallet"
     case popoverNotUpdating = "popover-not-updating"
     case settings
+    case send
+    case sendKnown = "send-known"
+    case publishCost = "publish-cost"
 
     enum Chrome { case titled, none }
 
@@ -110,7 +113,7 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .changeWallet, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve: .none
+        case .changeWallet, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve, .send, .sendKnown, .publishCost: .none
         default: .titled
         }
     }
@@ -132,7 +135,9 @@ enum TestScene: String, CaseIterable {
     func make() -> TestScreen {
         // Registered values stay in memory, so this never reads or writes anyone's settings, as long as nothing here changes one.
         let defaults = UserDefaults(suiteName: "com.benface.pricetag.mac.test-mode")!
-        defaults.register(defaults: hasWallet ? ["wallet": WalletAddress.demo] : [:])
+        var registered: [String: Any] = hasWallet ? ["wallet": WalletAddress.demo] : [:]
+        if self == .sendKnown, let book = try? JSONEncoder().encode(Book().answering(TestScene.recipient, .someoneElse, focus: nil)) { registered["answers"] = book }
+        defaults.register(defaults: registered)
         let source = FixtureSource(feed: feed)
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: .milliseconds(50), unreachableDelay: .seconds(30))
         store.start()
@@ -161,17 +166,49 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
         case .settings:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
+        case .send, .sendKnown:
+            // One read of a chain that isn't there, and no savings wallet, so it has nothing to sweep and nowhere to sweep it.
+            let wallet = HotWallet(signer: NoKeys(has: TestScene.hotWallet), settingsStore: NoSavedSettings(), stateStore: NoSavedState(active: TestScene.hotWallet), presence: NoOneThere(), portfolioSource: { source }, makeChain: { _ in FixtureChain() })
+            Task { await wallet.tick() }
+            let model = SendModel(wallet: wallet, store: store)
+            model.token = Base.tokens.first { $0.symbol == "USDC" }!
+            model.amountText = "12.50"
+            model.addressText = TestScene.recipient
+            return TestScreen(view: AnyView(SendSheet(model: model)), isReady: { wallet.snapshot != nil })
+        case .publishCost:
+            let draft = CostNoteDraft(wallet: TestScene.hotWallet.lowercased, txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
+            return TestScreen(view: AnyView(PublishCostSheet(draft: draft, typed: "250", publish: { _ in false }, problem: { nil })), isReady: isReady)
         }
     }
+
+    private static let hotWallet = EthereumAddress("0x00000000000000000000000000000000000de301")!
+    private static let recipient = "0x0000000000000000000000000000000000c0ffee"
+}
+
+/// A read with a little of each, from a chain that isn't there. It can't send anything, so nothing here can go anywhere.
+private struct FixtureChain: ChainClient {
+    struct NotInTestMode: Error {}
+
+    func snapshot(of address: EthereumAddress) async throws -> ChainSnapshot {
+        let usdc = Base.tokens.first { $0.symbol == "USDC" }!
+        return ChainSnapshot(chainID: Base.chainID, blockNumber: 1000, nonce: 0, balances: [Base.eth: 5_000_000_000_000_000, usdc: 40_000_000], ethUsdMicros: 3000 * Money.dollar, usdcUsdMicros: Money.dollar, fees: FeeQuote(maxFeePerGas: 10_000_000, maxPriorityFeePerGas: 1_000_000, l1FeeWei: 300_000_000_000))
+    }
+
+    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64 { throw NotInTestMode() }
+    func send(_ transaction: SignedTransaction) async throws { throw NotInTestMode() }
+    func receipt(of hash: String) async throws -> Receipt? { nil }
 }
 
 /// The test mode never makes, loads or signs with a key, and this is what makes sure of it.
 private struct NoKeys: Signer {
     struct NotInTestMode: Error {}
 
+    /// Only what to say about this address, for a screen that would otherwise say its key is missing. There's still no key.
+    var has: EthereumAddress?
+
     func createKey() async throws -> EthereumAddress { throw NotInTestMode() }
     func sign(_ transaction: UnsignedTransaction, from address: EthereumAddress) async throws -> SignedTransaction { throw NotInTestMode() }
-    func hasKey(_ address: EthereumAddress) async throws -> Bool { false }
+    func hasKey(_ address: EthereumAddress) async throws -> Bool { address == has }
     func deleteKey(_ address: EthereumAddress) async throws {}
     func addresses() async throws -> [EthereumAddress] { [] }
 }
@@ -182,7 +219,14 @@ private struct NoSavedSettings: WalletSettingsStore {
 }
 
 private struct NoSavedState: DeviceStateStore {
-    func load() throws -> DeviceWalletState { DeviceWalletState() }
+    var active: EthereumAddress?
+
+    func load() throws -> DeviceWalletState {
+        var state = DeviceWalletState()
+        state.active = active
+        return state
+    }
+
     func save(_ state: DeviceWalletState) throws {}
 }
 

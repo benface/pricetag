@@ -68,4 +68,26 @@ public enum Money {
     public static func amount(ofUsdMicros usd: UInt128, priceMicros: UInt128, decimals: Int) -> UInt128 {
         scale(usd, by: powerOfTen(decimals), over: priceMicros)
     }
+
+    /// An amount as typed. nil when it isn't one, including when it's finer than the token can hold, because rounding someone's money isn't this app's call.
+    public static func units(fromText text: String, decimals: Int) -> UInt128? {
+        let clean = text.filter { !" ,".contains($0) }
+        guard clean.wholeMatch(of: /\d+(\.\d*)?|\.\d+/) != nil else { return nil }
+        let parts = clean.split(separator: ".", omittingEmptySubsequences: false)
+        let whole = parts.first.map(String.init) ?? ""
+        let fraction = parts.count > 1 ? String(parts[1]) : ""
+        guard fraction.count <= decimals else { return nil }
+        let digits = whole + fraction + String(repeating: "0", count: decimals - fraction.count)
+        return UInt128(digits.isEmpty ? "0" : digits)
+    }
+
+    /// The shortest text `units(fromText:decimals:)` reads back as exactly this.
+    public static func text(ofUnits units: UInt128, decimals: Int) -> String {
+        let digits = String(units)
+        guard decimals > 0 else { return digits }
+        let padded = String(repeating: "0", count: max(0, decimals + 1 - digits.count)) + digits
+        var fraction = String(padded.suffix(decimals))
+        while fraction.last == "0" { fraction.removeLast() }
+        return String(padded.dropLast(decimals)) + (fraction.isEmpty ? "" : "." + fraction)
+    }
 }

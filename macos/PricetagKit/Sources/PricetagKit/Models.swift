@@ -543,6 +543,19 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
         return next
     }
 
+    /// Accounts in this wallet are the user's, so nobody's asked. That replaces anything said about them earlier.
+    public func linking(_ accounts: [String]) -> Book {
+        var next = self
+        for account in accounts { next.senders[account.lowercased()] = .mine }
+        return next
+    }
+
+    public func unlinking(_ accounts: [String]) -> Book {
+        var next = self
+        for account in accounts where next.senders[account.lowercased()]?.kind == .mine { next.senders[account.lowercased()] = nil }
+        return next
+    }
+
     public var linkedWallets: [String] {
         senders.filter { $0.value.kind == .mine }.keys.sorted()
     }
