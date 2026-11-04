@@ -208,7 +208,7 @@ describe("proof by a pricing rule", () => {
   const { block } = JSON.parse(readFileSync(new URL("./support/base-blocks.json", import.meta.url), "utf8")) as { block: BlockData }
   const MAIN_HASH = "c".repeat(64)
   const proofs: Proofs = {
-    ...createProofs((async () => []) as never, { baseDataset: "a/base@0.0.1", dataset: `a/${MARKET_RULE_ID}@0.0.1`, readDeposits: async () => new Map(), readManifestHash: async () => MAIN_HASH }),
+    ...createProofs((async () => []) as never, { baseDataset: "a/base@0.0.1", dataset: { name: `a/${MARKET_RULE_ID}@0.0.1`, reference: `a/${MARKET_RULE_ID}@0.0.1`, hash: null }, readDeposits: async () => new Map(), readManifestHash: async () => MAIN_HASH }),
     readBlock: async () => ({ data: block, deposits: null }),
   }
   const NOTE = ruleNote(RULE_TEXT[CAUTIOUS_RULE_ID]!)

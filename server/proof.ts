@@ -338,9 +338,12 @@ function retrying(query: Query, pauseMs: number): Query {
   }
 }
 
-export function createProofs(query: Query, config: { baseDataset: string; dataset: string | null; readDeposits: ReadDeposits; readManifestHash: ReadManifestHash; retryPauseMs?: number }): Proofs {
+/** The wallet's dataset: its name for people, what the SQL calls it, and when it's pinned, the hash it's pinned to. A pinned hash is what was read, so it's shown without asking. */
+export type ProofDatasetSource = { name: string; reference: string; hash: string | null }
+
+export function createProofs(query: Query, config: { baseDataset: string; dataset: ProofDatasetSource | null; readDeposits: ReadDeposits; readManifestHash: ReadManifestHash; retryPauseMs?: number }): Proofs {
   const blockQuery = retrying(query, config.retryPauseMs ?? READ_PAUSE_MS)
-  const reader = config.dataset ? datasetReader(blockQuery, { baseDataset: config.baseDataset, dataset: config.dataset }) : null
+  const reader = config.dataset ? datasetReader(blockQuery, { baseDataset: config.baseDataset, dataset: config.dataset.reference }) : null
   return {
     async priceBehind(feed, blockNum) {
       if (!reader) return null
@@ -349,8 +352,8 @@ export function createProofs(query: Query, config: { baseDataset: string; datase
       return { feed, update: tx ? await reader.readPriceUpdate(feed, tx, blockNum) : null }
     },
     async datasets(fork) {
-      const wanted = [...(config.dataset ? [{ title: fork ? "Activity, and the prices that rule starts from" : "Prices and activity", name: config.dataset }] : []), { title: "Base's blocks", name: config.baseDataset }]
-      const read = await Promise.all(wanted.map(async ({ title, name }) => ({ title, name, hash: await config.readManifestHash(name) })))
+      const wanted = [...(config.dataset ? [{ title: fork ? "Activity, and the prices that rule starts from" : "Prices and activity", name: config.dataset.name, hash: config.dataset.hash }] : []), { title: "Base's blocks", name: config.baseDataset, hash: null }]
+      const read = await Promise.all(wanted.map(async ({ title, name, hash }) => ({ title, name, hash: hash ?? (await config.readManifestHash(name)) })))
       // Its hash is the one the query was pinned to, so it's what was read.
       return fork ? [{ title: `Prices, by ${fork.name}`, name: fork.dataset, hash: fork.hash }, ...read] : read
     },

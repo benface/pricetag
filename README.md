@@ -89,7 +89,7 @@ PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.1.0
 PRICETAG_FORK_HASH=c5c66a117461e8990c4a5638919ddf9ca3c9ae9333982d9583d127d93ab1705e
 ```
 
-Queries are pinned to those hashes, so a hash on screen is what was read, and a wrong one fails instead of showing other numbers. With no fork set, nothing changes: there's no switch and no header.
+Queries are pinned to those hashes, Proof's included, so a hash on screen is what was read, and a wrong one fails instead of showing other numbers. With no fork set, nothing changes: there's no switch and no header, and `PRICETAG_DATASET_HASH` isn't used.
 
 The fork here is `dataset/cautious-eth.json`, from `cautiousEthTablesSql` in `dataset/build.ts`. Its one rule is that ETH counts at 1% below the Chainlink feed. It only materializes the tables a rule decides, `reference_prices` and `priced_legs`, and reads everything else from the dataset it forks. So it starts from the same block, and can only differ by the rule. The transactions always come from the first dataset.
 
