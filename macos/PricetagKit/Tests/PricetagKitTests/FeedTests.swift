@@ -12,13 +12,17 @@ actor ScriptedSource: PortfolioSource {
         self.answers = answers
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         methods.append(method)
         currencies.append(currency)
         return try answers.removeFirst().get()
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
         throw FetchError.unreachable
     }
 }
@@ -27,11 +31,15 @@ actor ScriptedSource: PortfolioSource {
 actor GatedSource: PortfolioSource {
     private var waiting: CheckedContinuation<Portfolio, any Error>?
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         try await withCheckedThrowingContinuation { waiting = $0 }
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
         throw FetchError.unreachable
     }
 

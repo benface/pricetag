@@ -41,7 +41,14 @@ function exchangeOf(view: WalletView): PortfolioExchange | null {
   return { source: rateSource(view.currency), latestRateMicros: view.latestRate?.rateMicros ?? null, missingRateTxs: view.missingRateTxs }
 }
 
-export function portfolioOf(wallet: WalletResponse, method: Method, others: readonly WalletResponse[] = [], book: Book = emptyBook()): PortfolioResponse {
+function outgoingTxsOf(wallet: WalletResponse): string[] {
+  return [...new Set([...wallet.legs.filter((leg) => BigInt(leg.delta) < 0n).map((leg) => leg.txHash), ...wallet.gasUnknownTxs])]
+}
+
+/** What a portfolio goes by without any answers: the wallets it's read with are the user's own, and that's all it knows. */
+const linkingTo = (others: readonly WalletResponse[]): Book => ({ ...emptyBook(), linked: others.map((other) => other.address.toLowerCase()) })
+
+export function portfolioOf(wallet: WalletResponse, method: Method, others: readonly WalletResponse[] = [], book: Book = linkingTo(others)): PortfolioResponse {
   const { view, positions, unread, totals, pnlStatus, points, questions, meter } = foldBook(wallet, others, method, book)
   return {
     address: wallet.address,
@@ -55,6 +62,8 @@ export function portfolioOf(wallet: WalletResponse, method: Method, others: read
     latest: wallet.latest,
     progress: { started: hasStarted(wallet), behindBlocks: isBehind(wallet) ? wallet.latest.blockNum - wallet.coverage.toBlock : 0 },
     gasUnknownTxs: wallet.gasUnknownTxs,
+    outgoingTxs: outgoingTxsOf(wallet),
+    unlisted: wallet.unlisted,
     l1FeeUnknownTxs: wallet.l1FeeUnknownTxs,
     openingUnread: wallet.openingUnread,
     unreadAssets: unread,
@@ -65,7 +74,6 @@ export function portfolioOf(wallet: WalletResponse, method: Method, others: read
     questions,
     meter,
     linkedReading: missingWallets(book, wallet.address, others),
-    unlistedTokens: wallet.unlistedTokens.length,
     marketChecked: wallet.marketChecked,
   }
 }
@@ -102,7 +110,7 @@ function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg {
 }
 
 /** The same explanation the web panel shows for a click on this number. null when the wallet has no such asset or transaction. */
-export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget, others: readonly WalletResponse[] = [], book: Book = emptyBook()): ExplanationResponse | null {
+export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget, others: readonly WalletResponse[] = [], book: Book = linkingTo(others)): ExplanationResponse | null {
   const { view, positions, totals, points } = foldBook(wallet, others, method, book)
   const explanation = explainTarget(target, { positions, totals, points }, bookContext(wallet, others, method, book, view))
   if (!explanation) return null

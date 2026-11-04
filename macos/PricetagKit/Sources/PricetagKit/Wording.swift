@@ -141,9 +141,9 @@ public enum Wording {
     /// What isn't listed with the holdings, and why it doesn't matter to the numbers. nil when there's nothing.
     public static func noMarket(_ portfolio: Portfolio) -> String? {
         let listed = portfolio.noMarketPositions.map(\.asset)
-        let total = listed.count + portfolio.unlistedTokens
+        let total = listed.count + portfolio.unlisted.count
         if total == 0 { return nil }
-        let off = portfolio.unlistedTokens == 0 ? "" : "\(listed.isEmpty ? "" : ", plus ")\(portfolio.unlistedTokens) we don't track"
+        let off = portfolio.unlisted.isEmpty ? "" : "\(listed.isEmpty ? "" : ", plus ")\(portfolio.unlisted.count) we don't track"
         return "\(total) \(total == 1 ? "token" : "tokens") with no market: \(listed.joined(separator: ", "))\(off). Often spam, and not counted in any total."
     }
 

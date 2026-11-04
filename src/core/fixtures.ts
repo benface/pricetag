@@ -143,6 +143,7 @@ const common = {
   prices,
   latest: { blockNum: START_BLOCK + HEAD_OFFSET, timestamp: new Date(START_TIME + HEAD_OFFSET * 2000).toISOString() },
   gasUnknownTxs: [],
+  unlisted: [{ token: "0x00000000000000000000000000000000000000f1", transfers: 1 }],
   l1FeeUnknownTxs: [],
   openingUnread: [],
   lastBalances: {},
@@ -186,7 +187,6 @@ export const DEMO_WALLET: WalletResponse = {
   coverage: { fromBlock: START_BLOCK, toBlock: START_BLOCK + HEAD_OFFSET },
   legs,
   balances: { blockNum: START_BLOCK + HEAD_OFFSET, amounts: Object.fromEntries([...balances].map(([asset, amount]) => [asset, amount.toString()])) },
-  unlistedTokens: [UNLISTED],
 }
 
 const savingsLegs = [
@@ -206,7 +206,6 @@ export const DEMO_SAVINGS_WALLET: WalletResponse = {
     ),
   },
   notes: [{ noteTx: normalizeAddress(`de31${"0".repeat(60)}`), blockNum: START_BLOCK - 299, txHash: (savingsFunding[0] as LegRow).tx_hash, asset: "USDC", usdMicros: (3_990n * E6).toString() }],
-  unlistedTokens: [],
 }
 
 /** The fixture at this address, if it's one of the demo's. */

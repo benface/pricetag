@@ -15,6 +15,7 @@ import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.t
 import { createRates } from "./rates.ts"
 import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
 import { datasetSource, feedRounds, rawSource, type Source } from "./source.ts"
+import { TAX_COUNTRIES, isTaxCountryCode, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 import { createWallets } from "./wallets.ts"
 
 type Env = Record<string, string | undefined>
@@ -25,6 +26,13 @@ function parseMethod(value: string | null): Method | null {
   if (value === null || value === "average") return "average"
   return value === "fifo" ? "fifo" : null
 }
+
+function parseScope(value: string | null): TaxScope | null {
+  return value === "pooled" || value === "per-wallet" ? value : null
+}
+
+/** How many other wallets a report can add. Each is a full read. */
+const MAX_OTHER_WALLETS = 20
 
 function parseCurrency(value: string | null): CurrencyCode | null {
   if (value === null) return "USD"
@@ -45,6 +53,17 @@ function createSource(env: Env): { source: Source; readRates: ReturnType<typeof 
   const historyBlocks = Number(env.PRICETAG_HISTORY_BLOCKS || 1800)
   if (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
   return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates }
+}
+
+/** Each one is a wallet read, so this stays well under what the server keeps in memory. */
+const MAX_LINKED_WALLETS = 10
+
+/** The user's other wallets, or null when that isn't what was sent. */
+function parseLinked(value: string | null): string[] | null {
+  if (value === null || value === "") return []
+  const addresses = value.split(",")
+  if (addresses.length > MAX_LINKED_WALLETS || !addresses.every(isAddress)) return null
+  return [...new Set(addresses.map((address) => address.toLowerCase()))]
 }
 
 /** The request's decoded path, or null when the URL is malformed. Clients can send anything here. */
@@ -92,8 +111,7 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 
 const recordOf = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
 
-export function createApi(env: Env) {
-  const created = createSource(env)
+export function createApi(env: Env, created: ReturnType<typeof createSource> = createSource(env)) {
   const source = created?.source ?? null
 
   let head: Head | null = null
@@ -227,18 +245,22 @@ export function createApi(env: Env) {
     const read = await readWallet(match[1] as string, res, { fresh: action === undefined })
     const wallet = read && (await inCurrency(read, currency, res))
     if (!wallet) return
-    const others = await linkedOf(wallet.address, books, currency, res)
+    // The client's own wallets, which only count on a wallet that's real.
+    const known: unknown[] = wallet.mode === "demo" || !Array.isArray(body.linked) ? [] : body.linked
+    if (!known.every((address) => typeof address === "string" && isAddress(address))) return sendJson(res, 400, { error: "Linked wallets are a list of Base addresses." })
+    const linkedBooks = books.map((one) => ({ ...one, linked: (known as string[]).map((address) => address.toLowerCase()) }))
+    const others = await linkedOf(wallet.address, linkedBooks, currency, res)
     if (!others) return
 
-    if (action === "preview") return sendJson(res, 200, { previews: books.map((candidate) => previewBook(wallet, others, method, candidate)) })
+    if (action === "preview") return sendJson(res, 200, { previews: linkedBooks.map((candidate) => previewBook(wallet, others, method, candidate)) })
     if (action === "export") {
-      const { positions, view } = foldBook(wallet, others, method, book)
+      const { positions, view } = foldBook(wallet, others, method, linkedBooks[0] as Book)
       res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" })
       res.end(exportCsv(positions, view.currency))
       return
     }
-    if (!target) return sendJson(res, 200, portfolioOf(wallet, method, others, book))
-    const explanation = explainPortfolio(wallet, method, target, others, book)
+    if (!target) return sendJson(res, 200, portfolioOf(wallet, method, others, linkedBooks[0]))
+    const explanation = explainPortfolio(wallet, method, target, others, linkedBooks[0])
     if (explanation) sendJson(res, 200, explanation)
     else sendJson(res, 404, { error: "This wallet has nothing like that." })
   }
@@ -296,16 +318,75 @@ export function createApi(env: Env) {
         sendJson(res, 400, { error: "That isn't a number this can explain." })
         return true
       }
+      const linked = parseLinked(params.get("linked"))
+      if (!linked) {
+        sendJson(res, 400, { error: "Linked wallets are a comma-separated list of Base addresses." })
+        return true
+      }
       const read = await readWallet(portfolioMatch[1] as string, res, { fresh: !target })
       const wallet = read && (await inCurrency(read, currency, res))
       if (!wallet) return true
+      const linkedWallets: WalletResponse[] = []
+      for (const address of wallet.mode === "demo" ? [] : linked.filter((address) => address !== wallet.address)) {
+        // A cost that can't be read isn't a cost of zero, so this answers with the failure instead of a wrong number.
+        const other = await readWallet(address, res, { fresh: !target })
+        const converted = other && (await inCurrency(other, currency, res))
+        if (!converted) return true
+        linkedWallets.push(converted)
+      }
       if (!target) {
-        sendJson(res, 200, portfolioOf(wallet, method))
+        sendJson(res, 200, portfolioOf(wallet, method, linkedWallets))
         return true
       }
-      const explanation = explainPortfolio(wallet, method, target)
+      const explanation = explainPortfolio(wallet, method, target, linkedWallets)
       if (explanation) sendJson(res, 200, explanation)
       else sendJson(res, 404, { error: "This wallet has nothing like that." })
+      return true
+    }
+
+    const taxMatch = /^\/api\/tax-report\/([^/]+)$/.exec(path)
+    if (taxMatch) {
+      const country = params.get("country")
+      if (!isTaxCountryCode(country)) {
+        sendJson(res, 400, { error: "That country isn't supported." })
+        return true
+      }
+      const rules = TAX_COUNTRIES[country]
+      const method = params.has("method") ? parseMethod(params.get("method")) : rules.method
+      if (!method) {
+        sendJson(res, 400, { error: "The method is either average or fifo." })
+        return true
+      }
+      const scope = params.has("scope") ? parseScope(params.get("scope")) : rules.scope
+      if (!scope) {
+        sendJson(res, 400, { error: "The calculation is either pooled or per-wallet." })
+        return true
+      }
+      const address = (taxMatch[1] as string).toLowerCase()
+      const others = (params.get("also") ?? "").split(",").map((other) => other.trim().toLowerCase()).filter(Boolean)
+      if (others.length > MAX_OTHER_WALLETS) {
+        sendJson(res, 400, { error: `A report can add up to ${MAX_OTHER_WALLETS} other wallets.` })
+        return true
+      }
+      const bad = others.find((other) => !isAddress(other))
+      if (bad !== undefined) {
+        sendJson(res, 400, { error: `${bad} isn't a Base address.` })
+        return true
+      }
+      // Whichever way round: demo data must never land in a report on a real wallet.
+      if (others.length > 0 && [address, ...others].some((wallet) => wallet === "demo" || wallet === DEMO_ADDRESS)) {
+        sendJson(res, 400, { error: "The demo wallet can't be combined with other wallets." })
+        return true
+      }
+      // One at a time, because a read that fails answers the request. A report never quietly leaves a wallet out.
+      const wallets: WalletResponse[] = []
+      for (const next of new Set([address, ...others])) {
+        const read = await readWallet(next, res)
+        const wallet = read && (await inCurrency(read, currency, res))
+        if (!wallet) return true
+        wallets.push(wallet)
+      }
+      sendJson(res, 200, taxReportOf(wallets, { country, method, scope }))
       return true
     }
 

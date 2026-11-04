@@ -17,16 +17,16 @@ actor BookSource: PortfolioSource {
         previewAnswers = answers
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         books.append(book)
         return portfolios.count > 1 ? portfolios.removeFirst() : portfolios[0]
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
-    func previews(address: String, method: CostMethod, currency: CurrencyCode, candidates: [Book]) async throws -> [BookPreview] {
+    func previews(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], candidates: [Book]) async throws -> [BookPreview] {
         previewed.append(candidates)
         return previewAnswers
     }
@@ -179,9 +179,9 @@ actor BookSource: PortfolioSource {
     }
 
     @Test func anExchangeCostKeepsWhatEarlierAnswersCovered() throws {
-        let earlier = Receipt(wallet: wallet, legId: "0x1:USDC", asset: "USDC", units: "5")
-        let later = Receipt(wallet: wallet, legId: "0x2:USDC", asset: "USDC", units: "7")
-        let other = Receipt(wallet: wallet, legId: "0x3:ETH", asset: "ETH", units: "9")
+        let earlier = CostReceipt(wallet: wallet, legId: "0x1:USDC", asset: "USDC", units: "5")
+        let later = CostReceipt(wallet: wallet, legId: "0x2:USDC", asset: "USDC", units: "7")
+        let other = CostReceipt(wallet: wallet, legId: "0x3:ETH", asset: "ETH", units: "9")
         let first = Book().enteringExchangeCosts(sender, receipts: [earlier], amounts: ["USDC": Money(micros: "1", currency: .USD)], focus: wallet)
         let second = first.enteringExchangeCosts(sender, receipts: [later, other], amounts: ["USDC": Money(micros: "2", currency: .CAD), "ETH": Money(micros: "3", currency: .CAD)], focus: wallet)
         let costs = try #require(second.senders[sender]?.costs)

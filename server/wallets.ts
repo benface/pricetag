@@ -2,7 +2,7 @@
 
 import { describeError } from "@pricetag/sdk"
 import { ASSETS, TOKENS, tokenByAddress, buildPricedLegs, derivePricedRows, latestPrices, openingLegs, type BalanceSnapshot, type LatestPrices, type LegRow, type PricedRow, type ReferenceRow } from "@pricetag/sdk/core"
-import type { Head, WalletResponse } from "../src/core/api.ts"
+import type { Head, UnlistedToken, WalletResponse } from "../src/core/api.ts"
 import { MARKET_MAX_AGE_BLOCKS, marketPrice, type MarketPrice } from "../src/core/market.ts"
 import type { CostNote } from "../src/core/notes.ts"
 import type { ReadL1Fees } from "./receipts.ts"
@@ -36,6 +36,21 @@ type Cached = {
   notesReadTo: number
   /** Market prices were all read this time. */
   marketChecked: boolean
+}
+
+/** What the wallet holds off the allowlist. An ID or an unreadable amount can't be netted, so those count as held. */
+export function unlistedTokens(rows: readonly LegRow[], account: string): UnlistedToken[] {
+  const tokens = new Map<string, { net: bigint; transfers: number; unreadable: boolean }>()
+  for (const row of rows) {
+    if (row.account !== account || (row.kind !== "unlisted" && row.kind !== "unlisted_nft")) continue
+    const token = tokens.get(row.token) ?? { net: 0n, transfers: 0, unreadable: false }
+    token.transfers += 1
+    if (row.kind === "unlisted_nft") token.unreadable = true
+    else if (/^\d+$/.test(row.amount)) token.net += row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
+    else token.unreadable = true
+    tokens.set(row.token, token)
+  }
+  return [...tokens].filter(([, { net, unreadable }]) => net > 0n || unreadable).map(([token, { transfers }]) => ({ token, transfers }))
 }
 
 type L1Fee = { blockNum: number; fee: string; readAtCoveredTo: number }
@@ -220,6 +235,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       prices: wallet.prices,
       latest: wallet.latest,
       gasUnknownTxs: [...wallet.gasUnknownTxs],
+      unlisted: unlistedTokens(wallet.rows, key),
       currency: "USD",
       rates: null,
       l1FeeUnknownTxs: l1.unknownTxs,
@@ -229,7 +245,6 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       unreadBalances: wallet.coveredTo >= wallet.fromBlock ? ASSETS.filter((asset) => closing?.amounts[asset] === undefined) : [],
       notes: wallet.notes,
       marketChecked: wallet.marketChecked,
-      unlistedTokens: [...new Set(wallet.rows.filter((r) => r.kind === "unlisted" || r.kind === "unlisted_nft").map((r) => r.token))],
     }
   }
 

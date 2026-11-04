@@ -27,6 +27,7 @@ struct MainWindow: View {
     @State private var exporting = false
     @State private var exportDocument: CSVDocument?
     @State private var exportError: String?
+    @Environment(\.openWindow) private var openWindow
 
     private var portfolio: Portfolio? { store.portfolio }
     private var isLive: Bool { store.feed.isLive }
@@ -65,10 +66,13 @@ struct MainWindow: View {
                         exportError = "The server couldn't make this file."
                     }
                 }
+            .sheet(isPresented: $navigation.isExportingTaxReport) {
+                TaxReportView(store: store) { navigation.isExportingTaxReport = false }
             }
             // What's open belongs to the wallet it was opened on.
             .onChange(of: store.address) {
                 navigation.target = nil
+                navigation.isExportingTaxReport = false
             }
     }
 
@@ -87,6 +91,10 @@ struct MainWindow: View {
             Button("Change Wallet", systemImage: "wallet.bifold") { navigation.isChangingWallet = true }
                 .help("Change wallet (⌘L)")
         }
+        ToolbarItem(placement: .navigation) {
+            Button("Spending Money", systemImage: "banknote") { openWindow(id: WindowID.hotWallet) }
+                .help("This Mac's spending money (⇧⌘M)")
+        }
         ToolbarItem(placement: .principal) {
             Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
                 ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
@@ -100,6 +108,9 @@ struct MainWindow: View {
                 Button("Resolve \(open)", systemImage: "questionmark.circle") { navigation.resolve() }
                     .help("Answer what the app can't work out by itself (⇧⌘R)")
             }
+            Button("Tax Report", systemImage: "doc.text") { navigation.isExportingTaxReport = true }
+                .disabled(store.address == nil)
+                .help("Export a tax report (⌘E)")
         }
         ToolbarItem(placement: .status) {
             FeedBadge(feed: store.feed, portfolio: portfolio)

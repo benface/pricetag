@@ -33,6 +33,8 @@ export type Book = {
   /** A cost entered for one movement, by `<wallet>:<leg id>`. */
   costs: Record<string, Money>
   withdrawals: ExchangeWithdrawal[]
+  /** The wallets a client already knows are the user's, like the Mac app's hot and cold ones. Nobody answered for these. */
+  linked?: string[]
 }
 
 export const emptyBook = (): Book => ({ senders: {}, costs: {}, withdrawals: [] })
@@ -53,7 +55,7 @@ export function enterExchangeCosts(book: Book, focus: string, sender: string, re
   return answerSender(book, focus, sender, { kind: "my-exchange", costs: [...earlier, ...costs] })
 }
 
-export const linkedWallets = (book: Book) => Object.entries(book.senders).flatMap(([address, answer]) => (answer.kind === "mine" ? [address] : []))
+export const linkedWallets = (book: Book) => [...new Set([...Object.entries(book.senders).flatMap(([address, answer]) => (answer.kind === "mine" ? [address] : [])), ...(book.linked ?? [])])]
 
 const plainRecord = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
 

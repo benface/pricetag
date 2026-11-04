@@ -184,6 +184,14 @@ public struct ReadProgress: Codable, Sendable, Equatable {
     public let behindBlocks: Int
 }
 
+/// A token off the allowlist that a wallet holds. Nothing ever calls it, because it has no trusted price and may be malicious.
+public struct UnlistedToken: Codable, Sendable, Equatable, Identifiable {
+    public let token: String
+    public let transfers: Int
+
+    public var id: String { token }
+}
+
 /// How a portfolio's money got out of USD. The server converts each amount at the rate when it happened.
 public struct PortfolioExchange: Codable, Sendable, Equatable {
     /// Where the rates came from, in words.
@@ -207,6 +215,8 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let latest: Head
     public let progress: ReadProgress
     public let gasUnknownTxs: [String]
+    public let outgoingTxs: [String]
+    public let unlisted: [UnlistedToken]
     public let l1FeeUnknownTxs: [String]
     /// Assets whose balance before the first block couldn't be read yet.
     public let openingUnread: [String]
@@ -221,8 +231,6 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let meter: Meter
     /// Linked wallets that aren't read yet, so what came from them shows as unresolved for now.
     public let linkedReading: [String]
-    /// Tokens off the allowlist that moved here, which have no position or price.
-    public let unlistedTokens: Int
     public let marketChecked: Bool
 
     /// What the holdings table lists. Tokens with no market go in a group of their own, so real warnings stay noticeable.
@@ -333,7 +341,7 @@ public struct Question: Codable, Sendable, Equatable, Identifiable {
     public let needsCost: Bool
     public let arrivals: [Arrival]
     /// What an answer about cost would cover. It's kept with the answer, so what arrives later is asked about in turn.
-    public let receipts: [Receipt]
+    public let receipts: [CostReceipt]
     public let transfers: Int
     public let firstAt: String
     public let lastAt: String
@@ -396,7 +404,7 @@ public struct Money: Codable, Sendable, Equatable, Hashable {
 }
 
 /// One thing that arrived from a sender, as it was when someone answered for it. Only the server reads what's in it.
-public struct Receipt: Codable, Sendable, Equatable, Hashable {
+public struct CostReceipt: Codable, Sendable, Equatable, Hashable {
     public let wallet: String
     public let legId: String
     public let asset: String
@@ -408,7 +416,7 @@ public struct ExchangeCost: Codable, Sendable, Equatable, Hashable {
     public let micros: String
     public let currency: CurrencyCode
     public let asset: String
-    public let receipts: [Receipt]
+    public let receipts: [CostReceipt]
 }
 
 public struct SenderAnswer: Codable, Sendable, Equatable {
@@ -452,7 +460,7 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
     }
 
     /// Saying what was paid for a sender's open receipts, by asset. It takes over for those receipts, and any others keep their earlier answers.
-    public func enteringExchangeCosts(_ sender: String, receipts: [Receipt], amounts: [String: Money], focus: String?) -> Book {
+    public func enteringExchangeCosts(_ sender: String, receipts: [CostReceipt], amounts: [String: Money], focus: String?) -> Book {
         let key = sender.lowercased()
         let earlier = senders[key]?.kind == .myExchange ? (senders[key]?.costs ?? []) : []
         let costs = amounts.sorted { $0.key < $1.key }.map { asset, money in

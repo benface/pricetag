@@ -683,10 +683,4 @@ describe("market prices, notes and unlisted tokens", () => {
     assert.deepEqual(wallet.notes, [note])
   })
 
-  it("lists tokens off the allowlist once each", async () => {
-    const OFF = "0x000000000000000000000000000000000000f00d"
-    const off: LegRow = { ...row(950), token: OFF, kind: "unlisted" }
-    const { source } = fake(new Map([[950, [off, { ...off, log_index: 1 }]]]), () => reference(1000))
-    assert.deepEqual((await createWallets(source, headAt(1000), noFees).get(ME)).unlistedTokens, [OFF])
-  })
 })

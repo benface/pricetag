@@ -34,6 +34,7 @@ import {
 import { PnlChart } from "./PnlChart.tsx"
 import { ResolvePanel } from "./ResolvePanel.tsx"
 import { useBook, useOtherWallets } from "./useBook.ts"
+import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
 import { linkedWallets } from "../core/book.ts"
 import { exportCsv } from "../core/export.ts"
@@ -181,6 +182,7 @@ export function App() {
   const [inputError, setInputError] = useState<string | null>(null)
   const [method, setMethod] = useState<Method>("average")
   const [target, setTarget] = useState<ExplainTarget | null>(null)
+  const [taxOpen, setTaxOpen] = useState(false)
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { wallet, loading, error } = useWallet(address, chosenCurrency)
   const { book, change, undo, canUndo } = useBook()
@@ -193,6 +195,7 @@ export function App() {
     const onPop = () => {
       setAddress(readAddress())
       setTarget(null)
+      setTaxOpen(false)
     }
     window.addEventListener("popstate", onPop)
     return () => window.removeEventListener("popstate", onPop)
@@ -202,6 +205,7 @@ export function App() {
     window.history.pushState(null, "", `?address=${next}`)
     setAddress(next)
     setTarget(null)
+    setTaxOpen(false)
   }
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -230,7 +234,7 @@ export function App() {
   const questions = fold?.questions ?? []
   const resolvable = useMemo(() => new Set(questions.flatMap((q) => q.arrivals.map((a) => a.asset))), [questions])
   const listed = positions.filter((p) => !p.noMarket)
-  const noMarketCount = totals.noMarket.length + (wallet?.unlistedTokens.length ?? 0)
+  const noMarketCount = totals.noMarket.length + (wallet?.unlisted.length ?? 0)
   const caveat = [BigInt(totals.unresolvedMicros) > 0n ? `${formatMoney(totals.unresolvedMicros, currency)} unresolved` : null, BigInt(totals.estimatedMicros) > 0n ? `${formatMoney(totals.estimatedMicros, currency)} estimated` : null].filter(Boolean).join(" · ")
   const download = () => {
     const link = document.createElement("a")
@@ -353,12 +357,17 @@ export function App() {
                   ))}
                 </div>
               </section>
+              <p className="tax-link">
+                <button type="button" className="link" onClick={() => setTaxOpen(true)}>
+                  Export a tax report…
+                </button>
+              </p>
               <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
               {listed.length > 0 ? <Holdings positions={listed} currency={currency} resolvable={resolvable} explain={setTarget} onResolve={(asset) => setResolving({ asset })} /> : null}
               {noMarketCount > 0 ? (
                 <p className="notice">
                   {noMarketCount} {noMarketCount === 1 ? "token" : "tokens"} with no market{totals.noMarket.length > 0 ? `: ${totals.noMarket.join(", ")}` : ""}
-                  {wallet.unlistedTokens.length > 0 ? `${totals.noMarket.length > 0 ? ", plus" : ":"} ${wallet.unlistedTokens.length} we don't track` : ""}. Often spam, and not counted in any total.
+                  {wallet.unlisted.length > 0 ? `${totals.noMarket.length > 0 ? ", plus" : ":"} ${wallet.unlisted.length} we don't track` : ""}. Often spam, and not counted in any total.
                 </p>
               ) : null}
               <p>
@@ -373,6 +382,7 @@ export function App() {
 
       {explanation ? <ExplainPanel explanation={explanation} onClose={close} /> : null}
       {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
+      {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} onClose={() => setTaxOpen(false)} /> : null}
     </div>
   )
 }
