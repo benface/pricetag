@@ -18,6 +18,8 @@ export type Onchain = {
   lastBalances?: Readonly<Record<string, { blockNum: number; amount: string }>>
   /** Assets missing from `balances`. Without a read, we can't say they're zero. */
   unreadBalances?: readonly string[]
+  /** Market prices were read, so a token without one really has no market. */
+  marketChecked?: boolean
 }
 
 export type Reconciliation =

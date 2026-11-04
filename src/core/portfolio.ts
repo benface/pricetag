@@ -1,8 +1,12 @@
 // Runs the fold over a wallet's priced legs, and adds up what can honestly be added up.
 
+import type { BookPreview, WalletResponse } from "./api.ts"
+import { linkedWallets, type Book } from "./book.ts"
 import { applyLeg, emptyPosition, usdOf, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
 import { answerToMicros, type PricedLeg, type ReferenceRow } from "./legs.ts"
 import { decimalsOf, estimateHeld, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
+import { meterOf, questionsOf, resolveLegs, type Meter, type Question } from "./resolve.ts"
+import { TOKENS, normalizeAddress } from "./tokens.ts"
 
 export type LatestPrice = { usdMicros: string; source: "oracle" | "swap" | "market"; blockNum: number }
 export type LatestPrices = Record<string, LatestPrice | undefined>
@@ -13,6 +17,9 @@ export type LegEffect = {
   after: PositionState
 }
 
+/** Which of a position's numbers rest on an estimate, so they can look different from exact ones. */
+export type Estimates = { cost: boolean; value: boolean; realized: boolean; unrealized: boolean }
+
 export type Position = {
   asset: string
   decimals: number
@@ -22,6 +29,9 @@ export type Position = {
   effects: LegEffect[]
   /** Null when there's nothing to compare against, as in a fold without onchain balances. */
   reconciliation: Reconciliation | null
+  /** No price, in any form, at any block. Often spam. It's listed apart, and can't affect PnL. */
+  noMarket: boolean
+  estimates: Estimates
 }
 
 export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "incomplete history" | "doesn't match its onchain balance" | "not checked against its onchain balance" | "balance couldn't be read" }
@@ -42,6 +52,25 @@ export type Totals = {
   /** Some gas had no price at its block, so it's not in `gasUsdMicros`. */
   unpricedGas: boolean
   coverage: Record<"value" | "realized" | "unrealized" | "pnl", Coverage>
+  /** What's held with an unknown cost, at today's price. It's not in any PnL. */
+  unresolvedUsdMicros: string
+  /** How much of what these sums are made of is an estimate. */
+  estimatedUsdMicros: string
+  /** Which sums rest on one. */
+  estimated: Pick<Estimates, "value" | "realized" | "unrealized">
+  /** Assets with no market, which aren't in any of this. */
+  noMarket: string[]
+}
+
+/**
+ * Whether `totals.pnlUsdMicros` can be read as the wallet's PnL.
+ * partial: it leaves something out, and `totals.excluded` says what. unavailable: it's null, because nothing in it is known.
+ */
+export type PnlStatus = "complete" | "partial" | "unavailable"
+
+export function pnlStatusOf(totals: Totals, gasUnknownTxs: readonly string[]): PnlStatus {
+  if (totals.pnlUsdMicros === null) return "unavailable"
+  return totals.excluded.length === 0 && !totals.unpricedGas && gasUnknownTxs.length === 0 ? "complete" : "partial"
 }
 
 /**
@@ -96,6 +125,10 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
     const price = prices[asset] ?? null
     const values = valuePosition(state, price?.usdMicros ?? null)
     const reconciliation = onchain ? reconcile(asset, effects.map((e) => e.leg), BigInt(state.shortfallQty), onchain) : null
+    const confirmed = reconciliation === null || reconciliation.status === "reconciled"
+    const cost = confirmed && BigInt(values.estimatedCostUsdMicros) > 0n
+    const value = price?.source === "market"
+    const hasPrice = price !== null || effects.some(({ leg }) => leg.priceUsdMicros !== null || leg.costUsdMicros !== null || leg.proceedsUsdMicros !== null || leg.pieces?.some((piece) => piece.costUsdMicros !== null))
     return {
       asset,
       decimals,
@@ -103,6 +136,8 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
       effects,
       price,
       reconciliation,
+      noMarket: onchain?.marketChecked === true && !hasPrice && !TOKENS.some((t) => t.symbol === asset && t.oracle),
+      estimates: { cost, value, realized: confirmed && BigInt(values.estimatedRealizedUsdMicros) > 0n, unrealized: confirmed && (cost || value) },
       values:
         reconciliation === null || reconciliation.status === "reconciled"
           ? values
@@ -119,10 +154,27 @@ export function sumTotals(positions: readonly Position[], unread: readonly strin
   let unrealized = 0n
   let gas = 0n
   let unpricedGas = false
+  let unresolved = 0n
+  let estimatedTotal = 0n
+  const estimated = { value: false, realized: false, unrealized: false }
+  const noMarket: string[] = []
   const excluded: Exclusion[] = []
   const coverage = { value: { known: 0, missing: 0 }, realized: { known: 0, missing: 0 }, unrealized: { known: 0, missing: 0 }, pnl: { known: 0, missing: 0 } }
   for (const position of positions) {
-    const { asset, values, state, reconciliation } = position
+    const { asset, values, state, reconciliation, estimates, price, decimals } = position
+    if (position.noMarket) {
+      noMarket.push(asset)
+      continue
+    }
+    if (price !== null) unresolved += usdOf(BigInt(values.unknownCostQty), BigInt(price.usdMicros), decimals)
+    const marketValue = estimates.value && values.valueUsdMicros !== null ? BigInt(values.valueUsdMicros) : 0n
+    const heldEstimate = estimates.cost && BigInt(values.estimatedCostUsdMicros) > marketValue ? BigInt(values.estimatedCostUsdMicros) : marketValue
+    if (estimates.value && values.valueUsdMicros !== null && BigInt(values.qty) > 0n) estimated.value = true
+    if (estimates.realized) estimated.realized = true
+    if (estimates.unrealized && values.unrealizedUsdMicros !== null) estimated.unrealized = true
+    // Only what's in the PnL counts as resting on an estimate. A position that's left out adds nothing to it.
+    if (estimates.unrealized && values.unrealizedUsdMicros !== null) estimatedTotal += heldEstimate
+    if (estimates.realized && values.realizedUsdMicros !== null) estimatedTotal += BigInt(values.estimatedRealizedUsdMicros)
     gas += BigInt(state.gasUsdMicros)
     if (BigInt(state.gasUsdMicros) > 0n) coverage.pnl.known++
     if (BigInt(state.unpricedGasQty) > 0n) {
@@ -193,6 +245,10 @@ export function sumTotals(positions: readonly Position[], unread: readonly strin
     excluded,
     unpricedGas,
     coverage,
+    unresolvedUsdMicros: unresolved.toString(),
+    estimatedUsdMicros: estimatedTotal.toString(),
+    estimated,
+    noMarket,
   }
 }
 
@@ -218,6 +274,8 @@ export function pnlOverTime(
   latest: { blockNum: number; timestamp: string } | null,
   /** Assets the chain hasn't confirmed. We can't tell when that started, so their PnL is left out of every point. */
   unconfirmed: ReadonlySet<string> = new Set(),
+  /** Assets with no market, which can't affect PnL. */
+  noMarket: ReadonlySet<string> = new Set(),
 ): PnlPoint[] {
   const refs = new Map(references.map((r) => [r.block_num, r]))
   const states = new Map<string, PositionState>()
@@ -227,6 +285,7 @@ export function pnlOverTime(
     let pnl = 0n
     let excludedCount = 0
     for (const [asset, state] of states) {
+      if (noMarket.has(asset)) continue
       const v = valuePosition(state, priceOf(asset))
       pnl -= BigInt(state.gasUsdMicros)
       if (BigInt(state.gasUsdMicros) > 0n) coverage.known++
@@ -275,4 +334,49 @@ export function pnlOverTime(
     points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.usdMicros ?? null) })
   }
   return points
+}
+
+export type BookFold = {
+  legs: PricedLeg[]
+  positions: Position[]
+  unread: string[]
+  totals: Totals
+  pnlStatus: PnlStatus
+  points: PnlPoint[]
+  questions: Question[]
+  meter: Meter
+}
+
+/** Everything a wallet's numbers come from: the chain, plus what the user has said. Both the browser and the server run this. */
+export function foldBook(focus: WalletResponse, others: readonly WalletResponse[], method: Method, book: Book): BookFold {
+  const address = normalizeAddress(focus.address)
+  const linked = new Set(linkedWallets(book))
+  const wallets = [focus, ...others.filter((w) => normalizeAddress(w.address) !== address && linked.has(normalizeAddress(w.address)))]
+  const { legs: resolved, open } = resolveLegs(wallets, method, book)
+  const legs = resolved.get(address) as PricedLeg[]
+  const positions = foldPositions(legs, method, focus.prices, focus)
+  const unread = unreadAssets(positions, focus)
+  const totals = sumTotals(positions, unread)
+  const questions = questionsOf(open, wallets, book)
+  return {
+    legs,
+    positions,
+    unread,
+    totals,
+    pnlStatus: pnlStatusOf(totals, focus.gasUnknownTxs),
+    points: pnlOverTime(legs, method, focus.prices, focus.references, focus.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket)),
+    questions,
+    meter: meterOf(questions, book, address),
+  }
+}
+
+/** The linked wallets a book needs that aren't in `read`. */
+export const missingWallets = (book: Book, focus: string, read: readonly WalletResponse[]) => {
+  const have = new Set([normalizeAddress(focus), ...read.map((w) => normalizeAddress(w.address))])
+  return linkedWallets(book).filter((address) => !have.has(address))
+}
+
+export function previewBook(focus: WalletResponse, others: readonly WalletResponse[], method: Method, book: Book): BookPreview {
+  const { totals, pnlStatus, questions } = foldBook(focus, others, method, book)
+  return { pnlUsdMicros: totals.pnlUsdMicros, pnlStatus, estimatedUsdMicros: totals.estimatedUsdMicros, unresolvedUsdMicros: totals.unresolvedUsdMicros, open: questions.length, pending: missingWallets(book, focus.address, others).length > 0 }
 }

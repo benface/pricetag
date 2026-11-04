@@ -1,10 +1,12 @@
 // The portfolio a wallet's legs fold into, for clients that don't run the fold themselves.
 // One source of PnL logic: this calls what the browser calls, and adds nothing to the math.
 
-import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PnlStatus, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
+import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
+import { emptyBook, type Book } from "../src/core/book.ts"
 import { describeEffect, describeNetting, explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../src/core/explain.ts"
 import type { Method } from "../src/core/fold.ts"
-import { foldPositions, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Position, type Totals } from "../src/core/portfolio.ts"
+import { foldBook, missingWallets, type LegEffect, type Position } from "../src/core/portfolio.ts"
+import type { Question } from "../src/core/resolve.ts"
 import { TOKENS } from "../src/core/tokens.ts"
 
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
@@ -27,7 +29,7 @@ export function parseExplainTarget(params: URLSearchParams): ExplainTarget | nul
   return TOTAL_METRICS.includes(metric) ? { kind: "total", metric: metric as TotalMetric } : null
 }
 
-function positionOf({ asset, decimals, price, values, state, effects, reconciliation }: Position): PortfolioPosition {
+function positionOf({ asset, decimals, price, values, state, effects, reconciliation, noMarket, estimates }: Position, questions: readonly Question[]): PortfolioPosition {
   const held = BigInt(values.qty) > 0n
   const { realizedUsdMicros: realized, unrealizedUsdMicros: unrealized } = values
   const pnl = (() => {
@@ -36,18 +38,11 @@ function positionOf({ asset, decimals, price, values, state, effects, reconcilia
     if (!held) return realized
     return unrealized === null ? null : (BigInt(realized) + BigInt(unrealized)).toString()
   })()
-  return { asset, decimals, note: asset === "ETH" ? "incl. WETH" : null, price, values, pnlUsdMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length, reconciliation }
+  return { asset, decimals, note: asset === "ETH" ? "incl. WETH" : null, price, values, pnlUsdMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length, reconciliation, noMarket, estimates, resolvable: BigInt(values.unknownCostQty) > 0n && questions.some((q) => q.arrivals.some((a) => a.asset === asset)) }
 }
 
-function pnlStatusOf(totals: Totals, gasUnknownTxs: readonly string[]): PnlStatus {
-  if (totals.pnlUsdMicros === null) return "unavailable"
-  return totals.excluded.length === 0 && !totals.unpricedGas && gasUnknownTxs.length === 0 ? "complete" : "partial"
-}
-
-export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioResponse {
-  const positions = foldPositions(wallet.legs, method, wallet.prices, wallet)
-  const unread = unreadAssets(positions, wallet)
-  const totals = sumTotals(positions, unread)
+export function portfolioOf(wallet: WalletResponse, method: Method, others: readonly WalletResponse[] = [], book: Book = emptyBook()): PortfolioResponse {
+  const { positions, unread, totals, pnlStatus, points, questions, meter } = foldBook(wallet, others, method, book)
   return {
     address: wallet.address,
     mode: wallet.mode,
@@ -61,10 +56,15 @@ export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioRe
     l1FeeUnknownTxs: wallet.l1FeeUnknownTxs,
     openingUnread: wallet.openingUnread,
     unreadAssets: unread,
-    positions: positions.map(positionOf),
+    positions: positions.map((position) => positionOf(position, questions)),
     totals,
-    pnlStatus: pnlStatusOf(totals, wallet.gasUnknownTxs),
-    points: pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)),
+    pnlStatus,
+    points,
+    questions,
+    meter,
+    linkedReading: missingWallets(book, wallet.address, others),
+    unlistedTokens: wallet.unlistedTokens.length,
+    marketChecked: wallet.marketChecked,
   }
 }
 
@@ -80,6 +80,8 @@ function legOf(effect: LegEffect): ExplanationLeg {
     priceSource: leg.priceSource,
     priceNote: leg.priceNote,
     costLabel: leg.costLabel,
+    estimated: leg.estimated === true,
+    partlyUnknown: leg.pieces !== undefined && leg.pieces.some((p) => p.costUsdMicros === null) && leg.pieces.some((p) => p.costUsdMicros !== null),
     blockNum: leg.blockNum,
     timestamp: leg.timestamp,
     txHash: leg.txHash,
@@ -90,16 +92,15 @@ function legOf(effect: LegEffect): ExplanationLeg {
 }
 
 /** The same explanation the web panel shows for a click on this number. null when the wallet has no such asset or transaction. */
-export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget): ExplanationResponse | null {
-  const positions = foldPositions(wallet.legs, method, wallet.prices, wallet)
-  const unread = unreadAssets(positions, wallet)
+export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget, others: readonly WalletResponse[] = [], book: Book = emptyBook()): ExplanationResponse | null {
+  const { positions, totals, points } = foldBook(wallet, others, method, book)
   const explanation = ((): Explanation | null => {
-    if (target.kind === "total") return explainTotal(positions, sumTotals(positions, unread), target.metric)
+    if (target.kind === "total") return explainTotal(positions, totals, target.metric)
     if (target.kind === "asset") {
       const position = positions.find((p) => p.asset === target.asset)
       return position ? explainMetric(position, target.metric) : null
     }
-    const point = pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)).find((p) => p.txHash === target.txHash)
+    const point = points.find((p) => p.txHash === target.txHash)
     return point ? explainPoint(positions, point) : null
   })()
   if (!explanation) return null

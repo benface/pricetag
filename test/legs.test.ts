@@ -631,7 +631,7 @@ describe("totals", () => {
 
   it("say what they leave out, and never count unknown as $0", () => {
     const reasons = (asset: string) => totals.excluded.filter((e) => e.asset === asset).map((e) => e.reason)
-    assert.deepEqual(reasons("cbBTC"), ["no current price", "unknown cost"])
+    assert.deepEqual(reasons("cbBTC"), ["unknown cost"])
     assert.ok(reasons("ETH").includes("unknown cost"))
     assert.ok(totals.coverage.unrealized.missing > 0)
     const known = positions.filter((p) => p.values.unrealizedUsdMicros !== null)
@@ -657,8 +657,10 @@ describe("totals", () => {
     assert.equal(aero.values.averageCostUsdMicros, "1249750")
     assert.equal(aero.values.realizedUsdMicros, "74985000")
     assert.equal(aero.values.qty, (500n * E18).toString())
-    assert.equal(aero.values.unrealizedUsdMicros, null)
-    assert.equal(aero.values.valueUsdMicros, null)
+    // 500 at its $1.40 market price, less the $624.875 they cost. Its value rests on recent trades, so it's an estimate.
+    assert.equal(aero.values.valueUsdMicros, "700000000")
+    assert.equal(aero.values.unrealizedUsdMicros, "75125000")
+    assert.deepEqual(aero.estimates, { cost: false, value: true, realized: false, unrealized: true })
   })
 
   it("the demo wallet's rows are still that wallet's", () => {

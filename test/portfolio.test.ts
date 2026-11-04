@@ -6,7 +6,8 @@ import { after, before, describe, it } from "node:test"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd } from "../src/core/format.ts"
-import { foldPositions, sumTotals } from "../src/core/portfolio.ts"
+import { emptyBook } from "../src/core/book.ts"
+import { foldBook } from "../src/core/portfolio.ts"
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
 
@@ -36,9 +37,9 @@ const walletWith = (changes: Partial<WalletResponse>): WalletResponse => ({
 describe("portfolioOf", () => {
   it("returns exactly what the browser's fold gives", () => {
     for (const method of ["average", "fifo"] as const) {
-      const positions = foldPositions(DEMO_WALLET.legs, method, DEMO_WALLET.prices, DEMO_WALLET)
+      const { positions, totals } = foldBook(DEMO_WALLET, [], method, emptyBook())
       const portfolio = portfolioOf(DEMO_WALLET, method)
-      assert.deepEqual(portfolio.totals, sumTotals(positions))
+      assert.deepEqual(portfolio.totals, totals)
       assert.deepEqual(portfolio.positions.map((p) => p.values), positions.map((p) => p.values))
       assert.equal(portfolio.method, method)
     }
@@ -49,7 +50,7 @@ describe("portfolioOf", () => {
     const position = (asset: string) => portfolio.positions.find((p) => p.asset === asset)
     assert.equal(position("USDC")?.pnlUsdMicros, null)
     assert.equal(position("cbBTC")?.pnlUsdMicros, null)
-    assert.equal(position("AERO")?.pnlUsdMicros, null, "AERO has a known cost, but no current price")
+    assert.equal(position("DEGEN")?.pnlUsdMicros, null, "DEGEN has no market at all")
   })
 
   it("carries each position's check, and leaves what doesn't match out of the chart too", () => {
@@ -135,12 +136,11 @@ describe("portfolioOf", () => {
     assert.equal(pnl?.value, null)
     assert.ok(pnl?.lines.every((line) => !line.includes("$0.00 ")))
     assert.ok(pnl?.lines.some((line) => line.includes("Not included: cbBTC")))
-    assert.equal(explainPortfolio(wallet, "average", { kind: "total", metric: "value" })?.value, null)
     assert.equal(explainPortfolio(wallet, "average", { kind: "total", metric: "unrealized" })?.value, null)
   })
 
   it("still explains a total that's only partial, with its value", () => {
-    assert.equal(explainPortfolio(DEMO_WALLET, "average", { kind: "total", metric: "pnl" })?.value, "+$74.28")
+    assert.equal(explainPortfolio(DEMO_WALLET, "average", { kind: "total", metric: "pnl" })?.value, "+$149.30")
   })
 
   it("matches the files the Swift package reads", () => {
@@ -226,6 +226,60 @@ describe("the portfolio API", () => {
     const { status, body } = await get("/api/portfolio/0x0000000000000000000000000000000000000001")
     assert.equal(status, 503)
     assert.match(String(body.error), /only the demo wallet/)
+  })
+
+  const post = async (path: string, body: unknown, contentType = "application/json") => {
+    const response = await fetch(base + path, { method: "POST", headers: { "content-type": contentType }, body: JSON.stringify(body) })
+    const text = await response.text()
+    return { status: response.status, text, body: (response.headers.get("content-type")?.includes("json") ? JSON.parse(text) : {}) as Record<string, unknown> }
+  }
+  const SAVINGS = "0x00000000000000000000000000000000000de301"
+  const mine = { senders: { [SAVINGS]: { kind: "mine" } }, costs: {}, withdrawals: [] }
+
+  it("folds with the answers it's sent, and keeps none of them", async () => {
+    const answered = (await post("/api/portfolio/demo", { method: "average", book: mine })).body as unknown as PortfolioResponse
+    assert.ok(answered.questions.some((q) => q.wallet === SAVINGS))
+    assert.deepEqual(answered.linkedReading, [])
+    const without = (await get("/api/portfolio/demo")).body as unknown as PortfolioResponse
+    assert.ok(!without.questions.some((q) => q.wallet === SAVINGS), "the next request knows nothing about it")
+  })
+
+  it("previews what each answer would do, before any is final", async () => {
+    const { body } = await post("/api/portfolio/demo/preview", { method: "average", book: {}, candidates: [{}, mine] })
+    const [before, after] = body.previews as { unresolvedUsdMicros: string; pending: boolean }[]
+    assert.ok(BigInt(after!.unresolvedUsdMicros) < BigInt(before!.unresolvedUsdMicros))
+    assert.equal(after!.pending, false)
+  })
+
+  it("explains a number with the answers it's sent", async () => {
+    const { status, body } = await post("/api/portfolio/demo/explain?asset=USDC&metric=amount", { method: "average", book: mine })
+    assert.equal(status, 200)
+    assert.ok((body as unknown as ExplanationResponse).legs.some((l) => l.costLabel === "inherited"))
+  })
+
+  it("exports a CSV", async () => {
+    const { status, text } = await post("/api/portfolio/demo/export", { method: "average" })
+    assert.equal(status, 200)
+    assert.match(text, /^time,block,transaction/)
+  })
+
+  it("imports a Coinbase history without keeping it", async () => {
+    const csv = "Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes\n2026-10-01T10:00:00Z,Buy,ETH,1,USD,$2000,$2000,$2000,$0,x\n2026-10-02T10:00:00Z,Send,ETH,1,USD,$2000,$2000,$2000,$0,x\n"
+    const { status, body } = await post("/api/import/coinbase", { csv })
+    assert.equal(status, 200)
+    assert.equal((body.withdrawals as unknown[]).length, 1)
+    assert.equal((await post("/api/import/coinbase", { csv: "nope" })).status, 400)
+  })
+
+  it("refuses a post that isn't JSON, so a page can't send one without asking", async () => {
+    assert.equal((await post("/api/portfolio/demo", { method: "average" }, "text/plain")).status, 400)
+  })
+
+  it("refuses answers it can't read", async () => {
+    assert.equal((await post("/api/portfolio/demo", { method: "average", book: { senders: { nope: {} } } })).status, 400)
+    assert.equal((await post("/api/portfolio/demo", { method: "lifo" })).status, 400)
+    assert.equal((await post("/api/portfolio/demo/preview", { method: "average", candidates: "x" })).status, 400)
+    assert.equal((await post("/api/links/verify", { owner: "x" })).status, 400)
   })
 
   it("still serves the browser's wallet route", async () => {

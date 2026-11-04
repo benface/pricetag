@@ -3,9 +3,14 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { isAddress, type Head, type WalletResponse } from "../src/core/api.ts"
-import { DEMO_ADDRESS, DEMO_WALLET } from "../src/core/fixtures.ts"
+import { emptyBook, linkedWallets, parseBook, type Book } from "../src/core/book.ts"
+import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
+import { exportCsv } from "../src/core/export.ts"
+import { DEMO_ADDRESS, DEMO_WALLET, demoWallet } from "../src/core/fixtures.ts"
 import type { Method } from "../src/core/fold.ts"
+import { foldBook, previewBook } from "../src/core/portfolio.ts"
 import { createQuery, describeError } from "./amp.ts"
+import { verifyLink } from "./links.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
 import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
 import { datasetSource, rawSource, type Source } from "./source.ts"
@@ -55,6 +60,31 @@ function sendAmpError(res: ServerResponse, error: unknown) {
   sendJson(res, 502, { error: "Couldn't read from Amp." })
 }
 
+/** Answers, CSVs and signatures are small. Anything bigger isn't one of them. */
+const MAX_BODY_BYTES = 8_000_000
+
+/**
+ * A request's JSON body, or null when it isn't one. Requiring the JSON type keeps a page in the browser from posting here
+ * without the server's say-so, and this server never gives it.
+ */
+async function readJson(req: IncomingMessage): Promise<unknown> {
+  if (!req.headers["content-type"]?.toLowerCase().startsWith("application/json")) return null
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    size += chunk.length
+    if (size > MAX_BODY_BYTES) return null
+    chunks.push(chunk)
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"))
+  } catch {
+    return null
+  }
+}
+
+const recordOf = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
+
 export function createApi(env: Env) {
   const source = createSource(env)
 
@@ -103,6 +133,8 @@ export function createApi(env: Env) {
    */
   async function readWallet(address: string, res: ServerResponse, { fresh } = { fresh: true }): Promise<WalletResponse | null> {
     if (address === "demo" || address === DEMO_ADDRESS) return DEMO_WALLET
+    const demo = demoWallet(address)
+    if (demo) return demo
     if (!isAddress(address)) {
       sendJson(res, 400, { error: "That isn't a Base address." })
       return null
@@ -119,6 +151,73 @@ export function createApi(env: Env) {
     }
   }
 
+  /**
+   * The linked wallets already read. Never waits on one, because it can take a while, and a number shouldn't: it starts the
+   * read, and what came from that wallet stays unresolved until the next request finds it.
+   */
+  function linkedOf(focus: string, books: readonly Book[]): WalletResponse[] {
+    const addresses = new Set(books.flatMap(linkedWallets))
+    return [...addresses].flatMap((address) => {
+      if (address === focus.toLowerCase()) return []
+      const demo = demoWallet(address)
+      if (demo) return [demo]
+      if (address === DEMO_ADDRESS) return [DEMO_WALLET]
+      if (!wallets) return []
+      void wallets.get(address).catch((error: unknown) => console.error("Linked wallet read failed:", describeError(error)))
+      const read = wallets.peek(address)
+      return read ? [read] : []
+    })
+  }
+
+  async function handlePost(path: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = recordOf(await readJson(req))
+    if (!body) return sendJson(res, 400, { error: "This needs a JSON body." })
+
+    if (path === "/api/import/coinbase") {
+      const imported = typeof body.csv === "string" ? parseCoinbaseCsv(body.csv) : null
+      if (!imported) return sendJson(res, 400, { error: "That doesn't look like a Coinbase transaction history." })
+      return sendJson(res, 200, imported)
+    }
+    if (path === "/api/links/verify") {
+      const { owner, address, signature } = body
+      if (typeof owner !== "string" || typeof address !== "string" || typeof signature !== "string" || !isAddress(owner) || !isAddress(address)) return sendJson(res, 400, { error: "That needs two addresses and a signature." })
+      return sendJson(res, 200, { verified: await verifyLink(owner, address, signature) })
+    }
+
+    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export))?$/.exec(path)
+    if (!match) return sendJson(res, 404, { error: "Not found" })
+    const method = parseMethod(typeof body.method === "string" ? body.method : null)
+    if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
+    const book = body.book === undefined ? emptyBook() : parseBook(body.book)
+    if (!book) return sendJson(res, 400, { error: "Those answers can't be read." })
+    const action = match[2]
+
+    if (action === "preview") {
+      const candidates = Array.isArray(body.candidates) ? body.candidates.map(parseBook) : null
+      if (!candidates || candidates.includes(null) || candidates.length > 8) return sendJson(res, 400, { error: "Those answers can't be read." })
+      const wallet = await readWallet(match[1] as string, res, { fresh: false })
+      if (!wallet) return
+      const books = candidates as Book[]
+      const others = linkedOf(wallet.address, books)
+      return sendJson(res, 200, { previews: books.map((candidate) => previewBook(wallet, others, method, candidate)) })
+    }
+
+    const target = action === "explain" ? parseExplainTarget(new URL(req.url ?? "/", "http://localhost").searchParams) : null
+    if (action === "explain" && !target) return sendJson(res, 400, { error: "That isn't a number this can explain." })
+    const wallet = await readWallet(match[1] as string, res, { fresh: action === undefined })
+    if (!wallet) return
+    const others = linkedOf(wallet.address, [book])
+    if (action === "export") {
+      res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" })
+      res.end(exportCsv(foldBook(wallet, others, method, book).positions))
+      return
+    }
+    if (!target) return sendJson(res, 200, portfolioOf(wallet, method, others, book))
+    const explanation = explainPortfolio(wallet, method, target, others, book)
+    if (explanation) sendJson(res, 200, explanation)
+    else sendJson(res, 404, { error: "This wallet has nothing like that." })
+  }
+
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = pathOf(req)
     if (path === null) {
@@ -126,6 +225,10 @@ export function createApi(env: Env) {
       return true
     }
     if (!path.startsWith("/api/")) return false
+    if (req.method === "POST") {
+      await handlePost(path, req, res)
+      return true
+    }
     if (req.method !== "GET") {
       sendJson(res, 405, { error: "Method not allowed" })
       return true

@@ -3,8 +3,10 @@
 
 import type { Method, PositionValues } from "./fold.ts"
 import type { PricedLeg, ReferenceRow } from "./legs.ts"
-import type { LatestPrice, LatestPrices, PnlPoint, Totals } from "./portfolio.ts"
+import type { CostNote } from "./notes.ts"
+import type { Estimates, LatestPrice, LatestPrices, PnlPoint, PnlStatus, Totals } from "./portfolio.ts"
 import type { BalanceSnapshot, Reconciliation } from "./reconcile.ts"
+import type { Meter, Question } from "./resolve.ts"
 
 export type Mode = "demo" | "raw" | "dataset"
 
@@ -34,6 +36,12 @@ export type WalletResponse = {
   lastBalances: Record<string, { blockNum: number; amount: string }>
   /** Assets with no balance read at `coverage.toBlock`, which isn't the same as holding none. Empty until reads start. */
   unreadBalances: string[]
+  /** Costs this wallet published itself, from its own zero-value transactions to itself. */
+  notes: CostNote[]
+  /** Whether market prices were read successfully, so a token without one really has no market. */
+  marketChecked: boolean
+  /** Tokens off the allowlist that moved here, which have no position or price. */
+  unlistedTokens: string[]
 }
 
 export type PortfolioPosition = {
@@ -48,13 +56,12 @@ export type PortfolioPosition = {
   shortfallQty: string
   legCount: number
   reconciliation: Reconciliation | null
+  /** No price, in any form, at any block. Often spam. It's listed apart, and can't affect PnL. */
+  noMarket: boolean
+  estimates: Estimates
+  /** Its cost is unknown, and answering a question could change that. */
+  resolvable: boolean
 }
-
-/**
- * Whether `totals.pnlUsdMicros` can be read as the wallet's PnL.
- * partial: it leaves something out, and `totals.excluded` says what. unavailable: it's null, because nothing in it is known.
- */
-export type PnlStatus = "complete" | "partial" | "unavailable"
 
 /** A wallet's holdings, cost and PnL, already folded by one method. */
 export type PortfolioResponse = {
@@ -76,6 +83,24 @@ export type PortfolioResponse = {
   totals: Totals
   pnlStatus: PnlStatus
   points: PnlPoint[]
+  /** What's left to ask, most useful first. */
+  questions: Question[]
+  meter: Meter
+  /** Linked wallets that aren't read yet, so what came from them shows as unresolved for now. */
+  linkedReading: string[]
+  unlistedTokens: number
+  marketChecked: boolean
+}
+
+/** What the headline would say with a different set of answers, before any of them is final. */
+export type BookPreview = {
+  pnlUsdMicros: string | null
+  pnlStatus: PnlStatus
+  estimatedUsdMicros: string
+  unresolvedUsdMicros: string
+  open: number
+  /** A wallet these answers link hasn't been read yet, so this can't say yet. */
+  pending: boolean
 }
 
 /** One number's explanation: how it's worked out, and the legs behind it, newest first. */
@@ -98,6 +123,10 @@ export type ExplanationLeg = {
   priceSource: PricedLeg["priceSource"]
   priceNote: string | null
   costLabel: PricedLeg["costLabel"]
+  /** Its cost or proceeds rest on an estimate. */
+  estimated: boolean
+  /** Some of what arrived has a known cost and some doesn't. */
+  partlyUnknown: boolean
   blockNum: number
   timestamp: string
   txHash: string
