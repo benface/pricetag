@@ -122,12 +122,18 @@ private struct HotWalletDetails: View {
                 .foregroundStyle(.white.opacity(0.85))
                 .textSelection(.enabled)
             HStack {
-                Button(wallet.settings.sweepDestination == nil ? "Move What's Left to a New Key" : "Sweep What's Left and Replace the Key") {
+                // Its own colors rather than a tint, which fades into the banner when the window isn't in front. An alarm usually finds it that way.
+                Button {
                     Task { await wallet.replaceKey() }
+                } label: {
+                    Text(wallet.settings.sweepDestination == nil ? "Move What's Left to a New Key" : "Sweep What's Left and Replace the Key")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.white)
-                .foregroundStyle(.red)
+                .buttonStyle(.plain)
                 .disabled(wallet.rotation != nil || wallet.isWorking)
                 Spacer()
                 Button("Dismiss") { wallet.dismissAlarm() }
