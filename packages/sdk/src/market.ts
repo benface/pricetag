@@ -1,7 +1,8 @@
 // A token's `market` price: what it recently traded at, from `priced_legs`, with guards so a thin pool can't set it.
 
 import { worth } from "./fold.ts"
-import { answerToMicros, isSanePrice, type PricedRow } from "./legs.ts"
+import { answerToMicros, isSanePrice, type LegRow, type PricedRow } from "./legs.ts"
+import type { BalanceSnapshot } from "./reconcile.ts"
 import { ETH_ADDRESS, TOKENS, normalizeAddress, tokenByAddress } from "./tokens.ts"
 
 /** One account's trade of a token. A trade shows up once per account it went through, which is why these group by transaction. */
@@ -58,4 +59,33 @@ export function marketPrice(trades: readonly MarketTrade[], asset: string, block
   if (real.reduce((sum, tx) => sum + tx.notional, 0n) < MIN_VOLUME_USD_MICROS) return null
   const last = real.slice(0, LAST_TRADES)
   return { usdMicros: median(last.map((tx) => median(tx.prices))).toString(), blockNum: (last[0] as (typeof last)[number]).blockNum }
+}
+
+/** What a wallet's market-priced tokens traded at, in USD, by block and then asset. A price too little trading backs isn't in it. */
+export type MarketMarks = Record<string, Record<string, string>>
+
+/**
+ * Each market-priced token at each block where this wallet has a transaction, while it holds that token. Newest first,
+ * because reads can run out. Held before or after the block, because each transaction in a block gets its own chart point.
+ */
+export function markNeeds(account: string, rows: readonly LegRow[], opening: Pick<BalanceSnapshot, "amounts"> | null): { asset: string; block: number }[] {
+  const moved = new Map<number, Map<string, bigint>>()
+  for (const row of rows) {
+    if (row.account !== account) continue
+    const changes = moved.get(row.block_num) ?? new Map<string, bigint>()
+    moved.set(row.block_num, changes)
+    const token = tokenByAddress(row.token)
+    if (token && !token.oracle) changes.set(token.asset, (changes.get(token.asset) ?? 0n) + (row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)))
+  }
+  const held = new Map(TOKENS.filter((t) => !t.oracle).map((t) => [t.asset, BigInt(opening?.amounts[t.asset] ?? "0")]))
+  const needs: { asset: string; block: number }[] = []
+  for (const [block, changes] of [...moved].sort(([a], [b]) => a - b)) {
+    for (const [asset, before] of held) {
+      const after = before + (changes.get(asset) ?? 0n)
+      if (before > 0n || after > 0n) needs.push({ asset, block })
+      // More can leave than we saw arrive, and what's left then is nothing, as in the fold.
+      held.set(asset, after > 0n ? after : 0n)
+    }
+  }
+  return needs.reverse()
 }

@@ -2,6 +2,7 @@
 
 import { applyLeg, emptyPosition, worth, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
 import { answerToMicros, type PricedLeg, type Reference } from "./legs.ts"
+import type { MarketMarks } from "./market.ts"
 import { decimalsOf, estimateHeld, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
 import { TOKENS } from "./tokens.ts"
 
@@ -262,14 +263,14 @@ export function sumTotals(positions: readonly Position[], unread: readonly strin
 /** A token's price at a block, in the currency being folded, for marking what's held at that moment. */
 export type MarkPrice = (blockNum: number, asset: string) => string | null
 
-/** Each block's oracle prices, in USD, from the oracle reads that come with a wallet's legs. */
-export function referenceMarks(references: readonly Reference[]): MarkPrice {
+/** Each block's prices, in USD, from the oracle reads that come with a wallet's legs, and what other tokens traded at, if that's known. */
+export function referenceMarks(references: readonly Reference[], market: MarketMarks = {}): MarkPrice {
   const refs = new Map(references.map((r) => [r.blockNum, r]))
   return (blockNum, asset) => {
     const ref = refs.get(blockNum)
     if (asset === "ETH") return answerToMicros(ref?.ethUsd)
     if (asset === "USDC") return answerToMicros(ref?.usdcUsd)
-    return null
+    return market[blockNum]?.[asset] ?? null
   }
 }
 export type Portfolio = { method: Method; positions: Position[]; totals: Totals }
@@ -303,8 +304,8 @@ export type PnlPoint = {
 
 /**
  * Total PnL after each transaction, plus a last point at `latest` and current prices, matching the headline.
- * Oracle tokens are marked to that block's oracle price. Others have no price between their own trades, so like
- * in the headline, they add no unrealized PnL and count in `excludedCount`. This way a trade can't make a spike.
+ * Tokens are marked to that block's oracle or market price, and never to a trade's own price, so a trade can't make a
+ * spike. Without one, like in the headline, a token adds no unrealized PnL and counts in `excludedCount`.
  */
 export function pnlOverTime(
   legs: readonly PricedLeg[],
