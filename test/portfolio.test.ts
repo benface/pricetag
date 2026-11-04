@@ -4,9 +4,11 @@ import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
+import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd } from "../src/core/format.ts"
 import { foldPositions, sumTotals } from "../src/core/portfolio.ts"
+import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
 
@@ -225,5 +227,70 @@ describe("the formatters the Swift package repeats", () => {
       amount: units.map(([value, decimals]) => ({ units: value, decimals, amount: formatAmount(value, decimals), signed: formatSignedAmount(value, decimals) })),
       duration: [0, 30, 1800, 3599, 3600, 5400, 100000].map((blocks) => ({ blocks, duration: formatDuration(blocks) })),
     })
+  })
+})
+
+describe("wording", () => {
+  const costLabels = ["paid", "inherited", "received at market", "self-reported", "unknown"] as const
+  const kinds = ["swap", "transfer", "gas"] as const
+  const vectors = {
+    methods: { average: wording.METHOD_LABELS.average, fifo: wording.METHOD_LABELS.fifo },
+    modes: wording.MODE_LABELS,
+    actions: kinds.flatMap((kind) => [true, false].map((incoming) => ({ kind, incoming, label: wording.actionLabel(kind, incoming) }))),
+    priceSources: (["oracle", "swap", "market"] as const).map((source) => ({ source, label: wording.priceSourceLabel(source) })),
+    costs: costLabels.map((cost) => ({ cost, tag: wording.costTag(cost) })),
+    activity: [[1, 1], [10, 10], [1203, 200]].map(([count, shown]) => ({ count, shown, title: wording.activityTitle(count as number, shown as number) })),
+    excluded: wording.excludedSentence([{ asset: "USDC", reason: "unknown cost" }, { asset: "AERO", reason: "no current price" }, { asset: "ETH", reason: "unknown cost" }]),
+    coverage: { fromBlock: 53500000, toBlock: 53505400, trackedTokens: 10, text: wording.coverageSentence({ fromBlock: 53500000, toBlock: 53505400 }, 10) },
+    feesUnknown: [1, 2].map((count) => ({ count, text: wording.feesUnknownSentence(count) })),
+    behind: [6, 14, 15, 50, 5400].map((blocks) => ({ blocks, text: wording.behindSentence(blocks) })),
+    stale: wording.staleSentence("Nov 4 at 5:40 AM"),
+    feedDetail: [wording.feedDetail("demo", 1000), wording.feedDetail("raw", 1000), wording.feedDetail("dataset", 1000)],
+    sentences: {
+      methodName: wording.METHOD_NAME,
+      methodHelp: wording.METHOD_HELP,
+      averagePricePaid: wording.AVERAGE_PRICE_PAID,
+      networkFees: wording.NETWORK_FEES,
+      realizedHelp: wording.REALIZED_HELP,
+      unrealizedHelp: wording.UNREALIZED_HELP,
+      notStarted: wording.NOT_STARTED,
+      unpricedFees: wording.UNPRICED_FEES,
+      demo: wording.DEMO_NOTICE,
+      pnlUnavailable: wording.PNL_UNAVAILABLE,
+      nothingToChart: wording.NOTHING_TO_CHART,
+      reading: wording.READING,
+      notAnAddress: wording.NOT_AN_ADDRESS,
+    },
+  }
+
+  it("says the same on the Mac", () => {
+    assertMatchesFile("wording-vectors.json", vectors)
+  })
+
+  it("uses none of the old terms in anything people read", () => {
+    const JARGON = /\b(fifo|avg|average cost|legs?|proceeds|oracles?|allowlist|off the list|swaps?|inherited|self-reported|received at market|gas|dataset|onchain|L[12])\b/i
+    // The vectors also name the API's own values, as inputs, so only what they print is held to this.
+    const printed = (value: unknown): string[] => {
+      if (typeof value === "string") return [value]
+      if (typeof value !== "object" || value === null) return []
+      return Object.entries(value).flatMap(([key, inner]) => (["kind", "source", "cost"].includes(key) ? [] : printed(inner)))
+    }
+    const texts: string[] = [...printed(vectors), ...Object.values(wording.PRICE_NOTES), wording.ETH_NOTE]
+    for (const method of ["average", "fifo"] as const) {
+      for (const position of foldPositions(DEMO_WALLET.legs, method, DEMO_WALLET.prices)) {
+        for (const effect of position.effects) {
+          texts.push(describeEffect(effect), describeNetting(effect.leg) ?? "", effect.leg.priceNote ?? "")
+        }
+        for (const metric of ["amount", "average", "value", "realized", "unrealized"] as const) {
+          const explanation = explainPortfolio(DEMO_WALLET, method, { kind: "asset", asset: position.asset, metric })
+          texts.push(explanation?.title ?? "", ...(explanation?.lines ?? []))
+        }
+      }
+      for (const metric of ["pnl", "value", "realized", "unrealized", "gas"] as const) {
+        const explanation = explainPortfolio(DEMO_WALLET, method, { kind: "total", metric })
+        texts.push(explanation?.title ?? "", ...(explanation?.lines ?? []))
+      }
+    }
+    for (const text of texts) assert.doesNotMatch(text, JARGON)
   })
 })

@@ -1,0 +1,89 @@
+import Foundation
+import Testing
+@testable import PricetagKit
+
+/// `test/portfolio.test.ts` writes the vectors from the web app's wording, so both say the same thing.
+struct WordingVectors: Decodable {
+    struct Action: Decodable {
+        let kind: String
+        let incoming: Bool
+        let label: String
+    }
+    struct PriceSource: Decodable { let source, label: String }
+    struct Cost: Decodable { let cost, tag: String }
+    struct Activity: Decodable {
+        let count, shown: Int
+        let title: String
+    }
+    struct CoverageVector: Decodable {
+        let fromBlock, toBlock, trackedTokens: Int
+        let text: String
+    }
+    struct FeesUnknown: Decodable {
+        let count: Int
+        let text: String
+    }
+    struct Behind: Decodable {
+        let blocks: Int
+        let text: String
+    }
+    struct Sentences: Decodable {
+        let methodName, methodHelp, averagePricePaid, networkFees, realizedHelp, unrealizedHelp: String
+        let notStarted, unpricedFees, demo, pnlUnavailable, nothingToChart, reading, notAnAddress: String
+    }
+    let methods: [String: String]
+    let modes: [String: String]
+    let actions: [Action]
+    let priceSources: [PriceSource]
+    let costs: [Cost]
+    let activity: [Activity]
+    let excluded: String
+    let coverage: CoverageVector
+    let feesUnknown: [FeesUnknown]
+    let behind: [Behind]
+    let stale: String
+    let feedDetail: [String]
+    let sentences: Sentences
+}
+
+@Suite struct WordingTests {
+    let vectors: WordingVectors
+
+    init() throws {
+        vectors = try resource("wording-vectors", as: WordingVectors.self)
+    }
+
+    @Test func labelsMatchTheWebApp() {
+        for method in CostMethod.allCases { #expect(vectors.methods[method.rawValue] == method.label) }
+        for mode in [Mode.demo, .raw, .dataset] { #expect(vectors.modes[mode.rawValue] == mode.label) }
+        for vector in vectors.actions { #expect(Wording.action(kind: vector.kind, isIncoming: vector.incoming) == vector.label) }
+        for vector in vectors.priceSources { #expect(Wording.priceSource(vector.source) == vector.label) }
+        for vector in vectors.costs { #expect(Wording.costTag(vector.cost) == vector.tag) }
+        for vector in vectors.activity { #expect(Wording.activityTitle(count: vector.count, shown: vector.shown) == vector.title) }
+    }
+
+    @Test func sentencesMatchTheWebApp() {
+        let excluded = [Exclusion(asset: "USDC", reason: "unknown cost"), Exclusion(asset: "AERO", reason: "no current price"), Exclusion(asset: "ETH", reason: "unknown cost")]
+        #expect(Wording.excluded(excluded) == vectors.excluded)
+        let span = Coverage(fromBlock: vectors.coverage.fromBlock, toBlock: vectors.coverage.toBlock)
+        #expect(Wording.coverage(span, trackedTokens: vectors.coverage.trackedTokens) == vectors.coverage.text)
+        for vector in vectors.feesUnknown { #expect(Wording.feesUnknown(vector.count) == vector.text) }
+        for vector in vectors.behind { #expect(Wording.behind(blocks: vector.blocks) == vector.text) }
+        #expect(Wording.stale(lastUpdate: "Nov 4 at 5:40 AM") == vectors.stale)
+        #expect([Mode.demo, .raw, .dataset].map { Wording.feedDetail($0, block: 1000) } == vectors.feedDetail)
+        let sentences = vectors.sentences
+        #expect(Wording.methodName == sentences.methodName)
+        #expect(Wording.methodHelp == sentences.methodHelp)
+        #expect(Wording.averagePricePaid == sentences.averagePricePaid)
+        #expect(Wording.networkFees == sentences.networkFees)
+        #expect(Wording.realizedHelp == sentences.realizedHelp)
+        #expect(Wording.unrealizedHelp == sentences.unrealizedHelp)
+        #expect(Wording.notStarted == sentences.notStarted)
+        #expect(Wording.unpricedFees == sentences.unpricedFees)
+        #expect(Wording.demo == sentences.demo)
+        #expect(Wording.pnlUnavailable == sentences.pnlUnavailable)
+        #expect(Wording.nothingToChart == sentences.nothingToChart)
+        #expect(Wording.reading == sentences.reading)
+        #expect(Wording.notAnAddress == sentences.notAnAddress)
+    }
+}

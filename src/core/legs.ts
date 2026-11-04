@@ -3,6 +3,7 @@
 
 import { usdOf, type CostLabel, type FoldLeg } from "./fold.ts"
 import { normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
+import { PRICE_NOTES } from "./wording.ts"
 
 export type PriceSource = "oracle" | "swap" | "market"
 /**
@@ -147,9 +148,6 @@ function isSaneAgainstOracle(impliedUsdMicros: bigint, oracleUsdMicros: string):
   return ratio >= ORACLE_BAND[0] && ratio <= ORACLE_BAND[1]
 }
 
-const REJECTED_NOTE = "Rejected this swap's implied price, because it's far from any plausible value."
-const UNLISTED_NOTE = "This transaction also moved a token off the allowlist, so what was paid or received can't be split between them."
-
 const isPlainAmount = (amount: string) => /^\d+$/.test(amount)
 
 type Input = {
@@ -196,7 +194,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         kind: "gas",
         priceUsdMicros: ethMicros,
         priceSource: ethMicros === null ? null : "oracle",
-        priceNote: ethMicros === null ? "The oracle read failed at this block." : null,
+        priceNote: ethMicros === null ? PRICE_NOTES.feedFailed : null,
         costUsdMicros: null,
         proceedsUsdMicros: null,
         costLabel: "unknown",
@@ -244,14 +242,14 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
       let priceSource: PriceSource | null = price === null ? null : "oracle"
       let priceNote: string | null = null
       let rejected = false
-      if (net.token.oracle && price === null) priceNote = "The oracle read failed at this block."
-      if (hasUnlisted) priceNote = UNLISTED_NOTE
+      if (net.token.oracle && price === null) priceNote = PRICE_NOTES.feedFailed
+      if (hasUnlisted) priceNote = PRICE_NOTES.unlisted
       else if (!net.token.oracle) {
         const swap = pricedRow?.priced.source === "swap" && pricedRow.priced.token === net.token.symbol ? pricedRow.priced.usd_micros : null
-        if (swap === null) priceNote = isSwap ? "This swap didn't give a usable price for this token." : "No swap in this transaction, and no oracle for this token."
-        else if (!isSwap) priceNote = "This transaction isn't a simple swap."
+        if (swap === null) priceNote = isSwap ? PRICE_NOTES.unusable : PRICE_NOTES.noExchange
+        else if (!isSwap) priceNote = PRICE_NOTES.notSimple
         else if (!isSanePrice(net.token, swap, ethMicros)) {
-          priceNote = REJECTED_NOTE
+          priceNote = PRICE_NOTES.rejected
           rejected = true
         } else {
           price = swap
@@ -276,8 +274,8 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
       if (other.rejected || !sane) {
         // A wrong trade value must never reach a total, so neither side gets one.
         tradeUsd = null
-        anchor.priceNote = REJECTED_NOTE
-        other.priceNote = REJECTED_NOTE
+        anchor.priceNote = PRICE_NOTES.rejected
+        other.priceNote = PRICE_NOTES.rejected
       }
     }
 

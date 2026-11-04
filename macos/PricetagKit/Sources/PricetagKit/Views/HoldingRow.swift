@@ -16,8 +16,8 @@ public struct HoldingRow: View {
     }
 
     private var cost: String {
-        if !position.isHeld { return "Closed" }
-        if let average = position.values.averageCostUsdMicros { return "Cost \(Format.price(average))" }
+        if !position.isHeld { return "None left" }
+        if let average = position.values.averageCostUsdMicros { return "Average paid \(Format.price(average))" }
         return "Cost unknown"
     }
 

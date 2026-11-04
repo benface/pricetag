@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { PnlPoint } from "../core/portfolio.ts"
 import { formatClock, formatSignedUsd, formatTime } from "../core/format.ts"
+import { NOTHING_TO_CHART } from "../core/wording.ts"
 
 const showPnl = (point: PnlPoint) => (point.pnlUsdMicros === null ? "⚠ Unavailable" : formatSignedUsd(point.pnlUsdMicros))
 
@@ -99,13 +100,12 @@ export function PnlChart({ points, onSelect }: Props) {
           {asTable ? "Show chart" : "Show table"}
         </button>
       </div>
-      <p className="muted small">After each transaction: realized PnL, plus unrealized PnL where there's a price at that moment, less gas. Unknown costs add nothing.</p>
+      <p className="muted small">After each transaction: realized PnL, plus unrealized PnL where there's a price at that moment, less network fees. Unknown costs add nothing.</p>
       {asTable ? (
         <table className="table compact">
           <thead>
             <tr>
               <th>Time</th>
-              <th>Block</th>
               <th className="num">PnL</th>
               <th className="num">Excludes</th>
             </tr>
@@ -122,7 +122,6 @@ export function PnlChart({ points, onSelect }: Props) {
                     `${formatTime(p.timestamp)} (now)`
                   )}
                 </td>
-                <td>{p.blockNum.toLocaleString("en-US")}</td>
                 <td className="num">{showPnl(p)}</td>
                 <td className="num">{p.excludedCount}</td>
               </tr>
@@ -130,7 +129,7 @@ export function PnlChart({ points, onSelect }: Props) {
           </tbody>
         </table>
       ) : null}
-      {!asTable && !chart.hasData ? <p className="notice warn chart-empty">⚠ Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't $0.</p> : null}
+      {!asTable && !chart.hasData ? <p className="notice warn chart-empty">⚠ {NOTHING_TO_CHART}</p> : null}
       <div
         ref={box}
         className="chart"
@@ -181,7 +180,6 @@ export function PnlChart({ points, onSelect }: Props) {
           >
             <strong>{showPnl(point)}</strong>
             <span>{formatTime(point.timestamp)}</span>
-            <span>Block {point.blockNum.toLocaleString("en-US")}</span>
             {point.excludedCount > 0 ? <span>⚠ Leaves out {point.excludedCount} unknown {point.excludedCount === 1 ? "amount" : "amounts"}</span> : null}
             {point.txHash ? <span className="muted">Click to see this transaction</span> : <span className="muted">Now, at current prices</span>}
           </div>
