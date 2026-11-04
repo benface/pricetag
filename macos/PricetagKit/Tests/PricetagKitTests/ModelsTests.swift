@@ -16,13 +16,13 @@ import Testing
     @Test func keepsUnknownsUnknown() throws {
         let usdc = try #require(try demoPortfolio().positions.first { $0.asset == "USDC" })
         #expect(usdc.hasUnknownCost)
-        #expect(usdc.pnlUsdMicros == nil)
-        #expect(usdc.values.averageCostUsdMicros == nil)
+        #expect(usdc.pnlMicros == nil)
+        #expect(usdc.values.averageCostMicros == nil)
     }
 
     @Test func keepsUnknownPointsUnknown() throws {
         let portfolio = try demoPortfolio()
-        #expect(portfolio.points.first?.pnlUsdMicros == nil)
+        #expect(portfolio.points.first?.pnlMicros == nil)
         #expect(portfolio.hasChartableData)
     }
 

@@ -16,7 +16,7 @@ public struct PnlHeadline: View {
 
     /// nil when there's no number to show, and that says so instead of showing $0.
     private var pnl: String? {
-        portfolio.pnlStatus == .unavailable ? nil : portfolio.totals.pnlUsdMicros
+        portfolio.pnlStatus == .unavailable ? nil : portfolio.totals.pnlMicros
     }
 
     public var body: some View {
@@ -120,10 +120,10 @@ extension Portfolio {
     /// The four sums beside the total, in reading order.
     public var totalStats: [(metric: TotalMetric, label: String, text: String?, coverage: SumCoverage?)] {
         [
-            (.value, "Value", totals.valueUsdMicros.map(Format.usd), totals.coverage.value),
-            (.realized, "Realized", totals.realizedUsdMicros.map(Format.signedUSD), totals.coverage.realized),
-            (.unrealized, "Unrealized", totals.unrealizedUsdMicros.map(Format.signedUSD), totals.coverage.unrealized),
-            (.gas, "Gas paid", totals.gasUsdMicros.map(Format.usd), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
+            (.value, "Value", totals.valueMicros.map(Format.usd), totals.coverage.value),
+            (.realized, "Realized", totals.realizedMicros.map(Format.signedUSD), totals.coverage.realized),
+            (.unrealized, "Unrealized", totals.unrealizedMicros.map(Format.signedUSD), totals.coverage.unrealized),
+            (.gas, "Gas paid", totals.gasMicros.map(Format.usd), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
     }
 }

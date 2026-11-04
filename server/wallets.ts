@@ -55,8 +55,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>) 
     const eth = answerToMicros(latest?.eth_usd)
     const usdc = answerToMicros(latest?.usdc_usd)
     const prices: LatestPrices = {}
-    if (latest && eth) prices.ETH = { usdMicros: eth, source: "oracle", blockNum: latest.block_num }
-    if (latest && usdc) prices.USDC = { usdMicros: usdc, source: "oracle", blockNum: latest.block_num }
+    if (latest && eth) prices.ETH = { micros: eth, source: "oracle", blockNum: latest.block_num }
+    if (latest && usdc) prices.USDC = { micros: usdc, source: "oracle", blockNum: latest.block_num }
 
     const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs }
     wallets.delete(address)

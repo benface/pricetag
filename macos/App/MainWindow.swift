@@ -193,7 +193,7 @@ private struct HoldingsTable: View {
             .alignment(.numeric)
             TableColumn("Avg cost") { position in
                 if position.isHeld {
-                    number(position, .average, position.values.averageCostUsdMicros.map(Format.price) ?? "Unknown", tone: position.hasUnknownCost ? .warning : .neutral, warn: position.hasUnknownCost)
+                    number(position, .average, position.values.averageCostMicros.map(Format.price) ?? "Unknown", tone: position.hasUnknownCost ? .warning : .neutral, warn: position.hasUnknownCost)
                 } else {
                     dash
                 }
@@ -201,7 +201,7 @@ private struct HoldingsTable: View {
             .alignment(.numeric)
             TableColumn("Value") { position in
                 if position.isHeld {
-                    let value = position.values.valueUsdMicros
+                    let value = position.values.valueMicros
                     number(position, .value, value.map(Format.usd) ?? "No price", tone: value == nil ? .warning : .neutral, warn: value == nil)
                 } else {
                     dash
@@ -209,14 +209,14 @@ private struct HoldingsTable: View {
             }
             .alignment(.numeric)
             TableColumn("Realized") { position in
-                let realized = position.values.realizedUsdMicros
+                let realized = position.values.realizedMicros
                 number(position, .realized, realized.map(Format.signedUSD) ?? Wording.pnlUnavailable, tone: Tone(signed: realized), warn: realized == nil)
             }
             .width(min: 110, ideal: 130)
             .alignment(.numeric)
             TableColumn("Unrealized") { position in
                 if position.isHeld {
-                    let unrealized = position.values.unrealizedUsdMicros
+                    let unrealized = position.values.unrealizedMicros
                     number(position, .unrealized, unrealized.map(Format.signedUSD) ?? Wording.pnlUnavailable, tone: Tone(signed: unrealized), warn: unrealized == nil)
                 } else {
                     dash
@@ -285,8 +285,8 @@ private struct TransactionsTable: View {
             .alignment(.numeric)
             TableColumn("Total PnL after") { point in
                 HStack(spacing: 4) {
-                    if point.pnlUsdMicros == nil { WarningIcon() }
-                    LiveNumber(point.pnlUsdMicros.map(Format.signedUSD) ?? "Unavailable", tone: isLive ? Tone(signed: point.pnlUsdMicros) : .neutral)
+                    if point.pnlMicros == nil { WarningIcon() }
+                    LiveNumber(point.pnlMicros.map(Format.signedUSD) ?? "Unavailable", tone: isLive ? Tone(signed: point.pnlMicros) : .neutral)
                 }
             }
             .alignment(.numeric)

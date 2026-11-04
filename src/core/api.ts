@@ -33,13 +33,13 @@ export type PortfolioPosition = {
   price: LatestPrice | null
   values: PositionValues
   /** Realized plus unrealized. null when either is unknown on what's still held, or units left that we never saw arrive. */
-  pnlUsdMicros: string | null
+  pnlMicros: string | null
   shortfallQty: string
   legCount: number
 }
 
 /**
- * Whether `totals.pnlUsdMicros` can be read as the wallet's PnL.
+ * Whether `totals.pnlMicros` can be read as the wallet's PnL.
  * partial: it leaves something out, and `totals.excluded` says what. unavailable: it's null, because nothing in it is known.
  */
 export type PnlStatus = "complete" | "partial" | "unavailable"
@@ -78,7 +78,7 @@ export type ExplanationLeg = {
   delta: string
   decimals: number
   kind: PricedLeg["kind"]
-  priceUsdMicros: string | null
+  priceMicros: string | null
   priceSource: PricedLeg["priceSource"]
   priceNote: string | null
   costLabel: PricedLeg["costLabel"]

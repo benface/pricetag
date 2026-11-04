@@ -274,7 +274,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     @Test func aNullTotalHasNoNumberWhateverTheStatusSays() throws {
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
         var totals = object["totals"] as! [String: Any]
-        totals["pnlUsdMicros"] = NSNull()
+        totals["pnlMicros"] = NSNull()
         object["totals"] = totals
         let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
         let summary = FeedSummary(feed: .live, portfolio: portfolio)

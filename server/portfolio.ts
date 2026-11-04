@@ -29,18 +29,18 @@ export function parseExplainTarget(params: URLSearchParams): ExplainTarget | nul
 
 function positionOf({ asset, decimals, price, values, state, effects }: Position): PortfolioPosition {
   const held = BigInt(values.qty) > 0n
-  const { realizedUsdMicros: realized, unrealizedUsdMicros: unrealized } = values
+  const { realizedMicros: realized, unrealizedMicros: unrealized } = values
   const pnl = (() => {
     // Units left that we never saw arrive, so whatever this position shows isn't all of it. Totals leave it out for the same reason.
     if (realized === null || BigInt(state.shortfallQty) > 0n) return null
     if (!held) return realized
     return unrealized === null ? null : (BigInt(realized) + BigInt(unrealized)).toString()
   })()
-  return { asset, decimals, note: asset === "ETH" ? "incl. WETH" : null, price, values, pnlUsdMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length }
+  return { asset, decimals, note: asset === "ETH" ? "incl. WETH" : null, price, values, pnlMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length }
 }
 
 function pnlStatusOf(totals: Totals, gasUnknownTxs: readonly string[]): PnlStatus {
-  if (totals.pnlUsdMicros === null) return "unavailable"
+  if (totals.pnlMicros === null) return "unavailable"
   return totals.excluded.length === 0 && !totals.unpricedGas && gasUnknownTxs.length === 0 ? "complete" : "partial"
 }
 
@@ -72,7 +72,7 @@ function legOf(effect: LegEffect): ExplanationLeg {
     delta: leg.delta,
     decimals: leg.decimals,
     kind: leg.kind,
-    priceUsdMicros: leg.priceUsdMicros,
+    priceMicros: leg.priceMicros,
     priceSource: leg.priceSource,
     priceNote: leg.priceNote,
     costLabel: leg.costLabel,

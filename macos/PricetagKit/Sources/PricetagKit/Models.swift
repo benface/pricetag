@@ -40,7 +40,7 @@ public struct Coverage: Codable, Sendable, Equatable {
 }
 
 public struct LatestPrice: Codable, Sendable, Equatable {
-    public let usdMicros: String
+    public let micros: String
     public let source: String
     public let blockNum: Int
 }
@@ -48,11 +48,11 @@ public struct LatestPrice: Codable, Sendable, Equatable {
 public struct PositionValues: Codable, Sendable, Equatable {
     public let qty: String
     public let unknownCostQty: String
-    public let costUsdMicros: String?
-    public let averageCostUsdMicros: String?
-    public let valueUsdMicros: String?
-    public let realizedUsdMicros: String?
-    public let unrealizedUsdMicros: String?
+    public let costMicros: String?
+    public let averageCostMicros: String?
+    public let valueMicros: String?
+    public let realizedMicros: String?
+    public let unrealizedMicros: String?
 }
 
 public struct Position: Codable, Sendable, Equatable, Identifiable {
@@ -61,7 +61,7 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public let note: String?
     public let price: LatestPrice?
     public let values: PositionValues
-    public let pnlUsdMicros: String?
+    public let pnlMicros: String?
     public let shortfallQty: String
     public let legCount: Int
 
@@ -93,18 +93,18 @@ public struct TotalsCoverage: Codable, Sendable, Equatable {
 
 /// Each sum is nil when nothing in it is known. That isn't $0, and a known $0 stays an answer.
 public struct Totals: Codable, Sendable, Equatable {
-    public let valueUsdMicros: String?
-    public let realizedUsdMicros: String?
-    public let unrealizedUsdMicros: String?
-    public let gasUsdMicros: String?
-    public let pnlUsdMicros: String?
+    public let valueMicros: String?
+    public let realizedMicros: String?
+    public let unrealizedMicros: String?
+    public let gasMicros: String?
+    public let pnlMicros: String?
     public let excluded: [Exclusion]
     public let unpricedGas: Bool
     public let coverage: TotalsCoverage
 }
 
 public enum PnlStatus: String, Codable, Sendable {
-    /// `totals.pnlUsdMicros` leaves nothing out.
+    /// `totals.pnlMicros` leaves nothing out.
     case complete
     /// It leaves something out, and `totals.excluded` says what.
     case partial
@@ -117,7 +117,7 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public let timestamp: String
     public let txHash: String?
     /// nil when nothing is known at this point, which isn't $0.
-    public let pnlUsdMicros: String?
+    public let pnlMicros: String?
     public let excludedCount: Int
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
@@ -147,7 +147,7 @@ public struct Portfolio: Codable, Sendable, Equatable {
 
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
     public var isEmpty: Bool { positions.isEmpty }
-    public var hasChartableData: Bool { points.contains { $0.pnlUsdMicros != nil } }
+    public var hasChartableData: Bool { points.contains { $0.pnlMicros != nil } }
     /// Every point with a transaction behind it, newest first.
     public var transactions: [PnlPoint] { points.filter { $0.txHash != nil }.reversed() }
 }
@@ -158,7 +158,7 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let delta: String
     public let decimals: Int
     public let kind: String
-    public let priceUsdMicros: String?
+    public let priceMicros: String?
     public let priceSource: String?
     public let priceNote: String?
     public let costLabel: String

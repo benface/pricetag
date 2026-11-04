@@ -66,7 +66,7 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
                   <td className="num">
                     {held ? (
                       <Num label={`${asset} average cost`} onClick={open(position, "average")} tone={unknown ? "warn" : null}>
-                        {values.averageCostUsdMicros ? formatPrice(values.averageCostUsdMicros) : "⚠ Unknown"}
+                        {values.averageCostMicros ? formatPrice(values.averageCostMicros) : "⚠ Unknown"}
                       </Num>
                     ) : (
                       <span className="muted">—</span>
@@ -74,22 +74,22 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
                   </td>
                   <td className="num">
                     {held ? (
-                      <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueUsdMicros === null ? "warn" : null}>
-                        {values.valueUsdMicros ? formatUsd(values.valueUsdMicros) : "⚠ No price"}
+                      <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueMicros === null ? "warn" : null}>
+                        {values.valueMicros ? formatUsd(values.valueMicros) : "⚠ No price"}
                       </Num>
                     ) : (
                       <span className="muted">—</span>
                     )}
                   </td>
                   <td className="num">
-                    <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedUsdMicros)}>
-                      {values.realizedUsdMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.realizedUsdMicros)}
+                    <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedMicros)}>
+                      {values.realizedMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.realizedMicros)}
                     </Num>
                   </td>
                   <td className="num">
                     {held ? (
-                      <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedUsdMicros)}>
-                        {values.unrealizedUsdMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.unrealizedUsdMicros)}
+                      <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedMicros)}>
+                        {values.unrealizedMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.unrealizedMicros)}
                       </Num>
                     ) : (
                       <span className="muted">—</span>
@@ -212,8 +212,8 @@ export function App() {
               <section className="summary">
                 <div className="headline">
                   <span className="muted small">Total PnL</span>
-                  <Num label="Total PnL" onClick={() => openTotal("pnl")} tone={toneOf(totals.pnlUsdMicros)}>
-                    <span className="big">{totals.pnlUsdMicros === null ? "⚠ Unavailable" : formatSignedUsd(totals.pnlUsdMicros)}</span>
+                  <Num label="Total PnL" onClick={() => openTotal("pnl")} tone={toneOf(totals.pnlMicros)}>
+                    <span className="big">{totals.pnlMicros === null ? "⚠ Unavailable" : formatSignedUsd(totals.pnlMicros)}</span>
                   </Num>
                   {totals.excluded.length > 0 ? (
                     <p className="excluded">⚠ Excludes {describeExcluded(totals.excluded)}.</p>
@@ -223,10 +223,10 @@ export function App() {
                   {totals.unpricedGas ? <p className="excluded">⚠ Some gas had no price at its block, and isn't in this total.</p> : null}
                 </div>
                 <dl className="stats">
-                  <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value} value={totals.valueUsdMicros && formatUsd(totals.valueUsdMicros)} />
-                  <Stat label="Realized" onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedUsdMicros && formatSignedUsd(totals.realizedUsdMicros)} />
-                  <Stat label="Unrealized" onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedUsdMicros && formatSignedUsd(totals.unrealizedUsdMicros)} />
-                  <Stat label="Gas paid" onClick={() => openTotal("gas")} coverage={{ known: 1, missing: totals.unpricedGas ? 1 : 0 }} value={totals.gasUsdMicros && formatUsd(totals.gasUsdMicros)} />
+                  <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value} value={totals.valueMicros && formatUsd(totals.valueMicros)} />
+                  <Stat label="Realized" onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedMicros && formatSignedUsd(totals.realizedMicros)} />
+                  <Stat label="Unrealized" onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedMicros && formatSignedUsd(totals.unrealizedMicros)} />
+                  <Stat label="Gas paid" onClick={() => openTotal("gas")} coverage={{ known: 1, missing: totals.unpricedGas ? 1 : 0 }} value={totals.gasMicros && formatUsd(totals.gasMicros)} />
                 </dl>
                 <div className="method" role="group" aria-label="Cost method">
                   {(["average", "fifo"] as const).map((m) => (

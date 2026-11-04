@@ -22,9 +22,9 @@ function LegRow({ effect }: { effect: LegEffect }) {
       </div>
       <div className="leg-tags">
         <span className="tag">{leg.kind}</span>
-        {leg.priceUsdMicros !== null && leg.priceSource ? (
+        {leg.priceMicros !== null && leg.priceSource ? (
           <span className="tag">
-            {formatPrice(leg.priceUsdMicros)} · {leg.priceSource}
+            {formatPrice(leg.priceMicros)} · {leg.priceSource}
           </span>
         ) : (
           <span className="tag warn">⚠ no price</span>

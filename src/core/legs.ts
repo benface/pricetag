@@ -1,7 +1,7 @@
 // Turns a wallet's rows in the dataset's shapes into the priced legs the fold reads.
 // Pure, so it can run on fixtures, on the raw dataset's rows and on the Pricetag dataset's rows alike.
 
-import { usdOf, type CostLabel, type FoldLeg } from "./fold.ts"
+import { worth, type CostLabel, type FoldLeg } from "./fold.ts"
 import { normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
 
 export type PriceSource = "oracle" | "swap" | "market"
@@ -50,6 +50,7 @@ export type PricedRow = {
   priced: PtPrice
 }
 
+/** Fresh from `buildPricedLegs`, its money is in USD. `viewWallet` converts it. */
 export type PricedLeg = FoldLeg & {
   asset: string
   blockNum: number
@@ -218,11 +219,11 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         delta: `-${row.amount}`,
         decimals: 18,
         kind: "gas",
-        priceUsdMicros: ethMicros,
+        priceMicros: ethMicros,
         priceSource: ethMicros === null ? null : "oracle",
         priceNote: ethMicros === null ? "The oracle read failed at this block." : null,
-        costUsdMicros: null,
-        proceedsUsdMicros: null,
+        costMicros: null,
+        proceedsMicros: null,
         costLabel: "unknown",
         parts: [row],
       })
@@ -291,7 +292,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     const usdcSide = resolved.find((r) => r.net.token.oracle === "usdc" && r.price !== null)
     const anchor = isSwap ? (usdcSide ?? resolved.find((r) => r.net.token.oracle === "eth" && r.price !== null)) : undefined
     const abs = (delta: bigint) => (delta < 0n ? -delta : delta)
-    let tradeUsd = anchor ? usdOf(abs(anchor.net.delta), BigInt(anchor.price as string), anchor.net.token.decimals) : null
+    let tradeUsd = anchor ? worth(abs(anchor.net.delta), BigInt(anchor.price as string), anchor.net.token.decimals) : null
     const other = anchor && resolved.find((r) => r !== anchor)
     if (anchor && other && tradeUsd !== null) {
       const implied = (tradeUsd * 10n ** BigInt(other.net.token.decimals)) / abs(other.net.delta)
@@ -317,11 +318,11 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         delta: net.delta.toString(),
         decimals: net.token.decimals,
         kind: isExchange ? "swap" : "transfer",
-        priceUsdMicros: price,
+        priceMicros: price,
         priceSource,
         priceNote,
-        costUsdMicros: paid ? value : null,
-        proceedsUsdMicros: net.delta < 0n ? value : null,
+        costMicros: paid ? value : null,
+        proceedsMicros: net.delta < 0n ? value : null,
         costLabel,
         parts: net.parts,
       })

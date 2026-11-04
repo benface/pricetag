@@ -16,7 +16,7 @@ public struct PnlChartView: View {
     }
 
     private var lineStyle: AnyShapeStyle {
-        let tone = Tone(signed: points.last { $0.pnlUsdMicros != nil }?.pnlUsdMicros)
+        let tone = Tone(signed: points.last { $0.pnlMicros != nil }?.pnlMicros)
         // A Color, because a chart reads plain styles like `.secondary` as shades of its accent.
         return isLive && tone != .neutral ? tone.style : AnyShapeStyle(Color.secondary)
     }
@@ -45,7 +45,7 @@ public struct PnlChartView: View {
                     .foregroundStyle(hovered.value == nil ? AnyShapeStyle(Color.clear) : lineStyle)
                     .annotation(position: .top, spacing: 6, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
                         VStack(spacing: 1) {
-                            if let pnl = hovered.point.pnlUsdMicros {
+                            if let pnl = hovered.point.pnlMicros {
                                 Text(Format.signedUSD(pnl)).monospacedDigit().fontWeight(.medium)
                             } else {
                                 WarningText("Unavailable").fontWeight(.medium)
@@ -100,7 +100,7 @@ public struct PnlChartView: View {
             }
         }
         .opacity(isLive ? 1 : 0.6)
-        .accessibilityLabel("Total PnL over time, ending at \(points.last?.pnlUsdMicros.map(Format.signedUSD) ?? "unavailable")")
+        .accessibilityLabel("Total PnL over time, ending at \(points.last?.pnlMicros.map(Format.signedUSD) ?? "unavailable")")
     }
 
     private func date(at location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy) -> Date? {

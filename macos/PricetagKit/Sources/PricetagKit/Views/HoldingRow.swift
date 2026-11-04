@@ -17,17 +17,17 @@ public struct HoldingRow: View {
 
     private var cost: String {
         if !position.isHeld { return "Closed" }
-        if let average = position.values.averageCostUsdMicros { return "Cost \(Format.price(average))" }
+        if let average = position.values.averageCostMicros { return "Cost \(Format.price(average))" }
         return "Cost unknown"
     }
 
     private var pnlText: String {
-        position.pnlUsdMicros.map(Format.signedUSD) ?? Wording.pnlUnavailable
+        position.pnlMicros.map(Format.signedUSD) ?? Wording.pnlUnavailable
     }
 
     private var valueText: String {
         if !position.isHeld { return "—" }
-        return position.values.valueUsdMicros.map(Format.usd) ?? "No price"
+        return position.values.valueMicros.map(Format.usd) ?? "No price"
     }
 
     public var body: some View {
@@ -47,14 +47,14 @@ public struct HoldingRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
-                LiveNumber(valueText, tone: position.isHeld && position.values.valueUsdMicros == nil ? .warning : .neutral)
+                LiveNumber(valueText, tone: position.isHeld && position.values.valueMicros == nil ? .warning : .neutral)
                 Text(cost)
                     .monospacedDigit()
                     .font(.caption)
                     .foregroundStyle(position.isHeld && position.hasUnknownCost ? Tone.warning.style : AnyShapeStyle(.secondary))
             }
-            LiveNumber(pnlText, tone: Tone(signed: position.pnlUsdMicros))
-                .font(position.pnlUsdMicros == nil ? .caption : .body)
+            LiveNumber(pnlText, tone: Tone(signed: position.pnlMicros))
+                .font(position.pnlMicros == nil ? .caption : .body)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(width: 104, alignment: .trailing)

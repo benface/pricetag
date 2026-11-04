@@ -95,8 +95,8 @@ export const DEMO_WALLET: WalletResponse = {
   legs: buildPricedLegs({ account: DEMO_ADDRESS, rows, references, priced: derivePricedRows(rows, references) }),
   references,
   prices: {
-    ETH: { usdMicros: "2640000000", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
-    USDC: { usdMicros: "999800", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
+    ETH: { micros: "2640000000", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
+    USDC: { micros: "999800", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
   },
   latest: { blockNum: START_BLOCK + HEAD_OFFSET, timestamp: new Date(START_TIME + HEAD_OFFSET * 2000).toISOString() },
   gasUnknownTxs: [],

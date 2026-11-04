@@ -112,7 +112,7 @@ public struct LegRow: View {
         // Price and cost stay apart: one is a shared fact with a source, the other is this wallet's.
         HStack(spacing: 4) {
             Tag(leg.kind)
-            if let price = leg.priceUsdMicros, let source = leg.priceSource {
+            if let price = leg.priceMicros, let source = leg.priceSource {
                 Tag("\(Format.price(price)) · \(source)")
             } else {
                 Tag("No price", isWarning: true)

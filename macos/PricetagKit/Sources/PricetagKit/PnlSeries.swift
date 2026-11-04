@@ -25,7 +25,7 @@ struct PnlSeries {
 
     init(points: [PnlPoint]) {
         let plotted = points.compactMap { point -> Plotted? in
-            point.date.map { Plotted(point: point, date: $0, value: point.pnlUsdMicros.map(Format.chartValue)) }
+            point.date.map { Plotted(point: point, date: $0, value: point.pnlMicros.map(Format.chartValue)) }
         }
         var segments: [[Step]] = []
         var gaps: [ClosedRange<Date>] = []

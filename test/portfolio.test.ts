@@ -36,9 +36,9 @@ describe("portfolioOf", () => {
   it("never gives a position a PnL when part of it is unknown", () => {
     const portfolio = portfolioOf(DEMO_WALLET, "average")
     const position = (asset: string) => portfolio.positions.find((p) => p.asset === asset)
-    assert.equal(position("USDC")?.pnlUsdMicros, null)
-    assert.equal(position("cbBTC")?.pnlUsdMicros, null)
-    assert.equal(position("AERO")?.pnlUsdMicros, null, "AERO has a known cost, but no current price")
+    assert.equal(position("USDC")?.pnlMicros, null)
+    assert.equal(position("cbBTC")?.pnlMicros, null)
+    assert.equal(position("AERO")?.pnlMicros, null, "AERO has a known cost, but no current price")
   })
 
   it("says the total is partial when it leaves something out", () => {
@@ -50,9 +50,9 @@ describe("portfolioOf", () => {
   it("says the total is unavailable when nothing in it is known", () => {
     const onlyUnknown = DEMO_WALLET.legs.filter((l) => l.asset === "cbBTC")
     const portfolio = portfolioOf(walletWith({ legs: onlyUnknown }), "average")
-    assert.equal(portfolio.totals.pnlUsdMicros, null)
+    assert.equal(portfolio.totals.pnlMicros, null)
     assert.equal(portfolio.pnlStatus, "unavailable")
-    assert.deepEqual(portfolio.points.map((p) => p.pnlUsdMicros), [null, null])
+    assert.deepEqual(portfolio.points.map((p) => p.pnlMicros), [null, null])
   })
 
   it("says the total is partial when gas couldn't be worked out, even with nothing excluded", () => {
@@ -63,25 +63,25 @@ describe("portfolioOf", () => {
 
   it("treats a known zero as an answer", () => {
     const portfolio = portfolioOf(walletWith({ legs: [] }), "average")
-    assert.equal(portfolio.totals.pnlUsdMicros, "0")
+    assert.equal(portfolio.totals.pnlMicros, "0")
     assert.equal(portfolio.pnlStatus, "complete")
   })
 
   it("keeps the demo's early unknown points unknown, and explains them that way", () => {
     const portfolio = portfolioOf(DEMO_WALLET, "average")
     const first = portfolio.points[0]
-    assert.equal(first?.pnlUsdMicros, null)
+    assert.equal(first?.pnlMicros, null)
     const explanation = explainPortfolio(DEMO_WALLET, "average", { kind: "tx", txHash: first?.txHash as string })
     assert.equal(explanation?.value, null)
-    assert.ok(portfolio.points.some((p) => p.pnlUsdMicros !== null))
+    assert.ok(portfolio.points.some((p) => p.pnlMicros !== null))
   })
 
   it("gives no PnL to a position whose history is incomplete", () => {
     const leg = DEMO_WALLET.legs.find((l) => l.asset === "AERO" && BigInt(l.delta) > 0n) as (typeof DEMO_WALLET.legs)[number]
-    const out = { ...leg, id: "out", delta: `-${BigInt(leg.delta) * 2n}`, kind: "transfer" as const, costUsdMicros: null, proceedsUsdMicros: null }
+    const out = { ...leg, id: "out", delta: `-${BigInt(leg.delta) * 2n}`, kind: "transfer" as const, costMicros: null, proceedsMicros: null }
     const position = portfolioOf(walletWith({ legs: [leg, out] }), "average").positions[0]
     assert.ok(BigInt(position?.shortfallQty ?? "0") > 0n)
-    assert.equal(position?.pnlUsdMicros, null)
+    assert.equal(position?.pnlMicros, null)
   })
 
   it("says how far what's read is behind the chain", () => {
@@ -96,7 +96,7 @@ describe("portfolioOf", () => {
     const closing = { ...eth[0], id: "closing", delta: `-${eth[0]?.delta}`, kind: "transfer" as const } as (typeof eth)[number]
     const portfolio = portfolioOf(walletWith({ legs: [...eth, closing] }), "average")
     assert.equal(portfolio.positions[0]?.values.qty, "0")
-    assert.equal(portfolio.positions[0]?.pnlUsdMicros, "0")
+    assert.equal(portfolio.positions[0]?.pnlMicros, "0")
   })
 
   it("doesn't explain a total with nothing known in it as $0", () => {

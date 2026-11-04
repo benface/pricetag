@@ -3,7 +3,7 @@
 import { applyLeg, emptyPosition, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
 import { answerToMicros, type PricedLeg, type ReferenceRow } from "./legs.ts"
 
-export type LatestPrice = { usdMicros: string; source: "oracle" | "swap" | "market"; blockNum: number }
+export type LatestPrice = { micros: string; source: "oracle" | "swap" | "market"; blockNum: number }
 export type LatestPrices = Record<string, LatestPrice | undefined>
 
 export type LegEffect = {
@@ -30,13 +30,13 @@ export const hasAnswer = ({ known, missing }: Coverage) => known > 0 || missing 
 
 export type Totals = {
   /** Each sums only what's known, and is null when nothing is. `excluded` says what isn't in it. */
-  valueUsdMicros: string | null
-  realizedUsdMicros: string | null
-  unrealizedUsdMicros: string | null
-  gasUsdMicros: string | null
-  pnlUsdMicros: string | null
+  valueMicros: string | null
+  realizedMicros: string | null
+  unrealizedMicros: string | null
+  gasMicros: string | null
+  pnlMicros: string | null
   excluded: Exclusion[]
-  /** Some gas had no price at its block, so it's not in `gasUsdMicros`. */
+  /** Some gas had no price at its block, so it's not in `gasMicros`. */
   unpricedGas: boolean
   coverage: Record<"value" | "realized" | "unrealized" | "pnl", Coverage>
 }
@@ -52,7 +52,7 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
   }
   return [...positions.entries()].map(([asset, { state, effects, decimals }]) => {
     const price = prices[asset] ?? null
-    return { asset, decimals, state, effects, price, values: valuePosition(state, price?.usdMicros ?? null) }
+    return { asset, decimals, state, effects, price, values: valuePosition(state, price?.micros ?? null) }
   })
 }
 
@@ -67,8 +67,8 @@ export function sumTotals(positions: readonly Position[]): Totals {
   const excluded: Exclusion[] = []
   const coverage = { value: { known: 0, missing: 0 }, realized: { known: 0, missing: 0 }, unrealized: { known: 0, missing: 0 }, pnl: { known: 0, missing: 0 } }
   for (const { asset, values, state } of positions) {
-    gas += BigInt(state.gasUsdMicros)
-    if (BigInt(state.gasUsdMicros) > 0n) coverage.pnl.known++
+    gas += BigInt(state.gasMicros)
+    if (BigInt(state.gasMicros) > 0n) coverage.pnl.known++
     if (BigInt(state.unpricedGasQty) > 0n) {
       unpricedGas = true
       coverage.pnl.missing++
@@ -80,23 +80,23 @@ export function sumTotals(positions: readonly Position[]): Totals {
       coverage.unrealized.missing++
       excluded.push({ asset, reason: "incomplete history" })
     }
-    if (values.valueUsdMicros !== null) {
-      value += BigInt(values.valueUsdMicros)
+    if (values.valueMicros !== null) {
+      value += BigInt(values.valueMicros)
       if (held) coverage.value.known++
     } else if (held) {
       coverage.value.missing++
       excluded.push({ asset, reason: "no current price" })
     }
-    if (values.realizedUsdMicros !== null) {
-      realized += BigInt(values.realizedUsdMicros)
+    if (values.realizedMicros !== null) {
+      realized += BigInt(values.realizedMicros)
     } else {
       coverage.realized.missing++
       excluded.push({ asset, reason: "sold at an unknown cost" })
     }
     // Only what the sum actually includes counts as known. A position with an unresolved sale is left out whole.
-    if (values.realizedUsdMicros !== null && BigInt(state.resolvedDisposedQty) > 0n) coverage.realized.known++
-    if (values.unrealizedUsdMicros !== null) {
-      unrealized += BigInt(values.unrealizedUsdMicros)
+    if (values.realizedMicros !== null && BigInt(state.resolvedDisposedQty) > 0n) coverage.realized.known++
+    if (values.unrealizedMicros !== null) {
+      unrealized += BigInt(values.unrealizedMicros)
       if (held) coverage.unrealized.known++
     } else if (held) {
       coverage.unrealized.missing++
@@ -106,11 +106,11 @@ export function sumTotals(positions: readonly Position[]): Totals {
   coverage.pnl.known += coverage.realized.known + coverage.unrealized.known
   coverage.pnl.missing += coverage.realized.missing + coverage.unrealized.missing
   return {
-    valueUsdMicros: answer(value, coverage.value),
-    realizedUsdMicros: answer(realized, coverage.realized),
-    unrealizedUsdMicros: answer(unrealized, coverage.unrealized),
-    gasUsdMicros: gas === 0n && unpricedGas ? null : gas.toString(),
-    pnlUsdMicros: answer(realized + unrealized - gas, coverage.pnl),
+    valueMicros: answer(value, coverage.value),
+    realizedMicros: answer(realized, coverage.realized),
+    unrealizedMicros: answer(unrealized, coverage.unrealized),
+    gasMicros: gas === 0n && unpricedGas ? null : gas.toString(),
+    pnlMicros: answer(realized + unrealized - gas, coverage.pnl),
     excluded,
     unpricedGas,
     coverage,
@@ -122,7 +122,7 @@ export type PnlPoint = {
   timestamp: string
   txHash: string | null
   /** Realized, plus unrealized at that moment's prices, less gas. Only what's known, and null when nothing is. */
-  pnlUsdMicros: string | null
+  pnlMicros: string | null
   excludedCount: number
 }
 
@@ -147,26 +147,26 @@ export function pnlOverTime(
     let excludedCount = 0
     for (const [asset, state] of states) {
       const v = valuePosition(state, priceOf(asset))
-      pnl -= BigInt(state.gasUsdMicros)
-      if (BigInt(state.gasUsdMicros) > 0n) coverage.known++
+      pnl -= BigInt(state.gasMicros)
+      if (BigInt(state.gasMicros) > 0n) coverage.known++
       if (BigInt(state.unpricedGasQty) > 0n) coverage.missing++
       if (BigInt(state.shortfallQty) > 0n) coverage.missing++
-      if (v.realizedUsdMicros === null) {
+      if (v.realizedMicros === null) {
         excludedCount++
         coverage.missing++
       } else {
-        pnl += BigInt(v.realizedUsdMicros)
+        pnl += BigInt(v.realizedMicros)
         if (BigInt(state.resolvedDisposedQty) > 0n) coverage.known++
       }
-      if (v.unrealizedUsdMicros !== null) {
-        pnl += BigInt(v.unrealizedUsdMicros)
+      if (v.unrealizedMicros !== null) {
+        pnl += BigInt(v.unrealizedMicros)
         if (BigInt(v.qty) > 0n) coverage.known++
       } else if (BigInt(v.qty) > 0n) {
         excludedCount++
         coverage.missing++
       }
     }
-    return { pnlUsdMicros: answer(pnl, coverage), excludedCount }
+    return { pnlMicros: answer(pnl, coverage), excludedCount }
   }
   legs.forEach((leg, i) => {
     states.set(leg.asset, applyLeg(states.get(leg.asset) ?? emptyPosition(method, leg.decimals), leg))
@@ -180,7 +180,7 @@ export function pnlOverTime(
     points.push({ blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure(priceOf) })
   })
   if (latest && states.size > 0) {
-    points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.usdMicros ?? null) })
+    points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.micros ?? null) })
   }
   return points
 }

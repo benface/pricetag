@@ -150,7 +150,7 @@ describe("the wallet cache", () => {
   it("a derived table a block behind the head still gives a current price, with its own block on it", async () => {
     const { source } = fake(new Map(), () => reference(998))
     const wallet = await createWallets(source, headAt(1000)).get(ME)
-    assert.deepEqual(wallet.prices.ETH, { usdMicros: "2400000000", source: "oracle", blockNum: 998 })
+    assert.deepEqual(wallet.prices.ETH, { micros: "2400000000", source: "oracle", blockNum: 998 })
   })
 
   it("with no recent oracle read, there's no price, rather than an old one", async () => {
@@ -168,7 +168,7 @@ describe("the wallet cache", () => {
     const { source } = fake(new Map([[950, [row(950)]]]), () => reference(1000))
     source.readReferences = async (blocks) => blocks.map((b) => ({ block_num: b, eth_usd: "", usdc_usd: "" }))
     const [leg] = (await createWallets(source, headAt(1000)).get(ME)).legs
-    assert.equal(leg!.priceUsdMicros, null)
+    assert.equal(leg!.priceMicros, null)
   })
 
   it("concurrent reads of one wallet share a single query", async () => {
