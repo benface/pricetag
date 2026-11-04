@@ -13,9 +13,19 @@ export const RULE_TEXT: Record<string, Pick<PricingRule, "name" | "summary">> = 
 }
 
 /** One number by each rule, in the wallet's main currency, except `usdPrice`. A null is unavailable, not zero. */
-export type RuleRow = { label: string; format: "signed" | "money" | "usdPrice"; a: string | null; b: string | null; difference: string | null }
+export type RuleRow = {
+  label: string
+  format: "signed" | "money" | "usdPrice"
+  a: string | null
+  b: string | null
+  /** Null unless both sides are made of the same known amounts, because anything else isn't a difference between rules. */
+  difference: string | null
+  /** This side's sum leaves something out. `warnings` says what. */
+  aPartial: boolean
+  bPartial: boolean
+}
 
-export type RuleTransaction = { txHash: string; blockNum: number; timestamp: string; asset: string; label: "Cost" | "Sold for"; a: string | null; b: string | null; difference: string | null }
+export type RuleTransaction = { txHash: string; blockNum: number; timestamp: string; asset: string; label: "Cost" | "Sold for" | "Network fee"; a: string | null; b: string | null; difference: string | null }
 
 /** What two rules make of one wallet at the same block, so the only difference between them is the rule. */
 export type RuleComparison = {
@@ -25,6 +35,8 @@ export type RuleComparison = {
   a: PricingRule
   b: PricingRule
   why: string
+  /** What the numbers leave out or can't vouch for, the same as they'd say on the main screen. */
+  warnings: string[]
   rows: RuleRow[]
   /** The newest few that came out differently. `changedTxs` says how many there are. */
   transactions: RuleTransaction[]
@@ -35,9 +47,9 @@ export type RuleComparison = {
 export const differenceOf = (a: string | null, b: string | null): string | null => (a === null || b === null ? null : (BigInt(b) - BigInt(a)).toString())
 
 export function whySentence(changedTxs: number): string {
-  const same = "Both read the same transactions at the same block, so the only difference is what ETH is worth, which also sets what ETH held and network fees count for."
-  if (changedTxs === 0) return `No transaction's cost or sale value here depends on what ETH is worth, so those stay the same. ${same}`
-  return `${changedTxs === 1 ? "1 transaction's" : `${changedTxs.toLocaleString("en-US")} transactions'`} cost or sale value changed. ${same}`
+  const same = "Both read the same transactions, balances and exchange rates at the same block, so the only difference is what ETH is worth, which also sets what ETH held counts for."
+  if (changedTxs === 0) return `No transaction's cost, sale value or network fee here depends on what ETH is worth, so those stay the same. ${same}`
+  return `${changedTxs === 1 ? "1 transaction's" : `${changedTxs.toLocaleString("en-US")} transactions'`} cost, sale value or network fee changed. ${same}`
 }
 
 /** Said wherever a number is explained while a rule other than the first is on, since a label alone can't say it. */

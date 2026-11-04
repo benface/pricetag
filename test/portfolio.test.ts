@@ -374,6 +374,7 @@ describe("comparing pricing rules", () => {
   // What the fork does: everything's the same but what ETH is worth, here and in anything valued in ETH.
   const forked = walletWith({
     prices: { ...DEMO_WALLET.prices, ETH: { ...eth, micros: lower(eth.micros)! } },
+    balances: DEMO_WALLET.balances,
     legs: DEMO_WALLET.legs.map((leg) => (leg.asset === "ETH" ? { ...leg, priceMicros: lower(leg.priceMicros), costMicros: lower(leg.costMicros), proceedsMicros: lower(leg.proceedsMicros) } : leg)),
   })
   const reference = (eth_usd: string) => ({ block_num: 1, eth_usd, usdc_usd: "100000000" })
@@ -381,7 +382,7 @@ describe("comparing pricing rules", () => {
   const row = (label: string) => compared.rows.find((r) => r.label === label)
 
   it("says what ETH is worth by each rule", () => {
-    assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "2400000000", b: "2376000000", difference: "-24000000" })
+    assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "2400000000", b: "2376000000", difference: "-24000000", aPartial: false, bPartial: false })
   })
 
   it("gets each side from the same fold the app shows", () => {
@@ -417,6 +418,35 @@ describe("comparing pricing rules", () => {
     const explained = explainPortfolio(walletWith({ ruleNote: note }), "average", { kind: "total", metric: "pnl" })
     assert.ok(explained?.lines.includes(note))
     assert.ok(!explainPortfolio(walletWith({}), "average", { kind: "total", metric: "pnl" })?.lines.includes(note))
+  })
+
+  it("says what a partial sum leaves out, the same as the main screen, and marks it", () => {
+    const portfolio = portfolioOf(walletWith({}), "average")
+    assert.ok(portfolio.totals.coverage.pnl.missing > 0, "the demo wallet leaves things out")
+    assert.equal(row("Total PnL")?.aPartial, true)
+    assert.equal(row("Total PnL")?.bPartial, true)
+    assert.ok(compared.warnings.includes(wording.excludedSentence(portfolio.totals.excluded)!))
+  })
+
+  it("says when a total's difference is real", () => {
+    assert.notEqual(row("Value")?.difference, null)
+  })
+
+  it("won't call it a difference when one side leaves out something the other doesn't", () => {
+    const missing = walletWith({ balances: null })
+    const lopsided = compareRules({ rule: market, wallet: walletWith({}), reference: reference("1") }, { rule: cautious, wallet: missing, reference: reference("1") }, "average", 1)
+    assert.equal(lopsided.rows.find((r) => r.label === "Total PnL")?.difference, null)
+    assert.ok(lopsided.warnings.some((w) => w.startsWith("Cautious ETH: ")))
+  })
+
+  it("counts a network fee that changed, and says so", () => {
+    const gas: LegRow = { block_num: 5, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: "0xfee", tx_index: 1, log_index: 0, token: ETH_ADDRESS, account: "0xaa", side: "debit", amount: "1000000000000000", kind: "gas" }
+    const by = (eth_usd: string) => walletWith({ address: "0xaa", prices: {}, legs: buildPricedLegs({ account: "0xaa", rows: [gas], references: [{ block_num: 5, eth_usd, usdc_usd: "100000000" }], priced: [] }), balances: null })
+    const fees = compareRules({ rule: market, wallet: by("300000000000"), reference: reference("300000000000") }, { rule: cautious, wallet: by("297000000000"), reference: reference("297000000000") }, "average", 5)
+    assert.equal(fees.changedTxs, 1)
+    assert.deepEqual(fees.transactions.map((tx) => [tx.label, tx.a, tx.b, tx.difference]), [["Network fee", "3000000", "2970000", "-30000"]])
+    assert.deepEqual(fees.rows.find((r) => r.label === "Network fees")?.difference, "-30000")
+    assert.equal(fees.why, whySentence(1))
   })
 
   it("sends the Mac app what it can read", () => {

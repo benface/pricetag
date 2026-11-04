@@ -52,6 +52,9 @@ function Comparison({ address, method, currency }: { address: string; method: Me
   return (
     <div className="comparison">
       <p>{comparison.why}</p>
+      {comparison.warnings.map((warning) => (
+        <p key={warning} className="notice warn">⚠ {warning}</p>
+      ))}
       <table className="rule-table">
         <thead>
           <tr>
@@ -65,8 +68,8 @@ function Comparison({ address, method, currency }: { address: string; method: Me
           {comparison.rows.map((row) => (
             <tr key={row.label}>
               <th scope="row">{row.label}</th>
-              <td>{show(row.a, row.format, shownIn)}</td>
-              <td>{show(row.b, row.format, shownIn)}</td>
+              <td>{show(row.a, row.format, shownIn)}{row.aPartial ? <span className="partial">⚠ partial</span> : null}</td>
+              <td>{show(row.b, row.format, shownIn)}{row.bPartial ? <span className="partial">⚠ partial</span> : null}</td>
               <td>{showDifference(row.difference, row.format, shownIn)}</td>
             </tr>
           ))}

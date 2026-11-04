@@ -188,7 +188,10 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
     }
   }
 
-  /** The two rules' wallets at one block, or answers the request with why they can't be compared yet. */
+  /**
+   * One wallet by both rules, from one set of facts at one block: the first rule's rows, balances, fees and exchange rates
+   * go on both sides, and only prices come from each. Answers with why not when that can't be established.
+   */
   async function compare(address: string, currency: CurrencyCode, method: Method, linked: readonly string[], res: ServerResponse): Promise<void> {
     const [first, second] = rules
     if (!first || !second) {
@@ -199,34 +202,47 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
       sendJson(res, 400, { error: "That isn't a Base address." })
       return
     }
-    const a = await readWallet(address, res, { fresh: true, rule: first })
-    const b = a && (await readWallet(address, res, { fresh: true, rule: second }))
-    if (!a || !b) return
-    // One can be a block or two ahead, and a price moves between blocks, so compare where both have been.
-    const blockNum = Math.min(a.coverage.toBlock, b.coverage.toBlock)
-    const movedSince = (wallet: WalletResponse) => wallet.legs.some((leg) => leg.blockNum > blockNum)
-    if (blockNum < a.coverage.fromBlock || movedSince(a) || movedSince(b)) {
-      sendJson(res, 409, { error: "The two rules haven't reached the same block yet. Try again in a moment." })
-      return
-    }
-    try {
-      const side = async (by: (typeof rules)[number], wallet: WalletResponse): Promise<Parameters<typeof compareRules>[0] | null> => {
-        const reference = await by.source.readLatestReference(blockNum)
-        const shown = await inCurrency({ ...wallet, prices: latestPrices(reference) }, currency, res)
-        if (!shown) return null
-        // Costs carried over from the user's other wallets are priced by the same rule as the wallet they land on.
-        const others: WalletResponse[] = []
-        for (const other of linked.filter((a) => a !== wallet.address)) {
-          const read = await readWallet(other, res, { fresh: true, rule: by })
-          const converted = read && (await inCurrency(read, currency, res))
-          if (!converted) return null
-          others.push(converted)
-        }
-        return { rule: by.rule, wallet: shown, reference, linked: others }
+    const notYet = () => sendJson(res, 409, { error: "The two rules haven't reached the same block yet. Try again in a moment." })
+    const own = address.toLowerCase()
+    const others = linked.filter((other) => other !== own)
+    const read: WalletResponse[] = []
+    for (const by of [first, second]) {
+      for (const wallet of [own, ...others]) {
+        const answer = await readWallet(wallet, res, { fresh: true, rule: by })
+        if (!answer) return
+        read.push(answer)
       }
-      const left = await side(first, a)
-      const right = left && (await side(second, b))
-      if (left && right) sendJson(res, 200, compareRules(left, right, method, blockNum))
+    }
+    // One can be a block or two ahead, so compare where everything has been.
+    const blockNum = Math.min(...read.map((wallet) => wallet.coverage.toBlock))
+    if (read.some((wallet) => blockNum < wallet.coverage.fromBlock)) return notYet()
+    try {
+      const [atA, atB] = [await first.source.readLatestReference(blockNum), await second.source.readLatestReference(blockNum)]
+      // A current price at another block, or none, would be a difference that isn't the rule.
+      if (!atA || !atB || atA.block_num !== atB.block_num) return notYet()
+      const pair = async (wallet: string, withBalances: boolean): Promise<[WalletResponse, WalletResponse] | null | undefined> => {
+        const facts = await first.wallets.factsAt(wallet, blockNum, { withBalances })
+        const a = facts && first.wallets.pricedOn(wallet, facts, latestPrices(atA))
+        const b = facts && second.wallets.pricedOn(wallet, facts, latestPrices(atB))
+        if (!a || !b) return null
+        // One read of the rates, on both sides. Answers the request itself when it fails, so that's not a "not yet".
+        const shown = await inCurrency(a, currency, res)
+        if (!shown) return undefined
+        return [{ ...shown, rule: first.rule.id, ruleNote: first.note }, { ...b, currency: shown.currency, rates: shown.rates, rule: second.rule.id, ruleNote: second.note }]
+      }
+      const main = await pair(own, true)
+      if (main === undefined) return
+      if (main === null) return notYet()
+      const linkedA: WalletResponse[] = []
+      const linkedB: WalletResponse[] = []
+      for (const other of others) {
+        const both = await pair(other, false)
+        if (both === undefined) return
+        if (both === null) return notYet()
+        linkedA.push(both[0])
+        linkedB.push(both[1])
+      }
+      sendJson(res, 200, compareRules({ rule: first.rule, wallet: main[0], reference: atA, linked: linkedA }, { rule: second.rule, wallet: main[1], reference: atB, linked: linkedB }, method, blockNum))
     } catch (error) {
       sendAmpError(res, error)
     }

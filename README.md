@@ -76,7 +76,7 @@ On the public RPC, a fresh start takes about 9 minutes for the default hour of b
 
 ## Forking a pricing rule
 
-A pricing rule is a dataset version, and the server picks one per request with Amp's `amp-alias` header. The SQL never changes, and the app has no code for any rule. Set these and both apps show a switch, in the Mac app's Settings and above the web app's numbers, with each rule's dataset and manifest hash, and a side-by-side comparison of a wallet at one block.
+A pricing rule is a dataset version, and the server picks one per request with Amp's `amp-alias` header. The SQL never changes, and the app has no code for any rule. Set these and both apps show a switch, in the Mac app's Settings and above the web app's numbers, with each rule's dataset and manifest hash, and a side-by-side comparison of a wallet. The comparison uses one set of facts at one block for both rules: the same transactions, balances, fees and exchange rates, with only prices from each. If it can't establish that, it says so and shows no numbers.
 
 ```sh
 PRICETAG_DATASET=benface/pricetag_scratch@0.0.5
@@ -100,7 +100,7 @@ Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/ve
 
 **Replacing the dataset it forks means replacing the fork too.** The fork reads the job of the version it names, so stopping that job stops the fork. Deploy a fork of the new version before stopping the old one, then change all four lines together.
 
-`pnpm amp:start` turns the fork off while it runs, because it isn't registered on a local Amp.
+`pnpm amp:start` turns the fork off while it runs, because it isn't registered on a local Amp. Hot wallet decisions and tax reports always read by the default rule, whatever the switch says.
 
 ## How it's put together
 

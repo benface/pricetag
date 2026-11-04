@@ -360,6 +360,10 @@ actor RuledSource: PortfolioSource {
         throw FetchError.unreachable
     }
 
+    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
+        throw FetchError.unreachable
+    }
+
     func rules() async throws -> [PricingRule] { [Self.market, Self.cautious] }
 
     func setFailing() { failing = true }

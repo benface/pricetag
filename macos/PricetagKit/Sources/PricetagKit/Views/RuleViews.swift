@@ -41,6 +41,7 @@ public struct RuleComparisonTable: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(comparison.why).fixedSize(horizontal: false, vertical: true)
+            ForEach(comparison.warnings, id: \.self) { WarningText($0) }
             Grid(alignment: .trailing, horizontalSpacing: 16, verticalSpacing: 6) {
                 GridRow {
                     Text("At block \(Format.block(comparison.blockNum))").gridColumnAlignment(.leading)
@@ -52,7 +53,7 @@ public struct RuleComparisonTable: View {
                 .foregroundStyle(.secondary)
                 Divider()
                 ForEach(comparison.rows) { row in
-                    line(row.label, format: row.format, a: row.a, b: row.b, difference: row.difference)
+                    line(row.label, format: row.format, a: row.a, b: row.b, difference: row.difference, aPartial: row.aPartial, bPartial: row.bPartial)
                 }
                 // In the same grid, so the columns line up with the ones above.
                 if !comparison.transactions.isEmpty {
@@ -76,12 +77,19 @@ public struct RuleComparisonTable: View {
         .textSelection(.enabled)
     }
 
-    private func line(_ label: String, format: String, a: String?, b: String?, difference: String?) -> some View {
+    private func line(_ label: String, format: String, a: String?, b: String?, difference: String?, aPartial: Bool = false, bPartial: Bool = false) -> some View {
         GridRow {
             Text(label).gridColumnAlignment(.leading)
-            Text(Format.ruleValue(a, format: format, currency: comparison.currency))
-            Text(Format.ruleValue(b, format: format, currency: comparison.currency))
+            value(a, format: format, isPartial: aPartial)
+            value(b, format: format, isPartial: bPartial)
             Text(Format.ruleDifference(difference, format: format, currency: comparison.currency))
+        }
+    }
+
+    private func value(_ micros: String?, format: String, isPartial: Bool) -> some View {
+        HStack(spacing: 4) {
+            if isPartial { Text("partial").font(.caption).foregroundStyle(Tone.warning.style) }
+            Text(Format.ruleValue(micros, format: format, currency: comparison.currency))
         }
     }
 }

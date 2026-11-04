@@ -94,9 +94,12 @@ describe("reading by a pricing rule", () => {
     const row = (label: string) => comparison.rows.find((r) => r.label === label)
     assert.equal(comparison.blockNum, HEAD)
     assert.deepEqual([comparison.a.id, comparison.b.id], [MARKET_RULE_ID, CAUTIOUS_RULE_ID])
-    assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "3000000000", b: "2970000000", difference: "-30000000" })
-    assert.deepEqual(row("Value"), { label: "Value", format: "money", a: "3000000000", b: "2970000000", difference: "-30000000" })
-    assert.deepEqual(row("Total PnL"), { label: "Total PnL", format: "signed", a: "0", b: "-30000000", difference: "-30000000" })
+    const whole = { aPartial: false, bPartial: false }
+    assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "3000000000", b: "2970000000", difference: "-30000000", ...whole })
+    assert.deepEqual(row("Value"), { label: "Value", format: "money", a: "3000000000", b: "2970000000", difference: "-30000000", ...whole })
+    // The USDC it paid with arrived with an unknown cost, so the total says it leaves that out.
+    assert.deepEqual(row("Total PnL"), { label: "Total PnL", format: "signed", a: "0", b: "-30000000", difference: "-30000000", aPartial: true, bPartial: true })
+    assert.ok(comparison.warnings.some((warning) => warning.includes("USDC")))
     assert.equal(comparison.changedTxs, 0, "it paid in USDC, so no cost changed")
   })
 
@@ -116,20 +119,109 @@ describe("reading by a pricing rule", () => {
   })
 })
 
-describe("comparing while one rule is behind", () => {
-  it("won't compare when the wallet moved in blocks only one has read, because the difference wouldn't be the rule", async () => {
-    const { server, base } = await serve(7)
-    const response = await fetch(`${base}/api/portfolio/${ME}/compare`)
-    server.close()
-    assert.equal(response.status, 409)
-    assert.match(((await response.json()) as { error: string }).error, /same block/)
+type Overrides = Partial<Source>
+
+async function compareWith(a: Overrides, b: Overrides, { through = [HEAD, HEAD] as [number, number], query = "", readRates = async () => ({ byBlock: {}, latest: null }) as never } = {}) {
+  const market = { ...sourceAt(ETH_ANSWER, through[0]), ...a }
+  const cautious = { ...sourceAt((ETH_ANSWER * 99n) / 100n, through[1]), ...b }
+  const api = createApi({}, { source: market, readRates, rules: [{ rule: rule(MARKET_RULE_ID), source: market }, { rule: rule(CAUTIOUS_RULE_ID), source: cautious }] })
+  const server = createServer((req, res) => void api(req, res))
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/portfolio/${ME}/compare${query}`)
+  server.close()
+  return { status: response.status, body: (await response.json()) as RuleComparison & { error?: string } }
+}
+
+const valueRow = (comparison: RuleComparison) => comparison.rows.find((r) => r.label === "ETH value")!
+
+describe("comparing only ever shows the rule", () => {
+  it("compares at the older block when one rule is behind", async () => {
+    const { status, body } = await compareWith({}, {}, { through: [HEAD, 15] })
+    assert.equal(status, 200)
+    assert.equal(body.blockNum, 15)
   })
 
-  it("compares at the older block when nothing moved after it", async () => {
-    const { server, base } = await serve(15)
-    const response = await fetch(`${base}/api/portfolio/${ME}/compare`)
-    server.close()
-    assert.equal(response.status, 200)
-    assert.equal(((await response.json()) as RuleComparison).blockNum, 15)
+  it("leaves out what moved after that block, on both sides", async () => {
+    const { status, body } = await compareWith({}, {}, { through: [HEAD, 7] })
+    assert.equal(status, 200)
+    assert.equal(body.blockNum, 7)
+    assert.ok(!body.rows.some((r) => r.label.startsWith("ETH ") && r.label !== "ETH price"), "it hadn't bought the ETH by block 7")
+  })
+
+  it("an internal ETH transfer after the common block isn't a difference between the rules", async () => {
+    // It's in the balance from block 18, with no row saying so, because there are no traces.
+    const balances = (base: Source["readBalances"]): Source["readBalances"] => async (address, block) => {
+      const read = await base(address, block)
+      return block >= 18 && read ? { ...read, amounts: { ...read.amounts, ETH: (BigInt(read.amounts.ETH as string) + 10n ** 18n).toString() } } : read
+    }
+    const { readBalances } = sourceAt(ETH_ANSWER)
+    const { status, body } = await compareWith({ readBalances: balances(readBalances) }, { readBalances: balances(readBalances) }, { through: [HEAD, 15] })
+    assert.equal(status, 200)
+    assert.equal(body.blockNum, 15)
+    assert.deepEqual([valueRow(body).a, valueRow(body).b, valueRow(body).difference], ["3000000000", "2970000000", "-30000000"])
+  })
+
+  it("reads exchange rates once, so a rate that moves between reads isn't a difference", async () => {
+    let answer = 70_000_000n
+    let reads = 0
+    const readRates = async (_currency: unknown, wallet: { latest: { blockNum: number } }) => {
+      reads++
+      answer += 1_000_000n
+      const round = { answer: answer.toString(), updatedAt: Date.parse("2026-11-04T00:00:00.000Z") / 1000 }
+      return { byBlock: Object.fromEntries([5, 10].map((block) => [block, round])), latest: { blockNum: wallet.latest.blockNum, round } }
+    }
+    const { status, body } = await compareWith({}, {}, { query: "?currency=CAD", readRates: readRates as never })
+    assert.equal(status, 200)
+    assert.equal(reads, 1)
+    assert.equal(body.currency, "CAD")
+    assert.equal(body.rows.find((r) => r.label === "ETH price")?.format, "usdPrice")
+    const row = valueRow(body)
+    assert.equal(((BigInt(row.a!) * 99n) / 100n - BigInt(row.b!)) ** 2n <= 1n, true, "the only difference is the 1%")
+  })
+
+  it("a balance read that fails for one rule's own reads changes nothing", async () => {
+    const { status, body } = await compareWith({}, { readBalances: async () => null })
+    assert.equal(status, 200)
+    assert.deepEqual([valueRow(body).a, valueRow(body).b], ["3000000000", "2970000000"])
+  })
+
+  it("a balance read that fails on the shared facts fails for both, with no difference that isn't the rule", async () => {
+    let reads = 0
+    const { readBalances } = sourceAt(ETH_ANSWER)
+    const failsAtTheCommonBlock: Source["readBalances"] = async (address, block) => {
+      reads++
+      return block === 15 ? null : readBalances(address, block)
+    }
+    const { status, body } = await compareWith({ readBalances: failsAtTheCommonBlock }, {}, { through: [HEAD, 15] })
+    assert.ok(reads > 0)
+    assert.equal(status, 200)
+    const pnl = body.rows.find((r) => r.label === "Total PnL")!
+    assert.equal(pnl.aPartial, pnl.bPartial)
+    assert.ok(body.warnings.every((w) => !w.startsWith("Market price:") && !w.startsWith("Cautious ETH:")), "both sides say the same")
+  })
+
+  it("won't compare when one rule has no current price at that block", async () => {
+    const { status, body } = await compareWith({}, { readLatestReference: async () => null })
+    assert.equal(status, 409)
+    assert.match(body.error!, /same block/)
+  })
+
+  it("won't compare when the rules' current prices are from different blocks", async () => {
+    const { status } = await compareWith({}, { readLatestReference: async (head) => ({ block_num: head - 1, eth_usd: "1", usdc_usd: "1" }) })
+    assert.equal(status, 409)
+  })
+
+  it("won't compare when the two read different transactions, as after a reorg", async () => {
+    const { status, body } = await compareWith({}, { readWindow: async () => ({ rows: [], priced: null, gasUnknownTxs: [] }) })
+    assert.equal(status, 409)
+    assert.match(body.error!, /same block/)
+  })
+
+  it("answers with the failure when a price or a rate can't be read, and shows no numbers", async () => {
+    const broken = await compareWith({}, { readLatestReference: async () => { throw new Error("no") } })
+    assert.equal(broken.status, 502)
+    const rates = await compareWith({}, {}, { query: "?currency=CAD", readRates: (async () => { throw new Error("no") }) as never })
+    assert.equal(rates.status, 502)
+    assert.equal(rates.body.rows, undefined)
   })
 })

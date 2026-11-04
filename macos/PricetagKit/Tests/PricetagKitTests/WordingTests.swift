@@ -119,6 +119,8 @@ struct WordingVectors: Decodable {
         #expect(comparison.b.name == "Cautious ETH")
         #expect(comparison.rows.first?.label == "ETH price")
         #expect(comparison.changedTxs > 0)
+        #expect(comparison.rows.first { $0.label == "Total PnL" }?.aPartial == true)
+        #expect(!comparison.warnings.isEmpty)
     }
 
     @Test func anUnavailableNumberIsNeverZero() {

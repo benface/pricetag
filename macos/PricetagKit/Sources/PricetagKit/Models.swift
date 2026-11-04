@@ -307,7 +307,11 @@ public struct RuleRow: Codable, Sendable, Equatable, Identifiable {
     public let format: String
     public let a: String?
     public let b: String?
+    /// nil unless both sides are made of the same known amounts, because anything else isn't a difference between rules.
     public let difference: String?
+    /// This side's sum leaves something out. `warnings` says what.
+    public let aPartial: Bool
+    public let bPartial: Bool
 
     public var id: String { label }
 }
@@ -333,6 +337,8 @@ public struct RuleComparison: Codable, Sendable, Equatable {
     public let a: PricingRule
     public let b: PricingRule
     public let why: String
+    /// What the numbers leave out or can't vouch for, the same as they'd say on the main screen.
+    public let warnings: [String]
     public let rows: [RuleRow]
     /// The newest few that came out differently. `changedTxs` says how many there are.
     public let transactions: [RuleTransaction]
