@@ -22,6 +22,8 @@ public protocol PortfolioSource: Sendable {
     func importCoinbase(csv: String) async throws -> ExchangeImport
     func verifyLink(owner: String, address: String, signature: String) async throws -> Bool
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
+    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof
+    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification
 }
 
 /// Nothing here needs to be there for a source that only reads, like one in a test.
@@ -31,6 +33,8 @@ extension PortfolioSource {
     public func importCoinbase(csv: String) async throws -> ExchangeImport { throw FetchError.unreachable }
     public func verifyLink(owner: String, address: String, signature: String) async throws -> Bool { throw FetchError.unreachable }
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
+    public func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof { throw FetchError.unreachable }
+    public func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification { throw FetchError.unreachable }
 }
 
 public struct PricetagClient: PortfolioSource {
@@ -52,11 +56,22 @@ public struct PricetagClient: PortfolioSource {
         try await decoded(post("/api/portfolio/\(address)/explain", query: target.queryItems, body: FoldBody(method: method, currency: currency, linked: linked, book: book), timeout: .seconds(30)))
     }
 
+    public func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+        try await get("/api/portfolio/\(address)/proof", query: legQuery(leg, currency), timeout: .seconds(30))
+    }
+
+    /// A block's rows can take a while on a busy server, and the read is one query at a time.
+    public func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+        try await get("/api/portfolio/\(address)/verify", query: legQuery(leg, currency), timeout: .seconds(120))
+    }
+
+    private func legQuery(_ leg: String, _ currency: CurrencyCode) -> [URLQueryItem] {
+        [URLQueryItem(name: "leg", value: leg), URLQueryItem(name: "currency", value: currency.rawValue)]
+    }
+
     /// Reads every wallet in it, so it gets as long as a first read.
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
-        var read = URLRequest(url: try url("/api/tax-report/\(request.address)", query: request.queryItems))
-        read.timeoutInterval = 180
-        return try await decoded(send(read))
+        try await get("/api/tax-report/\(request.address)", query: request.queryItems, timeout: .seconds(180))
     }
 
     public func previews(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], candidates: [Book]) async throws -> [BookPreview] {
@@ -92,6 +107,12 @@ public struct PricetagClient: PortfolioSource {
         if !query.isEmpty { components?.queryItems = query }
         guard let url = components?.url else { throw FetchError.rejected("That server address isn't a valid URL.") }
         return url
+    }
+
+    private func get<Body: Decodable>(_ path: String, query: [URLQueryItem], timeout: Duration) async throws -> Body {
+        var request = URLRequest(url: try url(path, query: query))
+        request.timeoutInterval = Double(timeout.components.seconds)
+        return try await decoded(send(request))
     }
 
     /// A post, because answers don't belong in a URL, where they'd end up in logs.
