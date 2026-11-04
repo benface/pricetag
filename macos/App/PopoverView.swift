@@ -25,6 +25,7 @@ struct PopoverView: View {
             footer
         }
         .frame(width: 380)
+        .background(.regularMaterial)
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)

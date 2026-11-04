@@ -75,6 +75,7 @@ public struct ExplanationPane: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
+                    Text(explanation.title).font(.headline)
                     if let value = explanation.value {
                         LiveNumber(value).font(.title2.weight(.semibold))
                     } else {

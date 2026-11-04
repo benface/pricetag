@@ -210,7 +210,7 @@ private struct HoldingsTable: View {
             target = .asset(position.asset, metric)
         } label: {
             HStack(spacing: 4) {
-                if warn { Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(Tone.warning.style) }
+                if warn { WarningIcon() }
                 LiveNumber(text, tone: isLive ? tone : (warn ? .warning : .neutral))
                     .lineLimit(1)
             }
@@ -218,6 +218,16 @@ private struct HoldingsTable: View {
         }
         .buttonStyle(NumberButtonStyle())
         .accessibilityLabel("\(position.asset) \(metric.rawValue), \(text)")
+    }
+}
+
+private struct WarningIcon: View {
+    @Environment(\.backgroundProminence) private var prominence
+
+    var body: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.caption2)
+            .foregroundStyle(prominence == .increased ? Tone.neutral.style : Tone.warning.style)
     }
 }
 

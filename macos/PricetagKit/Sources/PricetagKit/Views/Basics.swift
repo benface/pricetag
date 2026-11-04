@@ -28,6 +28,8 @@ public enum Tone {
 public struct LiveNumber: View {
     let text: String
     let tone: Tone
+    /// On a selected row's accent color, a tone would lose its contrast.
+    @Environment(\.backgroundProminence) private var prominence
 
     public init(_ text: String, tone: Tone = .neutral) {
         self.text = text
@@ -37,7 +39,7 @@ public struct LiveNumber: View {
     public var body: some View {
         Text(text)
             .monospacedDigit()
-            .foregroundStyle(tone.style)
+            .foregroundStyle(prominence == .increased ? Tone.neutral.style : tone.style)
             .contentTransition(.numericText())
             .animation(.snappy, value: text)
     }

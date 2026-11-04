@@ -28,7 +28,8 @@ public struct PnlChartView: View {
     }
 
     private var lineStyle: AnyShapeStyle {
-        guard isLive else { return AnyShapeStyle(.secondary) }
+        // A Color, because a chart reads the plain `.secondary` style as a shade of its accent.
+        guard isLive else { return AnyShapeStyle(Color.secondary) }
         return Tone(signed: points.last?.pnlUsdMicros).style
     }
 
