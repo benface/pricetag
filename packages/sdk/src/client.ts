@@ -5,9 +5,10 @@ import { createQuery, type Logger, type Query } from "./amp.ts"
 import { ORACLE_TABLES, SWAP_TABLES, WALLET_TABLES, datasetReader, datasetSource } from "./dataset.ts"
 import type { Method } from "./fold.ts"
 import { answerToMicros, buildPricedLegs, type LegRow, type PricedLeg, type PriceSource, type Reference } from "./legs.ts"
-import { describeMissing, foldWallet, hasStarted, latestPrices, type FoldedWallet, type Head, type LatestPrices, type WalletData } from "./portfolio.ts"
+import { latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
 import { createL1FeeReader, type ReadL1Fees } from "./receipts.ts"
 import { ASSETS, TOKENS, isAddress, normalizeAddress, tokenByAddress, type Token } from "./tokens.ts"
+import { describeMissing, foldWallet, hasStarted, type FoldedWallet, type WalletData } from "./wallet.ts"
 import { createWallets } from "./wallets.ts"
 
 export type PricetagConfig = {
@@ -56,14 +57,14 @@ export type WalletLegs = {
   blocks: BlocksRead
   /** In order for the fold. Each has its `txHash`, `priceSource` and, when it has no price, a `priceNote` saying why. */
   legs: PricedLeg[]
-  /** The oracle reads at the blocks of those legs, which `pnlOverTime` takes. */
+  /** The oracle reads at the blocks of those legs. `referenceMarks` turns them into what `pnlOverTime` takes. */
   references: Reference[]
   /** Transactions this wallet sent whose gas couldn't be worked out, so ETH is overstated by that much. */
   gasUnknownTxs: string[]
 }
 
-/** A wallet's holdings, cost and PnL, the same way the app works them out. */
-export type WalletPortfolio = FoldedWallet & {
+/** A wallet's holdings, cost and PnL in USD, the same way the app works them out. */
+export type WalletPortfolio = Omit<FoldedWallet, "view"> & {
   address: string
   method: Method
   blocks: BlocksRead
@@ -158,7 +159,7 @@ export function pricetagClient(query: Query, config: ClientConfig) {
       chainHead = (await reader.head(chainHead?.blockNum ?? null)) ?? chainHead
       const wallet = chainHead ? await wallets.get(account, { from, to }) : emptyWallet(account, from)
       const { coverage, legs, gasUnknownTxs, l1FeeUnknownTxs, openingUnread } = wallet
-      const folded = foldWallet(wallet, method)
+      const { view: _, ...folded } = foldWallet(wallet, method)
       const started = hasStarted(wallet)
       return {
         ...folded,
@@ -216,7 +217,7 @@ export function pricetagClient(query: Query, config: ClientConfig) {
         // token off the allowlist, is unknown here too.
         const legs = buildPricedLegs({ account: row.account, rows: moved.get(row.tx_hash) ?? [], references: [reference], priced: [row] })
         const leg = legs.find((l) => l.asset === found.asset)
-        const usdMicros = leg?.priceSource === "swap" ? leg.priceUsdMicros : null
+        const usdMicros = leg?.priceSource === "swap" ? leg.priceMicros : null
         const base = { blockNum: row.block_num, timestamp, txHash: row.tx_hash, account: row.account }
         if (usdMicros !== null) return { ...base, usdMicros, source: "swap", note: null }
         return { ...base, usdMicros: null, source: "unknown", note: leg?.priceNote ?? "This swap didn't give a usable price for this token." }
@@ -237,6 +238,8 @@ function emptyWallet(address: string, from: number): WalletData {
   return {
     address,
     mode: "dataset",
+    currency: "USD",
+    rates: null,
     coverage: { fromBlock: from, toBlock: from - 1 },
     legs: [],
     references: [],

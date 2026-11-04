@@ -28,7 +28,7 @@ Latest: ETH in 0x3920fc301a4d45b33d11fd22218e79f1b3e1233c82d8dc0e9450e7ac3f4a74c
 The whole script is [`examples/portfolio.ts`](examples/portfolio.ts). The part that matters:
 
 ```ts
-import { createPricetag, formatSignedUsd } from "@pricetag/sdk"
+import { createPricetag, formatSignedMoney } from "@pricetag/sdk"
 
 const pricetag = createPricetag({
   url: "http://127.0.0.1:1602",
@@ -40,7 +40,7 @@ const pricetag = createPricetag({
 const { started, positions, totals, pnlStatus, missing } = await pricetag.getPortfolio(address)
 if (!started) throw new Error("Nothing has been processed yet")
 
-console.log(formatSignedUsd(totals.pnlUsdMicros), pnlStatus, missing) // "complete", "partial" or "unavailable", and what's left out
+console.log(formatSignedMoney(totals.pnlMicros), pnlStatus, missing) // "complete", "partial" or "unavailable", and what's left out
 ```
 
 `pnpm amp:start` writes `AMP_QUERY_URL`, `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` to `.env.local`, and the example reads them from there, along with `BASE_RPC_URL` if you've set one. A dataset only has data from its start block on, so that's the earliest block that returns anything.
@@ -57,9 +57,9 @@ Amounts are in a token's smallest unit, and USD values are in micros (millionths
 | `getPrices(token, { from?, to? })` | `{ token, prices, blocks }`: a token's prices, by symbol or address. It throws on a token off the allowlist, which has no prices to give. |
 | `getLatestPrices()` | The current prices to value positions at. Only ETH and USDC have one, and only with a recent oracle read. |
 | `buildPortfolio(legs, method, prices?)` | `{ method, positions, totals }` from `getLegs`' legs. It's pure, so it needs no Amp. Nothing in it is checked against the chain, so prefer `getPortfolio`. |
-| `pnlStatus(totals, gasUnknownTxs?)` | Whether `totals.pnlUsdMicros` can be read as the wallet's PnL: `complete`, `partial` or `unavailable`. `getPortfolio` already includes it. |
-| `pnlOverTime(legs, method, prices, references, latest, unconfirmed?)` | PnL after each transaction. `getPortfolio` already includes it, as `points`. |
-| `formatUsd`, `formatSignedUsd`, `formatPrice` | A USD value in micros, as text. `null` prints as `unknown`, never as $0. |
+| `pnlStatus(totals, gasUnknownTxs?)` | Whether `totals.pnlMicros` can be read as the wallet's PnL: `complete`, `partial` or `unavailable`. `getPortfolio` already includes it. |
+| `pnlOverTime(legs, method, prices, markPrice, latest, unconfirmed?)` | PnL after each transaction, where `referenceMarks(references)` gives `markPrice`. `getPortfolio` already includes it, as `points`. |
+| `formatMoney`, `formatSignedMoney`, `formatPrice` | A value in micros, as text, in USD unless you pass another currency. `null` prints as `unknown`, never as $0. |
 | `formatAmount`, `formatSignedAmount` | An amount in whole tokens, from its smallest units and decimals, cut to a readable length. They cut instead of rounding, so they never show more than there is. |
 | `shortHash` | A transaction hash or address, shortened. |
 | `describeError(error)` | The most useful message in an error from Amp's client. The SDK's own errors already have it as their `message`, with Amp's error as their `cause`. |
@@ -206,6 +206,7 @@ SQL stops at cost, because a cost depends on every earlier leg. To get cost and 
 
 ## Limits
 
+- `getPortfolio` is in USD. The app can also show CAD, converting at each transaction's rate, and the SDK doesn't read those rates yet.
 - An old wallet's cost is unknown for whatever it held before the first block read, so its PnL stays unavailable, and that's the common case on a short range. Its amounts and value are still right, because they come from the chain.
 - Only tokens on the allowlist in [`src/tokens.ts`](src/tokens.ts) get a position or a price.
 - Only ETH and USDC have a current price, so other tokens show a cost but no value yet.

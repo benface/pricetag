@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { createServer as createNetServer, type AddressInfo, type Socket } from "node:net"
 import { describe, it } from "node:test"
 import { createPricetag } from "@pricetag/sdk"
-import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPrice, formatSignedUsd, formatUsd, pnlStatus, sumTotals } from "@pricetag/sdk/core"
+import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPrice, formatSignedMoney, formatMoney, pnlStatus, sumTotals } from "@pricetag/sdk/core"
 import { createWallets, datasetSource, pricetagClient, type Query, type ReadL1Fees } from "@pricetag/sdk/internal"
 import { portfolioOf } from "../server/portfolio.ts"
 import { DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
@@ -57,13 +57,13 @@ describe("getLegs", () => {
     assert.equal(address, `0x${ME}`)
     assert.deepEqual(blocks, { fromBlock: 50, toBlock: 200 })
     const aero = legs.find((l) => l.asset === "AERO")!
-    assert.deepEqual([aero.priceUsdMicros, aero.priceSource, aero.txHash, aero.costLabel, aero.costUsdMicros], ["2000000", "swap", "0xaa", "paid", "1000000000"])
+    assert.deepEqual([aero.priceMicros, aero.priceSource, aero.txHash, aero.costLabel, aero.costMicros], ["2000000", "swap", "0xaa", "paid", "1000000000"])
   })
 
   it("keeps an unpriced leg unknown, and says why", async () => {
     const { client } = fakeAmp({ legs: [leg("aa", AERO, ME, "credit", "5", "erc20")], reference_prices: [{ block_num: "100", eth_usd: ETH_ANSWER, usdc_usd: USDC_ANSWER }] })
     const [aero] = (await client.getLegs(`0x${ME}`, { from: 50 })).legs
-    assert.deepEqual([aero!.priceUsdMicros, aero!.priceSource, aero!.costLabel, aero!.costUsdMicros], [null, null, "unknown", null])
+    assert.deepEqual([aero!.priceMicros, aero!.priceSource, aero!.costLabel, aero!.costMicros], [null, null, "unknown", null])
     assert.ok(aero!.priceNote)
   })
 
@@ -197,7 +197,7 @@ describe("getPrices", () => {
     })
     const [point] = (await client.getPrices("AERO", { from: 50 })).prices
     assert.deepEqual([point!.usdMicros, point!.source, point!.txHash], [null, "unknown", "0xaa"])
-    assert.match(point!.note!, /off the allowlist/)
+    assert.match(point!.note!, /a token we can't price yet/)
   })
 
   it("rejects an absurd swap price", async () => {
@@ -234,14 +234,14 @@ describe("getPrices", () => {
     const { client } = fakeAmp(tables)
     const fromLegs = (await client.getLegs(`0x${ME}`, { from: 50 })).legs.find((l) => l.asset === "AERO")!
     const [fromPrices] = (await client.getPrices("AERO", { from: 50 })).prices
-    assert.deepEqual([fromPrices!.usdMicros, fromPrices!.source, fromPrices!.txHash], [fromLegs.priceUsdMicros, fromLegs.priceSource, fromLegs.txHash])
+    assert.deepEqual([fromPrices!.usdMicros, fromPrices!.source, fromPrices!.txHash], [fromLegs.priceMicros, fromLegs.priceSource, fromLegs.txHash])
   })
 })
 
 describe("getLatestPrices", () => {
   it("has only what a recent oracle read gives", async () => {
     const { client } = fakeAmp({ reference_prices: [{ block_num: "199", eth_usd: ETH_ANSWER, usdc_usd: "" }] })
-    assert.deepEqual(await client.getLatestPrices(), { ETH: { usdMicros: "2400000000", source: "oracle", blockNum: 199 } })
+    assert.deepEqual(await client.getLatestPrices(), { ETH: { micros: "2400000000", source: "oracle", blockNum: 199 } })
   })
 
   it("has nothing without a recent read", async () => {
@@ -270,7 +270,7 @@ describe("buildPortfolio", () => {
     const legs = buildPricedLegs({ account: DEMO_WALLET.address, rows: DEMO_ROWS, references: DEMO_REFERENCES, priced: [] })
     const { positions } = buildPortfolio(legs, "average")
     const eth = positions.find((p) => p.asset === "ETH")!
-    assert.deepEqual([eth.values.valueUsdMicros, eth.values.unrealizedUsdMicros, eth.price], [null, null, null])
+    assert.deepEqual([eth.values.valueMicros, eth.values.unrealizedMicros, eth.price], [null, null, null])
   })
 })
 
@@ -294,7 +294,7 @@ describe("pnlStatus", () => {
   })
 
   it("calls a total with no answer unavailable", () => {
-    assert.equal(pnlStatus({ ...totals, pnlUsdMicros: null }), "unavailable")
+    assert.equal(pnlStatus({ ...totals, pnlMicros: null }), "unavailable")
   })
 })
 
@@ -360,7 +360,7 @@ describe("getPortfolio", () => {
     assert.equal(started, false)
     assert.deepEqual(blocks, { fromBlock: 50, toBlock: 49 })
     assert.deepEqual(positions, [])
-    assert.deepEqual([totals.valueUsdMicros, totals.realizedUsdMicros, totals.unrealizedUsdMicros, totals.gasUsdMicros, totals.pnlUsdMicros], [null, null, null, null, null])
+    assert.deepEqual([totals.valueMicros, totals.realizedMicros, totals.unrealizedMicros, totals.gasMicros, totals.pnlMicros], [null, null, null, null, null])
     assert.equal(status, "unavailable")
     assert.match(missing.join(), /hasn't processed block 50/)
     assert.ok(!queries.some((q) => q.includes("eth_call")))
@@ -371,7 +371,7 @@ describe("getPortfolio", () => {
     const client = pricetagClient(async (sql) => (queries.push(sql), []), { dataset: "benface/pricetag@0.0.1", startBlock: 50 })
     const { started, totals } = await client.getPortfolio(`0x${ME}`)
     assert.equal(started, false)
-    assert.equal(totals.pnlUsdMicros, null)
+    assert.equal(totals.pnlMicros, null)
     assert.equal(queries.length, 1)
   })
 
@@ -458,17 +458,17 @@ describe("the client's options", () => {
 
 describe("the formatters", () => {
   it("print unknown as unknown, never as $0", () => {
-    assert.equal(formatUsd(null), "unknown")
-    assert.equal(formatSignedUsd(null), "unknown")
+    assert.equal(formatMoney(null), "unknown")
+    assert.equal(formatSignedMoney(null), "unknown")
     assert.equal(formatPrice(null), "unknown")
-    assert.equal(formatUsd("0"), "$0.00")
+    assert.equal(formatMoney("0"), "$0.00")
   })
 })
 
 describe("the package boundary", () => {
   it("keeps the public API small", async () => {
     const sdk = await import("@pricetag/sdk")
-    assert.deepEqual(Object.keys(sdk).sort(), ["ASSETS", "TOKENS", "buildPortfolio", "createPricetag", "describeError", "formatAmount", "formatPrice", "formatSignedAmount", "formatSignedUsd", "formatUsd", "isAddress", "pnlOverTime", "pnlStatus", "shortHash"])
+    assert.deepEqual(Object.keys(sdk).sort(), ["ASSETS", "TOKENS", "buildPortfolio", "createPricetag", "describeError", "formatAmount", "formatMoney", "formatPrice", "formatSignedAmount", "formatSignedMoney", "isAddress", "pnlOverTime", "pnlStatus", "referenceMarks", "shortHash"])
   })
 
   const sdkFile = (name: string) => readFileSync(new URL(`../packages/sdk/src/${name}`, import.meta.url), "utf8")
@@ -484,7 +484,7 @@ describe("the package boundary", () => {
       }
     }
     walk("core.ts")
-    assert.deepEqual([...seen].sort(), ["core.ts", "fold.ts", "format.ts", "legs.ts", "portfolio.ts", "reconcile.ts", "tokens.ts"])
+    assert.deepEqual([...seen].sort(), ["core.ts", "currency.ts", "fold.ts", "format.ts", "legs.ts", "portfolio.ts", "reconcile.ts", "tokens.ts", "wallet.ts"])
   })
 
   it("has the app's browser code import only that part", () => {

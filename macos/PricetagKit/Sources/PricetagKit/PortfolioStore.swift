@@ -34,6 +34,7 @@ public struct ExplanationRequest: Hashable, Sendable {
     public let target: ExplainTarget
     public let address: String
     public let method: CostMethod
+    public let currency: CurrencyCode
     public let serverURL: URL
 }
 
@@ -45,12 +46,13 @@ public final class PortfolioStore {
     static let behindAfterSeconds = 120
 
     /// What the store holds, which may not be current: read `feed` before calling it live. While a new method's numbers
-    /// are on their way, the feed is `.reading` and this still holds the old method's, so the screen doesn't jump.
+    /// or currency's numbers are on their way, the feed is `.reading` and this still holds the old ones, so the screen doesn't jump.
     public private(set) var portfolio: Portfolio?
     public private(set) var feed: FeedState
     public private(set) var updatedAt: Date?
     public private(set) var address: String?
     public private(set) var method: CostMethod
+    public private(set) var currency: CurrencyCode
     public private(set) var serverURL: URL
 
     @ObservationIgnored private var source: any PortfolioSource
@@ -77,6 +79,7 @@ public final class PortfolioStore {
         let serverURL = defaults.string(forKey: Keys.server).flatMap(URL.init(string:)) ?? Self.defaultServerURL
         self.address = address
         self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
+        self.currency = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
         self.serverURL = serverURL
         self.feed = address == nil ? .noWallet : .reading
         self.source = makeSource(serverURL)
@@ -119,6 +122,14 @@ public final class PortfolioStore {
         start()
     }
 
+    public func setCurrency(_ currency: CurrencyCode) {
+        guard currency != self.currency else { return }
+        self.currency = currency
+        defaults.set(currency.rawValue, forKey: Keys.currency)
+        if address != nil { feed = .reading }
+        start()
+    }
+
     public func setServerURL(_ url: URL) {
         guard url != serverURL else { return }
         serverURL = url
@@ -133,25 +144,27 @@ public final class PortfolioStore {
 
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, serverURL: serverURL) }
+        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, serverURL: serverURL) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
         // A request from before a change has nothing to say about what's on screen now.
         guard request == explanationRequest(for: request.target) else { throw CancellationError() }
-        return try await source.explanation(of: request.target, address: request.address, method: request.method)
+        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency)
     }
 
     /// One read. Returns how long to wait before the next one.
     func poll() async -> Duration {
         guard let address else { return unreachableDelay }
         let method = self.method
+        let currency = self.currency
         let serverURL = self.serverURL
         // An answer that arrives after a change is about something else, whatever it says.
-        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && serverURL == self.serverURL }
-        let timeout: Duration = portfolio == nil ? .seconds(180) : .seconds(15)
+        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && currency == self.currency && serverURL == self.serverURL }
+        // The first read in a currency also reads its rate at each of this wallet's transactions, so it gets as long as a first read.
+        let timeout: Duration = portfolio?.currency == currency ? .seconds(15) : .seconds(180)
         do {
-            let next = try await source.portfolio(address: address, method: method, timeout: timeout)
+            let next = try await source.portfolio(address: address, method: method, currency: currency, timeout: timeout)
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
@@ -159,8 +172,8 @@ public final class PortfolioStore {
             return reachableDelay
         } catch {
             guard isCurrent(), !(error is CancellationError) else { return .zero }
-            // Numbers by another method are wrong now, not just old, and there's no way to get the right ones.
-            if portfolio?.method != method { portfolio = nil }
+            // Numbers by another method or in another currency are wrong now, not just old, and there's no way to get the right ones.
+            if portfolio?.method != method || portfolio?.currency != currency { portfolio = nil }
             feed = state(of: error)
             return feed == .serverUnreachable ? unreachableDelay : reachableDelay
         }
@@ -185,6 +198,7 @@ public final class PortfolioStore {
     private enum Keys {
         static let wallet = "wallet"
         static let method = "method"
+        static let currency = "currency"
         static let server = "serverURL"
     }
 }

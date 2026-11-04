@@ -2,7 +2,7 @@
 // swaps, gas, a wrap, a plain transfer with an unknown cost, an absurd swap price, a sale of unknown-cost tokens, a swap
 // that also moved a token off the allowlist, an opening balance, and a balance the legs don't explain.
 
-import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, normalizeAddress, openingLegs, type LegKind, type LegRow, type Reference } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, normalizeAddress, openingLegs, type CurrencyCode, type LegKind, type LegRow, type Rates, type Reference } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
 
 export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
@@ -105,8 +105,8 @@ export const DEMO_WALLET: WalletResponse = {
   legs,
   references,
   prices: {
-    ETH: { usdMicros: "2640000000", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
-    USDC: { usdMicros: "999800", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
+    ETH: { micros: "2640000000", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
+    USDC: { micros: "999800", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
   },
   latest: { blockNum: START_BLOCK + HEAD_OFFSET, timestamp: new Date(START_TIME + HEAD_OFFSET * 2000).toISOString() },
   gasUnknownTxs: [],
@@ -115,6 +115,32 @@ export const DEMO_WALLET: WalletResponse = {
   lastBalances: {},
   unreadBalances: [],
   balances: { blockNum: START_BLOCK + HEAD_OFFSET, amounts: Object.fromEntries([...balances].map(([asset, amount]) => [asset, amount.toString()])) },
+  currency: "USD",
+  rates: null,
+}
+
+/** USD for one Canadian dollar, moving enough that converting at the wrong moment would show. */
+const CAD_USD: [blockOffset: number, usd: number][] = [
+  [0, 0.742],
+  [150, 0.741],
+  [300, 0.738],
+  [900, 0.734],
+  [1500, 0.731],
+  [2400, 0.728],
+  [3000, 0.725],
+  [3600, 0.723],
+  [4200, 0.72],
+  [4800, 0.718],
+  [HEAD_OFFSET, 0.715],
+]
+
+/** What the feed would have answered for the demo's blocks. A currency with no demo data has no rates, like any other missing rate. */
+export function demoRates(currency: CurrencyCode): Rates {
+  const rounds = (currency === "CAD" ? CAD_USD : []).map(([offset, usd]) => ({
+    blockNum: START_BLOCK + offset,
+    round: { answer: String(Math.round(usd * 1e8)), updatedAt: (START_TIME + offset * 2000) / 1000 },
+  }))
+  return { byBlock: Object.fromEntries(rounds.map((r) => [r.blockNum, r.round])), latest: rounds.at(-1) ?? null }
 }
 
 export const DEMO_ROWS = rows

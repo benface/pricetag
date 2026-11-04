@@ -57,7 +57,7 @@ describe("the example", () => {
   it("doesn't call a balance that couldn't be read zero", () => {
     const { stdout } = runExample({ legs: [leg(USDC, "credit", "1000000", "erc20")], reference_prices: [reference] })
     assert.match(stdout, /USDC: 1 .*\| unchecked/)
-    assert.match(stdout, /leaving out: .*USDC \(not checked against its onchain balance/)
+    assert.match(stdout, /leaving out: .*USDC \(not checked against its actual balance/)
     assert.match(stdout, /leaving out: .*ETH \(balance couldn't be read\)/)
   })
 
