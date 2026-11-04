@@ -507,6 +507,7 @@ public final class HotWallet {
 
     /// Everything that was about one key, whose alarms, dismissals, block numbers and reads say nothing about the next one.
     private func forgetTheOldKeysState() {
+        state.connectedSites = nil
         state.rotation = nil
         state.alarm = nil
         state.acknowledged = []
@@ -562,6 +563,118 @@ public final class HotWallet {
         }
     }
 
+    // MARK: - Sites
+
+    /// Why a site can't use this wallet right now, if it can't. Reads don't need any of this.
+    public var siteProblem: SiteError? {
+        guard availability == .ready else { return .stopped("This build of \(SiteWording.appName) can't hold a key.") }
+        guard address != nil else { return .stopped("Set up \(HotWalletWording.title) in \(SiteWording.appName) first.") }
+        if alarm != nil { return .stopped("\(SiteWording.appName) has stopped this wallet, because its key may be stolen.") }
+        if rotation != nil { return .stopped("\(SiteWording.appName) is replacing this wallet's key. Try again once that's done.") }
+        if isKeyMissing { return .stopped(HotWalletWording.keyMissing) }
+        return nil
+    }
+
+    public var connectedSites: [String] { state.connectedSites ?? [] }
+
+    func isConnected(_ origin: String) -> Bool {
+        connectedSites.contains(origin)
+    }
+
+    func connectSite(_ origin: String) {
+        guard !isConnected(origin) else { return }
+        state.connectedSites = connectedSites + [origin]
+        try? persist()
+    }
+
+    func disconnectSite(_ origin: String) {
+        state.connectedSites?.removeAll { $0 == origin }
+        try? persist()
+    }
+
+    func confirmPresence(reason: String) async throws {
+        try await presence.confirm(reason: reason)
+    }
+
+    func readForSite(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer {
+        // A node on another chain would tell a site things that aren't true of Base.
+        if let snapshot, snapshot.chainID != Base.chainID { return .failure(.wrongChain) }
+        return try await chain.read(method, parameters)
+    }
+
+    /// What a transaction would cost. What's signed later keeps this gas, so the fee shown is what can be spent.
+    func quoteForSite(_ transaction: SiteTransaction) async throws -> SiteQuote {
+        guard let address else { throw ChainError.unreadable }
+        let snapshot = try await chain.snapshot(of: address)
+        guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
+        guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
+        let estimate: UInt64
+        do {
+            estimate = try await chain.estimateGas(from: address, to: transaction.to, value: transaction.value, data: transaction.data)
+        } catch ChainError.rejected(let message) {
+            // The node worked out what it would do, and it fails. Nothing good comes of signing that.
+            throw ChainError.rejected("This transaction would fail: \(message)")
+        }
+        // A plain send to a plain address uses exactly what it's quoted.
+        let gasLimit = transaction.data.isEmpty && estimate == 21000 ? estimate : estimate + estimate / 4
+        return SiteQuote(
+            gasLimit: gasLimit,
+            maxFeePerGas: snapshot.fees.maxFeePerGas,
+            feeWei: snapshot.fees.costWei(gas: UInt128(gasLimit)),
+            ethUsdMicros: snapshot.ethUsdMicros,
+            ethBalance: snapshot.balances[Base.eth] ?? 0
+        )
+    }
+
+    /// Only after the user approved exactly this in the app. It's in line with sweeps, since two at once would use the same nonce.
+    func sendForSite(_ transaction: SiteTransaction, quote: SiteQuote, review: TransactionReview, origin: String) async throws -> String {
+        guard let address else { throw ChainError.unreadable }
+        var result: Result<String, any Error> = .failure(ChainError.unreadable)
+        await inTurn { [self] in
+            do {
+                guard address == self.address, siteProblem == nil else { throw ChainError.rejected("This wallet changed while that was waiting.") }
+                let snapshot = try await chain.snapshot(of: address)
+                self.snapshot = snapshot
+                guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
+                guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected("The last transaction is still showing up. Try again in a moment.") }
+                guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
+                // The fee shown is a promise. A jump past it needs another look.
+                guard snapshot.fees.maxFeePerGas <= 2 * quote.maxFeePerGas else { throw ChainError.rejected("Fees rose a lot since you approved this, so nothing was signed. Try again.") }
+                let nonce = AlarmCheck.nextNonce(records: state.records[address] ?? [], onchainNonce: snapshot.nonce)
+                let unsigned = UnsignedTransaction(
+                    chainID: Base.chainID,
+                    nonce: nonce,
+                    maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas,
+                    maxFeePerGas: snapshot.fees.maxFeePerGas,
+                    gasLimit: quote.gasLimit,
+                    to: transaction.to,
+                    value: transaction.value,
+                    data: transaction.data
+                )
+                let signed = try await signer.sign(unsigned, from: address)
+                do {
+                    try await recordAndSend(signed, from: address, record: SignedRecord(
+                        hash: signed.hash, nonce: nonce, to: transaction.to, symbol: review.symbol, decimals: review.decimals,
+                        amount: review.amount, usdMicros: review.usdMicros, gainUsdMicros: "0",
+                        reason: .site, createdAt: now(), status: .pending, site: origin
+                    ))
+                } catch ChainError.unreachable {
+                    // It may have got through, and the site can watch for its hash either way.
+                }
+                result = .success(signed.hash)
+            } catch {
+                result = .failure(error)
+            }
+        }
+        return try result.get()
+    }
+
+    /// Only after the user approved exactly this in the app. A message never spends by itself, but what it permits can.
+    func signForSite(_ message: SignableMessage) async throws -> MessageSignature {
+        guard let address else { throw ChainError.unreadable }
+        return try await signer.sign(message, from: address)
+    }
+
     // MARK: - Signing
 
     private func execute(_ plan: SweepPlan, from address: EthereumAddress, to destination: EthereumAddress, reason: SignedRecord.Reason, snapshot: ChainSnapshot) async throws {
@@ -589,29 +702,11 @@ public final class HotWallet {
                     data: data
                 )
                 let signed = try await signer.sign(transaction, from: address)
-                // On disk before it leaves, so a crash in between can't make this look like someone else's transaction.
-                let record = SignedRecord(
+                try await recordAndSend(signed, from: address, record: SignedRecord(
                     hash: signed.hash, nonce: nonce, to: destination, symbol: transfer.token.symbol, decimals: transfer.token.decimals,
                     amount: String(transfer.amount), usdMicros: transfer.usdMicros.map { String($0) }, gainUsdMicros: String(transfer.gainUsdMicros),
                     reason: reason, createdAt: now(), status: .pending
-                )
-                // Signing the same thing again gives the same hash, and that's one transaction, however many times it's sent.
-                if let index = state.records[address]?.firstIndex(where: { $0.hash == record.hash }) {
-                    state.records[address]?[index] = record
-                } else {
-                    state.records[address, default: []].append(record)
-                }
-                try persist()
-                do {
-                    try await chain.send(signed)
-                } catch ChainError.rejected(let message) {
-                    updateRecord(hash: signed.hash, address: address) { $0.status = .dropped }
-                    try persist()
-                    throw ChainError.rejected(message)
-                } catch ChainError.unreachable {
-                    // It may have got through, so it stays pending. The receipt check settles it.
-                    throw ChainError.unreachable
-                }
+                ))
                 nonce += 1
                 sweepProblem = nil
             } catch let ChainError.rejected(message) {
@@ -619,6 +714,27 @@ public final class HotWallet {
                 pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
                 return
             }
+        }
+    }
+
+    /// On disk before it leaves, so a crash in between can't make this look like someone else's transaction.
+    private func recordAndSend(_ signed: SignedTransaction, from address: EthereumAddress, record: SignedRecord) async throws {
+        // Signing the same thing again gives the same hash, and that's one transaction, however many times it's sent.
+        if let index = state.records[address]?.firstIndex(where: { $0.hash == record.hash }) {
+            state.records[address]?[index] = record
+        } else {
+            state.records[address, default: []].append(record)
+        }
+        try persist()
+        do {
+            try await chain.send(signed)
+        } catch ChainError.rejected(let message) {
+            updateRecord(hash: signed.hash, address: address) { $0.status = .dropped }
+            try persist()
+            throw ChainError.rejected(message)
+        } catch ChainError.unreachable {
+            // It may have got through, so it stays pending. The receipt check settles it.
+            throw ChainError.unreachable
         }
     }
 
@@ -639,8 +755,13 @@ public final class HotWallet {
                     state.sweptGains[address] = String(swept + gain)
                 }
                 if !receipt.succeeded {
-                    sweepProblem = "A sweep of \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
-                    pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
+                    if record.reason == .site {
+                        // The site's to answer for, so it doesn't hold up sweeps.
+                        sweepProblem = "A transaction for \(record.site ?? "a site") failed onchain. Nothing moved, but its gas was spent."
+                    } else {
+                        sweepProblem = "A sweep of \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
+                        pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
+                    }
                 }
                 try persist()
             } else if record.status == .dropped {

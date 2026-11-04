@@ -79,6 +79,8 @@ public protocol ChainClient: Sendable {
     func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64
     func send(_ transaction: SignedTransaction) async throws
     func receipt(of hash: String) async throws -> Receipt?
+    /// Passes a read a site asked for on to the node, with the node's own answer, including why a call reverted.
+    func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer
 }
 
 /// A JSON-RPC node, and every read of one tick in a single batch. It can lie about what it tells us, but all it can get out of
@@ -147,6 +149,26 @@ public struct RPCChainClient: ChainClient {
         // A node can say a transaction is in a block without having a block number for it yet, which isn't settled.
         guard let status = receipt["status"], let block = receipt["blockNumber"], !(block is NSNull) else { return nil }
         return Receipt(succeeded: try Self.quantity(status) == 1, blockNumber: UInt64(try Self.quantity(block)))
+    }
+
+    public func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(JSONValue.object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string(method), "params": parameters]))
+        let data: Data
+        do {
+            (data, _) = try await session.data(for: request)
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        } catch {
+            throw ChainError.unreachable
+        }
+        guard case .object(let answer)? = try? JSONDecoder().decode(JSONValue.self, from: data) else { throw ChainError.unreachable }
+        if case .object(let error)? = answer["error"] {
+            return .failure(SiteError(code: error["code"]?.integer ?? -32603, message: error["message"]?.string ?? "The node refused this.", data: error["data"]))
+        }
+        return .success(answer["result"] ?? .null)
     }
 
     private func call(_ to: EthereumAddress, _ data: [UInt8], at block: String) -> (String, [Any]) {
@@ -234,7 +256,7 @@ enum Oracle {
 }
 
 public enum Calldata {
-    private static func selector(_ signature: String) -> [UInt8] {
+    static func selector(_ signature: String) -> [UInt8] {
         Array(keccak256(Array(signature.utf8)).prefix(4))
     }
 

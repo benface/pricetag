@@ -36,6 +36,7 @@ actor FakeChain: ChainClient {
     var sendFailure: ChainError?
     var estimateFailure: ChainError?
     private(set) var sent: [SignedTransaction] = []
+    private(set) var reads: [String] = []
     /// Set after each send, to read what was on disk at that moment.
     var onSend: (@Sendable (SignedTransaction) -> Void)?
 
@@ -70,11 +71,17 @@ actor FakeChain: ChainClient {
     }
 
     func receipt(of hash: String) -> Receipt? { receipts[hash] }
+
+    func read(_ method: String, _ parameters: JSONValue) -> RPCAnswer {
+        reads.append(method)
+        return .success(.string("0xread"))
+    }
 }
 
 /// Remembers what it was asked to sign. It holds no key at all: the real vault has its own tests.
 actor FakeSigner: Signer {
     private(set) var signed: [UnsignedTransaction] = []
+    private(set) var signedMessages: [SignableMessage] = []
     private var keys: [EthereumAddress]
     private var unused: [EthereumAddress]
 
@@ -94,6 +101,12 @@ actor FakeSigner: Signer {
         signed.append(transaction)
         // Unique bytes for a unique hash. A node would reject this: the anvil test covers real signatures.
         return SignedTransaction(raw: transaction.signingPayload)
+    }
+
+    func sign(_ message: SignableMessage, from address: EthereumAddress) throws -> MessageSignature {
+        guard keys.contains(address) else { throw KeyVault.Failure.noSuchKey }
+        signedMessages.append(message)
+        return MessageSignature(r: [UInt8](repeating: 1, count: 32), s: [UInt8](repeating: 2, count: 32), v: 27)
     }
 
     func hasKey(_ address: EthereumAddress) -> Bool { keys.contains(address) }

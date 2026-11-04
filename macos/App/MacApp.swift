@@ -7,7 +7,9 @@ import SwiftUI
 struct MacApp: App {
     @State private var store: PortfolioStore
     @State private var hotWallet: HotWallet
-    @State private var navigation = Navigation()
+    @State private var navigation: Navigation
+    @State private var siteBridge: SiteBridge
+    @State private var bridgeServer: BridgeServer?
 
     init() {
         #if DEBUG
@@ -15,15 +17,37 @@ struct MacApp: App {
         #endif
         let store = PortfolioStore()
         let hotWallet = HotWalletFactory.make(store: store)
-        hotWallet.onLinkedWalletsChange = { store.setLinkedWallets($0) }
+        let navigation = Navigation()
+        let siteBridge = SiteBridge(wallet: hotWallet)
+        siteBridge.onTopUp = { navigation.wantsTopUp = true }
+        hotWallet.onLinkedWalletsChange = {
+            store.setLinkedWallets($0)
+            siteBridge.walletChanged()
+        }
         #if DEBUG
-        HotWalletDebug.applyLaunchArguments(to: hotWallet)
+        HotWalletDebug.applyLaunchArguments(to: hotWallet, bridge: siteBridge)
         #endif
+        _bridgeServer = State(initialValue: Self.startBridge(siteBridge))
         // Here and not in a view: the menu bar shows the total, and sweeps run, whether or not anything is open.
         hotWallet.start()
         store.start()
         _store = State(initialValue: store)
         _hotWallet = State(initialValue: hotWallet)
+        _navigation = State(initialValue: navigation)
+        _siteBridge = State(initialValue: siteBridge)
+    }
+
+    /// Only a provisioned build can open this, and only a provisioned build has a wallet to offer. The extension says the app isn't open otherwise.
+    private static func startBridge(_ bridge: SiteBridge) -> BridgeServer? {
+        guard let path = Bundle.main.bundleIdentifier.flatMap(BridgeEndpoint.socketPath) else { return nil }
+        let server = BridgeServer(bridge: bridge, path: path)
+        do {
+            try server.start()
+            return server
+        } catch {
+            FileHandle.standardError.write(Data("The browser extension can't reach this build: \(error)\n".utf8))
+            return nil
+        }
     }
 
     private var opensSpendingMoney: Bool {
@@ -34,11 +58,19 @@ struct MacApp: App {
         #endif
     }
 
+    private var opensAtLaunch: Bool {
+        #if DEBUG
+        !opensSpendingMoney && !HotWalletDebug.isQuiet
+        #else
+        true
+        #endif
+    }
+
     var body: some Scene {
         MenuBarExtra {
             PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)
         } label: {
-            MenuBarLabel(summary: FeedSummary(feed: store.feed, portfolio: store.portfolio), alarm: hotWallet.alarm)
+            MenuBarLabel(summary: FeedSummary(feed: store.feed, portfolio: store.portfolio), alarm: hotWallet.alarm, siteBridge: siteBridge, navigation: navigation)
         }
         .menuBarExtraStyle(.window)
 
@@ -49,7 +81,7 @@ struct MacApp: App {
         .defaultSize(width: 1120, height: 760)
         .windowToolbarStyle(.unified)
         // Opens at launch, because a full menu bar can hide the item, and launching should always show something.
-        .defaultLaunchBehavior(opensSpendingMoney ? .suppressed : .presented)
+        .defaultLaunchBehavior(opensAtLaunch ? .presented : .suppressed)
         .restorationBehavior(.disabled)
         .commands {
             CommandGroup(replacing: .newItem) {}
@@ -73,11 +105,19 @@ struct MacApp: App {
         }
 
         Window(HotWalletWording.title, id: WindowID.hotWallet) {
-            HotWalletWindow(wallet: hotWallet, store: store)
+            HotWalletWindow(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation)
                 .holdsDockPresence()
         }
         .defaultSize(width: 560, height: 720)
         .windowResizability(.contentMinSize)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
+        Window("Site Request", id: WindowID.siteApproval) {
+            SiteApprovalWindow(bridge: siteBridge)
+                .holdsDockPresence()
+        }
+        .windowResizability(.contentSize)
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
 
@@ -91,6 +131,7 @@ struct MacApp: App {
 enum WindowID {
     static let main = "main"
     static let hotWallet = "hot-wallet"
+    static let siteApproval = "site-approval"
 }
 
 private struct OpenHotWalletCommand: View {
@@ -108,7 +149,10 @@ private struct OpenHotWalletCommand: View {
 struct MenuBarLabel: View {
     let summary: FeedSummary
     let alarm: StolenKeyAlarm?
+    let siteBridge: SiteBridge
+    let navigation: Navigation
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
         label
@@ -124,6 +168,29 @@ struct MenuBarLabel: View {
                 openWindow(id: WindowID.hotWallet)
                 DockPresence.bringForward()
                 NSApp.requestUserAttention(.criticalRequest)
+            }
+            // Here for the same reason. A site asked for something, and it's the app's window that answers.
+            .onChange(of: siteBridge.current?.id) { _, id in
+                #if DEBUG
+                if HotWalletDebug.isQuiet { return }
+                #endif
+                if id == nil {
+                    dismissWindow(id: WindowID.siteApproval)
+                } else {
+                    openWindow(id: WindowID.siteApproval)
+                    DockPresence.bringForward()
+                }
+            }
+            .onChange(of: navigation.wantsTopUp) { _, wants in
+                guard wants else { return }
+                #if DEBUG
+                if HotWalletDebug.isQuiet {
+                    FileHandle.standardError.write(Data("TOP UP ASKED\n".utf8))
+                    return
+                }
+                #endif
+                openWindow(id: WindowID.hotWallet)
+                DockPresence.bringForward()
             }
     }
 

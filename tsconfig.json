@@ -8,11 +8,12 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
+    "allowJs": true,
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["packages", "src", "server", "test", "dataset", "scripts", "vite.config.ts"]
+  "include": ["packages", "src", "server", "test", "dataset", "scripts", "extension", "vite.config.ts"]
 }

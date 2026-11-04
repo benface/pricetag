@@ -1,0 +1,357 @@
+import Foundation
+import KeyVault
+import Observation
+
+/// One thing a site wants, waiting in the app for an answer. Nothing outside the app's own window can answer it: the bridge's
+/// wire protocol has no message for that, and pages only ever reach `handle`.
+public struct SiteApproval: Identifiable, Equatable, Sendable {
+    public enum Action: Equatable, Sendable {
+        case connect
+        case transaction(TransactionReview)
+        case message(MessageReview)
+    }
+
+    public let id: UUID
+    public let origin: String
+    public let action: Action
+    fileprivate let requester: Requester
+
+    public var warnings: [SiteWarning] {
+        switch action {
+        case .connect: []
+        case .transaction(let review): review.warnings
+        case .message(let review): review.warnings
+        }
+    }
+
+    public var needsAcknowledgment: Bool { warnings.contains(where: \.isStrong) }
+
+    /// Signing asks for Touch ID too, like every other time money can leave. Connecting only shows an address.
+    var presenceReason: String? {
+        switch action {
+        case .connect: nil
+        case .transaction: "send a transaction for \(origin)"
+        case .message: "sign a message for \(origin)"
+        }
+    }
+}
+
+/// Who to tell when a request goes away, so a closed tab takes its approval with it.
+struct Requester: Equatable, Hashable, Sendable {
+    let connection: UUID
+    let id: String
+}
+
+public struct SiteRequest: Sendable {
+    public let connection: UUID
+    public let id: String
+    public let origin: String
+    public let method: String
+    public let parameters: JSONValue?
+
+    public init(connection: UUID, id: String, origin: String, method: String, parameters: JSONValue?) {
+        self.connection = connection
+        self.id = id
+        self.origin = origin
+        self.method = method
+        self.parameters = parameters
+    }
+}
+
+/// All a site can ask of the hot wallet. It only ever sees the hot wallet: cold wallets aren't reachable from here at all.
+@MainActor
+@Observable
+public final class SiteBridge {
+    public private(set) var pending: [SiteApproval] = []
+    /// Tells every tab on an origin something changed: `accountsChanged` with its accounts.
+    @ObservationIgnored public var onAccountsChanged: ((_ origin: String, _ accounts: [String]) -> Void)?
+    @ObservationIgnored public var onTopUp: (() -> Void)?
+
+    public var current: SiteApproval? { pending.first }
+
+    private let wallet: HotWallet
+    private let now: @Sendable () -> Date
+    @ObservationIgnored private var waiting: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    @ObservationIgnored private var rejections: [String: [Date]] = [:]
+    @ObservationIgnored private var readsThisSecond: (second: Int, count: Int) = (0, 0)
+    @ObservationIgnored private var lastKnownAddress: EthereumAddress?
+    @ObservationIgnored private var lastKnownSites: [String] = []
+
+    static let maxPending = 8
+    static let maxPendingPerOrigin = 3
+    /// Rejecting this many times in `rejectionWindow` stops a site asking for a while, so it can't wear someone down until they click yes.
+    static let rejectionsBeforeCooldown = 3
+    static let rejectionWindow: TimeInterval = 60
+    /// Reads share the node with the wallet's own, and the public node allows 25 a second per IP.
+    static let readsPerSecond = 15
+
+    /// What a site can read from the node. Anything else that isn't handled here is refused, not passed along.
+    static let reads: Set<String> = [
+        "eth_blockNumber", "eth_call", "eth_estimateGas", "eth_feeHistory", "eth_gasPrice", "eth_getBalance", "eth_getBlockByHash",
+        "eth_getBlockByNumber", "eth_getCode", "eth_getLogs", "eth_getStorageAt", "eth_getTransactionByHash", "eth_getTransactionCount",
+        "eth_getTransactionReceipt", "eth_maxPriorityFeePerGas",
+    ]
+
+    static let baseChainHex = "0x2105"
+
+    public init(wallet: HotWallet, now: @escaping @Sendable () -> Date = { Date() }) {
+        self.wallet = wallet
+        self.now = now
+        lastKnownAddress = wallet.address
+        lastKnownSites = wallet.connectedSites
+    }
+
+    /// Answers one request. It can wait a long time, for as long as the user takes to decide.
+    public func handle(_ request: SiteRequest) async -> RPCAnswer {
+        guard Self.isAllowed(origin: request.origin) else { return .failure(.notConnected) }
+        switch request.method {
+        case "eth_chainId":
+            return .success(.string(Self.baseChainHex))
+        case "net_version":
+            return .success(.string(String(Base.chainID)))
+        case "eth_accounts":
+            return .success(accounts(for: request.origin))
+        case "eth_requestAccounts":
+            return await connect(request).map { _ in accounts(for: request.origin) }
+        case "wallet_requestPermissions":
+            return await connect(request).map { _ in permissions(for: request.origin) }
+        case "wallet_getPermissions":
+            return .success(permissions(for: request.origin))
+        case "wallet_revokePermissions":
+            disconnect(request.origin)
+            return .success(.null)
+        case "wallet_switchEthereumChain":
+            guard let chain = request.parameters?[0]?["chainId"]?.string, Self.isBase(chain) else { return .failure(.unknownChain) }
+            return .success(.null)
+        case "wallet_addEthereumChain":
+            guard let chain = request.parameters?[0]?["chainId"]?.string, Self.isBase(chain) else { return .failure(.unknownChain) }
+            return .success(.null)
+        case "eth_sendTransaction":
+            return await sendTransaction(request)
+        case "personal_sign":
+            return await signPersonal(request)
+        case "eth_signTypedData_v4":
+            return await signTyped(request)
+        case _ where Self.reads.contains(request.method):
+            return await read(request)
+        default:
+            // Including `eth_sign`, which signs a bare hash that could be anything at all, even a transaction.
+            return .failure(.unsupported(request.method))
+        }
+    }
+
+    // MARK: - Answers from the app's window
+
+    /// Doesn't answer until a strong warning has been acknowledged and Touch ID says yes. A cancelled prompt leaves it waiting.
+    public func approve(_ id: UUID, acknowledged: Bool = false) async {
+        guard let approval = pending.first(where: { $0.id == id }), !approval.needsAcknowledgment || acknowledged else { return }
+        if let reason = approval.presenceReason {
+            guard (try? await wallet.confirmPresence(reason: reason)) != nil else { return }
+        }
+        finish(id, approved: true)
+    }
+
+    public func reject(_ id: UUID) {
+        guard let approval = pending.first(where: { $0.id == id }) else { return }
+        rejections[approval.origin, default: []].append(now())
+        finish(id, approved: false)
+    }
+
+    public func rejectAll() {
+        for approval in pending { reject(approval.id) }
+    }
+
+    /// The site went away: its tab closed, or the browser quit.
+    public func cancel(connection: UUID, id: String) {
+        for approval in pending where approval.requester == Requester(connection: connection, id: id) {
+            finish(approval.id, approved: false)
+        }
+    }
+
+    public func cancelAll(connection: UUID) {
+        for approval in pending where approval.requester.connection == connection {
+            finish(approval.id, approved: false)
+        }
+    }
+
+    public func disconnect(_ origin: String) {
+        wallet.disconnectSite(origin)
+        onAccountsChanged?(origin, [])
+    }
+
+    /// The key changed, so sites connected to the old one are told they aren't anymore.
+    public func walletChanged() {
+        guard wallet.address != lastKnownAddress else { return }
+        lastKnownAddress = wallet.address
+        let sites = lastKnownSites
+        lastKnownSites = wallet.connectedSites
+        for origin in sites { onAccountsChanged?(origin, []) }
+    }
+
+    /// What the extension's own popup shows. Pages can't reach this: the extension only sends it from its popup.
+    public func popupStatus() -> JSONValue {
+        var status: [String: JSONValue] = ["appName": .string(SiteWording.appName), "canTopUp": .bool(wallet.canTopUp)]
+        if let problem = wallet.siteProblem { status["problem"] = .string(problem.message) }
+        if let address = wallet.address { status["address"] = .string(address.checksummed) }
+        if let plan = wallet.plan { status["value"] = .string(HotWalletWording.usd(plan.valueUsdMicros)) }
+        status["cap"] = .string(HotWalletWording.usd(wallet.settings.capUsdMicros))
+        status["sites"] = .number(Double(wallet.connectedSites.count))
+        return .object(status)
+    }
+
+    public func requestTopUp() {
+        onTopUp?()
+    }
+
+    // MARK: - Requests
+
+    private func accounts(for origin: String) -> JSONValue {
+        guard wallet.isConnected(origin), let address = wallet.address else { return .array([]) }
+        return .array([.string(address.lowercased)])
+    }
+
+    private func permissions(for origin: String) -> JSONValue {
+        guard wallet.isConnected(origin), let address = wallet.address else { return .array([]) }
+        let restriction: JSONValue = .object(["type": .string("restrictReturnedAccounts"), "value": .array([.string(address.lowercased)])])
+        return .array([.object(["parentCapability": .string("eth_accounts"), "invoker": .string(origin), "caveats": .array([restriction])])])
+    }
+
+    private func connect(_ request: SiteRequest) async -> RPCAnswer {
+        if let problem = wallet.siteProblem { return .failure(problem) }
+        if wallet.isConnected(request.origin) { return .success(.null) }
+        switch await ask(request, .connect) {
+        case .failure(let error): return .failure(error)
+        case .success: break
+        }
+        // It may have been replaced or stopped while this was open.
+        if let problem = wallet.siteProblem { return .failure(problem) }
+        wallet.connectSite(request.origin)
+        lastKnownSites = wallet.connectedSites
+        onAccountsChanged?(request.origin, wallet.address.map { [$0.lowercased] } ?? [])
+        return .success(.null)
+    }
+
+    private func sendTransaction(_ request: SiteRequest) async -> RPCAnswer {
+        if let problem = walletProblem(for: request.origin) { return .failure(problem) }
+        guard let address = wallet.address else { return .failure(.notConnected) }
+        let transaction: SiteTransaction
+        let quote: SiteQuote
+        do throws(SiteError) {
+            transaction = try SiteTransaction(request.parameters, from: address)
+        } catch {
+            return .failure(error)
+        }
+        do {
+            quote = try await wallet.quoteForSite(transaction)
+        } catch ChainError.rejected(let message) {
+            return .failure(SiteError(code: -32000, message: message))
+        } catch {
+            return .failure(SiteError(code: 4900, message: HotWalletWording.cantReachChain))
+        }
+        let review = TransactionReview(transaction, quote: quote)
+        if case .failure(let error) = await ask(request, .transaction(review)) { return .failure(error) }
+        if let problem = walletProblem(for: request.origin) { return .failure(problem) }
+        do {
+            return .success(.string(try await wallet.sendForSite(transaction, quote: quote, review: review, origin: request.origin)))
+        } catch ChainError.rejected(let message) {
+            return .failure(SiteError(code: -32000, message: message))
+        } catch {
+            return .failure(SiteError(code: 4900, message: HotWalletWording.cantReachChain))
+        }
+    }
+
+    private func signPersonal(_ request: SiteRequest) async -> RPCAnswer {
+        if let problem = walletProblem(for: request.origin) { return .failure(problem) }
+        guard let address = wallet.address else { return .failure(.notConnected) }
+        guard let messageText = request.parameters?[0]?.string, let signer = request.parameters?[1]?.string else { return .failure(.invalid("personal_sign needs a message and an address.")) }
+        guard EthereumAddress(signer) == address else { return .failure(.notConnected) }
+        let bytes: [UInt8]
+        if messageText.hasPrefix("0x") {
+            guard let decoded = Hex.decode(messageText) else { return .failure(.invalid("That message isn't hex.")) }
+            bytes = decoded
+        } else {
+            bytes = Array(messageText.utf8)
+        }
+        return await sign(request, MessageReview(personal: bytes, origin: request.origin))
+    }
+
+    private func signTyped(_ request: SiteRequest) async -> RPCAnswer {
+        if let problem = walletProblem(for: request.origin) { return .failure(problem) }
+        guard let address = wallet.address else { return .failure(.notConnected) }
+        guard let signer = request.parameters?[0]?.string, let payload = request.parameters?[1] else { return .failure(.invalid("eth_signTypedData_v4 needs an address and data.")) }
+        guard EthereumAddress(signer) == address else { return .failure(.notConnected) }
+        do throws(TypedData.Failure) {
+            let data = try TypedData(payload)
+            if let chain = try data.chainID, chain != Base.chainID { return .failure(.wrongChain) }
+            return await sign(request, try MessageReview(typed: data))
+        } catch {
+            guard case .malformed(let reason) = error else { return .failure(.invalid("That data can't be signed.")) }
+            return .failure(.invalid(reason))
+        }
+    }
+
+    private func sign(_ request: SiteRequest, _ review: MessageReview) async -> RPCAnswer {
+        if case .failure(let error) = await ask(request, .message(review)) { return .failure(error) }
+        if let problem = walletProblem(for: request.origin) { return .failure(problem) }
+        do {
+            return .success(.string(try await wallet.signForSite(review.signable).hex))
+        } catch {
+            return .failure(SiteError(code: -32603, message: "This couldn't be signed."))
+        }
+    }
+
+    private func read(_ request: SiteRequest) async -> RPCAnswer {
+        let second = Int(now().timeIntervalSince1970)
+        if readsThisSecond.second != second { readsThisSecond = (second, 0) }
+        guard readsThisSecond.count < Self.readsPerSecond else { return .failure(.readLimit) }
+        readsThisSecond.count += 1
+        do {
+            return try await wallet.readForSite(request.method, request.parameters ?? .array([]))
+        } catch let error as SiteError {
+            return .failure(error)
+        } catch {
+            return .failure(SiteError(code: 4900, message: HotWalletWording.cantReachChain))
+        }
+    }
+
+    private func walletProblem(for origin: String) -> SiteError? {
+        wallet.siteProblem ?? (wallet.isConnected(origin) ? nil : .notConnected)
+    }
+
+    private func ask(_ request: SiteRequest, _ action: SiteApproval.Action) async -> RPCAnswer {
+        recentRejections(of: request.origin)
+        if (rejections[request.origin]?.count ?? 0) >= Self.rejectionsBeforeCooldown { return .failure(.rejected) }
+        let fromThisOrigin = pending.filter { $0.origin == request.origin }
+        guard pending.count < Self.maxPending, fromThisOrigin.count < Self.maxPendingPerOrigin else { return .failure(.tooManyRequests) }
+        if action == .connect, fromThisOrigin.contains(where: { $0.action == .connect }) { return .failure(.tooManyRequests) }
+
+        let approval = SiteApproval(id: UUID(), origin: request.origin, action: action, requester: Requester(connection: request.connection, id: request.id))
+        pending.append(approval)
+        let approved = await withCheckedContinuation { waiting[approval.id] = $0 }
+        return approved ? .success(.null) : .failure(.rejected)
+    }
+
+    private func recentRejections(of origin: String) {
+        let cutoff = now().addingTimeInterval(-Self.rejectionWindow)
+        rejections[origin]?.removeAll { $0 < cutoff }
+    }
+
+    private func finish(_ id: UUID, approved: Bool) {
+        pending.removeAll { $0.id == id }
+        waiting.removeValue(forKey: id)?.resume(returning: approved)
+    }
+
+    /// `sender.origin` from the browser, never from the page. Plain HTTP can be changed by anyone on the network, so only this Mac may use it.
+    static func isAllowed(origin: String) -> Bool {
+        guard let parts = URLComponents(string: origin), let host = parts.host, !host.isEmpty, parts.path.isEmpty, parts.query == nil, parts.fragment == nil, parts.user == nil, parts.password == nil else { return false }
+        switch parts.scheme {
+        case "https": return true
+        case "http": return host == "localhost" || host == "127.0.0.1"
+        default: return false
+        }
+    }
+
+    private static func isBase(_ chain: String) -> Bool {
+        chain.lowercased() == baseChainHex
+    }
+}

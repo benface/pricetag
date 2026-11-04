@@ -32,7 +32,7 @@ app="$build/Build/Products/$configuration/$name.app"
 # Leaving out the base entitlements drops get-task-allow, so a debugger can't attach to a release build and read its memory.
 if build_app -allowProvisioningUpdates \
   APP_SIGN_STYLE=Automatic APP_TEAM="$team" APP_SIGN_IDENTITY="Apple Development" \
-  APP_ENTITLEMENTS=Config/HotWallet.entitlements \
+  APP_ENTITLEMENTS=Config/HotWallet.entitlements BRIDGE_ENTITLEMENTS=Config/BridgeHost.entitlements \
   APP_INJECT_BASE_ENTITLEMENTS="$([ "$configuration" = Release ] && echo NO || echo YES)"; then
   echo "Signed for team $team, so this build can hold a hot wallet."
 else
@@ -41,6 +41,9 @@ else
 fi
 
 [ "${1:-}" = "--build-only" ] && { echo "Built $app"; exit 0; }
+
+# So the browser extension can reach this build.
+"$here/install-bridge.sh" "$app"
 
 # The running copy may be an older build. Opening it while it's still quitting would do nothing.
 pkill -f "$app/Contents/MacOS/" 2>/dev/null || true

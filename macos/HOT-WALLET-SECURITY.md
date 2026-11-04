@@ -2,7 +2,7 @@
 
 The Mac app's hot wallet ("this device's spending money") is an unreviewed hackathon build. It's meant for small funds only, and it assumes it will get hacked: the cap is what makes the risk acceptable. This lists what it does, what's been checked and how, and what it doesn't protect against.
 
-To check it yourself: `pnpm check:mac` for the logic, `pnpm check:keychain` for the real Secure Enclave and Keychain, and `pnpm check:anvil` for real signing against a local fork of Base.
+To check it yourself: `pnpm check:mac` for the logic, `pnpm check:keychain` for the real Secure Enclave and Keychain, `pnpm check:anvil` for real signing against a local fork of Base, and `pnpm check:extension` for the browser extension on a real site, through to that fork.
 
 ## The key
 
@@ -19,7 +19,7 @@ To check it yourself: `pnpm check:mac` for the logic, `pnpm check:keychain` for 
 
 ## Touch ID
 
-Manual sends (Sweep Everything, Replace Key, Delete) ask for Touch ID, or the login password where there's none. Automatic sweeps don't, because they have to run with nobody there.
+Manual sends (Sweep Everything, Replace Key, Delete) and anything a site asks to send or sign ask for Touch ID, or the login password where there's none. Automatic sweeps don't, because they have to run with nobody there.
 
 - [ ] **It isn't enforced by the enclave.** The same wrapping key has to open with no prompt for sweeps, so the prompt lives in the app. It stops someone at an unlocked Mac, not malware running as this user.
 
@@ -32,6 +32,30 @@ Manual sends (Sweep Everything, Replace Key, Delete) ask for Touch ID, or the lo
 - [x] A cold wallet's address must be confirmed by the user against the device's screen. The app has no device code, so it can't check that itself. It does check the EIP-55 checksum, and refuses this wallet's own address, retired keys and zero.
 - [ ] **Savings wallets aren't locked down.** Malware running as this user could edit the settings to add its own address, then wait for a sweep. Protecting that needs a contract account (WORK-332).
 - [ ] **Sweeps need the app running.** Nothing runs while it's closed. A plain address can't enforce a cap onchain: it's a trigger for sweeping, not a limit.
+
+## Sites
+
+A browser extension lets websites use this wallet. A site can do real damage with one bad approval, up to what's on this wallet. That's what the cap is for, and it's why this assumes the page and the extension can't be trusted.
+
+- [x] The extension never sees a key, and doesn't log or store anything. It runs as it's committed, with no build step and no dependencies, and asks only for `nativeMessaging`.
+- [x] Approvals only appear in the app's own window, showing the site and what's being signed. The wire protocol has no message for answering one, and a test sends the attempts anyone would try.
+- [x] Rejecting is the default: Return, Esc and closing the window all reject. Approve can't be pressed for the first second, so a window opening under the pointer can't catch a click, and it has no keyboard shortcut.
+- [x] Sending and signing also ask for Touch ID. A refused prompt leaves the request waiting, and signs nothing.
+- [x] The origin comes from the browser (`sender.origin`), not the page, and is checked again in the app. Only top-level pages on HTTPS or this Mac can ask: no iframes, and no plain HTTP that anyone on the network could change.
+- [x] Only the hot wallet is ever exposed. Nothing in the bridge can read a cold wallet, and a request naming any other address is refused.
+- [x] Only Base. Other chains are refused for switching, sending and typed data, and what's signed always carries chain ID 8453. A signature with no chain in its data gets a strong warning.
+- [x] `eth_sign` is refused outright, and the vault has no way to sign a bare hash: every message's digest starts with 0x19, which can't begin a transaction. So is anything else not on a short list, including EIP-7702 authorizations and contract creation.
+- [x] Unlimited token approvals, approve-for-all, typed-data permits and orders, unreadable messages, and sign-ins for a different site all get a strong warning, and approving takes ticking that you understand. It looks for what these have in common, so a contract call it can't read just says it can't read it.
+- [x] The site doesn't choose the fee, gas or nonce. The gas that's shown is what's signed, and if fees more than double after approving, nothing's signed.
+- [x] Each transaction is on disk before it's broadcast, so the stolen key alarm knows it. While an alarm is up or a key is being replaced, sites can't sign or connect.
+- [x] A connection belongs to one key, and goes away when the key does. They're listed in the wallet's window, and can be disconnected there.
+- [x] A site can only have 3 things waiting, and 3 rejections in a minute stops it asking for a while, so it can't wear someone down. Its reads are limited too, so it can't use up the wallet's share of the node.
+- [x] Only this extension's ID can start the host (`allowed_origins`). The host is a separate program that only relays bytes, with no Keychain access and no key code in it. The ID comes from a public key in `extension/manifest.json`. Its private half was thrown away, since a local unpacked extension doesn't need one.
+- [ ] **Malware running as this user can fake a site.** It can start the host itself and claim any origin, so the window would show the wrong one. It would still need someone to approve it, and it could reach the key anyway. See the enclave's limits above.
+- [ ] **Someone can load another extension with this ID,** because the manifest's public key is what sets it. That takes Developer mode on this Mac, and it gets what this one gets: it can ask, not approve.
+- [ ] **A contract call can do anything.** A swap's calldata isn't decoded, so nothing here tells a good router from a drainer. The warnings only cover what can be recognized. Simulating is left for WORK-337.
+- [ ] **What's in a token approval can outlast it.** Disconnecting a site doesn't undo approvals it was given. Replacing the key does.
+- [ ] **An approved site can still ask to be trusted.** The origin says who's asking. It can't say a site hasn't been hacked.
 
 ## The node
 
@@ -83,6 +107,8 @@ The RPC is configurable and untrusted.
 
 These need a person at the Mac:
 
-- [ ] The Touch ID prompt itself, on Sweep Everything and Replace Key. The logic around it is tested with a stand-in.
+- [ ] The Touch ID prompt itself, on Sweep Everything, Replace Key and site requests. The logic around it is tested with a stand-in.
+- [ ] The approval window with a person at it. `pnpm check:extension` answers it through a debug build's stand-in, which a release build doesn't have.
+- [ ] A site with real funds on a real browser.
 - [ ] Reading an address on a real Ledger or Keystone screen.
 - [ ] Anything with real funds. All sends so far have been on a local fork. Start with a dollar or two.
