@@ -51,5 +51,8 @@ export function normalizeAddress(address: string): string {
   return hex.startsWith("0x") ? hex : `0x${hex}`
 }
 
+/** The positions tokens fold into, which is what balances are read and compared by. */
+export const ASSETS: readonly string[] = [...new Set(TOKENS.map((t) => t.asset))]
+
 /** The tokens the dataset's `legs` table keeps, excluding native ETH, which has no contract. */
 export const ERC20_ADDRESSES = TOKENS.filter((t) => t.address !== ETH_ADDRESS).map((t) => t.address)

@@ -69,6 +69,9 @@ public struct PnlCaveats: View {
             if !portfolio.gasUnknownTxs.isEmpty {
                 WarningText(Wording.gasUnknown(portfolio.gasUnknownTxs.count))
             }
+            if !portfolio.l1FeeUnknownTxs.isEmpty {
+                WarningText(Wording.networkFeeUnknown(portfolio.l1FeeUnknownTxs.count))
+            }
             ForEach(Wording.missingRates(portfolio), id: \.self) { line in
                 WarningText(line)
             }

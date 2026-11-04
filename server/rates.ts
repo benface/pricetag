@@ -17,7 +17,7 @@ export function createRates(readRounds: RoundReader) {
     const known = settled.get(currency) ?? new Map<number, RateRound>()
     settled.set(currency, known)
     const head = wallet.latest.blockNum
-    const blocks = [...new Set(wallet.legs.map((leg) => leg.blockNum))]
+    const blocks = [...new Set(wallet.legs.filter((leg) => !leg.opening).map((leg) => leg.blockNum))]
     const current = newest.get(currency)
     const wanted = blocks.filter((block) => !known.has(block))
     if (current?.blockNum !== head) wanted.push(head)

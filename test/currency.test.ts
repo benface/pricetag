@@ -7,7 +7,9 @@ import { CURRENCIES, viewWallet, type Rates } from "../src/core/currency.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { formatMoney, formatPrice, formatRate, formatSignedMoney } from "../src/core/format.ts"
 import type { PricedLeg } from "../src/core/legs.ts"
-import { foldPositions, sumTotals } from "../src/core/portfolio.ts"
+import { describeConversion, describeEffect, explainContext, explainTarget, type ExplainTarget } from "../src/core/explain.ts"
+import { foldPositions, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect } from "../src/core/portfolio.ts"
+import { openingLegs } from "../src/core/reconcile.ts"
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
 import { createRates } from "../server/rates.ts"
@@ -61,6 +63,12 @@ const walletWith = (changes: Partial<WalletResponse>): WalletResponse => ({
   references: [],
   prices: { ETH: { micros: "3000000000", source: "oracle", blockNum: HEAD } },
   latest: { blockNum: HEAD, timestamp: time(HEAD) },
+  // What the legs add up to, so these are about currency and not about reconciling.
+  balances: { blockNum: HEAD, amounts: { ETH: (E18 / 2n).toString() } },
+  openingUnread: [],
+  unreadBalances: [],
+  lastBalances: {},
+  l1FeeUnknownTxs: [],
   currency: "CAD",
   rates: RATES,
   ...changes,
@@ -233,9 +241,82 @@ describe("explaining a converted number", () => {
     assert.equal(explanation?.value, "+$350.00", "half the ETH is still held with no mark at this block, so this is only what's known")
     assert.match(explanation?.lines[0] ?? "", /Leaves out 1 unknown amount/)
     const closed = leg({ id: "all", blockNum: SELL_BLOCK, delta: `-${E18}`, priceMicros: "2000000000", proceedsMicros: "2000000000" })
-    const both = explainPortfolio(walletWith({ legs: [buy, closed] }), "average", { kind: "tx", txHash: "0xall" })
+    const both = explainPortfolio(walletWith({ legs: [buy, closed], balances: { blockNum: HEAD, amounts: { ETH: "0" } } }), "average", { kind: "tx", txHash: "0xall" })
     assert.equal(both?.value, "+$700.00")
     assert.equal(both?.sourceValue, "$0.00 USD")
+  })
+})
+
+describe("what's open when the currency changes", () => {
+  const closed = leg({ id: "all", blockNum: SELL_BLOCK, delta: `-${E18}`, priceMicros: "2000000000", proceedsMicros: "2000000000" })
+  const closedWallet = (changes: Partial<WalletResponse>) => walletWith({ legs: [buy, closed], balances: { blockNum: HEAD, amounts: { ETH: "0" } }, ...changes })
+  const explainIn = (wallet: WalletResponse, target: ExplainTarget) => {
+    const view = viewWallet(wallet)
+    const positions = foldPositions(view.legs, "average", view.prices, wallet)
+    const unread = unreadAssets(positions, wallet)
+    const totals = sumTotals(positions, unread)
+    const points = pnlOverTime(view.legs, "average", view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread))
+    return explainTarget(target, { positions, totals, points }, explainContext(wallet, view, "average"))
+  }
+  const USD = closedWallet({ currency: "USD", rates: null })
+  const CAD = closedWallet({})
+  const cases: [string, ExplainTarget, cad: string, usd: string][] = [
+    ["a total", { kind: "total", metric: "realized" }, "+$700.00", "$0.00"],
+    ["an asset", { kind: "asset", asset: "ETH", metric: "realized" }, "+$700.00", "$0.00"],
+    ["a transaction on the chart", { kind: "tx", txHash: "0xall" }, "+$700.00", "$0.00"],
+  ]
+
+  for (const [name, target, cad, usd] of cases) {
+    it(`gives the same target for ${name} the new numbers, going to CAD`, () => {
+      const before = explainIn(USD, target)
+      assert.equal(before?.value, usd)
+      assert.equal(before?.currency, "USD")
+      assert.equal(before?.sourceValue, null)
+      const after = explainIn(CAD, target)
+      assert.equal(after?.value, cad)
+      assert.equal(after?.currency, "CAD")
+      assert.equal(after?.sourceValue, `${usd} USD`)
+    })
+
+    it(`gives the same target for ${name} the new numbers, going to USD`, () => {
+      assert.equal(explainIn(CAD, target)?.value, cad)
+      const after = explainIn(USD, target)
+      assert.equal(after?.value, usd)
+      assert.equal(after?.currency, "USD")
+      assert.ok(after?.lines.every((line) => !line.includes("Chainlink")))
+    })
+  }
+
+  it("carries the currency its legs are in, so they can't be printed in another", () => {
+    const [newest] = explainIn(CAD, { kind: "total", metric: "pnl" })?.effects ?? []
+    assert.equal(newest?.leg.conversion?.rateMicros, "1600000")
+    assert.equal(describeEffect(newest as LegEffect, "CAD"), "Sold for $3,200.00, realized +$700.00")
+  })
+
+  it("has nothing to say about an asset or transaction that's gone", () => {
+    assert.equal(explainIn(CAD, { kind: "asset", asset: "AERO", metric: "value" }), null)
+    assert.equal(explainIn(CAD, { kind: "tx", txHash: "0xgone" }), null)
+  })
+})
+
+describe("what a wallet already held", () => {
+  const opening = openingLegs({ blockNum: BUY_BLOCK - 1, amounts: { ETH: E18.toString() } }, time(BUY_BLOCK - 1))
+
+  it("has nothing to convert, so it isn't a missing rate", () => {
+    const { view } = foldOf(walletWith({ legs: [...opening, buy], rates: RATES }))
+    assert.deepEqual(view.missingRateTxs, [])
+    assert.equal(view.legs[0]?.conversion, undefined)
+    assert.equal(describeConversion(view.legs[0] as PricedLeg, "CAD"), null)
+  })
+
+  it("needs no rate read", async () => {
+    const asked: number[][] = []
+    const read: RoundReader = async (_feed, blocks) => {
+      asked.push([...blocks])
+      return new Map()
+    }
+    await createRates(read)("CAD", { legs: [...opening, buy], latest: { blockNum: HEAD, timestamp: time(HEAD) } })
+    assert.deepEqual(asked, [[BUY_BLOCK, HEAD]])
   })
 })
 

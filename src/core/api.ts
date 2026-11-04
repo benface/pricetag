@@ -5,6 +5,7 @@ import type { CurrencyCode, Rates } from "./currency.ts"
 import type { Method, PositionValues } from "./fold.ts"
 import type { PricedLeg, ReferenceRow } from "./legs.ts"
 import type { LatestPrice, LatestPrices, PnlPoint, Totals } from "./portfolio.ts"
+import type { BalanceSnapshot, Reconciliation } from "./reconcile.ts"
 
 export type Mode = "demo" | "raw" | "dataset"
 
@@ -14,7 +15,7 @@ export type WalletResponse = {
   address: string
   mode: Mode
   /**
-   * The blocks read. Anything before `fromBlock` isn't seen, so balances are only what moved since then.
+   * The blocks read. What the wallet held before `fromBlock` comes from the chain, as opening legs with an unknown cost.
    * `toBlock` can be behind `latest` while a derived table catches up, and is below `fromBlock` until it starts.
    */
   coverage: { fromBlock: number; toBlock: number }
@@ -28,6 +29,16 @@ export type WalletResponse = {
   currency: CurrencyCode
   /** Null for USD. */
   rates: Rates | null
+  /** Transactions this wallet sent whose L1 fee couldn't be read yet. */
+  l1FeeUnknownTxs: string[]
+  /** Onchain balances at `coverage.toBlock`, as read. An asset missing from them is in `unreadBalances`. Null when the whole read failed. */
+  balances: BalanceSnapshot | null
+  /** Assets whose balance before `fromBlock` couldn't be read, so they can't be compared yet. */
+  openingUnread: string[]
+  /** The last balance read for each asset in `unreadBalances` that has one. */
+  lastBalances: Record<string, { blockNum: number; amount: string }>
+  /** Assets with no balance read at `coverage.toBlock`, which isn't the same as holding none. Empty until reads start. */
+  unreadBalances: string[]
 }
 
 export type PortfolioPosition = {
@@ -41,6 +52,7 @@ export type PortfolioPosition = {
   pnlMicros: string | null
   shortfallQty: string
   legCount: number
+  reconciliation: Reconciliation | null
 }
 
 /**
@@ -74,6 +86,10 @@ export type PortfolioResponse = {
   /** Whether what's read has reached the chain. `behindBlocks` is 0 until it's far enough behind to say so. */
   progress: { started: boolean; behindBlocks: number }
   gasUnknownTxs: string[]
+  l1FeeUnknownTxs: string[]
+  openingUnread: string[]
+  /** Assets with no position because nothing could be read about them, which isn't the same as holding none. */
+  unreadAssets: string[]
   positions: PortfolioPosition[]
   totals: Totals
   pnlStatus: PnlStatus
@@ -106,6 +122,8 @@ export type ExplanationLeg = {
   blockNum: number
   timestamp: string
   txHash: string
+  /** What the wallet already held before the first block read. It isn't a transaction, so `txHash` is empty. */
+  opening: boolean
   /** What this leg did to its position, in words. */
   effect: string
   /** The rows this leg nets together, in words, or null when it's just one. */

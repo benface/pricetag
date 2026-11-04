@@ -23,8 +23,8 @@ function LegRow({ effect, currency }: { effect: LegEffect; currency: CurrencyCod
         </span>
       </div>
       <div className="leg-tags">
-        <span className="tag">{leg.kind}</span>
-        {leg.priceMicros !== null && leg.priceSource ? (
+        <span className="tag">{leg.opening ? "opening balance" : leg.kind}</span>
+        {leg.opening ? null : leg.priceMicros !== null && leg.priceSource ? (
           <span className="tag">
             {formatPrice(leg.priceMicros, currency)} · {leg.priceSource}
           </span>
@@ -37,14 +37,16 @@ function LegRow({ effect, currency }: { effect: LegEffect; currency: CurrencyCod
       {leg.priceNote ? <p className="small muted">{leg.priceNote}</p> : null}
       {netting ? <p className="small muted">{netting}</p> : null}
       {conversion ? <p className="small muted">{conversion}</p> : null}
-      <a className="small" href={`https://basescan.org/tx/${leg.txHash}`} target="_blank" rel="noreferrer noopener">
-        {shortHash(leg.txHash)} on Basescan ↗
-      </a>
+      {leg.opening ? null : (
+        <a className="small" href={`https://basescan.org/tx/${leg.txHash}`} target="_blank" rel="noreferrer noopener">
+          {shortHash(leg.txHash)} on Basescan ↗
+        </a>
+      )}
     </li>
   )
 }
 
-export function ExplainPanel({ explanation, currency, onClose }: { explanation: Explanation; currency: CurrencyCode; onClose: () => void }) {
+export function ExplainPanel({ explanation, onClose }: { explanation: Explanation; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const close = useRef<HTMLButtonElement>(null)
 
@@ -95,7 +97,7 @@ export function ExplainPanel({ explanation, currency, onClose }: { explanation: 
         </h3>
         <ul className="legs">
           {explanation.effects.slice(0, MAX_LEGS_SHOWN).map((effect) => (
-            <LegRow key={effect.leg.id} effect={effect} currency={currency} />
+            <LegRow key={effect.leg.id} effect={effect} currency={explanation.currency} />
           ))}
         </ul>
       </div>

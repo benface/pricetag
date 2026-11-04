@@ -85,7 +85,8 @@ export type WalletView = {
   missingRateTxs: string[]
 }
 
-function usdMarkPrice(wallet: Pick<WalletResponse, "references">): MarkPrice {
+/** Each block's oracle prices, as they are. */
+export function usdMarkPrice(wallet: Pick<WalletResponse, "references">): MarkPrice {
   const refs = new Map(wallet.references.map((r) => [r.block_num, r]))
   return (blockNum, asset) => {
     const ref = refs.get(blockNum)
@@ -109,9 +110,11 @@ export function viewWallet(wallet: WalletResponse): WalletView {
   const legs = wallet.legs.map((leg): PricedLeg => {
     const answer = usableAnswer(rates.byBlock[leg.blockNum], leg.timestamp)
     answers.set(leg.blockNum, answer)
+    // Nothing to convert, like what a wallet already held at an unknown cost, so there's no rate to speak of.
+    if (leg.priceMicros === null && leg.costMicros === null && leg.proceedsMicros === null) return leg
     const usd = { priceUsdMicros: leg.priceMicros, costUsdMicros: leg.costMicros, proceedsUsdMicros: leg.proceedsMicros }
     if (answer === null) {
-      if (leg.priceMicros !== null || leg.costMicros !== null || leg.proceedsMicros !== null) missingRateTxs.add(leg.txHash)
+      missingRateTxs.add(leg.txHash)
       return { ...leg, priceMicros: null, priceSource: null, costMicros: null, proceedsMicros: null, costLabel: "unknown", conversion: { ...usd, rateMicros: null } }
     }
     return {

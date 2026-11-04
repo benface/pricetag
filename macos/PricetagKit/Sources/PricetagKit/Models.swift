@@ -55,6 +55,26 @@ public struct PositionValues: Codable, Sendable, Equatable {
     public let unrealizedMicros: String?
 }
 
+/// How a position's activity compares with what the chain says it holds, at the same block.
+public struct Reconciliation: Codable, Sendable, Equatable {
+    public enum Status: String, Codable, Sendable {
+        /// They match, to the smallest unit.
+        case reconciled
+        /// They don't, so the amount and value come from the chain, and PnL is unavailable.
+        case incomplete
+        /// A read failed or hasn't finished. PnL is unavailable until it works.
+        case unchecked
+    }
+
+    public let status: Status
+    public let blockNum: Int?
+    public let computedQty: String?
+    public let actualQty: String?
+    /// Actual minus computed.
+    public let differenceQty: String?
+    public let reason: String?
+}
+
 public struct Position: Codable, Sendable, Equatable, Identifiable {
     public let asset: String
     public let decimals: Int
@@ -64,11 +84,14 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public let pnlMicros: String?
     public let shortfallQty: String
     public let legCount: Int
+    public let reconciliation: Reconciliation?
 
     public var id: String { asset }
     public var isHeld: Bool { isPositive(values.qty) }
     public var hasShortfall: Bool { isPositive(shortfallQty) }
     public var hasUnknownCost: Bool { isPositive(values.unknownCostQty) }
+    public var isReconciled: Bool { reconciliation?.status == .reconciled }
+    public var isIncomplete: Bool { reconciliation?.status == .incomplete }
 }
 
 public struct Exclusion: Codable, Sendable, Equatable {
@@ -154,13 +177,19 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let latest: Head
     public let progress: ReadProgress
     public let gasUnknownTxs: [String]
+    public let l1FeeUnknownTxs: [String]
+    /// Assets whose balance before the first block couldn't be read yet.
+    public let openingUnread: [String]
+    /// Assets with no position because nothing could be read about them, which isn't the same as holding none.
+    public let unreadAssets: [String]
     public let positions: [Position]
     public let totals: Totals
     public let pnlStatus: PnlStatus
     public let points: [PnlPoint]
 
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
-    public var isEmpty: Bool { positions.isEmpty }
+    /// A balance that couldn't be read doesn't count as nothing.
+    public var isEmpty: Bool { positions.isEmpty && unreadAssets.isEmpty }
     public var hasChartableData: Bool { points.contains { $0.pnlMicros != nil } }
     /// Every point with a transaction behind it, newest first.
     public var transactions: [PnlPoint] { points.filter { $0.txHash != nil }.reversed() }
@@ -179,6 +208,8 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let blockNum: Int
     public let timestamp: String
     public let txHash: String
+    /// What the wallet already held before the first block read, which isn't a transaction.
+    public let opening: Bool
     public let effect: String
     public let netting: String?
     /// What this leg was in USD and the rate that converted it, in words. nil when it's in USD.
@@ -186,7 +217,7 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
 
     public var isIncoming: Bool { !delta.hasPrefix("-") }
     public var date: Date? { parseTimestamp(timestamp) }
-    public var transactionURL: URL? { URL(string: "https://basescan.org/tx/\(txHash)") }
+    public var transactionURL: URL? { opening ? nil : URL(string: "https://basescan.org/tx/\(txHash)") }
 }
 
 public struct Explanation: Codable, Sendable, Equatable {
@@ -205,7 +236,7 @@ public enum TotalMetric: String, Sendable, Hashable, CaseIterable {
 }
 
 public enum AssetMetric: String, Sendable, Hashable, CaseIterable {
-    case amount, average, value, realized, unrealized
+    case amount, average, value, realized, unrealized, onchain
 }
 
 /// A number someone clicked, to read what's behind it.

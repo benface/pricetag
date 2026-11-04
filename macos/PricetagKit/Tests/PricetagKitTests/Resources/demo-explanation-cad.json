@@ -22,6 +22,7 @@
       "blockNum": 53502400,
       "timestamp": "2026-11-04T09:20:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
+      "opening": false,
       "effect": "Sold for $618.01, realized +$107.21",
       "netting": null,
       "conversion": "In USD: $1.50 each, $449.91 received. 1 USD = $1.3736 CAD at this block, from Chainlink's CAD / USD price on Base."
@@ -39,6 +40,7 @@
       "blockNum": 53500900,
       "timestamp": "2026-11-04T08:30:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
+      "opening": false,
       "effect": "Adds 800 AERO for $1,362.13",
       "netting": null,
       "conversion": "In USD: $1.25 each, $999.80 paid. 1 USD = $1.3624 CAD at this block, from Chainlink's CAD / USD price on Base."

@@ -3,21 +3,16 @@
 
 import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PnlStatus, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
 import { viewWallet, type CurrencyCode, type WalletView } from "../src/core/currency.ts"
-import { describeConversion, describeEffect, describeNetting, explainContext, explainMetric, explainPoint, explainTotal, rateSource, type Explanation, type Metric, type TotalMetric } from "../src/core/explain.ts"
+import { describeConversion, describeEffect, describeNetting, explainContext, explainTarget, rateSource, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
 import type { Method } from "../src/core/fold.ts"
-import { foldPositions, pnlOverTime, sumTotals, type LegEffect, type Position, type Totals } from "../src/core/portfolio.ts"
+import { foldPositions, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Position, type Totals } from "../src/core/portfolio.ts"
 import { TOKENS } from "../src/core/tokens.ts"
 
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS = 200
 
-const ASSET_METRICS: readonly string[] = ["amount", "average", "value", "realized", "unrealized"] satisfies Metric[]
+const ASSET_METRICS: readonly string[] = ["amount", "average", "value", "realized", "unrealized", "onchain"] satisfies Metric[]
 const TOTAL_METRICS: readonly string[] = ["pnl", "value", "realized", "unrealized", "gas"] satisfies TotalMetric[]
-
-export type ExplainTarget =
-  | { kind: "total"; metric: TotalMetric }
-  | { kind: "asset"; asset: string; metric: Metric }
-  | { kind: "tx"; txHash: string }
 
 export function parseExplainTarget(params: URLSearchParams): ExplainTarget | null {
   const tx = params.get("tx")
@@ -28,7 +23,7 @@ export function parseExplainTarget(params: URLSearchParams): ExplainTarget | nul
   return TOTAL_METRICS.includes(metric) ? { kind: "total", metric: metric as TotalMetric } : null
 }
 
-function positionOf({ asset, decimals, price, values, state, effects }: Position): PortfolioPosition {
+function positionOf({ asset, decimals, price, values, state, effects, reconciliation }: Position): PortfolioPosition {
   const held = BigInt(values.qty) > 0n
   const { realizedMicros: realized, unrealizedMicros: unrealized } = values
   const pnl = (() => {
@@ -37,7 +32,7 @@ function positionOf({ asset, decimals, price, values, state, effects }: Position
     if (!held) return realized
     return unrealized === null ? null : (BigInt(realized) + BigInt(unrealized)).toString()
   })()
-  return { asset, decimals, note: asset === "ETH" ? "incl. WETH" : null, price, values, pnlMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length }
+  return { asset, decimals, note: asset === "ETH" ? "incl. WETH" : null, price, values, pnlMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length, reconciliation }
 }
 
 function pnlStatusOf(totals: Totals, gasUnknownTxs: readonly string[]): PnlStatus {
@@ -52,8 +47,9 @@ function exchangeOf(view: WalletView): PortfolioExchange | null {
 
 export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioResponse {
   const view = viewWallet(wallet)
-  const positions = foldPositions(view.legs, method, view.prices)
-  const totals = sumTotals(positions)
+  const positions = foldPositions(view.legs, method, view.prices, wallet)
+  const unread = unreadAssets(positions, wallet)
+  const totals = sumTotals(positions, unread)
   return {
     address: wallet.address,
     mode: wallet.mode,
@@ -66,10 +62,13 @@ export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioRe
     latest: wallet.latest,
     progress: { started: hasStarted(wallet), behindBlocks: isBehind(wallet) ? wallet.latest.blockNum - wallet.coverage.toBlock : 0 },
     gasUnknownTxs: wallet.gasUnknownTxs,
+    l1FeeUnknownTxs: wallet.l1FeeUnknownTxs,
+    openingUnread: wallet.openingUnread,
+    unreadAssets: unread,
     positions: positions.map(positionOf),
     totals,
     pnlStatus: pnlStatusOf(totals, wallet.gasUnknownTxs),
-    points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest),
+    points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread)),
   }
 }
 
@@ -88,6 +87,7 @@ function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg {
     blockNum: leg.blockNum,
     timestamp: leg.timestamp,
     txHash: leg.txHash,
+    opening: leg.opening === true,
     effect: describeEffect(effect, currency),
     netting: describeNetting(leg),
     conversion: describeConversion(leg, currency),
@@ -97,25 +97,19 @@ function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg {
 /** The same explanation the web panel shows for a click on this number. null when the wallet has no such asset or transaction. */
 export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget): ExplanationResponse | null {
   const view = viewWallet(wallet)
-  const positions = foldPositions(view.legs, method, view.prices)
-  const context = explainContext(wallet, view, method)
-  const explanation = ((): Explanation | null => {
-    if (target.kind === "total") return explainTotal(positions, sumTotals(positions), target.metric, context)
-    if (target.kind === "asset") {
-      const position = positions.find((p) => p.asset === target.asset)
-      return position ? explainMetric(position, target.metric, context) : null
-    }
-    const point = pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest).find((p) => p.txHash === target.txHash)
-    return point ? explainPoint(positions, point, context) : null
-  })()
+  const positions = foldPositions(view.legs, method, view.prices, wallet)
+  const unread = unreadAssets(positions, wallet)
+  const totals = sumTotals(positions, unread)
+  const points = pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread))
+  const explanation = explainTarget(target, { positions, totals, points }, explainContext(wallet, view, method))
   if (!explanation) return null
   return {
-    currency: view.currency,
+    currency: explanation.currency,
     title: explanation.title,
     value: explanation.value,
     sourceValue: explanation.sourceValue,
     lines: explanation.lines,
     legCount: explanation.effects.length,
-    legs: explanation.effects.slice(0, MAX_LEGS).map((effect) => legOf(effect, view.currency)),
+    legs: explanation.effects.slice(0, MAX_LEGS).map((effect) => legOf(effect, explanation.currency)),
   }
 }

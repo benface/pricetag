@@ -9,6 +9,7 @@ import type { Method } from "../src/core/fold.ts"
 import { createQuery, describeError } from "./amp.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
 import { createRates } from "./rates.ts"
+import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
 import { datasetSource, feedRounds, rawSource, type Source } from "./source.ts"
 import { createWallets } from "./wallets.ts"
 
@@ -35,7 +36,7 @@ function createSource(env: Env): { source: Source; readRates: ReturnType<typeof 
   if (env.PRICETAG_DATASET) {
     const startBlock = Number(env.PRICETAG_START_BLOCK)
     if (!Number.isSafeInteger(startBlock) || startBlock <= 0) throw new Error("PRICETAG_DATASET needs PRICETAG_START_BLOCK")
-    return { source: datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock }), readRates }
+    return { source: datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates }
   }
   const historyBlocks = Number(env.PRICETAG_HISTORY_BLOCKS || 1800)
   if (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
@@ -103,7 +104,7 @@ export function createApi(env: Env) {
     polling = false
   }
 
-  const wallets = source ? createWallets(source, pollHead) : null
+  const wallets = source ? createWallets(source, pollHead, createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL)) : null
 
   /**
    * Reads a wallet, or answers the request with why it can't.
