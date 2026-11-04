@@ -241,6 +241,58 @@ public struct Explanation: Codable, Sendable, Equatable {
     public let legs: [ExplanationLeg]
 }
 
+/// A dataset behind a number. `hash` is nil when it couldn't be read, and it's never guessed.
+public struct ProofDataset: Codable, Sendable, Equatable, Identifiable {
+    public let title: String
+    public let name: String
+    public let hash: String?
+
+    public var id: String { name }
+}
+
+public struct ProofLink: Codable, Sendable, Equatable, Identifiable {
+    public let title: String
+    public let url: String
+
+    public var id: String { url }
+    public var destination: URL? { URL(string: url) }
+}
+
+/// What's behind one row's price, in the server's words.
+public struct Proof: Codable, Sendable, Equatable {
+    public let blockNum: Int
+    public let txHash: String
+    public let source: [String]
+    public let movements: [String]
+    public let links: [ProofLink]
+    public let datasets: [ProofDataset]
+    /// What checking the block does and doesn't show for this row.
+    public let scope: [String]
+    /// Why the block can't be checked. nil when it can.
+    public let unavailable: String?
+}
+
+public enum CheckStatus: String, Codable, Sendable {
+    case passed, failed, unchecked
+}
+
+public struct ProofCheck: Codable, Sendable, Equatable, Identifiable {
+    public let title: String
+    public let status: CheckStatus
+    public let detail: String
+
+    public var id: String { title }
+}
+
+/// The block's commitments recomputed from what Amp stored. `status` is the worst of `checks`.
+public struct Verification: Codable, Sendable, Equatable {
+    public let blockNum: Int
+    public let blockHash: String
+    public let status: CheckStatus
+    public let summary: String
+    public let checks: [ProofCheck]
+}
+
 public enum TotalMetric: String, Sendable, Hashable, CaseIterable {
     case pnl, value, realized, unrealized, gas
 }

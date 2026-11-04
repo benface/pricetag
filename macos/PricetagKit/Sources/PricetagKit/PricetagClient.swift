@@ -18,6 +18,8 @@ public protocol PortfolioSource: Sendable {
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], timeout: Duration) async throws -> Portfolio
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> Explanation
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
+    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof
+    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification
 }
 
 public struct PricetagClient: PortfolioSource {
@@ -37,6 +39,19 @@ public struct PricetagClient: PortfolioSource {
 
     public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> Explanation {
         try await get("/api/portfolio/\(address)/explain", query: settings(method, currency, linked) + target.queryItems, timeout: .seconds(30))
+    }
+
+    public func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+        try await get("/api/portfolio/\(address)/proof", query: legQuery(leg, currency), timeout: .seconds(30))
+    }
+
+    /// A block's rows can take a while on a busy server, and the read is one query at a time.
+    public func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+        try await get("/api/portfolio/\(address)/verify", query: legQuery(leg, currency), timeout: .seconds(120))
+    }
+
+    private func legQuery(_ leg: String, _ currency: CurrencyCode) -> [URLQueryItem] {
+        [URLQueryItem(name: "leg", value: leg), URLQueryItem(name: "currency", value: currency.rawValue)]
     }
 
     /// Reads every wallet in it, so it gets as long as a first read.

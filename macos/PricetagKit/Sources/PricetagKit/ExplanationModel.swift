@@ -47,14 +47,14 @@ public final class ExplanationModel {
             guard asked == request else { return }
             // A refused request means this number doesn't exist here, unlike a server that's only out of reach.
             if case FetchError.rejected = error { explanation = nil }
-            if explanation == nil { failure = Self.message(for: error) }
+            if explanation == nil { failure = failureMessage(for: error) }
         }
     }
+}
 
-    private static func message(for error: any Error) -> String {
-        switch error as? FetchError {
-        case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message): message
-        case .unreachable, nil: "Can't reach the server."
-        }
+func failureMessage(for error: any Error) -> String {
+    switch error as? FetchError {
+    case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message): message
+    case .unreachable, nil: "Can't reach the server."
     }
 }

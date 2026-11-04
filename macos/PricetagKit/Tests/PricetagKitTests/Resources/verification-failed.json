@@ -1,0 +1,28 @@
+{
+  "blockNum": 9200017,
+  "blockHash": "0x0dcc158ae036da166cbc5b240ba8e307b6709912475bb99e06c74c04b83e5c69",
+  "status": "failed",
+  "summary": "Some of the data Amp stored for this block doesn't match. Don't rely on this number until that's explained.",
+  "checks": [
+    {
+      "title": "Block fingerprint",
+      "status": "passed",
+      "detail": "The block's stored details hash to its fingerprint, 0x0dcc15…3e5c69."
+    },
+    {
+      "title": "Transactions",
+      "status": "unchecked",
+      "detail": "Amp doesn't store everything a deposit's hash covers, and Base's node didn't answer."
+    },
+    {
+      "title": "Results and logs",
+      "status": "failed",
+      "detail": "Worked out 0x962f8d…118405, but the block says 0x5c6ca7…7053fe."
+    },
+    {
+      "title": "This activity",
+      "status": "failed",
+      "detail": "This transaction isn't in the checked data."
+    }
+  ]
+}
