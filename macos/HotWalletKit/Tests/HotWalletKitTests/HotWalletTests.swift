@@ -836,6 +836,20 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.rotationHold == .notWorthTheGas(["ETH"]))
     }
 
+    /// What it says could be someone's reason to give up what's there for good, so it can't claim more than is known.
+    @Test func aHoldOverEthDoesntSayItsWorthLessThanItsGas() async throws {
+        let unpriced = await Rig(snapshot(eth: 2 * cheapFees.costWei(of: Base.eth), ethUsd: nil))
+        // About $10 of ETH, and $6.30 to send it.
+        let priced = await Rig(snapshot(eth: oneEth / 300, fees: Self.expensiveFees))
+        for rig in [unpriced, priced] {
+            await rig.wallet.replaceKey()
+            await rig.wallet.tick()
+            #expect(rig.wallet.rotationHold == .notWorthTheGas(["ETH"]))
+            #expect(await rig.signer.hasKey(hotAddress))
+            #expect(rig.wallet.notices.contains { $0.text == "The old key still holds some ETH that gas makes too costly to move right now. It keeps the old key, and moves it if that changes, until you choose to leave it behind." })
+        }
+    }
+
     @Test func whatsLeftAfterTheLastTransferDoesntKeepTheOldKey() async throws {
         // Paying for ETH's own last transfer always leaves a little, so this has to be able to finish.
         let rig = await Rig(snapshot(eth: cheapFees.costWei(of: Base.eth)), portfolio: .success(portfolio(toBlock: 2000)))
