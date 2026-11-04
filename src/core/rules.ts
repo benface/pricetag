@@ -23,9 +23,12 @@ export type RuleRow = {
   /** This side's sum leaves something out. `warnings` says what. */
   aPartial: boolean
   bPartial: boolean
+  /** This side rests on an estimate, and so does a difference from it. `warnings` says how much. */
+  aEstimated: boolean
+  bEstimated: boolean
 }
 
-export type RuleTransaction = { txHash: string; blockNum: number; timestamp: string; asset: string; label: "Cost" | "Sold for" | "Network fee"; a: string | null; b: string | null; difference: string | null }
+export type RuleTransaction = { txHash: string; blockNum: number; timestamp: string; asset: string; label: "Cost" | "Sold for" | "Network fee"; a: string | null; b: string | null; difference: string | null; aEstimated: boolean; bEstimated: boolean }
 
 /** What two rules make of one wallet at the same block, so the only difference between them is the rule. */
 export type RuleComparison = {

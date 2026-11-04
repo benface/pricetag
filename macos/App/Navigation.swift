@@ -10,4 +10,13 @@ final class Navigation {
     var isExportingTaxReport = false
     /// The chart's transactions as a list, which is how to reach them from the keyboard or VoiceOver.
     var showsTransactions = false
+    var isResolving = false
+    /// Which holding Resolve was clicked on, so its questions come first.
+    var resolvingAsset: String?
+    var isExporting = false
+
+    func resolve(_ asset: String? = nil) {
+        resolvingAsset = asset
+        isResolving = true
+    }
 }
