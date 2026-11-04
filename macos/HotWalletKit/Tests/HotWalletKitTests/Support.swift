@@ -23,10 +23,10 @@ let cheapFees = FeeQuote(maxFeePerGas: 10_000_000, maxPriorityFeePerGas: 1_000_0
 
 func usdcUnits(_ dollars: UInt128) -> UInt128 { dollars * 1_000_000 }
 
-func snapshot(eth: UInt128 = oneEth / 100, tokens: [Token: UInt128] = [:], nonce: UInt64 = 0, chainID: UInt64 = Base.chainID, ethUsd: UInt128? = ethPrice, fees: FeeQuote = cheapFees) -> ChainSnapshot {
+func snapshot(eth: UInt128 = oneEth / 100, tokens: [Token: UInt128] = [:], nonce: UInt64 = 0, chainID: UInt64 = Base.chainID, ethUsd: UInt128? = ethPrice, prices: [String: UInt128] = [:], fees: FeeQuote = cheapFees) -> ChainSnapshot {
     var balances: [Token: UInt128] = [Base.eth: eth]
     for (token, balance) in tokens { balances[token] = balance }
-    return ChainSnapshot(chainID: chainID, blockNumber: 1000, nonce: nonce, balances: balances, ethUsdMicros: ethUsd, usdcUsdMicros: Money.dollar, fees: fees)
+    return ChainSnapshot(chainID: chainID, blockNumber: 1000, nonce: nonce, balances: balances, ethUsdMicros: ethUsd, usdcUsdMicros: Money.dollar, otherUsdMicros: prices, fees: fees)
 }
 
 actor FakeChain: ChainClient {

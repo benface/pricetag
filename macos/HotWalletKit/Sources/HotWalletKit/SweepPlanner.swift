@@ -45,6 +45,9 @@ public struct SweepPlan: Equatable, Sendable {
     public var gasReserveWei: UInt128 = 0
     /// Over the cap, but by less than it makes sense to spend gas on.
     public var excessIsDust = false
+    /// What moving everything skipped for costing more in gas than it's worth, which can change. It's still there, so it never
+    /// counts as empty. ETH under `minimumSweep` isn't here, because paying for its own last transfer always leaves a little.
+    public var notWorthTheGas: [Token] = []
 }
 
 public enum SweepPlanner {
@@ -136,7 +139,7 @@ public enum SweepPlanner {
         if plan.excessUsdMicros > 0 { take(plan.excessUsdMicros, from: byValue, isGain: false) }
         if wantsGain {
             // Gains are mostly already in a stablecoin. Taking from there leaves what's being held alone.
-            let stablesFirst = byValue.filter { $0.token.symbol == "USDC" } + byValue.filter { $0.token.symbol != "USDC" }
+            let stablesFirst = byValue.filter(\.token.isStablecoin) + byValue.filter { !$0.token.isStablecoin }
             take(pendingGainUsdMicros, from: stablesFirst, isGain: true)
         }
         return plan
@@ -153,7 +156,10 @@ public enum SweepPlanner {
         for holding in holdings where !holding.token.isNative && holding.balance > 0 {
             let cost = fees.costWei(of: holding.token)
             // Worth less than the gas to move it. Without a price, it isn't known to be, so it goes.
-            if let value = holding.valueUsdMicros, let ethPrice, value <= Money.usdMicros(of: cost, priceMicros: ethPrice, decimals: 18) { continue }
+            if let value = holding.valueUsdMicros, let ethPrice, value <= Money.usdMicros(of: cost, priceMicros: ethPrice, decimals: 18) {
+                plan.notWorthTheGas.append(holding.token)
+                continue
+            }
             guard eth >= cost else {
                 plan.blockers.insert(.notEnoughGas)
                 continue
@@ -167,6 +173,8 @@ public enum SweepPlanner {
             let amount = eth - cost
             let usd = ethPrice.map { Money.usdMicros(of: amount, priceMicros: $0, decimals: 18) }
             plan.transfers.append(PlannedTransfer(token: Base.eth, amount: amount, usdMicros: usd, gainUsdMicros: 0))
+        } else if eth > 0, ethPrice.map({ Money.usdMicros(of: eth, priceMicros: $0, decimals: 18) >= minimumSweep }) ?? true {
+            plan.notWorthTheGas.append(Base.eth)
         }
         return plan
     }
