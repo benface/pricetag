@@ -148,11 +148,11 @@ actor ScriptedPortfolios: PortfolioSource {
         return try next.get()
     }
 
-    func proof(leg: String, address: String, currency: CurrencyCode) throws -> Proof {
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) throws -> Proof {
         throw FetchError.unreachable
     }
 
-    func verification(leg: String, address: String, currency: CurrencyCode) throws -> Verification {
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) throws -> Verification {
         throw FetchError.unreachable
     }
 
