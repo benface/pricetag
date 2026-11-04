@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { isAddress, type WalletResponse } from "../core/api.ts"
+import { hasStarted, isAddress, isBehind, type WalletResponse } from "../core/api.ts"
 import type { Method } from "../core/fold.ts"
 import { foldPositions, hasAnswer, pnlOverTime, sumTotals, type Coverage, type Exclusion, type PnlPoint, type Position } from "../core/portfolio.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
-import { explainMetric, explainTotal, type Explanation, type Metric, type TotalMetric } from "./explain.ts"
-import { formatAmount, formatDuration, formatPrice, formatSignedUsd, formatUsd, shortHash } from "./format.ts"
+import { explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
+import { formatAmount, formatDuration, formatPrice, formatSignedUsd, formatUsd } from "../core/format.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { useWallet } from "./useWallet.ts"
 
@@ -140,15 +140,7 @@ export function App() {
   const points = useMemo(() => (wallet ? pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest) : []), [wallet, method])
   const close = useCallback(() => setExplanation(null), [])
   const openTotal = (metric: TotalMetric) => setExplanation(explainTotal(positions, totals, metric))
-  const openPoint = (point: PnlPoint) => {
-    const effects = positions.flatMap((p) => p.effects).filter((e) => e.leg.txHash === point.txHash)
-    setExplanation({
-      title: `Transaction ${shortHash(point.txHash as string)}`,
-      value: point.pnlUsdMicros && formatSignedUsd(point.pnlUsdMicros),
-      lines: [`Total PnL after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`],
-      effects,
-    })
-  }
+  const openPoint = (point: PnlPoint) => setExplanation(explainPoint(positions, point))
 
   return (
     <div className="page">
@@ -269,12 +261,6 @@ function Stat({ label, onClick, coverage, value }: { label: string; onClick: () 
     </div>
   )
 }
-
-/** A derived table is normally a block or two behind the chain. More than this is worth saying out loud. */
-const BEHIND_BLOCKS = 5
-
-const hasStarted = (wallet: WalletResponse) => wallet.coverage.toBlock >= wallet.coverage.fromBlock
-const isBehind = (wallet: WalletResponse) => wallet.latest.blockNum - wallet.coverage.toBlock > BEHIND_BLOCKS
 
 function LiveBadge({ wallet, stale }: { wallet: WalletResponse; stale: boolean }) {
   if (wallet.mode === "demo") return <span className="badge">Demo data</span>

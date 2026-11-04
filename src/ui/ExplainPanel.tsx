@@ -1,8 +1,7 @@
 import { useLayoutEffect, useRef } from "react"
 import type { LegEffect } from "../core/portfolio.ts"
-import { formatAmount, formatPrice, formatSignedAmount, formatTime, shortHash } from "./format.ts"
-import { describeEffect, type Explanation } from "./explain.ts"
-import { tokenByAddress } from "../core/tokens.ts"
+import { formatPrice, formatSignedAmount, formatTime, shortHash } from "../core/format.ts"
+import { describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
 
 /** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS_SHOWN = 200
@@ -10,7 +9,7 @@ const MAX_LEGS_SHOWN = 200
 function LegRow({ effect }: { effect: LegEffect }) {
   const { leg } = effect
   const incoming = BigInt(leg.delta) > 0n
-  const nets = leg.parts.length > 1
+  const netting = describeNetting(leg)
   return (
     <li className="leg">
       <div className="leg-main">
@@ -34,17 +33,7 @@ function LegRow({ effect }: { effect: LegEffect }) {
       </div>
       <p className="small">{describeEffect(effect)}.</p>
       {leg.priceNote ? <p className="small muted">{leg.priceNote}</p> : null}
-      {nets ? (
-        <p className="small muted">
-          Nets {leg.parts.length} rows:{" "}
-          {leg.parts
-            .map((p) => {
-              const token = tokenByAddress(p.token)
-              return `${p.side === "credit" ? "+" : "−"}${formatAmount(p.amount, token?.decimals ?? 18)} ${token?.symbol ?? p.token}`
-            })
-            .join(", ")}
-        </p>
-      ) : null}
+      {netting ? <p className="small muted">{netting}</p> : null}
       <a className="small" href={`https://basescan.org/tx/${leg.txHash}`} target="_blank" rel="noreferrer noopener">
         {shortHash(leg.txHash)} on Basescan ↗
       </a>

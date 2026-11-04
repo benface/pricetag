@@ -1,0 +1,39 @@
+// The app's name lives here and nowhere else: change this line to rename it everywhere.
+APP_NAME = Patina
+
+PRODUCT_NAME = $(APP_NAME)
+PRODUCT_MODULE_NAME = MacApp
+PRODUCT_BUNDLE_IDENTIFIER = com.benface.pricetag.mac
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+
+SDKROOT = macosx
+MACOSX_DEPLOYMENT_TARGET = 27.0
+SWIFT_VERSION = 6.0
+SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor
+SWIFT_APPROACHABLE_CONCURRENCY = YES
+ENABLE_USER_SCRIPT_SANDBOXING = YES
+
+// A menu bar app with no Dock icon until its window opens. See DockPresence.swift.
+GENERATE_INFOPLIST_FILE = YES
+INFOPLIST_FILE = Config/Info.plist
+INFOPLIST_KEY_CFBundleDisplayName = $(APP_NAME)
+INFOPLIST_KEY_LSUIElement = YES
+INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.finance
+INFOPLIST_KEY_NSHumanReadableCopyright =
+
+// Sandboxed, and its only permission is to open connections: it holds no keys and touches no files.
+ENABLE_APP_SANDBOX = YES
+ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES
+ENABLE_HARDENED_RUNTIME = YES
+
+// run.sh swaps in a real identity when there is one, so a rebuild keeps access to the app's saved settings.
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
+ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO
+COMBINE_HIDPI_IMAGES = YES
+ALWAYS_SEARCH_USER_PATHS = NO
+LD_RUNPATH_SEARCH_PATHS = @executable_path/../Frameworks
