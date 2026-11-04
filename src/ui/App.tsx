@@ -1,9 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { foldPositions, hasAnswer, isAddress, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type Coverage, type Exclusion, type Method, type PnlPoint, type Position } from "@pricetag/sdk/core"
+import { foldWallet, formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd, hasAnswer, isAddress, sumTotals, type Coverage, type Exclusion, type FoldedWallet, type Method, type PnlPoint, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { explainMetric, explainPoint, explainTotal, mismatchCause, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
-import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd } from "../core/format.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { useWallet } from "./useWallet.ts"
 
@@ -19,6 +18,8 @@ function Num({ onClick, label, children, tone }: { onClick: () => void; label: s
     </button>
   )
 }
+
+const NO_WALLET: FoldedWallet = { positions: [], unreadAssets: [], totals: sumTotals([]), pnlStatus: "complete", points: [] }
 
 const toneOf = (micros: string | null) => (micros === null ? "warn" : BigInt(micros) > 0n ? "gain" : BigInt(micros) < 0n ? "loss" : null)
 
@@ -156,10 +157,7 @@ export function App() {
     go(value.toLowerCase())
   }
 
-  const positions = useMemo(() => (wallet ? foldPositions(wallet.legs, method, wallet.prices, wallet) : []), [wallet, method])
-  const unread = useMemo(() => (wallet ? unreadAssets(positions, wallet) : []), [wallet, positions])
-  const totals = useMemo(() => sumTotals(positions, unread), [positions, unread])
-  const points = useMemo(() => (wallet ? pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)) : []), [wallet, method, positions, unread])
+  const { positions, unreadAssets: unread, totals, points } = useMemo<FoldedWallet>(() => (wallet ? foldWallet(wallet, method) : NO_WALLET), [wallet, method])
   const close = useCallback(() => setExplanation(null), [])
   const openTotal = (metric: TotalMetric) => setExplanation(explainTotal(positions, totals, metric))
   const openPoint = (point: PnlPoint) => setExplanation(explainPoint(positions, point))

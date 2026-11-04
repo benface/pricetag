@@ -15,7 +15,10 @@ export type LegKind = "erc20" | "eth" | "gas" | "l1_fee" | "wrap" | "unwrap" | "
 /** What a transaction cost to send. L2 gas comes from Amp's data, and the L1 data fee from its receipt. */
 const isFeeRow = (row: LegRow) => row.kind === "gas" || row.kind === "l1_fee"
 
-/** A row of `legs`. `token` and `account` are 0x-prefixed lowercase hex, `amount` a decimal string. */
+/**
+ * A row of `legs`, named like the table's columns, as `PricedRow` is. These are what the pricing code takes. Anything a
+ * read returns to a caller is camelCase. `token` and `account` are 0x-prefixed lowercase hex, `amount` a decimal string.
+ */
 export type LegRow = {
   block_num: number
   timestamp: string
@@ -29,8 +32,8 @@ export type LegRow = {
   kind: LegKind
 }
 
-/** A row of `reference_prices`, with Chainlink answers in 1e8 USD. Empty when a read failed. */
-export type ReferenceRow = { block_num: number; eth_usd: string; usdc_usd: string }
+/** One block's oracle reads, from `reference_prices`, with Chainlink answers in 1e8 USD. Empty when a read failed. */
+export type Reference = { blockNum: number; ethUsd: string; usdcUsd: string }
 
 /** The result of `pt_price`, in the shape `priced_legs` stores it. */
 export type PtPrice = { token: string; usd_micros: string; source: "swap" | "unknown" }
@@ -53,6 +56,11 @@ export type PricedRow = {
   priced: PtPrice
 }
 
+/** One of the rows a leg nets together. */
+export type LegPart = Pick<LegRow, "token" | "side" | "amount" | "kind"> & { logIndex: number }
+
+const partOf = ({ token, side, amount, kind, log_index }: LegRow): LegPart => ({ token, side, amount, kind, logIndex: log_index })
+
 export type PricedLeg = FoldLeg & {
   asset: string
   blockNum: number
@@ -63,7 +71,7 @@ export type PricedLeg = FoldLeg & {
   /** Why this leg has no usable price. */
   priceNote: string | null
   /** The rows this leg nets together, so a click can show them. */
-  parts: LegRow[]
+  parts: LegPart[]
   /** What the wallet already held before the first block read. It isn't a transaction, so `txHash` is empty. */
   opening?: boolean
 }
@@ -145,8 +153,8 @@ function netUnlisted(rows: readonly LegRow[]): { moves: bigint[]; unreadable: bo
  * compute, for one wallet's rows. Used when reading the raw dataset, and for fixtures, so both go through the same path
  * as the real table.
  */
-export function derivePricedRows(rows: readonly LegRow[], references: readonly ReferenceRow[]): PricedRow[] {
-  const refs = new Map(references.map((r) => [r.block_num, r]))
+export function derivePricedRows(rows: readonly LegRow[], references: readonly Reference[]): PricedRow[] {
+  const refs = new Map(references.map((r) => [r.blockNum, r]))
   const byTx = new Map<string, { first: LegRow; amounts: Map<string, string[]>; unlisted: LegRow[] }>()
   for (const row of rows) {
     // Like the dataset's `legs`, which pairs are made from: gas isn't traded.
@@ -177,7 +185,7 @@ export function derivePricedRows(rows: readonly LegRow[], references: readonly R
       sold_amount: out.amount,
       bought_token: into.token,
       bought_amount: into.amount,
-      priced: ptPrice(out.token, out.amount, into.token, into.amount, ref.eth_usd, ref.usdc_usd),
+      priced: ptPrice(out.token, out.amount, into.token, into.amount, ref.ethUsd, ref.usdcUsd),
     })
   }
   return result
@@ -210,7 +218,7 @@ const UNLISTED_NOTE = "This transaction also moved a token off the allowlist, so
 type Input = {
   account: string
   rows: readonly LegRow[]
-  references: readonly ReferenceRow[]
+  references: readonly Reference[]
   priced: readonly PricedRow[]
 }
 
@@ -221,7 +229,7 @@ type Input = {
  */
 export function buildPricedLegs({ account, rows, references, priced }: Input): PricedLeg[] {
   const me = normalizeAddress(account)
-  const refs = new Map(references.map((r) => [r.block_num, r]))
+  const refs = new Map(references.map((r) => [r.blockNum, r]))
   const txs = new Map<string, LegRow[]>()
   for (const row of rows) {
     if (row.account !== me) continue
@@ -235,8 +243,8 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
   for (const txRows of ordered) {
     const first = txRows[0]!
     const ref = refs.get(first.block_num)
-    const ethMicros = answerToMicros(ref?.eth_usd)
-    const usdcMicros = answerToMicros(ref?.usdc_usd)
+    const ethMicros = answerToMicros(ref?.ethUsd)
+    const usdcMicros = answerToMicros(ref?.usdcUsd)
     const oracle = (t: Token) => (t.oracle === "eth" ? ethMicros : t.oracle === "usdc" ? usdcMicros : null)
     const base = { blockNum: first.block_num, timestamp: first.timestamp, txHash: first.tx_hash, txIndex: first.tx_index }
 
@@ -255,7 +263,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         costUsdMicros: null,
         proceedsUsdMicros: null,
         costLabel: "unknown",
-        parts: feeRows,
+        parts: feeRows.map(partOf),
       })
     }
 
@@ -345,7 +353,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         costUsdMicros: paid ? value : null,
         proceedsUsdMicros: net.delta < 0n ? value : null,
         costLabel,
-        parts: net.parts,
+        parts: net.parts.map(partOf),
       })
     }
   }

@@ -1,14 +1,14 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { balancesByAsset, decodeBalanceResults, encodeBalanceCalls, MULTICALL3 } from "../server/balances.ts"
+import { balancesByAsset, decodeBalanceResults, encodeBalanceCalls, MULTICALL3 } from "@pricetag/sdk/internal"
 import { explainMetric, explainTotal, mismatchCause } from "../src/core/explain.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
-import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, foldPositions, openingLegs, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type LegRow, type Onchain, type ReferenceRow } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, foldPositions, openingLegs, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type LegRow, type Onchain, type Reference } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 const E18 = 10n ** 18n
 const E6 = 10n ** 6n
-const REF: ReferenceRow = { block_num: 100, eth_usd: "300000000000", usdc_usd: "100000000" }
+const REF: Reference = { blockNum: 100, ethUsd: "300000000000", usdcUsd: "100000000" }
 const PRICES = { ETH: { usdMicros: "3000000000", source: "oracle" as const, blockNum: 200 } }
 
 let counter = 0
@@ -209,7 +209,7 @@ describe("when there's nothing to compare", () => {
 
 describe("a known mismatch, when the next check can't run", () => {
   // Bought 1 ETH for $2,000, now $3,000, with 1.5 ETH onchain. Its PnL has to stay gone until a check says otherwise.
-  const SWAP_REF: ReferenceRow = { block_num: 100, eth_usd: "200000000000", usdc_usd: "100000000" }
+  const SWAP_REF: Reference = { blockNum: 100, ethUsd: "200000000000", usdcUsd: "100000000" }
   const rows = [row(USDC_ADDRESS, "credit", 2000n * E6), row(USDC_ADDRESS, "debit", 2000n * E6, "erc20", "0xbuy"), row(WETH_ADDRESS, "credit", E18, "erc20", "0xbuy")]
   const legs = buildPricedLegs({ account: ME, rows, references: [SWAP_REF], priced: [] })
   const fold = (state: Onchain) => foldPositions(legs, "average", PRICES, state)

@@ -1,7 +1,9 @@
 // Reads every allowlisted balance at a block with one `eth_call`, through Multicall3's `aggregate3`.
 // Encoding is by hand because it's the only ABI this app writes, and it stays pure so a test can run it on real bytes.
 
-import { ETH_ADDRESS, TOKENS, normalizeAddress } from "@pricetag/sdk/core"
+import type { Query } from "./amp.ts"
+import type { BalanceSnapshot } from "./reconcile.ts"
+import { ETH_ADDRESS, TOKENS, normalizeAddress } from "./tokens.ts"
 
 /** Deployed on Base, and long before any block this app reads. */
 export const MULTICALL3 = "0xca11bde05977b3631167028862be2a173976ca11"
@@ -61,4 +63,14 @@ export function balancesByAsset(results: readonly (bigint | null)[]): Record<str
     totals.set(token.asset, total === null || result === null ? null : total + result)
   })
   return Object.fromEntries([...totals].flatMap(([asset, total]) => (total === null ? [] : [[asset, total.toString()]])))
+}
+
+/**
+ * With no table in the query, this makes exactly one `eth_call`, and it can read a block no table has, like the one
+ * before a local dataset's start.
+ */
+export async function readBalancesAt(query: Query, network: string, address: string, block: number): Promise<BalanceSnapshot | null> {
+  const [row] = await query<Record<string, unknown>>(`SELECT rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeBalanceCalls(address)}', ${block}) AS r`)
+  const results = decodeBalanceResults((row?.r as { data?: string } | null | undefined)?.data)
+  return results && { blockNum: block, amounts: balancesByAsset(results) }
 }

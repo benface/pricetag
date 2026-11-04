@@ -1,8 +1,8 @@
 // Runs the fold over a wallet's priced legs, and adds up what can honestly be added up.
 
 import { applyLeg, emptyPosition, usdOf, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
-import { answerToMicros, type PricedLeg, type ReferenceRow } from "./legs.ts"
-import { decimalsOf, estimateHeld, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
+import { answerToMicros, type PricedLeg, type Reference } from "./legs.ts"
+import { decimalsOf, estimateHeld, reconcile, type BalanceSnapshot, type Onchain, type Reconciliation } from "./reconcile.ts"
 
 export type Head = { blockNum: number; timestamp: string }
 
@@ -114,12 +114,12 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
 }
 
 /** Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong. */
-export function latestPrices(reference: ReferenceRow | null): LatestPrices {
+export function latestPrices(reference: Reference | null): LatestPrices {
   const prices: LatestPrices = {}
-  const eth = answerToMicros(reference?.eth_usd)
-  const usdc = answerToMicros(reference?.usdc_usd)
-  if (reference && eth) prices.ETH = { usdMicros: eth, source: "oracle", blockNum: reference.block_num }
-  if (reference && usdc) prices.USDC = { usdMicros: usdc, source: "oracle", blockNum: reference.block_num }
+  const eth = answerToMicros(reference?.ethUsd)
+  const usdc = answerToMicros(reference?.usdcUsd)
+  if (reference && eth) prices.ETH = { usdMicros: eth, source: "oracle", blockNum: reference.blockNum }
+  if (reference && usdc) prices.USDC = { usdMicros: usdc, source: "oracle", blockNum: reference.blockNum }
   return prices
 }
 
@@ -246,12 +246,12 @@ export function pnlOverTime(
   legs: readonly PricedLeg[],
   method: Method,
   prices: LatestPrices,
-  references: readonly ReferenceRow[],
+  references: readonly Reference[],
   latest: { blockNum: number; timestamp: string } | null,
   /** Assets the chain hasn't confirmed. We can't tell when that started, so their PnL is left out of every point. */
   unconfirmed: ReadonlySet<string> = new Set(),
 ): PnlPoint[] {
-  const refs = new Map(references.map((r) => [r.block_num, r]))
+  const refs = new Map(references.map((r) => [r.blockNum, r]))
   const states = new Map<string, PositionState>()
   const points: PnlPoint[] = []
   const measure = (priceOf: (asset: string) => string | null) => {
@@ -297,8 +297,8 @@ export function pnlOverTime(
     if (leg.opening || legs[i + 1]?.txHash === leg.txHash) return
     const ref = refs.get(leg.blockNum)
     const priceOf = (asset: string) => {
-      if (asset === "ETH") return answerToMicros(ref?.eth_usd)
-      if (asset === "USDC") return answerToMicros(ref?.usdc_usd)
+      if (asset === "ETH") return answerToMicros(ref?.ethUsd)
+      if (asset === "USDC") return answerToMicros(ref?.usdcUsd)
       return null
     }
     points.push({ blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure(priceOf) })
@@ -307,4 +307,75 @@ export function pnlOverTime(
     points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.usdMicros ?? null) })
   }
   return points
+}
+
+export type Mode = "demo" | "raw" | "dataset"
+
+/** Everything read about a wallet, before any method folds it. The app's server sends this to the browser as is. */
+export type WalletData = {
+  address: string
+  mode: Mode
+  /**
+   * The blocks read. What the wallet held before `fromBlock` comes from the chain, as opening legs with an unknown cost.
+   * `toBlock` can be behind `latest` while a derived table catches up, and is below `fromBlock` until it starts.
+   */
+  coverage: { fromBlock: number; toBlock: number }
+  legs: PricedLeg[]
+  references: Reference[]
+  prices: LatestPrices
+  latest: Head
+  /** Transactions this wallet sent whose gas couldn't be worked out, so ETH is overstated by that much. */
+  gasUnknownTxs: string[]
+  /** Transactions this wallet sent whose L1 fee couldn't be read yet. */
+  l1FeeUnknownTxs: string[]
+  /** Onchain balances at `coverage.toBlock`, as read. An asset missing from them is in `unreadBalances`. Null when the whole read failed. */
+  balances: BalanceSnapshot | null
+  /** Assets whose balance before `fromBlock` couldn't be read, so they can't be compared yet. */
+  openingUnread: string[]
+  /** The last balance read for each asset in `unreadBalances` that has one. */
+  lastBalances: Record<string, { blockNum: number; amount: string }>
+  /** Assets with no balance read at `coverage.toBlock`, which isn't the same as holding none. Empty until reads start. */
+  unreadBalances: string[]
+}
+
+export const hasStarted = ({ coverage }: Pick<WalletData, "coverage">) => coverage.toBlock >= coverage.fromBlock
+
+export type FoldedWallet = {
+  positions: Position[]
+  /** Assets with no position because nothing could be read about them, which isn't the same as holding none. */
+  unreadAssets: string[]
+  totals: Totals
+  /** Whether `totals.pnlUsdMicros` can be read as the wallet's PnL. */
+  pnlStatus: PnlStatus
+  /** PnL after each transaction, for a chart. */
+  points: PnlPoint[]
+}
+
+/** With nothing read, there's no sum at all. Adding up no legs would otherwise say $0. */
+const noTotals = (): Totals => ({ ...sumTotals([]), valueUsdMicros: null, realizedUsdMicros: null, unrealizedUsdMicros: null, gasUsdMicros: null, pnlUsdMicros: null })
+
+/** The one way a wallet's data becomes numbers, so the browser, the app's server and the SDK can't disagree. */
+export function foldWallet(wallet: WalletData, method: Method): FoldedWallet {
+  const positions = foldPositions(wallet.legs, method, wallet.prices, wallet)
+  const unread = unreadAssets(positions, wallet)
+  const totals = hasStarted(wallet) ? sumTotals(positions, unread) : noTotals()
+  return {
+    positions,
+    unreadAssets: unread,
+    totals,
+    pnlStatus: pnlStatus(totals, wallet.gasUnknownTxs),
+    points: pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)),
+  }
+}
+
+/** What a wallet's numbers leave out, in words. Empty when nothing is. */
+export function describeMissing({ totals, gasUnknownTxs, l1FeeUnknownTxs }: { totals: Totals; gasUnknownTxs: readonly string[]; l1FeeUnknownTxs: readonly string[] }): string[] {
+  const reasons = new Map<string, string[]>()
+  for (const { asset, reason } of totals.excluded) reasons.set(asset, [...(reasons.get(asset) ?? []), reason])
+  return [
+    ...[...reasons].map(([asset, why]) => `${asset} (${why.join(", ")})`),
+    ...(totals.unpricedGas ? ["gas with no price"] : []),
+    ...(gasUnknownTxs.length > 0 ? [`gas that couldn't be worked out, in ${gasUnknownTxs.length} tx, so ETH is overstated`] : []),
+    ...(l1FeeUnknownTxs.length > 0 ? [`the L1 fees of ${l1FeeUnknownTxs.length} tx, so ETH can't be checked`] : []),
+  ]
 }

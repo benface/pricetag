@@ -1,7 +1,6 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { TOKENS, tokenByAddress, valuePosition, type LegEffect, type PnlPoint, type Position, type PricedLeg, type Totals } from "@pricetag/sdk/core"
-import { formatAmount, formatPrice, formatSignedUsd, formatUsd, shortHash } from "./format.ts"
+import { TOKENS, formatAmount, formatPrice, formatSignedUsd, formatUsd, shortHash, tokenByAddress, valuePosition, type LegEffect, type PnlPoint, type Position, type PricedLeg, type Totals } from "@pricetag/sdk/core"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"
 

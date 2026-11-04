@@ -2,13 +2,12 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { createQuery, describeError, isAddress, type Method } from "@pricetag/sdk"
+import { isAddress, type Method } from "@pricetag/sdk/core"
+import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createWallets, datasetSource, describeError, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { DEMO_ADDRESS, DEMO_WALLET } from "../src/core/fixtures.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
-import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
-import { datasetSource, rawSource, type Source } from "./source.ts"
-import { createWallets } from "./wallets.ts"
+import { rawSource } from "./source.ts"
 
 type Env = Record<string, string | undefined>
 

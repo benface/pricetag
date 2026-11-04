@@ -1,37 +1,12 @@
 // What the server sends its clients. The browser runs the fold itself, because cost is personal.
 // Clients that can't run it, like the Mac app, read the portfolio it computes instead.
 
-import type { BalanceSnapshot, Head, LatestPrice, LatestPrices, Method, PnlPoint, PnlStatus, PositionValues, PricedLeg, Reconciliation, ReferenceRow, Totals } from "@pricetag/sdk/core"
+import { hasStarted, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type WalletData } from "@pricetag/sdk/core"
 
-export type { Head, PnlStatus }
+export { hasStarted }
+export type { Head, Mode, PnlStatus }
 
-export type Mode = "demo" | "raw" | "dataset"
-
-export type WalletResponse = {
-  address: string
-  mode: Mode
-  /**
-   * The blocks read. What the wallet held before `fromBlock` comes from the chain, as opening legs with an unknown cost.
-   * `toBlock` can be behind `latest` while a derived table catches up, and is below `fromBlock` until it starts.
-   */
-  coverage: { fromBlock: number; toBlock: number }
-  legs: PricedLeg[]
-  references: ReferenceRow[]
-  prices: LatestPrices
-  latest: Head
-  /** Transactions this wallet sent whose gas couldn't be worked out, so ETH is overstated by that much. */
-  gasUnknownTxs: string[]
-  /** Transactions this wallet sent whose L1 fee couldn't be read yet. */
-  l1FeeUnknownTxs: string[]
-  /** Onchain balances at `coverage.toBlock`, as read. An asset missing from them is in `unreadBalances`. Null when the whole read failed. */
-  balances: BalanceSnapshot | null
-  /** Assets whose balance before `fromBlock` couldn't be read, so they can't be compared yet. */
-  openingUnread: string[]
-  /** The last balance read for each asset in `unreadBalances` that has one. */
-  lastBalances: Record<string, { blockNum: number; amount: string }>
-  /** Assets with no balance read at `coverage.toBlock`, which isn't the same as holding none. Empty until reads start. */
-  unreadBalances: string[]
-}
+export type WalletResponse = WalletData
 
 export type PortfolioPosition = {
   asset: string
@@ -103,7 +78,4 @@ export type ExplanationLeg = {
 /** A derived table is normally a block or two behind the chain. More than this is worth saying out loud. */
 const BEHIND_BLOCKS = 5
 
-type Progress = Pick<WalletResponse, "coverage" | "latest">
-
-export const hasStarted = ({ coverage }: Progress) => coverage.toBlock >= coverage.fromBlock
-export const isBehind = ({ coverage, latest }: Progress) => latest.blockNum - coverage.toBlock > BEHIND_BLOCKS
+export const isBehind = ({ coverage, latest }: Pick<WalletResponse, "coverage" | "latest">) => latest.blockNum - coverage.toBlock > BEHIND_BLOCKS

@@ -1,7 +1,7 @@
 // The portfolio a wallet's legs fold into, for clients that don't run the fold themselves.
 // One source of PnL logic: this calls what the browser calls, and adds nothing to the math.
 
-import { TOKENS, foldPositions, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Method, type Position, type Totals } from "@pricetag/sdk/core"
+import { TOKENS, foldWallet, type LegEffect, type Method, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting, explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../src/core/explain.ts"
 
@@ -38,9 +38,7 @@ function positionOf({ asset, decimals, price, values, state, effects, reconcilia
 }
 
 export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioResponse {
-  const positions = foldPositions(wallet.legs, method, wallet.prices, wallet)
-  const unread = unreadAssets(positions, wallet)
-  const totals = sumTotals(positions, unread)
+  const { positions, unreadAssets, totals, pnlStatus, points } = foldWallet(wallet, method)
   return {
     address: wallet.address,
     mode: wallet.mode,
@@ -53,11 +51,11 @@ export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioRe
     gasUnknownTxs: wallet.gasUnknownTxs,
     l1FeeUnknownTxs: wallet.l1FeeUnknownTxs,
     openingUnread: wallet.openingUnread,
-    unreadAssets: unread,
+    unreadAssets,
     positions: positions.map(positionOf),
     totals,
-    pnlStatus: pnlStatus(totals, wallet.gasUnknownTxs),
-    points: pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)),
+    pnlStatus,
+    points,
   }
 }
 
@@ -84,15 +82,14 @@ function legOf(effect: LegEffect): ExplanationLeg {
 
 /** The same explanation the web panel shows for a click on this number. null when the wallet has no such asset or transaction. */
 export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget): ExplanationResponse | null {
-  const positions = foldPositions(wallet.legs, method, wallet.prices, wallet)
-  const unread = unreadAssets(positions, wallet)
+  const { positions, totals, points } = foldWallet(wallet, method)
   const explanation = ((): Explanation | null => {
-    if (target.kind === "total") return explainTotal(positions, sumTotals(positions, unread), target.metric)
+    if (target.kind === "total") return explainTotal(positions, totals, target.metric)
     if (target.kind === "asset") {
       const position = positions.find((p) => p.asset === target.asset)
       return position ? explainMetric(position, target.metric) : null
     }
-    const point = pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)).find((p) => p.txHash === target.txHash)
+    const point = points.find((p) => p.txHash === target.txHash)
     return point ? explainPoint(positions, point) : null
   })()
   if (!explanation) return null

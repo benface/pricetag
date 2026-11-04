@@ -32,14 +32,33 @@ describe("the example", () => {
   })
 
   it("says the total is partial when gas couldn't be worked out, even with no legs", () => {
-    const { stdout } = runExample({ legs: [leg(ETH, "debit", "", "gas")], reference_prices: [reference] })
+    const { stdout } = runExample({ legs: [leg(ETH, "debit", "", "gas")], reference_prices: [reference], balances: { 99: {}, 200: {} } })
     assert.match(stdout, /PnL: \$0\.00 \(partial\)/)
     assert.match(stdout, /leaving out: gas that couldn't be worked out, in 1 tx, so ETH is overstated/)
   })
 
   it("says so when gas had no price at its block", () => {
-    const { stdout } = runExample({ legs: [leg(ETH, "credit", "5", "eth"), leg(ETH, "debit", "1", "gas")], reference_prices: [{ ...reference, eth_usd: "" }] })
+    const { stdout } = runExample({ legs: [leg(ETH, "credit", "5", "eth"), leg(ETH, "debit", "1", "gas")], reference_prices: [{ ...reference, eth_usd: "" }], balances: { 99: {}, 200: { ETH: "4" } } })
     assert.match(stdout, /PnL: unknown \(unavailable\), gas unknown, leaving out: .*gas with no price/)
+  })
+
+  it("says so when L1 fees are missing, and doesn't call ETH checked", () => {
+    const { stdout } = runExample({ legs: [leg(ETH, "credit", "5", "eth"), leg(ETH, "debit", "1", "gas")], reference_prices: [reference], balances: { 99: {}, 200: { ETH: "4" } } })
+    assert.match(stdout, /ETH: .*unchecked/)
+    assert.match(stdout, /leaving out: .*the L1 fees of 1 tx/)
+  })
+
+  it("starts from what the wallet already held, and checks it against the chain", () => {
+    const { stdout } = runExample({ legs: [leg(USDC, "credit", "1000000", "erc20")], reference_prices: [reference], balances: { 99: { USDC: "5000000" }, 200: { USDC: "6000000" } } })
+    assert.match(stdout, /USDC: 6 \| cost unknown \| value \$6\.00 \(oracle\) .*\| reconciled/)
+    assert.match(stdout, /Latest: USDC in 0xaa/)
+  })
+
+  it("doesn't call a balance that couldn't be read zero", () => {
+    const { stdout } = runExample({ legs: [leg(USDC, "credit", "1000000", "erc20")], reference_prices: [reference] })
+    assert.match(stdout, /USDC: 1 .*\| unchecked/)
+    assert.match(stdout, /leaving out: .*USDC \(not checked against its onchain balance/)
+    assert.match(stdout, /leaving out: .*ETH \(balance couldn't be read\)/)
   })
 
   it("prints a wallet's positions with what's left out, and its latest transaction's price and cost", () => {
@@ -47,6 +66,7 @@ describe("the example", () => {
       legs: [leg(USDC, "debit", "1000000000", "erc20"), leg(AERO, "credit", "500000000000000000000", "erc20")],
       priced_legs: [{ block_num: "100", tx_hash: "aa", account: ME, sold_token: USDC, sold_amount: "1000000000", bought_token: AERO, bought_amount: "500000000000000000000", priced: { source: "swap", token: "AERO", usd_micros: "2000000" } }],
       reference_prices: [reference],
+      balances: { 99: { USDC: "1000000000" }, 200: { AERO: "500000000000000000000" } },
     })
     assert.match(stdout, /AERO: 500 \| cost \$1,000\.00 \| value unknown \(no price\)/)
     assert.match(stdout, /leaving out: .*AERO/)

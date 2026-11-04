@@ -6,8 +6,7 @@ import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
-import { describeError, isNotStarted } from "@pricetag/sdk"
-import { datasetSource } from "../server/source.ts"
+import { datasetSource, describeError, isNotStarted } from "@pricetag/sdk/internal"
 
 /** Sends the path exactly as written, which fetch wouldn't. */
 function get(server: Server, path: string): Promise<{ status: number; body: string }> {

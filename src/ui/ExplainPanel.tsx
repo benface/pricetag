@@ -1,6 +1,5 @@
 import { useLayoutEffect, useRef } from "react"
-import type { LegEffect } from "@pricetag/sdk/core"
-import { formatPrice, formatSignedAmount, formatTime, shortHash } from "../core/format.ts"
+import { formatPrice, formatSignedAmount, formatTime, shortHash, type LegEffect } from "@pricetag/sdk/core"
 import { describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
 
 /** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */

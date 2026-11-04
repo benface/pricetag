@@ -5,6 +5,16 @@ import { createGrpcTransport } from "@connectrpc/connect-node"
 
 export type Query = <T>(sql: string, timeoutMs?: number) => Promise<T[]>
 
+/** Where the SDK says something went wrong without stopping, like a slow query or a read it will retry. */
+export type Logger = { warn(message: string): void }
+
+export type QueryOptions = {
+  /** How long one query can take, in ms. It defaults to 60 s. */
+  timeoutMs?: number | undefined
+  /** It defaults to `console`. */
+  logger?: Logger | undefined
+}
+
 const DEFAULT_TIMEOUT_MS = 60_000
 
 /** Amp's client returns Decimal128 values as Arrow big numbers, not strings. */
@@ -27,7 +37,7 @@ export function describeError(error: unknown): string {
 /** What Amp answers when a table's job hasn't written anything yet. It isn't an outage: that table just has no blocks. */
 export const isNotStarted = (error: unknown) => describeError(error).includes("no common canonical watermark")
 
-export function createQuery(url: string, token: string | undefined): Query {
+export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console }: QueryOptions = {}): Query {
   const client = createClient(createGrpcTransport({ baseUrl: url, interceptors: token ? [createAuthInterceptor(token)] : [] }))
   // Staging is shared, so run one query at a time.
   let queue: Promise<unknown> = Promise.resolve()
@@ -48,18 +58,19 @@ export function createQuery(url: string, token: string | undefined): Query {
     } catch (error) {
       // Stop the stream, without waiting on a server that may not answer.
       void iterator.return?.().catch(() => {})
-      throw error
+      throw new Error(describeError(error), { cause: error })
     } finally {
       clearTimeout(timer)
     }
   }
 
-  return <T>(sql: string, timeoutMs = DEFAULT_TIMEOUT_MS) => {
+  // A caller's limit is the most any query gets, including ones that normally ask for less.
+  return <T>(sql: string, timeoutMs = maxTimeoutMs) => {
     const result = queue.then(async () => {
       const started = Date.now()
-      const rows = await run<T>(sql, timeoutMs)
+      const rows = await run<T>(sql, Math.min(timeoutMs, maxTimeoutMs))
       const took = Date.now() - started
-      if (took > 5000) console.warn(`Slow Amp query: ${took} ms, ${rows.length} rows: ${sql.replace(/\s+/g, " ").slice(0, 100)}…`)
+      if (took > 5000) logger.warn(`Slow Amp query: ${took} ms, ${rows.length} rows: ${sql.replace(/\s+/g, " ").slice(0, 100)}…`)
       return rows
     })
     queue = result.catch(() => {})

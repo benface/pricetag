@@ -1,8 +1,12 @@
 // Display only. Every value here was computed in BigInt. Converting to Number happens only to print it.
+// Values in USD can be null, which means unknown, and prints as that. It never prints as $0.
+
+const UNKNOWN = "unknown"
 
 const usd2 = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
 
-export function formatUsd(micros: string | bigint): string {
+export function formatUsd(micros: string | bigint | null): string {
+  if (micros === null) return UNKNOWN
   const value = Number(micros) / 1e6
   const size = Math.abs(value)
   if (size === 0) return "$0.00"
@@ -11,13 +15,15 @@ export function formatUsd(micros: string | bigint): string {
   return usd2.format(value)
 }
 
-export function formatPrice(micros: string): string {
+export function formatPrice(micros: string | null): string {
+  if (micros === null) return UNKNOWN
   const value = Number(micros) / 1e6
   if (value >= 1) return usd2.format(value)
   return `$${value.toLocaleString("en-US", { maximumSignificantDigits: 4 })}`
 }
 
-export function formatSignedUsd(micros: string | bigint): string {
+export function formatSignedUsd(micros: string | bigint | null): string {
+  if (micros === null) return UNKNOWN
   const value = BigInt(micros)
   return value > 0n ? `+${formatUsd(value)}` : formatUsd(value)
 }
