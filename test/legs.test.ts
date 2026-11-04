@@ -203,9 +203,134 @@ describe("pricing a wallet's rows", () => {
     })
   })
 
-  it("a transaction moving three tokens isn't treated as a swap", () => {
+  it("a transaction moving three tokens has no value on any side, and its debit isn't a plain transfer", () => {
     const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 5n * E6), row("0x1", AERO, "credit", E18), row("0x1", ETH_ADDRESS, "credit", E18)])
-    assert.ok(legs.every((l) => l.kind === "transfer" && l.costLabel === "unknown"))
+    assert.ok(legs.every((l) => l.kind === "swap" && l.costLabel === "unknown" && l.costUsdMicros === null && l.proceedsUsdMicros === null))
+  })
+
+  it("a payment with nothing coming back stays a plain transfer", () => {
+    const [leg] = legsOf([row("0x1", USDC_ADDRESS, "debit", 5n * E6)])
+    assert.equal(leg!.kind, "transfer")
+  })
+
+  describe("a transaction that also moves a token off the allowlist", () => {
+    const JACK = "0x000000000000000000000000000000000000f00d"
+    const OTHER = "0x000000000000000000000000000000000000beef"
+    const unlisted = (tx: string, side: LegRow["side"], amount: bigint, token = JACK) => row(tx, token, side, amount, "unlisted")
+    const aero = (legs: ReturnType<typeof legsOf>) => legs.find((l) => l.asset === "AERO")!
+
+    for (const method of ["average", "fifo"] as const) {
+      // The review's case: 1,000 USDC buys 300 + 200 AERO across two routes, plus an unlisted token.
+      it(`a split route doesn't give AERO the whole payment, so a later sale can't show a false loss (${method})`, () => {
+        const rows = [
+          row("0x1", USDC_ADDRESS, "debit", 1000n * E6),
+          row("0x1", AERO, "credit", 300n * E18),
+          row("0x1", AERO, "credit", 200n * E18),
+          unlisted("0x1", "credit", 7n),
+          { ...row("0x2", AERO, "debit", 500n * E18), block_num: 101 },
+          { ...row("0x2", USDC_ADDRESS, "credit", 600n * E6), block_num: 101 },
+        ]
+        const legs = legsOf(rows, [REF, { ...REF, block_num: 101 }])
+        const position = foldPositions(legs, method, {}).find((p) => p.asset === "AERO")!
+        assert.equal(position.values.realizedUsdMicros, null)
+        assert.equal(sumTotals([position]).realizedUsdMicros, null)
+      })
+
+      it(`a single route doesn't either (${method})`, () => {
+        const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 500n * E18), unlisted("0x1", "credit", 7n)])
+        const position = foldPositions(legs, method, {}).find((p) => p.asset === "AERO")!
+        assert.equal(position.values.costUsdMicros, null)
+        assert.equal(position.values.averageCostUsdMicros, null)
+      })
+    }
+
+    it("what arrived has no cost or swap price, and says why", () => {
+      const rows = [row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 500n * E18), unlisted("0x1", "credit", 7n)]
+      const legs = legsOf(rows)
+      assert.equal(aero(legs).costLabel, "unknown")
+      assert.equal(aero(legs).costUsdMicros, null)
+      assert.equal(aero(legs).priceUsdMicros, null)
+      assert.match(aero(legs).priceNote!, /off the allowlist/)
+    })
+
+    it("a dataset row can't price it either, because that row only saw the listed tokens", () => {
+      const rows = [row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 500n * E18)]
+      const priced = derivePricedRows(rows, [REF])
+      assert.equal(priced.length, 1)
+      const legs = buildPricedLegs({ account: ME, rows: [...rows, unlisted("0x1", "credit", 7n)], references: [REF], priced })
+      assert.equal(aero(legs).priceUsdMicros, null)
+    })
+
+    it("selling for a listed token and an unlisted one leaves both sides unknown", () => {
+      const legs = legsOf([row("0x1", AERO, "debit", 500n * E18), row("0x1", USDC_ADDRESS, "credit", 600n * E6), unlisted("0x1", "credit", 7n)])
+      assert.equal(aero(legs).proceedsUsdMicros, null)
+      assert.equal(aero(legs).kind, "swap")
+      assert.equal(legs.find((l) => l.asset === "USDC")!.costUsdMicros, null)
+    })
+
+    it("paying with a listed and an unlisted token leaves what arrived unknown", () => {
+      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 600n * E6), unlisted("0x1", "debit", 7n), row("0x1", AERO, "credit", 500n * E18)])
+      assert.equal(aero(legs).costUsdMicros, null)
+      assert.equal(legs.find((l) => l.asset === "USDC")!.proceedsUsdMicros, null)
+    })
+
+    it("swapping into only an unlisted token has unknown proceeds, instead of hiding its gain as a transfer", () => {
+      const [usdc] = legsOf([row("0x1", USDC_ADDRESS, "debit", 600n * E6), unlisted("0x1", "credit", 7n)])
+      assert.equal(usdc!.kind, "swap")
+      assert.equal(usdc!.proceedsUsdMicros, null)
+    })
+
+    it("an unlisted token arriving with no payment is just a transfer in", () => {
+      const legs = legsOf([row("0x1", AERO, "credit", E18), unlisted("0x1", "credit", 7n)])
+      assert.equal(aero(legs).kind, "transfer")
+      assert.equal(aero(legs).costLabel, "unknown")
+    })
+
+    it("sending listed and unlisted tokens with nothing back stays a transfer", () => {
+      const [usdc] = legsOf([row("0x1", USDC_ADDRESS, "debit", 5n * E6), unlisted("0x1", "debit", 7n)])
+      assert.equal(usdc!.kind, "transfer")
+    })
+
+    it("an unlisted token that nets to zero moved nothing, so the swap stands", () => {
+      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 500n * E18), unlisted("0x1", "credit", 7n), unlisted("0x1", "debit", 7n)])
+      assert.equal(aero(legs).costUsdMicros, "1000000000")
+    })
+
+    it("a zero-value transfer of an unlisted token moved nothing either", () => {
+      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 500n * E18), unlisted("0x1", "credit", 0n)])
+      assert.equal(aero(legs).costUsdMicros, "1000000000")
+    })
+
+    it("several unlisted tokens net separately", () => {
+      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 500n * E18), unlisted("0x1", "credit", 7n), unlisted("0x1", "debit", 7n, OTHER)])
+      assert.equal(aero(legs).costUsdMicros, null)
+    })
+
+    it("an amount that can't be read counts as a movement, and doesn't throw", () => {
+      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 500n * E18), { ...unlisted("0x1", "credit", 0n), amount: "" }])
+      assert.equal(aero(legs).costUsdMicros, null)
+    })
+
+    it("the ETH and USDC oracle prices stay, as shared facts", () => {
+      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 2500n * E6), row("0x1", ETH_ADDRESS, "credit", E18), unlisted("0x1", "credit", 7n)])
+      const eth = legs.find((l) => l.asset === "ETH")!
+      assert.equal(eth.priceUsdMicros, "2400000000")
+      assert.equal(eth.costUsdMicros, null)
+    })
+
+    it("another transaction's unlisted movement doesn't matter", () => {
+      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 500n * E18), unlisted("0x2", "credit", 7n)])
+      assert.equal(aero(legs).costUsdMicros, "1000000000")
+    })
+
+    it("a known payment still survives an oracle failure when nothing unlisted moved", () => {
+      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 2500n * E6), row("0x1", ETH_ADDRESS, "credit", E18)], [{ block_num: 100, eth_usd: "", usdc_usd: "100000000" }])
+      assert.equal(legs.find((l) => l.asset === "ETH")!.costUsdMicros, "2500000000")
+    })
+
+    it("the rows that make the dataset's pairs leave unlisted tokens out", () => {
+      assert.equal(derivePricedRows([row("0x1", USDC_ADDRESS, "debit", 5n * E6), unlisted("0x1", "credit", 7n)], [REF]).length, 0)
+    })
   })
 
   it("wrapping nets to nothing, so its cost survives and nothing is realized", () => {

@@ -2,7 +2,7 @@
 // Pure, so it can be tested without Amp.
 
 import type { LegRow } from "../src/core/legs.ts"
-import { ETH_ADDRESS, WETH_ADDRESS, normalizeAddress } from "../src/core/tokens.ts"
+import { ETH_ADDRESS, WETH_ADDRESS, normalizeAddress, tokenByAddress } from "../src/core/tokens.ts"
 
 export const TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 export const DEPOSIT_TOPIC = "e1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
@@ -39,6 +39,7 @@ export type RawLog = {
   topic0: string
   topic1: string | null
   topic2: string | null
+  topic3: string | null
   data: string
 }
 
@@ -70,7 +71,7 @@ export type RawInput = {
   account: string
   /** Transactions the account sent or was the direct recipient of. */
   txs: readonly RawTx[]
-  /** Allowlisted `Transfer`, `Deposit` and `Withdrawal` logs naming the account. */
+  /** `Transfer`, `Deposit` and `Withdrawal` logs naming the account, for any token. */
   logs: readonly RawLog[]
   /** WETH `Withdrawal` logs in transactions the account sent, whoever `src` is. */
   withdrawals: readonly RawLog[]
@@ -98,20 +99,28 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
   }
 
   for (const log of logs) {
+    const address = normalizeAddress(log.address)
+    const listed = tokenByAddress(address) !== undefined
+    const first = topicToAddress(log.topic1)
     const base = {
       block_num: log.block_num,
       timestamp: log.timestamp,
       tx_hash: normalizeAddress(log.tx_hash),
       tx_index: log.tx_index,
       log_index: log.log_index,
-      token: normalizeAddress(log.address),
+      token: address,
       account: me,
       amount: BigInt(`0x${log.data.slice(0, 64) || "0"}`).toString(),
     }
-    const first = topicToAddress(log.topic1)
     if (log.topic0 === TRANSFER_TOPIC) {
-      if (first === me) rows.push({ ...base, side: "debit", kind: "erc20" })
-      if (topicToAddress(log.topic2) === me) rows.push({ ...base, side: "credit", kind: "erc20" })
+      if (listed && log.topic3 !== null) continue
+      // An NFT's id is in topic3, and is what tells one transfer of it from another.
+      const amount = log.topic3 === null ? base.amount : BigInt(`0x${log.topic3}`).toString()
+      const row = { ...base, amount, kind: listed ? ("erc20" as const) : ("unlisted" as const) }
+      if (first === me) rows.push({ ...row, side: "debit" })
+      if (topicToAddress(log.topic2) === me) rows.push({ ...row, side: "credit" })
+    } else if (address !== WETH_ADDRESS) {
+      continue
     } else if (log.topic0 === DEPOSIT_TOPIC && first === me) {
       rows.push({ ...base, side: "credit", kind: "wrap" })
     } else if (log.topic0 === WITHDRAWAL_TOPIC && first === me) {
