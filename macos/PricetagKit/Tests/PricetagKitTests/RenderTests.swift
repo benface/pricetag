@@ -1,4 +1,4 @@
-#if canImport(AppKit)
+#if DEBUG && canImport(AppKit)
 import AppKit
 import SwiftUI
 import Testing
