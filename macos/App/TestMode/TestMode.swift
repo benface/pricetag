@@ -196,7 +196,7 @@ private final class FixtureSource: PortfolioSource {
         self.feed = feed
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], timeout: Duration) async throws -> Portfolio {
         let read = reads.withLock { reads in
             reads += 1
             return reads
@@ -210,7 +210,7 @@ private final class FixtureSource: PortfolioSource {
         return try decode("demo-portfolio")
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) async throws -> Explanation {
         try decode("demo-explanation")
     }
 
