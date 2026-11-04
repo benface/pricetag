@@ -27,8 +27,12 @@ struct WordingVectors: Decodable {
         let blocks: Int
         let text: String
     }
+    struct PnlHelp: Decodable {
+        let text: String
+        let help: String?
+    }
     struct Sentences: Decodable {
-        let methodName, methodHelp, averagePricePaid, networkFees, realizedHelp, unrealizedHelp: String
+        let methodName, methodHelp, averagePricePaid, networkFees, pnlHelp, realizedHelp, unrealizedHelp: String
         let notStarted, unpricedFees, demo, pnlUnavailable, nothingToChart, reading, notAnAddress: String
     }
     let methods: [String: String]
@@ -43,6 +47,7 @@ struct WordingVectors: Decodable {
     let behind: [Behind]
     let stale: String
     let feedDetail: [String]
+    let pnlHelp: [PnlHelp]
     let sentences: Sentences
 }
 
@@ -71,11 +76,13 @@ struct WordingVectors: Decodable {
         for vector in vectors.behind { #expect(Wording.behind(blocks: vector.blocks) == vector.text) }
         #expect(Wording.stale(lastUpdate: "Nov 4 at 5:40 AM") == vectors.stale)
         #expect([Mode.demo, .raw, .dataset].map { Wording.feedDetail($0, block: 1000) } == vectors.feedDetail)
+        for vector in vectors.pnlHelp { #expect(Wording.pnlHelp(for: vector.text) == vector.help) }
         let sentences = vectors.sentences
         #expect(Wording.methodName == sentences.methodName)
         #expect(Wording.methodHelp == sentences.methodHelp)
         #expect(Wording.averagePricePaid == sentences.averagePricePaid)
         #expect(Wording.networkFees == sentences.networkFees)
+        #expect(Wording.pnlHelp == sentences.pnlHelp)
         #expect(Wording.realizedHelp == sentences.realizedHelp)
         #expect(Wording.unrealizedHelp == sentences.unrealizedHelp)
         #expect(Wording.notStarted == sentences.notStarted)

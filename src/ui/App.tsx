@@ -16,6 +16,7 @@ import {
   NETWORK_FEES,
   NOT_AN_ADDRESS,
   NOT_STARTED,
+  PNL_HELP,
   PNL_UNAVAILABLE,
   READING,
   REALIZED_HELP,
@@ -187,7 +188,7 @@ export function App() {
       {!address ? (
         <section className="empty">
           <h1>Every transfer gets a price.</h1>
-          <p>Paste a Base address to see its holdings, cost and PnL, with every number explained. This is view-only: there are no keys here, and it can't send anything.</p>
+          <p>Paste a Base address to see its holdings, cost and <span title={PNL_HELP}>PnL</span>, with every number explained. This is view-only: there are no keys here, and it can't send anything.</p>
           <button type="button" onClick={() => go("demo")}>
             Try the demo wallet
           </button>
@@ -222,7 +223,9 @@ export function App() {
             <>
               <section className="summary">
                 <div className="headline">
-                  <span className="muted small">Total PnL</span>
+                  <span className="muted small" title={PNL_HELP}>
+                    Total PnL
+                  </span>
                   <Num label="Total PnL" onClick={() => openTotal("pnl")} tone={toneOf(totals.pnlUsdMicros)}>
                     <span className="big">{totals.pnlUsdMicros === null ? "⚠ Unavailable" : formatSignedUsd(totals.pnlUsdMicros)}</span>
                   </Num>

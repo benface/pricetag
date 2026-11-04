@@ -21,7 +21,7 @@ public struct PnlHeadline: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("Total PnL").font(.caption).foregroundStyle(.secondary)
+            Text("Total PnL").font(.caption).foregroundStyle(.secondary).help(Wording.pnlHelp)
             Button(action: onOpen) {
                 Group {
                     if let pnl {

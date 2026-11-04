@@ -34,7 +34,7 @@ public struct ExplanationPane: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(explanation.title).font(.headline)
+                    Text(explanation.title).font(.headline).help(Wording.pnlHelp(for: explanation.title) ?? "")
                     if let value = explanation.value {
                         LiveNumber(value).font(.title2.weight(.semibold))
                     } else {
@@ -46,6 +46,7 @@ public struct ExplanationPane: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
+                            .help(Wording.pnlHelp(for: line) ?? "")
                     }
                     if store.feed.isStale {
                         WarningText("Not updating").font(.callout)

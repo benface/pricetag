@@ -138,11 +138,26 @@
     "Raw chain data · block 1,000",
     "Pricetag data · block 1,000"
   ],
+  "pnlHelp": [
+    {
+      "text": "Total PnL",
+      "help": "PnL is profit and loss: what you've gained or lost so far."
+    },
+    {
+      "text": "AERO: Realized PnL",
+      "help": "PnL is profit and loss: what you've gained or lost so far."
+    },
+    {
+      "text": "Transaction 0x1234…abcd",
+      "help": null
+    }
+  ],
   "sentences": {
     "methodName": "How cost is worked out",
     "methodHelp": "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest.",
     "averagePricePaid": "Average price paid",
     "networkFees": "Network fees",
+    "pnlHelp": "PnL is profit and loss: what you've gained or lost so far.",
     "realizedHelp": "Gain or loss on what you've sold or spent.",
     "unrealizedHelp": "Gain or loss on what you still hold, at the current price.",
     "notStarted": "The data hasn't reached this wallet's history yet, so there's nothing to show so far.",

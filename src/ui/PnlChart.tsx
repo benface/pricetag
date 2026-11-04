@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import type { PnlPoint } from "../core/portfolio.ts"
 import { formatClock, formatSignedUsd, formatTime } from "../core/format.ts"
-import { NOTHING_TO_CHART } from "../core/wording.ts"
+import { NOTHING_TO_CHART, PNL_HELP } from "../core/wording.ts"
 
 const showPnl = (point: PnlPoint) => (point.pnlUsdMicros === null ? "⚠ Unavailable" : formatSignedUsd(point.pnlUsdMicros))
 
@@ -95,18 +95,22 @@ export function PnlChart({ points, onSelect }: Props) {
   return (
     <section className="card">
       <div className="card-head">
-        <h2>PnL over time</h2>
+        <h2 title={PNL_HELP}>PnL over time</h2>
         <button type="button" className="link" onClick={() => setAsTable((v) => !v)}>
           {asTable ? "Show chart" : "Show table"}
         </button>
       </div>
-      <p className="muted small">After each transaction: realized PnL, plus unrealized PnL where there's a price at that moment, less network fees. Unknown costs add nothing.</p>
+      <p className="muted small" title={PNL_HELP}>
+        After each transaction: realized PnL, plus unrealized PnL where there's a price at that moment, less network fees. Unknown costs add nothing.
+      </p>
       {asTable ? (
         <table className="table compact">
           <thead>
             <tr>
               <th>Time</th>
-              <th className="num">PnL</th>
+              <th className="num" title={PNL_HELP}>
+                PnL
+              </th>
               <th className="num">Excludes</th>
             </tr>
           </thead>
@@ -122,7 +126,9 @@ export function PnlChart({ points, onSelect }: Props) {
                     `${formatTime(p.timestamp)} (now)`
                   )}
                 </td>
-                <td className="num">{showPnl(p)}</td>
+                <td className="num" title={PNL_HELP}>
+                  {showPnl(p)}
+                </td>
                 <td className="num">{p.excludedCount}</td>
               </tr>
             ))}

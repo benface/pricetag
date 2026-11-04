@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef } from "react"
 import type { LegEffect } from "../core/portfolio.ts"
 import { formatPrice, formatSignedAmount, formatTime, shortHash } from "../core/format.ts"
 import { describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
-import { actionLabel, activityTitle, costTag, priceSourceLabel } from "../core/wording.ts"
+import { actionLabel, activityTitle, costTag, pnlHelp, priceSourceLabel } from "../core/wording.ts"
 
 /** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS_SHOWN = 200
@@ -75,14 +75,14 @@ export function ExplainPanel({ explanation, onClose }: { explanation: Explanatio
     >
       <div className="panel-body">
         <header className="panel-head">
-          <h2>{explanation.title}</h2>
+          <h2 title={pnlHelp(explanation.title)}>{explanation.title}</h2>
           <button ref={close} type="button" className="link" onClick={onClose}>
             Close
           </button>
         </header>
         <p className="panel-value">{explanation.value ?? <span className="unavailable">⚠ Unavailable</span>}</p>
         {explanation.lines.map((line) => (
-          <p key={line} className="small">
+          <p key={line} className="small" title={pnlHelp(line)}>
             {line}
           </p>
         ))}

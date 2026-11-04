@@ -8,8 +8,14 @@ public enum Wording {
     public static let methodHelp = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
     public static let averagePricePaid = "Average price paid"
     public static let networkFees = "Network fees"
+    public static let pnlHelp = "PnL is profit and loss: what you've gained or lost so far."
     public static let realizedHelp = "Gain or loss on what you've sold or spent."
     public static let unrealizedHelp = "Gain or loss on what you still hold, at the current price."
+
+    /// The tooltip for a title or sentence that says PnL, or nothing when it doesn't.
+    public static func pnlHelp(for text: String) -> String? {
+        text.contains("PnL") ? pnlHelp : nil
+    }
 
     /// What a leg did, in a word.
     public static func action(kind: String, isIncoming: Bool) -> String {

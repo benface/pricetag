@@ -121,6 +121,7 @@ struct MainWindow: View {
                 } else {
                     Text(Wording.nothingToChart)
                         .foregroundStyle(.secondary)
+                        .help(Wording.pnlHelp)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
@@ -286,6 +287,7 @@ private struct TransactionsTable: View {
                     if point.pnlUsdMicros == nil { WarningIcon() }
                     LiveNumber(point.pnlUsdMicros.map(Format.signedUSD) ?? "Unavailable", tone: isLive ? Tone(signed: point.pnlUsdMicros) : .neutral)
                 }
+                .help(Wording.pnlHelp)
             }
             .alignment(.numeric)
             TableColumn("Leaves out") { point in
@@ -330,6 +332,7 @@ private struct Welcome: View {
             Label("Every transfer gets a price", systemImage: "tag")
         } description: {
             Text("Add a Base address to see its holdings, cost and PnL, with every number explained. This is view-only: there are no keys here, and it can't send anything.")
+                .help(Wording.pnlHelp)
         } actions: {
             WalletForm(store: store, onDone: {})
                 .frame(width: 440)

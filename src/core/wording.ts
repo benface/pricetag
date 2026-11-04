@@ -13,8 +13,12 @@ export const METHOD_HELP = "Average spreads what you paid across all you hold. O
 
 export const AVERAGE_PRICE_PAID = "Average price paid"
 export const NETWORK_FEES = "Network fees"
+export const PNL_HELP = "PnL is profit and loss: what you've gained or lost so far."
 export const REALIZED_HELP = "Gain or loss on what you've sold or spent."
 export const UNREALIZED_HELP = "Gain or loss on what you still hold, at the current price."
+
+/** The tooltip for a title or sentence that says PnL, or nothing when it doesn't. */
+export const pnlHelp = (text: string): string | undefined => (text.includes("PnL") ? PNL_HELP : undefined)
 
 export const ETH_NOTE = "incl. wrapped ETH"
 export const DEMO_NOTICE = "Demo data, not a real wallet. Every case the app has to get right is in here."

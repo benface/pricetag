@@ -246,11 +246,13 @@ describe("wording", () => {
     behind: [6, 14, 15, 50, 5400].map((blocks) => ({ blocks, text: wording.behindSentence(blocks) })),
     stale: wording.staleSentence("Nov 4 at 5:40 AM"),
     feedDetail: [wording.feedDetail("demo", 1000), wording.feedDetail("raw", 1000), wording.feedDetail("dataset", 1000)],
+    pnlHelp: ["Total PnL", "AERO: Realized PnL", "Transaction 0x1234…abcd"].map((text) => ({ text, help: wording.pnlHelp(text) ?? null })),
     sentences: {
       methodName: wording.METHOD_NAME,
       methodHelp: wording.METHOD_HELP,
       averagePricePaid: wording.AVERAGE_PRICE_PAID,
       networkFees: wording.NETWORK_FEES,
+      pnlHelp: wording.PNL_HELP,
       realizedHelp: wording.REALIZED_HELP,
       unrealizedHelp: wording.UNREALIZED_HELP,
       notStarted: wording.NOT_STARTED,
@@ -265,6 +267,12 @@ describe("wording", () => {
 
   it("says the same on the Mac", () => {
     assertMatchesFile("wording-vectors.json", vectors)
+  })
+
+  it("says what PnL stands for", () => {
+    assert.match(wording.PNL_HELP, /profit and loss/)
+    assert.equal(wording.pnlHelp("Total PnL"), wording.PNL_HELP)
+    assert.equal(wording.pnlHelp("Transaction 0x1234…abcd"), undefined)
   })
 
   it("uses none of the old terms in anything people read", () => {
