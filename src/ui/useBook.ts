@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import type { WalletResponse } from "../core/api.ts"
 import { emptyBook, parseBook, type Book } from "../core/book.ts"
+import type { CurrencyCode } from "../core/currency.ts"
 
 const KEY = "patina.book"
 
@@ -37,7 +38,7 @@ export function useBook() {
 }
 
 /** Reads other wallets, and again on each new block of the wallet on screen. One that can't be read yet stays out. */
-export function useOtherWallets(addresses: readonly string[], block: number | null): WalletResponse[] {
+export function useOtherWallets(addresses: readonly string[], currency: CurrencyCode, block: number | null): WalletResponse[] {
   const [wallets, setWallets] = useState<Record<string, WalletResponse>>({})
   const key = addresses.join(",")
 
@@ -45,7 +46,7 @@ export function useOtherWallets(addresses: readonly string[], block: number | nu
     if (!key) return
     const abort = new AbortController()
     for (const address of key.split(",")) {
-      fetch(`/api/wallet/${address}`, { signal: abort.signal })
+      fetch(`/api/wallet/${address}?currency=${currency}`, { signal: abort.signal })
         .then((response) => (response.ok ? (response.json() as Promise<WalletResponse>) : null))
         .then((wallet) => {
           if (wallet) setWallets((w) => ({ ...w, [address]: wallet }))
@@ -53,7 +54,8 @@ export function useOtherWallets(addresses: readonly string[], block: number | nu
         .catch(() => {})
     }
     return () => abort.abort()
-  }, [key, block])
+  }, [key, currency, block])
 
-  return addresses.flatMap((address) => wallets[address] ?? [])
+  // A wallet in another currency would mix amounts, so one from before a change waits for the new read.
+  return addresses.flatMap((address) => (wallets[address]?.currency === currency ? [wallets[address]] : []))
 }

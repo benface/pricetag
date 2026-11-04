@@ -9,8 +9,8 @@ public enum Mode: String, Codable, Sendable {
     public var label: String {
         switch self {
         case .demo: "Demo data"
-        case .raw: "Raw dataset"
-        case .dataset: "Pricetag dataset"
+        case .raw: "Raw chain data"
+        case .dataset: "Pricetag data"
         }
     }
 }
@@ -21,8 +21,8 @@ public enum CostMethod: String, Codable, Sendable, CaseIterable, Identifiable {
     public var id: Self { self }
     public var label: String {
         switch self {
-        case .average: "Average cost"
-        case .fifo: "FIFO"
+        case .average: "Average"
+        case .fifo: "Oldest first"
         }
     }
 }
@@ -40,7 +40,7 @@ public struct Coverage: Codable, Sendable, Equatable {
 }
 
 public struct LatestPrice: Codable, Sendable, Equatable {
-    public let usdMicros: String
+    public let micros: String
     public let source: String
     public let blockNum: Int
 }
@@ -48,13 +48,15 @@ public struct LatestPrice: Codable, Sendable, Equatable {
 public struct PositionValues: Codable, Sendable, Equatable {
     public let qty: String
     public let unknownCostQty: String
-    public let costUsdMicros: String?
-    public let averageCostUsdMicros: String?
-    public let valueUsdMicros: String?
-    public let realizedUsdMicros: String?
-    public let unrealizedUsdMicros: String?
-    public let estimatedCostUsdMicros: String
-    public let estimatedRealizedUsdMicros: String
+    public let costMicros: String?
+    public let averageCostMicros: String?
+    public let valueMicros: String?
+    public let realizedMicros: String?
+    public let unrealizedMicros: String?
+    /// How much of the cost of what's held is an estimate.
+    public let estimatedCostMicros: String
+    /// How much of what `realizedMicros` comes from is an estimate.
+    public let estimatedRealizedMicros: String
 }
 
 /// Which of a position's numbers rest on an estimate, so they can look different from exact ones.
@@ -91,7 +93,7 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public let note: String?
     public let price: LatestPrice?
     public let values: PositionValues
-    public let pnlUsdMicros: String?
+    public let pnlMicros: String?
     public let shortfallQty: String
     public let legCount: Int
     public let reconciliation: Reconciliation?
@@ -131,18 +133,18 @@ public struct TotalsCoverage: Codable, Sendable, Equatable {
 
 /// Each sum is nil when nothing in it is known. That isn't $0, and a known $0 stays an answer.
 public struct Totals: Codable, Sendable, Equatable {
-    public let valueUsdMicros: String?
-    public let realizedUsdMicros: String?
-    public let unrealizedUsdMicros: String?
-    public let gasUsdMicros: String?
-    public let pnlUsdMicros: String?
+    public let valueMicros: String?
+    public let realizedMicros: String?
+    public let unrealizedMicros: String?
+    public let gasMicros: String?
+    public let pnlMicros: String?
     public let excluded: [Exclusion]
     public let unpricedGas: Bool
     public let coverage: TotalsCoverage
     /// What's held with an unknown cost, at today's price. It's not in any PnL.
-    public let unresolvedUsdMicros: String
+    public let unresolvedMicros: String
     /// How much of what these sums are made of is an estimate.
-    public let estimatedUsdMicros: String
+    public let estimatedMicros: String
     public let estimated: TotalEstimates
     /// Assets with no market, which aren't in any of this.
     public let noMarket: [String]
@@ -155,7 +157,7 @@ public struct TotalEstimates: Codable, Sendable, Equatable {
 }
 
 public enum PnlStatus: String, Codable, Sendable {
-    /// `totals.pnlUsdMicros` leaves nothing out.
+    /// `totals.pnlMicros` leaves nothing out.
     case complete
     /// It leaves something out, and `totals.excluded` says what.
     case partial
@@ -168,7 +170,7 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public let timestamp: String
     public let txHash: String?
     /// nil when nothing is known at this point, which isn't $0.
-    public let pnlUsdMicros: String?
+    public let pnlMicros: String?
     public let excludedCount: Int
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
@@ -182,10 +184,24 @@ public struct ReadProgress: Codable, Sendable, Equatable {
     public let behindBlocks: Int
 }
 
+/// How a portfolio's money got out of USD. The server converts each amount at the rate when it happened.
+public struct PortfolioExchange: Codable, Sendable, Equatable {
+    /// Where the rates came from, in words.
+    public let source: String
+    /// nil when there's no current rate, so nothing held has a current value.
+    public let latestRateMicros: String?
+    /// Transactions with an amount that had no rate at its block, so that amount is unavailable.
+    public let missingRateTxs: [String]
+}
+
 public struct Portfolio: Codable, Sendable, Equatable {
     public let address: String
     public let mode: Mode
     public let method: CostMethod
+    /// What every amount in here is in.
+    public let currency: CurrencyCode
+    /// nil for USD.
+    public let exchange: PortfolioExchange?
     public let coverage: Coverage
     public let trackedTokens: Int
     public let latest: Head
@@ -216,7 +232,7 @@ public struct Portfolio: Codable, Sendable, Equatable {
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
     /// A balance that couldn't be read doesn't count as nothing.
     public var isEmpty: Bool { positions.isEmpty && unreadAssets.isEmpty }
-    public var hasChartableData: Bool { points.contains { $0.pnlUsdMicros != nil } }
+    public var hasChartableData: Bool { points.contains { $0.pnlMicros != nil } }
     /// Every point with a transaction behind it, newest first.
     public var transactions: [PnlPoint] { points.filter { $0.txHash != nil }.reversed() }
 }
@@ -227,7 +243,7 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let delta: String
     public let decimals: Int
     public let kind: String
-    public let priceUsdMicros: String?
+    public let priceMicros: String?
     public let priceSource: String?
     public let priceNote: String?
     public let costLabel: String
@@ -242,6 +258,8 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let opening: Bool
     public let effect: String
     public let netting: String?
+    /// What this leg was in USD and the rate that converted it, in words. nil when it's in USD.
+    public let conversion: String?
 
     public var isIncoming: Bool { !delta.hasPrefix("-") }
     public var date: Date? { parseTimestamp(timestamp) }
@@ -249,8 +267,11 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
 }
 
 public struct Explanation: Codable, Sendable, Equatable {
+    public let currency: CurrencyCode
     public let title: String
     public let value: String?
+    /// The same number in USD, when that isn't what `value` is in.
+    public let sourceValue: String?
     public let lines: [String]
     public let legCount: Int
     public let legs: [ExplanationLeg]
@@ -316,7 +337,7 @@ public struct Question: Codable, Sendable, Equatable, Identifiable {
     public let lastAt: String
     /// Facts that might help. Never a preselected answer.
     public let evidence: [String]
-    public let valueUsdMicros: String?
+    public let valueMicros: String?
 }
 
 public struct Meter: Codable, Sendable, Equatable {
@@ -334,10 +355,10 @@ public struct Meter: Codable, Sendable, Equatable {
 
 /// What the headline would say with a different set of answers, before any of them is final.
 public struct BookPreview: Codable, Sendable, Equatable {
-    public let pnlUsdMicros: String?
+    public let pnlMicros: String?
     public let pnlStatus: PnlStatus
-    public let estimatedUsdMicros: String
-    public let unresolvedUsdMicros: String
+    public let estimatedMicros: String
+    public let unresolvedMicros: String
     public let open: Int
     /// A wallet these answers link hasn't been read yet, so this can't say yet.
     public let pending: Bool
@@ -349,14 +370,25 @@ public struct ExchangeWithdrawal: Codable, Sendable, Equatable {
     public let asset: String
     public let units: String
     public let at: String
-    public let costUsdMicros: String
+    public let cost: Money
     public let toAddress: String?
 }
 
 public struct ExchangeImport: Codable, Sendable, Equatable {
     public let withdrawals: [ExchangeWithdrawal]
-    /// Withdrawals with no usable cost: bought in another currency, or with a history this can't follow.
+    /// Withdrawals with no usable cost: bought in a currency this app doesn't have, in several at once, or with a history it can't follow.
     public let skipped: Int
+}
+
+/// An amount someone entered or imported, in the currency it was in, because that's what it stays true in.
+public struct Money: Codable, Sendable, Equatable, Hashable {
+    public let micros: String
+    public let currency: CurrencyCode
+
+    public init(micros: String, currency: CurrencyCode) {
+        self.micros = micros
+        self.currency = currency
+    }
 }
 
 public struct SenderAnswer: Codable, Sendable, Equatable {
@@ -367,10 +399,10 @@ public struct SenderAnswer: Codable, Sendable, Equatable {
     }
 
     public let kind: Kind
-    /// What was paid for everything from this address, by asset, in micro-USD.
-    public let costs: [String: String]?
+    /// What was paid for everything from this address, by asset.
+    public let costs: [String: Money]?
 
-    public init(kind: Kind, costs: [String: String]? = nil) {
+    public init(kind: Kind, costs: [String: Money]? = nil) {
         self.kind = kind
         self.costs = costs
     }
@@ -382,10 +414,10 @@ public struct SenderAnswer: Codable, Sendable, Equatable {
 /// The user's answers. They stay on this device, and go along with each request. The server doesn't keep them.
 public struct Book: Codable, Sendable, Equatable, Hashable {
     public var senders: [String: SenderAnswer]
-    public var costs: [String: String]
+    public var costs: [String: Money]
     public var withdrawals: [ExchangeWithdrawal]
 
-    public init(senders: [String: SenderAnswer] = [:], costs: [String: String] = [:], withdrawals: [ExchangeWithdrawal] = []) {
+    public init(senders: [String: SenderAnswer] = [:], costs: [String: Money] = [:], withdrawals: [ExchangeWithdrawal] = []) {
         self.senders = senders
         self.costs = costs
         self.withdrawals = withdrawals
@@ -399,9 +431,9 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
         return next
     }
 
-    public func enteringCost(_ key: String, usdMicros: String) -> Book {
+    public func enteringCost(_ key: String, _ cost: Money) -> Book {
         var next = self
-        next.costs[key] = usdMicros
+        next.costs[key] = cost
         return next
     }
 

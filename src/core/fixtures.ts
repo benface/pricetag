@@ -3,10 +3,9 @@
 // that also moved a token off the allowlist, an opening balance, a balance the legs don't explain, and senders to answer
 // for: another of this user's wallets, a stranger, an exchange address and a bridge. Answering them is the demo.
 
+import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, normalizeAddress, openingLegs, type LegKind, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
-import { buildPricedLegs, derivePricedRows, type LegKind, type LegRow, type ReferenceRow } from "./legs.ts"
-import { openingLegs } from "./reconcile.ts"
-import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, normalizeAddress } from "./tokens.ts"
+import type { CurrencyCode, Rates } from "./currency.ts"
 
 export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
 /** The demo's other wallet. Nothing links them until someone answers that it's theirs. */
@@ -133,9 +132,9 @@ for (const leg of legs) balances.set(leg.asset, (balances.get(leg.asset) ?? 0n) 
 balances.set("cbBTC", (balances.get("cbBTC") ?? 0n) + 500_000n)
 
 const prices: WalletResponse["prices"] = {
-  ETH: { usdMicros: "2640000000", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
-  USDC: { usdMicros: "999800", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
-  ...Object.fromEntries(Object.entries(MARKET).map(([asset, usdMicros]) => [asset, { usdMicros, source: "market" as const, blockNum: START_BLOCK + HEAD_OFFSET - 12 }])),
+  ETH: { micros: "2640000000", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
+  USDC: { micros: "999800", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
+  ...Object.fromEntries(Object.entries(MARKET).map(([asset, micros]) => [asset, { micros, source: "market" as const, blockNum: START_BLOCK + HEAD_OFFSET - 12 }])),
 }
 
 const common = {
@@ -148,8 +147,37 @@ const common = {
   openingUnread: [],
   lastBalances: {},
   unreadBalances: [],
+  currency: "USD" as const,
+  rates: null,
   notes: [],
   marketChecked: true,
+}
+
+/** USD for one Canadian dollar, moving enough that converting at the wrong moment would show. */
+const CAD_USD: [blockOffset: number, usd: number][] = [
+  [-300, 0.745],
+  [0, 0.742],
+  [150, 0.741],
+  [300, 0.738],
+  [900, 0.734],
+  [1200, 0.732],
+  [1500, 0.731],
+  [2400, 0.728],
+  [3000, 0.725],
+  [3600, 0.723],
+  [4200, 0.72],
+  [4800, 0.718],
+  [5000, 0.716],
+  [HEAD_OFFSET, 0.715],
+]
+
+/** What the feed would have answered for the demo's blocks. A currency with no demo data has no rates, like any other missing rate. */
+export function demoRates(currency: CurrencyCode): Rates {
+  const rounds = (currency === "CAD" ? CAD_USD : []).map(([offset, usd]) => ({
+    blockNum: START_BLOCK + offset,
+    round: { answer: String(Math.round(usd * 1e8)), updatedAt: (START_TIME + offset * 2000) / 1000 },
+  }))
+  return { byBlock: Object.fromEntries(rounds.map((r) => [r.blockNum, r.round])), latest: rounds.at(-1) ?? null }
 }
 
 export const DEMO_WALLET: WalletResponse = {

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { WalletResponse } from "../core/api.ts"
+import type { CurrencyCode } from "../core/currency.ts"
 
 export type WalletState = {
   wallet: WalletResponse | null
@@ -8,8 +9,8 @@ export type WalletState = {
   error: string | null
 }
 
-async function fetchWallet(address: string, signal: AbortSignal): Promise<WalletResponse> {
-  const response = await fetch(`/api/wallet/${address}`, { signal })
+async function fetchWallet(address: string, currency: CurrencyCode, signal: AbortSignal): Promise<WalletResponse> {
+  const response = await fetch(`/api/wallet/${address}?currency=${currency}`, { signal })
   const body = (await response.json().catch(() => ({ error: "Can't reach the server." }))) as WalletResponse | { error: string }
   if (!response.ok || "error" in body) throw new Error("error" in body ? body.error : "Couldn't read this wallet.")
   return body
@@ -19,11 +20,14 @@ const LOST_CONNECTION = "Lost the connection to the server."
 const RECONNECT_MS = 3000
 
 /** Reads a wallet, then reads it again on each new block. A block that arrives during a read waits for the next one. */
-export function useWallet(address: string | null): WalletState {
+export function useWallet(address: string | null, currency: CurrencyCode): WalletState {
   const [state, setState] = useState<WalletState>({ wallet: null, loading: false, error: null })
+  const shownAddress = useRef<string | null>(null)
 
   useEffect(() => {
-    setState({ wallet: null, loading: address !== null, error: null })
+    // A change of currency keeps the numbers up until the new ones arrive. They say which currency they're in.
+    if (shownAddress.current !== address) setState({ wallet: null, loading: address !== null, error: null })
+    shownAddress.current = address
     if (!address) return
     const abort = new AbortController()
     let busy = false
@@ -41,7 +45,7 @@ export function useWallet(address: string | null): WalletState {
       busy = true
       readAgain = false
       const dropsAtStart = drops
-      fetchWallet(address, abort.signal)
+      fetchWallet(address, currency, abort.signal)
         .then((wallet) => setState((s) => ({ wallet, loading: false, error: connected && drops === dropsAtStart ? null : s.error })))
         .catch((error: Error) => {
           if (abort.signal.aborted) return
@@ -69,7 +73,7 @@ export function useWallet(address: string | null): WalletState {
         read()
       })
       events.addEventListener("head", read)
-      events.addEventListener("down", () => setState((s) => ({ ...s, error: "Can't reach Amp." })))
+      events.addEventListener("down", () => setState((s) => ({ ...s, error: "Can't reach the data source." })))
       events.addEventListener("error", () => {
         connected = false
         drops++
@@ -84,7 +88,7 @@ export function useWallet(address: string | null): WalletState {
       events.close()
       abort.abort()
     }
-  }, [address])
+  }, [address, currency])
 
   return state
 }

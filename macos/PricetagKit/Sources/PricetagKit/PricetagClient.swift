@@ -14,19 +14,19 @@ public enum FetchError: Error, Equatable, Sendable {
 }
 
 public protocol PortfolioSource: Sendable {
-    func portfolio(address: String, method: CostMethod, book: Book, timeout: Duration) async throws -> Portfolio
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, book: Book) async throws -> Explanation
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, book: Book, timeout: Duration) async throws -> Portfolio
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, book: Book) async throws -> Explanation
     /// What each set of answers would do to the headline, in the same order.
-    func previews(address: String, method: CostMethod, candidates: [Book]) async throws -> [BookPreview]
-    func exportCSV(address: String, method: CostMethod, book: Book) async throws -> String
+    func previews(address: String, method: CostMethod, currency: CurrencyCode, candidates: [Book]) async throws -> [BookPreview]
+    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, book: Book) async throws -> String
     func importCoinbase(csv: String) async throws -> ExchangeImport
     func verifyLink(owner: String, address: String, signature: String) async throws -> Bool
 }
 
 /// Nothing here needs to be there for a source that only reads, like one in a test.
 extension PortfolioSource {
-    public func previews(address: String, method: CostMethod, candidates: [Book]) async throws -> [BookPreview] { throw FetchError.unreachable }
-    public func exportCSV(address: String, method: CostMethod, book: Book) async throws -> String { throw FetchError.unreachable }
+    public func previews(address: String, method: CostMethod, currency: CurrencyCode, candidates: [Book]) async throws -> [BookPreview] { throw FetchError.unreachable }
+    public func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, book: Book) async throws -> String { throw FetchError.unreachable }
     public func importCoinbase(csv: String) async throws -> ExchangeImport { throw FetchError.unreachable }
     public func verifyLink(owner: String, address: String, signature: String) async throws -> Bool { throw FetchError.unreachable }
 }
@@ -42,21 +42,21 @@ public struct PricetagClient: PortfolioSource {
         session = URLSession(configuration: configuration)
     }
 
-    public func portfolio(address: String, method: CostMethod, book: Book, timeout: Duration) async throws -> Portfolio {
-        try await decoded(post("/api/portfolio/\(address)", body: FoldBody(method: method, book: book), timeout: timeout))
+    public func portfolio(address: String, method: CostMethod, currency: CurrencyCode, book: Book, timeout: Duration) async throws -> Portfolio {
+        try await decoded(post("/api/portfolio/\(address)", body: FoldBody(method: method, currency: currency, book: book), timeout: timeout))
     }
 
-    public func explanation(of target: ExplainTarget, address: String, method: CostMethod, book: Book) async throws -> Explanation {
-        try await decoded(post("/api/portfolio/\(address)/explain", query: target.queryItems, body: FoldBody(method: method, book: book), timeout: .seconds(30)))
+    public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, book: Book) async throws -> Explanation {
+        try await decoded(post("/api/portfolio/\(address)/explain", query: target.queryItems, body: FoldBody(method: method, currency: currency, book: book), timeout: .seconds(30)))
     }
 
-    public func previews(address: String, method: CostMethod, candidates: [Book]) async throws -> [BookPreview] {
-        let answer: PreviewAnswer = try await decoded(post("/api/portfolio/\(address)/preview", body: PreviewBody(method: method, candidates: candidates), timeout: .seconds(30)))
+    public func previews(address: String, method: CostMethod, currency: CurrencyCode, candidates: [Book]) async throws -> [BookPreview] {
+        let answer: PreviewAnswer = try await decoded(post("/api/portfolio/\(address)/preview", body: PreviewBody(method: method, currency: currency, candidates: candidates), timeout: .seconds(30)))
         return answer.previews
     }
 
-    public func exportCSV(address: String, method: CostMethod, book: Book) async throws -> String {
-        let data = try await post("/api/portfolio/\(address)/export", body: FoldBody(method: method, book: book), timeout: .seconds(30))
+    public func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, book: Book) async throws -> String {
+        let data = try await post("/api/portfolio/\(address)/export", body: FoldBody(method: method, currency: currency, book: book), timeout: .seconds(30))
         guard let text = String(data: data, encoding: .utf8) else { throw FetchError.rejected("The server sent something this version can't read.") }
         return text
     }
@@ -114,11 +114,13 @@ public struct PricetagClient: PortfolioSource {
 
     private struct FoldBody: Encodable {
         let method: CostMethod
+        let currency: CurrencyCode
         let book: Book
     }
 
     private struct PreviewBody: Encodable {
         let method: CostMethod
+        let currency: CurrencyCode
         let candidates: [Book]
     }
 

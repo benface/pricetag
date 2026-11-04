@@ -1,8 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { buildPricedLegs, derivePricedRows, type LegRow, type ReferenceRow } from "../src/core/legs.ts"
+import { ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
 import { MARKET_MAX_AGE_BLOCKS, marketPrice, marketTrades, type MarketRow, type MarketTrade } from "../src/core/market.ts"
-import { ETH_ADDRESS, USDC_ADDRESS } from "../src/core/tokens.ts"
 
 const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
 const DEGEN = "0x4ed4e862860bed51a9570b96d89af5e1b0efefed"
@@ -96,13 +95,13 @@ describe("the price of a leg, in order", () => {
   it("2. a swap in the same transaction beats the market", () => {
     const aero = legsOf(rows("0x1", [USDC_ADDRESS, "debit", 1000n * E6], [AERO, "credit", 800n * E18])).find((l) => l.asset === "AERO")
     assert.equal(aero?.priceSource, "swap")
-    assert.equal(aero?.priceUsdMicros, "1250000")
+    assert.equal(aero?.priceMicros, "1250000")
   })
 
   it("3. the market for a plain transfer, whose cost stays open", () => {
     const [leg] = legsOf(rows("0x1", [AERO, "credit", E18]))
     assert.equal(leg?.priceSource, "market")
-    assert.equal(leg?.priceUsdMicros, "1300000")
+    assert.equal(leg?.priceMicros, "1300000")
     assert.equal(leg?.priceNote, null)
     assert.equal(leg?.costLabel, "unknown")
   })
@@ -110,21 +109,21 @@ describe("the price of a leg, in order", () => {
   it("4. none, when there's no usable price", () => {
     const [leg] = legsOf(rows("0x1", [DEGEN, "credit", E18]))
     assert.equal(leg?.priceSource, null)
-    assert.equal(leg?.priceUsdMicros, null)
+    assert.equal(leg?.priceMicros, null)
   })
 
   it("an absurd swap gets the market's price instead, and still no cost", () => {
     const aero = legsOf(rows("0x1", [USDC_ADDRESS, "debit", 1n], [AERO, "credit", 50_000n * E18])).find((l) => l.asset === "AERO")
     assert.equal(aero?.priceSource, "market")
     assert.equal(aero?.costLabel, "unknown")
-    assert.equal(aero?.costUsdMicros, null)
+    assert.equal(aero?.costMicros, null)
   })
 
   it("values a swap with no feed on either side from the market, as an estimate", () => {
     const legs = legsOf(rows("0x1", [AERO, "debit", 1000n * E18], [DEGEN, "credit", 500_000n * E18]))
     const [sold, bought] = [legs.find((l) => l.asset === "AERO"), legs.find((l) => l.asset === "DEGEN")]
-    assert.equal(sold?.proceedsUsdMicros, "1300000000")
-    assert.equal(bought?.costUsdMicros, "1300000000")
+    assert.equal(sold?.proceedsMicros, "1300000000")
+    assert.equal(bought?.costMicros, "1300000000")
     assert.equal(bought?.costLabel, "paid")
     assert.equal(bought?.estimated, true)
     assert.equal(sold?.estimated, true)
@@ -132,7 +131,7 @@ describe("the price of a leg, in order", () => {
 
   it("won't value that swap when it implies something far from the other token's market price", () => {
     const legs = legsOf(rows("0x1", [AERO, "debit", 1000n * E18], [DEGEN, "credit", 500_000n * E18]), (asset) => (asset === "AERO" ? "1300000" : "1"))
-    assert.equal(legs.find((l) => l.asset === "DEGEN")?.costUsdMicros, null)
-    assert.equal(legs.find((l) => l.asset === "AERO")?.proceedsUsdMicros, null)
+    assert.equal(legs.find((l) => l.asset === "DEGEN")?.costMicros, null)
+    assert.equal(legs.find((l) => l.asset === "AERO")?.proceedsMicros, null)
   })
 })

@@ -50,7 +50,7 @@ export function reconcile(asset: string, legs: readonly PricedLeg[], shortfall: 
   const actual = balances?.amounts[asset]
   if (!balances || actual === undefined) {
     const last = lastBalances?.[asset]
-    return { status: "unchecked", reason: "The onchain balance couldn't be read.", heldQty: last ? estimateHeld(last, legs).toString() : null, heldIsCurrent: false }
+    return { status: "unchecked", reason: "The wallet's actual balance couldn't be read.", heldQty: last ? estimateHeld(last, legs).toString() : null, heldIsCurrent: false }
   }
   if (openingUnread?.includes(asset)) {
     return { status: "unchecked", reason: "What this wallet held before the first block read couldn't be read.", heldQty: actual, heldIsCurrent: true }
@@ -93,11 +93,11 @@ export function openingLegs(opening: BalanceSnapshot, timestamp: string): Priced
       timestamp,
       txHash: "",
       txIndex: -1,
-      priceUsdMicros: null,
+      priceMicros: null,
       priceSource: null,
       priceNote: `Already in this wallet before block ${firstBlock.toLocaleString("en-US")}, the first block read.`,
-      costUsdMicros: null,
-      proceedsUsdMicros: null,
+      costMicros: null,
+      proceedsMicros: null,
       costLabel: "unknown" as const,
       parts: [],
     }))

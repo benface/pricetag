@@ -6,34 +6,34 @@ import Foundation
 public enum Format {
     private static let locale = Locale(identifier: "en_US")
 
-    private static func dollars(_ micros: String) -> Decimal {
+    private static func whole(_ micros: String) -> Decimal {
         (Decimal(string: micros) ?? 0) / 1_000_000
     }
 
-    private static func currency(_ value: Decimal) -> String {
-        value.formatted(.currency(code: "USD").locale(locale).rounded(rule: .toNearestOrAwayFromZero))
+    private static func twoDecimals(_ value: Decimal, _ currency: CurrencyCode) -> String {
+        value.formatted(.currency(code: currency.rawValue).locale(currency.locale).rounded(rule: .toNearestOrAwayFromZero))
     }
 
-    private static func significant(_ value: Decimal, _ digits: Int) -> String {
-        value.formatted(.number.locale(locale).precision(.significantDigits(1...digits)).rounded(rule: .toNearestOrAwayFromZero))
+    private static func significant(_ value: Decimal, _ digits: Int, _ currency: CurrencyCode) -> String {
+        value.formatted(.number.locale(currency.locale).precision(.significantDigits(1...digits)).rounded(rule: .toNearestOrAwayFromZero))
     }
 
-    public static func usd(_ micros: String) -> String {
-        let value = dollars(micros)
+    public static func money(_ micros: String, _ currency: CurrencyCode) -> String {
+        let value = whole(micros)
         let size = abs(value)
-        if size == 0 { return "$0.00" }
+        if size == 0 { return twoDecimals(0, currency) }
         // Small amounts matter here: gas is often a fraction of a cent, and "$0.00" would read as nothing.
-        if size < Decimal(string: "0.01")! { return "\(value < 0 ? "-" : "")$\(significant(size, 2))" }
-        return currency(value)
+        if size < Decimal(string: "0.01")! { return "\(value < 0 ? "-" : "")\(currency.symbol)\(significant(size, 2, currency))" }
+        return twoDecimals(value, currency)
     }
 
-    public static func price(_ micros: String) -> String {
-        let value = dollars(micros)
-        return value >= 1 ? currency(value) : "$\(significant(value, 4))"
+    public static func price(_ micros: String, _ currency: CurrencyCode) -> String {
+        let value = whole(micros)
+        return value >= 1 ? twoDecimals(value, currency) : "\(currency.symbol)\(significant(value, 4, currency))"
     }
 
-    public static func signedUSD(_ micros: String) -> String {
-        isPositive(micros) ? "+\(usd(micros))" : usd(micros)
+    public static func signedMoney(_ micros: String, _ currency: CurrencyCode) -> String {
+        isPositive(micros) ? "+\(money(micros, currency))" : money(micros, currency)
     }
 
     /// Whole tokens from smallest units, cut to a readable length. Cuts instead of rounding, so it never shows more than there is.

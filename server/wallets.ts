@@ -1,18 +1,15 @@
 // Keeps each wallet's rows in memory: one full read, then only new blocks, because a wallet read scans the whole range.
 
+import { describeError } from "@pricetag/sdk"
+import { ASSETS, TOKENS, tokenByAddress, buildPricedLegs, derivePricedRows, latestPrices, openingLegs, type BalanceSnapshot, type LatestPrices, type LegRow, type PricedRow, type ReferenceRow } from "@pricetag/sdk/core"
 import type { Head, WalletResponse } from "../src/core/api.ts"
-import { buildPricedLegs, derivePricedRows, answerToMicros, type LegRow, type PricedRow, type ReferenceRow } from "../src/core/legs.ts"
 import { MARKET_MAX_AGE_BLOCKS, marketPrice, type MarketPrice } from "../src/core/market.ts"
 import type { CostNote } from "../src/core/notes.ts"
-import type { LatestPrices } from "../src/core/portfolio.ts"
-import { openingLegs, type BalanceSnapshot } from "../src/core/reconcile.ts"
-import { ASSETS, TOKENS, tokenByAddress } from "../src/core/tokens.ts"
-import { describeError } from "./amp.ts"
 import type { ReadL1Fees } from "./receipts.ts"
 import type { Source } from "./source.ts"
 
 /** Re-read this many blocks on each refresh, so a reorg near the tip replaces what it changed. */
-const REORG_BLOCKS = 30
+export const REORG_BLOCKS = 30
 const MAX_WALLETS = 20
 /** Base's block time, which is exact. */
 const BLOCK_MS = 2000
@@ -188,13 +185,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       for (const [asset, amount] of Object.entries(closing?.amounts ?? {})) lastBalances[asset] = { blockNum: coveredTo, amount }
     }
 
-    // Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong.
-    const latest = await source.readLatestReference(head.blockNum)
-    const eth = answerToMicros(latest?.eth_usd)
-    const usdc = answerToMicros(latest?.usdc_usd)
-    const prices: LatestPrices = {}
-    if (latest && eth) prices.ETH = { usdMicros: eth, source: "oracle", blockNum: latest.block_num }
-    if (latest && usdc) prices.USDC = { usdMicros: usdc, source: "oracle", blockNum: latest.block_num }
+    const prices = latestPrices(await source.readLatestReference(head.blockNum))
 
     // A price at the end of what's covered, for what's held, and one for each movement a trade doesn't already price.
     const headBucket = bucketOf(Math.min(coveredTo, head.blockNum), MARKET_HEAD_BUCKET_BLOCKS)
@@ -205,7 +196,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     ])
     for (const asset of heldAssets) {
       const price = market.get(`${asset}:${headBucket}`)
-      if (price) prices[asset] = { usdMicros: price.usdMicros, source: "market", blockNum: price.blockNum }
+      if (price) prices[asset] = { micros: price.usdMicros, source: "market", blockNum: price.blockNum }
     }
 
     const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs, opening, closing, lastBalances, l1Fees, notes, notesReadTo, marketChecked }
@@ -229,6 +220,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       prices: wallet.prices,
       latest: wallet.latest,
       gasUnknownTxs: [...wallet.gasUnknownTxs],
+      currency: "USD",
+      rates: null,
       l1FeeUnknownTxs: l1.unknownTxs,
       balances: closing,
       openingUnread: ASSETS.filter((asset) => opening?.amounts[asset] === undefined),

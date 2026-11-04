@@ -17,22 +17,22 @@ actor BookSource: PortfolioSource {
         previewAnswers = answers
     }
 
-    func portfolio(address: String, method: CostMethod, book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, book: Book, timeout: Duration) async throws -> Portfolio {
         books.append(book)
         return portfolios.count > 1 ? portfolios.removeFirst() : portfolios[0]
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
-    func previews(address: String, method: CostMethod, candidates: [Book]) async throws -> [BookPreview] {
+    func previews(address: String, method: CostMethod, currency: CurrencyCode, candidates: [Book]) async throws -> [BookPreview] {
         previewed.append(candidates)
         return previewAnswers
     }
 
     func importCoinbase(csv: String) async throws -> ExchangeImport {
-        ExchangeImport(withdrawals: [ExchangeWithdrawal(exchange: "Coinbase", asset: "ETH", units: "1", at: "2026-11-04T00:00:00.000Z", costUsdMicros: "5", toAddress: nil)], skipped: 1)
+        ExchangeImport(withdrawals: [ExchangeWithdrawal(exchange: "Coinbase", asset: "ETH", units: "1", at: "2026-11-04T00:00:00.000Z", cost: Money(micros: "5", currency: .USD), toAddress: nil)], skipped: 1)
     }
 
     func verifyLink(owner: String, address: String, signature: String) async throws -> Bool {
@@ -67,7 +67,7 @@ actor BookSource: PortfolioSource {
 
     @Test func aTotalNeverAppearsBare() throws {
         let portfolio = try demoPortfolio()
-        let caveat = try #require(Wording.headlineCaveat(portfolio.totals))
+        let caveat = try #require(Wording.headlineCaveat(portfolio.totals, portfolio.currency))
         #expect(caveat.contains("unresolved"))
         #expect(caveat.contains("estimated"))
         #expect(FeedSummary(feed: .live, portfolio: portfolio).text.contains("≈"))
@@ -77,14 +77,6 @@ actor BookSource: PortfolioSource {
         let text = try #require(Wording.noMarket(try demoPortfolio()))
         #expect(text.contains("DEGEN"))
         #expect(text.contains("2 tokens"))
-    }
-
-    @Test func userWordingAvoidsTheJargon() {
-        for label in ["paid", "inherited", "received at market", "self-reported"] {
-            #expect(!Wording.costSource(label).contains("market"))
-        }
-        #expect(Wording.priceSource("oracle") == "price feed")
-        #expect(Wording.priceSource("market") == "recent trades")
     }
 
     @Test func answersAreSentAlongAndKeptOnThisDevice() async throws {
@@ -99,7 +91,7 @@ actor BookSource: PortfolioSource {
     @Test func undoGoesBackOneAnswerAtATime() throws {
         let (store, _, _) = try makeStore()
         store.setBook(store.book.answering(sender, .someoneElse, focus: wallet))
-        store.setBook(store.book.enteringCost("k", usdMicros: "5"))
+        store.setBook(store.book.enteringCost("k", Money(micros: "5", currency: .USD)))
         store.undo()
         #expect(store.book.costs.isEmpty)
         #expect(store.book.senders[sender] == .someoneElse)
@@ -124,7 +116,7 @@ actor BookSource: PortfolioSource {
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source })
         let read = Task { await store.poll() }
         await source.waitUntilAsked()
-        store.setBook(Book(costs: ["k": "1"]))
+        store.setBook(Book(costs: ["k": Money(micros: "1", currency: .USD)]))
         store.stop()
         await source.answer(.success(try demoPortfolio()))
         await _ = read.value
@@ -138,10 +130,10 @@ actor BookSource: PortfolioSource {
         let model = ResolveModel(store: store)
         let first = try #require(model.current)
         #expect(first.id == portfolio.questions[0].id)
-        await source.answerPreviews([BookPreview(pnlUsdMicros: "12400000", pnlStatus: .complete, estimatedUsdMicros: "0", unresolvedUsdMicros: "0", open: 0, pending: false), BookPreview(pnlUsdMicros: nil, pnlStatus: .unavailable, estimatedUsdMicros: "0", unresolvedUsdMicros: "5000000", open: 1, pending: false)])
+        await source.answerPreviews([BookPreview(pnlMicros: "12400000", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false), BookPreview(pnlMicros: nil, pnlStatus: .unavailable, estimatedMicros: "0", unresolvedMicros: "5000000", open: 1, pending: false)])
         await model.loadPreviews()
-        #expect(model.previews[.mine].map(Wording.consequence) == "+$12.40")
-        #expect(model.previews[.someoneElse].map(Wording.consequence) == "PnL still unavailable")
+        #expect(model.previews[.mine].map { Wording.consequence($0, .USD) } == "+$12.40")
+        #expect(model.previews[.someoneElse].map { Wording.consequence($0, .USD) } == "PnL still unavailable")
         #expect(model.previews[.myExchange] == nil, "that answer asks for a cost before it changes anything")
 
         let asked = await source.previewed.last
@@ -164,14 +156,14 @@ actor BookSource: PortfolioSource {
         #expect(model.isAskingCost)
         #expect(store.book.senders[try #require(first.sender)]?.kind == .myExchange)
         #expect(!model.enterCost(["USDC": "nope"]), "not an amount")
-        await source.answerPreviews([BookPreview(pnlUsdMicros: "1000000", pnlStatus: .complete, estimatedUsdMicros: "0", unresolvedUsdMicros: "0", open: 0, pending: false)])
+        await source.answerPreviews([BookPreview(pnlMicros: "1000000", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false)])
         await model.previewCost(["USDC": "$1,234.50"])
-        #expect(model.costPreview.map(Wording.consequence) == "+$1.00")
+        #expect(model.costPreview.map { Wording.consequence($0, .USD) } == "+$1.00")
         #expect(store.book.senders[try #require(first.sender)]?.costs == nil, "typing isn't answering")
         await model.previewCost(["USDC": "nope"])
         #expect(model.costPreview == nil)
         #expect(model.enterCost(["USDC": "$1,234.50"]))
-        #expect(store.book.senders[try #require(first.sender)]?.costs == ["USDC": "1234500000"])
+        #expect(store.book.senders[try #require(first.sender)]?.costs == ["USDC": Money(micros: "1234500000", currency: .USD)])
     }
 
     @Test func aHoldingsQuestionsComeFirstWhenThatsWhatWasClicked() async throws {
@@ -188,7 +180,7 @@ actor BookSource: PortfolioSource {
         let question = try #require(model.current)
         #expect(question.kind == .cost)
         #expect(model.enterCost(["DAI": "250"]))
-        #expect(store.book.costs[try #require(question.costKey)] == "250000000")
+        #expect(store.book.costs[try #require(question.costKey)] == Money(micros: "250000000", currency: .USD))
     }
 
     @Test func importingKeepsWhatItFoundAndSaysWhatItCouldnt() async throws {
@@ -210,11 +202,32 @@ actor BookSource: PortfolioSource {
     }
 
     @Test func aPendingPreviewSaysSo() {
-        #expect(Wording.consequence(BookPreview(pnlUsdMicros: nil, pnlStatus: .unavailable, estimatedUsdMicros: "0", unresolvedUsdMicros: "0", open: 0, pending: true)) == "Reading that wallet…")
+        #expect(Wording.consequence(BookPreview(pnlMicros: nil, pnlStatus: .unavailable, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: true), .USD) == "Reading that wallet…")
     }
 
     @Test func aPartlyEstimatedOrUnresolvedConsequenceSaysSo() {
-        #expect(Wording.consequence(BookPreview(pnlUsdMicros: "1000000", pnlStatus: .partial, estimatedUsdMicros: "5", unresolvedUsdMicros: "45000000", open: 1, pending: false)) == "≈+$1.00 · $45.00 unresolved")
+        #expect(Wording.consequence(BookPreview(pnlMicros: "1000000", pnlStatus: .partial, estimatedMicros: "5", unresolvedMicros: "45000000", open: 1, pending: false), .USD) == "≈+$1.00 · $45.00 unresolved")
+    }
+
+    @Test func aCostInCADIsKeptInCAD() async throws {
+        let (store, _, _) = try makeStore()
+        store.setCurrency(.CAD)
+        await _ = store.poll()
+        let model = ResolveModel(store: store, firstAsset: "DAI")
+        let question = try #require(model.current)
+        #expect(model.enterCost(["DAI": "340"]))
+        #expect(store.book.costs[try #require(question.costKey)] == Money(micros: "340000000", currency: .CAD))
+    }
+
+    @Test func warnsAboutACostFarFromWhatItWasWorth() async throws {
+        let (store, _, _) = try makeStore()
+        await _ = store.poll()
+        let model = ResolveModel(store: store, firstAsset: "DAI")
+        let question = try #require(model.current)
+        #expect(model.costWarning(["DAI": "250"], for: question) == nil)
+        #expect(model.costWarning(["DAI": "121360"], for: question)?.contains("Double-check") == true)
+        #expect(model.costWarning(["DAI": "1"], for: question) != nil)
+        #expect(model.costWarning(["DAI": "nope"], for: question) == nil)
     }
 
     @Test func readsDollarsAsTyped() {

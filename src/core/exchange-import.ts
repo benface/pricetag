@@ -1,13 +1,13 @@
 // Reads a Coinbase transaction history CSV, to find what each withdrawal cost. A withdrawal it can't price exactly is left
 // out rather than guessed: it stays a question.
 
+import { ASSETS, decimalsOf, isAddress, normalizeAddress } from "@pricetag/sdk/core"
 import type { ExchangeWithdrawal } from "./book.ts"
-import { decimalsOf } from "./reconcile.ts"
-import { ASSETS, isAddressLike, normalizeAddress } from "./tokens.ts"
+import { isCurrencyCode, type CurrencyCode } from "./currency.ts"
 
 export type ExchangeImport = {
   withdrawals: ExchangeWithdrawal[]
-  /** Withdrawals with no usable cost: bought in another currency, or with a history this can't follow. */
+  /** Withdrawals with no usable cost: bought in a currency this app doesn't have, in several at once, or with a history it can't follow. */
   skipped: number
 }
 
@@ -42,7 +42,7 @@ const BUYS = new Set(["buy", "advanced trade buy", "advance trade buy"])
 const SELLS = new Set(["sell", "advanced trade sell", "advance trade sell"])
 const SENDS = new Set(["send", "withdrawal"])
 
-type Pool = { units: bigint; cost: bigint; known: boolean }
+type Pool = { units: bigint; cost: bigint; known: boolean; currency: CurrencyCode | null }
 
 export function parseCoinbaseCsv(text: string): ExchangeImport | null {
   const lines = text.replace(/^﻿/, "").split(/\r?\n/)
@@ -72,22 +72,26 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
     const decimals = decimalsOf(asset)
     const units = unitsOf(cells[at.qty] ?? "", decimals)
     const type = (cells[at.type] ?? "").trim().toLowerCase()
-    const pool = pools.get(asset) ?? { units: 0n, cost: 0n, known: true }
+    const pool = pools.get(asset) ?? { units: 0n, cost: 0n, known: true, currency: null }
     pools.set(asset, pool)
-    const usd = at.currency < 0 || (cells[at.currency] ?? "").trim().toUpperCase() === "USD"
+    const currency = at.currency < 0 ? "USD" : (cells[at.currency] ?? "").trim().toUpperCase()
     if (units === null || units === 0n) continue
     if (BUYS.has(type)) {
       const total = unitsOf(cells[at.total] ?? "", 6)
-      if (total === null || !usd) pool.known = false
-      else pool.cost += total
+      // Adding up two currencies would need a rate at each purchase, so a mix has no usable cost.
+      if (total === null || !isCurrencyCode(currency) || (pool.currency !== null && pool.currency !== currency)) pool.known = false
+      else {
+        pool.cost += total
+        pool.currency = currency
+      }
       pool.units += units
     } else if (SELLS.has(type) || SENDS.has(type)) {
-      const enough = pool.known && units <= pool.units && pool.units > 0n
+      const enough = pool.known && pool.currency !== null && units <= pool.units && pool.units > 0n
       const cost = enough ? (pool.cost * units) / pool.units : 0n
       if (SENDS.has(type)) {
         if (enough) {
           const to = (cells[at.notes] ?? "").match(/0x[0-9a-fA-F]{40}/)?.[0]
-          withdrawals.push({ exchange: "Coinbase", asset, units: units.toString(), at: new Date(time).toISOString(), costUsdMicros: cost.toString(), toAddress: to && isAddressLike(to) ? normalizeAddress(to) : null })
+          withdrawals.push({ exchange: "Coinbase", asset, units: units.toString(), at: new Date(time).toISOString(), cost: { micros: cost.toString(), currency: pool.currency as CurrencyCode }, toAddress: to && isAddress(to) ? normalizeAddress(to) : null })
         } else skipped++
       }
       pool.cost -= cost

@@ -135,8 +135,8 @@ public struct FeedBadge: View {
         case .live:
             guard let portfolio else { return "Reading" }
             if portfolio.mode == .demo { return Mode.demo.label }
-            return "Live · block \(Format.block(portfolio.coverage.toBlock))"
-        case .catchingUp: return portfolio.map { "Catching up · block \(Format.block($0.coverage.toBlock))" } ?? "Catching up"
+            return "Live"
+        case .catchingUp: return "Catching up"
         default: return "Not updating"
         }
     }
@@ -157,6 +157,6 @@ public struct FeedBadge: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
-        .help(portfolio.map { $0.mode.label } ?? "")
+        .help(portfolio.map { Wording.feedDetail($0.mode, block: $0.coverage.toBlock) } ?? "")
     }
 }

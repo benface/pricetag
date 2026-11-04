@@ -1,7 +1,7 @@
 // Addresses with a public name. Each one's name tag was read on Basescan, and its activity checked on Base. A name is
 // only evidence: exchanges send everyone's withdrawals from shared addresses, so it never says whose withdrawal this was.
 
-import { normalizeAddress } from "./tokens.ts"
+import { normalizeAddress } from "@pricetag/sdk/core"
 
 export type KnownSender = { name: string; kind: "exchange" | "bridge" }
 

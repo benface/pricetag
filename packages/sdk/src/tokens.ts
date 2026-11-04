@@ -51,7 +51,11 @@ export function normalizeAddress(address: string): string {
   return hex.startsWith("0x") ? hex : `0x${hex}`
 }
 
-export const isAddressLike = (value: string) => /^0x[0-9a-fA-F]{40}$/.test(value)
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/
+
+export function isAddress(value: string): boolean {
+  return ADDRESS.test(value)
+}
 
 /** The positions tokens fold into, which is what balances are read and compared by. */
 export const ASSETS: readonly string[] = [...new Set(TOKENS.map((t) => t.asset))]

@@ -3,15 +3,13 @@
 //
 // Every query is bounded by block, because staging is shared.
 
+import { ERC20_ADDRESSES, ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, asIso, asNumber, blockFilters, datasetReader, decimalString, describeError, hexOf, isNotStarted, prefixed, readHead, type LegRow, type PricedRow, type Query, type ReferenceRow, type Row, type BalanceSnapshot } from "@pricetag/sdk"
 import type { Head, Mode } from "../src/core/api.ts"
-import type { LegRow, PricedRow, ReferenceRow } from "../src/core/legs.ts"
+import type { RateRound } from "../src/core/currency.ts"
 import { marketTrades, type MarketTrade } from "../src/core/market.ts"
 import { parseNote, type CostNote } from "../src/core/notes.ts"
-import type { BalanceSnapshot } from "../src/core/reconcile.ts"
-import { ERC20_ADDRESSES, ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS } from "../src/core/tokens.ts"
-import { decimalString, describeError, isNotStarted, type Query } from "./amp.ts"
 import { MULTICALL3, balancesByAsset, decodeBalanceResults, encodeBalanceCalls } from "./balances.ts"
-import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
+import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRound, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
 
 export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknownTxs: string[] }
 
@@ -40,39 +38,6 @@ export type Source = {
   readMarketTrades?(asset: string, from: number, to: number): Promise<MarketTrade[]>
 }
 
-const hexOf = (address: string) => address.replace(/^0x/, "").toLowerCase()
-const asNumber = (value: unknown) => Number(value)
-const isMissingTable = (error: unknown) => /table .*not found|not found.*table|does not exist|unknown table/i.test(describeError(error))
-const asIso = (value: unknown) => new Date(Number(value)).toISOString()
-const prefixed = (hex: string) => `0x${hex}`
-
-const BLOCKS_PER_QUERY = 200
-/** Enough for the guards in market.ts, which only read the latest few. A busy pool repeats each trade per account. */
-const MARKET_ROWS = 300
-
-/**
- * WHERE clauses for a list of blocks, split so no query names too many.
- * Amp only skips files on a range: `block_num IN (...)` alone timed out on staging, and with the BETWEEN it took 1 s.
- */
-export function blockFilters(blocks: readonly number[]): { filter: string; count: number }[] {
-  const sorted = [...new Set(blocks)].sort((a, b) => a - b)
-  const result: { filter: string; count: number }[] = []
-  for (let i = 0; i < sorted.length; i += BLOCKS_PER_QUERY) {
-    const part = sorted.slice(i, i + BLOCKS_PER_QUERY)
-    result.push({ filter: `block_num BETWEEN ${part[0]} AND ${part[part.length - 1]} AND block_num IN (${part.join(", ")})`, count: part.length })
-  }
-  return result
-}
-
-type Row = Record<string, unknown>
-
-async function readHead(query: Query, dataset: string, after: number | null): Promise<Head | null> {
-  const where = after === null ? "" : `WHERE block_num >= ${after}`
-  const rows = await query<Row>(`SELECT block_num, timestamp FROM "${dataset}".blocks ${where} ORDER BY block_num DESC LIMIT 1`, 15_000)
-  const row = rows[0]
-  return row ? { blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) } : null
-}
-
 /**
  * With no table in the query, this makes exactly one `eth_call`, and it can read a block no table has, like the one
  * before a local dataset's start.
@@ -81,6 +46,30 @@ async function readBalancesAt(query: Query, network: string, address: string, bl
   const [row] = await query<Row>(`SELECT rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeBalanceCalls(address)}', ${block}) AS r`)
   const results = decodeBalanceResults((row?.r as { data?: string } | null | undefined)?.data)
   return results && { blockNum: block, amounts: balancesByAsset(results) }
+}
+
+/** A feed's answer at each block, leaving out blocks where the read failed. */
+export type RoundReader = (feed: string, blocks: readonly number[]) => Promise<Map<number, RateRound>>
+
+/**
+ * Exchange rates read the way `rawSource` reads the oracle, whichever source a wallet comes from: the Pricetag dataset's
+ * base is USD, so it doesn't hold them. See the note on the query's shape in `readReferences`.
+ */
+export function feedRounds(query: Query, config: { baseDataset: string; network: string }): RoundReader {
+  return async (feed, blocks) => {
+    const rounds = new Map<number, RateRound>()
+    for (const { filter, count } of blockFilters(blocks)) {
+      const rows = await query<Row>(
+        `SELECT block_num, rpc.${config.network}.eth_call(NULL, evm_encode_hex('${feed}'), evm_encode_params('latestRoundData()'), block_num) AS round
+         FROM (SELECT block_num FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`,
+      )
+      for (const row of rows) {
+        const round = decodeRound((row.round as { data?: string } | null)?.data)
+        if (round) rounds.set(asNumber(row.block_num), round)
+      }
+    }
+    return rounds
+  }
 }
 
 async function readNotesAt(query: Query, dataset: string, address: string, blocks: readonly number[]): Promise<CostNote[]> {
@@ -95,9 +84,6 @@ async function readNotesAt(query: Query, dataset: string, address: string, block
   }
   return notes.sort((a, b) => a.blockNum - b.blockNum)
 }
-
-/** About 2 minutes. A derived table runs a block or two behind the head, and older than this isn't a current price. */
-const MAX_PRICE_AGE_BLOCKS = 60
 
 export function rawSource(query: Query, config: { baseDataset: string; network: string; historyBlocks: number }): Source {
   const ds = `"${config.baseDataset}"`
@@ -218,26 +204,39 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
   }
 }
 
+const isMissingTable = (error: unknown) => /table .*not found|not found.*table|does not exist|unknown table/i.test(describeError(error))
+
+/** Enough for the guards in market.ts, which only read the latest few. A busy pool repeats each trade per account. */
+const MARKET_ROWS = 300
+
 export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; startBlock: number; network: string }): Source {
+  const reader = datasetReader(query, config)
   const ds = `"${config.dataset}"`
-  const readOrEmpty = (sql: string) =>
-    query<Row>(sql).catch((error: unknown) => {
-      if (isNotStarted(error)) return []
-      throw error
-    })
-  const referenceColumns = "block_num, get_field(eth_round, 'c1') AS eth_usd, get_field(usdc_round, 'c1') AS usdc_usd"
-  const toReference = (r: Row): ReferenceRow => ({
-    block_num: asNumber(r.block_num),
-    eth_usd: decimalString(r.eth_usd) ?? "",
-    usdc_usd: decimalString(r.usdc_usd) ?? "",
-  })
+  const base = `"${config.baseDataset}"`
   return {
     mode: "dataset",
     startBlock: config.startBlock,
     historyBlocks: null,
-    head: (after) => readHead(query, config.baseDataset, after),
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
     readNotes: (address, blocks) => readNotesAt(query, config.baseDataset, address, blocks),
+    ...reader,
+
+    async readWindow(address, from, to) {
+      const window = await reader.readWindow(address, from, to)
+      // `legs` doesn't say who was on the other side, so that comes from the raw tables, for only the blocks that matter.
+      const me = hexOf(address)
+      const topic = `X'${me.padStart(64, "0")}'`
+      const allowlist = ERC20_ADDRESSES.map((a) => `X'${hexOf(a)}'`).join(", ")
+      const logs: Pick<RawLog, "tx_hash" | "log_index" | "topic1" | "topic2">[] = []
+      const txs: Pick<RawTx, "tx_hash" | "from" | "to">[] = []
+      for (const { filter } of blockFilters(counterpartyBlocks(window.rows))) {
+        const logRows = await query<Row>(`SELECT tx_hash, log_index, topic1, topic2 FROM ${base}.logs WHERE ${filter} AND topic0 = X'${TRANSFER_TOPIC}' AND address IN (${allowlist}) AND (topic1 = ${topic} OR topic2 = ${topic})`)
+        logs.push(...logRows.map((l) => ({ tx_hash: prefixed(String(l.tx_hash)), log_index: asNumber(l.log_index), topic1: String(l.topic1), topic2: String(l.topic2) })))
+        const txRows = await query<Row>(`SELECT tx_hash, "from", "to" FROM ${base}.transactions WHERE ${filter} AND ("from" = X'${me}' OR "to" = X'${me}') AND value <> '0'`)
+        txs.push(...txRows.map((t) => ({ tx_hash: prefixed(String(t.tx_hash)), from: String(t.from), to: t.to == null ? null : String(t.to) })))
+      }
+      return { ...window, rows: withCounterparties(window.rows, logs, txs) }
+    },
 
     async marketReady() {
       // Only a dataset with the fix for wrong `priced_legs` rows has this table. Asking it for no rows tells them apart.
@@ -252,11 +251,14 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
     },
 
     async readMarketTrades(asset, from, to) {
-      const rows = await readOrEmpty(
+      const rows = await query<Row>(
         `SELECT block_num, tx_hash, sold_token, sold_amount, bought_token, bought_amount, priced, eth_usd FROM ${ds}.priced_legs
          WHERE block_num BETWEEN ${from} AND ${to} AND get_field(priced, 'token') = '${asset.replace(/[^A-Za-z0-9]/g, "")}'
          ORDER BY block_num DESC LIMIT ${MARKET_ROWS}`,
-      )
+      ).catch((error: unknown) => {
+        if (isNotStarted(error)) return []
+        throw error
+      })
       return marketTrades(
         rows.map((r) => ({
           block_num: asNumber(r.block_num),
@@ -269,82 +271,6 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
           eth_usd: decimalString(r.eth_usd) ?? "",
         })),
       )
-    },
-
-    async processedThrough(after, head) {
-      let through = head
-      for (const table of ["legs", "unlisted_legs", "priced_legs", "reference_prices"]) {
-        const rows = await readOrEmpty(`SELECT block_num FROM ${ds}.${table} WHERE block_num BETWEEN ${after} AND ${head} ORDER BY block_num DESC LIMIT 1`)
-        if (!rows[0]) return null
-        through = Math.min(through, asNumber(rows[0].block_num))
-      }
-      return through
-    },
-
-    async readWindow(address, from, to) {
-      const me = hexOf(address)
-      const range = `block_num BETWEEN ${from} AND ${to}`
-      const legColumns = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
-      const legRows = await query<Row>(`SELECT ${legColumns} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
-      const unlistedRows = await query<Row>(`SELECT ${legColumns} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
-      const pricedRows = await query<Row>(
-        `SELECT block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced FROM ${ds}.priced_legs WHERE ${range} AND account = X'${me}'`,
-      )
-      const toLegRow = (l: Row): LegRow => ({
-        block_num: asNumber(l.block_num),
-        timestamp: asIso(l.timestamp),
-        tx_hash: prefixed(String(l.tx_hash)),
-        tx_index: asNumber(l.tx_index),
-        log_index: asNumber(l.log_index),
-        token: prefixed(String(l.token)),
-        account: prefixed(String(l.account)),
-        side: l.side as LegRow["side"],
-        amount: l.amount == null ? "" : String(l.amount),
-        kind: l.kind as LegRow["kind"],
-      })
-      const rows = legRows.map(toLegRow)
-      const kept = rows.filter((r) => r.amount !== "" && r.amount !== "0")
-      // `legs` doesn't say who was on the other side, so that comes from the raw tables, for only the blocks that matter.
-      const logs: Pick<RawLog, "tx_hash" | "log_index" | "topic1" | "topic2">[] = []
-      const txs: Pick<RawTx, "tx_hash" | "from" | "to">[] = []
-      const allowlist = ERC20_ADDRESSES.map((a) => `X'${hexOf(a)}'`).join(", ")
-      const topic = `X'${me.padStart(64, "0")}'`
-      for (const { filter } of blockFilters(counterpartyBlocks(kept, address))) {
-        const logRows = await query<Row>(`SELECT tx_hash, log_index, topic1, topic2 FROM "${config.baseDataset}".logs WHERE ${filter} AND topic0 = X'${TRANSFER_TOPIC}' AND address IN (${allowlist}) AND (topic1 = ${topic} OR topic2 = ${topic})`)
-        logs.push(...logRows.map((l) => ({ tx_hash: prefixed(String(l.tx_hash)), log_index: asNumber(l.log_index), topic1: String(l.topic1), topic2: String(l.topic2) })))
-        const txRows = await query<Row>(`SELECT tx_hash, "from", "to" FROM "${config.baseDataset}".transactions WHERE ${filter} AND ("from" = X'${me}' OR "to" = X'${me}') AND value <> '0'`)
-        txs.push(...txRows.map((t) => ({ tx_hash: prefixed(String(t.tx_hash)), from: String(t.from), to: t.to == null ? null : String(t.to) })))
-      }
-      return {
-        // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
-        // An unlisted row stays either way, because it's evidence that something moved.
-        rows: [...withCounterparties(kept, address, logs, txs), ...unlistedRows.map(toLegRow)],
-        gasUnknownTxs: rows.filter((r) => r.kind === "gas" && r.amount === "").map((r) => r.tx_hash),
-        priced: pricedRows.map((p) => ({
-          block_num: asNumber(p.block_num),
-          tx_hash: prefixed(String(p.tx_hash)),
-          account: prefixed(String(p.account)),
-          sold_token: prefixed(String(p.sold_token)),
-          sold_amount: String(p.sold_amount),
-          bought_token: prefixed(String(p.bought_token)),
-          bought_amount: String(p.bought_amount),
-          priced: p.priced as PricedRow["priced"],
-        })),
-      }
-    },
-
-    async readReferences(blocks) {
-      const result: ReferenceRow[] = []
-      for (const { filter } of blockFilters(blocks)) {
-        const rows = await query<Row>(`SELECT ${referenceColumns} FROM ${ds}.reference_prices WHERE ${filter}`)
-        result.push(...rows.map(toReference))
-      }
-      return result
-    },
-
-    async readLatestReference(head) {
-      const rows = await readOrEmpty(`SELECT ${referenceColumns} FROM ${ds}.reference_prices WHERE block_num BETWEEN ${head - MAX_PRICE_AGE_BLOCKS} AND ${head} ORDER BY block_num DESC LIMIT 1`)
-      return rows[0] ? toReference(rows[0]) : null
     },
   }
 }

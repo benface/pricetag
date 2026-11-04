@@ -1,8 +1,6 @@
 // A token's `market` price: what it recently traded at, from `priced_legs`, with guards so a thin pool can't set it.
 
-import { answerToMicros, isSanePrice, type PricedRow } from "./legs.ts"
-import { usdOf } from "./fold.ts"
-import { TOKENS, tokenByAddress } from "./tokens.ts"
+import { TOKENS, answerToMicros, isSanePrice, tokenByAddress, worth, type PricedRow } from "@pricetag/sdk/core"
 
 /** One account's trade of a token. A trade shows up once per account it went through, which is why these group by transaction. */
 export type MarketTrade = { blockNum: number; txHash: string; asset: string; usdMicros: string; notionalUsdMicros: string }
@@ -33,7 +31,7 @@ export function marketTrades(rows: readonly MarketRow[]): MarketTrade[] {
     const sold = tokenByAddress(row.sold_token)?.asset === token.asset
     const amount = sold ? row.sold_amount : row.bought_amount
     if (!/^\d+$/.test(amount)) return []
-    return [{ blockNum: row.block_num, txHash: row.tx_hash, asset: token.asset, usdMicros: row.priced.usd_micros, notionalUsdMicros: usdOf(BigInt(amount), BigInt(row.priced.usd_micros), token.decimals).toString() }]
+    return [{ blockNum: row.block_num, txHash: row.tx_hash, asset: token.asset, usdMicros: row.priced.usd_micros, notionalUsdMicros: worth(BigInt(amount), BigInt(row.priced.usd_micros), token.decimals).toString() }]
   })
 }
 

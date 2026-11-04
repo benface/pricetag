@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
+import type { Method } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "../core/api.ts"
-import { answerSender, linkMessage, type Book, type SenderAnswer } from "../core/book.ts"
+import { answerSender, linkMessage, type Book, type Money, type SenderAnswer } from "../core/book.ts"
+import type { CurrencyCode } from "../core/currency.ts"
 import { parseCoinbaseCsv } from "../core/exchange-import.ts"
-import type { Method } from "../core/fold.ts"
-import { formatAmount, formatSignedUsd, formatUsd, shortHash } from "../core/format.ts"
-import { foldBook, previewBook } from "../core/portfolio.ts"
-import type { Question } from "../core/resolve.ts"
+import { formatAmount, formatMoney, formatSignedMoney, shortHash } from "../core/format.ts"
+import { foldBook, previewBook, type Question } from "../core/resolve.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
 
@@ -25,13 +25,20 @@ function microsOf(text: string): string | null {
   return BigInt(`${whole || "0"}${fraction.slice(0, 6).padEnd(6, "0")}`).toString()
 }
 
-export const pnlWords = (pnl: string | null, estimated: string, unresolved: string) => {
+const pnlWords = (pnl: string | null, estimated: string, unresolved: string, currency: CurrencyCode) => {
   if (pnl === null) return "PnL unavailable"
-  const number = `${BigInt(estimated) > 0n ? "≈" : ""}${formatSignedUsd(pnl)}`
-  return BigInt(unresolved) > 0n ? `${number} · ${formatUsd(unresolved)} unresolved` : number
+  const number = `${BigInt(estimated) > 0n ? "≈" : ""}${formatSignedMoney(pnl, currency)}`
+  return BigInt(unresolved) > 0n ? `${number} · ${formatMoney(unresolved, currency)} unresolved` : number
 }
 
-const consequence = (preview: BookPreview) => (preview.pending ? "Reading that wallet…" : preview.pnlUsdMicros === null ? "PnL still unavailable" : pnlWords(preview.pnlUsdMicros, preview.estimatedUsdMicros, preview.unresolvedUsdMicros))
+const consequence = (preview: BookPreview, currency: CurrencyCode) => (preview.pending ? "Reading that wallet…" : preview.pnlMicros === null ? "PnL still unavailable" : pnlWords(preview.pnlMicros, preview.estimatedMicros, preview.unresolvedMicros, currency))
+
+/** A typed cost next to what it was worth, to catch a slip. It's only ever a warning: what someone paid is theirs to say. */
+function looksOff(entered: string | null, value: string | null): boolean {
+  if (entered === null || value === null || BigInt(value) === 0n) return false
+  const ratio = (BigInt(entered) * 100n) / BigInt(value)
+  return ratio > 500n || ratio < 20n
+}
 
 type Props = {
   wallet: WalletResponse
@@ -69,6 +76,7 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
   }, [])
 
   const fold = useMemo(() => foldBook(wallet, others as WalletResponse[], method, book), [wallet, others, method, book])
+  const { currency } = fold.view
   const questions = useMemo(() => {
     const open = fold.questions.filter((q) => !skipped.has(q.id))
     if (!firstAsset) return open
@@ -130,9 +138,10 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
     if (!current) return null
     const entered = Object.fromEntries(current.arrivals.map((a) => [a.asset, microsOf(costs[a.asset] ?? "")]))
     if (Object.values(entered).includes(null)) return null
-    if (current.sender) return answerSender(book, wallet.address, current.sender, { kind: "my-exchange", costs: entered as Record<string, string> })
-    return current.costKey ? { ...book, costs: { ...book.costs, [current.costKey]: Object.values(entered)[0] as string } } : null
-  }, [current, costs, book, wallet.address])
+    const money = (micros: string | null): Money => ({ micros: micros as string, currency })
+    if (current.sender) return answerSender(book, wallet.address, current.sender, { kind: "my-exchange", costs: Object.fromEntries(Object.entries(entered).map(([asset, micros]) => [asset, money(micros)])) })
+    return current.costKey ? { ...book, costs: { ...book.costs, [current.costKey]: money(Object.values(entered)[0] as string) } } : null
+  }, [current, costs, book, wallet.address, currency])
   const saveCost = () => {
     if (!costBook) return setMessage("That isn't an amount.")
     onChange(costBook)
@@ -143,7 +152,7 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
     const imported = parseCoinbaseCsv(await file.text())
     if (!imported) return setMessage("That doesn't look like a Coinbase transaction history.")
     onChange({ ...book, withdrawals: imported.withdrawals })
-    setMessage(`Found ${imported.withdrawals.length} withdrawals.${imported.skipped > 0 ? ` ${imported.skipped} had no usable cost, like one bought in another currency.` : ""}`)
+    setMessage(`Found ${imported.withdrawals.length} withdrawals.${imported.skipped > 0 ? ` ${imported.skipped} had no usable cost.` : ""}`)
     setAsking(false)
   }
 
@@ -170,7 +179,7 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
       </div>
       <p className="small">
         <span className="muted">Now </span>
-        {pnlWords(fold.totals.pnlUsdMicros, fold.totals.estimatedUsdMicros, fold.totals.unresolvedUsdMicros)}
+        {pnlWords(fold.totals.pnlMicros, fold.totals.estimatedMicros, fold.totals.unresolvedMicros, currency)}
       </p>
 
       {current ? (
@@ -207,7 +216,8 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
                   <input autoFocus inputMode="decimal" placeholder="$0.00" value={costs[arrival.asset] ?? ""} onChange={(e) => setCosts({ ...costs, [arrival.asset]: e.target.value })} />
                 </label>
               ))}
-              {costBook ? <p className="small">That would make it {consequence(previewBook(wallet, others as WalletResponse[], method, costBook))}</p> : null}
+              {costBook ? <p className="small">That would make it {consequence(previewBook(wallet, others as WalletResponse[], method, costBook), currency)}</p> : null}
+              {current.arrivals.length === 1 && looksOff(microsOf(costs[(current.arrivals[0] as { asset: string }).asset] ?? ""), current.valueMicros) ? <p className="small warn-text">⚠ That's far from what it was worth when it arrived, about {formatMoney(current.valueMicros as string, currency)}. Double-check it.</p> : null}
               <div className="cost-actions">
                 <button type="button" onClick={saveCost}>
                   Save
@@ -231,7 +241,7 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
               {OWNERSHIP.map(({ kind, title, swipe }, i) => (
                 <button key={kind} type="button" onClick={() => choose(kind)}>
                   <span className="answer-title">{title}</span>
-                  <span className="muted small">{kind === "my-exchange" ? "Then asks what you paid" : previews ? consequence(previews[kind]) : "…"}</span>
+                  <span className="muted small">{kind === "my-exchange" ? "Then asks what you paid" : previews ? consequence(previews[kind], currency) : "…"}</span>
                   <span className="muted small key">
                     {i + 1} {swipe}
                   </span>

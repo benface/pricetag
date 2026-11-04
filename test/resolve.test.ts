@@ -2,17 +2,14 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { verifyLink } from "../server/links.ts"
 import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
+import { ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, type LegRow, type Method, type ReferenceRow } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
-import { answerSender, costKey, emptyBook, linkMessage, parseBook, type Book, type SenderAnswer } from "../src/core/book.ts"
+import { answerSender, costKey, emptyBook, linkMessage, parseBook, type Book, type Money, type SenderAnswer } from "../src/core/book.ts"
 import { matchWithdrawal, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
-import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET } from "../src/core/fixtures.ts"
-import type { Method } from "../src/core/fold.ts"
-import { buildPricedLegs, type LegRow, type PricedLeg, type ReferenceRow } from "../src/core/legs.ts"
+import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { encodeNote, parseNote } from "../src/core/notes.ts"
-import { foldBook } from "../src/core/portfolio.ts"
-import { openingLegs } from "../src/core/reconcile.ts"
-import { ETH_ADDRESS, USDC_ADDRESS } from "../src/core/tokens.ts"
+import { foldBook } from "../src/core/resolve.ts"
 
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`
 const [A, B, C, STRANGER] = [addr(0xa1), addr(0xb1), addr(0xc1), addr(0xd1)] as [string, string, string, string]
@@ -57,8 +54,10 @@ function wallet(address: string, rows: LegRow[], changes: Partial<WalletResponse
     mode: "demo",
     coverage: { fromBlock: 1, toBlock: 100 },
     references: refs,
-    prices: { USDC: { usdMicros: "1000000", source: "oracle", blockNum: 100 }, ETH: { usdMicros: "2000000000", source: "oracle", blockNum: 100 } },
+    prices: { USDC: { micros: "1000000", source: "oracle", blockNum: 100 }, ETH: { micros: "2000000000", source: "oracle", blockNum: 100 } },
     latest: { blockNum: 100, timestamp: "2026-11-04T00:10:00.000Z" },
+    currency: "USD",
+    rates: null,
     gasUnknownTxs: [],
     l1FeeUnknownTxs: [],
     balances: { blockNum: 100, amounts },
@@ -73,7 +72,8 @@ function wallet(address: string, rows: LegRow[], changes: Partial<WalletResponse
   }
 }
 
-const book = (senders: Record<string, SenderAnswer> = {}, costs: Record<string, string> = {}): Book => ({ senders, costs, withdrawals: [] })
+const usd = (micros: string): Money => ({ micros, currency: "USD" })
+const book = (senders: Record<string, SenderAnswer> = {}, costs: Record<string, string> = {}): Book => ({ senders, costs: Object.fromEntries(Object.entries(costs).map(([key, micros]) => [key, usd(micros)])), withdrawals: [] })
 
 const position = (focus: WalletResponse, others: WalletResponse[], b: Book, asset = "USDC", method: Method = "average") => foldBook(focus, others, method, b).positions.find((p) => p.asset === asset)!
 
@@ -82,7 +82,7 @@ describe("the cost of an incoming leg", () => {
     const rows = buy(10, "0x1", A, 1000n)
     const usdc = position(wallet(A, rows), [], book({ [A]: { kind: "someone-else" } }))
     assert.equal(usdc.effects[0]?.leg.costLabel, "paid")
-    assert.equal(usdc.values.costUsdMicros, "1000000000")
+    assert.equal(usdc.values.costMicros, "1000000000")
     assert.equal(usdc.estimates.cost, false)
   })
 
@@ -92,26 +92,26 @@ describe("the cost of an incoming leg", () => {
     it("carries over what the linked sender paid, and isn't an estimate", () => {
       const usdc = position(wallet(B, rows), [wallet(A, rows)], book({ [A]: { kind: "mine" } }))
       assert.equal(usdc.effects[0]?.leg.costLabel, "inherited")
-      assert.equal(usdc.values.costUsdMicros, "1000000000")
+      assert.equal(usdc.values.costMicros, "1000000000")
       assert.equal(usdc.estimates.cost, false)
     })
 
     it("needs the link: without it the cost stays unknown, even with the sender's wallet read", () => {
       const usdc = position(wallet(B, rows), [wallet(A, rows)], emptyBook())
-      assert.equal(usdc.values.costUsdMicros, null)
+      assert.equal(usdc.values.costMicros, null)
       assert.equal(usdc.effects[0]?.leg.costLabel, "unknown")
     })
 
     it("stays unknown while the linked wallet hasn't been read", () => {
       const fold = foldBook(wallet(B, rows), [], "average", book({ [A]: { kind: "mine" } }))
-      assert.equal(fold.positions[0]?.values.costUsdMicros, null)
+      assert.equal(fold.positions[0]?.values.costMicros, null)
       assert.deepEqual(fold.questions, [], "the answer's already in, so there's nothing to ask")
     })
 
     it("follows a chain of linked wallets", () => {
       const chain = [...rows, ...send(30, "0x3", B, C, 400n * E6)]
       const usdc = position(wallet(C, chain), [wallet(A, chain), wallet(B, chain)], book({ [A]: { kind: "mine" }, [B]: { kind: "mine" } }))
-      assert.equal(usdc.values.costUsdMicros, "400000000")
+      assert.equal(usdc.values.costMicros, "400000000")
       assert.equal(usdc.effects[0]?.leg.costLabel, "inherited")
     })
 
@@ -130,7 +130,7 @@ describe("the cost of an incoming leg", () => {
     it("gives the same totals by either method when everything carries over whole", () => {
       for (const method of ["average", "fifo"] as const) {
         const usdc = position(wallet(B, rows), [wallet(A, rows)], book({ [A]: { kind: "mine" } }), "USDC", method)
-        assert.equal(usdc.values.costUsdMicros, "1000000000")
+        assert.equal(usdc.values.costMicros, "1000000000")
       }
     })
 
@@ -142,9 +142,9 @@ describe("the cost of an incoming leg", () => {
       const usdc = position(wallet(B, moved), [a], book({ [A]: { kind: "mine" } }))
       assert.equal(usdc.values.qty, (900n * E6).toString())
       assert.equal(usdc.values.unknownCostQty, (300n * E6).toString(), "a third of A's USDC had no known cost")
-      assert.equal(usdc.values.costUsdMicros, null, "the whole position's cost is unavailable, not just part of it")
-      assert.equal(usdc.values.unrealizedUsdMicros, null)
-      assert.equal(usdc.state.lots.find((l) => l.costUsdMicros !== null)?.costUsdMicros, "600000000")
+      assert.equal(usdc.values.costMicros, null, "the whole position's cost is unavailable, not just part of it")
+      assert.equal(usdc.values.unrealizedMicros, null)
+      assert.equal(usdc.state.lots.find((l) => l.costMicros !== null)?.costMicros, "600000000")
     })
 
     it("resolves downstream once the upstream cost is answered", () => {
@@ -152,9 +152,9 @@ describe("the cost of an incoming leg", () => {
       const moved = send(20, "0x2", A, B, 500n * E6)
       const a = wallet(A, moved, { legs: opening })
       const linked = book({ [A]: { kind: "mine" } })
-      assert.equal(position(wallet(B, moved), [a], linked).values.costUsdMicros, null)
+      assert.equal(position(wallet(B, moved), [a], linked).values.costMicros, null)
       const answered = book({ [A]: { kind: "mine" } }, { [costKey(A, "opening:USDC")]: "450000000" })
-      assert.equal(position(wallet(B, moved), [a], answered).values.costUsdMicros, "450000000")
+      assert.equal(position(wallet(B, moved), [a], answered).values.costMicros, "450000000")
     })
 
     it("carries an estimate along as an estimate, and an upstream shortfall as unknown", () => {
@@ -163,7 +163,7 @@ describe("the cost of an incoming leg", () => {
       const usdc = position(wallet(B, moved), [wallet(A, moved)], answers)
       assert.equal(usdc.effects[0]?.leg.costLabel, "inherited")
       assert.equal(usdc.estimates.cost, true)
-      assert.equal(usdc.values.estimatedCostUsdMicros, "100000000")
+      assert.equal(usdc.values.estimatedCostMicros, "100000000")
 
       const short = send(20, "0x2", A, B, 100n * E6)
       const carried = position(wallet(B, short), [wallet(A, short)], book({ [A]: { kind: "mine" } }))
@@ -175,13 +175,13 @@ describe("the cost of an incoming leg", () => {
       const answers = book({ [A]: { kind: "mine" } })
       const a = wallet(A, split)
       const b = position(wallet(B, split), [a], answers)
-      assert.equal(b.values.costUsdMicros, "600000000")
+      assert.equal(b.values.costMicros, "600000000")
     })
 
     it("realizes a gain on what was inherited, from the cost it inherited", () => {
       const moved = [...buy(10, "0x1", A, 1000n), ...send(20, "0x2", A, B, 1000n * E6)]
-      const usdc = position(wallet(B, moved, { prices: { USDC: { usdMicros: "1100000", source: "oracle", blockNum: 100 } } }), [wallet(A, moved)], book({ [A]: { kind: "mine" } }))
-      assert.equal(usdc.values.unrealizedUsdMicros, "100000000")
+      const usdc = position(wallet(B, moved, { prices: { USDC: { micros: "1100000", source: "oracle", blockNum: 100 } } }), [wallet(A, moved)], book({ [A]: { kind: "mine" } }))
+      assert.equal(usdc.values.unrealizedMicros, "100000000")
     })
   })
 
@@ -192,12 +192,12 @@ describe("the cost of an incoming leg", () => {
     it("uses the wallet's own note", () => {
       const usdc = position(wallet(A, rows, { notes: [note] }), [], emptyBook())
       assert.equal(usdc.effects[0]?.leg.costLabel, "self-reported")
-      assert.equal(usdc.values.costUsdMicros, "80000000")
+      assert.equal(usdc.values.costMicros, "80000000")
     })
 
     it("uses a local entry, which beats a note, because the user can correct it", () => {
       const usdc = position(wallet(A, rows, { notes: [note] }), [], book({}, { [costKey(A, "0x1:USDC")]: "70000000" }))
-      assert.equal(usdc.values.costUsdMicros, "70000000")
+      assert.equal(usdc.values.costMicros, "70000000")
     })
 
     it("beats received at market", () => {
@@ -226,7 +226,7 @@ describe("the cost of an incoming leg", () => {
     it("applies once it's someone else, at the price then, and is always an estimate", () => {
       const usdc = position(wallet(A, rows), [], book({ [STRANGER]: { kind: "someone-else" } }))
       assert.equal(usdc.effects[0]?.leg.costLabel, "received at market")
-      assert.equal(usdc.values.costUsdMicros, "100000000")
+      assert.equal(usdc.values.costMicros, "100000000")
       assert.equal(usdc.estimates.cost, true)
       assert.equal(usdc.estimates.unrealized, true)
     })
@@ -235,7 +235,7 @@ describe("the cost of an incoming leg", () => {
       const spam = send(10, "0x1", STRANGER, A, E18, AERO)
       const aero = position(wallet(A, spam), [], book({ [STRANGER]: { kind: "someone-else" } }), "AERO")
       assert.equal(aero.effects[0]?.leg.costLabel, "unknown")
-      assert.equal(aero.values.costUsdMicros, null)
+      assert.equal(aero.values.costMicros, null)
     })
   })
 
@@ -244,22 +244,78 @@ describe("the cost of an incoming leg", () => {
       const rows = [...send(5, "0x0", A, STRANGER, 10n * E6), ...send(10, "0x1", STRANGER, A, 100n * E6)]
       const fold = foldBook(wallet(A, rows), [], "average", emptyBook())
       assert.equal(fold.positions[0]?.effects.at(-1)?.leg.costLabel, "unknown")
-      assert.equal(fold.positions[0]?.values.costUsdMicros, null)
+      assert.equal(fold.positions[0]?.values.costMicros, null)
     })
 
     it("is never $0: it stays out of totals, and the total says how much that is", () => {
       const rows = send(10, "0x1", STRANGER, A, 100n * E6)
       const { totals, pnlStatus } = foldBook(wallet(A, rows), [], "average", emptyBook())
-      assert.equal(totals.pnlUsdMicros, null)
+      assert.equal(totals.pnlMicros, null)
       assert.equal(pnlStatus, "unavailable")
-      assert.equal(totals.unresolvedUsdMicros, "100000000")
+      assert.equal(totals.unresolvedMicros, "100000000")
     })
 
     it("a sale of what has an unknown cost has no realized PnL", () => {
       const rows = [...send(10, "0x1", STRANGER, A, 100n * E6), move(20, "0x2", A, "debit", 100n * E6, null), move(20, "0x2", A, "credit", E18 / 20n, null, ETH_ADDRESS)]
       const usdc = position(wallet(A, rows), [], emptyBook())
-      assert.equal(usdc.values.realizedUsdMicros, null)
+      assert.equal(usdc.values.realizedMicros, null)
     })
+  })
+})
+
+describe("in another currency", () => {
+  /** 1 CAD = 0.75 USD at every block, so 1 USD = 1.333333 CAD. */
+  const rates = (blocks: number[]) => ({ byBlock: Object.fromEntries(blocks.map((b) => [b, { answer: "75000000", updatedAt: Date.UTC(2026, 10, 4) / 1000 }])), latest: { blockNum: 100, round: { answer: "75000000", updatedAt: Date.UTC(2026, 10, 4) / 1000 } } })
+  const cad = (address: string, rows: LegRow[], changes: Partial<WalletResponse> = {}) => wallet(address, rows, { currency: "CAD", rates: rates([...new Set(rows.map((r) => r.block_num))]), ...changes })
+
+  it("carries a cost between wallets in the currency it's reported in", () => {
+    const rows = [...buy(10, "0x1", A, 750n), ...send(20, "0x2", A, B, 750n * E6)]
+    const usdc = position(cad(B, rows), [cad(A, rows)], book({ [A]: { kind: "mine" } }))
+    assert.equal(usdc.effects[0]?.leg.costLabel, "inherited")
+    assert.equal(usdc.values.costMicros, "1000000000", "$750 USD at 0.75")
+  })
+
+  it("values what's received at market at the rate then", () => {
+    const usdc = position(cad(A, send(10, "0x1", STRANGER, A, 75n * E6)), [], book({ [STRANGER]: { kind: "someone-else" } }))
+    assert.equal(usdc.values.costMicros, "99999975", "75 at the feed's $1, which is $1.333333 CAD each")
+  })
+
+  it("keeps a cost entered in CAD as CAD, and converts one entered in USD", () => {
+    const rows = send(10, "0x1", STRANGER, A, 100n * E6)
+    const entered = (money: Money): Book => ({ ...emptyBook(), costs: { [costKey(A, "0x1:USDC")]: money } })
+    assert.equal(position(cad(A, rows), [], entered({ micros: "90000000", currency: "CAD" })).values.costMicros, "90000000")
+    assert.equal(position(cad(A, rows), [], entered(usd("75000000"))).values.costMicros, "100000000")
+  })
+
+  it("converts a note, which is always in USD", () => {
+    const rows = send(10, "0x1", STRANGER, A, 100n * E6)
+    const notes = [{ noteTx: "0xn", blockNum: 20, txHash: "0x1", asset: "USDC", usdMicros: "75000000" }]
+    assert.equal(position(cad(A, rows, { notes }), [], emptyBook()).values.costMicros, "100000000")
+  })
+
+  it("never reads a CAD cost as USD: with no rate, it stays unknown", () => {
+    const rows = send(10, "0x1", STRANGER, A, 100n * E6)
+    const entered: Book = { ...emptyBook(), costs: { [costKey(A, "0x1:USDC")]: { micros: "90000000", currency: "CAD" } } }
+    const usdc = position(wallet(A, rows), [], entered)
+    assert.equal(usdc.effects[0]?.leg.costLabel, "unknown")
+    assert.equal(usdc.values.costMicros, null)
+  })
+
+  it("gives the USD side of a CAD wallet its own folded answers", () => {
+    const rows = send(10, "0x1", STRANGER, A, 100n * E6)
+    const entered: Book = { ...emptyBook(), costs: { [costKey(A, "0x1:USDC")]: { micros: "120000000", currency: "CAD" } } }
+    const side = foldBook(cad(A, rows), [], "average", entered, { usd: true })
+    assert.equal(side.view.currency, "USD")
+    assert.equal(side.positions[0]?.values.costMicros, "90000000", "$120 CAD at 0.75")
+  })
+
+  it("explains the demo in CAD with an answer in, with both sides agreeing it's known", () => {
+    const cadDemo = { ...DEMO_WALLET, currency: "CAD" as const, rates: demoRates("CAD") }
+    const answered = answerSender(emptyBook(), DEMO_ADDRESS, "0x000000000000000000000000000000000000be11", { kind: "someone-else" })
+    const explained = explainPortfolio(cadDemo, "average", { kind: "asset", asset: "ETH", metric: "unrealized" }, [], answered)!
+    assert.equal(explained.currency, "CAD")
+    assert.ok(explained.value)
+    assert.ok(explained.sourceValue, "the USD side knows it too")
   })
 })
 
@@ -279,26 +335,26 @@ describe("each kind of sender", () => {
     const [q] = question(rows)
     assert.deepEqual(q?.evidence, ["From a Coinbase address"])
     assert.equal(q?.known?.kind, "exchange")
-    assert.equal(position(wallet(A, rows), [], emptyBook()).values.costUsdMicros, null)
+    assert.equal(position(wallet(A, rows), [], emptyBook()).values.costMicros, null)
   })
 
   it("my exchange account asks for the cost, and stays open until it has one", () => {
     const rows = send(10, "0x1", COINBASE, A, 100n * E6)
     const asked = book({ [COINBASE]: { kind: "my-exchange" } })
     assert.equal(question(rows, asked)[0]?.needsCost, true)
-    assert.equal(position(wallet(A, rows), [], asked).values.costUsdMicros, null)
+    assert.equal(position(wallet(A, rows), [], asked).values.costMicros, null)
 
-    const told = book({ [COINBASE]: { kind: "my-exchange", costs: { USDC: "90000000" } } })
+    const told = book({ [COINBASE]: { kind: "my-exchange", costs: { USDC: usd("90000000") } } })
     assert.deepEqual(question(rows, told), [])
     const usdc = position(wallet(A, rows), [], told)
     assert.equal(usdc.effects[0]?.leg.costLabel, "self-reported")
-    assert.equal(usdc.values.costUsdMicros, "90000000")
+    assert.equal(usdc.values.costMicros, "90000000")
   })
 
   it("splits an exchange's total across its transfers by size", () => {
     const rows = [...send(10, "0x1", COINBASE, A, 300n * E6), ...send(20, "0x2", COINBASE, A, 100n * E6)]
-    const usdc = position(wallet(A, rows), [], book({ [COINBASE]: { kind: "my-exchange", costs: { USDC: "400000000" } } }))
-    assert.deepEqual(usdc.effects.map((e) => e.leg.costUsdMicros), ["300000000", "100000000"])
+    const usdc = position(wallet(A, rows), [], book({ [COINBASE]: { kind: "my-exchange", costs: { USDC: usd("400000000") } } }))
+    assert.deepEqual(usdc.effects.map((e) => e.leg.costMicros), ["300000000", "100000000"])
   })
 
   it("someone else's exchange account is just someone else", () => {
@@ -315,7 +371,7 @@ describe("each kind of sender", () => {
   })
 
   it("the user can still recategorize a bridge's transfer", () => {
-    const usdc = position(wallet(A, send(10, "0x1", ACROSS, A, 100n * E6)), [], book({ [ACROSS]: { kind: "my-exchange", costs: { USDC: "95000000" } } }))
+    const usdc = position(wallet(A, send(10, "0x1", ACROSS, A, 100n * E6)), [], book({ [ACROSS]: { kind: "my-exchange", costs: { USDC: usd("95000000") } } }))
     assert.equal(usdc.effects[0]?.leg.costLabel, "self-reported")
   })
 
@@ -379,16 +435,24 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
 2026-10-02T10:00:00Z,Buy,ETH,1.0,USD,$2200.00,$2200.00,"$2,220.00",$20.00,Bought 1 ETH
 2026-11-04T00:00:00Z,Send,ETH,0.5,USD,$2500.00,$1250.00,$1250.00,$0.00,Sent 0.5 ETH to ${A}
 2026-11-04T01:00:00Z,Send,cbBTC,1,USD,$68000,$68000,$68000,$0,Sent 1 cbBTC to ${A}
-2026-11-04T02:00:00Z,Buy,AERO,10,CAD,$1.80,$18,$18,$0,Bought with Canadian dollars
-2026-11-04T03:00:00Z,Send,AERO,10,CAD,$1.80,$18,$18,$0,Sent 10 AERO
+2026-11-04T02:00:00Z,Buy,AERO,10,EUR,$1.80,$18,$18,$0,Bought with euros
+2026-11-04T03:00:00Z,Send,AERO,10,EUR,$1.80,$18,$18,$0,Sent 10 AERO
 `
 
   it("works out each withdrawal's cost from what was bought before it, fees included", () => {
     const { withdrawals, skipped } = parseCoinbaseCsv(CSV)!
-    assert.equal(withdrawals.length, 1)
     // 2 ETH cost $4,240, so half an ETH costs $1,060.
-    assert.deepEqual(withdrawals[0], { exchange: "Coinbase", asset: "ETH", units: (E18 / 2n).toString(), at: "2026-11-04T00:00:00.000Z", costUsdMicros: "1060000000", toAddress: A })
-    assert.equal(skipped, 2, "one has no purchases behind it, and one was bought in another currency")
+    assert.deepEqual(withdrawals[0], { exchange: "Coinbase", asset: "ETH", units: (E18 / 2n).toString(), at: "2026-11-04T00:00:00.000Z", cost: usd("1060000000"), toAddress: A })
+    assert.equal(withdrawals.length, 1)
+    assert.equal(skipped, 2, "one has no purchases behind it, and one was bought in a currency this app doesn't have")
+  })
+
+  it("keeps what a Canadian account paid in Canadian dollars, and won't mix two currencies", () => {
+    const header = "Timestamp,Transaction Type,Asset,Quantity Transacted,Price Currency,Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes"
+    const cad = parseCoinbaseCsv(`${header}\n2026-10-01T10:00:00Z,Buy,ETH,1,CAD,$3000,$3000,"$3,000.00",$0,x\n2026-10-02T10:00:00Z,Send,ETH,1,CAD,$3000,$3000,$3000,$0,x\n`)!
+    assert.deepEqual(cad.withdrawals[0]?.cost, { micros: "3000000000", currency: "CAD" })
+    const mixed = parseCoinbaseCsv(`${header}\n2026-10-01T10:00:00Z,Buy,ETH,1,CAD,$3000,$3000,$3000,$0,x\n2026-10-01T11:00:00Z,Buy,ETH,1,USD,$2000,$2000,$2000,$0,x\n2026-10-02T10:00:00Z,Send,ETH,1,CAD,$3000,$3000,$3000,$0,x\n`)!
+    assert.deepEqual(mixed, { withdrawals: [], skipped: 1 })
   })
 
   it("isn't fooled by something that isn't one", () => {
@@ -399,7 +463,7 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
   const at = (minutes: number) => new Date(Date.parse("2026-11-04T00:00:00Z") + minutes * 60_000).toISOString()
 
   it("matches a withdrawal by asset, amount and time, allowing for the network fee", () => {
-    assert.equal(matchWithdrawal(withdrawals, A, "ETH", E18 / 2n, at(3))?.costUsdMicros, "1060000000")
+    assert.equal(matchWithdrawal(withdrawals, A, "ETH", E18 / 2n, at(3))?.cost.micros, "1060000000")
     assert.ok(matchWithdrawal(withdrawals, A, "ETH", (E18 / 200n) * 99n, at(3)))
   })
 
@@ -421,7 +485,7 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
     const rows = [move(Math.floor(60), "0x1", A, "credit", E18 / 2n, COINBASE, ETH_ADDRESS)].map((r) => ({ ...r, timestamp: at(3) }))
     const fold = foldBook(wallet(A, rows), [], "average", { ...emptyBook(), withdrawals })
     assert.equal(fold.positions[0]?.effects[0]?.leg.costLabel, "self-reported")
-    assert.equal(fold.positions[0]?.values.costUsdMicros, "1060000000")
+    assert.equal(fold.positions[0]?.values.costMicros, "1060000000")
     assert.deepEqual(fold.questions, [])
   })
 })
@@ -444,16 +508,16 @@ describe("what the UI gets", () => {
   it("says how much of a total is an estimate", () => {
     const rows = send(10, "0x1", ACROSS, A, 100n * E6)
     const { totals } = foldBook(wallet(A, rows), [], "average", emptyBook())
-    assert.equal(totals.estimatedUsdMicros, "100000000")
+    assert.equal(totals.estimatedMicros, "100000000")
     assert.equal(totals.estimated.unrealized, true)
-    assert.equal(totals.unresolvedUsdMicros, "0")
+    assert.equal(totals.unresolvedMicros, "0")
   })
 
   it("counts a realized gain on an estimated cost as estimated", () => {
     const rows = [...send(10, "0x1", ACROSS, A, 100n * E6), move(20, "0x2", A, "debit", 100n * E6, null), move(20, "0x2", A, "credit", E18 / 20n, null, ETH_ADDRESS)]
     const usdc = position(wallet(A, rows), [], emptyBook())
     assert.equal(usdc.estimates.realized, true)
-    assert.ok(BigInt(usdc.values.estimatedRealizedUsdMicros) > 0n)
+    assert.ok(BigInt(usdc.values.estimatedRealizedMicros) > 0n)
   })
 
   it("marks a position resolvable only when an answer could help", () => {
@@ -466,8 +530,8 @@ describe("what the UI gets", () => {
 
   it("exports marks what's exact, estimated, unresolved and without a market", () => {
     const { positions } = foldBook(DEMO_WALLET, [], "average", emptyBook())
-    const lines = exportCsv(positions).trim().split("\n")
-    assert.deepEqual(lines[0]?.split(","), ["time", "block", "transaction", "asset", "amount", "kind", "price_usd", "price_source", "cost_usd", "cost_source", "proceeds_usd", "status"])
+    const lines = exportCsv(positions, "USD").trim().split("\n")
+    assert.deepEqual(lines[0]?.split(","), ["time", "block", "transaction", "asset", "amount", "kind", "currency", "price", "price_source", "cost", "cost_source", "proceeds", "status"])
     const status = (asset: string, predicate = (_: string[]) => true) => lines.slice(1).map((l) => l.split(",")).filter((c) => c[3] === asset && predicate(c)).map((c) => c.at(-1))
     assert.ok(status("USDC").includes("unresolved"))
     assert.deepEqual(status("USDT"), ["estimated"])
@@ -500,16 +564,16 @@ describe("the demo", () => {
 
   it("goes from unknown to resolved as it's answered", () => {
     const before = usdc(emptyBook())
-    assert.equal(before.values.costUsdMicros, null)
+    assert.equal(before.values.costMicros, null)
     assert.equal(before.effects[0]?.leg.costLabel, "unknown")
 
     const linked = answerSender(emptyBook(), DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, { kind: "mine" })
     const partly = usdc(linked)
     assert.equal(partly.effects[0]?.leg.costLabel, "inherited", "the note's cost carried over")
-    assert.equal(partly.values.costUsdMicros, null, "but the other wallet's older USDC still has no known cost")
+    assert.equal(partly.values.costMicros, null, "but the other wallet's older USDC still has no known cost")
 
-    const answered: Book = { ...linked, costs: { [costKey(DEMO_SAVINGS_ADDRESS, "opening:USDC")]: (1_000n * E6).toString() } }
-    assert.notEqual(usdc(answered).values.costUsdMicros, null)
+    const answered: Book = { ...linked, costs: { [costKey(DEMO_SAVINGS_ADDRESS, "opening:USDC")]: usd((1_000n * E6).toString()) } }
+    assert.notEqual(usdc(answered).values.costMicros, null)
     assert.equal(usdc(answered).reconciliation?.status, "reconciled")
   })
 
@@ -519,13 +583,13 @@ describe("the demo", () => {
     for (let i = 0; i < 12; i++) {
       const [q] = foldBook(DEMO_WALLET, [DEMO_SAVINGS_WALLET], "average", current).questions
       if (!q) break
-      if (q.kind === "cost") current = { ...current, costs: { ...current.costs, [q.costKey as string]: "1000000" } }
+      if (q.kind === "cost") current = { ...current, costs: { ...current.costs, [q.costKey as string]: usd("1000000") } }
       else current = answerSender(current, DEMO_ADDRESS, q.sender as string, { kind: "someone-else" })
     }
     const { meter, totals } = foldBook(DEMO_WALLET, [DEMO_SAVINGS_WALLET], "average", current)
     assert.equal(meter.open, 0)
     assert.ok(meter.answered > 0)
-    assert.ok(totals.pnlUsdMicros !== null)
+    assert.ok(totals.pnlMicros !== null)
     assert.ok(totals.excluded.some((e) => e.asset === "cbBTC"), "an answer doesn't explain a balance that doesn't match the chain")
   })
 
@@ -535,19 +599,19 @@ describe("the demo", () => {
     const eth = savings.positions.find((p) => p.asset === "ETH")!
     assert.equal(eth.effects[0]?.leg.costLabel, "inherited")
     assert.ok(BigInt(eth.values.unknownCostQty) > 0n)
-    assert.equal(eth.values.costUsdMicros, null)
+    assert.equal(eth.values.costMicros, null)
     assert.equal(savings.positions.find((p) => p.asset === "USDC")?.values.qty, "0")
   })
 })
 
 describe("a book from a request", () => {
   it("reads what a client sends, lowercasing addresses", () => {
-    const parsed = parseBook({ senders: { [A.toUpperCase().replace("0X", "0x")]: { kind: "mine" } }, costs: { "x:y": "5" } })
-    assert.deepEqual(parsed, { senders: { [A]: { kind: "mine" } }, costs: { "x:y": "5" }, withdrawals: [] })
+    const parsed = parseBook({ senders: { [A.toUpperCase().replace("0X", "0x")]: { kind: "mine" } }, costs: { "x:y": usd("5") } })
+    assert.deepEqual(parsed, { senders: { [A]: { kind: "mine" } }, costs: { "x:y": usd("5") }, withdrawals: [] })
   })
 
   it("refuses anything else", () => {
-    for (const bad of [null, 1, "x", [], { senders: [] }, { senders: { nope: { kind: "mine" } } }, { senders: { [A]: { kind: "nope" } } }, { costs: { x: "-1" } }, { costs: { x: 5 } }, { senders: { [A]: { kind: "my-exchange", costs: { USDC: "1.5" } } } }, { withdrawals: [{}] }]) {
+    for (const bad of [null, 1, "x", [], { senders: [] }, { senders: { nope: { kind: "mine" } } }, { senders: { [A]: { kind: "nope" } } }, { costs: { x: "-1" } }, { costs: { x: 5 } }, { senders: { [A]: { kind: "my-exchange", costs: { USDC: "1" } } } }, { withdrawals: [{}] }]) {
       assert.equal(parseBook(bad), null, JSON.stringify(bad))
     }
   })

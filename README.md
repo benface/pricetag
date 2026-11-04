@@ -1,7 +1,7 @@
 # pricetag
 Every transfer gets a price. A Base wallet with real cost and PnL, built on Amp.
 
-This first version is watch-only: paste any Base address to see its holdings, cost and PnL, and click any number to see the legs behind it. There are no keys in it, and it doesn't sign anything.
+This first version is watch-only: paste any Base address to see its holdings, cost and PnL, and click any number to see the activity behind it. There are no keys in it, and it doesn't sign anything.
 
 ## Run it
 
@@ -15,7 +15,7 @@ pnpm dev                     # http://localhost:5173
 
 ## The Mac app
 
-Patina is a native menu bar app: live total PnL in the bar, holdings, cost and PnL in its popover, and a window where any number clicks through to its legs, price source and transaction. It's watch-only, with no keys.
+Patina is a native menu bar app: live total PnL in the bar, holdings, cost and PnL in its popover, and a window where any number clicks through to its activity, price source and transaction. It's watch-only, with no keys.
 
 ```sh
 pnpm mac         # builds the app, opens it, and runs the server until you press Ctrl-C
@@ -23,11 +23,11 @@ pnpm mac:build   # only builds it, to macos/build/
 pnpm check:mac   # the Swift tests, the app's build, and the shared package's build for iOS
 ```
 
-It reads from the server on http://127.0.0.1:8787, set in Settings, so it runs on whatever the server runs on: with no `.env.local`, that's the demo wallet. It remembers the wallet and method across restarts.
+It reads from the server on http://127.0.0.1:8787, set in Settings, so it runs on whatever the server runs on: with no `.env.local`, that's the demo wallet. It remembers the wallet, method and currency across restarts.
 
 If the menu bar is full, macOS hides new items. Look under the menu bar's "show hidden items" control, or in System Settings > Menu Bar, and drag it out. The window opens at launch either way.
 
-The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<address>?method=average|fifo` returns the portfolio the fold computed, and `GET /api/portfolio/<address>/explain?metric=…&asset=…` or `?tx=…` returns what's behind one number. `test/portfolio.test.ts` writes what they send to files the Swift tests read, so the two can't drift apart without a failure: when a change is on purpose, run it with `UPDATE_FIXTURES=1`.
+The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<address>?method=average|fifo&currency=USD|CAD` returns the portfolio the fold computed, and `GET /api/portfolio/<address>/explain?metric=…&asset=…` or `?tx=…` returns what's behind one number. `test/portfolio.test.ts` writes what they send to files the Swift tests read, so the two can't drift apart without a failure: when a change is on purpose, run it with `UPDATE_FIXTURES=1`.
 
 - `macos/PricetagKit/`: everything that isn't Mac-specific, like the API models, the live feed, formatting and shared views. It also builds for iOS.
 - `macos/App/`: the menu bar item, popover, window and settings.
@@ -62,14 +62,26 @@ On the public RPC, a fresh start takes about 9 minutes for the default hour of b
 
 ## How it's put together
 
-- `src/core/fold.ts`: `applyLeg(state, leg)`, average cost and FIFO. Pure, BigInt, JSON-safe state and no imports, so it can move into a stateful table.
-- `src/core/legs.ts`: nets each transaction per asset and labels each leg's price and cost.
-- `src/core/portfolio.ts`: runs the fold and adds up what's known, in the browser for the web app and on the server for the Mac app.
-- `src/core/reconcile.ts`: compares what a position's legs add up to with what the chain says it holds.
-- `src/core/explain.ts`: says how each number is worked out, for both.
-- `server/`: the Amp client, the two data sources, the balance and receipt readers, and the small HTTP server.
+- `packages/sdk/`: `@pricetag/sdk`, what other apps can build on too. [Its quickstart](packages/sdk/README.md) covers the tables, the API and plain SQL.
+  - `src/fold.ts`: `applyLeg(state, leg)`, average cost and FIFO. Pure, BigInt, JSON-safe state and no imports, so it can move into a stateful table.
+  - `src/legs.ts`: nets each transaction per asset and labels each leg's price and cost.
+  - `src/portfolio.ts`: runs the fold and adds up what's known, in the browser for the web app and on the server for the Mac app.
+  - `src/reconcile.ts`: compares what a position's legs add up to with what the chain says it holds.
+  - `src/amp.ts`, `src/dataset.ts`, `src/client.ts`: the Amp client and the reads from the dataset. The browser imports `@pricetag/sdk/core`, which leaves these out.
+- `src/`: the web app. `src/core/api.ts` is what the server sends its clients, `src/core/currency.ts` converts a wallet out of USD at each transaction's rate, `src/core/explain.ts` says how each number is worked out, for the web and Mac apps, and `src/core/fixtures.ts` is the demo wallet.
+- `server/`: the raw data source, the balance and receipt readers, and the small HTTP server.
 - `macos/`: the Mac app.
 - `dataset/`: the manifest. `pricetag.json` is generated by `build.ts`, so change the SQL there.
+
+## Main currency
+
+Both apps show every value in the chosen currency, USD or CAD, and remember the choice: the Mac app in Settings, and the web app in its header. The dataset's base stays USD. `src/core/currency.ts` is the one place that converts, and both apps go through it.
+
+- **Each amount converts at the rate when it happened.** A cost or sale uses the rate at its transaction's block, and a current value uses the current rate. Conversion runs before the fold, so a gain in CAD is proceeds in CAD minus cost in CAD, and it includes what the exchange rate did in between.
+- **Rates come from Chainlink's feed on Base**, read at the block with `eth_call`, so a transaction minutes old already has its rate. Clicking through a number names the source, the rate, and the amount in USD.
+- **A missing rate is never filled in.** That amount is unavailable, whatever depends on it says so, and no other day's rate stands in. A feed that hasn't updated in 3 days counts as missing, since forex markets close for only about 2.
+
+To add a currency, add its Chainlink feed to `CURRENCIES` in `src/core/currency.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/Currency.swift`. Base has feeds for EUR, GBP, AUD, CHF, SGD and others.
 
 ## Rules the numbers follow
 
@@ -94,10 +106,29 @@ What a wallet held before the first block read is read from the chain too (`eth_
 
 Each transaction's L1 data fee comes from its RPC receipt, because Amp's data doesn't have it. It's added to the gas leg in the server for both data sources, so the dataset's own `legs` table stays L2 only. A fee is read when it's first seen, and again once its block is past the part of the chain re-read for reorgs, because a reorg can change it without moving the transaction. There's no tolerance anywhere: a wrong fee shows up as a mismatch.
 
+## Resolving what we can't work out
+
+The dataset carries a price. What something cost is personal, so each client works it out, in this order:
+
+1. **Paid:** the wallet paid for it in the same transaction.
+2. **Inherited:** it came from one of the user's linked wallets, so it carries over what that wallet paid and when, through any chain of wallets. What's unresolved upstream stays unresolved here.
+3. **Self-reported:** a cost entered in the app, an exchange history's, or an onchain note. A note only counts from the wallet's own zero-value transaction to itself.
+4. **Received at market:** the price when it arrived, once it's known to be someone else's or came from a bridge. It's always shown as an estimate.
+5. **Unknown:** anything else. An unanswered sender stays here, even when it looks like a stranger, because it could be the user's own wallet.
+
+A token's price goes oracle, swap, then `market`: the median of its last few trades at or before that block, from `priced_legs`. It needs 3 transactions of at least $100, $1,000 in all, within 30 minutes, each one plausible at its own block. `priced_legs` doesn't say how deep a pool is, so that's the stand-in for liquidity. A dataset without the `unlisted_moves` table has the wrong rows WORK-346 removed, so it's never read for this.
+
+**Answers stay on the device.** The Mac app and the browser keep them, and send them with each request (`POST /api/portfolio/<address>`, with `/explain`, `/preview` and `/export`). The server folds with them and keeps nothing. Costs are kept in the currency they were entered in, and converted at the rate when they arrived. Without that rate, they stay unknown.
+
+"Who's this?" asks once per address, most useful first. Each answer shows what it would do before it's picked, Undo is always there, and skipping leaves it flagged. A token with no price anywhere isn't asked about: it's listed apart and can't affect PnL. Totals say how much is unresolved and estimated right next to the number, and exports mark every row `exact`, `estimated`, `unresolved` or `no market`.
+
 ## Known gaps
 
-- Only the allowlist in `src/core/tokens.ts` gets a position and a price. A transaction that also moves another token is never valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. Internal ETH isn't seen without traces, so it can't trigger this.
-- Only ETH and USDC have a current price, so other tokens show their cost but no value or unrealized PnL yet.
+- Sending isn't in the app yet, so "Is this yours?" at send time and linking every account from one device or recovery phrase wait for that. Neither can the app write a note yet, only read one.
+- Exchange names are only as good as the list in `src/core/senders.ts`. Each is checked on Basescan, but Coinbase withdrawals on Base mostly come from addresses without a public name, so most won't say "From a Coinbase address". An imported history still matches them.
+- A cost entered in CAD can't be shown in USD for a wallet read in USD, because that read has no rates. It shows as unresolved there, and never as the wrong number.
+- Only the allowlist in `packages/sdk/src/tokens.ts` gets a position and a price. A transaction that also moves another token is never valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. Internal ETH isn't seen without traces, so it can't trigger this.
+- Market prices need the Pricetag dataset, so reading the raw dataset, only ETH and USDC have a current price, and other tokens show their cost but no value yet.
 - The dataset nets per token, then only prices an account's single pair. A split route that nets to one token out and one in gets a price. A token that mostly cancels out (under half of what moved is left) is what a router or pool kept, so it gets no price. Paying with ETH and WETH together makes two pairs, so the other token has no price, though the app still knows what was paid. A pair gets no price either when something off the allowlist moved with it, unless that token netted to zero.
 - There are no traces: a WETH `Withdrawal` counts as ETH paid to the transaction's sender, and other internal ETH transfers aren't seen. Smart wallets, whose transactions are sent by a bundler, won't get that ETH.
 - Rebasing tokens and internal ETH transfers aren't resolved, only flagged. A flagged position's PnL stays unavailable until they are.

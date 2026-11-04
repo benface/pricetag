@@ -122,9 +122,9 @@ public struct ResolveFlow: View {
     }
 
     private func nowText(_ portfolio: Portfolio) -> String {
-        guard portfolio.pnlStatus != .unavailable, let pnl = portfolio.totals.pnlUsdMicros else { return Wording.pnlUnavailable }
-        let number = Format.estimate(Format.signedUSD(pnl), isPositive(portfolio.totals.estimatedUsdMicros))
-        return Wording.headlineCaveat(portfolio.totals).map { "\(number) · \($0)" } ?? number
+        guard portfolio.pnlStatus != .unavailable, let pnl = portfolio.totals.pnlMicros else { return Wording.pnlUnavailable }
+        let number = Format.estimate(Format.signedMoney(pnl, portfolio.currency), isPositive(portfolio.totals.estimatedMicros))
+        return Wording.headlineCaveat(portfolio.totals, portfolio.currency).map { "\(number) · \($0)" } ?? number
     }
 
     private func arrived(_ question: Question) -> some View {
@@ -226,14 +226,14 @@ public struct ResolveFlow: View {
 
     private func consequence(_ ownership: Ownership) -> String {
         if ownership == .myExchange { return "Then asks what you paid" }
-        return model.previews[ownership].map(Wording.consequence) ?? "…"
+        return model.previews[ownership].map { Wording.consequence($0, store.currency) } ?? "…"
     }
 
     private func costCard(_ question: Question) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             arrived(question)
             ForEach(question.arrivals) { arrival in
-                LabeledContent("Paid for \(Format.amount(arrival.units, decimals: arrival.decimals)) \(arrival.asset)") {
+                LabeledContent("Paid for \(Format.amount(arrival.units, decimals: arrival.decimals)) \(arrival.asset), in \(store.currency.rawValue)") {
                     TextField("$0.00", text: Binding(get: { costs[arrival.asset] ?? "" }, set: { costs[arrival.asset] = $0 }))
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
@@ -244,9 +244,12 @@ public struct ResolveFlow: View {
             }
             if let preview = model.costPreview {
                 LabeledContent("That would make it") {
-                    Text(Wording.consequence(preview)).monospacedDigit().fontWeight(.medium)
+                    Text(Wording.consequence(preview, store.currency)).monospacedDigit().fontWeight(.medium)
                 }
                 .font(.callout)
+            }
+            if let warning = model.costWarning(costs, for: question) {
+                WarningText(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
             }
             HStack {
                 Button("Save") { save(question) }

@@ -1,8 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, effectiveGasPrice, gasPaid, legRowsFromRaw, type RawLog, type RawTx } from "../server/raw.ts"
-import { blockFilters } from "../server/source.ts"
-import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS } from "../src/core/tokens.ts"
+import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, blockFilters } from "@pricetag/sdk"
 
 const ME = "dd8795475306152abe5f45f1ce97c017fd2f02e7"
 const OTHER = "f849e0d4a7a1d74cb278361ff29967dfb5a22c67"

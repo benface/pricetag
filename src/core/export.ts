@@ -1,20 +1,21 @@
 // Every movement as a spreadsheet row, marked so an estimate or an unknown can't pass for an exact number.
 
-import type { LegEffect, Position } from "./portfolio.ts"
+import type { LegEffect, Position } from "@pricetag/sdk/core"
+import type { CurrencyCode } from "./currency.ts"
 
-const HEADER = ["time", "block", "transaction", "asset", "amount", "kind", "price_usd", "price_source", "cost_usd", "cost_source", "proceeds_usd", "status"]
+const HEADER = ["time", "block", "transaction", "asset", "amount", "kind", "currency", "price", "price_source", "cost", "cost_source", "proceeds", "status"]
 
 function statusOf({ leg, before, after }: LegEffect, noMarket: boolean): string {
   if (noMarket) return "no market"
   if (BigInt(leg.delta) > 0n) {
-    if (leg.costLabel === "unknown" || leg.costUsdMicros === null) return "unresolved"
+    if (leg.costLabel === "unknown" || leg.costMicros === null) return "unresolved"
     return leg.estimated ? "estimated" : "exact"
   }
   if (BigInt(after.unresolvedDisposedQty) > BigInt(before.unresolvedDisposedQty) || BigInt(after.unpricedGasQty) > BigInt(before.unpricedGasQty) || BigInt(after.shortfallQty) > BigInt(before.shortfallQty)) return "unresolved"
-  return BigInt(after.estimatedRealizedUsdMicros) > BigInt(before.estimatedRealizedUsdMicros) ? "estimated" : "exact"
+  return BigInt(after.estimatedRealizedMicros) > BigInt(before.estimatedRealizedMicros) ? "estimated" : "exact"
 }
 
-const dollars = (micros: string | null) => {
+const money = (micros: string | null) => {
   if (micros === null) return ""
   const value = BigInt(micros)
   const size = value < 0n ? -value : value
@@ -30,7 +31,7 @@ function amount(units: string, decimals: number): string {
 
 const quote = (cell: string) => (/[",\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell)
 
-export function exportCsv(positions: readonly Position[]): string {
+export function exportCsv(positions: readonly Position[], currency: CurrencyCode): string {
   const rows = positions
     .flatMap((position) => position.effects.map((effect) => ({ effect, noMarket: position.noMarket })))
     .sort((a, b) => a.effect.leg.blockNum - b.effect.leg.blockNum || a.effect.leg.txIndex - b.effect.leg.txIndex)
@@ -43,12 +44,13 @@ export function exportCsv(positions: readonly Position[]): string {
         leg.txHash,
         leg.asset,
         amount(leg.delta, leg.decimals),
-        leg.opening ? "opening balance" : leg.kind,
-        dollars(leg.priceUsdMicros),
+        leg.opening ? "starting balance" : leg.kind,
+        currency,
+        money(leg.priceMicros),
         leg.priceSource ?? "",
-        incoming ? dollars(leg.costUsdMicros) : "",
+        incoming ? money(leg.costMicros) : "",
         incoming ? leg.costLabel : "",
-        dollars(leg.proceedsUsdMicros),
+        money(leg.proceedsMicros),
         statusOf(effect, noMarket),
       ]
     })
