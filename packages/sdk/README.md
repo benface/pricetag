@@ -127,10 +127,11 @@ The dataset reference is `benface/pricetag@0.0.1`, and it reads `edgeandnode/bas
 | --- | --- | --- |
 | `legs` | One account's signed movement of an allowlisted token, ETH, or gas | `account`, `token`, `side` (`debit` or `credit`), `amount`, `kind` (`erc20`, `eth`, `gas`, `wrap` or `unwrap`), `tx_hash` |
 | `unlisted_legs` | The same for a token off the allowlist. It has no price, but it shows money went somewhere else | Same as `legs`, with `kind` `unlisted` or `unlisted_nft`. An NFT's `amount` is its ID |
-| `reference_prices` | One block's Chainlink ETH/USD and USDC/USD reads | `eth_round` and `usdc_round`. Field `c1` is the answer, in 1e8 USD |
-| `priced_legs` | An account's only pair in a transaction, after netting each token: what it sold and what it bought | `sold_token`, `sold_amount`, `bought_token`, `bought_amount`, and `priced` (`source`, `token`, `usd_micros`) |
+| `reference_prices` | One block's latest Chainlink ETH/USD and USDC/USD updates | `eth_answer` and `usdc_answer`, in 1e8 USD, null when a feed has no recent update. `eth_tx` and `usdc_tx` are the transactions they came from |
+| `price_updates` | One Chainlink update, from its `AnswerUpdated` log. It starts a day before the dataset, except on a local Amp, whose first row per feed is read from the contract, with an all-zero `tx_hash` | `feed` (`eth` or `usdc`), `answer`, `tx_hash`, `log_index`, `round_id`, `updated_at`, `valid_until` |
+| `priced_legs` | An account's only pair in a transaction, after netting each token: what it sold and what it bought | `sold_token`, `sold_amount`, `bought_token`, `bought_amount`, `priced` (`source`, `token`, `usd_micros`), and the prices it used: `eth_usd`, `usdc_usd`, `eth_tx`, `usdc_tx` |
 
-The other tables are steps on the way to these: `base_legs`, `gas_legs`, `tx_gas`, `unwrap_legs`, `net_legs`, `unlisted_moves`, `pairs`, `pair_counts` and `single_pairs`.
+The other tables are steps on the way to these: `base_legs`, `gas_legs`, `tx_gas`, `unwrap_legs`, `net_legs`, `unlisted_moves`, `pairs`, `pair_counts`, `single_pairs` and `carried`.
 
 A price and a cost are separate. The dataset carries the price, a shared fact about a transaction. Cost is personal, so each client works it out: `cost = fold(pricedLegs, method)`. That's why the dataset has no cost column.
 
@@ -177,7 +178,7 @@ A negative `net` means the wallet held more than the range shows. In `buildPortf
 **Oracle prices:** divide by 100 for micros.
 
 ```sql
-SELECT block_num, timestamp, get_field(eth_round, 'c1') AS eth_usd, get_field(usdc_round, 'c1') AS usdc_usd
+SELECT block_num, timestamp, eth_answer AS eth_usd, usdc_answer AS usdc_usd
 FROM "benface/pricetag@0.0.1".reference_prices
 WHERE block_num BETWEEN 53515266 AND 53515658
 ORDER BY block_num
