@@ -1,10 +1,20 @@
 // Turns a wallet's rows in the dataset's shapes into the priced legs the fold reads.
 // Pure, so it can run on fixtures, on the raw dataset's rows and on the Pricetag dataset's rows alike.
 
-import { usdOf, type CostLabel, type FoldLeg } from "./fold.ts"
+import { worth, type CostLabel, type FoldLeg } from "./fold.ts"
 import { normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
 
 export type PriceSource = "oracle" | "swap" | "market"
+
+/** Why a leg has no usable price. Apps show these as they are, so they stay in plain language. */
+export const PRICE_NOTES = {
+  feedFailed: "The market price feed didn't answer at this block.",
+  rejected: "Ignored the price this exchange implied, because it's far from any plausible value.",
+  unlisted: "This transaction also moved a token we can't price yet, so what was paid or received can't be split between them.",
+  unusable: "This exchange didn't give a usable price for this token.",
+  noExchange: "Nothing was exchanged in this transaction, and this token has no market price feed.",
+  notSimple: "This transaction isn't a simple exchange of one token for another.",
+}
 /**
  * Transfers of tokens off the allowlist. They have no position or price, but they say money went elsewhere.
  * `unlisted`: `amount` is a quantity, or empty when it can't be read, as with ERC-1155.
@@ -53,6 +63,16 @@ export type PricedRow = {
   priced: PtPrice
 }
 
+/** What a leg converted out of USD was before that, and the rate that took it there. */
+export type LegConversion = {
+  priceUsdMicros: string | null
+  costUsdMicros: string | null
+  proceedsUsdMicros: string | null
+  /** What one USD bought at this leg's block, or null when there's no rate for it. */
+  rateMicros: string | null
+}
+
+/** Fresh from `buildPricedLegs`, its money is in USD. An app showing another currency converts it before folding. */
 export type PricedLeg = FoldLeg & {
   asset: string
   blockNum: number
@@ -64,6 +84,8 @@ export type PricedLeg = FoldLeg & {
   priceNote: string | null
   /** The rows this leg nets together, so a click can show them. */
   parts: LegRow[]
+  /** Only on a leg converted out of USD. */
+  conversion?: LegConversion
   /** What the wallet already held before the first block read. It isn't a transaction, so `txHash` is empty. */
   opening?: boolean
 }
@@ -204,9 +226,6 @@ function isSaneAgainstOracle(impliedUsdMicros: bigint, oracleUsdMicros: string):
   return ratio >= ORACLE_BAND[0] && ratio <= ORACLE_BAND[1]
 }
 
-const REJECTED_NOTE = "Rejected this swap's implied price, because it's far from any plausible value."
-const UNLISTED_NOTE = "This transaction also moved a token off the allowlist, so what was paid or received can't be split between them."
-
 type Input = {
   account: string
   rows: readonly LegRow[]
@@ -249,11 +268,11 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         delta: `-${feeRows.reduce((sum, row) => sum + BigInt(row.amount), 0n)}`,
         decimals: 18,
         kind: "gas",
-        priceUsdMicros: ethMicros,
+        priceMicros: ethMicros,
         priceSource: ethMicros === null ? null : "oracle",
-        priceNote: ethMicros === null ? "The oracle read failed at this block." : null,
-        costUsdMicros: null,
-        proceedsUsdMicros: null,
+        priceNote: ethMicros === null ? PRICE_NOTES.feedFailed : null,
+        costMicros: null,
+        proceedsMicros: null,
         costLabel: "unknown",
         parts: feeRows,
       })
@@ -290,14 +309,14 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
       let priceSource: PriceSource | null = price === null ? null : "oracle"
       let priceNote: string | null = null
       let rejected = false
-      if (net.token.oracle && price === null) priceNote = "The oracle read failed at this block."
-      if (hasUnlisted) priceNote = UNLISTED_NOTE
+      if (net.token.oracle && price === null) priceNote = PRICE_NOTES.feedFailed
+      if (hasUnlisted) priceNote = PRICE_NOTES.unlisted
       else if (!net.token.oracle) {
         const swap = pricedRow?.priced.source === "swap" && pricedRow.priced.token === net.token.symbol ? pricedRow.priced.usd_micros : null
-        if (swap === null) priceNote = isSwap ? "This swap didn't give a usable price for this token." : "No swap in this transaction, and no oracle for this token."
-        else if (!isSwap) priceNote = "This transaction isn't a simple swap."
+        if (swap === null) priceNote = isSwap ? PRICE_NOTES.unusable : PRICE_NOTES.noExchange
+        else if (!isSwap) priceNote = PRICE_NOTES.notSimple
         else if (!isSanePrice(net.token, swap, ethMicros)) {
-          priceNote = REJECTED_NOTE
+          priceNote = PRICE_NOTES.rejected
           rejected = true
         } else {
           price = swap
@@ -313,7 +332,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     const usdcSide = resolved.find((r) => r.net.token.oracle === "usdc" && r.price !== null)
     const anchor = isSwap ? (usdcSide ?? resolved.find((r) => r.net.token.oracle === "eth" && r.price !== null)) : undefined
     const abs = (delta: bigint) => (delta < 0n ? -delta : delta)
-    let tradeUsd = anchor ? usdOf(abs(anchor.net.delta), BigInt(anchor.price as string), anchor.net.token.decimals) : null
+    let tradeUsd = anchor ? worth(abs(anchor.net.delta), BigInt(anchor.price as string), anchor.net.token.decimals) : null
     const other = anchor && resolved.find((r) => r !== anchor)
     if (anchor && other && tradeUsd !== null) {
       const implied = (tradeUsd * 10n ** BigInt(other.net.token.decimals)) / abs(other.net.delta)
@@ -322,8 +341,8 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
       if (other.rejected || !sane) {
         // A wrong trade value must never reach a total, so neither side gets one.
         tradeUsd = null
-        anchor.priceNote = REJECTED_NOTE
-        other.priceNote = REJECTED_NOTE
+        anchor.priceNote = PRICE_NOTES.rejected
+        other.priceNote = PRICE_NOTES.rejected
       }
     }
 
@@ -339,11 +358,11 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         delta: net.delta.toString(),
         decimals: net.token.decimals,
         kind: isExchange ? "swap" : "transfer",
-        priceUsdMicros: price,
+        priceMicros: price,
         priceSource,
         priceNote,
-        costUsdMicros: paid ? value : null,
-        proceedsUsdMicros: net.delta < 0n ? value : null,
+        costMicros: paid ? value : null,
+        proceedsMicros: net.delta < 0n ? value : null,
         costLabel,
         parts: net.parts,
       })

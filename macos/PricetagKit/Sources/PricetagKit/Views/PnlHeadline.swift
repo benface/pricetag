@@ -16,16 +16,20 @@ public struct PnlHeadline: View {
 
     /// nil when there's no number to show, and that says so instead of showing $0.
     private var pnl: String? {
-        portfolio.pnlStatus == .unavailable ? nil : portfolio.totals.pnlUsdMicros
+        portfolio.pnlStatus == .unavailable ? nil : portfolio.totals.pnlMicros
+    }
+
+    private func signed(_ micros: String) -> String {
+        Format.signedMoney(micros, portfolio.currency)
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("Total PnL").font(.caption).foregroundStyle(.secondary)
+            Text("Total PnL · \(portfolio.currency.rawValue)").font(.caption).foregroundStyle(.secondary).help(Wording.pnlHelp)
             Button(action: onOpen) {
                 Group {
                     if let pnl {
-                        LiveNumber(Format.signedUSD(pnl), tone: isLive ? Tone(signed: pnl) : .neutral)
+                        LiveNumber(signed(pnl), tone: isLive ? Tone(signed: pnl) : .neutral)
                     } else {
                         WarningText(Wording.pnlUnavailable)
                     }
@@ -38,8 +42,8 @@ public struct PnlHeadline: View {
                 .animation(.easeOut(duration: 0.15), value: isLive)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("Total PnL, \(pnl.map(Format.signedUSD) ?? Wording.pnlUnavailable)")
-            .accessibilityHint("Shows the legs behind this number")
+            .accessibilityLabel("Total PnL, \(pnl.map(signed) ?? Wording.pnlUnavailable)")
+            .accessibilityHint("Shows the activity behind this number")
             PnlCaveats(portfolio: portfolio)
         }
     }
@@ -60,13 +64,16 @@ public struct PnlCaveats: View {
                 Text("Nothing excluded.").foregroundStyle(.secondary)
             }
             if portfolio.totals.unpricedGas {
-                WarningText(Wording.unpricedGas)
+                WarningText(Wording.unpricedFees)
             }
             if !portfolio.gasUnknownTxs.isEmpty {
-                WarningText(Wording.gasUnknown(portfolio.gasUnknownTxs.count))
+                WarningText(Wording.feesUnknown(portfolio.gasUnknownTxs.count))
             }
             if !portfolio.l1FeeUnknownTxs.isEmpty {
-                WarningText(Wording.networkFeeUnknown(portfolio.l1FeeUnknownTxs.count))
+                WarningText(Wording.networkFeeUnknown(portfolio.l1FeeUnknownTxs.count)).help(Wording.pnlHelp)
+            }
+            ForEach(Wording.missingRates(portfolio), id: \.self) { line in
+                WarningText(line)
             }
         }
         .font(.caption)
@@ -77,14 +84,16 @@ public struct PnlCaveats: View {
 /// One of the sums beside the total. It says when it's partial, and shows no number when nothing's known.
 public struct TotalStat: View {
     let label: String
+    let help: String?
     /// nil when nothing in the sum is known.
     let text: String?
     let coverage: SumCoverage?
     let isLive: Bool
     let onOpen: () -> Void
 
-    public init(label: String, text: String?, coverage: SumCoverage? = nil, isLive: Bool, onOpen: @escaping () -> Void) {
+    public init(label: String, help: String? = nil, text: String?, coverage: SumCoverage? = nil, isLive: Bool, onOpen: @escaping () -> Void) {
         self.label = label
+        self.help = help
         self.text = text
         self.coverage = coverage
         self.isLive = isLive
@@ -94,7 +103,7 @@ public struct TotalStat: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                Text(label).foregroundStyle(.secondary)
+                Text(label).foregroundStyle(.secondary).help(help ?? "")
                 if text != nil, coverage?.isPartial == true {
                     Text("partial").foregroundStyle(Tone.warning.style)
                 }
@@ -121,12 +130,14 @@ public struct TotalStat: View {
 
 extension Portfolio {
     /// The four sums beside the total, in reading order.
-    public var totalStats: [(metric: TotalMetric, label: String, text: String?, coverage: SumCoverage?)] {
-        [
-            (.value, "Value", totals.valueUsdMicros.map(Format.usd), totals.coverage.value),
-            (.realized, "Realized", totals.realizedUsdMicros.map(Format.signedUSD), totals.coverage.realized),
-            (.unrealized, "Unrealized", totals.unrealizedUsdMicros.map(Format.signedUSD), totals.coverage.unrealized),
-            (.gas, "Gas paid", totals.gasUsdMicros.map(Format.usd), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
+    public var totalStats: [(metric: TotalMetric, label: String, help: String?, text: String?, coverage: SumCoverage?)] {
+        let money = { Format.money($0, currency) }
+        let signed = { Format.signedMoney($0, currency) }
+        return [
+            (.value, "Value", nil, totals.valueMicros.map(money), totals.coverage.value),
+            (.realized, "Realized", Wording.realizedHelp, totals.realizedMicros.map(signed), totals.coverage.realized),
+            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map(signed), totals.coverage.unrealized),
+            (.gas, Wording.networkFees, nil, totals.gasMicros.map(money), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
     }
 }

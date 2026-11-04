@@ -2,19 +2,16 @@
 // One source of PnL logic: this calls what the browser calls, and adds nothing to the math.
 
 import { TOKENS, foldPositions, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Method, type Position, type Totals } from "@pricetag/sdk/core"
-import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
-import { describeEffect, describeNetting, explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../src/core/explain.ts"
+import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
+import { viewWallet, type CurrencyCode, type WalletView } from "../src/core/currency.ts"
+import { describeConversion, describeEffect, describeNetting, explainContext, explainTarget, rateSource, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
+import { ETH_NOTE } from "../src/core/wording.ts"
 
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS = 200
 
 const ASSET_METRICS: readonly string[] = ["amount", "average", "value", "realized", "unrealized", "onchain"] satisfies Metric[]
 const TOTAL_METRICS: readonly string[] = ["pnl", "value", "realized", "unrealized", "gas"] satisfies TotalMetric[]
-
-export type ExplainTarget =
-  | { kind: "total"; metric: TotalMetric }
-  | { kind: "asset"; asset: string; metric: Metric }
-  | { kind: "tx"; txHash: string }
 
 export function parseExplainTarget(params: URLSearchParams): ExplainTarget | null {
   const tx = params.get("tx")
@@ -27,24 +24,32 @@ export function parseExplainTarget(params: URLSearchParams): ExplainTarget | nul
 
 function positionOf({ asset, decimals, price, values, state, effects, reconciliation }: Position): PortfolioPosition {
   const held = BigInt(values.qty) > 0n
-  const { realizedUsdMicros: realized, unrealizedUsdMicros: unrealized } = values
+  const { realizedMicros: realized, unrealizedMicros: unrealized } = values
   const pnl = (() => {
     // Units left that we never saw arrive, so whatever this position shows isn't all of it. Totals leave it out for the same reason.
     if (realized === null || BigInt(state.shortfallQty) > 0n) return null
     if (!held) return realized
     return unrealized === null ? null : (BigInt(realized) + BigInt(unrealized)).toString()
   })()
-  return { asset, decimals, note: asset === "ETH" ? "incl. WETH" : null, price, values, pnlUsdMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length, reconciliation }
+  return { asset, decimals, note: asset === "ETH" ? ETH_NOTE : null, price, values, pnlMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length, reconciliation }
+}
+
+function exchangeOf(view: WalletView): PortfolioExchange | null {
+  if (view.currency === "USD") return null
+  return { source: rateSource(view.currency), latestRateMicros: view.latestRate?.rateMicros ?? null, missingRateTxs: view.missingRateTxs }
 }
 
 export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioResponse {
-  const positions = foldPositions(wallet.legs, method, wallet.prices, wallet)
+  const view = viewWallet(wallet)
+  const positions = foldPositions(view.legs, method, view.prices, wallet)
   const unread = unreadAssets(positions, wallet)
   const totals = sumTotals(positions, unread)
   return {
     address: wallet.address,
     mode: wallet.mode,
     method,
+    currency: view.currency,
+    exchange: exchangeOf(view),
     coverage: wallet.coverage,
     // ETH is the allowlist's first entry, and everything else is a token.
     trackedTokens: TOKENS.length - 1,
@@ -57,11 +62,11 @@ export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioRe
     positions: positions.map(positionOf),
     totals,
     pnlStatus: pnlStatus(totals, wallet.gasUnknownTxs),
-    points: pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)),
+    points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread)),
   }
 }
 
-function legOf(effect: LegEffect): ExplanationLeg {
+function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg {
   const { leg } = effect
   return {
     id: leg.id,
@@ -69,7 +74,7 @@ function legOf(effect: LegEffect): ExplanationLeg {
     delta: leg.delta,
     decimals: leg.decimals,
     kind: leg.kind,
-    priceUsdMicros: leg.priceUsdMicros,
+    priceMicros: leg.priceMicros,
     priceSource: leg.priceSource,
     priceNote: leg.priceNote,
     costLabel: leg.costLabel,
@@ -77,30 +82,28 @@ function legOf(effect: LegEffect): ExplanationLeg {
     timestamp: leg.timestamp,
     txHash: leg.txHash,
     opening: leg.opening === true,
-    effect: describeEffect(effect),
+    effect: describeEffect(effect, currency),
     netting: describeNetting(leg),
+    conversion: describeConversion(leg, currency),
   }
 }
 
 /** The same explanation the web panel shows for a click on this number. null when the wallet has no such asset or transaction. */
 export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget): ExplanationResponse | null {
-  const positions = foldPositions(wallet.legs, method, wallet.prices, wallet)
+  const view = viewWallet(wallet)
+  const positions = foldPositions(view.legs, method, view.prices, wallet)
   const unread = unreadAssets(positions, wallet)
-  const explanation = ((): Explanation | null => {
-    if (target.kind === "total") return explainTotal(positions, sumTotals(positions, unread), target.metric)
-    if (target.kind === "asset") {
-      const position = positions.find((p) => p.asset === target.asset)
-      return position ? explainMetric(position, target.metric) : null
-    }
-    const point = pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)).find((p) => p.txHash === target.txHash)
-    return point ? explainPoint(positions, point) : null
-  })()
+  const totals = sumTotals(positions, unread)
+  const points = pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread))
+  const explanation = explainTarget(target, { positions, totals, points }, explainContext(wallet, view, method))
   if (!explanation) return null
   return {
+    currency: explanation.currency,
     title: explanation.title,
     value: explanation.value,
+    sourceValue: explanation.sourceValue,
     lines: explanation.lines,
     legCount: explanation.effects.length,
-    legs: explanation.effects.slice(0, MAX_LEGS).map(legOf),
+    legs: explanation.effects.slice(0, MAX_LEGS).map((effect) => legOf(effect, explanation.currency)),
   }
 }

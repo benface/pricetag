@@ -1,0 +1,198 @@
+{
+  "methods": {
+    "average": "Average",
+    "fifo": "Oldest first"
+  },
+  "modes": {
+    "demo": "Demo data",
+    "raw": "Raw chain data",
+    "dataset": "Pricetag data"
+  },
+  "actions": [
+    {
+      "kind": "swap",
+      "incoming": true,
+      "label": "Bought"
+    },
+    {
+      "kind": "swap",
+      "incoming": false,
+      "label": "Sold"
+    },
+    {
+      "kind": "transfer",
+      "incoming": true,
+      "label": "Received"
+    },
+    {
+      "kind": "transfer",
+      "incoming": false,
+      "label": "Sent"
+    },
+    {
+      "kind": "gas",
+      "incoming": true,
+      "label": "Network fee"
+    },
+    {
+      "kind": "gas",
+      "incoming": false,
+      "label": "Network fee"
+    }
+  ],
+  "priceSources": [
+    {
+      "source": "oracle",
+      "label": "market price feed"
+    },
+    {
+      "source": "swap",
+      "label": "from this exchange"
+    },
+    {
+      "source": "market",
+      "label": "market price"
+    }
+  ],
+  "costs": [
+    {
+      "cost": "paid",
+      "tag": "Cost: what you paid"
+    },
+    {
+      "cost": "inherited",
+      "tag": "Cost: from your other wallet"
+    },
+    {
+      "cost": "received at market",
+      "tag": "Cost: market price when received"
+    },
+    {
+      "cost": "self-reported",
+      "tag": "Cost: what you entered"
+    },
+    {
+      "cost": "unknown",
+      "tag": "Cost unknown"
+    }
+  ],
+  "activity": [
+    {
+      "count": 1,
+      "shown": 1,
+      "title": "Activity (1)"
+    },
+    {
+      "count": 10,
+      "shown": 10,
+      "title": "Activity (10)"
+    },
+    {
+      "count": 1203,
+      "shown": 200,
+      "title": "Activity (newest 200 of 1,203)"
+    }
+  ],
+  "excluded": "Excludes USDC, ETH (unknown cost); AERO (no current price).",
+  "coverage": [
+    {
+      "fromBlock": 53500000,
+      "toBlock": 53505400,
+      "trackedTokens": 10,
+      "openingUnread": false,
+      "text": "Covers about 3 h of history and 10 tokens plus ETH. What the wallet held before that is included, at an unknown cost. Other tokens aren't counted."
+    },
+    {
+      "fromBlock": 53500000,
+      "toBlock": 53505400,
+      "trackedTokens": 10,
+      "openingUnread": true,
+      "text": "Covers about 3 h of history and 10 tokens plus ETH. What the wallet held before that couldn't all be read yet, so some amounts may not be full balances. Other tokens aren't counted."
+    }
+  ],
+  "networkFeeUnknown": [
+    {
+      "count": 1,
+      "text": "Couldn't read the network fee of 1 transaction yet, so fees paid are too low, and ETH's PnL is unavailable until they're read."
+    },
+    {
+      "count": 2,
+      "text": "Couldn't read the network fee of 2 transactions yet, so fees paid are too low, and ETH's PnL is unavailable until they're read."
+    }
+  ],
+  "checkLabels": {
+    "reconciled": "Matches",
+    "incomplete": "Incomplete",
+    "unchecked": "Not checked"
+  },
+  "feesUnknown": [
+    {
+      "count": 1,
+      "text": "Network fees couldn't be worked out for 1 transaction, so the network fees shown are too low."
+    },
+    {
+      "count": 2,
+      "text": "Network fees couldn't be worked out for 2 transactions, so the network fees shown are too low."
+    }
+  ],
+  "behind": [
+    {
+      "blocks": 6,
+      "text": "The data is still catching up, less than a minute behind the network. Anything newer isn't in these numbers yet."
+    },
+    {
+      "blocks": 14,
+      "text": "The data is still catching up, less than a minute behind the network. Anything newer isn't in these numbers yet."
+    },
+    {
+      "blocks": 15,
+      "text": "The data is still catching up, about 1 min behind the network. Anything newer isn't in these numbers yet."
+    },
+    {
+      "blocks": 50,
+      "text": "The data is still catching up, about 2 min behind the network. Anything newer isn't in these numbers yet."
+    },
+    {
+      "blocks": 5400,
+      "text": "The data is still catching up, about 3 h behind the network. Anything newer isn't in these numbers yet."
+    }
+  ],
+  "stale": "These numbers aren't updating. Last update: Nov 4 at 5:40 AM.",
+  "feedDetail": [
+    "Demo data",
+    "Raw chain data · block 1,000",
+    "Pricetag data · block 1,000"
+  ],
+  "pnlHelp": [
+    {
+      "text": "Total PnL",
+      "help": "PnL is profit and loss: what you've gained or lost so far."
+    },
+    {
+      "text": "AERO: Realized PnL",
+      "help": "PnL is profit and loss: what you've gained or lost so far."
+    },
+    {
+      "text": "Transaction 0x1234…abcd",
+      "help": null
+    }
+  ],
+  "sentences": {
+    "methodName": "How cost is worked out",
+    "methodHelp": "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest.",
+    "averagePricePaid": "Average price paid",
+    "networkFees": "Network fees",
+    "balanceCheck": "Balance check",
+    "startingBalance": "Starting balance",
+    "pnlHelp": "PnL is profit and loss: what you've gained or lost so far.",
+    "realizedHelp": "Gain or loss on what you've sold or spent.",
+    "unrealizedHelp": "Gain or loss on what you still hold, at the current price.",
+    "notStarted": "The data hasn't reached this wallet's history yet, so there's nothing to show so far.",
+    "unpricedFees": "Some network fees had no price at the time, and aren't in this total.",
+    "demo": "Demo data, not a real wallet. Every case the app has to get right is in here.",
+    "pnlUnavailable": "PnL unavailable",
+    "nothingToChart": "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero.",
+    "reading": "Reading this wallet's history. The first read can take a minute, then only new activity is read.",
+    "notAnAddress": "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
+  }
+}

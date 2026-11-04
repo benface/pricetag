@@ -38,7 +38,7 @@ struct MacApp: App {
             CommandGroup(after: .toolbar) {
                 Divider()
                 ForEach(Array(CostMethod.allCases.enumerated()), id: \.element) { index, method in
-                    Button(method.label) { store.setMethod(method) }
+                    Button("Cost: \(method.label)") { store.setMethod(method) }
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
                 }
                 Divider()

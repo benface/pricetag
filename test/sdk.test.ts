@@ -53,13 +53,13 @@ describe("getLegs", () => {
     assert.equal(address, `0x${ME}`)
     assert.deepEqual(blocks, { fromBlock: 50, toBlock: 200 })
     const aero = legs.find((l) => l.asset === "AERO")!
-    assert.deepEqual([aero.priceUsdMicros, aero.priceSource, aero.txHash, aero.costLabel, aero.costUsdMicros], ["2000000", "swap", "0xaa", "paid", "1000000000"])
+    assert.deepEqual([aero.priceMicros, aero.priceSource, aero.txHash, aero.costLabel, aero.costMicros], ["2000000", "swap", "0xaa", "paid", "1000000000"])
   })
 
   it("keeps an unpriced leg unknown, and says why", async () => {
     const { client } = fakeAmp({ legs: [leg("aa", AERO, ME, "credit", "5", "erc20")], reference_prices: [{ block_num: "100", eth_usd: ETH_ANSWER, usdc_usd: USDC_ANSWER }] })
     const [aero] = (await client.getLegs(`0x${ME}`, { from: 50 })).legs
-    assert.deepEqual([aero!.priceUsdMicros, aero!.priceSource, aero!.costLabel, aero!.costUsdMicros], [null, null, "unknown", null])
+    assert.deepEqual([aero!.priceMicros, aero!.priceSource, aero!.costLabel, aero!.costMicros], [null, null, "unknown", null])
     assert.ok(aero!.priceNote)
   })
 
@@ -193,7 +193,7 @@ describe("getPrices", () => {
     })
     const [point] = (await client.getPrices("AERO", { from: 50 })).prices
     assert.deepEqual([point!.usdMicros, point!.source, point!.txHash], [null, "unknown", "0xaa"])
-    assert.match(point!.note!, /off the allowlist/)
+    assert.match(point!.note!, /a token we can't price yet/)
   })
 
   it("rejects an absurd swap price", async () => {
@@ -230,14 +230,14 @@ describe("getPrices", () => {
     const { client } = fakeAmp(tables)
     const fromLegs = (await client.getLegs(`0x${ME}`, { from: 50 })).legs.find((l) => l.asset === "AERO")!
     const [fromPrices] = (await client.getPrices("AERO", { from: 50 })).prices
-    assert.deepEqual([fromPrices!.usdMicros, fromPrices!.source, fromPrices!.txHash], [fromLegs.priceUsdMicros, fromLegs.priceSource, fromLegs.txHash])
+    assert.deepEqual([fromPrices!.usdMicros, fromPrices!.source, fromPrices!.txHash], [fromLegs.priceMicros, fromLegs.priceSource, fromLegs.txHash])
   })
 })
 
 describe("getLatestPrices", () => {
   it("has only what a recent oracle read gives", async () => {
     const { client } = fakeAmp({ reference_prices: [{ block_num: "199", eth_usd: ETH_ANSWER, usdc_usd: "" }] })
-    assert.deepEqual(await client.getLatestPrices(), { ETH: { usdMicros: "2400000000", source: "oracle", blockNum: 199 } })
+    assert.deepEqual(await client.getLatestPrices(), { ETH: { micros: "2400000000", source: "oracle", blockNum: 199 } })
   })
 
   it("has nothing without a recent read", async () => {
@@ -266,7 +266,7 @@ describe("buildPortfolio", () => {
     const legs = buildPricedLegs({ account: DEMO_WALLET.address, rows: DEMO_ROWS, references: DEMO_REFERENCES, priced: [] })
     const { positions } = buildPortfolio(legs, "average")
     const eth = positions.find((p) => p.asset === "ETH")!
-    assert.deepEqual([eth.values.valueUsdMicros, eth.values.unrealizedUsdMicros, eth.price], [null, null, null])
+    assert.deepEqual([eth.values.valueMicros, eth.values.unrealizedMicros, eth.price], [null, null, null])
   })
 })
 
@@ -290,7 +290,7 @@ describe("pnlStatus", () => {
   })
 
   it("calls a total with no answer unavailable", () => {
-    assert.equal(pnlStatus({ ...totals, pnlUsdMicros: null }), "unavailable")
+    assert.equal(pnlStatus({ ...totals, pnlMicros: null }), "unavailable")
   })
 })
 

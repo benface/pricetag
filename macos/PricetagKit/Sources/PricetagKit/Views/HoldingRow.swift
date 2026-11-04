@@ -4,10 +4,12 @@ import SwiftUI
 /// Every line is one line tall whatever it says, so nothing moves when a value changes.
 public struct HoldingRow: View {
     let position: Position
+    let currency: CurrencyCode
     let isLive: Bool
 
-    public init(position: Position, isLive: Bool) {
+    public init(position: Position, currency: CurrencyCode, isLive: Bool) {
         self.position = position
+        self.currency = currency
         self.isLive = isLive
     }
 
@@ -16,18 +18,18 @@ public struct HoldingRow: View {
     }
 
     private var cost: String {
-        if !position.isHeld { return "Closed" }
-        if let average = position.values.averageCostUsdMicros { return "Cost \(Format.price(average))" }
+        if !position.isHeld { return "None left" }
+        if let average = position.values.averageCostMicros { return "Average paid \(Format.price(average, currency))" }
         return "Cost unknown"
     }
 
     private var pnlText: String {
-        position.pnlUsdMicros.map(Format.signedUSD) ?? Wording.pnlUnavailable
+        position.pnlMicros.map { Format.signedMoney($0, currency) } ?? Wording.pnlUnavailable
     }
 
     private var valueText: String {
         if !position.isHeld { return "—" }
-        return position.values.valueUsdMicros.map(Format.usd) ?? "No price"
+        return position.values.valueMicros.map { Format.money($0, currency) } ?? "No price"
     }
 
     public var body: some View {
@@ -42,14 +44,14 @@ public struct HoldingRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
-                LiveNumber(valueText, tone: position.isHeld && position.values.valueUsdMicros == nil ? .warning : .neutral)
+                LiveNumber(valueText, tone: position.isHeld && position.values.valueMicros == nil ? .warning : .neutral)
                 Text(cost)
                     .monospacedDigit()
                     .font(.caption)
                     .foregroundStyle(position.isHeld && position.hasUnknownCost ? Tone.warning.style : AnyShapeStyle(.secondary))
             }
-            LiveNumber(pnlText, tone: Tone(signed: position.pnlUsdMicros))
-                .font(position.pnlUsdMicros == nil ? .caption : .body)
+            LiveNumber(pnlText, tone: Tone(signed: position.pnlMicros))
+                .font(position.pnlMicros == nil ? .caption : .body)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(width: 104, alignment: .trailing)
@@ -72,12 +74,8 @@ public struct OnchainCheck: View {
     }
 
     private var label: String? {
-        switch position.reconciliation?.status {
-        case .reconciled: "Reconciled"
-        case .incomplete: "Incomplete"
-        case .unchecked: "Not checked"
-        case nil: position.hasShortfall ? "Incomplete" : nil
-        }
+        if let status = position.reconciliation?.status { return Wording.checkLabel(status) }
+        return position.hasShortfall ? Wording.checkLabel(.incomplete) : nil
     }
 
     private var help: String {
