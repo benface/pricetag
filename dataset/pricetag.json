@@ -688,9 +688,82 @@
       },
       "network": "base-mainnet"
     },
+    "net_legs": {
+      "input": {
+        "sql": "SELECT block_num, timestamp, tx_hash, account, token, get_field(net, 'side') AS side, get_field(net, 'amount') AS amount FROM (\n  SELECT block_num, timestamp, tx_hash, account, token, self.pt_net(string_agg(CASE WHEN side = 'credit' THEN amount ELSE concat('-', amount) END, ',')) AS net\n  FROM self.legs WHERE kind <> 'gas'\n  GROUP BY block_num(), block_num, timestamp, tx_hash, account, token\n) WHERE get_field(net, 'side') <> '' AND block_num() >= 53514029"
+      },
+      "schema": {
+        "arrow": {
+          "fields": [
+            {
+              "name": "_block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "_ts",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "timestamp",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "tx_hash",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": false
+            },
+            {
+              "name": "account",
+              "type": {
+                "FixedSizeBinary": 20
+              },
+              "nullable": true
+            },
+            {
+              "name": "token",
+              "type": {
+                "FixedSizeBinary": 20
+              },
+              "nullable": false
+            },
+            {
+              "name": "side",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "amount",
+              "type": "Utf8",
+              "nullable": true
+            }
+          ]
+        }
+      },
+      "network": "base-mainnet"
+    },
     "pairs": {
       "input": {
-        "sql": "SELECT a.block_num, a.timestamp, a.tx_hash, a.account,\n  a.token AS sold_token, a.amount AS sold_amount,\n  b.token AS bought_token, b.amount AS bought_amount\nFROM self.legs a\nJOIN self.legs b ON a._block_num = b._block_num AND a.tx_hash = b.tx_hash AND a.account = b.account\nWHERE a.side = 'debit' AND b.side = 'credit' AND a.kind <> 'gas' AND b.kind <> 'gas' AND a.token <> b.token AND block_num() >= 53514029"
+        "sql": "SELECT a.block_num, a.timestamp, a.tx_hash, a.account,\n  a.token AS sold_token, a.amount AS sold_amount,\n  b.token AS bought_token, b.amount AS bought_amount\nFROM self.net_legs a\nJOIN self.net_legs b ON a._block_num = b._block_num AND a.tx_hash = b.tx_hash AND a.account = b.account\nWHERE a.side = 'debit' AND b.side = 'credit' AND block_num() >= 53514029"
       },
       "schema": {
         "arrow": {
@@ -770,7 +843,7 @@
     },
     "pair_counts": {
       "input": {
-        "sql": "SELECT block_num() AS bn, tx_hash, account, COUNT(*) AS pair_count\nFROM self.pairs WHERE block_num() >= 53514029 GROUP BY block_num(), tx_hash, account"
+        "sql": "SELECT bn, tx_hash, account, pair_count FROM (\n  SELECT block_num() AS bn, tx_hash, account, COUNT(*) AS pair_count\n  FROM self.pairs GROUP BY block_num(), tx_hash, account\n) WHERE block_num() >= 53514029"
       },
       "schema": {
         "arrow": {
@@ -1063,6 +1136,35 @@
       "source": {
         "source": "\nconst TOKENS = {\n  '0000000000000000000000000000000000000000': { symbol: 'ETH', decimals: 18, asset: 'ETH', oracle: 'eth' },\n  '4200000000000000000000000000000000000006': { symbol: 'WETH', decimals: 18, asset: 'ETH', oracle: 'eth' },\n  '833589fcd6edb6e08f4c7c32d4f71b54bda02913': { symbol: 'USDC', decimals: 6, asset: 'USDC', oracle: 'usdc' },\n  'fde4c96c8593536e31f229ea8f37b2ada2699bb2': { symbol: 'USDT', decimals: 6, asset: 'USDT', oracle: null },\n  '50c5725949a6f0c72e6c4a641f24049a917db0cb': { symbol: 'DAI', decimals: 18, asset: 'DAI', oracle: null },\n  '2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22': { symbol: 'cbETH', decimals: 18, asset: 'cbETH', oracle: null },\n  'c1cba3fcea344f92d9239c08c0568f6f2f0ee452': { symbol: 'wstETH', decimals: 18, asset: 'wstETH', oracle: null },\n  'cbb7c0000ab88b473b1f5afd9ef808440eed33bf': { symbol: 'cbBTC', decimals: 8, asset: 'cbBTC', oracle: null },\n  '940181a94a35a4569e4529a3cdfb74e38fd98631': { symbol: 'AERO', decimals: 18, asset: 'AERO', oracle: null },\n  '0b3e328455c4059eeb9e3f84b5543f74e24e7e1b': { symbol: 'VIRTUAL', decimals: 18, asset: 'VIRTUAL', oracle: null },\n  '4ed4e862860bed51a9570b96d89af5e1b0efefed': { symbol: 'DEGEN', decimals: 18, asset: 'DEGEN', oracle: null }\n};\nfunction norm(a) { return String(a).replace(/^0x/, '').toLowerCase(); }\nfunction usdPerToken(pricedAmt, pricedDec, refAmt, refDec, refAnswer) {\n  return (BigInt(refAmt) * BigInt(refAnswer) * (10n ** BigInt(pricedDec)) / (BigInt(pricedAmt) * (10n ** BigInt(refDec)) * 100n)).toString();\n}\nfunction pt_price(soldToken, soldAmount, boughtToken, boughtAmount, ethUsd, usdcUsd) {\n  const none = { source: 'unknown', token: '', usd_micros: '' };\n  const s = TOKENS[norm(soldToken)], b = TOKENS[norm(boughtToken)];\n  if (!s || !b || !ethUsd || !usdcUsd || !soldAmount || !boughtAmount) return none;\n  if (BigInt(soldAmount) === 0n || BigInt(boughtAmount) === 0n) return none;\n  if (s.asset === b.asset) return none;\n  const answer = { eth: ethUsd, usdc: usdcUsd };\n  if (s.oracle) return { source: 'swap', token: b.symbol, usd_micros: usdPerToken(boughtAmount, b.decimals, soldAmount, s.decimals, answer[s.oracle]) };\n  if (b.oracle) return { source: 'swap', token: s.symbol, usd_micros: usdPerToken(soldAmount, s.decimals, boughtAmount, b.decimals, answer[b.oracle]) };\n  return none;\n}\n",
         "filename": "pt_price.js"
+      }
+    },
+    "pt_net": {
+      "inputTypes": [
+        "Utf8"
+      ],
+      "outputType": {
+        "Struct": [
+          {
+            "name": "amount",
+            "data_type": "Utf8",
+            "nullable": true,
+            "dict_id": 0,
+            "dict_is_ordered": false,
+            "metadata": {}
+          },
+          {
+            "name": "side",
+            "data_type": "Utf8",
+            "nullable": true,
+            "dict_id": 0,
+            "dict_is_ordered": false,
+            "metadata": {}
+          }
+        ]
+      },
+      "source": {
+        "source": "\nfunction pt_net(amounts) {\n  const none = { amount: '', side: '' };\n  if (!amounts) return none;\n  let net = 0n, gross = 0n;\n  for (const part of String(amounts).split(',')) {\n    if (!/^-?\\d+$/.test(part)) return none;\n    const amount = BigInt(part);\n    net += amount;\n    gross += amount < 0n ? -amount : amount;\n  }\n  if (net === 0n) return none;\n  const size = net < 0n ? -net : net;\n  return { amount: size * 2n < gross ? '' : size.toString(), side: net > 0n ? 'credit' : 'debit' };\n}\n",
+        "filename": "pt_net.js"
       }
     },
     "pt_gas": {
