@@ -3,7 +3,7 @@
 import assert from "node:assert/strict"
 import { readFileSync, writeFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { compareWithHoldingEth, foldPositions, pnlStatus, sumTotals, type CostLabel, type CurrencyCode, type HoldComparison, type LatestPrices, type Method, type PricedLeg } from "@pricetag/sdk/core"
+import { compareWithHoldingEth, foldPositions, pnlStatus, sharePaidAt, sumTotals, type CostLabel, type CurrencyCode, type HoldComparison, type LatestPrices, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
 import { emptyBook } from "../src/core/book.ts"
 import { explainTarget } from "../src/core/explain.ts"
@@ -37,7 +37,7 @@ function leg(asset: string, amount: number | bigint, blockNum: number, rest: Par
     blockNum,
     timestamp: new Date(1_800_000_000_000 + blockNum * 2000).toISOString(),
     txHash,
-    txIndex: 0,
+    txIndex: nextTx++,
     parts: [],
     ...rest,
   }
@@ -50,7 +50,8 @@ const send = (asset: string, amount: number, price: number, blockNum: number) =>
 /** One token for another, at one value, in one transaction. */
 function swap(soldAsset: string, sold: number, boughtAsset: string, bought: number, dollars: number, blockNum: number): PricedLeg[] {
   const txHash = `0x${(nextTx++).toString(16).padStart(64, "0")}`
-  return [leg(soldAsset, -sold, blockNum, { txHash, kind: "swap", proceedsMicros: usd(dollars) }), leg(boughtAsset, bought, blockNum, { txHash, kind: "swap", costMicros: usd(dollars), costLabel: "paid" })]
+  const txIndex = nextTx++
+  return [leg(soldAsset, -sold, blockNum, { txHash, txIndex, kind: "swap", proceedsMicros: usd(dollars) }), leg(boughtAsset, bought, blockNum, { txHash, txIndex, kind: "swap", costMicros: usd(dollars), costLabel: "paid" })]
 }
 /** A network fee in thousandths of an ETH, at `price`. */
 const gas = (thousandths: number, price: number, blockNum: number) => leg("ETH", -(BigInt(thousandths) * E18) / 1000n, blockNum, { kind: "gas", priceMicros: usd(price), priceSource: "oracle" })
@@ -171,6 +172,57 @@ describe("comparing a wallet with holding ETH", () => {
       assert.match(holdCaveatSentence(result, "USD") as string, /Unavailable, because something left/)
     })
 
+    it("leaves nothing out of what was put in for an amount with no ETH price at its moment", () => {
+      // The USDC arrives at block 150, which has no ETH price, so it was never in the ETH, and its leaving takes none out.
+      const known = deposit("ETH", 1, 1000, 100)
+      const skipped = deposit("USDC", 1000, 1000, 150)
+      const latest = prices(4000, { USDC: 1 })
+      const before = compare([known, skipped], latest)
+      const after = compare([known, skipped, send("USDC", 1000, 1, 200)], latest)
+      assert.equal(before.holdMicros, usd(3000))
+      assert.equal(after.holdMicros, usd(3000))
+      assert.equal(after.ethQty, E18.toString())
+      assert.equal(after.takenOutMicros, usd(0))
+      assert.equal(after.status, "partial")
+    })
+
+    it("leaves nothing out of what was put in for an opening balance, even with a cost entered", () => {
+      const opening = { ...leg("USDC", 1000n * E6, 90), opening: true, costMicros: usd(1000), costLabel: "self-reported" as const }
+      const result = compare([opening, deposit("ETH", 1, 1000, 100), send("USDC", 1000, 1, 200)], prices(4000, { USDC: 1 }))
+      assert.equal(result.ethQty, E18.toString())
+      assert.equal(result.holdMicros, usd(3000))
+      assert.equal(result.status, "partial")
+    })
+
+    it("follows an amount that wasn't in the ETH through an exchange", () => {
+      // The AERO has a known cost, but it was paid for with USDC that was never in the ETH.
+      const opening = { ...leg("USDC", 1000n * E6, 90), opening: true }
+      const result = compare([opening, deposit("ETH", 1, 1000, 100), ...swap("USDC", 1000, "AERO", 1000, 1000, 150), leg("AERO", -1000n * E18, 200, { priceMicros: usd(1), priceSource: "oracle" })], prices(4000, { AERO: 1 }))
+      assert.equal(result.ethQty, E18.toString())
+      assert.equal(result.takenOutMicros, usd(0))
+    })
+
+    it("follows an amount that was in the ETH through an exchange", () => {
+      const result = compare([deposit("USDC", 1000, 1000, 100), ...swap("USDC", 1000, "AERO", 1000, 1000, 150), leg("AERO", -500n * E18, 200, { priceMicros: usd(1), priceSource: "oracle" })], prices(4000, { AERO: 1 }))
+      assert.equal(result.takenOutMicros, usd(500))
+      assert.equal(result.ethQty, ((3n * E18) / 4n).toString())
+    })
+
+    it("takes out only the share of an exchange that came from an amount in the ETH", () => {
+      // Half of the USDC was in the ETH, so half of the AERO was, and $500 of what leaves is $250 out of the ETH.
+      const opening = { ...leg("USDC", 1000n * E6, 90), opening: true }
+      const result = compare([opening, deposit("USDC", 1000, 1000, 100), ...swap("USDC", 2000, "AERO", 2000, 2000, 150), leg("AERO", -500n * E18, 200, { priceMicros: usd(1), priceSource: "oracle" })], prices(4000, { AERO: 1 }))
+      assert.equal(result.takenOutMicros, usd(250))
+      assert.equal(result.ethQty, ((7n * E18) / 8n).toString())
+    })
+
+    it("has no answer when an amount in the ETH left with no known value, even by way of an exchange with none", () => {
+      const noValue = [leg("USDC", -1000n * E6, 150, { txHash: "0xfeed", txIndex: 5000, kind: "swap" }), leg("AERO", 1000n * E18, 150, { txHash: "0xfeed", txIndex: 5000, kind: "swap" })]
+      const result = compare([deposit("USDC", 1000, 1000, 100), ...noValue, leg("AERO", -1000n * E18, 200)], prices(4000, { AERO: 1 }))
+      assert.equal(result.status, "unavailable")
+      assert.equal(result.unavailable, "left with no known value")
+    })
+
     it("takes nothing out for a part that was never known to be put in", () => {
       const unknown = leg("USDC", 1000n * E6, 100)
       const result = compare([unknown, send("USDC", 1000, 1, 200), deposit("ETH", 1, 2000, 200)], prices(2000, { USDC: 1 }))
@@ -259,6 +311,113 @@ describe("comparing a wallet with holding ETH", () => {
     const latest = prices(2000, { USDC: 1, AERO: 3 })
     assert.equal(compare(legs, latest, "average").holdMicros, compare(legs, latest, "fifo").holdMicros)
     assert.equal(compare(legs, latest, "average").differenceMicros, compare(legs, latest, "fifo").differenceMicros)
+  })
+})
+
+describe("what came from a linked wallet", () => {
+  const WALLET_A = `0x${"a".repeat(40)}`
+  const WALLET_B = `0x${"b".repeat(40)}`
+  const WALLET_C = `0x${"c".repeat(40)}`
+  const part = (side: "debit" | "credit", counterparty: string, amount: bigint) => ({ side, counterparty, amount: amount.toString(), logIndex: 0, token: "", account: "", kind: "eth" as const })
+  const ETH_NOW = 4000
+  /** One transfer of ETH, as both wallets see it. */
+  function transfer(from: string, to: string, amount: bigint, blockNum: number): [PricedLeg, PricedLeg] {
+    const price = { priceMicros: usd(ETH_AT[blockNum] as number), priceSource: "oracle" as const }
+    const sent = leg("ETH", -amount, blockNum, { ...price, parts: [part("debit", to, amount)] })
+    return [sent, leg("ETH", amount, blockNum, { ...price, txHash: sent.txHash, txIndex: sent.txIndex, parts: [part("credit", from, amount)] })]
+  }
+  const walletOf = (address: string, legs: PricedLeg[], eth: bigint): WalletResponse => ({
+    ...DEMO_WALLET,
+    address,
+    legs,
+    references: Object.keys(ETH_AT).map((block) => ({ blockNum: Number(block), ethUsd: (BigInt(ETH_AT[Number(block)] as number) * 100_000_000n).toString(), usdcUsd: "100000000" })),
+    prices: prices(ETH_NOW),
+    latest: { blockNum: 400, timestamp: "2027-01-15T08:00:00.000Z" },
+    coverage: { fromBlock: 100, toBlock: 400 },
+    balances: { blockNum: 400, amounts: { ETH: eth.toString() } },
+    marketChecked: false,
+  })
+  const bought = () => [deposit("ETH", 1, 1000, 100), deposit("ETH", 1, 2000, 200)]
+
+  for (const method of ["average", "fifo"] as const) {
+    it(`buys what each purchase bought, by ${method}, when all of it moves`, () => {
+      const [sent, received] = transfer(WALLET_A, WALLET_B, 2n * E18, 300)
+      const a = walletOf(WALLET_A, [...bought(), sent], 0n)
+      const b = walletOf(WALLET_B, [received], 2n * E18)
+      const { holdComparison } = foldBook(b, [a], method, { ...emptyBook(), linked: [WALLET_A] })
+      assert.equal(holdComparison.status, "complete")
+      assert.equal(holdComparison.putInMicros, usd(3000))
+      assert.equal(holdComparison.ethQty, (2n * E18).toString())
+      assert.equal(holdComparison.walletMicros, usd(5000))
+      assert.equal(holdComparison.holdMicros, usd(5000))
+      assert.equal(holdComparison.differenceMicros, usd(0))
+    })
+
+    it(`stays even with holding, by ${method}, when only part of it moves`, () => {
+      const [sent, received] = transfer(WALLET_A, WALLET_B, E18, 300)
+      const a = walletOf(WALLET_A, [...bought(), sent], E18)
+      const b = walletOf(WALLET_B, [received], E18)
+      const { holdComparison } = foldBook(b, [a], method, { ...emptyBook(), linked: [WALLET_A] })
+      assert.equal(holdComparison.status, "complete")
+      assert.equal(holdComparison.ethQty, E18.toString())
+      assert.equal(holdComparison.differenceMicros, usd(0))
+    })
+
+    it(`keeps its dates, by ${method}, through a second linked wallet`, () => {
+      const purchases = bought()
+      const [first, firstIn] = transfer(WALLET_A, WALLET_B, 2n * E18, 200)
+      const [second, secondIn] = transfer(WALLET_B, WALLET_C, 2n * E18, 300)
+      const a = walletOf(WALLET_A, [...purchases, first], 0n)
+      const b = walletOf(WALLET_B, [firstIn, second], 0n)
+      const c = walletOf(WALLET_C, [secondIn], 2n * E18)
+      const { holdComparison } = foldBook(c, [a, b], method, { ...emptyBook(), linked: [WALLET_A, WALLET_B] })
+      assert.equal(holdComparison.ethQty, (2n * E18).toString())
+      assert.equal(holdComparison.differenceMicros, usd(0))
+    })
+  }
+
+  it("shares out what an average mixed together without losing or inventing any", () => {
+    const parts = [{ costMicros: "1", blockNum: 1 }, { costMicros: "1", blockNum: 2 }, { costMicros: "1", blockNum: 3 }, { costMicros: "97", blockNum: 4 }]
+    for (const share of [0n, 1n, 2n, 3n, 50n, 99n, 100n]) {
+      const shares = sharePaidAt(parts, share, 100n)
+      assert.equal(shares.reduce((sum, p) => sum + BigInt(p.costMicros), 0n), share)
+      shares.forEach((p, i) => assert.ok(BigInt(p.costMicros) >= 0n && BigInt(p.costMicros) <= BigInt((parts[i] as { costMicros: string }).costMicros)))
+    }
+  })
+})
+
+describe("a position total PnL leaves out", () => {
+  it("adds no gain that left to the wallet's side", () => {
+    // 1 ETH at $1,000, and 0.5 ETH leaves at $2,000, but the chain says none is left, so this ETH's history can't be trusted.
+    const legs = [deposit("ETH", 1, 1000, 100), leg("ETH", -E18 / 2n, 200, { priceMicros: usd(2000), priceSource: "oracle" }), deposit("USDC", 100, 100, 200)]
+    const wallet: WalletResponse = {
+      ...DEMO_WALLET,
+      legs,
+      references: [{ blockNum: 100, ethUsd: "100000000000", usdcUsd: "100000000" }, { blockNum: 200, ethUsd: "200000000000", usdcUsd: "100000000" }],
+      prices: prices(4000, { USDC: 1 }),
+      latest: { blockNum: 400, timestamp: "2027-01-15T08:00:00.000Z" },
+      coverage: { fromBlock: 100, toBlock: 400 },
+      balances: { blockNum: 400, amounts: { ETH: "0", USDC: (100n * E6).toString() } },
+      marketChecked: false,
+    }
+    const { totals, holdComparison } = foldBook(wallet, [], "average", emptyBook())
+    assert.deepEqual(totals.excluded, [{ asset: "ETH", reason: "doesn't match its actual balance" }])
+    assert.equal(totals.pnlMicros, usd(0))
+    assert.equal(holdComparison.gainThatLeftMicros, usd(0))
+    assert.equal(holdComparison.walletMicros, usd(0))
+    assert.equal(holdComparison.status, "partial")
+    assert.equal(holdComparison.walletLeavesOut, true)
+  })
+
+  it("still adds the gain that left a position it includes", () => {
+    const result = compare([deposit("ETH", 1, 1000, 100), leg("ETH", -E18 / 2n, 200, { priceMicros: usd(2000), priceSource: "oracle" })], prices(2000))
+    assert.equal(result.gainThatLeftMicros, usd(500))
+  })
+
+  it("marks the wallet's side an estimate when a market price valued what left", () => {
+    const result = compare([deposit("USDC", 1000, 1000, 100), ...swap("USDC", 1000, "AERO", 1000, 1000, 100), leg("AERO", -500n * E18, 200, { priceMicros: usd(2), priceSource: "market" })], prices(2000, { AERO: 2 }))
+    assert.equal(result.walletEstimated, true)
+    assert.equal(result.estimated, true)
   })
 })
 

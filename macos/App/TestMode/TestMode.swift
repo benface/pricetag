@@ -185,7 +185,7 @@ private struct HoldComparisonScene: View {
     var body: some View {
         VStack(spacing: 12) {
             ForEach(vectors.indices, id: \.self) { index in
-                HoldComparisonCard(comparison: vectors[index].comparison, currency: vectors[index].currency, walletEstimated: false, isLive: true) {}
+                HoldComparisonCard(comparison: vectors[index].comparison, currency: vectors[index].currency, isLive: true) {}
             }
         }
         .padding(16)

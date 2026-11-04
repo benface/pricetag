@@ -116,9 +116,9 @@ A client keeps each wallet's rows in memory, so another call on the same client 
 
 `holdComparison` takes the same money in and out, at the same moments, and only asks what would have happened in between. It's in the currency the wallet is folded in.
 
-- **Put in** is whatever arrived from outside the wallet, at what it cost, or at its price when it arrived if that's all that's known. A transfer from a linked wallet brings its cost and date with it. An exchange inside the wallet isn't put in, and neither is its fee.
-- **Each amount buys ETH** at the oracle's price at its moment. **What left the wallet leaves the ETH too**, at its value when it left. If holding would have run out first, `ranOut` says so.
-- **`walletMicros`** is `totals.pnlMicros` plus `gainThatLeftMicros`, because total PnL counts what left at the cost it carried, and this counts it at its value on both sides. Otherwise a wallet that only held ETH and sent some would lose to itself.
+- **Put in** is whatever arrived from outside the wallet, at what it cost, or at its price when it arrived if that's all that's known. A transfer from a linked wallet brings its cost and dates with it. An exchange inside the wallet isn't put in, and neither is its fee.
+- **Each amount buys ETH** at the oracle's price at its moment. **What left the wallet leaves the ETH too**, at its value when it left, but only as far as it came from an amount in that ETH, which is followed through exchanges by the same method. If holding would have run out first, `ranOut` says so.
+- **`walletMicros`** is `totals.pnlMicros` plus `gainThatLeftMicros`, because total PnL counts what left at the cost it carried, and this counts it at its value on both sides. Otherwise a wallet that only held ETH and sent some would lose to itself. A position total PnL leaves out adds nothing to it.
 - **`status`** is `complete` when the two cover the same money, which is the only time there's a `differenceMicros`. It's `partial` when an amount put in has no known value (`unknownAmounts`), or the wallet's total leaves something out (`walletLeavesOut`). An opening balance is always an unknown amount, because it has no moment to convert at. It's `unavailable`, with `holdMicros: null` and why in `unavailable`, when there's no current ETH price, nothing put in has a known value, or something left with no known value. Unknown amounts are never counted as $0.
 
 ### Other things to check

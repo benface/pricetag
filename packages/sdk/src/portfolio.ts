@@ -85,7 +85,7 @@ function unconfirmedValues(values: PositionValues, qty: string, priceMicros: str
   }
 }
 
-const isUnconfirmed = ({ reconciliation }: Position) => reconciliation !== null && reconciliation.status !== "reconciled"
+export const isUnconfirmed = ({ reconciliation }: Pick<Position, "reconciliation">) => reconciliation !== null && reconciliation.status !== "reconciled"
 
 /**
  * Assets with no balance read and nothing else to go on, so they have no position. They might still hold something, so

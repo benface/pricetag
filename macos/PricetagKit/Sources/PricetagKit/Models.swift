@@ -233,6 +233,8 @@ public struct HoldComparison: Codable, Sendable, Equatable {
     /// The wallet's total PnL after network fees, plus any gain that left with what it sent. nil when nothing in it is known.
     public let walletMicros: String?
     public let walletLeavesOut: Bool
+    /// `walletMicros` rests on a market price.
+    public let walletEstimated: Bool
     /// nil when it's unavailable. That isn't $0.
     public let holdMicros: String?
     /// Only when complete.
@@ -288,8 +290,6 @@ public struct Portfolio: Codable, Sendable, Equatable {
     /// A balance that couldn't be read doesn't count as nothing.
     public var isEmpty: Bool { positions.isEmpty && unreadAssets.isEmpty }
     public var hasChartableData: Bool { points.contains { $0.pnlMicros != nil } }
-    /// Some of the total PnL rests on an estimate.
-    public var pnlIsEstimated: Bool { isPositive(totals.estimatedMicros) }
     /// Every point with a transaction behind it, newest first.
     public var transactions: [PnlPoint] { points.filter { $0.txHash != nil }.reversed() }
 }

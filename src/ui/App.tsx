@@ -382,7 +382,7 @@ export function App() {
                   Export a tax report…
                 </button>
               </p>
-              {fold ? <HoldCard comparison={fold.holdComparison} walletEstimated={BigInt(totals.estimatedMicros) > 0n} currency={currency} onOpen={() => setTarget({ kind: "hold" })} /> : null}
+              {fold ? <HoldCard comparison={fold.holdComparison} currency={currency} onOpen={() => setTarget({ kind: "hold" })} /> : null}
               <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
               {listed.length > 0 ? <Holdings positions={listed} currency={currency} resolvable={resolvable} explain={setTarget} onResolve={(asset) => setResolving({ asset })} /> : null}
               {noMarketCount > 0 ? (
@@ -409,8 +409,8 @@ export function App() {
 }
 
 /** Calm on purpose: no colors for ahead or behind, and it asks nothing of anyone. Clicking it says how it's worked out. */
-function HoldCard({ comparison, walletEstimated, currency, onOpen }: { comparison: HoldComparison; walletEstimated: boolean; currency: CurrencyCode; onOpen: () => void }) {
-  const { walletMicros, walletLeavesOut, holdMicros, differenceMicros, status, estimated } = comparison
+function HoldCard({ comparison, currency, onOpen }: { comparison: HoldComparison; currency: CurrencyCode; onOpen: () => void }) {
+  const { walletMicros, walletLeavesOut, walletEstimated, holdMicros, differenceMicros, status, estimated } = comparison
   const caveat = holdCaveatSentence(comparison, currency)
   const signed = (micros: string | null, isEstimate: boolean) => (micros === null ? "⚠ Unavailable" : est(formatSignedMoney(micros, currency), isEstimate))
   return (

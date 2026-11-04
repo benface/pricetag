@@ -187,7 +187,7 @@ func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, ou
         "unresolvedMicros": "0", "estimatedMicros": "0", "estimated": { "value": false, "realized": \(estimatedRealized), "unrealized": false }, "noMarket": []
       },
       "pnlStatus": "complete", "points": [],
-      "holdComparison": { "status": "unavailable", "unavailable": "nothing known put in", "walletMicros": null, "walletLeavesOut": false, "holdMicros": null, "differenceMicros": null, "putInMicros": "0", "unknownAmounts": 0, "estimated": false },
+      "holdComparison": { "status": "unavailable", "unavailable": "nothing known put in", "walletMicros": null, "walletLeavesOut": false, "walletEstimated": false, "holdMicros": null, "differenceMicros": null, "putInMicros": "0", "unknownAmounts": 0, "estimated": false },
       "questions": [], "meter": { "open": 0, "answered": 0, "waiting": 0 }, "linkedReading": [], "linkedFailed": [\(linkedFailed.map { "\"\($0)\"" }.joined(separator: ","))], "marketChecked": true
     }
     """

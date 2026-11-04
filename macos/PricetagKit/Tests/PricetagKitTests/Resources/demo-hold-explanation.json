@@ -1,15 +1,14 @@
 {
   "currency": "USD",
   "title": "If you'd held ETH instead",
-  "value": "+$15.47",
+  "value": "+$15.51",
   "sourceValue": null,
   "lines": [
     "Takes each amount put in this wallet, turns it into ETH at that moment's price, and values that ETH at today's price.",
     "Put in means whatever arrived from outside this wallet, at what it cost you, or at its price when it arrived if that's all that's known. Exchanges inside the wallet aren't put in.",
-    "$5.14 left this wallet, so it leaves the ETH too, at its price when it left.",
-    "$199.98 put in leaves 0.0796 ETH, worth $210.31 at today's $2,640.00.",
-    "This wallet: +$149.73. That's its total PnL after network fees, and +$0.43 on what left it, which total PnL doesn't count because a transfer isn't a sale. Holding ETH pays no fees.",
-    "If you'd held ETH instead: +$15.47.",
+    "$199.98 put in leaves 0.0816 ETH, worth $215.49 at today's $2,640.00.",
+    "This wallet: +$149.30. That's its total PnL after network fees. Holding ETH pays no fees.",
+    "If you'd held ETH instead: +$15.51.",
     "Partial, so the two don't cover the same money. Holding ETH counts the $199.98 put in with a known value. 4 other amounts have no known value, and aren't counted. This wallet's total leaves some things out.",
     "Past results don't predict future ones."
   ],

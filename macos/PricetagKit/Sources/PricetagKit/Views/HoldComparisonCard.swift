@@ -5,14 +5,12 @@ import SwiftUI
 public struct HoldComparisonCard: View {
     let comparison: HoldComparison
     let currency: CurrencyCode
-    let walletEstimated: Bool
     let isLive: Bool
     let onOpen: () -> Void
 
-    public init(comparison: HoldComparison, currency: CurrencyCode, walletEstimated: Bool, isLive: Bool, onOpen: @escaping () -> Void) {
+    public init(comparison: HoldComparison, currency: CurrencyCode, isLive: Bool, onOpen: @escaping () -> Void) {
         self.comparison = comparison
         self.currency = currency
-        self.walletEstimated = walletEstimated
         self.isLive = isLive
         self.onOpen = onOpen
     }
@@ -28,10 +26,10 @@ public struct HoldComparisonCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 Button(action: onOpen) {
                     HStack(alignment: .lastTextBaseline, spacing: 28) {
-                        column(Wording.holdWallet, text: signed(comparison.walletMicros, estimated: walletEstimated), isPartial: comparison.walletLeavesOut)
+                        column(Wording.holdWallet, text: signed(comparison.walletMicros, estimated: comparison.walletEstimated), isPartial: comparison.walletLeavesOut)
                         column(Wording.holdEth, text: signed(comparison.holdMicros, estimated: comparison.estimated), isPartial: isPartial)
                         if let difference = comparison.differenceMicros {
-                            Text(Wording.holdDifference(difference, currency, estimated: walletEstimated || comparison.estimated))
+                            Text(Wording.holdDifference(difference, currency, estimated: comparison.walletEstimated || comparison.estimated))
                                 .foregroundStyle(.secondary)
                                 .monospacedDigit()
                         }

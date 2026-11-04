@@ -4,7 +4,7 @@
 // The rest come from here, and the fold then runs on the result. An unanswered sender stays unknown: it could be the user's
 // own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, emptyPosition, foldWallet, formatAmount, normalizeAddress, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HoldComparison, type MarkPrice, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, emptyPosition, foldWallet, formatAmount, lessPaidAt, normalizeAddress, sharePaidAt, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HoldComparison, type MarkPrice, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "./api.ts"
 import { costKey, linkedWallets, type Book, type ExchangeCost, type Money, type Receipt } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
@@ -38,13 +38,16 @@ function moneyIn({ wallet, view }: Side, money: Money, leg: PricedLeg): string |
 function slice(piece: CostPiece, qty: bigint): CostPiece {
   const whole = BigInt(piece.qty)
   const share = (micros: string) => (qty === whole ? BigInt(micros) : (BigInt(micros) * qty) / whole).toString()
-  return { ...piece, qty: qty.toString(), costMicros: piece.costMicros === null ? null : share(piece.costMicros), estimatedCostMicros: share(piece.estimatedCostMicros) }
+  const cost = piece.costMicros === null ? null : share(piece.costMicros)
+  const paidAt = piece.paidAt && cost !== null ? { paidAt: sharePaidAt(piece.paidAt, BigInt(cost), BigInt(piece.costMicros as string)) } : {}
+  return { ...piece, qty: qty.toString(), costMicros: cost, estimatedCostMicros: share(piece.estimatedCostMicros), ...paidAt }
 }
 
 /** What's left of a piece after a slice of it is gone. */
 function without(piece: CostPiece, taken: CostPiece): CostPiece {
   const less = (micros: string | null, gone: string | null) => (micros === null ? null : (BigInt(micros) - BigInt(gone as string)).toString())
-  return { ...piece, qty: (BigInt(piece.qty) - BigInt(taken.qty)).toString(), costMicros: less(piece.costMicros, taken.costMicros), estimatedCostMicros: less(piece.estimatedCostMicros, taken.estimatedCostMicros) as string }
+  const paidAt = piece.paidAt && taken.paidAt ? { paidAt: lessPaidAt(piece.paidAt, taken.paidAt) } : {}
+  return { ...piece, qty: (BigInt(piece.qty) - BigInt(taken.qty)).toString(), costMicros: less(piece.costMicros, taken.costMicros), estimatedCostMicros: less(piece.estimatedCostMicros, taken.estimatedCostMicros) as string, ...paidAt }
 }
 
 /** Each transfer in a debit, in the order it went. Null when the leg isn't simply that, as when something also came back. */
@@ -216,7 +219,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const next = resolve(side, leg)
     ;(output.get(address) as PricedLeg[])[index] = next
     const key = `${address}:${next.asset}`
-    const { state, taken } = applyLegTaking(states.get(key) ?? emptyPosition(method, next.decimals), next)
+    const { state, taken } = applyLegTaking(states.get(key) ?? emptyPosition(method, next.decimals, sides.length > 1), next)
     states.set(key, state)
     const recipients = next.kind === "transfer" && taken.length > 0 ? recipientsOf(next) : null
     for (const [recipient, pieces] of allocateTaken(taken, recipients ?? [], method)) carried.set(`${next.txHash}:${address}:${next.asset}:${recipient}`, pieces)

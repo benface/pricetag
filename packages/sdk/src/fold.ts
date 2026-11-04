@@ -38,6 +38,9 @@ export type FoldLeg = {
   timestamp?: string
 }
 
+/** Part of a cost, and the block it was paid at. */
+export type PaidAt = { costMicros: string; blockNum: number }
+
 /** Part of a credit, or what a debit took: how much, what it cost, and when it was first acquired. */
 export type CostPiece = {
   qty: string
@@ -47,6 +50,8 @@ export type CostPiece = {
   estimatedCostMicros: string
   acquiredBlock?: number
   acquiredAt?: string
+  /** What an average mixed together, paid at different moments. Missing means all of it at `acquiredBlock`. */
+  paidAt?: PaidAt[]
 }
 
 export type Lot = {
@@ -60,11 +65,18 @@ export type Lot = {
   /** When these units were first acquired, which an inherited lot keeps from the wallet that sent it. */
   acquiredBlock?: number
   acquiredAt?: string
+  /** When a position tracks it: what this lot mixes together. Missing means all of it at `acquiredBlock`. */
+  paidAt?: PaidAt[]
 }
 
 export type PositionState = {
   method: Method
   decimals: number
+  /**
+   * Keep what an average mixes together apart, so a transfer between linked wallets can say when its cost was paid.
+   * Only for that: a pool never loses a date by shrinking, so this costs a little more with each purchase.
+   */
+  tracksPaidAt?: boolean
   /** Known-cost and unknown-cost units held. Average cost keeps at most one lot of each. */
   lots: Lot[]
   /** From disposals whose cost and proceeds are both known. */
@@ -88,10 +100,11 @@ export type PositionState = {
   estimatedRealizedMicros: string
 }
 
-export function emptyPosition(method: Method, decimals: number): PositionState {
+export function emptyPosition(method: Method, decimals: number, tracksPaidAt = false): PositionState {
   return {
     method,
     decimals,
+    ...(tracksPaidAt ? { tracksPaidAt } : {}),
     lots: [],
     realizedMicros: "0",
     resolvedDisposedQty: "0",
@@ -110,6 +123,35 @@ export function worth(qty: bigint, unitMicros: bigint, decimals: number): bigint
   return (qty * unitMicros) / 10n ** BigInt(decimals)
 }
 
+/** Each part's share of `share`, out of their `total`. They add up to exactly `share`, and none is more than its part. */
+export function sharePaidAt(paidAt: readonly PaidAt[], share: bigint, total: bigint): PaidAt[] {
+  let sum = 0n
+  let given = 0n
+  return paidAt.map(({ costMicros, blockNum }) => {
+    sum += BigInt(costMicros)
+    const upTo = total === 0n ? 0n : (sum * share) / total
+    const part = upTo - given
+    given = upTo
+    return { costMicros: part.toString(), blockNum }
+  })
+}
+
+/** What's left once `taken`, a share of these same parts, is gone. */
+export const lessPaidAt = (paidAt: readonly PaidAt[], taken: readonly PaidAt[]): PaidAt[] => paidAt.map(({ costMicros, blockNum }, i) => ({ costMicros: (BigInt(costMicros) - BigInt((taken[i] as PaidAt).costMicros)).toString(), blockNum }))
+
+function paidAtOf(lot: Lot): readonly PaidAt[] | null {
+  if (lot.paidAt) return lot.paidAt
+  return lot.acquiredBlock === undefined || lot.costMicros === null ? null : [{ costMicros: lot.costMicros, blockNum: lot.acquiredBlock }]
+}
+
+function mergedPaidAt(a: Lot, b: Lot): PaidAt[] | null {
+  const [x, y] = [paidAtOf(a), paidAtOf(b)]
+  if (!x || !y) return null
+  const byBlock = new Map<number, bigint>()
+  for (const { costMicros, blockNum } of [...x, ...y]) byBlock.set(blockNum, (byBlock.get(blockNum) ?? 0n) + BigInt(costMicros))
+  return [...byBlock].map(([blockNum, cost]) => ({ costMicros: cost.toString(), blockNum }))
+}
+
 function lotOf(piece: CostPiece, legId: string): Lot {
   const known = piece.label !== "unknown" && piece.costMicros !== null
   const estimated = known ? BigInt(piece.estimatedCostMicros) : 0n
@@ -120,6 +162,7 @@ function lotOf(piece: CostPiece, legId: string): Lot {
     legId,
     ...(estimated > 0n ? { estimatedCostMicros: estimated.toString() } : {}),
     ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }),
+    ...(known && piece.paidAt ? { paidAt: piece.paidAt } : {}),
   }
 }
 
@@ -131,13 +174,14 @@ function insertByDate(lots: readonly Lot[], lot: Lot): Lot[] {
   return at < 0 ? [...lots, lot] : [...lots.slice(0, at), lot, ...lots.slice(at)]
 }
 
-function addLot(method: Method, lots: readonly Lot[], lot: Lot): Lot[] {
+function addLot({ method, tracksPaidAt }: PositionState, lots: readonly Lot[], lot: Lot): Lot[] {
   if (method === "fifo") return insertByDate(lots, lot)
   const known = lot.costMicros !== null
   const pool = lots.find((l) => (l.costMicros === null) === !known)
   if (!pool) return [...lots, lot]
   const estimated = estimatedOf(pool) + estimatedOf(lot)
   const acquired = pool.acquiredBlock === undefined || (lot.acquiredBlock !== undefined && lot.acquiredBlock < pool.acquiredBlock) ? lot : pool
+  const paidAt = tracksPaidAt && known ? mergedPaidAt(pool, lot) : null
   const merged: Lot = {
     qty: (BigInt(pool.qty) + BigInt(lot.qty)).toString(),
     costMicros: known ? (BigInt(pool.costMicros as string) + BigInt(lot.costMicros as string)).toString() : null,
@@ -145,6 +189,7 @@ function addLot(method: Method, lots: readonly Lot[], lot: Lot): Lot[] {
     legId: pool.legId,
     ...(estimated > 0n ? { estimatedCostMicros: estimated.toString() } : {}),
     ...(acquired.acquiredBlock === undefined ? {} : { acquiredBlock: acquired.acquiredBlock, acquiredAt: acquired.acquiredAt as string }),
+    ...(paidAt ? { paidAt } : {}),
   }
   return lots.map((l) => (l === pool ? merged : l))
 }
@@ -154,28 +199,30 @@ function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
   const estimated = (leg.estimated || leg.costLabel === "received at market") && leg.costMicros !== null ? leg.costMicros : "0"
   // A piece with its own date got it from the wallet that first acquired it. Any other was acquired here and now.
   const pieces = leg.pieces?.map((piece) => ({ ...dated, ...piece })) ?? [{ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...dated }]
-  return pieces.reduce<Lot[]>((lots, piece) => addLot(state.method, lots, lotOf(piece, leg.id)), state.lots)
+  return pieces.reduce<Lot[]>((lots, piece) => addLot(state, lots, lotOf(piece, leg.id)), state.lots)
 }
 
 type Taken = { lots: Lot[]; pieces: CostPiece[]; knownQty: bigint; knownCost: bigint; estimatedCost: bigint; unknownQty: bigint; shortfall: bigint }
 
-function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint; estimated: bigint } {
+function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint; estimated: bigint; paidAt?: PaidAt[] } {
   const lotQty = BigInt(lot.qty)
   const lotCost = lot.costMicros === null ? null : BigInt(lot.costMicros)
   const lotEstimated = estimatedOf(lot)
   // Taking a whole lot takes all of its cost, so rounding never leaves dust behind.
-  if (qty === lotQty) return { rest: null, cost: lotCost ?? 0n, estimated: lotEstimated }
+  if (qty === lotQty) return { rest: null, cost: lotCost ?? 0n, estimated: lotEstimated, ...(lot.paidAt ? { paidAt: lot.paidAt } : {}) }
   const cost = lotCost === null ? 0n : (lotCost * qty) / lotQty
   const estimated = (lotEstimated * qty) / lotQty
   const left = lotEstimated - estimated
+  const paidAt = lot.paidAt && lotCost !== null ? sharePaidAt(lot.paidAt, cost, lotCost) : null
   const { estimatedCostMicros: _, ...plain } = lot
   const rest: Lot = {
     ...plain,
     qty: (lotQty - qty).toString(),
     costMicros: lotCost === null ? null : (lotCost - cost).toString(),
     ...(left > 0n ? { estimatedCostMicros: left.toString() } : {}),
+    ...(paidAt && lot.paidAt ? { paidAt: lessPaidAt(lot.paidAt, paidAt) } : {}),
   }
-  return { rest, cost, estimated }
+  return { rest, cost, estimated, ...(paidAt ? { paidAt } : {}) }
 }
 
 /** FIFO takes the oldest lots first. Average takes from the known and unknown pools in proportion. */
@@ -195,7 +242,7 @@ function take(state: PositionState, qty: bigint): Taken {
       result.lots.push(lot)
       return
     }
-    const { rest, cost, estimated } = shrink(lot, n)
+    const { rest, cost, estimated, paidAt } = shrink(lot, n)
     if (rest) result.lots.push(rest)
     if (lot.costMicros === null) result.unknownQty += n
     else {
@@ -209,6 +256,7 @@ function take(state: PositionState, qty: bigint): Taken {
       label: lot.costMicros === null ? "unknown" : lot.label === "mixed" ? "inherited" : lot.label,
       estimatedCostMicros: estimated.toString(),
       ...(lot.acquiredBlock === undefined ? {} : { acquiredBlock: lot.acquiredBlock, acquiredAt: lot.acquiredAt as string }),
+      ...(paidAt ? { paidAt } : {}),
     })
   })
   // Units we never saw arrive have no cost anyone can carry.
