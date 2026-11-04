@@ -27,7 +27,10 @@ public struct PnlHeadline: View {
                         WarningText(Wording.pnlUnavailable)
                     }
                 }
-                .font(.system(size: size, weight: .semibold, design: .rounded))
+                .font(.system(size: isAvailable ? size : size * 0.7, weight: .semibold, design: .rounded))
+                // One line whatever it says: a big number shrinks to fit instead of pushing everything down.
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
                 .opacity(isLive ? 1 : 0.55)
             }
             .buttonStyle(NumberButtonStyle())

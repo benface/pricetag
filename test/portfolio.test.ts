@@ -68,6 +68,20 @@ describe("portfolioOf", () => {
     assert.equal(portfolio.positions[0]?.pnlUsdMicros, "0")
   })
 
+  it("doesn't explain a total with nothing known in it as $0", () => {
+    const wallet = walletWith({ legs: DEMO_WALLET.legs.filter((l) => l.asset === "cbBTC") })
+    const pnl = explainPortfolio(wallet, "average", { kind: "total", metric: "pnl" })
+    assert.equal(pnl?.value, null)
+    assert.ok(pnl?.lines.every((line) => !line.includes("$0.00")))
+    assert.ok(pnl?.lines.some((line) => line.includes("Not included: cbBTC")))
+    assert.equal(explainPortfolio(wallet, "average", { kind: "total", metric: "value" })?.value, null)
+    assert.equal(explainPortfolio(wallet, "average", { kind: "total", metric: "unrealized" })?.value, null)
+  })
+
+  it("still explains a total that's only partial, with its value", () => {
+    assert.equal(explainPortfolio(DEMO_WALLET, "average", { kind: "total", metric: "pnl" })?.value, "+$74.39")
+  })
+
   it("matches the files the Swift package reads", () => {
     assertMatchesFile("demo-portfolio.json", portfolioOf(DEMO_WALLET, "average"))
     assertMatchesFile("demo-explanation.json", explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "AERO", metric: "realized" }))

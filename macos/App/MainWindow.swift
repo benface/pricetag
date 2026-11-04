@@ -90,9 +90,16 @@ struct MainWindow: View {
             } else {
                 summary(portfolio)
                 GroupBox {
-                    PnlChartView(points: portfolio.points, isLive: isLive) { navigation.target = .transaction($0) }
-                        .frame(height: 170)
-                        .padding(6)
+                    // With nothing known, the series is all zeros, and a flat line at $0 would read as an answer.
+                    if portfolio.pnlStatus == .unavailable {
+                        Text("Nothing to chart until a cost or a price is known.")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 170)
+                    } else {
+                        PnlChartView(points: portfolio.points, isLive: isLive) { navigation.target = .transaction($0) }
+                            .frame(height: 170)
+                            .padding(6)
+                    }
                 }
                 HoldingsTable(portfolio: portfolio, isLive: isLive, target: $navigation.target)
                     .frame(minHeight: 150)

@@ -79,11 +79,21 @@ function legOf(effect: LegEffect): ExplanationLeg {
   }
 }
 
+/** A total with nothing known in it isn't an answer, so it has no value and no sum. What it leaves out still gets said. */
+function explainKnownTotal(wallet: WalletResponse, positions: Position[], metric: TotalMetric): Explanation {
+  const totals = sumTotals(positions)
+  const explanation = explainTotal(positions, totals, metric)
+  if (metric === "pnl") return pnlStatusOf(totals, wallet.gasUnknownTxs) === "unavailable" ? { ...explanation, value: null, lines: explanation.lines.slice(1) } : explanation
+  if (metric === "gas") return explanation
+  const { known, missing } = totals.coverage[metric]
+  return missing > 0 && known === 0 ? { ...explanation, value: null } : explanation
+}
+
 /** The same explanation the web panel shows for a click on this number. null when the wallet has no such asset or transaction. */
 export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget): ExplanationResponse | null {
   const positions = foldPositions(wallet.legs, method, wallet.prices)
   const explanation = ((): Explanation | null => {
-    if (target.kind === "total") return explainTotal(positions, sumTotals(positions), target.metric)
+    if (target.kind === "total") return explainKnownTotal(wallet, positions, target.metric)
     if (target.kind === "asset") {
       const position = positions.find((p) => p.asset === target.asset)
       return position ? explainMetric(position, target.metric) : null

@@ -28,9 +28,9 @@ public struct PnlChartView: View {
     }
 
     private var lineStyle: AnyShapeStyle {
-        // A Color, because a chart reads the plain `.secondary` style as a shade of its accent.
-        guard isLive else { return AnyShapeStyle(Color.secondary) }
-        return Tone(signed: points.last?.pnlUsdMicros).style
+        let tone = Tone(signed: points.last?.pnlUsdMicros)
+        // A Color, because a chart reads plain styles like `.secondary` as shades of its accent.
+        return isLive && tone != .neutral ? tone.style : AnyShapeStyle(Color.secondary)
     }
 
     private func nearest(to date: Date) -> Plotted? {
