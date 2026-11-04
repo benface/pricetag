@@ -36,6 +36,7 @@ public struct ExplanationRequest: Hashable, Sendable {
     public let method: CostMethod
     public let currency: CurrencyCode
     public let rule: String?
+    public let linked: [String]
     public let serverURL: URL
 }
 
@@ -59,6 +60,8 @@ public final class PortfolioStore {
     public private(set) var rules: [PricingRule] = []
     /// What to ask the server for, or nil for its default.
     public private(set) var selectedRule: String?
+    /// The user's own wallets. Transfers between them carry their cost, and aren't new purchases.
+    public private(set) var linkedWallets: [String] = []
 
     @ObservationIgnored private var source: any PortfolioSource
     @ObservationIgnored private let makeSource: @Sendable (URL) -> any PortfolioSource
@@ -129,6 +132,13 @@ public final class PortfolioStore {
         start()
     }
 
+    public func setLinkedWallets(_ wallets: [String]) {
+        let next = wallets.map { $0.lowercased() }
+        guard next != linkedWallets else { return }
+        linkedWallets = next
+        if address != nil, pollTask != nil { start() }
+    }
+
     public func setCurrency(_ currency: CurrencyCode) {
         guard currency != self.currency else { return }
         self.currency = currency
@@ -166,7 +176,7 @@ public final class PortfolioStore {
 
     public func comparison() async throws -> RuleComparison {
         guard let address else { throw CancellationError() }
-        return try await source.comparison(address: address, method: method, currency: currency)
+        return try await source.comparison(address: address, method: method, currency: currency, linked: linked(for: address))
     }
 
     public func setServerURL(_ url: URL) {
@@ -184,14 +194,22 @@ public final class PortfolioStore {
 
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, serverURL: serverURL) }
+        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), serverURL: serverURL) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
         // A request from before a change has nothing to say about what's on screen now.
         guard request == explanationRequest(for: request.target) else { throw CancellationError() }
-        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule)
+        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked)
     }
+
+    private func linked(for address: String) -> [String] {
+        // Costs only carry over onto a wallet that's the user's own. A wallet being watched could be anyone's.
+        linkedWallets.contains(address) ? linkedWallets.filter { $0 != address } : []
+    }
+
+    /// Where this store reads from, for anything else that needs the same server.
+    public var currentSource: any PortfolioSource { source }
 
     /// One read. Returns how long to wait before the next one.
     func poll() async -> Duration {
@@ -200,14 +218,15 @@ public final class PortfolioStore {
         let currency = self.currency
         let rule = selectedRule
         let serverURL = self.serverURL
+        let linked = linked(for: address)
         // An answer that arrives after a change is about something else, whatever it says.
-        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && currency == self.currency && rule == self.selectedRule && serverURL == self.serverURL }
+        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && currency == self.currency && rule == self.selectedRule && serverURL == self.serverURL && linked == self.linked(for: address) }
         let isOtherRule = rule != nil && portfolio?.rule != rule
         // The first read in a currency also reads its rate at each of this wallet's transactions, and the first by a rule
         // reads the wallet again, so they get as long as a first read.
         let timeout: Duration = portfolio?.currency == currency && !isOtherRule ? .seconds(15) : .seconds(180)
         do {
-            let next = try await source.portfolio(address: address, method: method, currency: currency, rule: rule, timeout: timeout)
+            let next = try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, timeout: timeout)
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()

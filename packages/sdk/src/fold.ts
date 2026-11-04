@@ -100,7 +100,10 @@ function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
   return state.lots.map((l) => (l === pool ? merged : l))
 }
 
-type Taken = { lots: Lot[]; knownQty: bigint; knownCost: bigint; unknownQty: bigint; shortfall: bigint }
+type Taken = { lots: Lot[]; knownQty: bigint; knownCost: bigint; unknownQty: bigint; shortfall: bigint; parts: TakenLot[] }
+
+/** Part of a lot that leaves in a debit. Its cost is null when that's unknown. */
+export type TakenLot = { qty: bigint; costMicros: bigint | null }
 
 function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint } {
   const lotQty = BigInt(lot.qty)
@@ -120,7 +123,7 @@ function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint } {
 function take(state: PositionState, qty: bigint): Taken {
   const held = state.lots.reduce((sum, l) => sum + BigInt(l.qty), 0n)
   const taking = qty < held ? qty : held
-  const result: Taken = { lots: [], knownQty: 0n, knownCost: 0n, unknownQty: 0n, shortfall: qty - taking }
+  const result: Taken = { lots: [], knownQty: 0n, knownCost: 0n, unknownQty: 0n, shortfall: qty - taking, parts: [] }
 
   let remaining = taking
   state.lots.forEach((lot, i) => {
@@ -135,6 +138,7 @@ function take(state: PositionState, qty: bigint): Taken {
     }
     const { rest, cost } = shrink(lot, n)
     if (rest) result.lots.push(rest)
+    result.parts.push({ qty: n, costMicros: lot.costMicros === null ? null : cost })
     if (lot.costMicros === null) result.unknownQty += n
     else {
       result.knownQty += n
@@ -142,6 +146,12 @@ function take(state: PositionState, qty: bigint): Taken {
     }
   })
   return result
+}
+
+/** What a debit of `qty` takes, lot by lot, in the order this method takes them. Units never seen arriving have an unknown cost. */
+export function lotsTaken(state: PositionState, qty: bigint): TakenLot[] {
+  const { parts, shortfall } = take(state, qty)
+  return shortfall > 0n ? [...parts, { qty: shortfall, costMicros: null }] : parts
 }
 
 export function applyLeg(state: PositionState, leg: FoldLeg): PositionState {

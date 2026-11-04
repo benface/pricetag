@@ -4,6 +4,7 @@
 import { TOKENS, answerToMicros, foldPositions, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type LegEffect, type Method, type Position, type PricedLeg, type ReferenceRow, type Totals } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
 import { viewWallet, type CurrencyCode, type WalletView } from "../src/core/currency.ts"
+import { inheritCosts } from "../src/core/linked.ts"
 import { describeConversion, describeEffect, describeNetting, explainContext, explainTarget, rateSource, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
 import { differenceOf, whySentence, type PricingRule, type RuleComparison, type RuleRow, type RuleTransaction } from "../src/core/rules.ts"
 import { ETH_NOTE } from "../src/core/wording.ts"
@@ -40,8 +41,23 @@ function exchangeOf(view: WalletView): PortfolioExchange | null {
   return { source: rateSource(view.currency), latestRateMicros: view.latestRate?.rateMicros ?? null, missingRateTxs: view.missingRateTxs }
 }
 
-export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioResponse {
+function outgoingTxsOf(wallet: WalletResponse): string[] {
+  return [...new Set([...wallet.legs.filter((leg) => BigInt(leg.delta) < 0n).map((leg) => leg.txHash), ...wallet.gasUnknownTxs])]
+}
+
+/**
+ * The wallet in its currency, with costs carried over from the user's other wallets. Each wallet converts at its own blocks'
+ * rates first, so what's inherited keeps the rate from when it was bought, not from when it moved.
+ */
+function viewWithLinkedCosts(wallet: WalletResponse, linked: readonly WalletResponse[], method: Method): WalletView {
   const view = viewWallet(wallet)
+  if (linked.length === 0) return view
+  const wallets = new Map([[wallet.address, view.legs], ...linked.map((other): [string, PricedLeg[]] => [other.address, viewWallet(other).legs])])
+  return { ...view, legs: inheritCosts(wallets, method).get(wallet.address) ?? view.legs }
+}
+
+export function portfolioOf(wallet: WalletResponse, method: Method, linked: readonly WalletResponse[] = []): PortfolioResponse {
+  const view = viewWithLinkedCosts(wallet, linked, method)
   const positions = foldPositions(view.legs, method, view.prices, wallet)
   const unread = unreadAssets(positions, wallet)
   const totals = sumTotals(positions, unread)
@@ -58,6 +74,8 @@ export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioRe
     latest: wallet.latest,
     progress: { started: hasStarted(wallet), behindBlocks: isBehind(wallet) ? wallet.latest.blockNum - wallet.coverage.toBlock : 0 },
     gasUnknownTxs: wallet.gasUnknownTxs,
+    outgoingTxs: outgoingTxsOf(wallet),
+    unlisted: wallet.unlisted,
     l1FeeUnknownTxs: wallet.l1FeeUnknownTxs,
     openingUnread: wallet.openingUnread,
     unreadAssets: unread,
@@ -91,8 +109,8 @@ function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg {
 }
 
 /** The same explanation the web panel shows for a click on this number. null when the wallet has no such asset or transaction. */
-export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget): ExplanationResponse | null {
-  const view = viewWallet(wallet)
+export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget, linked: readonly WalletResponse[] = []): ExplanationResponse | null {
+  const view = viewWithLinkedCosts(wallet, linked, method)
   const positions = foldPositions(view.legs, method, view.prices, wallet)
   const unread = unreadAssets(positions, wallet)
   const totals = sumTotals(positions, unread)
@@ -127,11 +145,11 @@ function changedLegs(a: readonly PricedLeg[], b: readonly PricedLeg[]): RuleTran
   return changed.sort((x, y) => y.blockNum - x.blockNum)
 }
 
-type Compared = { rule: PricingRule; wallet: WalletResponse; reference: ReferenceRow | null }
+type Compared = { rule: PricingRule; wallet: WalletResponse; reference: ReferenceRow | null; linked?: readonly WalletResponse[] }
 
 /** One wallet by two rules, both folded by the same code, so the rule is all that can differ. */
 export function compareRules(a: Compared, b: Compared, method: Method, blockNum: number): RuleComparison {
-  const [left, right] = [portfolioOf(a.wallet, method), portfolioOf(b.wallet, method)]
+  const [left, right] = [portfolioOf(a.wallet, method, a.linked), portfolioOf(b.wallet, method, b.linked)]
   const rowOf = (label: string, format: RuleRow["format"], x: string | null, y: string | null): RuleRow => ({ label, format, a: x, b: y, difference: differenceOf(x, y) })
   const totals = (key: "pnlMicros" | "realizedMicros" | "unrealizedMicros" | "valueMicros", label: string, format: RuleRow["format"]) => rowOf(label, format, left.totals[key], right.totals[key])
   const rows: RuleRow[] = [
@@ -151,7 +169,7 @@ export function compareRules(a: Compared, b: Compared, method: Method, blockNum:
     row("cost", "money", position.values.costMicros, theirs.values.costMicros)
     row("value", "money", position.values.valueMicros, theirs.values.valueMicros)
   }
-  const changed = changedLegs(viewWallet(a.wallet).legs, viewWallet(b.wallet).legs)
+  const changed = changedLegs(viewWithLinkedCosts(a.wallet, a.linked ?? [], method).legs, viewWithLinkedCosts(b.wallet, b.linked ?? [], method).legs)
   const changedTxs = new Set(changed.map((c) => c.txHash)).size
   return {
     address: a.wallet.address,

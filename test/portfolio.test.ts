@@ -8,6 +8,7 @@ import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedMoney, formatMoney } from "../src/core/format.ts"
+import { ETH_USD_FEED, TOKENS, USDC_USD_FEED } from "@pricetag/sdk/core"
 import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
@@ -22,6 +23,16 @@ function assertMatchesFile(name: string, actual: unknown) {
   if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
   assert.equal(readFileSync(url, "utf8"), text, `${name} is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.`)
 }
+
+describe("the hot wallet's allowlist", () => {
+  it("matches what the Swift package has compiled in", () => {
+    const url = new URL("../macos/HotWalletKit/Tests/HotWalletKitTests/Resources/tokens.json", import.meta.url)
+    const actual = { tokens: TOKENS.map(({ address, symbol, decimals, asset }) => ({ address, symbol, decimals, asset })), ethUsdFeed: ETH_USD_FEED.toLowerCase(), usdcUsdFeed: USDC_USD_FEED.toLowerCase() }
+    const text = `${JSON.stringify(actual, null, 2)}\n`
+    if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
+    assert.equal(readFileSync(url, "utf8"), text, "tokens.json is out of date. Run with UPDATE_FIXTURES=1, and change Tokens.swift to match.")
+  })
+})
 
 /** Balances that match whatever legs it's given, so a test about something else isn't also a test of a mismatch. */
 function balancesOf(legs: WalletResponse["legs"], blockNum: number): WalletResponse["balances"] {
@@ -222,6 +233,8 @@ describe("the portfolio API", () => {
 
   it("answers with what's wrong", async () => {
     assert.equal((await get("/api/portfolio/nope")).status, 400)
+    assert.equal((await get("/api/portfolio/demo?linked=nope")).status, 400)
+    assert.equal((await get(`/api/portfolio/demo?linked=${Array(11).fill("0x0000000000000000000000000000000000000001").join(",")}`)).status, 400)
     assert.equal((await get("/api/portfolio/demo?method=lifo")).status, 400)
     assert.equal((await get("/api/portfolio/demo/explain?metric=nope")).status, 400)
     assert.equal((await get("/api/portfolio/demo/explain?asset=NOPE&metric=value")).status, 404)

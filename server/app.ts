@@ -38,7 +38,7 @@ function pinned(dataset: string, hash: string | undefined): string {
   return `${dataset.split("@")[0]}@${hash}`
 }
 
-function createSource(env: Env): { source: Source; rules: RuleSource[]; readRates: ReturnType<typeof createRates> } | null {
+function createSource(env: Env): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates> } | null {
   if (!env.AMP_QUERY_URL) return null
   const query = createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined)
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
@@ -61,11 +61,22 @@ function createSource(env: Env): { source: Source; rules: RuleSource[]; readRate
       ]
       return { source: rules[0]!.source, rules, readRates }
     }
-    return { source: datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), rules: [], readRates }
+    return { source: datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates }
   }
   const historyBlocks = Number(env.PRICETAG_HISTORY_BLOCKS || 1800)
   if (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
-  return { source: rawSource(query, { baseDataset, network, historyBlocks }), rules: [], readRates }
+  return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates }
+}
+
+/** Each one is a wallet read, so this stays well under what the server keeps in memory. */
+const MAX_LINKED_WALLETS = 10
+
+/** The user's other wallets, or null when that isn't what was sent. */
+function parseLinked(value: string | null): string[] | null {
+  if (value === null || value === "") return []
+  const addresses = value.split(",")
+  if (addresses.length > MAX_LINKED_WALLETS || !addresses.every(isAddress)) return null
+  return [...new Set(addresses.map((address) => address.toLowerCase()))]
 }
 
 /** The request's decoded path, or null when the URL is malformed. Clients can send anything here. */
@@ -88,8 +99,7 @@ function sendAmpError(res: ServerResponse, error: unknown) {
   sendJson(res, 502, { error: "Couldn't read this wallet's data." })
 }
 
-export function createApi(env: Env) {
-  const created = createSource(env)
+export function createApi(env: Env, created: ReturnType<typeof createSource> = createSource(env)) {
   const source = created?.source ?? null
 
   let head: Head | null = null
@@ -171,7 +181,7 @@ export function createApi(env: Env) {
   }
 
   /** The two rules' wallets at one block, or answers the request with why they can't be compared yet. */
-  async function compare(address: string, currency: CurrencyCode, method: Method, res: ServerResponse): Promise<void> {
+  async function compare(address: string, currency: CurrencyCode, method: Method, linked: readonly string[], res: ServerResponse): Promise<void> {
     const [first, second] = rules
     if (!first || !second) {
       sendJson(res, 404, { error: "There's only one pricing rule here, so there's nothing to compare." })
@@ -192,10 +202,23 @@ export function createApi(env: Env) {
       return
     }
     try {
-      const [atA, atB] = await Promise.all([first.source.readLatestReference(blockNum), second.source.readLatestReference(blockNum)])
-      const shownA = await inCurrency({ ...a, prices: latestPrices(atA) }, currency, res)
-      const shownB = shownA && (await inCurrency({ ...b, prices: latestPrices(atB) }, currency, res))
-      if (shownA && shownB) sendJson(res, 200, compareRules({ rule: first.rule, wallet: shownA, reference: atA }, { rule: second.rule, wallet: shownB, reference: atB }, method, blockNum))
+      const side = async (by: (typeof rules)[number], wallet: WalletResponse): Promise<Parameters<typeof compareRules>[0] | null> => {
+        const reference = await by.source.readLatestReference(blockNum)
+        const shown = await inCurrency({ ...wallet, prices: latestPrices(reference) }, currency, res)
+        if (!shown) return null
+        // Costs carried over from the user's other wallets are priced by the same rule as the wallet they land on.
+        const others: WalletResponse[] = []
+        for (const other of linked.filter((a) => a !== wallet.address)) {
+          const read = await readWallet(other, res, { fresh: true, rule: by })
+          const converted = read && (await inCurrency(read, currency, res))
+          if (!converted) return null
+          others.push(converted)
+        }
+        return { rule: by.rule, wallet: shown, reference, linked: others }
+      }
+      const left = await side(first, a)
+      const right = left && (await side(second, b))
+      if (left && right) sendJson(res, 200, compareRules(left, right, method, blockNum))
     } catch (error) {
       sendAmpError(res, error)
     }
@@ -257,7 +280,9 @@ export function createApi(env: Env) {
         return true
       }
       if (portfolioMatch[2] === "/compare") {
-        await compare(portfolioMatch[1] as string, currency, method, res)
+        const linked = parseLinked(params.get("linked"))
+        if (!linked) sendJson(res, 400, { error: "Linked wallets are a comma-separated list of Base addresses." })
+        else await compare(portfolioMatch[1] as string, currency, method, linked, res)
         return true
       }
       const target = portfolioMatch[2] ? parseExplainTarget(params) : null
@@ -265,14 +290,27 @@ export function createApi(env: Env) {
         sendJson(res, 400, { error: "That isn't a number this can explain." })
         return true
       }
+      const linked = parseLinked(params.get("linked"))
+      if (!linked) {
+        sendJson(res, 400, { error: "Linked wallets are a comma-separated list of Base addresses." })
+        return true
+      }
       const read = await readWallet(portfolioMatch[1] as string, res, { fresh: !target, rule })
       const wallet = read && (await inCurrency(read, currency, res))
       if (!wallet) return true
+      const linkedWallets: WalletResponse[] = []
+      for (const address of wallet.mode === "demo" ? [] : linked.filter((address) => address !== wallet.address)) {
+        // A cost that can't be read isn't a cost of zero, so this answers with the failure instead of a wrong number.
+        const other = await readWallet(address, res, { fresh: !target, rule })
+        const converted = other && (await inCurrency(other, currency, res))
+        if (!converted) return true
+        linkedWallets.push(converted)
+      }
       if (!target) {
-        sendJson(res, 200, portfolioOf(wallet, method))
+        sendJson(res, 200, portfolioOf(wallet, method, linkedWallets))
         return true
       }
-      const explanation = explainPortfolio(wallet, method, target)
+      const explanation = explainPortfolio(wallet, method, target, linkedWallets)
       if (explanation) sendJson(res, 200, explanation)
       else sendJson(res, 404, { error: "This wallet has nothing like that." })
       return true

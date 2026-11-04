@@ -154,6 +154,14 @@ public struct ReadProgress: Codable, Sendable, Equatable {
     public let behindBlocks: Int
 }
 
+/// A token off the allowlist that a wallet holds. Nothing ever calls it, because it has no trusted price and may be malicious.
+public struct UnlistedToken: Codable, Sendable, Equatable, Identifiable {
+    public let token: String
+    public let transfers: Int
+
+    public var id: String { token }
+}
+
 /// How a portfolio's money got out of USD. The server converts each amount at the rate when it happened.
 public struct PortfolioExchange: Codable, Sendable, Equatable {
     /// Where the rates came from, in words.
@@ -179,6 +187,8 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let latest: Head
     public let progress: ReadProgress
     public let gasUnknownTxs: [String]
+    public let outgoingTxs: [String]
+    public let unlisted: [UnlistedToken]
     public let l1FeeUnknownTxs: [String]
     /// Assets whose balance before the first block couldn't be read yet.
     public let openingUnread: [String]

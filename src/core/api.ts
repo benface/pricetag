@@ -8,6 +8,9 @@ export type { Head, PnlStatus }
 
 export type Mode = "demo" | "raw" | "dataset"
 
+/** A token off the allowlist that this wallet holds. It has no trusted price and may be malicious, so nothing ever calls it. */
+export type UnlistedToken = { token: string; transfers: number }
+
 export type WalletResponse = {
   address: string
   mode: Mode
@@ -26,6 +29,7 @@ export type WalletResponse = {
   rule?: string
   /** Set when that rule isn't the default, because the prices it shows aren't what their labels alone would say. */
   ruleNote?: string | null
+  unlisted: UnlistedToken[]
   /** What this response is meant to be shown in. Its money is always USD, and `viewWallet` converts it. */
   currency: CurrencyCode
   /** Null for USD. */
@@ -83,6 +87,9 @@ export type PortfolioResponse = {
   /** Whether what's read has reached the chain. `behindBlocks` is 0 until it's far enough behind to say so. */
   progress: { started: boolean; behindBlocks: number }
   gasUnknownTxs: string[]
+  /** Every transaction that took something from this wallet or that it paid gas for. A hot wallet compares these with what it signed. */
+  outgoingTxs: string[]
+  unlisted: UnlistedToken[]
   l1FeeUnknownTxs: string[]
   openingUnread: string[]
   /** Assets with no position because nothing could be read about them, which isn't the same as holding none. */
