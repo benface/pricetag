@@ -721,7 +721,7 @@ describe("the package boundary", () => {
       }
     }
     walk("core.ts")
-    assert.deepEqual([...seen].sort(), ["core.ts", "currency.ts", "fold.ts", "format.ts", "legs.ts", "portfolio.ts", "reconcile.ts", "tokens.ts", "wallet.ts"])
+    assert.deepEqual([...seen].sort(), ["chain.ts", "core.ts", "currency.ts", "fold.ts", "format.ts", "legs.ts", "portfolio.ts", "reconcile.ts", "tokens.ts", "wallet.ts"])
   })
 
   it("has the app's browser code import only that part", () => {

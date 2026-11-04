@@ -1,7 +1,7 @@
 // What the server sends its clients. The browser runs the fold itself, because cost is personal.
 // Clients that can't run it, like the Mac app, read the portfolio it computes instead.
 
-import { hasStarted, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type UnlistedToken, type WalletData } from "@pricetag/sdk/core"
+import { hasStarted, msBetweenBlocks, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type UnlistedToken, type WalletData } from "@pricetag/sdk/core"
 import type { TaxCountryCode, TaxScope } from "./tax.ts"
 
 export { hasStarted }
@@ -125,10 +125,10 @@ export type TaxReportResponse = {
   csv: string
 }
 
-/** A derived table is normally a block or two behind the chain. More than this is worth saying out loud. */
-const BEHIND_BLOCKS = 5
+/** A derived table is normally a few seconds behind the chain. More than this is worth saying out loud. */
+const BEHIND_MS = 10_000
 
-export const isBehind = ({ coverage, latest }: Pick<WalletResponse, "coverage" | "latest">) => latest.blockNum - coverage.toBlock > BEHIND_BLOCKS
+export const isBehind = ({ coverage, latest }: Pick<WalletResponse, "coverage" | "latest">) => msBetweenBlocks(coverage.toBlock, latest.blockNum) > BEHIND_MS
 
 /** A dataset behind a number, by name and manifest hash. The hash is null when it couldn't be read, and is never guessed. */
 export type ProofDataset = { title: string; name: string; hash: string | null }

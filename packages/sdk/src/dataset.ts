@@ -3,6 +3,7 @@
 // Every query is bounded by block, because a hosted Amp is shared.
 
 import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type Query } from "./amp.ts"
+import { blockBefore } from "./chain.ts"
 import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
 import type { LegRow, PricedRow, Reference } from "./legs.ts"
 import type { Head } from "./portfolio.ts"
@@ -45,8 +46,8 @@ export async function readHead(query: Query, dataset: string, after: number | nu
   return row ? { blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) } : null
 }
 
-/** About 2 minutes. A derived table runs a block or two behind the head, and older than this isn't a current price. */
-const MAX_PRICE_AGE_BLOCKS = 60
+/** A derived table runs a few seconds behind the head, and older than this isn't a current price. */
+const MAX_PRICE_AGE_MS = 120_000
 
 const LEG_COLUMNS = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
 const PRICED_COLUMNS = "block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced"
@@ -149,7 +150,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
 
     /** The newest oracle read at or just before `head`, or null if there's none recent enough to call current. */
     async readLatestReference(head: number): Promise<Reference | null> {
-      const rows = await readOrEmpty(`SELECT ${REFERENCE_COLUMNS} FROM ${prices}.reference_prices WHERE block_num BETWEEN ${head - MAX_PRICE_AGE_BLOCKS} AND ${head} ORDER BY block_num DESC LIMIT 1`)
+      const rows = await readOrEmpty(`SELECT ${REFERENCE_COLUMNS} FROM ${prices}.reference_prices WHERE block_num BETWEEN ${blockBefore(head, MAX_PRICE_AGE_MS)} AND ${head} ORDER BY block_num DESC LIMIT 1`)
       return rows[0] ? toReference(rows[0]) : null
     },
 
@@ -210,7 +211,7 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
   return {
     mode: "dataset",
     startBlock: config.startBlock,
-    historyBlocks: null,
+    historyFrom: null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     ...datasetReader(query, config),

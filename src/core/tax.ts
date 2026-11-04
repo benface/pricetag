@@ -12,7 +12,7 @@
 // - US, oldest first in each wallet: Treas. Reg. 1.1012-1(j), for dispositions from January 1, 2025. Average basis in
 //   1.1012-1(e) only covers certain stock. Rev. Proc. 2024-28 and IRS digital asset FAQs cover the move to wallets.
 
-import { foldPositions, formatDuration, isAddress, shortHash, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
+import { foldPositions, formatDuration, isAddress, msBetweenBlocks, shortHash, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { rateSource } from "./explain.ts"
 import { METHOD_LABELS } from "./wording.ts"
@@ -314,7 +314,7 @@ function walletWarnings(source: Source, named: boolean): string[] {
 
 function coverageNote({ wallet }: Source, named: boolean): string {
   const { fromBlock, toBlock } = wallet.coverage
-  const span = toBlock >= fromBlock ? ` (about ${formatDuration(toBlock - fromBlock)})` : ""
+  const span = toBlock >= fromBlock ? ` (about ${formatDuration(msBetweenBlocks(fromBlock, toBlock))})` : ""
   return `${named ? `${shortHash(wallet.address)} covers` : "Covers"} blocks ${fromBlock.toLocaleString("en-US")} to ${toBlock.toLocaleString("en-US")}${span}. Anything earlier isn't here, and tokens off the tracked list aren't counted.`
 }
 

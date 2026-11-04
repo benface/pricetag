@@ -71,8 +71,8 @@ public final class HotWallet {
     static let pauseAfterFailure: TimeInterval = 300
     /// How long a transaction can go unseen before its nonce counts as free again.
     static let pendingTimeout: TimeInterval = 180
-    /// About a minute of Base. History from further back than this says nothing about what the key holds now.
-    static let historyFreshnessBlocks: UInt64 = 30
+    /// History from further back than this says nothing about what the key holds now.
+    static let historyFreshnessMs = 60_000
     /// How long a rotation can wait for current history before it says so. A first read can take this long.
     static let historyGrace: TimeInterval = 180
     /// Nodes behind a load balancer can disagree for a moment, so these have to hold for a few reads before they count.
@@ -273,7 +273,7 @@ public final class HotWallet {
     private func otherTokens(on address: EthereumAddress, emptySinceBlock: UInt64, snapshot: ChainSnapshot) -> Int? {
         guard !ampProblem, let portfolio, portfolio.address == address.lowercased, portfolio.progress.started else { return nil }
         let reached = UInt64(max(portfolio.coverage.toBlock, 0))
-        guard reached >= emptySinceBlock, reached + Self.historyFreshnessBlocks >= snapshot.blockNumber else { return nil }
+        guard reached >= emptySinceBlock, reached >= BlockTime.blockBefore(Int(snapshot.blockNumber), ms: Self.historyFreshnessMs) else { return nil }
         return portfolio.unlisted.count
     }
 

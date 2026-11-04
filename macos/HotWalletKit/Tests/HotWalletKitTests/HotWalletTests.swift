@@ -715,7 +715,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.wallet.readHistory()
         await rig.wallet.replaceKey()
         await rig.wallet.tick()
-        current.blockNumber = 2000 + HotWallet.historyFreshnessBlocks + 1
+        current.blockNumber = 2000 + 31
         await rig.chain.set(current)
         for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
         #expect(await rig.signer.hasKey(hotAddress))

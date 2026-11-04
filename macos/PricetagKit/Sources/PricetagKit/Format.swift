@@ -85,8 +85,8 @@ public enum Format {
         date.formatted(.dateTime.month(.abbreviated).day().hour().minute().locale(locale))
     }
 
-    public static func duration(blocks: Int) -> String {
-        let minutes = Int((Double(blocks * 2) / 60).rounded())
+    public static func duration(ms: Int) -> String {
+        let minutes = Int((Double(ms) / 60_000).rounded())
         if minutes < 120 { return "\(minutes) min" }
         return "\(Int((Double(minutes) / 60).rounded())) h"
     }

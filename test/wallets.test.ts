@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { portfolioOf } from "../server/portfolio.ts"
 import { createWallets, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
-import { ASSETS, ETH_ADDRESS, type LegRow, type Reference } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, type LegRow, type Reference } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 
@@ -34,7 +34,7 @@ function fake(
   const source: Source = {
     mode: "raw",
     startBlock: null,
-    historyBlocks: 100,
+    historyFrom: (head) => head - 100,
     head: async () => null,
     processedThrough: async (_, head) => processed(head),
     async readWindow(_, from, to): Promise<WindowRows> {
@@ -247,6 +247,25 @@ describe("reconciling", () => {
     const { legs } = await createWallets(source, headAt(1000), noFees).get(ME)
     assert.deepEqual(legs.map((l) => [l.id, l.delta]).slice(0, 2), [["opening:ETH", "7"], ["0x3b6:ETH", "5000"]])
     assert.equal(legs[0]!.timestamp, new Date(Date.parse("2026-11-04T00:00:00.000Z") - 101 * 2000).toISOString())
+  })
+
+  it("re-reads about a minute of chain for reorgs, whatever the block time", async () => {
+    let head = LAST_2S_BLOCK + 1000
+    const { source, windows } = fake(new Map(), () => reference(head))
+    const wallets = createWallets(source, async () => headAt(head)(), noFees)
+    await wallets.get(ME, { from: LAST_2S_BLOCK })
+    head += 5
+    await wallets.get(ME, { from: LAST_2S_BLOCK })
+    // 300 blocks at 200 ms, ending at the last block covered.
+    assert.deepEqual(windows.at(-1), [LAST_2S_BLOCK + 701, head])
+  })
+
+  it("dates a wallet's opening across the change to 200 ms blocks", async () => {
+    const head = LAST_2S_BLOCK + 50
+    const { source } = fake(new Map(), () => reference(head), undefined, async (): Promise<Record<string, string>> => ({ ETH: "7", USDC: "0" }))
+    const { legs } = await createWallets(source, headAt(head), noFees).get(ME, { from: LAST_2S_BLOCK - 9 })
+    // 10 blocks at 2 s, then 50 at 200 ms.
+    assert.equal(legs[0]!.timestamp, new Date(Date.parse("2026-11-04T00:00:00.000Z") - 30_000).toISOString())
   })
 
   it("a failed read takes down neither the wallet nor the check's retry", () =>

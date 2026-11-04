@@ -44,7 +44,7 @@ public struct ExplanationRequest: Hashable, Sendable {
 @Observable
 public final class PortfolioStore {
     public static let defaultServerURL = URL(string: "http://127.0.0.1:8787")!
-    /// Past this, the newest block is too old to call live. Base makes a block every 2 s.
+    /// Past this, the newest block is too old to call live.
     static let behindAfterSeconds = 120
 
     /// What the store holds, which may not be current: read `feed` before calling it live. While a new method's, currency's

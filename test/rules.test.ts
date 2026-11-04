@@ -27,7 +27,7 @@ function sourceAt(ethAnswer: bigint, through = HEAD, reads: string[] = []): Sour
   return {
     mode: "dataset",
     startBlock: 1,
-    historyBlocks: null,
+    historyFrom: null,
     head: async () => ({ blockNum: HEAD, timestamp: "2026-11-04T00:00:00.000Z" }),
     processedThrough: async (_, head) => Math.min(head, through),
     readWindow: async (address) => {

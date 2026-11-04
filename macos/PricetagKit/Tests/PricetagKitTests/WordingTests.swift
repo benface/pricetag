@@ -25,7 +25,7 @@ struct WordingVectors: Decodable {
         let text: String
     }
     struct Behind: Decodable {
-        let blocks: Int
+        let ms: Int
         let text: String
     }
     struct PnlHelp: Decodable {
@@ -81,7 +81,7 @@ struct WordingVectors: Decodable {
         for vector in vectors.networkFeeUnknown { #expect(Wording.networkFeeUnknown(vector.count) == vector.text) }
         for status in [Reconciliation.Status.reconciled, .incomplete, .unchecked] { #expect(Wording.checkLabel(status) == vectors.checkLabels[status.rawValue]) }
         for vector in vectors.feesUnknown { #expect(Wording.feesUnknown(vector.count) == vector.text) }
-        for vector in vectors.behind { #expect(Wording.behind(blocks: vector.blocks) == vector.text) }
+        for vector in vectors.behind { #expect(Wording.behind(ms: vector.ms) == vector.text) }
         #expect(Wording.stale(lastUpdate: "Nov 4 at 5:40 AM") == vectors.stale)
         #expect([Mode.demo, .raw, .dataset].map { Wording.feedDetail($0, block: 1000) } == vectors.feedDetail)
         for vector in vectors.pnlHelp { #expect(Wording.pnlHelp(for: vector.text) == vector.help) }

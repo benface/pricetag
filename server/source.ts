@@ -3,7 +3,7 @@
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, type RateRound } from "@pricetag/sdk/core"
+import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, blockBefore, type RateRound } from "@pricetag/sdk/core"
 import { asIso, asNumber, blockFilters, decimalString, hexOf, prefixed, readBalancesAt, readEthBalancesAt, readHead, type Query, type Row, type Source } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRound, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
@@ -31,7 +31,10 @@ export function feedRounds(query: Query, config: { baseDataset: string; network:
   }
 }
 
-export function rawSource(query: Query, config: { baseDataset: string; network: string; historyBlocks: number }): Source {
+/** How far back a wallet's history goes when PRICETAG_HISTORY_BLOCKS doesn't say. */
+const DEFAULT_HISTORY_MS = 3_600_000
+
+export function rawSource(query: Query, config: { baseDataset: string; network: string; historyBlocks: number | null }): Source {
   const ds = `"${config.baseDataset}"`
 
   async function inBlocks<T>(blocks: readonly number[], sql: (filter: string, count: number) => string): Promise<T[]> {
@@ -61,7 +64,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
   return {
     mode: "raw",
     startBlock: null,
-    historyBlocks: config.historyBlocks,
+    historyFrom: (head) => (config.historyBlocks === null ? blockBefore(head, DEFAULT_HISTORY_MS) : head - config.historyBlocks),
     head: (after) => readHead(query, config.baseDataset, after),
     // The raw tables are what the head is read from, so they've always reached it.
     processedThrough: async (_after, head) => head,

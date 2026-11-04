@@ -3,9 +3,9 @@ import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
 import type { LegPart, PricedLeg } from "@pricetag/sdk/core"
 import type { Query } from "@pricetag/sdk/internal"
-import { createDepositReader, readBlock } from "../server/block.ts"
+import { createDepositReader, readBlock, type BlockData } from "../server/block.ts"
 import { createManifestReader, createProofs, proofOf, verificationOf } from "../server/proof.ts"
-import { checkHeader, checkReceipts, checkTransactions, encodeTransaction, keccak, rlp, trieRoot, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "../server/verify.ts"
+import { DEPOSIT_TX_TYPE, checkHeader, checkReceipts, checkTransactions, encodeTransaction, keccak, rlp, trieRoot, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "../server/verify.ts"
 
 /** Real rows from Amp's Base dataset: a whole block, a current header, and one transaction of each kind. */
 const FIXTURES = JSON.parse(readFileSync(new URL("./support/base-blocks.json", import.meta.url), "utf8")) as {
@@ -179,6 +179,23 @@ const legOf = (changes: Partial<PricedLeg>): PricedLeg => ({
 })
 
 const activity = (leg: PricedLeg, legs: PricedLeg[] = []) => verificationOf(leg, legs, { block, txs, logs: [...logs, transferLog] }, deposits).checks.at(-1)!
+
+describe("a block from after the 200 ms upgrade", () => {
+  // A real Base Sepolia block, read through Amp. Every block now has a second deposit at index 1, setting its milliseconds.
+  const fast = JSON.parse(readFileSync(new URL("./support/base-sepolia-200ms-block.json", import.meta.url), "utf8")) as { block: BlockData; deposits: Record<string, DepositDetails> }
+  const { block: fastBlock, txs: fastTxs, logs: fastLogs } = fast.block
+
+  it("has the second deposit, and passes every check", () => {
+    assert.deepEqual(fastTxs.slice(0, 2).map((tx) => [tx.type, tx.to]), [[DEPOSIT_TX_TYPE, "4200000000000000000000000000000000000015"], [DEPOSIT_TX_TYPE, "4200000000000000000000000000000000000030"]])
+    assert.deepEqual(checkHeader(fastBlock), { status: "passed" })
+    assert.deepEqual(checkTransactions(fastBlock, fastTxs, new Map(Object.entries(fast.deposits))), { status: "passed" })
+    assert.deepEqual(checkReceipts(fastBlock, fastTxs, fastLogs), { status: "passed" })
+  })
+
+  it("won't pass with the second deposit missing", () => {
+    assert.equal(checkTransactions(fastBlock, fastTxs.filter((tx) => tx.tx_index !== 1), new Map(Object.entries(fast.deposits))).status, "failed")
+  })
+})
 
 describe("a leg against its checked block", () => {
   it("passes the whole check and says so", () => {
