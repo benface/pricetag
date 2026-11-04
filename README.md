@@ -32,6 +32,8 @@ If the menu bar is full, macOS hides new items. Look under the menu bar's "show 
 
 The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<address>?method=average|fifo&currency=USD|CAD` returns the portfolio the fold computed, `GET /api/portfolio/<address>/explain?metric=…&asset=…` or `?tx=…` returns what's behind one number, and `GET /api/portfolio/<address>/proof?leg=…` and `/verify?leg=…` return what's behind one price and the check of its block. With a [forked pricing rule](#forking-a-pricing-rule), `GET /api/rules` lists the rules, `&rule=<id>` picks one, and `GET /api/portfolio/<address>/compare` returns a wallet by both. `test/portfolio.test.ts` writes what they send to files the Swift tests read, so the two can't drift apart without a failure: when a change is on purpose, run it with `UPDATE_FIXTURES=1`.
 
+The numbers move on their own: `GET /api/events` says when there's a new block, and the app and the web page read again when it does. It comes from Amp's stream, so a reorg is seen when it happens, and the server polls Amp when the stream isn't working. The Mac app also polls every 2 s when it can't reach the events, and every 15 s even when it can, in case they've quietly stopped.
+
 - `macos/PricetagKit/`: everything that isn't Mac-specific, like the API models, the live feed, formatting and shared views. It also builds for iOS.
 - `macos/HotWalletKit/`: the hot wallet, which also builds for iOS. `KeyVault` is the only code that touches a key, and `HotWalletKit` decides what to do and can only ask it to sign.
 - `macos/App/`: the menu bar item, popover, window and settings.

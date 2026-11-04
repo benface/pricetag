@@ -53,6 +53,7 @@ Amounts are in a token's smallest unit, and USD values are in micros (millionths
 | --- | --- |
 | `createPricetag(config)` | A client. See [the config](#the-config). |
 | `getPortfolio(address, { method?, from?, to? })` | A wallet's holdings, cost and PnL, matching the app. `method` is `"average"`, the default, or `"fifo"`. With a `to`, it's the wallet as of that block, at that block's prices. See [what it returns](#what-getportfolio-returns). |
+| `watchWallet(address, { method?, from?, signal? })` | The same portfolio now, then again after each new block, as an async iterable. See [watching a wallet](#watching-a-wallet). |
 | `getLegs(address, { from?, to? })` | `{ legs, blocks, references, gasUnknownTxs }`: what moved in the range, priced and labeled, in the order the fold reads them. It doesn't include opening balances or L1 fees. |
 | `getPrices(token, { from?, to? })` | `{ token, prices, blocks }`: a token's prices, by symbol or address. It throws on a token off the allowlist, which has no prices to give. |
 | `getLatestPrices()` | The current prices to value positions at. Only ETH and USDC have one, and only with a recent oracle read. |
@@ -110,6 +111,25 @@ L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anyt
 A position's `reconciliation.status` is `reconciled` when its legs add up to its onchain balance to the smallest unit, `incomplete` when they don't, and `unchecked` when a read is missing. Only a reconciled position shows PnL. Otherwise its amount and value come from the chain, and its cost and PnL are `null`.
 
 A client keeps each wallet's rows in memory, so another call on the same client only reads new blocks. A read with a `to` is re-read on each new block until `to` is 30 blocks behind the chain's head, because a reorg can still change it. After that, it's fixed. It also reads at most 200 L1 fees per call, so a busy wallet's ETH stays `unchecked` for its first few calls while they catch up.
+
+### Watching a wallet
+
+```ts
+for await (const { blocks, totals, pnlStatus, reorgFrom, via } of pricetag.watchWallet(address)) {
+  console.log(blocks.toBlock, formatSignedMoney(totals.pnlMicros), pnlStatus)
+}
+```
+
+[`examples/watch.ts`](examples/watch.ts) is a whole one: `pnpm example:watch <address> [how many updates]`.
+
+Each update is everything `getPortfolio` returns, for the whole wallet, so replace the last one with it. That's what makes a reorg safe: an update after one has what the reorg changed, and nothing it took away. `reorgFrom` says from which block, if you want to tell someone. `via` says what reported the block, `stream` or `polling`, and is null on the first update.
+
+- **Where it comes from:** Amp's stream says when `priced_legs`, the last table to finish a block, has finished one, and when blocks were replaced. It sends no rows. The wallet is then read the same way `getPortfolio` reads it, since balances, L1 fees and current prices aren't in any one stream.
+- **When the stream fails:** it polls every 2 s and tries the stream again every 30 s. A stream with no new block for 60 s counts as failed, even if it's still connected. While polling, a reorg is only seen at the head, and a deeper one is replaced by the same re-read of the last 30 blocks that every read does.
+- **Failed reads:** they go to `logger`, and the next block tries again, so the iterable doesn't end because Amp had a bad moment. It ends when you leave the loop or abort `signal`.
+- **Slow code:** a loop that takes longer than a block doesn't fall behind. It gets the newest block next, with any reorg it missed.
+
+Each watch holds one streaming request open, apart from the one-at-a-time queries.
 
 ### Other things to check
 

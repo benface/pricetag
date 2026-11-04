@@ -23,9 +23,12 @@ public protocol PortfolioSource: Sendable {
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
     func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof
     func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification
+    /// One element each time the server says there's a new block, until the connection goes. Nil when this source can't say.
+    func headEvents() -> AsyncThrowingStream<Void, any Error>?
 }
 
 extension PortfolioSource {
+    public func headEvents() -> AsyncThrowingStream<Void, any Error>? { nil }
     public func rules() async throws -> [PricingRule] { [] }
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
 }
@@ -34,11 +37,37 @@ public struct PricetagClient: PortfolioSource {
     public let serverURL: URL
     private let session: URLSession
 
+    /// A block every 2 s means the events are never quiet for this long, unless something's wrong.
+    private static let eventsIdleTimeout: TimeInterval = 30
+
     public init(serverURL: URL) {
+        self.init(serverURL: serverURL, configuration: .ephemeral)
+    }
+
+    init(serverURL: URL, configuration: URLSessionConfiguration) {
         self.serverURL = serverURL
-        let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         session = URLSession(configuration: configuration)
+    }
+
+    public func headEvents() -> AsyncThrowingStream<Void, any Error>? {
+        let request = URLRequest(url: serverURL.appending(path: "/api/events"), timeoutInterval: Self.eventsIdleTimeout)
+        let session = session
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let (bytes, response) = try await session.bytes(for: request)
+                    guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw FetchError.unreachable }
+                    for try await line in bytes.lines where line == "event: head" {
+                        continuation.yield()
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     public func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], timeout: Duration) async throws -> Portfolio {

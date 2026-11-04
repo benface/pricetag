@@ -142,6 +142,25 @@ const fixedMayChange = (wallet: Cached, chain: Head) => chain.blockNum > wallet.
 /** A live read's re-reads follow its coverage, which can lag. A fixed read's coverage stops, so only the chain says what's settled. */
 const tipOf = (range: WalletRange, coveredTo: number, chain: Head) => (range.to === undefined ? coveredTo : chain.blockNum)
 
+/** A wallet as it was before `block`, so the next refresh reads everything from there on as new. */
+function rewound(wallet: Cached, block: number): Cached {
+  const kept = <K, V>(entries: Map<K, V>, blockOf: (value: V, key: K) => number) => new Map([...entries].filter(([key, value]) => blockOf(value, key) < block))
+  const last = block - 1
+  return {
+    ...wallet,
+    coveredTo: Math.min(wallet.coveredTo, last),
+    rows: wallet.rows.filter((r) => r.block_num < block),
+    priced: wallet.priced.filter((p) => p.block_num < block),
+    references: kept(wallet.references, (reference) => reference.blockNum),
+    latest: wallet.latest.blockNum < block ? wallet.latest : { blockNum: last, timestamp: new Date(new Date(wallet.latest.timestamp).getTime() - (wallet.latest.blockNum - last) * BLOCK_MS).toISOString() },
+    gasUnknown: kept(wallet.gasUnknown, (at) => at),
+    closing: wallet.closing && wallet.closing.blockNum < block ? wallet.closing : null,
+    lastBalances: Object.fromEntries(Object.entries(wallet.lastBalances).filter(([, balance]) => balance.blockNum < block)),
+    l1Fees: kept(wallet.l1Fees, (fee) => fee.blockNum),
+    ethBalances: kept(wallet.ethBalances, (_, at) => at),
+  }
+}
+
 /** A gas row's L1 fee, as a row of its own beside it. */
 function l1FeeRows(rows: readonly LegRow[], fees: Cached["l1Fees"]): { rows: LegRow[]; unknownTxs: string[] } {
   const result: LegRow[] = []
@@ -354,6 +373,19 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         references: new Map([...own.references].filter(([block]) => block <= through)),
         prices,
       })
+    },
+
+    /**
+     * A reorg replaced every block from `block` on, so forget them, however far back that is. A wallet read that started
+     * before this finishes first, and the next one replaces them. A wallet that held balances from before `block` is
+     * read again from the start if the reorg reached them.
+     */
+    async rewind(block: number): Promise<void> {
+      while (inflight.size > 0) await Promise.allSettled(inflight.values())
+      for (const [key, wallet] of wallets) {
+        if (block <= wallet.fromBlock) wallets.delete(key)
+        else if (block <= wallet.latest.blockNum) wallets.set(key, rewound(wallet, block))
+      }
     },
 
     /** What's already been read, with no query, or null when nothing has been. */
