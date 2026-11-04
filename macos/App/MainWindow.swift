@@ -5,6 +5,7 @@ import SwiftUI
 struct MainWindow: View {
     let store: PortfolioStore
     @Bindable var navigation: Navigation
+    @Environment(\.openWindow) private var openWindow
 
     private var portfolio: Portfolio? { store.portfolio }
     private var isLive: Bool { store.feed.isLive }
@@ -39,6 +40,10 @@ struct MainWindow: View {
         ToolbarItem(placement: .navigation) {
             Button("Change Wallet", systemImage: "wallet.bifold") { navigation.isChangingWallet = true }
                 .help("Change wallet (⌘L)")
+        }
+        ToolbarItem(placement: .navigation) {
+            Button("Spending Money", systemImage: "banknote") { openWindow(id: WindowID.hotWallet) }
+                .help("This Mac's spending money (⇧⌘M)")
         }
         ToolbarItem(placement: .principal) {
             Picker("Cost method", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {

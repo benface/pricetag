@@ -11,12 +11,12 @@ actor ScriptedSource: PortfolioSource {
         self.answers = answers
     }
 
-    func portfolio(address: String, method: CostMethod, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, linked: [String], timeout: Duration) async throws -> Portfolio {
         methods.append(method)
         return try answers.removeFirst().get()
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, linked: [String]) async throws -> Explanation {
         throw FetchError.unreachable
     }
 }
@@ -25,11 +25,11 @@ actor ScriptedSource: PortfolioSource {
 actor GatedSource: PortfolioSource {
     private var waiting: CheckedContinuation<Portfolio, any Error>?
 
-    func portfolio(address: String, method: CostMethod, timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, linked: [String], timeout: Duration) async throws -> Portfolio {
         try await withCheckedThrowingContinuation { waiting = $0 }
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, linked: [String]) async throws -> Explanation {
         throw FetchError.unreachable
     }
 

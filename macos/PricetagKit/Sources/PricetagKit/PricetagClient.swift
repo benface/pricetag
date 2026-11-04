@@ -14,8 +14,9 @@ public enum FetchError: Error, Equatable, Sendable {
 }
 
 public protocol PortfolioSource: Sendable {
-    func portfolio(address: String, method: CostMethod, timeout: Duration) async throws -> Portfolio
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod) async throws -> Explanation
+    /// `linked` is the user's other wallets, which transfers between carry their cost.
+    func portfolio(address: String, method: CostMethod, linked: [String], timeout: Duration) async throws -> Portfolio
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, linked: [String]) async throws -> Explanation
 }
 
 public struct PricetagClient: PortfolioSource {
@@ -29,12 +30,18 @@ public struct PricetagClient: PortfolioSource {
         session = URLSession(configuration: configuration)
     }
 
-    public func portfolio(address: String, method: CostMethod, timeout: Duration) async throws -> Portfolio {
-        try await get("/api/portfolio/\(address)", query: [URLQueryItem(name: "method", value: method.rawValue)], timeout: timeout)
+    public func portfolio(address: String, method: CostMethod, linked: [String], timeout: Duration) async throws -> Portfolio {
+        try await get("/api/portfolio/\(address)", query: query(method: method, linked: linked), timeout: timeout)
     }
 
-    public func explanation(of target: ExplainTarget, address: String, method: CostMethod) async throws -> Explanation {
-        try await get("/api/portfolio/\(address)/explain", query: [URLQueryItem(name: "method", value: method.rawValue)] + target.queryItems, timeout: .seconds(30))
+    public func explanation(of target: ExplainTarget, address: String, method: CostMethod, linked: [String]) async throws -> Explanation {
+        try await get("/api/portfolio/\(address)/explain", query: query(method: method, linked: linked) + target.queryItems, timeout: .seconds(30))
+    }
+
+    private func query(method: CostMethod, linked: [String]) -> [URLQueryItem] {
+        var items = [URLQueryItem(name: "method", value: method.rawValue)]
+        if !linked.isEmpty { items.append(URLQueryItem(name: "linked", value: linked.joined(separator: ","))) }
+        return items
     }
 
     private func get<Body: Decodable>(_ path: String, query: [URLQueryItem], timeout: Duration) async throws -> Body {

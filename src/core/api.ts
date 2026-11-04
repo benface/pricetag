@@ -9,6 +9,9 @@ export type Mode = "demo" | "raw" | "dataset"
 
 export type Head = { blockNum: number; timestamp: string }
 
+/** A token off the allowlist that this wallet holds. It has no trusted price and may be malicious, so nothing ever calls it. */
+export type UnlistedToken = { token: string; transfers: number }
+
 export type WalletResponse = {
   address: string
   mode: Mode
@@ -23,6 +26,7 @@ export type WalletResponse = {
   latest: Head
   /** Transactions this wallet sent whose gas couldn't be worked out, so ETH is overstated by that much. */
   gasUnknownTxs: string[]
+  unlisted: UnlistedToken[]
 }
 
 export type PortfolioPosition = {
@@ -56,6 +60,9 @@ export type PortfolioResponse = {
   /** Whether what's read has reached the chain. `behindBlocks` is 0 until it's far enough behind to say so. */
   progress: { started: boolean; behindBlocks: number }
   gasUnknownTxs: string[]
+  /** Every transaction that took something from this wallet or that it paid gas for. A hot wallet compares these with what it signed. */
+  outgoingTxs: string[]
+  unlisted: UnlistedToken[]
   positions: PortfolioPosition[]
   totals: Totals
   pnlStatus: PnlStatus

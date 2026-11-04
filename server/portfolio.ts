@@ -4,6 +4,7 @@
 import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PnlStatus, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting, explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../src/core/explain.ts"
 import type { Method } from "../src/core/fold.ts"
+import { inheritCosts } from "../src/core/linked.ts"
 import { foldPositions, pnlOverTime, sumTotals, type LegEffect, type Position, type Totals } from "../src/core/portfolio.ts"
 import { TOKENS } from "../src/core/tokens.ts"
 
@@ -44,6 +45,16 @@ function pnlStatusOf(totals: Totals, gasUnknownTxs: readonly string[]): PnlStatu
   return totals.excluded.length === 0 && !totals.unpricedGas && gasUnknownTxs.length === 0 ? "complete" : "partial"
 }
 
+function outgoingTxsOf(wallet: WalletResponse): string[] {
+  return [...new Set([...wallet.legs.filter((leg) => BigInt(leg.delta) < 0n).map((leg) => leg.txHash), ...wallet.gasUnknownTxs])]
+}
+
+/** This wallet's legs, with costs carried over from the user's other wallets. */
+export function withLinkedCosts(wallet: WalletResponse, linked: readonly WalletResponse[], method: Method): WalletResponse {
+  const wallets = new Map([wallet, ...linked].map((w) => [w.address, w.legs]))
+  return { ...wallet, legs: inheritCosts(wallets, method).get(wallet.address) ?? wallet.legs }
+}
+
 export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioResponse {
   const positions = foldPositions(wallet.legs, method, wallet.prices)
   const totals = sumTotals(positions)
@@ -57,6 +68,8 @@ export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioRe
     latest: wallet.latest,
     progress: { started: hasStarted(wallet), behindBlocks: isBehind(wallet) ? wallet.latest.blockNum - wallet.coverage.toBlock : 0 },
     gasUnknownTxs: wallet.gasUnknownTxs,
+    outgoingTxs: outgoingTxsOf(wallet),
+    unlisted: wallet.unlisted,
     positions: positions.map(positionOf),
     totals,
     pnlStatus: pnlStatusOf(totals, wallet.gasUnknownTxs),

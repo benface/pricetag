@@ -6,7 +6,7 @@ import { isAddress, type Head, type WalletResponse } from "../src/core/api.ts"
 import { DEMO_ADDRESS, DEMO_WALLET } from "../src/core/fixtures.ts"
 import type { Method } from "../src/core/fold.ts"
 import { createQuery, describeError } from "./amp.ts"
-import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
+import { explainPortfolio, parseExplainTarget, portfolioOf, withLinkedCosts } from "./portfolio.ts"
 import { datasetSource, rawSource, type Source } from "./source.ts"
 import { createWallets } from "./wallets.ts"
 
@@ -31,6 +31,17 @@ function createSource(env: Env): Source | null {
   const historyBlocks = Number(env.PRICETAG_HISTORY_BLOCKS || 1800)
   if (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
   return rawSource(query, { baseDataset, network: env.PRICETAG_RPC_NETWORK || "base_mainnet", historyBlocks })
+}
+
+/** Each one is a wallet read, so this stays well under what the server keeps in memory. */
+const MAX_LINKED_WALLETS = 10
+
+/** The user's other wallets, or null when that isn't what was sent. */
+function parseLinked(value: string | null): string[] | null {
+  if (value === null || value === "") return []
+  const addresses = value.split(",")
+  if (addresses.length > MAX_LINKED_WALLETS || !addresses.every(isAddress)) return null
+  return [...new Set(addresses.map((address) => address.toLowerCase()))]
 }
 
 /** The request's decoded path, or null when the URL is malformed. Clients can send anything here. */
@@ -159,8 +170,25 @@ export function createApi(env: Env) {
         sendJson(res, 400, { error: "That isn't a number this can explain." })
         return true
       }
-      const wallet = await readWallet(portfolioMatch[1] as string, res, { fresh: !target })
-      if (!wallet) return true
+      const linked = parseLinked(params.get("linked"))
+      if (!linked) {
+        sendJson(res, 400, { error: "Linked wallets are a comma-separated list of Base addresses." })
+        return true
+      }
+      const read = await readWallet(portfolioMatch[1] as string, res, { fresh: !target })
+      if (!read) return true
+      let wallet = read
+      const others = wallet.mode === "demo" ? [] : linked.filter((address) => address !== wallet.address)
+      if (others.length > 0) {
+        const linkedWallets: WalletResponse[] = []
+        for (const address of others) {
+          // A cost that can't be read isn't a cost of zero, so this answers with the failure instead of a wrong number.
+          const other = await readWallet(address, res, { fresh: !target })
+          if (!other) return true
+          linkedWallets.push(other)
+        }
+        wallet = withLinkedCosts(wallet, linkedWallets, method)
+      }
       if (!target) {
         sendJson(res, 200, portfolioOf(wallet, method))
         return true

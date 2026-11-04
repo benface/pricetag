@@ -1,6 +1,6 @@
 // Keeps each wallet's rows in memory: one full read, then only new blocks, because a wallet read scans the whole range.
 
-import type { Head, WalletResponse } from "../src/core/api.ts"
+import type { Head, UnlistedToken, WalletResponse } from "../src/core/api.ts"
 import { buildPricedLegs, derivePricedRows, answerToMicros, type LegRow, type PricedRow, type ReferenceRow } from "../src/core/legs.ts"
 import type { LatestPrices } from "../src/core/portfolio.ts"
 import type { Source } from "./source.ts"
@@ -18,6 +18,21 @@ type Cached = {
   prices: LatestPrices
   latest: Head
   gasUnknownTxs: Set<string>
+}
+
+/** What the wallet holds off the allowlist. An ID or an unreadable amount can't be netted, so those count as held. */
+export function unlistedTokens(rows: readonly LegRow[], account: string): UnlistedToken[] {
+  const tokens = new Map<string, { net: bigint; transfers: number; unreadable: boolean }>()
+  for (const row of rows) {
+    if (row.account !== account || (row.kind !== "unlisted" && row.kind !== "unlisted_nft")) continue
+    const token = tokens.get(row.token) ?? { net: 0n, transfers: 0, unreadable: false }
+    token.transfers += 1
+    if (row.kind === "unlisted_nft") token.unreadable = true
+    else if (/^\d+$/.test(row.amount)) token.net += row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
+    else token.unreadable = true
+    tokens.set(row.token, token)
+  }
+  return [...tokens].filter(([, { net, unreadable }]) => net > 0n || unreadable).map(([token, { transfers }]) => ({ token, transfers }))
 }
 
 export function createWallets(source: Source, currentHead: () => Promise<Head>) {
@@ -76,6 +91,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>) 
       prices: wallet.prices,
       latest: wallet.latest,
       gasUnknownTxs: [...wallet.gasUnknownTxs],
+      unlisted: unlistedTokens(wallet.rows, key),
     }
   }
 

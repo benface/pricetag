@@ -34,6 +34,7 @@ public struct ExplanationRequest: Hashable, Sendable {
     public let target: ExplainTarget
     public let address: String
     public let method: CostMethod
+    public let linked: [String]
     public let serverURL: URL
 }
 
@@ -52,6 +53,8 @@ public final class PortfolioStore {
     public private(set) var address: String?
     public private(set) var method: CostMethod
     public private(set) var serverURL: URL
+    /// The user's own wallets. Transfers between them carry their cost, and aren't new purchases.
+    public private(set) var linkedWallets: [String] = []
 
     @ObservationIgnored private var source: any PortfolioSource
     @ObservationIgnored private let makeSource: @Sendable (URL) -> any PortfolioSource
@@ -119,6 +122,13 @@ public final class PortfolioStore {
         start()
     }
 
+    public func setLinkedWallets(_ wallets: [String]) {
+        let next = wallets.map { $0.lowercased() }
+        guard next != linkedWallets else { return }
+        linkedWallets = next
+        if address != nil, pollTask != nil { start() }
+    }
+
     public func setServerURL(_ url: URL) {
         guard url != serverURL else { return }
         serverURL = url
@@ -133,25 +143,34 @@ public final class PortfolioStore {
 
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, serverURL: serverURL) }
+        address.map { ExplanationRequest(target: target, address: $0, method: method, linked: linked(for: $0), serverURL: serverURL) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
         // A request from before a change has nothing to say about what's on screen now.
         guard request == explanationRequest(for: request.target) else { throw CancellationError() }
-        return try await source.explanation(of: request.target, address: request.address, method: request.method)
+        return try await source.explanation(of: request.target, address: request.address, method: request.method, linked: request.linked)
     }
+
+    private func linked(for address: String) -> [String] {
+        // Costs only carry over onto a wallet that's the user's own. A wallet being watched could be anyone's.
+        linkedWallets.contains(address) ? linkedWallets.filter { $0 != address } : []
+    }
+
+    /// Where this store reads from, for anything else that needs the same server.
+    public var currentSource: any PortfolioSource { source }
 
     /// One read. Returns how long to wait before the next one.
     func poll() async -> Duration {
         guard let address else { return unreachableDelay }
         let method = self.method
         let serverURL = self.serverURL
+        let linked = linked(for: address)
         // An answer that arrives after a change is about something else, whatever it says.
-        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && serverURL == self.serverURL }
+        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && serverURL == self.serverURL && linked == self.linked(for: address) }
         let timeout: Duration = portfolio == nil ? .seconds(180) : .seconds(15)
         do {
-            let next = try await source.portfolio(address: address, method: method, timeout: timeout)
+            let next = try await source.portfolio(address: address, method: method, linked: linked, timeout: timeout)
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
