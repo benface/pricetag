@@ -56,7 +56,7 @@ struct SettingsView: View {
                 }
             }
             Toggle("Sweep realized gains to savings", isOn: Binding(get: { hotWallet.settings.sweepsRealizedGains }, set: { hotWallet.setSweepsRealizedGains($0) }))
-            TextField("RPC", text: $rpc, prompt: Text(Base.publicRPC.absoluteString))
+            TextField("Network", text: $rpc, prompt: Text(Base.publicRPC.absoluteString))
                 .onSubmit(applyRPC)
             if let rpcError {
                 WarningText(rpcError).font(.callout)
@@ -75,7 +75,7 @@ struct SettingsView: View {
         } header: {
             Text(HotWalletWording.title)
         } footer: {
-            Text("The cap is $\(Int(hotWallet.settings.capCeiling / Money.dollar)) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build"). The RPC only reads balances and sends what this app signed, and it can't move anything by itself.")
+            Text("The cap is $\(Int(hotWallet.settings.capCeiling / Money.dollar)) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build"). The network address only reads balances and passes on what this app signed. It can't move anything by itself.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -84,7 +84,7 @@ struct SettingsView: View {
     private func applyRPC() {
         let value = rpc.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https", url.host() != nil else {
-            rpcError = "That isn't an RPC address. It should look like \(Base.publicRPC.absoluteString)."
+            rpcError = "That isn't a network address. It should look like \(Base.publicRPC.absoluteString)."
             return
         }
         rpcError = nil

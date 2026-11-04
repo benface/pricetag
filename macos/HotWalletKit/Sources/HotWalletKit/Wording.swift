@@ -27,10 +27,11 @@ public enum HotWalletWording {
         "\(symbols.joined(separator: ", ")) \(symbols.count == 1 ? "has" : "have") no trusted price right now, so \(symbols.count == 1 ? "it isn't" : "they aren't") counted toward the cap or swept automatically. Sweep Everything still moves \(symbols.count == 1 ? "it" : "them")."
     }
 
-    public static let noEthPrice = "ETH's oracle can't be read right now, so gas can't be valued and nothing is swept automatically."
-    public static let wrongChain = "That RPC isn't on Base, so nothing will be signed. Change it in Settings."
-    public static let cantReachChain = "Can't reach the RPC, so balances may be old and nothing is being swept."
-    public static let cantCheckAmp = "Can't read this wallet's history from Amp right now, so it isn't being compared with what this app signed. The nonce check still runs."
+    public static let noEthPrice = "ETH's price can't be read right now, so gas can't be valued and nothing is swept automatically."
+    public static let wrongChain = "The network address in Settings isn't on Base, so nothing will be signed."
+    public static let cantReachChain = "Can't reach the network, so balances may be old and nothing is being swept."
+    public static let cantCheckAmp = "Can't read this wallet's history from Amp right now, so it isn't being compared with what this app signed. It still checks how many transactions this key has sent."
+    public static let feesLookWrong = "The network is quoting far higher fees than Base ever charges, so nothing was signed. Check the network address in Settings."
     public static let keyMissing = "This device no longer has this wallet's key, so nothing here can be moved. This can happen after restoring onto a different device."
     public static let rotating = "Moving everything off the old key. It's deleted once there's nothing left on it."
 
@@ -39,7 +40,7 @@ public enum HotWalletWording {
             switch $0 {
             case .unknownTransaction(let hash): "A transaction this app didn't sign took funds from this wallet: \(hash)."
             case .nonceAhead(let signed, let onchain): "This key has sent \(onchain) transactions, and this app only signed \(signed)."
-            case .nonceTaken(let nonce, let ours): "Another transaction used nonce \(nonce) instead of this app's \(ours)."
+            case .nonceTaken(_, let ours): "Another transaction from this key took the place of one this app signed: \(ours)."
             }
         }.joined(separator: " ")
     }

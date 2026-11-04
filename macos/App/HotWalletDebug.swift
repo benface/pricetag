@@ -22,6 +22,13 @@ nonisolated enum HotWalletDebug {
         if let cold = value(after: "--add-cold") { try? wallet.addColdWallet(address: cold, name: "Ledger") }
         if let cap = value(after: "--cap").flatMap(Int.init) { wallet.setCap(dollars: cap) }
         if CommandLine.arguments.contains("--create-wallet") { Task { await wallet.createWallet() } }
+        // An address is public, and scripts driving a fork need it to fund the wallet.
+        if CommandLine.arguments.contains("--print-address") {
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                FileHandle.standardError.write(Data("ADDRESS \(wallet.address?.lowercased ?? "none")\n".utf8))
+            }
+        }
     }
 
     static func runSelfTestIfAsked() {

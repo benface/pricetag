@@ -121,6 +121,15 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(await rig.signer.signed.last?.nonce == 0, "a dropped transaction's nonce gets used again")
     }
 
+    @Test func aFeeQuoteNoOneWouldChargeSignsNothing() async throws {
+        let absurd = FeeQuote(maxFeePerGas: FeeQuote.highestPlausibleFeePerGas + 1, maxPriorityFeePerGas: FeeQuote.highestPlausibleFeePerGas, l1FeeWei: 0)
+        let rig = await Rig(snapshot(eth: oneEth, tokens: [usdc: usdcUnits(5000)], fees: absurd))
+        await rig.wallet.tick()
+        await rig.wallet.sweepEverything()
+        #expect(await rig.signer.signed.isEmpty)
+        #expect(rig.wallet.sweepProblem == HotWalletWording.feesLookWrong)
+    }
+
     @Test func anEstimateThatFailsSignsNothing() async throws {
         let rig = await Rig(over)
         await rig.chain.setEstimateFailure(.rejected("execution reverted"))
@@ -398,6 +407,8 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
         await chain.confirmAll()
         await chain.set(snapshot(eth: 0, nonce: 2))
+        for _ in 1..<HotWallet.readsBeforeAlarm { await wallet.tick() }
+        #expect(await signer.hasKey(hotAddress), "one read saying it's empty isn't enough to delete a key")
         await wallet.tick()
         #expect(wallet.address == nextAddress)
         #expect(wallet.rotation == nil)
@@ -429,7 +440,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
         await chain.confirmAll()
         await chain.set(snapshot(eth: 0, nonce: 2))
-        await wallet.tick()
+        for _ in 0..<HotWallet.readsBeforeAlarm { await wallet.tick() }
         #expect(wallet.address == nextAddress)
         #expect(wallet.alarm == nil)
     }

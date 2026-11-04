@@ -33,6 +33,12 @@ public struct FeeQuote: Equatable, Sendable {
     public var maxPriorityFeePerGas: UInt128
     /// What the L1 data for one sweep costs, on top of gas. It moves with L1's gas price, so plans allow twice this.
     public var l1FeeWei: UInt128
+    /// Base charges a tiny fraction of this. A node quoting more is wrong or lying, and signing would burn what's here as fees.
+    public static let highestPlausibleFeePerGas: UInt128 = 100_000_000_000
+
+    public var isPlausible: Bool {
+        maxFeePerGas <= Self.highestPlausibleFeePerGas
+    }
 
     public init(maxFeePerGas: UInt128, maxPriorityFeePerGas: UInt128, l1FeeWei: UInt128) {
         self.maxFeePerGas = maxFeePerGas

@@ -65,9 +65,9 @@ private struct HotWalletSetup: View {
             if let problem = wallet.sweepProblem {
                 WarningText(problem).font(.callout)
             }
-            Spacer(minLength: 0)
         }
         .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -237,7 +237,7 @@ private struct HotWalletDetails: View {
         } header: {
             Text("Other Tokens")
         } footer: {
-            Text("Off the allowlist, so they have no trusted price. Unknown tokens can be malicious, so this app never interacts with them. Don't go looking for what they're worth.")
+            Text("Tokens this app doesn't track, so they have no trusted price. Unknown tokens can be malicious, so it never interacts with them. Don't go looking for what they're worth.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -263,6 +263,10 @@ private struct HotWalletDetails: View {
                             .minimumScaleFactor(0.8)
                     }
                     Spacer()
+                    Button("Show in \(AppName.current)", systemImage: "chart.xyaxis.line") { store.setWallet(cold.address.lowercased) }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .help("Show its cost and PnL in the main window")
                     Button("Remove", systemImage: "minus.circle") { wallet.removeColdWallet(cold.address) }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
@@ -305,7 +309,7 @@ private struct HotWalletDetails: View {
         .confirmationDialog("Sweep everything to your savings?", isPresented: $isConfirmingSweep) {
             Button("Sweep Everything") { Task { await wallet.sweepEverything() } }
         } message: {
-            Text("Moves every token on the allowlist and all the ETH it can, in separate transactions. Your device's Touch ID or password confirms it.")
+            Text("Moves every token this app tracks and all the ETH it can, in separate transactions. Touch ID or your password confirms it.")
         }
         .confirmationDialog("Replace this wallet's key?", isPresented: $isConfirmingRotation) {
             Button("Replace Key") { Task { await wallet.replaceKey() } }

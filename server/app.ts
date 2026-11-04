@@ -64,9 +64,7 @@ function sendAmpError(res: ServerResponse, error: unknown) {
   sendJson(res, 502, { error: "Couldn't read from Amp." })
 }
 
-export function createApi(env: Env) {
-  const source = createSource(env)
-
+export function createApi(env: Env, source: Source | null = createSource(env)) {
   let head: Head | null = null
   const subscribers = new Set<ServerResponse>()
   let polling = false

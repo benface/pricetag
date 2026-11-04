@@ -1,5 +1,12 @@
 import assert from "node:assert/strict"
-import { describe, it } from "node:test"
+import { after, before, describe, it } from "node:test"
+import { createServer, type Server } from "node:http"
+import type { AddressInfo } from "node:net"
+import { createApi } from "../server/app.ts"
+import type { Source } from "../server/source.ts"
+import type { PortfolioResponse } from "../src/core/api.ts"
+import { buildPricedLegs, type LegRow } from "../src/core/legs.ts"
+import { ETH_ADDRESS } from "../src/core/tokens.ts"
 import type { Method } from "../src/core/fold.ts"
 import type { PricedLeg } from "../src/core/legs.ts"
 import { inheritCosts } from "../src/core/linked.ts"
@@ -143,6 +150,12 @@ describe("withLinkedCosts", () => {
 })
 
 describe("outgoingTxs", () => {
+  it("ignores a zero-value transfer, which anyone can make in this wallet's name to poison its history", () => {
+    const row = { block_num: 1, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: "0xbad", tx_index: 0, log_index: 0, token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", account: HOT, side: "debit" as const, amount: "0", kind: "erc20" as const }
+    const legs = buildPricedLegs({ account: HOT, rows: [row], references: [], priced: [] })
+    assert.deepEqual(portfolioOf({ ...DEMO_WALLET, address: HOT, legs }, "average").outgoingTxs, [])
+  })
+
   it("lists what left or paid gas, including gas it couldn't work out, and not what only arrived", () => {
     const wallet = { ...DEMO_WALLET, address: HOT, legs: [leg("0x1", ONE), leg("0x2", -ONE), leg("0x3", -1n, { kind: "gas" })], gasUnknownTxs: ["0x4"] }
     assert.deepEqual(portfolioOf(wallet, "average").outgoingTxs, ["0x2", "0x3", "0x4"])
@@ -178,5 +191,82 @@ describe("unlistedTokens", () => {
       { token: "0x3", transfers: 1 },
       { token: "0x4", transfers: 1 },
     ])
+  })
+})
+
+describe("the portfolio endpoint with linked wallets", () => {
+  const row = (block: number, tx: string, account: string, side: "credit" | "debit", amount: bigint): LegRow => ({
+    block_num: block,
+    timestamp: "2026-11-04T00:00:00.000Z",
+    tx_hash: tx,
+    tx_index: 1,
+    log_index: 0,
+    token: ETH_ADDRESS,
+    account,
+    side,
+    amount: amount.toString(),
+    kind: "eth",
+  })
+  const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+  // The hot wallet buys 1 ETH with 3,000 USDC, then sends it to savings.
+  const rows: Record<string, LegRow[]> = {
+    [HOT]: [
+      row(10, "0x1", HOT, "credit", ONE),
+      { ...row(10, "0x1", HOT, "debit", 3_000_000_000n), token: USDC, kind: "erc20" },
+      row(11, "0x2", HOT, "debit", ONE),
+    ],
+    [COLD]: [row(11, "0x2", COLD, "credit", ONE)],
+  }
+  const source: Source = {
+    mode: "raw",
+    startBlock: 1,
+    historyBlocks: null,
+    head: async () => ({ blockNum: 20, timestamp: "2026-11-04T00:00:00.000Z" }),
+    processedThrough: async (_, head) => head,
+    readWindow: async (address) => ({ rows: rows[address] ?? [], priced: null, gasUnknownTxs: [] }),
+    readReferences: async (blocks) => blocks.map((block_num) => ({ block_num, eth_usd: "300000000000", usdc_usd: "100000000" })),
+    readLatestReference: async () => ({ block_num: 20, eth_usd: "400000000000", usdc_usd: "100000000" }),
+  }
+  let server: Server
+  let base: string
+  before(async () => {
+    const api = createApi({}, source)
+    server = createServer((req, res) => void api(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+  after(() => server.close())
+  const eth = async (query: string) => {
+    const body = (await (await fetch(`${base}/api/portfolio/${COLD}${query}`)).json()) as PortfolioResponse
+    return body.positions.find((p) => p.asset === "ETH")
+  }
+
+  it("leaves a transfer's cost unknown without them", async () => {
+    assert.equal((await eth(""))?.values.costUsdMicros, null)
+  })
+
+  it("carries over what the sender paid with them", async () => {
+    const position = await eth(`?linked=${HOT}`)
+    assert.equal(position?.values.costUsdMicros, "3000000000")
+    assert.equal(position?.values.unrealizedUsdMicros, "1000000000")
+    const explained = (await (await fetch(`${base}/api/portfolio/${COLD}/explain?asset=ETH&metric=value&linked=${HOT}`)).json()) as { legs: { costLabel: string }[] }
+    assert.deepEqual(explained.legs.map((l) => l.costLabel), ["inherited"])
+  })
+
+  it("ignores the wallet itself in the list", async () => {
+    assert.equal((await eth(`?linked=${COLD},${HOT}`))?.values.costUsdMicros, "3000000000")
+  })
+
+  it("answers with the failure when a linked wallet can't be read, rather than a wrong cost", async () => {
+    const failing: Source = { ...source, readWindow: async (address) => {
+      if (address === HOT) throw new Error("nope")
+      return { rows: rows[address] ?? [], priced: null, gasUnknownTxs: [] }
+    } }
+    const api = createApi({}, failing)
+    const other = createServer((req, res) => void api(req, res))
+    await new Promise<void>((resolve) => other.listen(0, "127.0.0.1", resolve))
+    const response = await fetch(`http://127.0.0.1:${(other.address() as AddressInfo).port}/api/portfolio/${COLD}?linked=${HOT}`)
+    other.close()
+    assert.equal(response.status, 502)
   })
 })

@@ -51,6 +51,7 @@ public final class HotWallet {
     @ObservationIgnored private var readTask: Task<Void, Never>?
     @ObservationIgnored private var missedReceipts: [String: Int] = [:]
     @ObservationIgnored private var nonceAheadTicks = 0
+    @ObservationIgnored private var emptyReads = 0
     @ObservationIgnored private var pausedUntil: Date?
     @ObservationIgnored private var lastInLine: Task<Void, Never>?
 
@@ -212,11 +213,14 @@ public final class HotWallet {
         if (state.records[address] ?? []).contains(where: { $0.status == .pending }) { return }
         if let rotation = state.rotation, rotation.from == address {
             let everything = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: rotation.destination)
-            if everything.transfers.isEmpty {
-                if everything.blockers.isEmpty { try await finishRotation(rotation) }
+            guard everything.transfers.isEmpty else {
+                emptyReads = 0
+                try await execute(everything, from: address, to: rotation.destination, reason: .rotation, snapshot: snapshot)
                 return
             }
-            try await execute(everything, from: address, to: rotation.destination, reason: .rotation, snapshot: snapshot)
+            // Deleting a key can't be undone, so one read saying it's empty isn't enough.
+            emptyReads = everything.blockers.isEmpty ? emptyReads + 1 : 0
+            if emptyReads >= Self.readsBeforeAlarm { try await finishRotation(rotation) }
             return
         }
         if let pausedUntil, now() < pausedUntil { return }
@@ -431,6 +435,7 @@ public final class HotWallet {
         plan = nil
         portfolio = nil
         nonceAheadTicks = 0
+        emptyReads = 0
         missedReceipts = [:]
         publishLinkedWallets()
     }
@@ -491,6 +496,11 @@ public final class HotWallet {
     // MARK: - Signing
 
     private func execute(_ plan: SweepPlan, from address: EthereumAddress, to destination: EthereumAddress, reason: SignedRecord.Reason, snapshot: ChainSnapshot) async throws {
+        guard snapshot.fees.isPlausible else {
+            sweepProblem = HotWalletWording.feesLookWrong
+            pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
+            return
+        }
         var nonce = AlarmCheck.nextNonce(records: state.records[address] ?? [], onchainNonce: snapshot.nonce)
         for transfer in plan.transfers {
             let contract = transfer.token.contract ?? destination
