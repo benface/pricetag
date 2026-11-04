@@ -45,7 +45,7 @@ public struct SweepPlan: Equatable, Sendable {
     public var gasReserveWei: UInt128 = 0
     /// Over the cap, but by less than it makes sense to spend gas on.
     public var excessIsDust = false
-    /// What moving everything skipped for costing more in gas than it's worth, which can change. It's still there, so it never
+    /// What moving everything skipped because of what gas costs, which can change. It's still there, so it never
     /// counts as empty. ETH under `minimumSweep` isn't here, because paying for its own last transfer always leaves a little.
     public var notWorthTheGas: [Token] = []
 }
