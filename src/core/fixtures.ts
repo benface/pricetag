@@ -145,6 +145,7 @@ const common = {
   unlisted: [{ token: "0x00000000000000000000000000000000000000f1", transfers: 1 }],
   l1FeeUnknownTxs: [],
   openingUnread: [],
+  unseenEth: [],
   lastBalances: {},
   unreadBalances: [],
   currency: "USD" as const,
