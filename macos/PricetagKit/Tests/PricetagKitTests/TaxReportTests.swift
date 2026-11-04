@@ -98,9 +98,21 @@ import Testing
         model.setOtherWalletsText("\(a)\n \(b), ")
         #expect(model.otherWallets == [a.lowercased(), b])
         let request = model.request(address: b, currency: .USD, serverURL: server)
-        #expect(request?.queryItems.first { $0.name == "also" }?.value == "\(a.lowercased()),\(b)")
+        #expect(request?.body.also == [a.lowercased(), b])
         // The demo wallet can't be combined, so what's remembered doesn't get in its way.
         #expect(model.request(address: WalletAddress.demo, currency: .USD, serverURL: server)?.otherWallets == [])
+    }
+
+    @Test func theAnswersAndTheWalletsItKnowsGoWithTheRequest() {
+        let a = "0x\(String(repeating: "a", count: 40))"
+        let b = "0x\(String(repeating: "b", count: 40))"
+        let model = model()
+        model.setOtherWalletsText(a)
+        let book = Book(senders: [b: .someoneElse])
+        let request = model.request(address: "0x\(String(repeating: "c", count: 40))", currency: .USD, serverURL: server, book: book, linked: [a, b])
+        #expect(request?.body.also == [a, b], "A wallet that's both typed and known only counts once")
+        #expect(request?.body.book == book)
+        #expect(model.request(address: WalletAddress.demo, currency: .USD, serverURL: server, book: book, linked: [a])?.body.also == [], "The demo wallet can't be combined")
     }
 
     @Test func aFailedReadSaysWhy() async {

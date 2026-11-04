@@ -272,7 +272,7 @@ public final class PortfolioStore {
         return try await source.taxReport(request)
     }
 
-    private func linked(for address: String) -> [String] {
+    public func linked(for address: String) -> [String] {
         // Costs only carry over onto a wallet that's the user's own. A wallet being watched could be anyone's.
         linkedWallets.contains(address) ? linkedWallets.filter { $0 != address } : []
     }

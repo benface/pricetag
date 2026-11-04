@@ -132,10 +132,12 @@ To add a currency, add its Chainlink feed to `CURRENCIES` in `packages/sdk/src/c
 
 ## Tax report
 
-Both apps export the same CSV, because the server writes it (`GET /api/tax-report/<address>?country=CA|US`, and `src/core/tax.ts` does the work). This isn't tax advice, and the report says so first.
+Both apps export the same CSV, because the server writes it (`POST /api/tax-report/<address>` with the country and the user's answers, and `src/core/tax.ts` does the work; a `GET` with `?country=CA|US` is the same report with no answers). This isn't tax advice, and the report says so first.
 
 - **One row per thing that may be taxable:** a sale, a network fee (paying one in ETH counts as selling that ETH) or something sent. Each has its date, asset, amount, proceeds, cost, gain, method, price source and transaction link, in the main currency. The gains come from what the fold did, so a position with nothing unresolved adds up to the Realized the apps show. With something unresolved, the apps leave out the whole position and this keeps each row it knows, so the report's total can differ, and it says so.
-- **Gaps say so.** A cost, proceeds or gain that can't be worked out says `unknown`, its row is `UNRESOLVED` with a reason, and it isn't in the gain total. It's never 0. A sale that's part known and part unknown becomes two rows. A cost from an estimate is `ESTIMATED`.
+- **Gaps say so.** A cost, proceeds or gain that can't be worked out says `unknown`, its row is `UNRESOLVED` with a reason, and it isn't in the gain total. It's never 0. A sale that's part known and part unknown becomes two rows. A cost from an estimate is `ESTIMATED`, and one the user entered or imported is `SELF-REPORTED`, however far it's moved between wallets since.
+- **It uses the same answers as the screen.** Costs go through the same resolver as "Who's this?": what's inherited from a linked wallet, entered, imported, noted onchain or received at market.
+- **A market price from when something arrived reads differently by country.** In Canada it's generally the real cost of what you're paid or given ([ITA s. 69(1)(c)](https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-69.html), [s. 52(1)](https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-52.html)), so the row is `OK` and says where its cost came from. In the US it's the cost of pay (Q59) but not of a gift (Q76, [IRS digital asset FAQs](https://www.irs.gov/individuals/international-taxpayers/frequently-asked-questions-on-digital-asset-transactions)), and we can't tell which it was, so the row stays `ESTIMATED`. Both warn that your own money moved from elsewhere keeps what you first paid.
 - **Notes are rows too**, right under the header, so the file still parses and the warnings are the first thing anyone sees.
 - **The country picks the defaults, and both can be overridden**, with a warning when that may not be accepted:
 
@@ -146,11 +148,11 @@ Both apps export the same CSV, because the server writes it (`GET /api/tax-repor
 
 Canada's "all together" is our reading: s. 47 averages what a taxpayer owns and says nothing about where it's held, but CRA's crypto guide doesn't address wallets directly.
 
-Wallets are the address on screen plus any others typed into the report. A transfer between them, netting to zero, isn't a sale. All together, its cost stays in the pool. Each on its own, what arrives has an unknown cost in the report, until WORK-371 uses the costs the apps now carry between linked wallets.
+Wallets are the address on screen, any others typed into the report, and the ones the user's answers or the app say are theirs. A transfer between them, netting to zero, isn't a sale. All together, its cost stays in the pool. Each on its own, its cost carries over to the wallet it arrived in. On a wallet nobody's said is theirs, the wallets in the answers only supply costs, and aren't listed. The demo's are the same way, because they start at different blocks.
 
 All together needs one consistent history, because a cost worked out from part of it would look known and be wrong. So the report stops at the last block every wallet has reached and says what that leaves out. If their histories start at different blocks, which can only happen reading the raw dataset, every cost and gain says `unknown`. The demo wallet can't be combined with anything.
 
-The report doesn't check Canada's superficial loss rule, split US short-term from long-term gains, or list what was received, and it says so. Anything before the first block read has an unknown cost, so most rows on an older wallet are unresolved for now.
+The report doesn't check Canada's superficial loss rule, split US short-term from long-term gains, or list what was received, and it says so. Anything before the first block read has an unknown cost until the user answers for it, so most rows on an older wallet start out unresolved.
 
 To add a country, add it to `TAX_COUNTRIES` in `src/core/tax.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/TaxReport.swift`.
 

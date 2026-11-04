@@ -3,9 +3,12 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { foldPositions, type PricedLeg } from "@pricetag/sdk/core"
-import type { TaxReportResponse, WalletResponse } from "../src/core/api.ts"
-import { DEMO_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
+import { ASSETS, ETH_ADDRESS, foldPositions, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import type { Source } from "@pricetag/sdk/internal"
+import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../src/core/api.ts"
+import { costKey, emptyBook, type Book } from "../src/core/book.ts"
+import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
+import { foldBook } from "../src/core/resolve.ts"
 import { TAX_COUNTRIES, readOtherWallets, taxReportOf, taxRows } from "../src/core/tax.ts"
 import { createApi } from "../server/app.ts"
 
@@ -179,7 +182,9 @@ describe("taxRows", () => {
   it("doesn't call a real cost estimated because it was mixed with another real one", () => {
     const legs = [buy(10, 1n, 1000), leg(20, E18, { costMicros: usd(1000), costLabel: "self-reported" }), sell(30, 1n, 2000)]
     const [row] = taxRows([walletOf(A, legs, { balances: { blockNum: 1000, amounts: { ETH: E18.toString() } } })], { method: "average", scope: "per-wallet" })
-    assert.equal(row?.status, "resolved")
+    assert.equal(row?.status, "self-reported", "someone entered part of it, and the file says so")
+    const [plain] = taxRows([walletOf(A, [buy(10, 1n, 1000), buy(20, 1n, 1000), sell(30, 1n, 2000)], { balances: { blockNum: 1000, amounts: { ETH: E18.toString() } } })], { method: "average", scope: "per-wallet" })
+    assert.equal(plain?.status, "resolved")
   })
 
   describe("across wallets", () => {
@@ -196,7 +201,7 @@ describe("taxRows", () => {
       )
     })
 
-    it("per wallet, the move still isn't a sale, and what arrived has an unknown cost until costs carry over", () => {
+    it("per wallet, the move still isn't a sale, and a cost that can't be traced stays unknown", () => {
       const rows = taxRows([a, b], { method: "fifo", scope: "per-wallet" })
       assert.deepEqual(
         rows.map((row) => [row.type, row.costMicros, row.gainMicros, row.status, row.wallet]),
@@ -379,11 +384,11 @@ describe("taxReportOf", () => {
     assert.ok(missing.warnings.some((warning) => /no exchange rate/.test(warning)))
   })
 
-  it("warns about moves whose cost doesn't carry over yet", () => {
+  it("warns about moves whose cost couldn't be carried over", () => {
     const a = walletOf(A, [buy(10, 1n, 1000), leg(20, -E18, { kind: "transfer" })])
     const b = walletOf(B, [leg(20, E18, { kind: "transfer" })])
     const report = taxReportOf([a, b], { country: "US", method: "fifo", scope: "per-wallet" })
-    assert.ok(report.warnings.some((warning) => /cost doesn't carry over/.test(warning)))
+    assert.ok(report.warnings.some((warning) => /no known cost to carry over/.test(warning)))
     assert.equal(report.rowCount, 0)
     assert.equal(report.gainMicros, null)
   })
@@ -401,6 +406,325 @@ describe("taxReportOf", () => {
     const text = `${JSON.stringify(taxReportOf([{ ...DEMO_WALLET, currency: "CAD", rates: demoRates("CAD") }], { country: "CA", method: "average", scope: "pooled" }), null, 2)}\n`
     if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
     assert.equal(readFileSync(url, "utf8"), text, "demo-tax-report.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.")
+  })
+})
+
+describe("the user's answers in a report", () => {
+  // Where a transfer came from or went to, which is what lets the answers apply to it.
+  const part = (account: string, side: "credit" | "debit", amount: bigint, counterparty: string): LegPart => ({ logIndex: 0, token: ETH_ADDRESS, account, side, amount: amount.toString(), kind: "eth", counterparty })
+  const arrived = (block: number, from: string, to = A) => leg(block, E18, { kind: "transfer", parts: [part(to, "credit", E18, from)] })
+  const sent = (block: number, to: string, from = A) => leg(block, -E18, { kind: "transfer", parts: [part(from, "debit", E18, to)] })
+  const held = (legs: PricedLeg[]) => walletOf(A, legs)
+  const US = { country: "US", method: "fifo", scope: "per-wallet" } as const
+  const CA = { country: "CA", method: "average", scope: "pooled" } as const
+  const answering = (senders: Book["senders"], costs: Book["costs"] = {}): Book => ({ ...emptyBook(), senders, costs })
+  const SELLER = `0x${"5".repeat(40)}`
+
+  describe("a cost entered in the app", () => {
+    const wallet = held([arrived(10, SELLER), sell(30, 1n, 2500)])
+    const book = answering({}, { [costKey(A, wallet.legs[0]?.id as string)]: { micros: usd(1000), currency: "USD" } })
+
+    it("fills in what would be unknown, and is marked as the user's word", () => {
+      assert.equal(eventsOf(taxReportOf([wallet], US))[0]?.Status, "UNRESOLVED")
+      const report = taxReportOf([wallet], US, { book })
+      const [row] = eventsOf(report)
+      assert.deepEqual([row?.Cost, row?.Gain, row?.Status], ["1000.000000", "1500.000000", "SELF-REPORTED"])
+      assert.match(row?.Notes ?? "", /what you entered or imported/)
+      assert.deepEqual([report.selfReportedCount, report.gainMicros], [1, usd(1500)])
+      assert.ok(report.warnings.some((warning) => /1 row of 1 uses a cost you entered/.test(warning)))
+    })
+
+    it("says the same as the screen", () => {
+      const { positions } = foldBook(wallet, [], "fifo", book)
+      assert.equal(positions[0]?.values.realizedMicros, taxReportOf([wallet], US, { book }).gainMicros)
+    })
+
+    it("is converted at the rate when it arrived, and a missing rate leaves it unknown", () => {
+      const round = (answer: string, block: number) => ({ answer, updatedAt: Date.parse(leg(block, 0n).timestamp) / 1000 })
+      const rates = { byBlock: { 10: round("50000000", 10), 30: round("50000000", 30) }, latest: { blockNum: 1000, round: round("50000000", 30) } }
+      const [row] = eventsOf(taxReportOf([{ ...wallet, currency: "CAD", rates }], CA, { book }))
+      assert.deepEqual([row?.Cost, row?.Status], ["2000.000000", "SELF-REPORTED"])
+      const [gap] = eventsOf(taxReportOf([{ ...wallet, currency: "CAD", rates: { byBlock: { 30: round("50000000", 30) }, latest: rates.latest } }], CA, { book }))
+      assert.deepEqual([gap?.Cost, gap?.Status], ["unknown", "UNRESOLVED"])
+    })
+
+    it("only marks the row that used it", () => {
+      const both = held([buy(5, 1n, 1000), arrived(10, SELLER), sell(30, 1n, 2500), sell(40, 1n, 2500)])
+      const rows = eventsOf(taxReportOf([both], US, { book: answering({}, { [costKey(A, both.legs[1]?.id as string)]: { micros: usd(1000), currency: "USD" } }) }))
+      assert.deepEqual(rows.map((row) => row.Status), ["OK", "SELF-REPORTED"])
+    })
+  })
+
+  it("uses what was imported from an exchange, and marks it", () => {
+    const wallet = held([arrived(10, SELLER), sell(30, 1n, 2500)])
+    const at = wallet.legs[0]?.timestamp as string
+    const book: Book = { ...emptyBook(), withdrawals: [{ exchange: "Coinbase", asset: "ETH", units: E18.toString(), at, cost: { micros: usd(1200), currency: "USD" }, toAddress: A }] }
+    const [row] = eventsOf(taxReportOf([wallet], US, { book }))
+    assert.deepEqual([row?.Cost, row?.Status], ["1200.000000", "SELF-REPORTED"])
+  })
+
+  it("uses a cost entered for an exchange account, and marks it", () => {
+    const wallet = held([arrived(10, SELLER), sell(30, 1n, 2500)])
+    const receipts = [{ wallet: A, legId: wallet.legs[0]?.id as string, asset: "ETH", units: E18.toString() }]
+    const [row] = eventsOf(taxReportOf([wallet], US, { book: answering({ [SELLER]: { kind: "my-exchange", costs: [{ asset: "ETH", micros: usd(900), currency: "USD", receipts }] } }) }))
+    assert.deepEqual([row?.Cost, row?.Status], ["900.000000", "SELF-REPORTED"])
+  })
+
+  it("uses what was noted onchain, even with no answers", () => {
+    const wallet = held([arrived(10, SELLER), sell(30, 1n, 2500)])
+    const [row] = eventsOf(taxReportOf([{ ...wallet, notes: [{ noteTx: hash(99), blockNum: 11, txHash: hash(10), asset: "ETH", usdMicros: usd(700) }] }], US))
+    assert.deepEqual([row?.Cost, row?.Status], ["700.000000", "SELF-REPORTED"])
+  })
+
+  describe("a market price from when it arrived", () => {
+    const wallet = held([arrived(10, SELLER), sell(30, 1n, 2500)])
+    const book = answering({ [SELLER]: { kind: "someone-else" } })
+
+    it("is the cost in Canada, and the row says where it came from", () => {
+      const report = taxReportOf([wallet], CA, { book })
+      const [row] = eventsOf(report)
+      assert.deepEqual([row?.Cost, row?.Gain, row?.Status], ["2000.000000", "500.000000", "OK"])
+      assert.match(row?.Notes ?? "", /worth when it arrived/)
+      assert.equal(report.estimatedCount, 0)
+      assert.ok(report.warnings.some((warning) => warning.includes(TAX_COUNTRIES.CA.marketWarning)))
+    })
+
+    it("stays an estimate in the US, because a gift's cost is the giver's", () => {
+      const report = taxReportOf([wallet], US, { book })
+      const [row] = eventsOf(report)
+      assert.deepEqual([row?.Cost, row?.Status], ["2000.000000", "ESTIMATED"])
+      assert.match(row?.Notes ?? "", /^Part of its cost is an estimate.*giver's/)
+      assert.equal(report.estimatedCount, 1)
+      assert.ok(report.warnings.some((warning) => warning.includes(TAX_COUNTRIES.US.marketWarning)))
+    })
+
+    it("in Canada, doesn't excuse a different estimate on the same row", () => {
+      const legs = [arrived(10, SELLER), leg(30, -E18, { proceedsMicros: usd(2500), estimated: true })]
+      const [row] = eventsOf(taxReportOf([held(legs)], CA, { book }))
+      assert.equal(row?.Status, "ESTIMATED")
+      assert.match(row?.Notes ?? "", /^What it sold for is an estimate/)
+      const traded = [leg(5, E18, { kind: "swap", costMicros: usd(1000), costLabel: "paid", estimated: true }), sell(30, 1n, 2500)]
+      assert.match(eventsOf(taxReportOf([held(traded)], CA))[0]?.Notes ?? "", /^Part of its cost is an estimate/)
+    })
+  })
+
+  describe("between wallets", () => {
+    const hop = 20
+    const a = (first: PricedLeg) => walletOf(A, [first, sent(hop, B)])
+    const b = walletOf(B, [arrived(hop, A, B), sell(30, 1n, 2500)])
+    const cost = usd(1000)
+
+    it("carries a cost over, each on its own, without warning about it", () => {
+      for (const context of [{}, { book: answering({ [A]: { kind: "mine" }, [B]: { kind: "mine" } }) }]) {
+        const report = taxReportOf([a(buy(10, 1n, 1000)), b], US, context)
+        const [row] = eventsOf(report)
+        assert.deepEqual([row?.Cost, row?.Gain, row?.Status, row?.Wallet], ["1000.000000", "1500.000000", "OK", B])
+        assert.ok(!report.warnings.some((warning) => /carry over/.test(warning)))
+      }
+    })
+
+    it("still warns when what moved has no cost to carry", () => {
+      const report = taxReportOf([a(leg(10, E18)), b], US)
+      assert.equal(eventsOf(report)[0]?.Status, "UNRESOLVED")
+      assert.ok(report.warnings.some((warning) => /no known cost to carry over/.test(warning)))
+    })
+
+    it("keeps marking a cost the user entered, however far it's moved", () => {
+      const first = arrived(10, SELLER)
+      const book = answering({}, { [costKey(A, first.id)]: { micros: cost, currency: "USD" } })
+      for (const settings of [US, CA, { ...US, method: "average" as const }]) {
+        const [row] = eventsOf(taxReportOf([a(first), b], settings, { book }))
+        assert.deepEqual([row?.Cost, row?.Status], ["1000.000000", "SELF-REPORTED"], JSON.stringify(settings))
+      }
+    })
+
+    it("keeps reading a market price as one, however far it's moved", () => {
+      const book = answering({ [SELLER]: { kind: "someone-else" } })
+      assert.equal(eventsOf(taxReportOf([a(arrived(10, SELLER)), b], US, { book }))[0]?.Status, "ESTIMATED")
+      for (const settings of [CA, { ...CA, scope: "per-wallet" as const }]) {
+        assert.equal(eventsOf(taxReportOf([a(arrived(10, SELLER)), b], settings, { book }))[0]?.Status, "OK", JSON.stringify(settings))
+      }
+    })
+
+    it("gives each sale its share of what was entered", () => {
+      const first = arrived(10, SELLER)
+      const book = answering({}, { [costKey(A, first.id)]: { micros: cost, currency: "USD" } })
+      const half = walletOf(A, [first, leg(30, -E18 / 2n, { proceedsMicros: usd(1000) }), leg(40, -E18 / 2n, { proceedsMicros: usd(1000) })])
+      const rows = taxRows([half], { method: "fifo", scope: "per-wallet" }, { book })
+      assert.deepEqual(rows.map((row) => [row.costMicros, row.status]), [[usd(500), "self-reported"], [usd(500), "self-reported"]])
+    })
+
+    it("can take costs from a wallet without listing its sales", () => {
+      const giver = walletOf(B, [buy(10, 1n, 1000), sent(hop, A, B)])
+      const here = walletOf(A, [arrived(hop, B), sell(30, 1n, 2500)])
+      const report = taxReportOf([here], US, { book: answering({ [B]: { kind: "mine" } }), costsFrom: [giver] })
+      assert.deepEqual(report.wallets, [A])
+      assert.deepEqual(eventsOf(report).map((row) => [row.Cost, row.Wallet]), [["1000.000000", A]])
+    })
+  })
+
+  it("names the wallets it added because of an answer", () => {
+    const report = taxReportOf([walletOf(A, [buy(10, 1n, 1000)]), walletOf(B, [buy(10, 1n, 1000)])], US, { book: answering({ [B]: { kind: "mine" } }) })
+    assert.ok(report.notes.some((note) => /wallets you've said are yours/.test(note)))
+    const typed = taxReportOf([walletOf(A, [buy(10, 1n, 1000)]), walletOf(B, [buy(10, 1n, 1000)])], US)
+    assert.ok(!typed.notes.some((note) => /wallets you've said are yours/.test(note)))
+  })
+
+  it("keeps the words people read plain", () => {
+    const JARGON = /\b(legs?|oracle|FIFO|traces?|rebas\w*|L1|L2|allowlist)\b/i
+    for (const country of [TAX_COUNTRIES.CA, TAX_COUNTRIES.US]) assert.doesNotMatch(`${country.marketRowNote} ${country.marketWarning}`, JARGON)
+  })
+})
+
+describe("POST /api/tax-report", () => {
+  let server: Server
+  let base = ""
+  before(async () => {
+    const handle = createApi({})
+    server = createServer((req, res) => void handle(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+  after(() => server.close())
+
+  const post = async (address: string, body: unknown) => {
+    const response = await fetch(`${base}/api/tax-report/${address}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    return { status: response.status, body: (await response.json()) as TaxReportResponse & { error?: string } }
+  }
+
+  it("is the same report as a GET with no answers", async () => {
+    const got = (await (await fetch(`${base}/api/tax-report/demo?country=CA&currency=CAD`)).json()) as TaxReportResponse
+    assert.deepEqual((await post("demo", { country: "CA", currency: "CAD" })).body, got)
+    assert.deepEqual((await post("demo", { country: "CA", currency: "CAD", also: [], book: emptyBook() })).body, got)
+  })
+
+  it("applies a cost someone entered", async () => {
+    const open = DEMO_WALLET.legs.find((l) => l.asset === "ETH" && BigInt(l.delta) > 0n && l.costLabel === "unknown") as PricedLeg
+    const plain = (await post("demo", { country: "US" })).body
+    const answered = (await post("demo", { country: "US", book: { costs: { [costKey(DEMO_ADDRESS, open.id)]: { micros: usd(1), currency: "USD" } } } })).body
+    assert.ok(answered.unresolvedCount < plain.unresolvedCount, "an answered cost resolves rows")
+    assert.ok(answered.selfReportedCount > 0)
+  })
+
+  it("on the demo, takes costs from its other wallet without listing that wallet's rows", async () => {
+    const book = { senders: { [DEMO_SAVINGS_ADDRESS]: { kind: "mine" } } }
+    const { status, body } = await post("demo", { country: "CA", book })
+    assert.equal(status, 200)
+    assert.deepEqual(body.wallets, [DEMO_ADDRESS])
+    assert.ok(!body.warnings.some((warning) => /start at different blocks/.test(warning)))
+    assert.ok(!eventsOf(body).some((row) => row.Wallet === DEMO_SAVINGS_ADDRESS))
+  })
+
+  it("never lets an answer put demo data in a report on a real wallet", async () => {
+    const book = { senders: { [DEMO_ADDRESS]: { kind: "mine" }, [DEMO_SAVINGS_ADDRESS]: { kind: "mine" }, [A]: { kind: "mine" } } }
+    const { status, body } = await post(A, { country: "CA", book })
+    assert.equal(status, 503, "only the real wallet is read, and it has no data source here")
+    assert.doesNotMatch(body.error ?? "", /demo wallet can't/)
+    for (const also of [[DEMO_SAVINGS_ADDRESS], [DEMO_ADDRESS]]) assert.equal((await post(A, { country: "CA", also })).status, 400, String(also[0]))
+  })
+
+  it("turns down what it can't read", async () => {
+    assert.equal((await post("demo", {})).status, 400)
+    assert.equal((await post("demo", { country: "FR" })).status, 400)
+    assert.equal((await post("demo", { country: 1 })).status, 400)
+    assert.equal((await post("demo", { country: "CA", method: "lifo" })).status, 400)
+    assert.equal((await post("demo", { country: "CA", method: 1 })).status, 400)
+    assert.equal((await post("demo", { country: "CA", scope: "everything" })).status, 400)
+    assert.equal((await post("demo", { country: "CA", currency: "EUR" })).status, 400)
+    assert.equal((await post("demo", { country: "CA", book: { costs: { x: "nope" } } })).status, 400)
+    assert.equal((await post(A, { country: "CA", also: "nope" })).status, 400)
+    assert.equal((await post(A, { country: "CA", also: [1] })).status, 400)
+    assert.equal((await post(A, { country: "CA", also: ["nope"] })).status, 400)
+    assert.equal((await post(A, { country: "CA", also: Array(21).fill(B) })).status, 400)
+    const senders = Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`0x${i.toString(16).padStart(40, "c")}`, { kind: "mine" }]))
+    assert.equal((await post(A, { country: "CA", book: { senders } })).status, 400)
+  })
+
+  it("fails rather than leave out a wallet the answers named", async () => {
+    assert.equal((await post(A, { country: "CA", book: { senders: { [A]: { kind: "mine" }, [B]: { kind: "mine" } } } })).status, 503)
+  })
+})
+
+describe("POST /api/tax-report on real wallets", () => {
+  // A buys 1 ETH with USDC, then sends it to B. C is someone being watched, who also got some from A.
+  const C = `0x${"c".repeat(40)}`
+  const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+  const row = (block_num: number, tx_hash: string, account: string, side: LegRow["side"], amount: bigint): LegRow => ({ block_num, timestamp: "2026-11-04T00:00:00.000Z", tx_hash, tx_index: 1, log_index: block_num, token: ETH_ADDRESS, account, side, amount: amount.toString(), kind: "eth" })
+  const rows: Record<string, LegRow[]> = {
+    [A]: [row(10, "0x1", A, "credit", E18), { ...row(11, "0x1", A, "debit", 3_000_000_000n), block_num: 10, token: USDC, kind: "erc20" }, { ...row(12, "0x2", A, "debit", E18), counterparty: B }],
+    [B]: [{ ...row(12, "0x2", B, "credit", E18), counterparty: A }, row(14, "0x3", B, "debit", E18 / 2n), { ...row(15, "0x3", B, "credit", 1_600_000_000n), block_num: 14, token: USDC, kind: "erc20" }],
+    [C]: [],
+  }
+  const source: Source = {
+    mode: "raw",
+    startBlock: 1,
+    historyBlocks: null,
+    head: async () => ({ blockNum: 20, timestamp: "2026-11-04T00:00:00.000Z" }),
+    processedThrough: async (_, head) => head,
+    readWindow: async (address) => ({ rows: rows[address] ?? [], priced: null, gasUnknown: [] }),
+    readReferences: async (blocks) => blocks.map((block_num) => ({ blockNum: block_num, ethUsd: "300000000000", usdcUsd: "100000000" })),
+    readLatestReference: async () => ({ blockNum: 20, ethUsd: "400000000000", usdcUsd: "100000000" }),
+    readEthBalances: async () => new Map(),
+    readBalances: async (address, block) => {
+      const amounts: Record<string, string> = Object.fromEntries(ASSETS.map((asset) => [asset, "0"]))
+      for (const r of rows[address] ?? []) {
+        if (r.block_num > block) continue
+        const asset = r.token === USDC ? "USDC" : "ETH"
+        amounts[asset] = (BigInt(amounts[asset] as string) + (r.side === "credit" ? BigInt(r.amount) : -BigInt(r.amount))).toString()
+      }
+      return { blockNum: block, amounts }
+    },
+  }
+  let server: Server
+  let base = ""
+  before(async () => {
+    const handle = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], readBlock: async () => null } })
+    server = createServer((req, res) => void handle(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+  after(() => server.close())
+  const post = async (address: string, body: unknown) => (await (await fetch(`${base}/api/tax-report/${address}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json()) as TaxReportResponse
+  const sale = (report: TaxReportResponse) => eventsOf(report).find((event) => event.Type === "Sold" && event.Wallet === B)
+  const mine = { senders: { [A]: { kind: "mine" }, [B]: { kind: "mine" } } }
+
+  it("without answers, a wallet on its own doesn't know what came to it cost", async () => {
+    const report = await post(B, { country: "US" })
+    assert.deepEqual(report.wallets, [B])
+    assert.deepEqual([sale(report)?.Cost, sale(report)?.Status], ["unknown", "UNRESOLVED"])
+  })
+
+  it("adds the wallets the answers say are the user's, and carries their costs", async () => {
+    for (const country of ["US", "CA"]) {
+      const report = await post(B, { country, book: mine })
+      assert.deepEqual(report.wallets, [B, A], country)
+      assert.deepEqual([sale(report)?.Cost, sale(report)?.Gain, sale(report)?.Status], ["1500.000000", "100.000000", "OK"], country)
+      assert.ok(report.notes.some((note) => /wallets you've said are yours/.test(note)), country)
+    }
+  })
+
+  it("agrees with the portfolio the same answers give", async () => {
+    const report = await post(B, { country: "US", book: mine })
+    const portfolio = (await (await fetch(`${base}/api/portfolio/${B}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method: "fifo", book: mine }) })).json()) as PortfolioResponse
+    assert.equal(portfolio.positions.find((p) => p.asset === "ETH")?.values.realizedMicros, usd(100))
+    assert.equal(sale(report)?.Gain, "100.000000")
+  })
+
+  it("adds them when wallets are typed too, since that says this one is the user's", async () => {
+    const report = await post(C, { country: "US", also: [A], book: { senders: { [B]: { kind: "mine" } } } })
+    assert.deepEqual(report.wallets, [C, A, B])
+  })
+
+  it("on a wallet nobody's said is theirs, reads the answers' wallets for costs and doesn't list them", async () => {
+    const report = await post(C, { country: "US", book: mine })
+    assert.deepEqual(report.wallets, [C])
+    assert.equal(report.rowCount, 0)
+    assert.ok(!report.notes.some((note) => /wallets you've said are yours/.test(note)))
+  })
+
+  it("doesn't let an answered demo wallet in", async () => {
+    const report = await post(A, { country: "US", book: { senders: { [A]: { kind: "mine" }, [DEMO_ADDRESS]: { kind: "mine" }, [DEMO_SAVINGS_ADDRESS]: { kind: "mine" } } } })
+    assert.deepEqual(report.wallets, [A])
   })
 })
 

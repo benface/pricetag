@@ -77,7 +77,7 @@ public struct PricetagClient: PortfolioSource {
 
     /// Reads every wallet in it, so it gets as long as a first read.
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
-        try await get("/api/tax-report/\(request.address)", query: request.queryItems, timeout: .seconds(180))
+        try await decoded(post("/api/tax-report/\(request.address)", body: request.body, timeout: .seconds(180)))
     }
 
     public func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview] {

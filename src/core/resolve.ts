@@ -38,13 +38,27 @@ function moneyIn({ wallet, view }: Side, money: Money, leg: PricedLeg): string |
 function slice(piece: CostPiece, qty: bigint): CostPiece {
   const whole = BigInt(piece.qty)
   const share = (micros: string) => (qty === whole ? BigInt(micros) : (BigInt(micros) * qty) / whole).toString()
-  return { ...piece, qty: qty.toString(), costMicros: piece.costMicros === null ? null : share(piece.costMicros), estimatedCostMicros: share(piece.estimatedCostMicros) }
+  return {
+    ...piece,
+    qty: qty.toString(),
+    costMicros: piece.costMicros === null ? null : share(piece.costMicros),
+    estimatedCostMicros: share(piece.estimatedCostMicros),
+    ...(piece.reportedCostMicros === undefined ? {} : { reportedCostMicros: share(piece.reportedCostMicros) }),
+    ...(piece.atMarketCostMicros === undefined ? {} : { atMarketCostMicros: share(piece.atMarketCostMicros) }),
+  }
 }
 
 /** What's left of a piece after a slice of it is gone. */
 function without(piece: CostPiece, taken: CostPiece): CostPiece {
   const less = (micros: string | null, gone: string | null) => (micros === null ? null : (BigInt(micros) - BigInt(gone as string)).toString())
-  return { ...piece, qty: (BigInt(piece.qty) - BigInt(taken.qty)).toString(), costMicros: less(piece.costMicros, taken.costMicros), estimatedCostMicros: less(piece.estimatedCostMicros, taken.estimatedCostMicros) as string }
+  return {
+    ...piece,
+    qty: (BigInt(piece.qty) - BigInt(taken.qty)).toString(),
+    costMicros: less(piece.costMicros, taken.costMicros),
+    estimatedCostMicros: less(piece.estimatedCostMicros, taken.estimatedCostMicros) as string,
+    ...(piece.reportedCostMicros === undefined ? {} : { reportedCostMicros: less(piece.reportedCostMicros, taken.reportedCostMicros as string) as string }),
+    ...(piece.atMarketCostMicros === undefined ? {} : { atMarketCostMicros: less(piece.atMarketCostMicros, taken.atMarketCostMicros as string) as string }),
+  }
 }
 
 /** Each transfer in a debit, in the order it went. Null when the leg isn't simply that, as when something also came back. */
