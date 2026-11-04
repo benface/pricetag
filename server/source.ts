@@ -211,9 +211,11 @@ export function resolvingSource(query: Query, config: { baseDataset: string; dat
       const allowlist = ERC20_ADDRESSES.map((a) => `X'${hexOf(a)}'`).join(", ")
       const logs: Pick<RawLog, "tx_hash" | "log_index" | "topic1" | "topic2">[] = []
       const txs: Pick<RawTx, "tx_hash" | "from" | "to">[] = []
-      for (const { filter } of blockFilters(counterpartyBlocks(window.rows))) {
+      for (const { filter } of blockFilters(counterpartyBlocks(window.rows, "erc20"))) {
         const logRows = await query<Row>(`SELECT tx_hash, log_index, topic1, topic2 FROM ${base}.logs WHERE ${filter} AND topic0 = X'${TRANSFER_TOPIC}' AND address IN (${allowlist}) AND (topic1 = ${topic} OR topic2 = ${topic})`)
         logs.push(...logRows.map((l) => ({ tx_hash: prefixed(String(l.tx_hash)), log_index: asNumber(l.log_index), topic1: String(l.topic1), topic2: String(l.topic2) })))
+      }
+      for (const { filter } of blockFilters(counterpartyBlocks(window.rows, "eth"))) {
         const txRows = await query<Row>(`SELECT tx_hash, "from", "to" FROM ${base}.transactions WHERE ${filter} AND ("from" = X'${me}' OR "to" = X'${me}') AND value <> '0'`)
         txs.push(...txRows.map((t) => ({ tx_hash: prefixed(String(t.tx_hash)), from: String(t.from), to: t.to == null ? null : String(t.to) })))
       }

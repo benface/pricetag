@@ -308,7 +308,7 @@ describe("proof by a pricing rule", () => {
     const answer = await proof(await legOf("USDC", `?rule=${CAUTIOUS_RULE_ID}`), cautious)
     assert.match(answer.source[0] as string, /Chainlink's USDC\/USD price/)
     assert.ok(answer.source.includes(NOTE))
-    assert.match(NOTE, /1% below Chainlink's price.*Every other price is the same/)
+    assert.match(NOTE, /1% below Chainlink's price.*every other price is the same/)
   })
 
   it("says nothing about a rule when it's the default, asked for or not", async () => {
@@ -355,6 +355,92 @@ async function compareWith(a: Overrides, b: Overrides, { through = [HEAD, HEAD] 
 }
 
 const valueRow = (comparison: RuleComparison) => comparison.rows.find((r) => r.label === "ETH value")!
+
+describe("comparing a token only its trades price", () => {
+  const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
+  const HOLDING = (100n * 10n ** 18n).toString()
+  const USDC_HELD = "1000000000"
+  const LATER = 61
+  const trades = (usdMicros: string): NonNullable<Source["readMarketTrades"]> => async (asset, _from, to) => [1, 2, 3].map((n) => ({ blockNum: to - n, txHash: `0x${n}`, asset, usdMicros, notionalUsdMicros: "500000000" }))
+  // It received 100 AERO in a plain transfer, so a market price is all that values it. It holds them, and 1,000 USDC.
+  const holder = (readMarketTrades: NonNullable<Source["readMarketTrades"]>): Overrides => ({
+    head: async () => ({ blockNum: LATER, timestamp: "2026-11-04T00:00:00.000Z" }),
+    readWindow: async () => ({ rows: [row("0xa", 5, ME, AERO, "credit", HOLDING), row("0xa", 5, ME, USDC_ADDRESS, "credit", USDC_HELD)], priced: null, gasUnknown: [] }),
+    readBalances: async (_, block) => ({ blockNum: block, amounts: { ...Object.fromEntries(ASSETS.map((asset) => [asset, "0"])), AERO: block >= 5 ? HOLDING : "0", USDC: block >= 5 ? USDC_HELD : "0" } }),
+    marketReady: async () => true,
+    readMarketTrades,
+  })
+  const market = holder(trades("1300000"))
+  const cautious = holder(trades("1287000"))
+  const label = (comparison: RuleComparison, name: string) => comparison.rows.find((r) => r.label === name)
+
+  for (const through of [[59, LATER], [LATER, 59]] as [number, number][]) {
+    it(`prices both at the common block when they read either side of a price's bucket, at ${through.join(" and ")}`, async () => {
+      const { status, body } = await compareWith(market, cautious, { through })
+      assert.equal(status, 200)
+      assert.equal(body.blockNum, 59)
+      const none = { aPartial: false, bPartial: false }
+      assert.deepEqual(label(body, "AERO value"), { label: "AERO value", format: "money", a: "130000000", b: "128700000", difference: "-1300000", ...none, aEstimated: true, bEstimated: true })
+      assert.deepEqual(label(body, "Value"), { label: "Value", format: "money", a: "1130000000", b: "1128700000", difference: "-1300000", ...none, aEstimated: true, bEstimated: true })
+      assert.ok(body.warnings.every((w) => !w.startsWith("Market price:") && !w.startsWith("Cautious ETH:")), "both sides say the same")
+    })
+  }
+
+  const leftOut = (body: RuleComparison) => {
+    assert.equal(label(body, "AERO value"), undefined)
+    const value = label(body, "Value")!
+    assert.deepEqual([value.a, value.b, value.difference], ["1000000000", "1000000000", "0"], "only what both can value")
+    assert.deepEqual([value.aPartial, value.bPartial], [true, true])
+    assert.ok(body.warnings.some((w) => w.includes("AERO (no current price)")))
+    assert.ok(body.warnings.every((w) => !w.startsWith("Market price:") && !w.startsWith("Cautious ETH:")), "both sides say the same")
+  }
+  const thin: NonNullable<Source["readMarketTrades"]> = async () => []
+  const failing: NonNullable<Source["readMarketTrades"]> = async () => {
+    throw new Error("no")
+  }
+
+  it("leaves a token out on both sides when the other rule's trades don't back a price", async () => {
+    const { status, body } = await compareWith(market, holder(thin))
+    assert.equal(status, 200)
+    leftOut(body)
+    assert.equal(body.changedTxs, 0)
+  })
+
+  it("leaves a token out on both sides when the first rule has no price and the other does", async () => {
+    const { status, body } = await compareWith(holder(thin), cautious)
+    assert.equal(status, 200)
+    leftOut(body)
+    assert.equal(body.changedTxs, 0)
+  })
+
+  it("leaves a token out on both sides when one rule's read of it fails", async () => {
+    const { status, body } = await compareWith(market, holder(failing))
+    assert.equal(status, 200)
+    leftOut(body)
+    assert.equal(body.changedTxs, 0)
+  })
+
+  it("a price only one rule has for what moved isn't a change in its cost", async () => {
+    // AERO for DEGEN, with no feed on either side, so what left is worth its market price, and that's what DEGEN cost.
+    const DEGEN = "0x4ed4e862860bed51a9570b96d89af5e1b0efefed"
+    const swap: Overrides = { readWindow: async () => ({ rows: [row("0xa", 5, ME, AERO, "credit", HOLDING), row("0xb", 7, ME, AERO, "debit", HOLDING), row("0xb", 7, ME, DEGEN, "credit", HOLDING)], priced: null, gasUnknown: [] }) }
+    const onlyTheHead: NonNullable<Source["readMarketTrades"]> = async (asset, from, to) => (to === 0 ? [] : trades("1287000")(asset, from, to))
+    const both = await compareWith({ ...market, ...swap }, { ...cautious, ...swap }, { through: [59, 59] })
+    assert.equal(both.status, 200)
+    assert.equal(both.body.changedTxs, 1, "both have one, so this is the rule")
+    const { status, body } = await compareWith({ ...market, ...swap }, { ...holder(onlyTheHead), ...swap }, { through: [59, 59] })
+    assert.equal(status, 200)
+    assert.equal(body.changedTxs, 0)
+    assert.equal(label(body, "DEGEN cost"), undefined)
+  })
+
+  it("says the same when neither rule has a market for it", async () => {
+    const { status, body } = await compareWith(holder(thin), holder(thin))
+    assert.equal(status, 200)
+    assert.equal(label(body, "AERO value"), undefined)
+    assert.ok(body.warnings.every((w) => !w.startsWith("Market price:") && !w.startsWith("Cautious ETH:")))
+  })
+})
 
 describe("comparing only ever shows the rule", () => {
   it("compares at the older block when one rule is behind", async () => {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { portfolioOf } from "../server/portfolio.ts"
 import { USD_CONTEXT, explainMetric } from "../src/core/explain.ts"
-import { createWallets, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
+import { createWallets, sharedMarket, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
 import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, foldWallet, shortHash, type FeedRound, type LegRow, type Reference } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
@@ -695,8 +695,8 @@ describe("current prices from the token feeds", () => {
     await b.get(ME)
     const facts = (await a.factsAt(ME, 995, { withBalances: false }))!
     const eth = (usd: string) => ({ ETH: { micros: usd, source: "oracle" as const, blockNum: 995 } })
-    assert.equal(a.pricedOn(ME, facts, eth("2400000000"))!.prices.wstETH?.micros, "3000000000")
-    assert.equal(b.pricedOn(ME, facts, eth("2000000000"))!.prices.wstETH?.micros, "2500000000", "the other rule's read failed, and the facts still say this")
+    assert.equal(a.pricedOn(ME, facts, eth("2400000000"), await a.marketOn(ME, facts, eth("2400000000")))!.prices.wstETH?.micros, "3000000000")
+    assert.equal(b.pricedOn(ME, facts, eth("2000000000"), await b.marketOn(ME, facts, eth("2000000000")))!.prices.wstETH?.micros, "2500000000", "the other rule's read failed, and the facts still say this")
   })
 
   it("reads a comparison's feeds at its own block, not at what the last refresh read", async () => {
@@ -710,7 +710,7 @@ describe("current prices from the token feeds", () => {
     await wallets.get(ME)
     const facts = (await wallets.factsAt(ME, 985, { withBalances: false }))!
     assert.deepEqual(reads, [[["AERO"], 990], [["AERO"], 960]], "the bucket at or before 985")
-    assert.deepEqual(wallets.pricedOn(ME, facts, {})!.prices.AERO, { micros: "630000", source: "oracle", blockNum: 960 })
+    assert.deepEqual(wallets.pricedOn(ME, facts, {}, await wallets.marketOn(ME, facts, {}))!.prices.AERO, { micros: "630000", source: "oracle", blockNum: 960 })
   })
 
   it("isn't \"no market\" when a comparison's feed read fails or is too old", async () => {
@@ -726,10 +726,31 @@ describe("current prices from the token feeds", () => {
     assert.equal((await wallets.get(ME)).marketChecked, true)
     for (const [through, broken] of [[985, "fail"], [955, "old"]] as const) {
       answer = broken
-      const compared = wallets.pricedOn(ME, (await wallets.factsAt(ME, through, { withBalances: false }))!, {})!
+      const facts = (await wallets.factsAt(ME, through, { withBalances: false }))!
+      const compared = wallets.pricedOn(ME, facts, {}, await wallets.marketOn(ME, facts, {}))!
       assert.equal(compared.prices.AERO, undefined, broken)
       assert.equal(compared.marketChecked, false, broken)
     }
+  })
+
+  it("doesn't read a market price for a comparison when the feed has one, and falls back to it when not", async () => {
+    let answer = "63000000"
+    const { source, marketReads } = feedFake([held(950, AERO)], {}, {
+      async readFeedRounds(_, block) {
+        return { AERO: round(answer, block) }
+      },
+    })
+    const wallets = createWallets(source, headAt(1000), noFees)
+    await wallets.get(ME)
+    const before = marketReads.length
+    const priced = (await wallets.factsAt(ME, 995, { withBalances: false }))!
+    const usingFeed = await wallets.marketOn(ME, priced, {})
+    assert.equal(marketReads.length, before, "only the movement's bucket, already read")
+    assert.equal(wallets.pricedOn(ME, priced, {}, usingFeed)!.prices.AERO?.source, "oracle")
+    answer = "1"
+    const rejected = (await wallets.factsAt(ME, 985, { withBalances: false }))!
+    const usingMarket = await wallets.marketOn(ME, rejected, {})
+    assert.equal(wallets.pricedOn(ME, rejected, {}, usingMarket)!.prices.AERO?.source, "market")
   })
 
   it("reads a stalled wallet's feeds at the head, so its price keeps moving and can go old", async () => {
@@ -981,14 +1002,49 @@ describe("market prices, notes and unlisted tokens", () => {
     await a.get(ME)
     await b.get(ME)
     const facts = (await a.factsAt(ME, 995, { withBalances: false }))!
-    const [byA, byB] = [a.pricedOn(ME, facts, {})!, b.pricedOn(ME, facts, {})!]
+    const [marketA, marketB] = [await a.marketOn(ME, facts, {}), await b.marketOn(ME, facts, {})]
+    assert.deepEqual([marketB.priced.size, marketB.checked], [0, false])
+    const [byA, byB] = [a.pricedOn(ME, facts, {}, marketA)!, b.pricedOn(ME, facts, {}, marketB)!]
     assert.deepEqual([byA.prices.AERO?.source, byA.marketChecked], ["market", true])
     assert.deepEqual([byB.prices.AERO, byB.marketChecked], [undefined, false])
     assert.deepEqual(byA.legs.find((l) => l.asset === "AERO")?.priceSource, "market")
     assert.deepEqual(byB.legs.find((l) => l.asset === "AERO")?.priceSource, null)
     const older = (await a.factsAt(ME, 960, { withBalances: false }))!
-    assert.equal(a.pricedOn(ME, older, {})!.prices.AERO, undefined, "a price from after that block would be the wrong one")
+    const atOlder = a.pricedOn(ME, older, {}, await a.marketOn(ME, older, {}))!
+    assert.ok(atOlder.prices.AERO!.blockNum <= 960, "a price from after that block would be the wrong one")
     assert.deepEqual(older.notes, [], "nor a note from after it")
+  })
+
+  it("reads a market price for the block it's asked about, when the wallet was read in another bucket", async () => {
+    const { source, reads } = marketFake(new Map([[950, [aeroRow(950)]]]), {})
+    const wallets = createWallets(source, headAt(1000), noFees)
+    await wallets.get(ME)
+    const facts = (await wallets.factsAt(ME, 985, { withBalances: false }))!
+    reads.length = 0
+    const market = await wallets.marketOn(ME, facts, {})
+    assert.deepEqual(reads.map(([asset, , to]) => [asset, to]), [["AERO", 960]])
+    assert.equal(market.checked, true)
+    assert.ok(market.priced.has("AERO:960"))
+    assert.equal(wallets.pricedOn(ME, facts, {}, market)!.prices.AERO?.source, "market")
+  })
+
+  it("uses only the market prices it's given, for what's held and for what moved", async () => {
+    const { source } = marketFake(new Map([[950, [aeroRow(950)]]]), {})
+    const wallets = createWallets(source, headAt(1000), noFees)
+    await wallets.get(ME)
+    const facts = (await wallets.factsAt(ME, 995, { withBalances: false }))!
+    await wallets.marketOn(ME, facts, {})
+    const wallet = wallets.pricedOn(ME, facts, {}, { priced: new Set(), checked: false })!
+    assert.equal(wallet.prices.AERO, undefined)
+    assert.equal(wallet.legs.find((l) => l.asset === "AERO")?.priceMicros, null)
+    assert.equal(wallet.marketChecked, false, "a token left out for this has a market")
+  })
+
+  it("two rules share a market price only when both have it", () => {
+    const one = { priced: new Set(["AERO:0", "DEGEN:0"]), checked: true }
+    assert.deepEqual(sharedMarket(one, one), { priced: new Set(["AERO:0", "DEGEN:0"]), checked: true })
+    assert.deepEqual(sharedMarket(one, { priced: new Set(["AERO:0"]), checked: true }), { priced: new Set(["AERO:0"]), checked: false })
+    assert.deepEqual(sharedMarket({ priced: new Set(), checked: true }, { priced: new Set(), checked: false }), { priced: new Set(), checked: false })
   })
 
   it("looks for notes only in transactions with nothing but gas, and passes along what it finds", async () => {
@@ -1226,7 +1282,8 @@ describe("settling unwrap credits", () => {
       await a.get(ME)
       await b.get(ME)
       const facts = (await a.factsAt(ME, 995, { withBalances: false }))!
-      const sales = [a.pricedOn(ME, facts, {})!, b.pricedOn(ME, facts, {})!].map((wallet) => wallet.legs.find((l) => l.asset === "cbBTC")!)
+      const noMarket = { priced: new Set<string>(), checked: true }
+      const sales = [a.pricedOn(ME, facts, {}, noMarket)!, b.pricedOn(ME, facts, {}, noMarket)!].map((wallet) => wallet.legs.find((l) => l.asset === "cbBTC")!)
       assert.deepEqual(sales.map((l) => [l.proceedsMicros, l.unsettledCredit]), [[WHOLE, undefined], [WHOLE, undefined]])
     })
 
