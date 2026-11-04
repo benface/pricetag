@@ -378,7 +378,7 @@ export const missingWallets = (book: Book, focus: string, read: readonly WalletR
 }
 
 /** What a different set of answers would make the headline say, before any of them is final. */
-export function previewBook(focus: WalletResponse, others: readonly WalletResponse[], method: Method, book: Book): BookPreview {
+export function previewBook(focus: WalletResponse, others: readonly WalletResponse[], method: Method, book: Book, failed: readonly string[] = []): BookPreview {
   const { totals, pnlStatus: status, questions } = foldBook(focus, others, method, book)
-  return { pnlMicros: totals.pnlMicros, pnlStatus: status, estimatedMicros: totals.estimatedMicros, unresolvedMicros: totals.unresolvedMicros, open: questions.length, pending: missingWallets(book, focus.address, others).length > 0 }
+  return { pnlMicros: totals.pnlMicros, pnlStatus: status, estimatedMicros: totals.estimatedMicros, unresolvedMicros: totals.unresolvedMicros, open: questions.length, pending: missingWallets(book, focus.address, others).length > 0, failed: linkedWallets(book).some((address) => failed.includes(address)) }
 }

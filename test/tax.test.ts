@@ -154,6 +154,24 @@ describe("taxRows", () => {
     assert.deepEqual([row?.status, row?.gainMicros], ["estimated", usd(1000)])
   })
 
+  it("marks a trade valued from the market as estimated, in what was paid and what was received", () => {
+    // 100 AERO bought for $100, traded for 100 VIRTUAL worth an estimated $100, then sold for $150.
+    const legs = [
+      leg(10, 100n * E18, { asset: "AERO", id: "a", costMicros: usd(100), costLabel: "paid" }),
+      leg(20, -100n * E18, { asset: "AERO", id: "b", proceedsMicros: usd(100), estimated: true }),
+      leg(20, 100n * E18, { asset: "VIRTUAL", id: "c", kind: "swap", costMicros: usd(100), costLabel: "paid", estimated: true }),
+      leg(30, -100n * E18, { asset: "VIRTUAL", id: "d", proceedsMicros: usd(150) }),
+    ]
+    const rows = taxRows([walletOf(A, legs, { balances: { blockNum: 1000, amounts: { AERO: "0", VIRTUAL: "0" } } })], { method: "fifo", scope: "per-wallet" })
+    assert.deepEqual(rows.map((row) => [row.asset, row.status, row.gainMicros]), [["AERO", "estimated", usd(0)], ["VIRTUAL", "estimated", usd(50)]])
+  })
+
+  it("doesn't call a real cost estimated because it was mixed with another real one", () => {
+    const legs = [buy(10, 1n, 1000), leg(20, E18, { costMicros: usd(1000), costLabel: "self-reported" }), sell(30, 1n, 2000)]
+    const [row] = taxRows([walletOf(A, legs, { balances: { blockNum: 1000, amounts: { ETH: E18.toString() } } })], { method: "average", scope: "per-wallet" })
+    assert.equal(row?.status, "resolved")
+  })
+
   describe("across wallets", () => {
     // A buys, moves it to B, and B sells.
     const move = 20

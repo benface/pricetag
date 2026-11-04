@@ -210,6 +210,49 @@ describe("the portfolio endpoint with linked wallets", () => {
     assert.equal(response.status, 400)
   })
 
+  describe("a linked wallet that can't be read", () => {
+    let broken = true
+    const flaky: Source = {
+      ...source,
+      readWindow: async (address) => {
+        if (address === HOT && broken) throw new Error("nope")
+        return { rows: rows[address] ?? [], priced: null, gasUnknownTxs: [] }
+      },
+    }
+    let other: Server
+    let url: string
+    before(async () => {
+      const api = createApi({}, { source: flaky, readRates: async () => ({ byBlock: {}, latest: null }) })
+      other = createServer((req, res) => void api(req, res))
+      await new Promise<void>((resolve) => other.listen(0, "127.0.0.1", resolve))
+      url = `http://127.0.0.1:${(other.address() as AddressInfo).port}`
+    })
+    after(() => other.close())
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 50))
+    const post = async (path: string, body: unknown) => (await fetch(`${url}/api/portfolio/${COLD}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json()
+
+    it("says it's reading at first, then that it failed, then recovers", async () => {
+      const first = (await post("", { method: "average", linked: [HOT] })) as PortfolioResponse
+      assert.deepEqual([first.linkedReading, first.linkedFailed], [[HOT], []], "a first read doesn't hold up the number")
+      assert.equal(first.positions.find((p) => p.asset === "ETH")?.values.costMicros, null)
+      await settle()
+
+      const second = (await post("", { method: "average", linked: [HOT] })) as PortfolioResponse
+      assert.deepEqual([second.linkedReading, second.linkedFailed], [[], [HOT]], "it isn't still reading: it failed")
+      assert.equal(second.meter.waiting, 1, "so nothing's balanced")
+      assert.equal(second.positions.find((p) => p.asset === "ETH")?.values.costMicros, null, "and the cost stays unknown")
+      const previews = (await post("/preview", { method: "average", linked: [HOT], candidates: [{}] })) as { previews: { failed: boolean; pending: boolean }[] }
+      assert.deepEqual(previews.previews.map((p) => [p.failed, p.pending]), [[true, true]])
+
+      broken = false
+      await post("", { method: "average", linked: [HOT] })
+      await settle()
+      const third = (await post("", { method: "average", linked: [HOT] })) as PortfolioResponse
+      assert.deepEqual([third.linkedReading, third.linkedFailed, third.meter.waiting], [[], [], 0])
+      assert.equal(third.positions.find((p) => p.asset === "ETH")?.values.costMicros, "3000000000")
+    })
+  })
+
   it("ignores the wallet itself in the list", async () => {
     assert.equal((await eth(`?linked=${COLD},${HOT}`))?.values.costMicros, "3000000000")
   })

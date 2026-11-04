@@ -189,6 +189,9 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
     }
   }
 
+  /** Linked wallets whose last read failed, so a client can say so rather than go on saying it's reading. Each request tries again. */
+  const linkedFailures = new Set<string>()
+
   /**
    * The linked wallets already read, in `currency`. Never waits on a first read, because it can take a while and a number
    * shouldn't: it starts the read, and what came from that wallet stays unresolved until the next request finds it.
@@ -200,7 +203,13 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
       if (address === focus.toLowerCase()) continue
       let wallet = address === DEMO_ADDRESS ? DEMO_WALLET : demoWallet(address)
       if (!wallet && wallets) {
-        void wallets.get(address).catch((error: unknown) => console.error("Linked wallet read failed:", describeError(error)))
+        void wallets.get(address).then(
+          () => linkedFailures.delete(address),
+          (error: unknown) => {
+            console.error("Linked wallet read failed:", describeError(error))
+            linkedFailures.add(address)
+          },
+        )
         wallet = wallets.peek(address)
       }
       if (!wallet) continue
@@ -252,14 +261,14 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
     const others = await linkedOf(wallet.address, linkedBooks, currency, res)
     if (!others) return
 
-    if (action === "preview") return sendJson(res, 200, { previews: linkedBooks.map((candidate) => previewBook(wallet, others, method, candidate)) })
+    if (action === "preview") return sendJson(res, 200, { previews: linkedBooks.map((candidate) => previewBook(wallet, others, method, candidate, [...linkedFailures])) })
     if (action === "export") {
       const { positions, view } = foldBook(wallet, others, method, linkedBooks[0] as Book)
       res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" })
       res.end(exportCsv(positions, view.currency))
       return
     }
-    if (!target) return sendJson(res, 200, portfolioOf(wallet, method, others, linkedBooks[0]))
+    if (!target) return sendJson(res, 200, portfolioOf(wallet, method, others, linkedBooks[0], [...linkedFailures]))
     const explanation = explainPortfolio(wallet, method, target, others, linkedBooks[0])
     if (explanation) sendJson(res, 200, explanation)
     else sendJson(res, 404, { error: "This wallet has nothing like that." })

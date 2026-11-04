@@ -667,5 +667,6 @@
     "waiting": 0
   },
   "linkedReading": [],
+  "linkedFailed": [],
   "marketChecked": true
 }

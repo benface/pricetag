@@ -130,7 +130,7 @@ actor BookSource: PortfolioSource {
         let model = ResolveModel(store: store)
         let first = try #require(model.current)
         #expect(first.id == portfolio.questions[0].id)
-        await source.answerPreviews([BookPreview(pnlMicros: "12400000", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false), BookPreview(pnlMicros: nil, pnlStatus: .unavailable, estimatedMicros: "0", unresolvedMicros: "5000000", open: 1, pending: false)])
+        await source.answerPreviews([BookPreview(pnlMicros: "12400000", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false, failed: false), BookPreview(pnlMicros: nil, pnlStatus: .unavailable, estimatedMicros: "0", unresolvedMicros: "5000000", open: 1, pending: false, failed: false)])
         await model.loadPreviews()
         #expect(model.previews[.mine].map { Wording.consequence($0, .USD) } == "+$12.40")
         #expect(model.previews[.someoneElse].map { Wording.consequence($0, .USD) } == "PnL still unavailable")
@@ -156,7 +156,7 @@ actor BookSource: PortfolioSource {
         #expect(model.isAskingCost)
         #expect(store.book.senders[try #require(first.sender)]?.kind == .myExchange)
         #expect(!model.enterCost(["USDC": "nope"]), "not an amount")
-        await source.answerPreviews([BookPreview(pnlMicros: "1000000", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false)])
+        await source.answerPreviews([BookPreview(pnlMicros: "1000000", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false, failed: false)])
         await model.previewCost(["USDC": "$1,234.50"])
         #expect(model.costPreview.map { Wording.consequence($0, .USD) } == "+$1.00")
         #expect(store.book.senders[try #require(first.sender)]?.costs == nil, "typing isn't answering")
@@ -225,11 +225,15 @@ actor BookSource: PortfolioSource {
     }
 
     @Test func aPendingPreviewSaysSo() {
-        #expect(Wording.consequence(BookPreview(pnlMicros: nil, pnlStatus: .unavailable, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: true), .USD) == "Reading that wallet…")
+        #expect(Wording.consequence(BookPreview(pnlMicros: nil, pnlStatus: .unavailable, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: true, failed: false), .USD) == "Reading that wallet…")
+    }
+
+    @Test func aFailedPreviewSaysSoRatherThanReading() {
+        #expect(Wording.consequence(BookPreview(pnlMicros: nil, pnlStatus: .unavailable, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: true, failed: true), .USD) == "Couldn't read that wallet")
     }
 
     @Test func aPartlyEstimatedOrUnresolvedConsequenceSaysSo() {
-        #expect(Wording.consequence(BookPreview(pnlMicros: "1000000", pnlStatus: .partial, estimatedMicros: "5", unresolvedMicros: "45000000", open: 1, pending: false), .USD) == "≈+$1.00 · $45.00 unresolved")
+        #expect(Wording.consequence(BookPreview(pnlMicros: "1000000", pnlStatus: .partial, estimatedMicros: "5", unresolvedMicros: "45000000", open: 1, pending: false, failed: false), .USD) == "≈+$1.00 · $45.00 unresolved")
     }
 
     @Test func aCostInCADIsKeptInCAD() async throws {

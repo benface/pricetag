@@ -231,6 +231,8 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let meter: Meter
     /// Linked wallets that aren't read yet, so what came from them shows as unresolved for now.
     public let linkedReading: [String]
+    /// Linked wallets whose last read failed. It's tried again with each read, and what they sent stays unresolved or out of date until it works.
+    public let linkedFailed: [String]
     public let marketChecked: Bool
 
     /// What the holdings table lists. Tokens with no market go in a group of their own, so real warnings stay noticeable.
@@ -374,6 +376,8 @@ public struct BookPreview: Codable, Sendable, Equatable {
     public let open: Int
     /// A wallet these answers link hasn't been read yet, so this can't say yet.
     public let pending: Bool
+    /// A wallet these answers link couldn't be read.
+    public let failed: Bool
 }
 
 /// A withdrawal found in an exchange's history, with what it cost.

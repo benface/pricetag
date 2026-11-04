@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import type { Method } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "../core/api.ts"
-import { answerSender, enterExchangeCosts, linkMessage, type Book, type Money, type SenderAnswer } from "../core/book.ts"
+import { answerSender, enterExchangeCosts, linkMessage, linkedWallets, type Book, type Money, type SenderAnswer } from "../core/book.ts"
 import type { CurrencyCode } from "../core/currency.ts"
 import { parseCoinbaseCsv } from "../core/exchange-import.ts"
 import { formatAmount, formatMoney, formatSignedMoney, shortHash } from "../core/format.ts"
 import { foldBook, isBalanced, previewBook, type Question } from "../core/resolve.ts"
+import { linkedFailedSentence } from "../core/wording.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
 
@@ -31,7 +32,7 @@ const pnlWords = (pnl: string | null, estimated: string, unresolved: string, cur
   return BigInt(unresolved) > 0n ? `${number} · ${formatMoney(unresolved, currency)} unresolved` : number
 }
 
-const consequence = (preview: BookPreview, currency: CurrencyCode) => (preview.pending ? "Reading that wallet…" : preview.pnlMicros === null ? "PnL still unavailable" : pnlWords(preview.pnlMicros, preview.estimatedMicros, preview.unresolvedMicros, currency))
+const consequence = (preview: BookPreview, currency: CurrencyCode) => (preview.failed ? "Couldn't read that wallet" : preview.pending ? "Reading that wallet…" : preview.pnlMicros === null ? "PnL still unavailable" : pnlWords(preview.pnlMicros, preview.estimatedMicros, preview.unresolvedMicros, currency))
 
 /** A typed cost next to what it was worth, to catch a slip. It's only ever a warning: what someone paid is theirs to say. */
 function looksOff(entered: string | null, value: string | null): boolean {
@@ -41,6 +42,9 @@ function looksOff(entered: string | null, value: string | null): boolean {
 }
 
 type Props = {
+  /** Wallets whose last read failed. */
+  failed: readonly string[]
+  onRetry: () => void
   wallet: WalletResponse
   others: readonly WalletResponse[]
   method: Method
@@ -56,7 +60,7 @@ type Props = {
 }
 
 /** "Who's this?": one card at a time, with swipes, keys or taps. Each answer shows what it does before you pick it. */
-export function ResolvePanel({ wallet, others, method, book, firstAsset, onChange, onUndo, canUndo, onCurrentSender, onClose }: Props) {
+export function ResolvePanel({ wallet, others, failed, onRetry, method, book, firstAsset, onChange, onUndo, canUndo, onCurrentSender, onClose }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set())
   const [asking, setAsking] = useState(false)
@@ -86,7 +90,8 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
   const current = questions[0] ?? null
   const sender = current?.sender ?? null
   const takingCost = current !== null && (current.kind === "cost" || asking || current.needsCost)
-  const balanced = isBalanced(fold.meter)
+  const linkedFailed = failed.filter((address) => linkedWallets(book).includes(address))
+  const balanced = isBalanced(fold.meter) && linkedFailed.length === 0
   const progress = fold.meter.open + fold.meter.answered === 0 ? 1 : fold.meter.answered / (fold.meter.open + fold.meter.answered)
 
   useEffect(() => onCurrentSender(sender), [sender, onCurrentSender])
@@ -109,9 +114,9 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
   }
   const previews = useMemo(() => {
     if (!sender || takingCost) return null
-    const preview = (kind: "mine" | "someone-else") => previewBook(wallet, others as WalletResponse[], method, answerSender(book, wallet.address, sender, { kind }))
+    const preview = (kind: "mine" | "someone-else") => previewBook(wallet, others as WalletResponse[], method, answerSender(book, wallet.address, sender, { kind }), failed)
     return { mine: preview("mine"), "someone-else": preview("someone-else") }
-  }, [sender, takingCost, wallet, others, method, book])
+  }, [sender, takingCost, wallet, others, method, book, failed])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -215,7 +220,7 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
                   <input autoFocus inputMode="decimal" placeholder="$0.00" value={costs[arrival.asset] ?? ""} onChange={(e) => setCosts({ ...costs, [arrival.asset]: e.target.value })} />
                 </label>
               ))}
-              {costBook ? <p className="small">That would make it {consequence(previewBook(wallet, others as WalletResponse[], method, costBook), currency)}</p> : null}
+              {costBook ? <p className="small">That would make it {consequence(previewBook(wallet, others as WalletResponse[], method, costBook, failed), currency)}</p> : null}
               {current.arrivals.length === 1 && looksOff(microsOf(costs[(current.arrivals[0] as { asset: string }).asset] ?? ""), current.valueMicros) ? <p className="small warn-text">⚠ That's far from what it was worth when it arrived, about {formatMoney(current.valueMicros as string, currency)}. Double-check it.</p> : null}
               <div className="cost-actions">
                 <button type="button" onClick={saveCost}>
@@ -253,7 +258,15 @@ export function ResolvePanel({ wallet, others, method, book, firstAsset, onChang
       ) : (
         <div className="finish">
           <div className={balanced ? "seal done" : "seal"}>{balanced ? "✓" : "…"}</div>
-          {fold.meter.waiting > 0 ? <p className="small muted">Still reading your other {fold.meter.waiting === 1 ? "wallet" : "wallets"}. What came from {fold.meter.waiting === 1 ? "it" : "them"} stays unresolved until that's done.</p> : null}
+          {linkedFailed.length > 0 ? (
+            <>
+              <p className="small warn-text">⚠ {linkedFailedSentence(linkedFailed.length)}</p>
+              <button type="button" onClick={onRetry}>
+                Try again
+              </button>
+            </>
+          ) : null}
+          {fold.meter.waiting > linkedFailed.length ? <p className="small muted">Still reading your other {fold.meter.waiting === 1 ? "wallet" : "wallets"}. What came from {fold.meter.waiting === 1 ? "it" : "them"} stays unresolved until that's done.</p> : null}
           {fold.totals.excluded.length > 0 ? <p className="small muted">Every question's answered. What's left isn't a question, like a balance that doesn't match the chain.</p> : null}
           {skipped.size > 0 ? (
             <>

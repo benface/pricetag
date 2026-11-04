@@ -188,7 +188,7 @@ public final class HotWallet {
         guard let address else { return }
         let linked = linkedWallets.filter { $0 != address.lowercased }
         do {
-            // Always USD, like the cap and the balances it's compared with. No answers: a sweep only moves gains that are facts, not estimates.
+            // Always USD, like the cap and the balances it's compared with. No answers: what someone said about a cost shouldn't move money by itself. `pendingGain` keeps estimates out too.
             let portfolio = try await portfolioSource().portfolio(address: address.lowercased, method: costMethod(), currency: .USD, linked: linked, book: Book(), timeout: .seconds(180))
             guard !Task.isCancelled, address == self.address else { return }
             self.portfolio = portfolio
@@ -328,8 +328,11 @@ public final class HotWallet {
         onLinkedWalletsChange?(linkedWallets)
     }
 
+    /// Only a gain that's all there and all fact gets swept by itself: never one that rests on an estimate, or on a wallet that couldn't be read.
     private func pendingGain(address: EthereumAddress) -> UInt128 {
-        guard let totals = portfolio?.totals, totals.coverage.realized.missing == 0, let text = totals.realizedMicros, let realized = UInt128(text) else { return 0 }
+        guard let portfolio, portfolio.linkedReading.isEmpty, portfolio.linkedFailed.isEmpty else { return 0 }
+        let totals = portfolio.totals
+        guard totals.coverage.realized.missing == 0, !totals.estimated.realized, let text = totals.realizedMicros, let realized = UInt128(text) else { return 0 }
         return realized.subtractingClamped(state.sweptGains[address].flatMap { UInt128($0) } ?? 0)
     }
 

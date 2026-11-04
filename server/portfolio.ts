@@ -3,7 +3,7 @@
 
 import { TOKENS, type LegEffect, type Method, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
-import { emptyBook, type Book } from "../src/core/book.ts"
+import { emptyBook, linkedWallets, type Book } from "../src/core/book.ts"
 import type { CurrencyCode, WalletView } from "../src/core/currency.ts"
 import { describeConversion, describeEffect, describeNetting, explainTarget, rateSource, type ExplainContext, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
 import { foldBook, missingWallets, type Question } from "../src/core/resolve.ts"
@@ -48,8 +48,10 @@ function outgoingTxsOf(wallet: WalletResponse): string[] {
 /** What a portfolio goes by without any answers: the wallets it's read with are the user's own, and that's all it knows. */
 const linkingTo = (others: readonly WalletResponse[]): Book => ({ ...emptyBook(), linked: others.map((other) => other.address.toLowerCase()) })
 
-export function portfolioOf(wallet: WalletResponse, method: Method, others: readonly WalletResponse[] = [], book: Book = linkingTo(others)): PortfolioResponse {
+export function portfolioOf(wallet: WalletResponse, method: Method, others: readonly WalletResponse[] = [], book: Book = linkingTo(others), failed: readonly string[] = []): PortfolioResponse {
   const { view, positions, unread, totals, pnlStatus, points, questions, meter } = foldBook(wallet, others, method, book)
+  const missing = missingWallets(book, wallet.address, others)
+  const linkedFailed = linkedWallets(book).filter((address) => failed.includes(address))
   return {
     address: wallet.address,
     mode: wallet.mode,
@@ -72,8 +74,10 @@ export function portfolioOf(wallet: WalletResponse, method: Method, others: read
     pnlStatus,
     points,
     questions,
-    meter,
-    linkedReading: missingWallets(book, wallet.address, others),
+    // A wallet that fails on a later read leaves what it sent out of date, so nothing's balanced until it's back.
+    meter: { ...meter, waiting: new Set([...missing, ...linkedFailed]).size },
+    linkedReading: missing.filter((address) => !linkedFailed.includes(address)),
+    linkedFailed,
     marketChecked: wallet.marketChecked,
   }
 }

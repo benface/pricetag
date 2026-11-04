@@ -94,6 +94,10 @@ export function networkFeeUnknownSentence(count: number): string {
   return `Couldn't read the network fee of ${count} ${count === 1 ? "transaction" : "transactions"} yet, so fees paid are too low, and ETH's PnL is unavailable until they're read.`
 }
 
+export function linkedFailedSentence(count: number): string {
+  return count === 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : `Couldn't read ${count} of your other wallets, so what came from them may show as unresolved.`
+}
+
 export function feesUnknownSentence(count: number): string {
   return `Network fees couldn't be worked out for ${count} ${count === 1 ? "transaction" : "transactions"}, so the network fees shown are too low.`
 }

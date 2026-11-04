@@ -359,6 +359,7 @@ describe("wording", () => {
     stale: wording.staleSentence("Nov 4 at 5:40 AM"),
     feedDetail: [wording.feedDetail("demo", 1000), wording.feedDetail("raw", 1000), wording.feedDetail("dataset", 1000)],
     pnlHelp: ["Total PnL", "AERO: Realized PnL", "Transaction 0x1234…abcd"].map((text) => ({ text, help: wording.pnlHelp(text) ?? null })),
+    linkedFailed: [1, 2].map((count) => ({ count, text: wording.linkedFailedSentence(count) })),
     sentences: {
       methodName: wording.METHOD_NAME,
       methodHelp: wording.METHOD_HELP,

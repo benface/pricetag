@@ -151,7 +151,7 @@ function addLot(method: Method, lots: readonly Lot[], lot: Lot): Lot[] {
 
 function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
   const dated = leg.blockNum === undefined ? {} : { acquiredBlock: leg.blockNum, acquiredAt: leg.timestamp as string }
-  const estimated = leg.estimated && leg.costMicros !== null ? leg.costMicros : "0"
+  const estimated = (leg.estimated || leg.costLabel === "received at market") && leg.costMicros !== null ? leg.costMicros : "0"
   // A piece with its own date got it from the wallet that first acquired it. Any other was acquired here and now.
   const pieces = leg.pieces?.map((piece) => ({ ...dated, ...piece })) ?? [{ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...dated }]
   return pieces.reduce<Lot[]>((lots, piece) => addLot(state.method, lots, lotOf(piece, leg.id)), state.lots)

@@ -28,6 +28,7 @@ import {
   excludedSentence,
   feedDetail,
   feesUnknownSentence,
+  linkedFailedSentence,
   networkFeeUnknownSentence,
   staleSentence,
 } from "../core/wording.ts"
@@ -189,7 +190,8 @@ export function App() {
   const [resolving, setResolving] = useState<{ asset: string | null } | null>(null)
   const [cardSender, setCardSender] = useState<string | null>(null)
   const wanted = useMemo(() => [...new Set([...linkedWallets(book), ...(cardSender ? [cardSender] : [])])].filter((a) => a !== wallet?.address), [book, cardSender, wallet?.address])
-  const others = useOtherWallets(wanted, chosenCurrency, wallet?.latest.blockNum ?? null)
+  const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, wallet?.latest.blockNum ?? null)
+  const linkedFailed = useMemo(() => failed.filter((address) => linkedWallets(book).includes(address)), [failed, book])
 
   useEffect(() => {
     const onPop = () => {
@@ -310,6 +312,14 @@ export function App() {
           {wallet.mode === "demo" ? <p className="notice">{DEMO_NOTICE}</p> : null}
           {hasStarted(wallet) ? <p className="notice">{coverageSentence(wallet.coverage, TOKENS.length - 1, wallet.openingUnread.length > 0)}</p> : null}
           {wallet.gasUnknownTxs.length > 0 ? <p className="notice warn">⚠ {feesUnknownSentence(wallet.gasUnknownTxs.length)}</p> : null}
+          {linkedFailed.length > 0 ? (
+            <p className="notice warn">
+              ⚠ {linkedFailedSentence(linkedFailed.length)}{" "}
+              <button type="button" className="link" onClick={retry}>
+                Try again
+              </button>
+            </p>
+          ) : null}
           {view && view.missingRateTxs.length > 0 ? <p className="notice warn">⚠ {missingRatesLine(view.missingRateTxs.length, currency)}</p> : null}
           {currency !== "USD" && view && !view.latestRate ? <p className="notice warn">⚠ There's no current USD to {currency} rate, so what's held has no current value.</p> : null}
           {wallet.l1FeeUnknownTxs.length > 0 ? <p className="notice warn" title={PNL_HELP}>⚠ {networkFeeUnknownSentence(wallet.l1FeeUnknownTxs.length)}</p> : null}
@@ -381,7 +391,7 @@ export function App() {
       ) : null}
 
       {explanation ? <ExplainPanel explanation={explanation} onClose={close} /> : null}
-      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
+      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
       {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} onClose={() => setTaxOpen(false)} /> : null}
     </div>
   )

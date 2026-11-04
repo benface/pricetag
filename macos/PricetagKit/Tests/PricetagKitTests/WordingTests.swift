@@ -51,6 +51,7 @@ struct WordingVectors: Decodable {
     let stale: String
     let feedDetail: [String]
     let pnlHelp: [PnlHelp]
+    let linkedFailed: [FeesUnknown]
     let sentences: Sentences
 }
 
@@ -85,6 +86,7 @@ struct WordingVectors: Decodable {
         #expect([Mode.demo, .raw, .dataset].map { Wording.feedDetail($0, block: 1000) } == vectors.feedDetail)
         for vector in vectors.pnlHelp { #expect(Wording.pnlHelp(for: vector.text) == vector.help) }
         let sentences = vectors.sentences
+        for vector in vectors.linkedFailed { #expect(Wording.linkedFailed(vector.count) == vector.text) }
         #expect(Wording.methodName == sentences.methodName)
         #expect(Wording.methodHelp == sentences.methodHelp)
         #expect(Wording.averagePricePaid == sentences.averagePricePaid)

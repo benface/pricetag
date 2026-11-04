@@ -154,7 +154,7 @@ actor ScriptedPortfolios: PortfolioSource {
 }
 
 /// A portfolio as the server would send it, from JSON, so the test uses the same decoding as the app.
-func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, outgoing: [String] = [], realized: String? = "0", realizedMissing: Int = 0, positions: [String] = [], unlisted: [String] = []) -> Portfolio {
+func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, outgoing: [String] = [], realized: String? = "0", realizedMissing: Int = 0, estimatedRealized: Bool = false, linkedFailed: [String] = [], positions: [String] = [], unlisted: [String] = []) -> Portfolio {
     let realizedText = realized.map { "\"\($0)\"" } ?? "null"
     let json = """
     {
@@ -172,10 +172,10 @@ func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, ou
           "value": { "known": 0, "missing": 0 }, "realized": { "known": 1, "missing": \(realizedMissing) },
           "unrealized": { "known": 0, "missing": 0 }, "pnl": { "known": 0, "missing": 0 }
         },
-        "unresolvedMicros": "0", "estimatedMicros": "0", "estimated": { "value": false, "realized": false, "unrealized": false }, "noMarket": []
+        "unresolvedMicros": "0", "estimatedMicros": "0", "estimated": { "value": false, "realized": \(estimatedRealized), "unrealized": false }, "noMarket": []
       },
       "pnlStatus": "complete", "points": [],
-      "questions": [], "meter": { "open": 0, "answered": 0, "waiting": 0 }, "linkedReading": [], "marketChecked": true
+      "questions": [], "meter": { "open": 0, "answered": 0, "waiting": 0 }, "linkedReading": [], "linkedFailed": [\(linkedFailed.map { "\"\($0)\"" }.joined(separator: ","))], "marketChecked": true
     }
     """
     return try! JSONDecoder().decode(Portfolio.self, from: Data(json.utf8))

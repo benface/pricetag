@@ -152,8 +152,13 @@ public enum Wording {
         "Patina: \(address.lowercased()) is my wallet, and belongs with \(owner.lowercased()).\n\nThis only links them in my own app. It can't move funds or approve anything."
     }
 
+    public static func linkedFailed(_ count: Int) -> String {
+        count == 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : "Couldn't read \(count) of your other wallets, so what came from them may show as unresolved."
+    }
+
     /// A preview's headline, as it would read.
     public static func consequence(_ preview: BookPreview, _ currency: CurrencyCode) -> String {
+        if preview.failed { return "Couldn't read that wallet" }
         if preview.pending { return "Reading that wallet…" }
         guard let pnl = preview.pnlMicros else { return "PnL still unavailable" }
         let number = Format.estimate(Format.signedMoney(pnl, currency), isPositive(preview.estimatedMicros))

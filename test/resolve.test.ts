@@ -798,6 +798,27 @@ describe("what the UI gets", () => {
     assert.ok(BigInt(usdc.values.estimatedRealizedMicros) > 0n)
   })
 
+  describe("says a realized gain rests on an estimate, with no answers at all", () => {
+    const sold = (block: number, tx: string, account: string, usdc: bigint) => [move(block, tx, account, "debit", usdc * E6, null), move(block, tx, account, "credit", (E18 * usdc) / 2000n, null, ETH_ADDRESS)]
+    const estimated = (focus: WalletResponse, others: WalletResponse[] = [], answers = emptyBook()) => foldBook(focus, others, "average", answers).totals.estimated.realized
+
+    it("from a bridge, which is what an automatic sweep must not move", () => {
+      const rows = [...send(10, "0x1", ACROSS, A, 100n * E6), ...sold(20, "0x2", A, 100n)]
+      const { totals } = foldBook(wallet(A, rows), [], "average", emptyBook())
+      assert.equal(totals.estimated.realized, true)
+      assert.equal(totals.coverage.realized.missing, 0, "nothing's missing, so coverage alone wouldn't catch it")
+    })
+
+    it("from a cost inherited from a wallet that estimated it", () => {
+      const rows = [...send(10, "0x1", ACROSS, A, 100n * E6), ...send(15, "0x9", A, B, 100n * E6), ...sold(20, "0x2", B, 100n)]
+      assert.equal(estimated(wallet(B, rows), [wallet(A, rows)], book({ [A]: { kind: "mine" } })), true)
+    })
+
+    it("and not from what was really paid", () => {
+      assert.equal(estimated(wallet(A, [...buy(10, "0x1", A, 100n), ...sold(20, "0x2", A, 100n)])), false)
+    })
+  })
+
   it("marks a position resolvable only when an answer could help", () => {
     const portfolio = portfolioOf(DEMO_WALLET, "average")
     const of = (asset: string) => portfolio.positions.find((p) => p.asset === asset)!

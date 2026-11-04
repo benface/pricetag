@@ -221,6 +221,12 @@ struct MainWindow: View {
         if portfolio.mode == .demo {
             Notice(.info, Wording.demo)
         }
+        if !portfolio.linkedFailed.isEmpty {
+            HStack(spacing: 8) {
+                Notice(.warning, Wording.linkedFailed(portfolio.linkedFailed.count))
+                Button("Try Again") { store.start() }
+            }
+        }
         if !portfolio.linkedReading.isEmpty {
             Notice(.info, "Reading your other \(portfolio.linkedReading.count == 1 ? "wallet" : "wallets"). What came from \(portfolio.linkedReading.count == 1 ? "it" : "them") shows as unresolved until that's done.")
         }

@@ -300,7 +300,12 @@ public struct ResolveFlow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if let waiting = model.meter?.waiting, waiting > 0 {
+            if let failed = store.portfolio?.linkedFailed.count, failed > 0 {
+                WarningText(Wording.linkedFailed(failed)).font(.callout).fixedSize(horizontal: false, vertical: true)
+                Button("Try Again") { store.start() }
+            }
+            if let portfolio = store.portfolio, !portfolio.linkedReading.isEmpty {
+                let waiting = portfolio.linkedReading.count
                 Text("Still reading your other \(waiting == 1 ? "wallet" : "wallets"). What came from \(waiting == 1 ? "it" : "them") stays unresolved until that's done.")
                     .font(.callout)
                     .foregroundStyle(.secondary)

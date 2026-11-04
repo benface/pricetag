@@ -110,6 +110,8 @@ export type PortfolioResponse = {
   meter: Meter
   /** Linked wallets that aren't read yet, so what came from them shows as unresolved for now. */
   linkedReading: string[]
+  /** Linked wallets whose last read failed. It's tried again with each request, and what they sent stays unresolved or out of date until it works. */
+  linkedFailed: string[]
   marketChecked: boolean
 }
 
@@ -122,6 +124,8 @@ export type BookPreview = {
   open: number
   /** A wallet these answers link hasn't been read yet, so this can't say yet. */
   pending: boolean
+  /** A wallet these answers link couldn't be read. */
+  failed: boolean
 }
 
 /** One number's explanation: how it's worked out, and the legs behind it, newest first. */

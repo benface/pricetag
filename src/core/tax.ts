@@ -131,13 +131,8 @@ function knownOf(state: PositionState): { qty: bigint; cost: bigint } {
   return { qty, cost }
 }
 
-/** A cost from an estimate carries through a sale, and an average that blends one in can't be told apart from it. */
-function usedEstimate({ before, after }: LegEffect): boolean {
-  return before.lots.some((lot) => {
-    if (lot.costMicros === null || (lot.label !== "received at market" && lot.label !== "mixed")) return false
-    return !after.lots.some((rest) => rest.legId === lot.legId && rest.qty === lot.qty)
-  })
-}
+/** Whether a sale's gain rests on an estimate, in its cost or its proceeds. The fold keeps count of both, whatever a lot is labeled. */
+const usedEstimate = ({ before, after }: LegEffect) => BigInt(after.estimatedRealizedMicros) > BigInt(before.estimatedRealizedMicros)
 
 /** The rows a debit becomes: a sale with both a known and an unknown cost splits, so the known part still adds up. */
 function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null): TaxRow[] {
