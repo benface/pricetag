@@ -2,7 +2,7 @@
 // Clients that can't run it, like the Mac app, read the portfolio it computes instead.
 
 import { hasStarted, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type UnlistedToken, type WalletData } from "@pricetag/sdk/core"
-import type { Estimates } from "@pricetag/sdk/core"
+import type { Estimates, HoldComparison } from "@pricetag/sdk/core"
 import type { Meter, Question } from "./resolve.ts"
 import type { TaxCountryCode, TaxScope } from "./tax.ts"
 
@@ -70,6 +70,8 @@ export type PortfolioResponse = {
   totals: Totals
   pnlStatus: PnlStatus
   points: PnlPoint[]
+  /** What this wallet made next to what simply holding ETH would have. */
+  holdComparison: HoldComparison
   /** What's left to ask, most useful first. */
   questions: Question[]
   meter: Meter

@@ -3,6 +3,7 @@
 export * from "./currency.ts"
 export * from "./fold.ts"
 export * from "./format.ts"
+export * from "./hold.ts"
 export * from "./legs.ts"
 export * from "./market.ts"
 export * from "./notes.ts"

@@ -14,6 +14,11 @@ public enum Wording {
     public static let realizedHelp = "Gain or loss on what you've sold or spent."
     public static let unrealizedHelp = "Gain or loss on what you still hold, at the current price."
 
+    public static let holdTitle = "Compared with holding ETH"
+    public static let holdWallet = "This wallet, after network fees"
+    public static let holdEth = "If you'd held ETH instead"
+    public static let holdPast = "Past results don't predict future ones."
+
     public static let rulesTitle = "Pricing rule"
     public static let rulesHelp = "Prices come from a public recipe anyone can copy and change. Each rule here is one version of it, named by its fingerprint. Switching only changes which one this wallet is read through."
 
@@ -60,6 +65,32 @@ public enum Wording {
     /// What a list of movements is called, with how much of it is showing.
     public static func activityTitle(count: Int, shown: Int) -> String {
         count > shown ? "Activity (newest \(shown) of \(Format.block(count)))" : "Activity (\(Format.block(count)))"
+    }
+
+    /// How this wallet did next to holding, when the two cover the same money.
+    public static func holdDifference(_ micros: String, _ currency: CurrencyCode, estimated: Bool = false) -> String {
+        let isLess = micros.hasPrefix("-")
+        let about = estimated ? "About " : ""
+        guard isLess || isPositive(micros) else { return "\(about)\(estimated ? "the" : "The") same as holding ETH." }
+        return "\(about)\(Format.money(isLess ? String(micros.dropFirst()) : micros, currency)) \(isLess ? "less" : "more") than holding ETH."
+    }
+
+    /// What keeps the two from being set against each other, or nil when nothing does.
+    public static func holdCaveat(_ comparison: HoldComparison, _ currency: CurrencyCode) -> String? {
+        if comparison.status == .complete { return nil }
+        switch comparison.unavailable {
+        case .noCurrentEthPrice: return "Unavailable, because there's no current ETH price to compare with."
+        case .leftWithNoKnownValue: return "Unavailable, because something left this wallet with no known value, so what holding ETH would have left can't be worked out."
+        case .nothingKnownPutIn: return "Unavailable, because nothing put in this wallet has a known value yet."
+        case nil: break
+        }
+        let count = comparison.unknownAmounts
+        let amounts = count == 1 ? "1 other amount has no known value, and isn't counted." : "\(Format.block(count)) other amounts have no known value, and aren't counted."
+        return [
+            "Partial, so the two don't cover the same money. Holding ETH counts the \(Format.money(comparison.putInMicros, currency)) put in with a known value.",
+            count > 0 ? amounts : nil,
+            comparison.walletLeavesOut ? "This wallet's total leaves some things out." : nil,
+        ].compactMap(\.self).joined(separator: " ")
     }
 
     /// What a total leaves out, or nil when it leaves out nothing.

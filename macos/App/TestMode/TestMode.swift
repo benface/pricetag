@@ -96,6 +96,8 @@ enum TestScene: String, CaseIterable {
     case mainServerDown = "main-server-down"
     case mainNotUpdating = "main-not-updating"
     case mainLinkedFailed = "main-linked-failed"
+    case holdComparison = "hold-comparison"
+    case mainHoldDetails = "main-hold-details"
     case resolve
     case changeWallet = "change-wallet"
     case popover
@@ -106,11 +108,11 @@ enum TestScene: String, CaseIterable {
     enum Chrome { case titled, none }
 
     /// Rendering draws the inspector's text in the wrong color in dark mode, so this one only comes from a real window.
-    var needsRealWindow: Bool { self == .mainDetails }
+    var needsRealWindow: Bool { self == .mainDetails || self == .mainHoldDetails }
 
     var chrome: Chrome {
         switch self {
-        case .changeWallet, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve: .none
+        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve: .none
         default: .titled
         }
     }
@@ -141,6 +143,7 @@ enum TestScene: String, CaseIterable {
         let navigation = Navigation()
         navigation.showsTransactions = self == .mainTransactions
         if self == .mainDetails { navigation.target = .asset("AERO", .realized) }
+        if self == .mainHoldDetails { navigation.target = .holdComparison }
 
         let isReady: () -> Bool = { [feed] in
             switch feed {
@@ -153,7 +156,9 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .resolve:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
-        case .main, .mainTransactions, .mainDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed:
+        case .holdComparison:
+            return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
+        case .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
@@ -162,6 +167,30 @@ enum TestScene: String, CaseIterable {
         case .settings:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
         }
+    }
+}
+
+/// The card in each state it can be in, from what `test/hold.test.ts` wrote.
+private struct HoldComparisonScene: View {
+    private struct Vector: Decodable {
+        let currency: CurrencyCode
+        let comparison: HoldComparison
+    }
+
+    private let vectors: [Vector] = {
+        guard let url = Bundle.main.url(forResource: "hold-vectors", withExtension: "json"), let data = try? Data(contentsOf: url), let vectors = try? JSONDecoder().decode([Vector].self, from: data) else { TestMode.fail("There's no fixture called hold-vectors.") }
+        return vectors
+    }()
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ForEach(vectors.indices, id: \.self) { index in
+                HoldComparisonCard(comparison: vectors[index].comparison, currency: vectors[index].currency, walletEstimated: false, isLive: true) {}
+            }
+        }
+        .padding(16)
+        .frame(width: 800)
+        .background(.background)
     }
 }
 
@@ -221,7 +250,7 @@ private final class FixtureSource: PortfolioSource {
     }
 
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
-        try decode("demo-explanation")
+        try decode(target == .holdComparison ? "demo-hold-explanation" : "demo-explanation")
     }
 
     func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {

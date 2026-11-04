@@ -103,6 +103,7 @@ L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anyt
 | `missing` | What the numbers leave out, in words. It's empty when nothing is. Show it next to any total. |
 | `legs` | Every leg in fold order, starting with what the wallet already held as opening legs (`opening: true`, with an unknown cost). |
 | `points` | PnL after each transaction, for a chart. |
+| `holdComparison` | What the wallet made next to what simply holding ETH would have. See [below](#comparing-with-holding-eth). |
 | `gasUnknownTxs` | Transactions whose gas couldn't be worked out, so ETH is overstated by that much. |
 | `l1Fees`, `l1FeeUnknownTxs` | `read`, `pending` (some couldn't be read yet, and the next call tries again) or `no rpc url`, and the transactions affected. |
 | `openingUnread`, `unreadAssets` | Assets whose balance before the first block couldn't be read, and assets with no position because nothing could be read about them, which isn't the same as holding none. |
@@ -110,6 +111,15 @@ L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anyt
 A position's `reconciliation.status` is `reconciled` when its legs add up to its onchain balance to the smallest unit, `incomplete` when they don't, and `unchecked` when a read is missing. Only a reconciled position shows PnL. Otherwise its amount and value come from the chain, and its cost and PnL are `null`.
 
 A client keeps each wallet's rows in memory, so another call on the same client only reads new blocks. A read with a `to` is re-read on each new block until `to` is 30 blocks behind the chain's head, because a reorg can still change it. After that, it's fixed. It also reads at most 200 L1 fees per call, so a busy wallet's ETH stays `unchecked` for its first few calls while they catch up.
+
+### Comparing with holding ETH
+
+`holdComparison` takes the same money in and out, at the same moments, and only asks what would have happened in between. It's in the currency the wallet is folded in.
+
+- **Put in** is whatever arrived from outside the wallet, at what it cost, or at its price when it arrived if that's all that's known. A transfer from a linked wallet brings its cost and date with it. An exchange inside the wallet isn't put in, and neither is its fee.
+- **Each amount buys ETH** at the oracle's price at its moment. **What left the wallet leaves the ETH too**, at its value when it left. If holding would have run out first, `ranOut` says so.
+- **`walletMicros`** is `totals.pnlMicros` plus `gainThatLeftMicros`, because total PnL counts what left at the cost it carried, and this counts it at its value on both sides. Otherwise a wallet that only held ETH and sent some would lose to itself.
+- **`status`** is `complete` when the two cover the same money, which is the only time there's a `differenceMicros`. It's `partial` when an amount put in has no known value (`unknownAmounts`), or the wallet's total leaves something out (`walletLeavesOut`). An opening balance is always an unknown amount, because it has no moment to convert at. It's `unavailable`, with `holdMicros: null` and why in `unavailable`, when there's no current ETH price, nothing put in has a known value, or something left with no known value. Unknown amounts are never counted as $0.
 
 ### Other things to check
 

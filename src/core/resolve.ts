@@ -4,7 +4,7 @@
 // The rest come from here, and the fold then runs on the result. An unanswered sender stays unknown: it could be the user's
 // own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, emptyPosition, foldWallet, formatAmount, normalizeAddress, usableAnswer, usdView, viewWallet, worth, type CostPiece, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, emptyPosition, foldWallet, formatAmount, normalizeAddress, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HoldComparison, type MarkPrice, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "./api.ts"
 import { costKey, linkedWallets, type Book, type ExchangeCost, type Money, type Receipt } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
@@ -337,6 +337,7 @@ export type BookFold = {
   totals: Totals
   pnlStatus: PnlStatus
   points: PnlPoint[]
+  holdComparison: HoldComparison
   questions: Question[]
   meter: Meter
 }
@@ -353,7 +354,9 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
   const view = (sides[0] as Side).view
   const { legs: resolved, open } = resolveLegs(sides, method, book)
   const legs = resolved.get(address) as PricedLeg[]
-  const { positions, unreadAssets: unread, totals, pnlStatus, points } = foldWallet(focus, method, { ...view, legs })
+  // What came from a linked wallet was first paid for in its blocks, which only its oracle reads have.
+  const markPrice: MarkPrice = (blockNum, asset) => sides.map((side) => side.view.markPrice(blockNum, asset)).find((price) => price !== null) ?? null
+  const { positions, unreadAssets: unread, totals, pnlStatus, points, holdComparison } = foldWallet(focus, method, { ...view, legs, markPrice })
   const questions = questionsOf(open, sides, book)
   return {
     view,
@@ -363,6 +366,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
     totals,
     pnlStatus,
     points,
+    holdComparison,
     questions,
     meter: meterOf(questions, book, address, missingWallets(book, focus, others).length),
   }

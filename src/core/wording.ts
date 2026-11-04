@@ -2,7 +2,7 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import { formatDuration, formatMoney, type CostLabel, type CurrencyCode, type FoldLeg, type Method, type PriceSource } from "@pricetag/sdk/core"
+import { formatDuration, formatMoney, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PriceSource } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
@@ -17,6 +17,11 @@ export const STARTING_BALANCE = "Starting balance"
 export const PNL_HELP = "PnL is profit and loss: what you've gained or lost so far."
 export const REALIZED_HELP = "Gain or loss on what you've sold or spent."
 export const UNREALIZED_HELP = "Gain or loss on what you still hold, at the current price."
+
+export const HOLD_TITLE = "Compared with holding ETH"
+export const HOLD_WALLET = "This wallet, after network fees"
+export const HOLD_ETH = "If you'd held ETH instead"
+export const HOLD_PAST = "Past results don't predict future ones."
 
 /** The tooltip for a title or sentence that says PnL, or nothing when it doesn't. */
 export const pnlHelp = (text: string): string | undefined => (text.includes("PnL") ? PNL_HELP : undefined)
@@ -91,6 +96,24 @@ export function excludedSentence(excluded: readonly { asset: string; reason: str
   const byReason = new Map<string, string[]>()
   for (const { asset, reason } of excluded) byReason.set(reason, [...(byReason.get(reason) ?? []), asset])
   return `Excludes ${[...byReason.entries()].map(([reason, assets]) => `${assets.join(", ")} (${reason})`).join("; ")}.`
+}
+
+/** How this wallet did next to holding, when the two cover the same money. */
+export function holdDifferenceSentence(micros: string, currency: CurrencyCode, estimated = false): string {
+  const difference = BigInt(micros)
+  const about = estimated ? "About " : ""
+  if (difference === 0n) return `${about}${estimated ? "the" : "The"} same as holding ETH.`
+  return `${about}${formatMoney(difference < 0n ? -difference : difference, currency)} ${difference > 0n ? "more" : "less"} than holding ETH.`
+}
+
+/** What keeps the two from being set against each other, or null when nothing does. */
+export function holdCaveatSentence({ status, unavailable, putInMicros, unknownAmounts, walletLeavesOut }: Pick<HoldComparison, "status" | "unavailable" | "putInMicros" | "unknownAmounts" | "walletLeavesOut">, currency: CurrencyCode): string | null {
+  if (status === "complete") return null
+  if (unavailable === "no current eth price") return "Unavailable, because there's no current ETH price to compare with."
+  if (unavailable === "left with no known value") return "Unavailable, because something left this wallet with no known value, so what holding ETH would have left can't be worked out."
+  if (unavailable === "nothing known put in") return "Unavailable, because nothing put in this wallet has a known value yet."
+  const amounts = unknownAmounts === 1 ? "1 other amount has no known value, and isn't counted." : `${unknownAmounts.toLocaleString("en-US")} other amounts have no known value, and aren't counted.`
+  return [`Partial, so the two don't cover the same money. Holding ETH counts the ${formatMoney(putInMicros, currency)} put in with a known value.`, unknownAmounts > 0 ? amounts : null, walletLeavesOut ? "This wallet's total leaves some things out." : null].filter((part) => part !== null).join(" ")
 }
 
 export function coverageSentence(coverage: { fromBlock: number; toBlock: number }, trackedTokens: number, openingUnread: boolean): string {

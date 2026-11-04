@@ -519,6 +519,23 @@
       "excludedCount": 7
     }
   ],
+  "holdComparison": {
+    "walletLeavesOut": true,
+    "putInMicros": "273196600",
+    "takenOutMicros": "7175218",
+    "ethPriceMicros": "3692307692",
+    "unknownAmounts": 4,
+    "ranOut": false,
+    "status": "partial",
+    "unavailable": null,
+    "walletMicros": "241085076",
+    "gainThatLeftMicros": "799709",
+    "holdMicros": "28121113",
+    "differenceMicros": null,
+    "ethQty": "79663592461339559",
+    "ethValueMicros": "294142495",
+    "estimated": true
+  },
   "questions": [
     {
       "id": "sender:0x00000000000000000000000000000000000de301",

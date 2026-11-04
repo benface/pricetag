@@ -202,6 +202,39 @@ public struct PortfolioExchange: Codable, Sendable, Equatable {
     public let missingRateTxs: [String]
 }
 
+/// What a wallet made next to what simply holding ETH would have. The server works it out, like every other number.
+public struct HoldComparison: Codable, Sendable, Equatable {
+    public enum Status: String, Codable, Sendable {
+        /// The two cover the same money, so they can be set against each other.
+        case complete
+        /// Each is true of what it covers, but they don't cover the same money, so there's no difference to show.
+        case partial
+        /// What holding would have made can't be worked out.
+        case unavailable
+    }
+
+    public enum Unavailable: String, Codable, Sendable {
+        case noCurrentEthPrice = "no current eth price"
+        case nothingKnownPutIn = "nothing known put in"
+        case leftWithNoKnownValue = "left with no known value"
+    }
+
+    public let status: Status
+    public let unavailable: Unavailable?
+    /// The wallet's total PnL after network fees, plus any gain that left with what it sent. nil when nothing in it is known.
+    public let walletMicros: String?
+    public let walletLeavesOut: Bool
+    /// nil when it's unavailable. That isn't $0.
+    public let holdMicros: String?
+    /// Only when complete.
+    public let differenceMicros: String?
+    /// What's known to have been put in. An amount with no known value isn't in it, and isn't counted as $0.
+    public let putInMicros: String
+    /// Movements in with no known value. Never counted as $0.
+    public let unknownAmounts: Int
+    public let estimated: Bool
+}
+
 public struct Portfolio: Codable, Sendable, Equatable {
     public let address: String
     public let mode: Mode
@@ -228,6 +261,7 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let totals: Totals
     public let pnlStatus: PnlStatus
     public let points: [PnlPoint]
+    public let holdComparison: HoldComparison
     /// What's left to ask, most useful first.
     public let questions: [Question]
     public let meter: Meter
@@ -245,6 +279,8 @@ public struct Portfolio: Codable, Sendable, Equatable {
     /// A balance that couldn't be read doesn't count as nothing.
     public var isEmpty: Bool { positions.isEmpty && unreadAssets.isEmpty }
     public var hasChartableData: Bool { points.contains { $0.pnlMicros != nil } }
+    /// Some of the total PnL rests on an estimate.
+    public var pnlIsEstimated: Bool { isPositive(totals.estimatedMicros) }
     /// Every point with a transaction behind it, newest first.
     public var transactions: [PnlPoint] { points.filter { $0.txHash != nil }.reversed() }
 }
@@ -354,12 +390,14 @@ public enum ExplainTarget: Sendable, Hashable {
     case total(TotalMetric)
     case asset(String, AssetMetric)
     case transaction(String)
+    case holdComparison
 
     var queryItems: [URLQueryItem] {
         switch self {
         case .total(let metric): [URLQueryItem(name: "metric", value: metric.rawValue)]
         case .asset(let asset, let metric): [URLQueryItem(name: "asset", value: asset), URLQueryItem(name: "metric", value: metric.rawValue)]
         case .transaction(let hash): [URLQueryItem(name: "tx", value: hash)]
+        case .holdComparison: [URLQueryItem(name: "metric", value: "hold")]
         }
     }
 }

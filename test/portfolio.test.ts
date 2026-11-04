@@ -163,6 +163,7 @@ describe("portfolioOf", () => {
     const inCad = walletWith({ currency: "CAD", rates: demoRates("CAD") })
     assertMatchesFile("demo-portfolio-cad.json", portfolioOf(inCad, "average"))
     assertMatchesFile("demo-explanation-cad.json", explainPortfolio(inCad, "average", { kind: "asset", asset: "AERO", metric: "realized" }))
+    assertMatchesFile("demo-hold-explanation.json", explainPortfolio(DEMO_WALLET, "average", { kind: "hold" }))
     const leg = DEMO_WALLET.legs.find(({ priceSource, kind }) => priceSource === "swap" && kind === "swap") as PricedLeg
     const dataset = { title: "Base's blocks", name: "edgeandnode/base_mainnet@0.0.2", hash: "6428aaca2cf57b8403ca3ab8bc657b361926ce6beeb6577477c85684e6ea569e" }
     assertMatchesFile("proof.json", proofOf(leg, DEMO_WALLET.legs, "USD", [dataset, { ...dataset, name: "a/b@1", hash: null }], null))
@@ -395,6 +396,10 @@ describe("wording", () => {
       notAnAddress: wording.NOT_AN_ADDRESS,
       rulesTitle: wording.RULES_TITLE,
       rulesHelp: wording.RULES_HELP,
+      holdTitle: wording.HOLD_TITLE,
+      holdWallet: wording.HOLD_WALLET,
+      holdEth: wording.HOLD_ETH,
+      holdPast: wording.HOLD_PAST,
     },
     manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
   }

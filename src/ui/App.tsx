@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { CURRENCIES, CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isCurrencyCode, sumTotals, type Coverage, type CurrencyCode, type Method, type Position } from "@pricetag/sdk/core"
+import { CURRENCIES, CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isCurrencyCode, sumTotals, type Coverage, type CurrencyCode, type HoldComparison, type Method, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { explainTarget, missingRatesLine, mismatchCause, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
@@ -9,6 +9,10 @@ import {
   CHECK_LABELS,
   DEMO_NOTICE,
   ETH_NOTE,
+  HOLD_ETH,
+  HOLD_PAST,
+  HOLD_TITLE,
+  HOLD_WALLET,
   METHOD_HELP,
   METHOD_LABELS,
   METHOD_NAME,
@@ -26,6 +30,8 @@ import {
   excludedSentence,
   feedDetail,
   feesUnknownSentence,
+  holdCaveatSentence,
+  holdDifferenceSentence,
   linkedFailedSentence,
   networkFeeUnknownSentence,
   staleSentence,
@@ -250,7 +256,7 @@ export function App() {
   const explanation = useMemo(() => {
     if (!target || !fold || !wallet) return null
     const usd = fold.view.currency === "USD" ? null : foldBook(wallet, others, method, book, { usd: true })
-    return explainTarget(target, fold, { view: fold.view, ruleNote: wallet.ruleNote ?? null, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points } })
+    return explainTarget(target, fold, { view: fold.view, ruleNote: wallet.ruleNote ?? null, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points, holdComparison: usd.holdComparison } })
   }, [target, fold, wallet, others, method, book])
   const close = useCallback(() => setTarget(null), [])
   const openTotal = (metric: TotalMetric) => setTarget({ kind: "total", metric })
@@ -374,6 +380,7 @@ export function App() {
                   Export a tax report…
                 </button>
               </p>
+              {fold ? <HoldCard comparison={fold.holdComparison} walletEstimated={BigInt(totals.estimatedMicros) > 0n} currency={currency} onOpen={() => setTarget({ kind: "hold" })} /> : null}
               <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
               {listed.length > 0 ? <Holdings positions={listed} currency={currency} resolvable={resolvable} explain={setTarget} onResolve={(asset) => setResolving({ asset })} /> : null}
               {noMarketCount > 0 ? (
@@ -396,6 +403,35 @@ export function App() {
       {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
       {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} onClose={() => setTaxOpen(false)} /> : null}
     </div>
+  )
+}
+
+/** Calm on purpose: no colors for ahead or behind, and it asks nothing of anyone. Clicking it says how it's worked out. */
+function HoldCard({ comparison, walletEstimated, currency, onOpen }: { comparison: HoldComparison; walletEstimated: boolean; currency: CurrencyCode; onOpen: () => void }) {
+  const { walletMicros, walletLeavesOut, holdMicros, differenceMicros, status, estimated } = comparison
+  const caveat = holdCaveatSentence(comparison, currency)
+  const signed = (micros: string | null, isEstimate: boolean) => (micros === null ? "⚠ Unavailable" : est(formatSignedMoney(micros, currency), isEstimate))
+  return (
+    <section className="card hold">
+      <div className="card-head">
+        <h2 className="muted small">{HOLD_TITLE} · {currency}</h2>
+        <span className="muted small">{HOLD_PAST}</span>
+      </div>
+      <button type="button" className="hold-numbers" onClick={onOpen} aria-label={`${HOLD_TITLE}. Shows how this is worked out`}>
+        <span>
+          <span className="muted small">{HOLD_WALLET}</span>
+          <strong>{signed(walletMicros, walletEstimated)}</strong>
+          {walletMicros !== null && walletLeavesOut ? <span className="partial">⚠ partial</span> : null}
+        </span>
+        <span>
+          <span className="muted small">{HOLD_ETH}</span>
+          <strong>{signed(holdMicros, estimated)}</strong>
+          {status === "partial" ? <span className="partial">⚠ partial</span> : null}
+        </span>
+        {differenceMicros !== null ? <span className="hold-difference">{holdDifferenceSentence(differenceMicros, currency, walletEstimated || estimated)}</span> : null}
+      </button>
+      {caveat ? <p className="caveat">⚠ {caveat}</p> : null}
+    </section>
   )
 }
 
