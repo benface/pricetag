@@ -11,7 +11,7 @@ import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from 
 import { createRates } from "./rates.ts"
 import { createDepositReader } from "./block.ts"
 import { warnOfNewAggregators } from "./feeds.ts"
-import { createManifestReader, createProofs, feedBehind, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
+import { createManifestReader, createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
 import { feedRounds, rawSource } from "./source.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 
@@ -320,6 +320,7 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
       }
       const proofs = wallet.mode === "demo" ? null : (created?.proofs ?? null)
       const feed = feedBehind(leg, wallet.legs)
+      const byRule = Boolean(wallet.ruleNote)
       if (proofMatch[2] === "proof") {
         // The rest of the proof doesn't depend on this read, so a failure just says the update couldn't be found.
         const behind: PriceBehind | null =
@@ -329,7 +330,7 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
                 return { feed, update: null }
               })
             : null
-        sendJson(res, 200, proofOf(leg, wallet.legs, currency, proofs ? await proofs.datasets() : [], proofs ? null : DEMO_UNVERIFIABLE, behind))
+        sendJson(res, 200, proofOf(leg, wallet.legs, currency, proofs ? await proofs.datasets() : [], proofs ? null : DEMO_UNVERIFIABLE, behind && { ...behind, byRule }))
         return true
       }
       if (!proofs) {
@@ -341,9 +342,10 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
       try {
         read = await proofs.readBlock(leg.blockNum)
         const behind = read && feed ? await proofs.priceBehind(feed, leg.blockNum) : null
-        if (behind) {
+        // A price read when a local Amp started has no log to check, and the proof says so.
+        if (behind && !isSeed(behind.update)) {
           const updateBlock = behind.update?.block_num
-          checkedUpdate = { behind, read: updateBlock === undefined ? null : updateBlock === leg.blockNum ? read : await proofs.readBlock(updateBlock) }
+          checkedUpdate = { behind: { ...behind, byRule }, read: updateBlock === undefined ? null : updateBlock === leg.blockNum ? read : await proofs.readBlock(updateBlock) }
         }
       } catch (error) {
         sendAmpError(res, error, "Couldn't read this block.")

@@ -532,7 +532,7 @@
     },
     "price_updates": {
       "input": {
-        "sql": "SELECT block_num, timestamp, tx_hash, log_index, CASE WHEN address IN (X'05c84a58FE042275b37db038bAAcD15F410c7bB0') THEN 'eth' ELSE 'usdc' END AS feed,\n  CASE WHEN address IN (X'05c84a58FE042275b37db038bAAcD15F410c7bB0') THEN arrow_cast(1300, 'UInt64') ELSE arrow_cast(45000, 'UInt64') END AS valid_blocks,\n  get_field(t, 'current') AS answer, get_field(t, 'roundId') AS round_id, get_field(t, 'updatedAt') AS updated_at\nFROM (SELECT block_num, timestamp, tx_hash, log_index, address, evm_decode_log(topic1, topic2, topic3, data, 'AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)') AS t\n  FROM base.logs WHERE topic0 = evm_topic('AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)') AND address IN (X'05c84a58FE042275b37db038bAAcD15F410c7bB0', X'68bE4C50235205Ede361ac8244B1ee221CDDA5E2'))\nWHERE block_num() >= 53469029"
+        "sql": "SELECT block_num, timestamp, tx_hash, log_index, CASE WHEN address IN (X'05c84a58FE042275b37db038bAAcD15F410c7bB0') THEN 'eth' ELSE 'usdc' END AS feed,\n  CASE WHEN address IN (X'05c84a58FE042275b37db038bAAcD15F410c7bB0') THEN timestamp + INTERVAL '2600 seconds' ELSE timestamp + INTERVAL '90000 seconds' END AS valid_until,\n  get_field(t, 'current') AS answer, get_field(t, 'roundId') AS round_id, get_field(t, 'updatedAt') AS updated_at\nFROM (SELECT block_num, timestamp, tx_hash, log_index, address, evm_decode_log(topic1, topic2, topic3, data, 'AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)') AS t\n  FROM base.logs WHERE topic0 = evm_topic('AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)') AND address IN (X'05c84a58FE042275b37db038bAAcD15F410c7bB0', X'68bE4C50235205Ede361ac8244B1ee221CDDA5E2'))\nWHERE block_num() >= 53469029"
       },
       "schema": {
         "arrow": {
@@ -585,8 +585,13 @@
               "nullable": false
             },
             {
-              "name": "valid_blocks",
-              "type": "UInt64",
+              "name": "valid_until",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
               "nullable": false
             },
             {
@@ -611,7 +616,7 @@
     },
     "carried": {
       "input": {
-        "sql": "SELECT b.block_num AS at_block, b.timestamp, u.feed, u.block_num AS update_block, u.log_index, u.tx_hash, u.answer\nFROM base.blocks b\nJOIN self.price_updates u ON b.block_num >= u.block_num AND b.block_num < u.block_num + u.valid_blocks\nWHERE b._block_num >= 53514029 AND block_num() >= 53514029"
+        "sql": "SELECT b.block_num AS at_block, b.timestamp, u.feed, u.block_num AS update_block, u.log_index, u.tx_hash, u.answer\nFROM base.blocks b\nJOIN self.price_updates u ON b.block_num >= u.block_num AND b.timestamp < u.valid_until\nWHERE b._block_num >= 53514029 AND block_num() >= 53514029"
       },
       "schema": {
         "arrow": {

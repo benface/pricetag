@@ -3,11 +3,11 @@ import { readFileSync } from "node:fs"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { describe, it } from "node:test"
-import { ASSETS, PRICE_FEEDS, type LegRow, type PricedLeg, type PriceFeed } from "@pricetag/sdk/core"
+import { ASSETS, PRICE_FEEDS, SEED_TX, type LegRow, type PricedLeg, type PriceFeed } from "@pricetag/sdk/core"
 import { datasetReader, type PriceUpdate, type Query, type Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
 import { AGGREGATOR_SELECTOR, warnOfNewAggregators } from "../server/feeds.ts"
-import { createProofs, feedBehind, proofOf, verificationOf, type BlockRead, type PriceBehind } from "../server/proof.ts"
+import { createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type PriceBehind } from "../server/proof.ts"
 import { ANSWER_UPDATED_TOPIC } from "../server/raw.ts"
 import { keccak, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "../server/verify.ts"
 import type { ProofResponse, VerificationResponse } from "../src/core/api.ts"
@@ -123,6 +123,68 @@ describe("what the proof says about an update", () => {
   })
 })
 
+describe("a price read when a local Amp started", () => {
+  const seed: PriceUpdate = { block_num: 53_600_000, tx_hash: SEED_TX, log_index: 0, answer: "99982711" }
+  const seeded: PriceBehind = { feed: USDC_FEED, update: seed }
+  const usdc = leg({ id: "x:USDC", asset: "USDC", delta: "-1000000000", decimals: 6, kind: "swap", priceMicros: "999827" })
+  const aero = leg({ id: "x:AERO", asset: "AERO", delta: "2000000000000000000000", kind: "swap", priceSource: "swap" })
+
+  it("is only the marked transaction", () => {
+    assert.equal(isSeed(seed), true)
+    assert.equal(isSeed(update), false)
+    assert.equal(isSeed(null), false)
+  })
+
+  it("says it was read from the contract, and when, and links the contract, not a transaction", () => {
+    const proof = proofOf(usdc, [usdc, aero], "USD", [], null, seeded)
+    assert.match(proof.source[0] as string, /USDC\/USD price of \$0\.9998, read from its contract at block 53,600,000, where this dataset starts\. It has had no update since/)
+    assert.ok(proof.links.some((link) => link.url.includes(USDC_FEED.proxy)))
+    assert.ok(!proof.links.some((link) => link.url.includes(SEED_TX)))
+  })
+
+  it("names it behind an exchange too", () => {
+    const proof = proofOf(aero, [usdc, aero], "USD", [], null, seeded)
+    assert.match(proof.source[1] as string, /The USDC is valued at Chainlink's USDC\/USD price of \$0\.9998, read from its contract/)
+    assert.ok(!proof.links.some((link) => link.url.includes(SEED_TX)))
+  })
+
+  it("doesn't claim the check covers it", () => {
+    for (const [row, line] of [[usdc, /It doesn't cover this price: this dataset started after Chainlink's last update/], [aero, /doesn't cover Chainlink's price, used to value them, because this dataset started after/]] as const) {
+      const words = proofOf(row, [usdc, aero], "USD", [], null, seeded).scope.join(" ")
+      assert.match(words, line)
+      assert.match(words, /block headers don't record calls/)
+      assert.doesNotMatch(words, /Chainlink publishes each update as a log/)
+    }
+  })
+
+  it("uses plain language", () => {
+    const proof = proofOf(aero, [usdc, aero], "USD", [], null, seeded)
+    assert.doesNotMatch([...proof.source, ...proof.scope].join(" "), /\b(oracle|legs?|seed|aggregator)\b/i)
+  })
+})
+
+describe("with a pricing rule on", () => {
+  const ruled: PriceBehind = { ...behind, byRule: true }
+  const atRule = leg({ priceMicros: ((BigInt(MICROS) * 99n) / 100n).toString() })
+
+  it("checks the update without comparing it to the rule's price, since only the rule's dataset knows how it gets there", () => {
+    const check = checkOf(verificationOf(atRule, [], data, read.deposits, { behind: ruled, read }))
+    assert.equal(check?.status, "passed")
+    assert.match(check?.detail ?? "", /the price this rule starts from/)
+    assert.doesNotMatch(check?.detail ?? "", /works out to the price shown/)
+  })
+
+  it("still fails an update that doesn't check out", () => {
+    assert.equal(checkOf(verificationOf(atRule, [], data, read.deposits, { behind: { ...ruled, feed: ETH_FEED }, read }))?.status, "failed")
+    assert.equal(checkOf(verificationOf(atRule, [], data, read.deposits, { behind: { ...ruled, update: { ...update, answer: "1" } }, read }))?.status, "failed")
+  })
+
+  it("says the log has what the rule starts from, not the number on screen", () => {
+    assert.ok(proofOf(atRule, [], "USD", [], null, ruled).scope.some((line) => /has to say the price this rule starts from/.test(line)))
+    assert.ok(proofOf(atRule, [], "USD", [], null, behind).scope.some((line) => /has to say this price/.test(line)))
+  })
+})
+
 describe("checking an update", () => {
   const verify = (changes: Partial<PricedLeg> = {}, checked: Partial<{ behind: PriceBehind; read: BlockRead | null }> = {}) => verificationOf(leg(changes), [], data, read.deposits, { behind, read, ...checked })
 
@@ -216,7 +278,7 @@ describe("reading an update", () => {
     const { proofs, queries } = proofsOver("a/pricetag@1")
     assert.deepEqual(await proofs.priceBehind(ETH_FEED, 500000), { feed: ETH_FEED, update: { block_num: 499990, tx_hash: `0x${TX}`, log_index: 7, answer: "300000000000" } })
     const sql = queries.find((q) => q.includes(".price_updates")) as string
-    assert.match(sql, /block_num BETWEEN 498701 AND 500000/)
+    assert.match(sql, /block_num BETWEEN 498700 AND 500000/)
     assert.match(sql, /feed = 'eth'/)
     assert.ok(sql.includes(`tx_hash = X'${TX}'`))
   })
@@ -296,6 +358,15 @@ describe("the proof and verify routes", () => {
     assert.deepEqual(blocksRead, [LEG_BLOCK])
   })
 
+  it("checks only the row's block when the price was read when a local Amp started", async () => {
+    const { get, blocksRead, close } = await serve(async () => ({ feed, update: { ...update, tx_hash: SEED_TX } }))
+    const { status, body } = await get<VerificationResponse>("verify")
+    close()
+    assert.equal(status, 200)
+    assert.deepEqual(blocksRead, [LEG_BLOCK])
+    assert.equal(checkOf(body), undefined)
+  })
+
   it("names the update in the proof, and still answers when it can't be read", async () => {
     const good = await serve(async () => behind)
     const named = await good.get<ProofResponse>("proof")
@@ -336,7 +407,7 @@ describe("the startup check of the feeds", () => {
     assert.equal(messages.length, 1)
     assert.match(messages[0] as string, /USDC\/USD/)
     assert.ok((messages[0] as string).includes(moved.slice(2).toLowerCase()))
-    assert.match(messages[0] as string, /45,000 blocks/)
+    assert.match(messages[0] as string, /25 hours/)
   })
 
   it("warns, without throwing or naming the RPC, when it can't check", async () => {

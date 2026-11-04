@@ -6,7 +6,7 @@ import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type Que
 import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
 import type { LegRow, PricedRow, Reference } from "./legs.ts"
 import type { Head } from "./portfolio.ts"
-import type { PriceFeed } from "./tokens.ts"
+import { blocksWithin, type PriceFeed } from "./tokens.ts"
 import type { Source } from "./wallets.ts"
 
 export type Row = Record<string, unknown>
@@ -91,7 +91,7 @@ export type SwapRow = { row: PricedRow; timestamp: string; reference: Reference 
 
 export type OracleRow = { block_num: number; timestamp: string; answer: string }
 
-/** A row of `price_updates`: one `AnswerUpdated` log from a feed's aggregator. */
+/** A row of `price_updates`: one `AnswerUpdated` log from a feed's aggregator, or on a local Amp, a price read when it started (`SEED_TX`). */
 export type PriceUpdate = { block_num: number; tx_hash: string; log_index: number; answer: string }
 
 /** Each read only waits for the tables it uses, so a lagging table doesn't hide what's ready in another. */
@@ -167,7 +167,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
     /** The update a `reference_prices` row at `block` names, or null if the feed's window doesn't reach it. */
     async readPriceUpdate(feed: PriceFeed, txHash: string, block: number): Promise<PriceUpdate | null> {
       const rows = await query<Row>(
-        `SELECT block_num, tx_hash, log_index, answer FROM ${ds}.price_updates WHERE block_num BETWEEN ${block - feed.validBlocks + 1} AND ${block} AND feed = '${feed.name}' AND tx_hash = X'${hexOf(txHash)}' ORDER BY block_num DESC, log_index DESC LIMIT 1`,
+        `SELECT block_num, tx_hash, log_index, answer FROM ${ds}.price_updates WHERE block_num BETWEEN ${block - blocksWithin(feed.validSeconds, block)} AND ${block} AND feed = '${feed.name}' AND tx_hash = X'${hexOf(txHash)}' ORDER BY block_num DESC, log_index DESC LIMIT 1`,
       )
       const row = rows[0]
       return row ? { block_num: asNumber(row.block_num), tx_hash: prefixed(String(row.tx_hash)), log_index: asNumber(row.log_index), answer: decimalString(row.answer) ?? "" } : null

@@ -5,14 +5,14 @@
 // Writes dataset/cautious-eth.json with --fork: the fork, with one pricing rule changed. FORK_OF names what it forks, which has
 // to be registered where AMP_ADMIN_URL points.
 //
-//   FORK_OF=benface/pricetag_scratch@0.0.6 AMP_ADMIN_URL=... node dataset/build.ts --fork [start block]
+//   FORK_OF=benface/pricetag@0.1.0 AMP_ADMIN_URL=... node dataset/build.ts --fork [start block]
 //
 // It needs an Amp with edgeandnode/base_mainnet@0.0.2 registered, and only reads from it. What a table can look like
 // comes from WORK-319: every table needs its own top-level `block_num()` filter, at most one join, explicit columns,
 // and UDFs that never return null or throw, because one bad row stops the whole dataset.
 
 import { readFileSync, writeFileSync } from "node:fs"
-import { ERC20_ADDRESSES, ETH_ADDRESS, PRICE_FEEDS, TOKENS, WETH_ADDRESS, type PriceFeed } from "@pricetag/sdk/core"
+import { ERC20_ADDRESSES, ETH_ADDRESS, PRICE_FEEDS, SEED_TX, TOKENS, WETH_ADDRESS, blocksWithin, type PriceFeed } from "@pricetag/sdk/core"
 
 const MANIFEST = new URL("./pricetag.json", import.meta.url)
 const CAUTIOUS_MANIFEST = new URL("./cautious-eth.json", import.meta.url)
@@ -47,11 +47,42 @@ const feedCase = (value: (feed: PriceFeed) => string) => `CASE WHEN address IN (
 /** The newest update of one feed in a block's group of `carried` rows. */
 const latest = (column: string, feed: PriceFeed) => `last_value(${column} ORDER BY update_block, log_index) FILTER (WHERE feed = '${feed.name}')`
 
+/** A feed's price read from its contract, for when the dataset can't reach back to its last update. */
+export type FeedSeed = { feed: PriceFeed; answer: string; roundId: string; updatedAt: number }
+
+const UPDATE_COLUMNS = "block_num, timestamp, tx_hash, log_index, feed, valid_until, answer, round_id, updated_at"
+
+/**
+ * Every Chainlink update. It normally starts one window before the dataset, so even the feed that updates least has a
+ * price at its first block. The address filter is required: 201 contracts emitted this event in a day.
+ *
+ * `seeds` is for an Amp with no blocks before `start`, like a local one. Each stands in for a feed's last update at the
+ * first block, and lasts as long as that update would have.
+ */
+function priceUpdatesSql(start: number, seeds: readonly FeedSeed[] | null) {
+  const logs = `SELECT block_num, timestamp, tx_hash, log_index, ${feedCase((feed) => `'${feed.name}'`)} AS feed,
+  ${feedCase((feed) => `timestamp + INTERVAL '${feed.validSeconds} seconds'`)} AS valid_until,
+  get_field(t, 'current') AS answer, get_field(t, 'roundId') AS round_id, get_field(t, 'updatedAt') AS updated_at
+FROM (SELECT block_num, timestamp, tx_hash, log_index, address, evm_decode_log(topic1, topic2, topic3, data, '${ANSWER_UPDATED}') AS t
+  FROM base.logs WHERE topic0 = evm_topic('${ANSWER_UPDATED}') AND address IN (${addressList(PRICE_FEEDS.flatMap((feed) => feed.aggregators))}))`
+  if (!seeds) return `${logs}\nWHERE block_num() >= ${start - Math.max(...PRICE_FEEDS.map((feed) => blocksWithin(feed.validSeconds, start)))}`
+  const rows = seeds.map(
+    ({ feed, answer, roundId, updatedAt }) =>
+      `SELECT block_num, timestamp, arrow_cast(X'${hex(SEED_TX)}', 'FixedSizeBinary(32)') AS tx_hash, arrow_cast(0, 'UInt32') AS log_index, '${feed.name}' AS feed,
+  arrow_cast(to_timestamp_seconds(${updatedAt + feed.validSeconds}), 'Timestamp(Nanosecond, Some("+00:00"))') AS valid_until,
+  '${answer}' AS answer, '${roundId}' AS round_id, '${updatedAt}' AS updated_at
+FROM base.blocks WHERE block_num = ${start}`,
+  )
+  return `SELECT ${UPDATE_COLUMNS} FROM (
+${[logs, ...rows].join("\nUNION ALL\n")}
+) WHERE block_num() >= ${start}`
+}
+
 function unlistedSelect(account: string, side: string, amount: string, kind: string, from: string) {
   return `SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, ${account} AS account, '${side}' AS side, ${amount} AS amount, '${kind}' AS kind FROM (${from})`
 }
 
-export function tablesSql(start: number): Record<string, string> {
+export function tablesSql(start: number, seeds: readonly FeedSeed[] | null = null): Record<string, string> {
   const since = `block_num() >= ${start}`
   const transfer = decoded(TRANSFER, `topic3 IS NULL AND address IN (${allowlist})`)
   const unlistedTransfer = decoded(TRANSFER, `topic3 IS NULL AND address NOT IN (${allowlist})`)
@@ -129,22 +160,15 @@ WHERE l.address = X'${hex(WETH_ADDRESS)}' AND l.topic0 = evm_topic('${WITHDRAWAL
   SELECT ${legColumns} FROM self.unwrap_legs
 ) WHERE ${since}`,
 
-    // Every Chainlink update. It starts one window before the dataset, so even the feed that updates least has a price at
-    // its first block. The address filter is required: 201 contracts emitted this event in a day.
-    price_updates: `SELECT block_num, timestamp, tx_hash, log_index, ${feedCase((feed) => `'${feed.name}'`)} AS feed,
-  ${feedCase((feed) => `arrow_cast(${feed.validBlocks}, 'UInt64')`)} AS valid_blocks,
-  get_field(t, 'current') AS answer, get_field(t, 'roundId') AS round_id, get_field(t, 'updatedAt') AS updated_at
-FROM (SELECT block_num, timestamp, tx_hash, log_index, address, evm_decode_log(topic1, topic2, topic3, data, '${ANSWER_UPDATED}') AS t
-  FROM base.logs WHERE topic0 = evm_topic('${ANSWER_UPDATED}') AND address IN (${addressList(PRICE_FEEDS.flatMap((feed) => feed.aggregators))}))
-WHERE block_num() >= ${start - Math.max(...PRICE_FEEDS.map((feed) => feed.validBlocks))}`,
+    price_updates: priceUpdatesSql(start, seeds),
 
     // Every update that could still be the latest at each block. A join that isn't on the watermark reads history, which is
-    // how a table carries a value forward. The filter on b._block_num has to stay: without it, each batch can rescan all of
+    // how a table carries a value forward. It starts on the block number because several blocks can share a second. The filter on b._block_num has to stay: without it, each batch can rescan all of
     // Base's blocks. These stages can't merge either: an aggregate over this join, or a projecting subquery on the blocks
     // side, registers fine and then fails in the job.
     carried: `SELECT b.block_num AS at_block, b.timestamp, u.feed, u.block_num AS update_block, u.log_index, u.tx_hash, u.answer
 FROM base.blocks b
-JOIN self.price_updates u ON b.block_num >= u.block_num AND b.block_num < u.block_num + u.valid_blocks
+JOIN self.price_updates u ON b.block_num >= u.block_num AND b.timestamp < u.valid_until
 WHERE b._block_num >= ${start} AND ${since}`,
 
     // The latest update per block, one row per block. A feed with no update in its window has an empty price, which is unknown.
@@ -355,7 +379,7 @@ async function build() {
   const args = process.argv.slice(2)
   if (args[0] === "--fork") {
     const forkOf = process.env.FORK_OF
-    if (!forkOf) throw new Error("Set FORK_OF to the dataset this forks, like benface/pricetag_scratch@0.0.6")
+    if (!forkOf) throw new Error("Set FORK_OF to the dataset this forks, like benface/pricetag@0.1.0")
     const start = Number(args[1] ?? startOf(CAUTIOUS_MANIFEST))
     const { pt_price } = functions()
     const pt_cautious = { inputTypes: ["Utf8"], outputType: "Utf8", source: { source: ptCautiousSource(), filename: "pt_cautious.js" } }

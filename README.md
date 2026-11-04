@@ -76,17 +76,17 @@ It adds a marked block to the end of `.env.local` that points the app at the loc
 
 On the public RPC, a fresh start takes about 9 minutes for the default hour of blocks. For a quicker one, use `PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start`, which takes about 2 minutes.
 
-**USDC has no price at first on a local Amp.** A local Amp only has logs from its start block, and USDC/USD's next update can be up to a day away. Until then, USDC's price is `unknown`, and so is every exchange's, because `pt_price` needs both feeds. ETH's prices work within about 20 minutes, its longest gap so far. A hosted Amp doesn't have this problem, since its Base dataset goes back further than the 45,000 blocks `price_updates` reads.
+**A local Amp's first prices come from `eth_call`.** It only has logs from its start block, and USDC/USD's last update can be up to a day older. So `amp:start` reads each feed's latest round from its contract at the start block (`dataset/local.ts`), and those stand in as updates, with an all-zero transaction, for as long as the real ones would have lasted. If that read fails, `amp:start` stops before the backfill. Proof says a price came from the contract, and Verify doesn't claim to cover it. It covers the price from the first real log onward.
 
 ## Forking a pricing rule
 
 A pricing rule is a dataset version, and the server picks one per request with Amp's `amp-alias` header. The SQL never changes, and the app has no code for any rule. Set these and both apps show a switch, in the Mac app's Settings and above the web app's numbers, with each rule's dataset and manifest hash, and a side-by-side comparison of a wallet. The comparison uses one set of facts at one block for both rules: the same transactions, balances, fees and exchange rates, with only prices from each. If it can't establish that, it says so and shows no numbers.
 
 ```sh
-PRICETAG_DATASET=benface/pricetag_scratch@0.0.6
-PRICETAG_DATASET_HASH=7a6deb3f2fd4b9c972f9d94027d385d72038747061e3c1be97aa3a2fcc60f393
-PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.0.2
-PRICETAG_FORK_HASH=ec377e0a0df29fea0c4095114891a1b4a2e74cca2e0f02ea41c2322f48470b2e
+PRICETAG_DATASET=benface/pricetag@0.1.0
+PRICETAG_DATASET_HASH=a94e5237dd3eae583eda6f5aefa74800e6778d0c9c2ed14c4d5383f6f67137b2
+PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.1.0
+PRICETAG_FORK_HASH=c5c66a117461e8990c4a5638919ddf9ca3c9ae9333982d9583d127d93ab1705e
 ```
 
 Queries are pinned to those hashes, so a hash on screen is what was read, and a wrong one fails instead of showing other numbers. With no fork set, nothing changes: there's no switch and no header.
@@ -96,11 +96,11 @@ The fork here is `dataset/cautious-eth.json`, from `cautiousEthTablesSql` in `da
 To change the rule, edit that function, then build, register and deploy it under a new tag, and update the hash:
 
 ```sh
-FORK_OF=benface/pricetag_scratch@0.0.6 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
-ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.0.3
+FORK_OF=benface/pricetag@0.1.0 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
+ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.1.1
 ```
 
-Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.0.3` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging.
+Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.1.1` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging.
 
 **Replacing the dataset it forks means replacing the fork too.** The fork reads the job of the version it names, so stopping that job stops the fork. Deploy a fork of the new version before stopping the old one, then change all four lines together.
 
@@ -128,13 +128,13 @@ The dataset reads Chainlink's prices from the `AnswerUpdated` logs its contracts
 
 | Table | What it does |
 | --- | --- |
-| `price_updates` | Every update from the aggregators in `PRICE_FEEDS` (`packages/sdk/src/tokens.ts`). It starts 45,000 blocks before the dataset, so USDC/USD, which only updates about daily, has a price at the first block. |
-| `carried` | For each block, every update that could still be the latest. It's a range join of `blocks` to `price_updates`, which is how a table carries a value forward. Its `b._block_num` filter has to stay, or each batch can rescan all of Base. |
+| `price_updates` | Every update from the aggregators in `PRICE_FEEDS` (`packages/sdk/src/tokens.ts`). It starts one window before the dataset, 45,000 blocks at today's start, so USDC/USD, which only updates about daily, has a price at the first block. |
+| `carried` | For each block, every update that could still be the latest. It's a join of `blocks` to `price_updates`, from the update's block until its window ends, which is how a table carries a value forward. Its `b._block_num` filter has to stay, or each batch can rescan all of Base. |
 | `reference_prices` | The latest update per feed, one row per block: `eth_answer` and `usdc_answer` (1e8 USD), and `eth_tx` and `usdc_tx`, the transactions they came from. |
 
 `priced_legs` joins `reference_prices` on the block, and carries the same answers and transactions.
 
-- **An update only counts for so long.** ETH/USD's lasts 1,300 blocks (longest gap seen in a day: 618), and USDC/USD's 45,000 (longest gap in 76 rounds: 43,245). After that, that price is `unknown`, never stale. Exchanges lose their price too, because `pt_price` needs both feeds. If both feeds lapsed together, a block would have no row at all, and the app would show as behind until a fix.
+- **An update only counts for so long.** ETH/USD's lasts 2,600 s (longest gap seen in a day: 1,236 s), and USDC/USD's 25 hours (longest gap in 76 rounds: 86,490 s). They're in time because feeds update on a clock, and Base's blocks go from 2 s to 200 ms on 2026-11-05. `blocksWithin` turns a window into blocks for reads and start filters. After that, that price is `unknown`, never stale. Exchanges lose their price too, because `pt_price` needs both feeds. If both feeds lapsed together, a block would have no row at all, and the app would show as behind until a fix.
 - **When Chainlink changes a feed's aggregator, a new dataset version is needed.** Proxies emit no log when that happens, so no table can notice: the old address just goes quiet. The server asks each proxy for its `aggregator()` when it starts, and warns if it isn't listed. To fix it, add the address to `PRICE_FEEDS` and deploy a new version. Both feeds last changed about 2 months ago, and about 5 months before that.
 - **ETH/USD leads what its proxy returns.** A log comes 15 or 16 blocks before the proxy shows the new round (once in a while, just 1). The price is the newer published value, so it isn't delayed to match. Compared block by block with `eth_call`, that's the only difference.
 
@@ -215,7 +215,7 @@ What a pass doesn't show, which the interface also says:
 - That the derived SQL ran correctly. Only the raw dataset's rows are checked, plus the row's amounts against them.
 - That Chainlink's number is right. It only shows that Chainlink published it.
 - That the update was still the latest at the row's block. That comes from `carried` and `reference_prices`, so it's the derived SQL again.
-- An `oracle` price, or the oracle side of a `swap` price, when reading the raw dataset, because `eth_call` results aren't in a block's commitments. The same goes for exchange rates and L1 fees, which aren't in the commitments either, so an L1 fee's amount is never compared.
+- An `oracle` price, or the oracle side of a `swap` price, when reading the raw dataset or a local Amp before its first real update, because `eth_call` results aren't in a block's commitments. The same goes for exchange rates and L1 fees, which aren't in the commitments either, so an L1 fee's amount is never compared.
 - That a transaction's `from` is right. Signatures are in the commitment, but aren't recovered to compare them with the stored sender, so a row that takes its account from the sender (fees, ETH sent, unwrapped ETH received) says so.
 
 `server/verify.ts` is the pure part, tested on real rows and on tampered ones. Keccak comes from `@noble/hashes`, since whether Node has it depends on its build. `server/block.ts` reads a block and `server/proof.ts` puts it into words. It's valid for blocks since Canyon (January 2024), because older deposits' receipts are encoded differently.

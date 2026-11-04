@@ -1,7 +1,7 @@
 // What's behind one leg's price, and the check of the block it's in. The words are here because the clients only show them.
 // The check only reaches the raw dataset's rows: the block's header covers those, and nothing downstream of them.
 
-import { PRICE_FEEDS, TOKENS, WETH_ADDRESS, answerToMicros, formatAmount, formatPrice, ptPrice, tokenByAddress, type CurrencyCode, type LegPart, type PriceFeed, type PricedLeg } from "@pricetag/sdk/core"
+import { PRICE_FEEDS, SEED_TX, TOKENS, WETH_ADDRESS, answerToMicros, formatAmount, formatPrice, ptPrice, tokenByAddress, type CurrencyCode, type LegPart, type PriceFeed, type PricedLeg } from "@pricetag/sdk/core"
 import { datasetReader, describeError, hexOf, type PriceUpdate, type Query } from "@pricetag/sdk/internal"
 import type { CheckStatus, ProofCheck, ProofDataset, ProofLink, ProofResponse, VerificationResponse } from "../src/core/api.ts"
 import { tokenLabel } from "../src/core/wording.ts"
@@ -33,9 +33,13 @@ export function feedBehind(leg: PricedLeg, legs: readonly PricedLeg[]): PriceFee
 
 /**
  * The Chainlink update behind a leg's price, when the dataset says which one it was. The raw dataset reads prices with
- * `eth_call`, which has no log to point at, so it has none of these.
+ * `eth_call`, which has no log to point at, so it has none of these. `byRule` says the wallet was read through a rule other
+ * than the default, which sets the price shown from this update, in a way only that rule's dataset knows.
  */
-export type PriceBehind = { feed: PriceFeed; update: PriceUpdate | null }
+export type PriceBehind = { feed: PriceFeed; update: PriceUpdate | null; byRule?: boolean }
+
+/** Whether this "update" is a price read from the contract when a local Amp started, which no log or block can back up. */
+export const isSeed = (update: PriceUpdate | null | undefined) => update?.tx_hash === SEED_TX
 
 const contractLink = (feed: PriceFeed): ProofLink => ({ title: `Chainlink's ${feed.pair} contract on Basescan`, url: `${BASESCAN}/address/${feed.proxy}` })
 
@@ -49,11 +53,19 @@ const describeUpdate = (feed: PriceFeed, update: PriceUpdate) => {
 
 const NOT_FOUND = "The update behind it couldn't be found."
 
+/** A price read from the contract when this dataset started. There's been no update since, or it would have been used. */
+const describeSeed = (feed: PriceFeed, update: PriceUpdate) => {
+  const micros = answerToMicros(update.answer)
+  return `Chainlink's ${feed.pair} price${micros ? ` of ${formatPrice(micros, "USD")}` : ""}, read from its contract at block ${update.block_num.toLocaleString("en-US")}, where this dataset starts`
+}
+
 /** Where this leg's price came from, in words, with where to read it for yourself. */
 function priceSource(leg: PricedLeg, legs: readonly PricedLeg[], behind: PriceBehind | null): { source: string[]; links: ProofLink[] } {
   const block = leg.blockNum.toLocaleString("en-US")
-  const update = behind?.update
+  const seed = isSeed(behind?.update) ? behind?.update : null
+  const update = seed ? null : behind?.update
   if (leg.priceSource === "oracle") {
+    if (behind && seed) return { source: [`${describeSeed(behind.feed, seed)}. It has had no update since.`], links: [contractLink(behind.feed)] }
     if (behind && update) return { source: [`${describeUpdate(behind.feed, update)}. It was the latest at block ${block}.`], links: [updateLink(behind.feed, update)] }
     const feed = behind?.feed ?? feedOf(leg.asset)
     const source = [behind ? `Chainlink's ${behind.feed.pair} price on Base at block ${block}. ${NOT_FOUND}` : `Chainlink's ${feed?.pair ?? `${leg.asset}/USD`} price on Base, read from its contract at block ${block}.`]
@@ -63,9 +75,10 @@ function priceSource(leg: PricedLeg, legs: readonly PricedLeg[], behind: PriceBe
     const paid = paidFor(leg, legs)
     const feed = behind?.feed ?? (paid ? feedOf(paid.asset) : null)
     const source = [paid ? `Worked out from this exchange: ${amountOf(paid)} for ${amountOf(leg)}.` : `Worked out from what this transaction exchanged at block ${block}.`]
-    if (paid && behind && update) source.push(`The ${paid.asset} is valued at ${describeUpdate(behind.feed, update)}, the latest at this block.`)
+    if (paid && behind && seed) source.push(`The ${paid.asset} is valued at ${describeSeed(behind.feed, seed)}. It has had no update since.`)
+    else if (paid && behind && update) source.push(`The ${paid.asset} is valued at ${describeUpdate(behind.feed, update)}, the latest at this block.`)
     else if (paid && feed) source.push(`The ${paid.asset} is valued at Chainlink's ${feed.pair} price at this block.${behind ? ` ${NOT_FOUND}` : ""}`)
-    return { source, links: behind && update ? [updateLink(behind.feed, update)] : feed ? [contractLink(feed)] : [] }
+    return { source, links: behind && update && !seed ? [updateLink(behind.feed, update)] : feed ? [contractLink(feed)] : [] }
   }
   return { source: [leg.priceNote ?? "This has no price."], links: [] }
 }
@@ -104,14 +117,16 @@ function scopeOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: CurrencyC
     "Checking the block shows that the data Amp stored matches the block's header. It doesn't show that the header is on Base's real chain, or that the dataset's calculations ran correctly. A dataset's fingerprint only identifies its recipe.",
   ]
   const update = behind?.update
-  const notFound = "the update behind it couldn't be found"
-  if (update) {
+  const seed = isSeed(update)
+  const called = "Chainlink's price comes from calling a contract, and block headers don't record calls"
+  const notFound = seed ? `this dataset started after Chainlink's last update, so ${called[0]!.toLowerCase()}${called.slice(1)}` : "the update behind it couldn't be found"
+  if (update && !seed) {
     const block = update.block_num.toLocaleString("en-US")
     const covered = leg.priceSource === "oracle" ? `It covers this price, the transaction and ${leg.kind === "gas" ? "the fee paid to Base" : "the amounts"}` : "It covers the amounts exchanged and Chainlink's price, used to value them"
-    scope.push(`${covered}: Chainlink publishes each update as a log, so block ${block} is checked too, and its log has to say this price.`)
+    scope.push(`${covered}: Chainlink publishes each update as a log, so block ${block} is checked too, and its log has to say ${behind?.byRule ? "the price this rule starts from" : "this price"}.`)
     scope.push(`That shows what Chainlink published. It doesn't show that Chainlink's number is right. That this update was still the latest at block ${leg.blockNum.toLocaleString("en-US")} comes from the dataset's calculations.`)
   } else {
-    if (leg.priceSource === "oracle") scope.push(`It doesn't cover this price: ${behind ? notFound : "Chainlink's price comes from calling a contract, and block headers don't record calls"}. It covers the transaction and ${leg.kind === "gas" ? "the fee paid to Base" : "the amounts"}.`)
+    if (leg.priceSource === "oracle") scope.push(`It doesn't cover this price: ${behind ? notFound : called}. It covers the transaction and ${leg.kind === "gas" ? "the fee paid to Base" : "the amounts"}.`)
     if (leg.priceSource === "swap") scope.push(`It covers the amounts exchanged. It doesn't cover Chainlink's price, used to value them, because ${behind ? notFound : "block headers don't record calls to a contract"}.`)
   }
   if (hasEthereumFee) scope.push("It doesn't cover the fee paid to Ethereum, which only Base's receipts have.")
@@ -214,7 +229,7 @@ function priceFrom(leg: PricedLeg, legs: readonly PricedLeg[], answer: string): 
 }
 
 /** The update's block checked like the leg's own, then its log against the update and the update against the price. */
-function updateCheck(leg: PricedLeg, legs: readonly PricedLeg[], { feed, update }: PriceBehind, read: BlockRead | null): ProofCheck {
+function updateCheck(leg: PricedLeg, legs: readonly PricedLeg[], { feed, update, byRule }: PriceBehind, read: BlockRead | null): ProofCheck {
   const title = "Chainlink's update"
   if (!update) return { title, status: "unchecked", detail: "The update behind this price couldn't be found, so the price isn't confirmed." }
   const block = update.block_num.toLocaleString("en-US")
@@ -230,8 +245,10 @@ function updateCheck(leg: PricedLeg, legs: readonly PricedLeg[], { feed, update 
   const isUpdate = log && tx?.tx_hash === hexOf(update.tx_hash) && feed.aggregators.some((address) => hexOf(address) === hexOf(log.address)) && log.topics[0] === ANSWER_UPDATED_TOPIC
   if (!isUpdate) return { title, status: "failed", detail: `Log #${update.log_index} of block ${block} isn't an update from Chainlink's ${feed.pair} contract.` }
   if (!update.answer || !log.topics[1] || BigInt(`0x${log.topics[1]}`) !== BigInt(update.answer)) return { title, status: "failed", detail: `Log #${update.log_index} of block ${block} doesn't say what the dataset says it does.` }
+  const where = `Block ${block} matches its header, and its log #${update.log_index}, from Chainlink's ${feed.pair} contract,`
+  if (byRule) return { title, status: "passed", detail: `${where} is the price this rule starts from. The dataset says it was the latest at block ${leg.blockNum.toLocaleString("en-US")}, and the rule's own dataset sets the price shown here from it.` }
   if (priceFrom(leg, legs, update.answer) !== leg.priceMicros) return { title, status: "failed", detail: `Log #${update.log_index} of block ${block} doesn't work out to the price shown here.` }
-  return { title, status: "passed", detail: `Block ${block} matches its header, and its log #${update.log_index}, from Chainlink's ${feed.pair} contract, works out to the price shown here. The dataset says it was the latest at block ${leg.blockNum.toLocaleString("en-US")}.` }
+  return { title, status: "passed", detail: `${where} works out to the price shown here. The dataset says it was the latest at block ${leg.blockNum.toLocaleString("en-US")}.` }
 }
 
 const SUMMARIES: Record<CheckStatus, string> = {

@@ -21,7 +21,7 @@ export async function warnOfNewAggregators(url: string, send: typeof fetch = fet
       if (typeof result !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(result)) throw new Error("no address in the answer")
       const current = result.slice(-40).toLowerCase()
       if (feed.aggregators.some((address) => hexOf(address) === current)) continue
-      warn(`Chainlink's ${feed.pair} feed now reads from 0x${current}, which isn't in PRICE_FEEDS. Its price turns unknown within ${feed.validBlocks.toLocaleString("en-US")} blocks of its last update. Add the address and deploy a new dataset version.`)
+      warn(`Chainlink's ${feed.pair} feed now reads from 0x${current}, which isn't in PRICE_FEEDS. Its price turns unknown within ${(feed.validSeconds / 3600).toLocaleString("en-US", { maximumFractionDigits: 1 })} hours of its last update. Add the address and deploy a new dataset version.`)
     } catch (error) {
       // Not the URL: a dedicated RPC's has a key in it.
       warn(`Couldn't check which contract Chainlink's ${feed.pair} feed reads from: ${error instanceof Error ? error.message : "unknown error"}`)

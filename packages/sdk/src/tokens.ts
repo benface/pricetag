@@ -18,14 +18,29 @@ export type PriceFeed = {
   proxy: string
   /** The contracts that emit this feed's `AnswerUpdated`. A new aggregator goes here, and needs a new dataset version. */
   aggregators: readonly string[]
-  /** How long an update counts, in blocks. After that the price is unknown, not stale. Longest gaps seen: 618 and 43,245. */
-  validBlocks: number
+  /** How long an update counts. After that the price is unknown, not stale. It's in time because feeds update on a clock, whatever the block rate. Longest gaps seen: 1,236 s and 86,490 s. */
+  validSeconds: number
 }
 
 export const PRICE_FEEDS: readonly [PriceFeed, PriceFeed] = [
-  { name: "eth", pair: "ETH/USD", proxy: ETH_USD_FEED, aggregators: ["0x05c84a58FE042275b37db038bAAcD15F410c7bB0"], validBlocks: 1_300 },
-  { name: "usdc", pair: "USDC/USD", proxy: USDC_USD_FEED, aggregators: ["0x68bE4C50235205Ede361ac8244B1ee221CDDA5E2"], validBlocks: 45_000 },
+  { name: "eth", pair: "ETH/USD", proxy: ETH_USD_FEED, aggregators: ["0x05c84a58FE042275b37db038bAAcD15F410c7bB0"], validSeconds: 2_600 },
+  { name: "usdc", pair: "USDC/USD", proxy: USDC_USD_FEED, aggregators: ["0x68bE4C50235205Ede361ac8244B1ee221CDDA5E2"], validSeconds: 90_000 },
 ]
+
+/**
+ * Stands in for the transaction of a price read from a feed's contract instead of a log. A local Amp has no logs from
+ * before its start, so that's where its first prices come from. A real transaction can't have this hash.
+ */
+export const SEED_TX = `0x${"0".repeat(64)}`
+
+/** Base's first 200ms block, from its 2026-11-05 18:00 UTC upgrade. Blocks before it are 2 s apart. */
+const FAST_BLOCKS_FROM = 53_556_127
+
+/** How many blocks up to `block` it takes to span `seconds`, which is what keeps a read over a time window bounded. */
+export function blocksWithin(seconds: number, block: number): number {
+  const fast = Math.max(0, block - FAST_BLOCKS_FROM)
+  return seconds * 5 <= fast ? Math.ceil(seconds * 5) : fast + Math.ceil((seconds - fast / 5) / 2)
+}
 
 /**
  * A swap price outside this range is rejected, and the leg has no usable price. Swaps can imply absurd prices:

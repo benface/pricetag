@@ -297,17 +297,20 @@ deploy_raw() {
   ampctl dataset deploy "$RAW_DATASET" > /dev/null
 }
 
+# The raw dataset has no blocks from before the start, so the manifest gets Chainlink's prices at the start block. They're
+# read first, because it's a pity to find out they can't be read after the backfill. See "Run the dataset locally" in the README.
+write_local_manifest() {
+  say "Reading Chainlink's prices at block $1..."
+  node "$REPO_DIR/dataset/local.ts" "$1" "$RPC_URL" > "$STATE_DIR/pricetag.json" \
+    || die "couldn't read Chainlink's prices at block $1 from BASE_RPC_URL."
+}
+
 deploy_pricetag() {
   local start_block="$1"
   say "Deploying $PRICETAG_DATASET from block $start_block..."
   # A table without its own top-level block_num() filter walks from genesis. Refuse to deploy one.
-  jq -e '.tables | map_values(.input.sql | test("block_num\\(\\) >= [0-9]+")) | all' "$MANIFEST" > /dev/null \
+  jq -e '.tables | map_values(.input.sql | test("block_num\\(\\) >= [0-9]+")) | all' "$STATE_DIR/pricetag.json" > /dev/null \
     || die "every table in $MANIFEST needs a top-level block_num() >= <block> filter."
-  # Everything starts at the raw dataset's first block, so price_updates can't read its usual window before it, and
-  # USDC has no price until its next update. See "Run the dataset locally" in the README.
-  jq --argjson start "$start_block" \
-    '.tables |= map_values(.input.sql |= gsub("(?<column>block_num\\(\\)|b\\._block_num) >= [0-9]+"; "\(.column) >= \($start)"))' \
-    "$MANIFEST" > "$STATE_DIR/pricetag.json"
   ampctl dataset register "${PRICETAG_DATASET%@*}" "$STATE_DIR/pricetag.json" --tag "${PRICETAG_DATASET#*@}" > /dev/null
   # Unbounded on purpose: --end-block turns off the start filter.
   ampctl dataset deploy "$PRICETAG_DATASET" > /dev/null
@@ -380,6 +383,7 @@ cmd_start() {
   printf '%s' "$ENV_FILE" > "$STATE_DIR/env_file"
   trap 'say "Start failed. See $STATE_DIR/ampd.log, then clean up with: scripts/amp stop"' EXIT
   start_rpc_throttle
+  write_local_manifest "$start_block"
   start_metadb
   start_ampd
   deploy_raw "$start_block"
