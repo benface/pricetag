@@ -2,7 +2,7 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import { formatDuration, msBetweenBlocks, type CostLabel, type FoldLeg, type Method, type PriceSource } from "@pricetag/sdk/core"
+import { formatDuration, formatMoney, msBetweenBlocks, type CostLabel, type CurrencyCode, type FoldLeg, type Method, type PriceSource } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
@@ -67,11 +67,23 @@ export function costTag(label: CostLabel): string {
   }[label]
 }
 
+/** A cost's source, to finish "from …". */
+export const COST_WORDS: Record<CostLabel, string> = {
+  paid: "what you paid",
+  inherited: "what your other wallet paid",
+  "received at market": "the price when it arrived",
+  "self-reported": "what you entered",
+  unknown: "an unknown cost",
+}
+
 /** What a list of movements is called, with how much of it is showing. */
 export function activityTitle(count: number, shown: number): string {
   const total = count.toLocaleString("en-US")
   return count > shown ? `Activity (newest ${shown} of ${total})` : `Activity (${total})`
 }
+
+/** How much of a wallet's PnL rests on an estimate, or null when none does. */
+export const estimatedSentence = (micros: string, currency: CurrencyCode): string | null => (BigInt(micros) > 0n ? `${formatMoney(micros, currency)} of this is an estimate, from market prices.` : null)
 
 /** What a total leaves out, or null when it leaves out nothing. */
 export function excludedSentence(excluded: readonly { asset: string; reason: string }[]): string | null {
@@ -88,6 +100,10 @@ export function coverageSentence(coverage: { fromBlock: number; toBlock: number 
 
 export function networkFeeUnknownSentence(count: number): string {
   return `Couldn't read the network fee of ${count} ${count === 1 ? "transaction" : "transactions"} yet, so fees paid are too low, and ETH's PnL is unavailable until they're read.`
+}
+
+export function linkedFailedSentence(count: number): string {
+  return count === 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : `Couldn't read ${count} of your other wallets, so what came from them may show as unresolved.`
 }
 
 export function feesUnknownSentence(count: number): string {

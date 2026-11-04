@@ -52,6 +52,7 @@ struct WordingVectors: Decodable {
     let stale: String
     let feedDetail: [String]
     let pnlHelp: [PnlHelp]
+    let linkedFailed: [FeesUnknown]
     let sentences: Sentences
 }
 
@@ -86,6 +87,7 @@ struct WordingVectors: Decodable {
         #expect([Mode.demo, .raw, .dataset].map { Wording.feedDetail($0, block: 1000) } == vectors.feedDetail)
         for vector in vectors.pnlHelp { #expect(Wording.pnlHelp(for: vector.text) == vector.help) }
         let sentences = vectors.sentences
+        for vector in vectors.linkedFailed { #expect(Wording.linkedFailed(vector.count) == vector.text) }
         #expect(Wording.methodName == sentences.methodName)
         #expect(Wording.rulesTitle == sentences.rulesTitle)
         #expect(Wording.rulesHelp == sentences.rulesHelp)
@@ -120,6 +122,8 @@ struct WordingVectors: Decodable {
         #expect(comparison.rows.first?.label == "ETH price")
         #expect(comparison.changedTxs > 0)
         #expect(comparison.rows.first { $0.label == "Total PnL" }?.aPartial == true)
+        #expect(comparison.rows.first { $0.label == "Total PnL" }?.aEstimated == true)
+        #expect(comparison.rows.first?.aEstimated == false)
         #expect(!comparison.warnings.isEmpty)
     }
 
@@ -133,5 +137,12 @@ struct WordingVectors: Decodable {
         #expect(Format.ruleDifference("1500000", format: "money", currency: .USD) == "+$1.50")
         #expect(Format.ruleDifference("-24000000", format: "usdPrice", currency: .CAD) == "-$24.00")
         #expect(Format.ruleValue("2376000000", format: "usdPrice", currency: .CAD) == "$2,376.00")
+        // An estimate looks like one, and so does a difference from it. What isn't a number stays as it is.
+        #expect(Format.ruleValue("1500000", format: "money", currency: .USD, isEstimate: true) == "≈$1.50")
+        #expect(Format.ruleValue("1500000", format: "signed", currency: .USD, isEstimate: true) == "≈+$1.50")
+        #expect(Format.ruleValue(nil, format: "signed", currency: .USD, isEstimate: true) == "Unavailable")
+        #expect(Format.ruleDifference("1500000", format: "money", currency: .USD, isEstimate: true) == "≈+$1.50")
+        #expect(Format.ruleDifference("0", format: "money", currency: .USD, isEstimate: true) == "Same")
+        #expect(Format.ruleDifference(nil, format: "money", currency: .USD, isEstimate: true) == "—")
     }
 }

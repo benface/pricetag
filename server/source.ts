@@ -3,9 +3,9 @@
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, blockBefore, type RateRound } from "@pricetag/sdk/core"
-import { asIso, asNumber, blockFilters, decimalString, hexOf, prefixed, readBalancesAt, readEthBalancesAt, readHead, type Query, type Row, type Source } from "@pricetag/sdk/internal"
-import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRound, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
+import { ERC20_ADDRESSES, ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
+import { asIso, asNumber, blockFilters, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, type Query, type Row, type Source } from "@pricetag/sdk/internal"
+import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRound, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
 
 /** A feed's answer at each block, leaving out blocks where the read failed. */
 export type RoundReader = (feed: string, blocks: readonly number[]) => Promise<Map<number, RateRound>>
@@ -29,6 +29,19 @@ export function feedRounds(query: Query, config: { baseDataset: string; network:
     }
     return rounds
   }
+}
+
+async function readNotesAt(query: Query, dataset: string, address: string, blocks: readonly number[]): Promise<CostNote[]> {
+  const me = hexOf(address)
+  const notes: CostNote[] = []
+  for (const { filter } of blockFilters(blocks)) {
+    const rows = await query<Row>(`SELECT block_num, tx_hash, input FROM "${dataset}".transactions WHERE ${filter} AND "from" = X'${me}' AND "to" = X'${me}' AND status AND value = '0'`)
+    for (const row of rows) {
+      const note = parseNote(String(row.input ?? ""))
+      if (note) notes.push({ ...note, noteTx: prefixed(String(row.tx_hash)), blockNum: asNumber(row.block_num) })
+    }
+  }
+  return notes.sort((a, b) => a.blockNum - b.blockNum)
 }
 
 /** How far back a wallet's history goes when PRICETAG_HISTORY_BLOCKS doesn't say. */
@@ -71,6 +84,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
     readReferences,
     readLatestReference: async (head) => (await readReferences([head]))[0] ?? null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readNotes: (address, blocks) => readNotesAt(query, config.baseDataset, address, blocks),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
 
     async readWindow(address, from, to) {
@@ -149,6 +163,76 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
         },
       })
       return { rows, priced: null, gasUnknown }
+    },
+  }
+}
+
+const isMissingTable = (error: unknown) => /table .*not found|not found.*table|does not exist|unknown table/i.test(describeError(error))
+
+/** Enough for the guards in market.ts, which only read the latest few. A busy pool repeats each trade per account. */
+const MARKET_ROWS = 300
+
+/** The SDK's `datasetSource`, plus what only working out a cost needs: who was on the other side, notes, and market prices. */
+export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string }): Source {
+  const reader = datasetSource(query, config)
+  const ds = `"${config.dataset}"`
+  // What a fork of the pricing rule changes, so its market prices come from its own trades.
+  const prices = `"${config.priceDataset ?? config.dataset}"`
+  const base = `"${config.baseDataset}"`
+  return {
+    ...reader,
+    readNotes: (address, blocks) => readNotesAt(query, config.baseDataset, address, blocks),
+
+    async readWindow(address, from, to) {
+      const window = await reader.readWindow(address, from, to)
+      // `legs` doesn't say who was on the other side, so that comes from the raw tables, for only the blocks that matter.
+      const me = hexOf(address)
+      const topic = `X'${me.padStart(64, "0")}'`
+      const allowlist = ERC20_ADDRESSES.map((a) => `X'${hexOf(a)}'`).join(", ")
+      const logs: Pick<RawLog, "tx_hash" | "log_index" | "topic1" | "topic2">[] = []
+      const txs: Pick<RawTx, "tx_hash" | "from" | "to">[] = []
+      for (const { filter } of blockFilters(counterpartyBlocks(window.rows))) {
+        const logRows = await query<Row>(`SELECT tx_hash, log_index, topic1, topic2 FROM ${base}.logs WHERE ${filter} AND topic0 = X'${TRANSFER_TOPIC}' AND address IN (${allowlist}) AND (topic1 = ${topic} OR topic2 = ${topic})`)
+        logs.push(...logRows.map((l) => ({ tx_hash: prefixed(String(l.tx_hash)), log_index: asNumber(l.log_index), topic1: String(l.topic1), topic2: String(l.topic2) })))
+        const txRows = await query<Row>(`SELECT tx_hash, "from", "to" FROM ${base}.transactions WHERE ${filter} AND ("from" = X'${me}' OR "to" = X'${me}') AND value <> '0'`)
+        txs.push(...txRows.map((t) => ({ tx_hash: prefixed(String(t.tx_hash)), from: String(t.from), to: t.to == null ? null : String(t.to) })))
+      }
+      return { ...window, rows: withCounterparties(window.rows, logs, txs) }
+    },
+
+    async marketReady() {
+      // Only a dataset with the fix for wrong `priced_legs` rows has this table. Asking it for no rows tells them apart.
+      try {
+        await query<Row>(`SELECT block_num FROM ${ds}.unlisted_moves WHERE block_num BETWEEN ${config.startBlock} AND ${config.startBlock} LIMIT 1`, 15_000)
+        return true
+      } catch (error) {
+        if (isNotStarted(error)) return true
+        if (isMissingTable(error)) return false
+        throw error
+      }
+    },
+
+    async readMarketTrades(asset, from, to) {
+      const rows = await query<Row>(
+        `SELECT block_num, tx_hash, sold_token, sold_amount, bought_token, bought_amount, priced, eth_usd FROM ${prices}.priced_legs
+         WHERE block_num BETWEEN ${from} AND ${to} AND get_field(priced, 'token') = '${asset.replace(/[^A-Za-z0-9]/g, "")}'
+         ORDER BY block_num DESC LIMIT ${MARKET_ROWS}`,
+      ).catch((error: unknown) => {
+        if (isNotStarted(error)) return []
+        throw error
+      })
+      return marketTrades(
+        rows.map((r) => ({
+          block_num: asNumber(r.block_num),
+          tx_hash: prefixed(String(r.tx_hash)),
+          sold_token: prefixed(String(r.sold_token)),
+          sold_amount: String(r.sold_amount ?? ""),
+          bought_token: prefixed(String(r.bought_token)),
+          bought_amount: String(r.bought_amount ?? ""),
+          priced: r.priced as PricedRow["priced"],
+          eth_usd: decimalString(r.eth_usd) ?? "",
+        })),
+      )
     },
   }
 }

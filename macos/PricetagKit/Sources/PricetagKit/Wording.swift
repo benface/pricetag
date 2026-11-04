@@ -139,6 +139,41 @@ public enum Wording {
         mode == .demo ? mode.label : "\(mode.label) · block \(Format.block(block))"
     }
 
+    /// What sits right next to a total, so it never appears bare. nil when it's exact and whole.
+    public static func headlineCaveat(_ totals: Totals, _ currency: CurrencyCode) -> String? {
+        var parts: [String] = []
+        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) unresolved") }
+        if isPositive(totals.estimatedMicros) { parts.append("\(Format.money(totals.estimatedMicros, currency)) estimated") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// What isn't listed with the holdings, and why it doesn't matter to the numbers. nil when there's nothing.
+    public static func noMarket(_ portfolio: Portfolio) -> String? {
+        let listed = portfolio.noMarketPositions.map(\.asset)
+        let total = listed.count + portfolio.unlisted.count
+        if total == 0 { return nil }
+        let off = portfolio.unlisted.isEmpty ? "" : "\(listed.isEmpty ? "" : ", plus ")\(portfolio.unlisted.count) we don't track"
+        return "\(total) \(total == 1 ? "token" : "tokens") with no market: \(listed.joined(separator: ", "))\(off). Often spam, and not counted in any total."
+    }
+
+    /// What a wallet signs to prove it's this user's. The server checks the signature against the same words.
+    public static func linkMessage(owner: String, address: String) -> String {
+        "Patina: \(address.lowercased()) is my wallet, and belongs with \(owner.lowercased()).\n\nThis only links them in my own app. It can't move funds or approve anything."
+    }
+
+    public static func linkedFailed(_ count: Int) -> String {
+        count == 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : "Couldn't read \(count) of your other wallets, so what came from them may show as unresolved."
+    }
+
+    /// A preview's headline, as it would read.
+    public static func consequence(_ preview: BookPreview, _ currency: CurrencyCode) -> String {
+        if preview.failed { return "Couldn't read that wallet" }
+        if preview.pending { return "Reading that wallet…" }
+        guard let pnl = preview.pnlMicros else { return "PnL still unavailable" }
+        let number = Format.estimate(Format.signedMoney(pnl, currency), isPositive(preview.estimatedMicros))
+        return isPositive(preview.unresolvedMicros) ? "\(number) · \(Format.money(preview.unresolvedMicros, currency)) unresolved" : number
+    }
+
     public static let notStarted = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."
     public static let unpricedFees = "Some network fees had no price at the time, and aren't in this total."
 

@@ -37,22 +37,22 @@ public enum Format {
     }
 
     /// One side of a comparison. A nil is unavailable, not zero.
-    public static func ruleValue(_ micros: String?, format: String, currency: CurrencyCode) -> String {
+    public static func ruleValue(_ micros: String?, format: String, currency: CurrencyCode, isEstimate: Bool = false) -> String {
         guard let micros else { return "Unavailable" }
         switch format {
-        case "usdPrice": return price(micros, .USD)
-        case "money": return money(micros, currency)
-        default: return signedMoney(micros, currency)
+        case "usdPrice": return estimate(price(micros, .USD), isEstimate)
+        case "money": return estimate(money(micros, currency), isEstimate)
+        default: return estimate(signedMoney(micros, currency), isEstimate)
         }
     }
 
     /// Always signed, so which way it went can be read at a glance. A price's is small, so it keeps its digits.
-    public static func ruleDifference(_ micros: String?, format: String, currency: CurrencyCode) -> String {
+    public static func ruleDifference(_ micros: String?, format: String, currency: CurrencyCode, isEstimate: Bool = false) -> String {
         guard let micros else { return "—" }
         if whole(micros) == 0 { return "Same" }
-        guard format == "usdPrice" else { return signedMoney(micros, currency) }
+        guard format == "usdPrice" else { return estimate(signedMoney(micros, currency), isEstimate) }
         let isNegative = micros.hasPrefix("-")
-        return "\(isNegative ? "-" : "+")\(price(isNegative ? String(micros.dropFirst()) : micros, .USD))"
+        return estimate("\(isNegative ? "-" : "+")\(price(isNegative ? String(micros.dropFirst()) : micros, .USD))", isEstimate)
     }
 
     /// Whole tokens from smallest units, cut to a readable length. Cuts instead of rounding, so it never shows more than there is.
@@ -71,6 +71,22 @@ public enum Format {
 
     public static func signedAmount(_ units: String, decimals: Int) -> String {
         isPositive(units) ? "+\(amount(units, decimals: decimals))" : amount(units, decimals: decimals)
+    }
+
+    /// An estimate has to look different from an exact value, wherever it's shown.
+    public static func estimate(_ text: String, _ isEstimate: Bool) -> String {
+        isEstimate ? "≈\(text)" : text
+    }
+
+    /// Micro-USD from what someone typed, like "$1,234.50". nil when it isn't an amount. Cents past six places are cut.
+    public static func micros(fromDollars text: String) -> String? {
+        let clean = text.filter { !" $,".contains($0) }
+        guard clean.wholeMatch(of: /\d+(\.\d*)?|\.\d+/) != nil else { return nil }
+        let parts = clean.split(separator: ".", omittingEmptySubsequences: false)
+        let whole = parts.first.map(String.init) ?? ""
+        let fraction = parts.count > 1 ? String(parts[1].prefix(6)) : ""
+        let digits = (whole + fraction.padding(toLength: 6, withPad: "0", startingAt: 0)).drop { $0 == "0" }
+        return digits.isEmpty ? "0" : String(digits)
     }
 
     public static func block(_ number: Int) -> String {

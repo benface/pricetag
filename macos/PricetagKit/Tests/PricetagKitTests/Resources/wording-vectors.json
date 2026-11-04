@@ -177,6 +177,16 @@
       "help": null
     }
   ],
+  "linkedFailed": [
+    {
+      "count": 1,
+      "text": "Couldn't read your other wallet, so what came from it may show as unresolved."
+    },
+    {
+      "count": 2,
+      "text": "Couldn't read 2 of your other wallets, so what came from them may show as unresolved."
+    }
+  ],
   "sentences": {
     "methodName": "How cost is worked out",
     "methodHelp": "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest.",

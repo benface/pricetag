@@ -62,7 +62,10 @@ struct PopoverView: View {
             case (_, let portfolio?) where portfolio.isEmpty:
                 Text("No activity for this wallet in this time.").foregroundStyle(.secondary)
             case (_, let portfolio?):
-                PnlHeadline(portfolio: portfolio, isLive: isLive, size: 30) { open(.total(.pnl)) }
+                PnlHeadline(portfolio: portfolio, isLive: isLive, size: 30, onOpen: { open(.total(.pnl)) }, onResolve: {
+                    navigation.resolve()
+                    open(nil)
+                })
                 // Two by two, because four across would cut off anything over $9,999.
                 LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 8) {
                     ForEach(portfolio.totalStats, id: \.metric) { stat in
@@ -86,7 +89,7 @@ struct PopoverView: View {
     private func holdings(_ portfolio: Portfolio) -> some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(portfolio.positions) { position in
+                ForEach(portfolio.listedPositions) { position in
                     Button { open(.asset(position.asset, .amount)) } label: {
                         HoldingRow(position: position, currency: portfolio.currency, isLive: isLive)
                             .padding(.horizontal, 10)
@@ -102,6 +105,14 @@ struct PopoverView: View {
                 }
             }
             .padding(4)
+            if let noMarket = Wording.noMarket(portfolio) {
+                Text(noMarket)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+            }
         }
         .frame(maxHeight: 300)
         .fixedSize(horizontal: false, vertical: true)
@@ -193,7 +204,7 @@ struct PopoverView: View {
     }
 
     private func moveHighlight(by step: Int) -> KeyPress.Result {
-        guard let assets = portfolio?.positions.map(\.asset), !assets.isEmpty else { return .ignored }
+        guard let assets = portfolio?.listedPositions.map(\.asset), !assets.isEmpty else { return .ignored }
         let current = highlighted.flatMap(assets.firstIndex(of:))
         let next = current.map { min(max($0 + step, 0), assets.count - 1) } ?? (step > 0 ? 0 : assets.count - 1)
         highlighted = assets[next]

@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { portfolioOf } from "../server/portfolio.ts"
 import { createWallets, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
-import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, type LegRow, type Reference } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, msBetweenBlocks, type LegRow, type Reference } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 
@@ -599,6 +599,137 @@ describe("reconciling", () => {
     head = 1001
     await wallets.get(ME)
     assert.deepEqual(reads, [960, 1001])
+  })
+})
+
+describe("market prices, notes and unlisted tokens", () => {
+  const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
+  const trades = (block: number, usdMicros = "1300000") => [1, 2, 3].map((n) => ({ blockNum: block - n, txHash: `0x${n}`, asset: "AERO", usdMicros, notionalUsdMicros: "500000000" }))
+  const aeroRow = (block: number): LegRow => ({ ...row(block), token: AERO, kind: "erc20", amount: (10n ** 18n).toString() })
+
+  function marketFake(chain: Map<number, LegRow[]>, changes: Partial<Source>) {
+    const reads: [string, number, number][] = []
+    const { source } = fake(chain, () => reference(1000))
+    const withMarket: Source = {
+      ...source,
+      marketReady: async () => true,
+      async readMarketTrades(asset, from, to) {
+        reads.push([asset, from, to])
+        return trades(to)
+      },
+      ...changes,
+    }
+    return { source: withMarket, reads }
+  }
+
+  it("prices a plain transfer from its market at or before that block, and what's held at the head", async () => {
+    const { source, reads } = marketFake(new Map([[950, [aeroRow(950)]]]), {})
+    const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.equal(wallet.marketChecked, true)
+    assert.equal(wallet.legs[0]?.priceSource, "market")
+    assert.equal(wallet.legs[0]?.priceMicros, "1300000")
+    assert.equal(wallet.prices.AERO?.source, "market")
+    assert.ok(reads.every(([, , to]) => to <= 1000))
+    assert.ok(reads.some(([, , to]) => to <= 950), "the leg's own price comes from at or before its block")
+  })
+
+  it("keeps a market read's bucket and age about as long in time after the 200 ms upgrade", async () => {
+    const head = LAST_2S_BLOCK + 9000
+    const { source, reads } = marketFake(new Map([[LAST_2S_BLOCK + 8000, [aeroRow(LAST_2S_BLOCK + 8000)]]]), { startBlock: LAST_2S_BLOCK })
+    await createWallets(source, headAt(head), noFees).get(ME)
+    const bucket = head - (head % 300)
+    assert.ok(reads.some(([, from, to]) => to === bucket && msBetweenBlocks(from, to) === 1_800_000), JSON.stringify(reads))
+  })
+
+  it("doesn't read a dataset whose priced_legs can't be trusted, and doesn't call that no market", async () => {
+    let read = false
+    const { source } = marketFake(new Map([[950, [aeroRow(950)]]]), {
+      marketReady: async () => false,
+      async readMarketTrades() {
+        read = true
+        return []
+      },
+    })
+    const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.equal(read, false)
+    assert.equal(wallet.marketChecked, false)
+    assert.equal(wallet.legs[0]?.priceMicros, null)
+  })
+
+  it("says so when a read fails, gives no price, and tries again", async () => {
+    let fail = true
+    const { source } = marketFake(new Map([[950, [aeroRow(950)]]]), {
+      async readMarketTrades(_, __, to) {
+        if (fail) throw new Error("boom")
+        return trades(to)
+      },
+    })
+    let head = 1000
+    const wallets = createWallets(source, async () => headAt(head)(), noFees)
+    const failed = await wallets.get(ME)
+    assert.equal(failed.marketChecked, false)
+    assert.equal(failed.legs[0]?.priceMicros, null, "a failed read is no price, never a stale or zero one")
+    fail = false
+    head = 1001
+    const retried = await wallets.get(ME)
+    assert.equal(retried.marketChecked, true)
+    assert.equal(retried.legs[0]?.priceMicros, "1300000")
+  })
+
+  it("has no market to check on a source without one", async () => {
+    const { source } = fake(new Map([[950, [aeroRow(950)]]]), () => reference(1000))
+    assert.equal((await createWallets(source, headAt(1000), noFees).get(ME)).marketChecked, false)
+  })
+
+  it("only reads a thin market once, and treats it as no price", async () => {
+    let count = 0
+    const { source } = marketFake(new Map([[950, [aeroRow(950)]]]), {
+      async readMarketTrades() {
+        count++
+        return []
+      },
+    })
+    let head = 1000
+    const wallets = createWallets(source, async () => headAt(head)(), noFees)
+    const first = await wallets.get(ME)
+    assert.equal(first.marketChecked, true)
+    assert.equal(first.legs[0]?.priceMicros, null)
+    const after = count
+    head = 1001
+    await wallets.get(ME)
+    assert.equal(count, after)
+  })
+
+  it("gives each rule its own market prices and check on one set of facts", async () => {
+    const note = { noteTx: "0x1", blockNum: 999, txHash: "0x2", asset: "AERO", usdMicros: "5" }
+    const first = marketFake(new Map([[950, [aeroRow(950)]]]), { readNotes: async () => [note] })
+    const second = marketFake(new Map([[950, [aeroRow(950)]]]), { async readMarketTrades() { throw new Error("boom") } })
+    const [a, b] = [createWallets(first.source, headAt(1000), noFees), createWallets(second.source, headAt(1000), noFees)]
+    await a.get(ME)
+    await b.get(ME)
+    const facts = (await a.factsAt(ME, 995, { withBalances: false }))!
+    const [byA, byB] = [a.pricedOn(ME, facts, {})!, b.pricedOn(ME, facts, {})!]
+    assert.deepEqual([byA.prices.AERO?.source, byA.marketChecked], ["market", true])
+    assert.deepEqual([byB.prices.AERO, byB.marketChecked], [undefined, false])
+    assert.deepEqual(byA.legs.find((l) => l.asset === "AERO")?.priceSource, "market")
+    assert.deepEqual(byB.legs.find((l) => l.asset === "AERO")?.priceSource, null)
+    const older = (await a.factsAt(ME, 960, { withBalances: false }))!
+    assert.equal(a.pricedOn(ME, older, {})!.prices.AERO, undefined, "a price from after that block would be the wrong one")
+    assert.deepEqual(older.notes, [], "nor a note from after it")
+  })
+
+  it("looks for notes only in transactions with nothing but gas, and passes along what it finds", async () => {
+    const gas = (block: number): LegRow => ({ ...row(block), side: "debit", kind: "gas", tx_hash: `0xg${block}` })
+    const asked: number[][] = []
+    const note = { noteTx: "0xg950", blockNum: 950, txHash: "0x1", asset: "USDC", usdMicros: "5" }
+    const { source } = fake(new Map([[950, [gas(950)]], [960, [gas(960), { ...row(960), tx_hash: "0xg960" }]]]), () => reference(1000))
+    source.readNotes = async (_, blocks) => {
+      asked.push([...blocks])
+      return blocks.includes(950) ? [note] : []
+    }
+    const wallet = await createWallets(source, headAt(1000), async () => new Map()).get(ME)
+    assert.deepEqual(asked, [[950]])
+    assert.deepEqual(wallet.notes, [note])
   })
 })
 

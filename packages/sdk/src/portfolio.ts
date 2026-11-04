@@ -3,6 +3,7 @@
 import { applyLeg, emptyPosition, worth, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
 import { answerToMicros, type PricedLeg, type Reference } from "./legs.ts"
 import { decimalsOf, estimateHeld, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
+import { TOKENS } from "./tokens.ts"
 
 export type Head = { blockNum: number; timestamp: string }
 
@@ -21,6 +22,9 @@ export type LegEffect = {
   after: PositionState
 }
 
+/** Which of a position's numbers rest on an estimate, so they can look different from exact ones. */
+export type Estimates = { cost: boolean; value: boolean; realized: boolean; unrealized: boolean }
+
 export type Position = {
   asset: string
   decimals: number
@@ -30,6 +34,9 @@ export type Position = {
   effects: LegEffect[]
   /** Null when there's nothing to compare against, as in a fold without onchain balances. */
   reconciliation: Reconciliation | null
+  /** No price, in any form, at any block. Often spam. It's listed apart, and can't affect PnL. */
+  noMarket: boolean
+  estimates: Estimates
 }
 
 export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "incomplete history" | "doesn't match its actual balance" | "not checked against its actual balance" | "balance couldn't be read" }
@@ -50,6 +57,14 @@ export type Totals = {
   /** Some gas had no price at its block, so it's not in `gasMicros`. */
   unpricedGas: boolean
   coverage: Record<"value" | "realized" | "unrealized" | "pnl", Coverage>
+  /** What's held with an unknown cost, at today's price. It's not in any PnL. */
+  unresolvedMicros: string
+  /** How much of what these sums are made of is an estimate. */
+  estimatedMicros: string
+  /** Which sums rest on one. */
+  estimated: Pick<Estimates, "value" | "realized" | "unrealized">
+  /** Assets with no market, which aren't in any of this. */
+  noMarket: string[]
 }
 
 /**
@@ -104,6 +119,13 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
     const price = prices[asset] ?? null
     const values = valuePosition(state, price?.micros ?? null)
     const reconciliation = onchain ? reconcile(asset, effects.map((e) => e.leg), BigInt(state.shortfallQty), onchain) : null
+    const confirmed = reconciliation === null || reconciliation.status === "reconciled"
+    const cost = confirmed && BigInt(values.estimatedCostMicros) > 0n
+    const value = price?.source === "market"
+    const hasPrice =
+      price !== null ||
+      onchain?.prices?.[asset] !== undefined ||
+      effects.some(({ leg }) => leg.priceMicros !== null || leg.costMicros !== null || leg.proceedsMicros !== null || leg.pieces?.some((piece) => piece.costMicros !== null) || leg.conversion?.priceUsdMicros != null || leg.conversion?.costUsdMicros != null || leg.conversion?.proceedsUsdMicros != null)
     return {
       asset,
       decimals,
@@ -111,6 +133,8 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
       effects,
       price,
       reconciliation,
+      noMarket: onchain?.marketChecked === true && !hasPrice && !TOKENS.some((t) => t.symbol === asset && t.oracle),
+      estimates: { cost, value, realized: confirmed && BigInt(values.estimatedRealizedMicros) > 0n, unrealized: confirmed && (cost || value) },
       values:
         reconciliation === null || reconciliation.status === "reconciled"
           ? values
@@ -137,10 +161,27 @@ export function sumTotals(positions: readonly Position[], unread: readonly strin
   let unrealized = 0n
   let gas = 0n
   let unpricedGas = false
+  let unresolved = 0n
+  let estimatedTotal = 0n
+  const estimated = { value: false, realized: false, unrealized: false }
+  const noMarket: string[] = []
   const excluded: Exclusion[] = []
   const coverage = { value: { known: 0, missing: 0 }, realized: { known: 0, missing: 0 }, unrealized: { known: 0, missing: 0 }, pnl: { known: 0, missing: 0 } }
   for (const position of positions) {
-    const { asset, values, state, reconciliation } = position
+    const { asset, values, state, reconciliation, estimates, price, decimals } = position
+    if (position.noMarket) {
+      noMarket.push(asset)
+      continue
+    }
+    if (price !== null) unresolved += worth(BigInt(values.unknownCostQty), BigInt(price.micros), decimals)
+    const marketValue = estimates.value && values.valueMicros !== null ? BigInt(values.valueMicros) : 0n
+    const heldEstimate = estimates.cost && BigInt(values.estimatedCostMicros) > marketValue ? BigInt(values.estimatedCostMicros) : marketValue
+    if (estimates.value && values.valueMicros !== null && BigInt(values.qty) > 0n) estimated.value = true
+    if (estimates.realized) estimated.realized = true
+    if (estimates.unrealized && values.unrealizedMicros !== null) estimated.unrealized = true
+    // Only what's in the PnL counts as resting on an estimate. A position that's left out adds nothing to it.
+    if (estimates.unrealized && values.unrealizedMicros !== null) estimatedTotal += heldEstimate
+    if (estimates.realized && values.realizedMicros !== null) estimatedTotal += BigInt(values.estimatedRealizedMicros)
     gas += BigInt(state.gasMicros)
     if (BigInt(state.gasMicros) > 0n) coverage.pnl.known++
     if (BigInt(state.unpricedGasQty) > 0n) {
@@ -211,6 +252,10 @@ export function sumTotals(positions: readonly Position[], unread: readonly strin
     excluded,
     unpricedGas,
     coverage,
+    unresolvedMicros: unresolved.toString(),
+    estimatedMicros: estimatedTotal.toString(),
+    estimated,
+    noMarket,
   }
 }
 
@@ -269,6 +314,8 @@ export function pnlOverTime(
   latest: { blockNum: number; timestamp: string } | null,
   /** Assets the chain hasn't confirmed. We can't tell when that started, so their PnL is left out of every point. */
   unconfirmed: ReadonlySet<string> = new Set(),
+  /** Assets with no market, which can't affect PnL. */
+  noMarket: ReadonlySet<string> = new Set(),
 ): PnlPoint[] {
   const states = new Map<string, PositionState>()
   const points: PnlPoint[] = []
@@ -277,6 +324,7 @@ export function pnlOverTime(
     let pnl = 0n
     let excludedCount = 0
     for (const [asset, state] of states) {
+      if (noMarket.has(asset)) continue
       const v = valuePosition(state, priceOf(asset))
       pnl -= BigInt(state.gasMicros)
       if (BigInt(state.gasMicros) > 0n) coverage.known++
