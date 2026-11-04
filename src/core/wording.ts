@@ -2,7 +2,7 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import { formatDuration, formatMoney, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PriceSource } from "@pricetag/sdk/core"
+import { formatAmount, formatDuration, formatMoney, shortHash, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
@@ -147,4 +147,14 @@ export function staleSentence(lastUpdate: string): string {
 /** The technical side of the status badge, for its tooltip. */
 export function feedDetail(mode: Mode, block: number): string {
   return mode === "demo" ? MODE_LABELS.demo : `${MODE_LABELS[mode]} · block ${block.toLocaleString("en-US")}`
+}
+
+/** Keeps a wallet with many of these to a sentence. The rest are still there, as sales with no known value. */
+const MAX_NAMED_UNSEEN = 5
+
+/** The transactions most likely behind ETH that doesn't match. */
+export function unseenEthCause(unseen: readonly UnseenEth[]): string {
+  const named = unseen.slice(0, MAX_NAMED_UNSEEN).map(({ amount, txHashes }) => `${txHashes.map(shortHash).join(", ")} (+${formatAmount(amount, 18)} ETH)`)
+  const more = unseen.length > named.length ? `, and ${unseen.length - named.length} more` : ""
+  return `It lines up with what left this wallet in ${named.join(", ")}${more}: ETH rose by that much in the same block, with no transaction showing it.`
 }

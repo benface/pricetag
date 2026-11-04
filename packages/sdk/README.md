@@ -53,7 +53,7 @@ Amounts are in a token's smallest unit, and USD values are in micros (millionths
 | --- | --- |
 | `createPricetag(config)` | A client. See [the config](#the-config). |
 | `getPortfolio(address, { method?, from?, to? })` | A wallet's holdings, cost and PnL, matching the app. `method` is `"average"`, the default, or `"fifo"`. With a `to`, it's the wallet as of that block, at that block's prices. See [what it returns](#what-getportfolio-returns). |
-| `getLegs(address, { from?, to? })` | `{ legs, blocks, references, gasUnknownTxs }`: what moved in the range, priced and labeled, in the order the fold reads them. It doesn't include opening balances or L1 fees. |
+| `getLegs(address, { from?, to? })` | `{ legs, blocks, references, gasUnknownTxs, l1Fees, l1FeeUnknownTxs }`: what moved in the range, priced and labeled, in the order the fold reads them. It doesn't include opening balances. With an `rpcUrl`, these are the same legs as the app's and `getPortfolio`'s, L1 fees included. Without one, gas leaves out L1 fees, and a swap paid out in unwrapped ETH stays unknown. |
 | `getPrices(token, { from?, to? })` | `{ token, prices, blocks }`: a token's prices, by symbol or address. It throws on a token off the allowlist, which has no prices to give. |
 | `getLatestPrices()` | The current prices to value positions at. Only ETH and USDC have one, and only with a recent oracle read. |
 | `buildPortfolio(legs, method, prices?)` | `{ method, positions, totals }` from `getLegs`' legs. It's pure, so it needs no Amp. Nothing in it is checked against the chain, so prefer `getPortfolio`. |
@@ -81,7 +81,7 @@ There are three entry points:
 | `token` | A local Amp doesn't need one, but a hosted one does. |
 | `dataset` | The Pricetag dataset, like `benface/pricetag@0.0.1`. |
 | `startBlock` | The dataset's first block. Reads start here unless they pass a `from`. With neither, they throw. |
-| `rpcUrl` | Where `getPortfolio` reads L1 fees from. See below. |
+| `rpcUrl` | Where `getPortfolio` and `getLegs` read L1 fees from. See below. |
 | `baseDataset` | The raw dataset the chain's head is read from. It defaults to `edgeandnode/base_mainnet@0.0.2`. |
 | `network` | Amp's name for the chain, used to read onchain balances. It defaults to `base_mainnet`. |
 | `timeoutMs` | How long one query can take. It defaults to 60 s. |
@@ -89,7 +89,7 @@ There are three entry points:
 
 Queries always run one at a time, because a hosted Amp is shared.
 
-L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anything can't have its ETH checked against the chain, so ETH is `unchecked`, `l1Fees` is `"no rpc url"`, and `missing` says so. The public RPC is `https://mainnet.base.org`, and it rate-limits.
+L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anything can't have its ETH checked against the chain, so ETH is `unchecked`, `l1Fees` is `"no rpc url"`, and `missing` says so. `getLegs` can't confirm a swap paid out in unwrapped ETH either, so `l1Fees` says the same there and the swap stays unknown. The public RPC is `https://mainnet.base.org`, and it rate-limits.
 
 ### What `getPortfolio` returns
 
@@ -108,9 +108,9 @@ L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anyt
 | `l1Fees`, `l1FeeUnknownTxs` | `read`, `pending` (some couldn't be read yet, and the next call tries again) or `no rpc url`, and the transactions affected. |
 | `openingUnread`, `unreadAssets` | Assets whose balance before the first block couldn't be read, and assets with no position because nothing could be read about them, which isn't the same as holding none. |
 
-A position's `reconciliation.status` is `reconciled` when its legs add up to its onchain balance to the smallest unit, `incomplete` when they don't, and `unchecked` when a read is missing. Only a reconciled position shows PnL. Otherwise its amount and value come from the chain, and its cost and PnL are `null`.
+A position's `reconciliation.status` is `reconciled` when its legs add up to its onchain balance to the smallest unit, `incomplete` when they don't, and `unchecked` when a read is missing. Only a reconciled position shows PnL. Otherwise its amount and value come from the chain, and its cost and PnL are `null`. On ETH that's `incomplete`, `reconciliation.unseenEth` lists blocks where ETH rose with nothing to explain it, and the transactions that took a token from the wallet there. Those transactions' proceeds stay unknown.
 
-A client keeps each wallet's rows in memory, so another call on the same client only reads new blocks. A read with a `to` is re-read on each new block until `to` is 30 blocks behind the chain's head, because a reorg can still change it. After that, it's fixed. It also reads at most 200 L1 fees per call, so a busy wallet's ETH stays `unchecked` for its first few calls while they catch up.
+A client keeps each wallet's rows in memory, so another call on the same client only reads new blocks. A read with a `to` is re-read on each new block until `to` is 30 blocks behind the chain's head, because a reorg can still change it. After that, it's fixed. It also reads at most 200 L1 fees per call, so a busy wallet's ETH stays `unchecked` for its first few calls while they catch up. With an `rpcUrl`, `getLegs` shares all of this with `getPortfolio`, so a swap paid out in unwrapped ETH can stay unknown for those first few calls too.
 
 ### Comparing with holding ETH
 
@@ -218,7 +218,7 @@ SQL stops at cost, because a cost depends on every earlier leg. To get cost and 
 
 - `getPortfolio` is in USD. The app can also show CAD, converting at each transaction's rate, and the SDK doesn't read those rates yet.
 - An old wallet's cost is unknown for whatever it held before the first block read, so its PnL stays unavailable, and that's the common case on a short range. Its amounts and value are still right, because they come from the chain.
-- `getLegs` and `getPrices` leave a sender's swap paid out in unwrapped ETH unknown, with a note saying why. An `unwrap` credit in `legs` only says a contract turned WETH into ETH in that transaction, not that the ETH reached the sender, and its amount can be wrong. Confirming it takes balances and L1 fees, so only `getPortfolio` does, like the app. `priced_legs` still has a row for them, so if you query it directly, don't take a `bought_token` of ETH on trust.
+- A sender's swap paid out in unwrapped ETH stays unknown, with a note saying why, in `getLegs` without an `rpcUrl`, and always in `getPrices`. An `unwrap` credit in `legs` only says a contract turned WETH into ETH in that transaction, not that the ETH reached the sender, and its amount can be wrong. Confirming it takes balances and L1 fees, so only `getPortfolio`, and `getLegs` with an `rpcUrl`, do, like the app. `getPrices` would need those reads for every swap's wallet, and another account's row in the same transaction, like the pool's, usually still prices it. `priced_legs` still has a row for them, so if you query it directly, don't take a `bought_token` of ETH on trust.
 - Only tokens on the allowlist in [`src/tokens.ts`](src/tokens.ts) get a position or a price.
 - Only ETH and USDC have a current price, so other tokens show a cost but no value yet.
 - `getLegs` with `buildPortfolio` is only what moved in the range, so its numbers won't match `getPortfolio`'s. Read them as what those legs add up to, not as the wallet's PnL.

@@ -357,6 +357,11 @@ describe("the formatters the Swift package repeats", () => {
   })
 })
 
+const UNSEEN_ETH_CASES = [
+  [{ blockNum: 53517245, amount: "827782101642000000", txHashes: [`0xde3a${"0".repeat(60)}`] }],
+  [{ blockNum: 1, amount: "5", txHashes: [`0xaaaa${"0".repeat(60)}`, `0xbbbb${"0".repeat(60)}`] }, ...[2, 3, 4, 5, 6].map((blockNum) => ({ blockNum, amount: "1000000000000000000", txHashes: [`0x${String(blockNum).repeat(64)}`] }))],
+]
+
 describe("wording", () => {
   const costLabels = ["paid", "inherited", "received at market", "self-reported", "unknown"] as const
   const kinds = ["swap", "transfer", "gas"] as const
@@ -401,6 +406,7 @@ describe("wording", () => {
       holdEth: wording.HOLD_ETH,
       holdPast: wording.HOLD_PAST,
     },
+    unseenEth: UNSEEN_ETH_CASES.map((unseen) => ({ unseen, text: wording.unseenEthCause(unseen) })),
     manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
   }
 
