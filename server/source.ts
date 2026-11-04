@@ -6,7 +6,7 @@
 import type { Head, Mode } from "../src/core/api.ts"
 import type { LegRow, PricedRow, ReferenceRow } from "../src/core/legs.ts"
 import { ERC20_ADDRESSES, ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS } from "../src/core/tokens.ts"
-import { decimalString, type Query } from "./amp.ts"
+import { decimalString, isNotStarted, type Query } from "./amp.ts"
 import { DEPOSIT_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
 export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknownTxs: string[] }
@@ -17,6 +17,11 @@ export type Source = {
   startBlock: number | null
   historyBlocks: number | null
   head(after: number | null): Promise<Head | null>
+  /**
+   * The newest block, in `after`..`head`, that every table a wallet read needs has processed, or null if none has.
+   * Reads never go past this. A derived table can lag the chain, and a block read before it's processed looks empty.
+   */
+  processedThrough(after: number, head: number): Promise<number | null>
   readWindow(address: string, from: number, to: number): Promise<WindowRows>
   readReferences(blocks: readonly number[]): Promise<ReferenceRow[]>
   /** The newest oracle read at or just before `head`, or null if there's none recent enough to call current. */
@@ -89,6 +94,8 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
     startBlock: null,
     historyBlocks: config.historyBlocks,
     head: (after) => readHead(query, config.baseDataset, after),
+    // The raw tables are what the head is read from, so they've always reached it.
+    processedThrough: async (_after, head) => head,
     readReferences,
     readLatestReference: async (head) => (await readReferences([head]))[0] ?? null,
 
@@ -172,6 +179,11 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
 
 export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; startBlock: number }): Source {
   const ds = `"${config.dataset}"`
+  const readOrEmpty = (sql: string) =>
+    query<Row>(sql).catch((error: unknown) => {
+      if (isNotStarted(error)) return []
+      throw error
+    })
   const referenceColumns = "block_num, get_field(eth_round, 'c1') AS eth_usd, get_field(usdc_round, 'c1') AS usdc_usd"
   const toReference = (r: Row): ReferenceRow => ({
     block_num: asNumber(r.block_num),
@@ -183,6 +195,16 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
     startBlock: config.startBlock,
     historyBlocks: null,
     head: (after) => readHead(query, config.baseDataset, after),
+
+    async processedThrough(after, head) {
+      let through = head
+      for (const table of ["legs", "priced_legs", "reference_prices"]) {
+        const rows = await readOrEmpty(`SELECT block_num FROM ${ds}.${table} WHERE block_num BETWEEN ${after} AND ${head} ORDER BY block_num DESC LIMIT 1`)
+        if (!rows[0]) return null
+        through = Math.min(through, asNumber(rows[0].block_num))
+      }
+      return through
+    },
 
     async readWindow(address, from, to) {
       const me = hexOf(address)
@@ -232,9 +254,7 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
     },
 
     async readLatestReference(head) {
-      const rows = await query<Row>(
-        `SELECT ${referenceColumns} FROM ${ds}.reference_prices WHERE block_num BETWEEN ${head - MAX_PRICE_AGE_BLOCKS} AND ${head} ORDER BY block_num DESC LIMIT 1`,
-      )
+      const rows = await readOrEmpty(`SELECT ${referenceColumns} FROM ${ds}.reference_prices WHERE block_num BETWEEN ${head - MAX_PRICE_AGE_BLOCKS} AND ${head} ORDER BY block_num DESC LIMIT 1`)
       return rows[0] ? toReference(rows[0]) : null
     },
   }

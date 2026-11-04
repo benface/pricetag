@@ -10,6 +10,18 @@ const DEFAULT_TIMEOUT_MS = 60_000
 /** Amp's client returns Decimal128 values as Arrow big numbers, not strings. */
 export const decimalString = (value: unknown): string | null => (value == null ? null : String(value).replaceAll('"', ""))
 
+/** Amp's client wraps errors a few levels deep, and the outer ones have no message. Nothing here contains the token. */
+export function describeError(error: unknown): string {
+  for (let e = error as { cause?: unknown; rawMessage?: unknown; message?: unknown } | null | undefined; e; e = e.cause as typeof e) {
+    if (typeof e.rawMessage === "string" && e.rawMessage) return e.rawMessage
+    if (e.cause === undefined && typeof e.message === "string" && e.message) return e.message
+  }
+  return String(error)
+}
+
+/** What Amp answers when a table's job hasn't written anything yet. It isn't an outage: that table just has no blocks. */
+export const isNotStarted = (error: unknown) => describeError(error).includes("no common canonical watermark")
+
 export function createQuery(url: string, token: string | undefined): Query {
   const client = createClient(createGrpcTransport({ baseUrl: url, interceptors: token ? [createAuthInterceptor(token)] : [] }))
   // Staging is shared, so run one query at a time.

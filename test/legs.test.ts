@@ -30,7 +30,8 @@ describe("pricing a wallet's rows", () => {
     assert.equal(aero.priceSource, "swap")
     assert.equal(aero.priceUsdMicros, "1250000")
     assert.equal(aero.costLabel, "paid")
-    assert.equal(aero.unitCostUsdMicros, "1250000")
+    assert.equal(aero.costUsdMicros, "1000000000")
+    assert.equal(usdc.proceedsUsdMicros, "1000000000")
   })
 
   it("a plain transfer in has a price but an unknown cost, because price and cost are separate", () => {
@@ -39,7 +40,7 @@ describe("pricing a wallet's rows", () => {
     assert.equal(leg!.priceUsdMicros, "2400000000")
     assert.equal(leg!.priceSource, "oracle")
     assert.equal(leg!.costLabel, "unknown")
-    assert.equal(leg!.unitCostUsdMicros, null)
+    assert.equal(leg!.costUsdMicros, null)
   })
 
   it("a token with no oracle and no swap has no price, and says why", () => {
@@ -68,6 +69,63 @@ describe("pricing a wallet's rows", () => {
     const [leg] = legsOf([row("0x1", ETH_ADDRESS, "credit", E18)], [{ block_num: 100, eth_usd: "", usdc_usd: "" }])
     assert.equal(leg!.priceUsdMicros, null)
     assert.match(leg!.priceNote!, /oracle/)
+  })
+
+  describe("a swap's cost and proceeds come from what changed hands", () => {
+    const refAt = (block: number, ethUsd: string): ReferenceRow => ({ block_num: block, eth_usd: ethUsd, usdc_usd: "100000000" })
+    const at = (rows: LegRow[], block: number) => rows.map((r) => ({ ...r, block_num: block }))
+    // Buys 1 ETH for 2,500 USDC while the oracle says $2,400, then sells it for 2,500 USDC while the oracle says $2,600.
+    const rows = [
+      ...at([row("0x1", USDC_ADDRESS, "debit", 2500n * E6), row("0x1", ETH_ADDRESS, "credit", E18)], 100),
+      ...at([row("0x2", ETH_ADDRESS, "debit", E18), row("0x2", USDC_ADDRESS, "credit", 2500n * E6)], 200),
+    ]
+    const references = [refAt(100, "240000000000"), refAt(200, "260000000000")]
+
+    for (const method of ["average", "fifo"] as const) {
+      it(`a round trip at one price realizes $0, whatever the oracle did (${method})`, () => {
+        const legs = legsOf(rows, references)
+        const eth = foldPositions(legs, method, {}).find((p) => p.asset === "ETH")!
+        assert.equal(eth.values.realizedUsdMicros, "0")
+        assert.equal(eth.values.qty, "0")
+      })
+    }
+
+    it("keeps the oracle price as the shared fact, next to what was paid", () => {
+      const bought = legsOf(rows, references).find((l) => l.txHash === "0x1" && l.asset === "ETH")!
+      assert.equal(bought.priceUsdMicros, "2400000000")
+      assert.equal(bought.priceSource, "oracle")
+      assert.equal(bought.costUsdMicros, "2500000000")
+    })
+
+    it("both sides share one value, so a USDC holder with a known cost doesn't lose on the spread", () => {
+      const legs = legsOf(rows, references)
+      const sold = legs.find((l) => l.txHash === "0x1" && l.asset === "USDC")!
+      assert.equal(sold.proceedsUsdMicros, "2500000000")
+      const received = legs.find((l) => l.txHash === "0x2" && l.asset === "USDC")!
+      assert.equal(received.costUsdMicros, "2500000000")
+    })
+
+    it("uses ETH's value when the other side has no oracle", () => {
+      const legs = legsOf([row("0x1", AERO, "debit", 100n * E18), row("0x1", ETH_ADDRESS, "credit", E18 / 20n)])
+      const aero = legs.find((l) => l.asset === "AERO")!
+      assert.equal(aero.proceedsUsdMicros, "120000000")
+      assert.equal(legs.find((l) => l.asset === "ETH")!.costUsdMicros, "120000000")
+    })
+
+    it("a swap far from the oracle has no value at all, so it can't make a phantom gain", () => {
+      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 1n), row("0x1", ETH_ADDRESS, "credit", E18)])
+      const eth = legs.find((l) => l.asset === "ETH")!
+      assert.equal(eth.costLabel, "unknown")
+      assert.equal(eth.costUsdMicros, null)
+      assert.equal(eth.priceUsdMicros, "2400000000")
+      assert.match(eth.priceNote!, /Rejected/)
+      assert.equal(legs.find((l) => l.asset === "USDC")!.proceedsUsdMicros, null)
+    })
+
+    it("real slippage isn't rejected", () => {
+      const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 2800n * E6), row("0x1", ETH_ADDRESS, "credit", E18)])
+      assert.equal(legs.find((l) => l.asset === "ETH")!.costUsdMicros, "2800000000")
+    })
   })
 
   it("a transaction moving three tokens isn't treated as a swap", () => {
@@ -103,6 +161,63 @@ describe("pricing a wallet's rows", () => {
   })
 })
 
+describe("an entirely unknown result stays unavailable", () => {
+  const gasOnly = legsOf([row("0x1", ETH_ADDRESS, "debit", E18 / 1000n, "gas")], [{ block_num: 100, eth_usd: "", usdc_usd: "" }])
+  const unknownHolding = legsOf([row("0x1", AERO, "credit", E18)])
+
+  it("gas with no price and no cost: every total is null, not $0", () => {
+    const totals = sumTotals(foldPositions(gasOnly, "average", {}))
+    assert.equal(totals.pnlUsdMicros, null)
+    assert.equal(totals.realizedUsdMicros, null)
+    assert.equal(totals.gasUsdMicros, null)
+    assert.equal(totals.unpricedGas, true)
+    // It spent ETH we never saw arrive, so it holds units we can't see. That isn't a value of $0 either.
+    assert.equal(totals.valueUsdMicros, null)
+    assert.equal(totals.unrealizedUsdMicros, null)
+    assert.ok(totals.excluded.some((e) => e.reason === "incomplete history"))
+  })
+
+  it("sending out more than we saw arrive, with no sale, has no PnL answer in the headline or the chart", () => {
+    const legs = legsOf([row("0x1", AERO, "debit", E18)])
+    assert.equal(sumTotals(foldPositions(legs, "fifo", {})).pnlUsdMicros, null)
+    assert.equal(pnlOverTime(legs, "fifo", {}, [REF], null).at(-1)!.pnlUsdMicros, null)
+  })
+
+  it("a holding with no cost and no price: PnL, value and unrealized are null, and nothing sold is a real $0", () => {
+    const totals = sumTotals(foldPositions(unknownHolding, "average", {}))
+    assert.equal(totals.pnlUsdMicros, null)
+    assert.equal(totals.valueUsdMicros, null)
+    assert.equal(totals.unrealizedUsdMicros, null)
+    assert.equal(totals.realizedUsdMicros, "0")
+  })
+
+  it("the chart agrees, at every point", () => {
+    const points = pnlOverTime(unknownHolding, "average", {}, [REF], { blockNum: 101, timestamp: "2026-11-04T00:00:00.000Z" })
+    assert.ok(points.length > 0)
+    assert.ok(points.every((p) => p.pnlUsdMicros === null))
+  })
+
+  it("a genuine $0 stays $0: bought and sold at the same value", () => {
+    const flat = [
+      row("0x1", USDC_ADDRESS, "debit", 2400n * E6),
+      row("0x1", ETH_ADDRESS, "credit", E18),
+      row("0x2", ETH_ADDRESS, "debit", E18),
+      row("0x2", USDC_ADDRESS, "credit", 2400n * E6),
+    ]
+    const positions = foldPositions(legsOf(flat), "fifo", {}).filter((p) => p.asset === "ETH")
+    const totals = sumTotals(positions)
+    assert.equal(totals.pnlUsdMicros, "0")
+    assert.equal(totals.realizedUsdMicros, "0")
+    assert.equal(pnlOverTime(legsOf(flat).filter((l) => l.asset === "ETH"), "fifo", {}, [REF], null).at(-1)!.pnlUsdMicros, "0")
+  })
+
+  it("known gas alone is an answer: it's a real, negative PnL", () => {
+    const paidGas = legsOf([row("0x1", ETH_ADDRESS, "debit", E18 / 1000n, "gas")])
+    const totals = sumTotals(foldPositions(paidGas, "average", {}))
+    assert.equal(totals.pnlUsdMicros, "-2400000")
+  })
+})
+
 describe("totals", () => {
   const prices = DEMO_WALLET.prices
   const positions = foldPositions(DEMO_WALLET.legs, "average", prices)
@@ -114,11 +229,11 @@ describe("totals", () => {
     assert.ok(reasons("ETH").includes("unknown cost"))
     assert.ok(totals.coverage.unrealized.missing > 0)
     const known = positions.filter((p) => p.values.unrealizedUsdMicros !== null)
-    assert.equal(totals.unrealizedUsdMicros, known.reduce((sum, p) => sum + BigInt(p.values.unrealizedUsdMicros!), 0n).toString())
+    assert.equal(totals.unrealizedUsdMicros, known.length === 0 ? null : known.reduce((sum, p) => sum + BigInt(p.values.unrealizedUsdMicros!), 0n).toString())
   })
 
   it("add up: PnL is realized plus unrealized, less gas", () => {
-    assert.equal(BigInt(totals.pnlUsdMicros), BigInt(totals.realizedUsdMicros) + BigInt(totals.unrealizedUsdMicros) - BigInt(totals.gasUsdMicros))
+    assert.equal(BigInt(totals.pnlUsdMicros!), BigInt(totals.realizedUsdMicros ?? 0) + BigInt(totals.unrealizedUsdMicros ?? 0) - BigInt(totals.gasUsdMicros ?? 0))
   })
 
   it("the chart's last point matches the headline, for both methods", () => {

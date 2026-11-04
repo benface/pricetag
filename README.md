@@ -32,10 +32,11 @@ Both go through the same path after that, and they gave identical legs on the wa
 
 ## Rules the numbers follow
 
-- Price and cost are separate. A price is a shared fact labeled `oracle` or `swap`. A cost is this wallet's, labeled `paid` or `unknown`.
-- `unknown` is never $0. A position with an unknown cost shows "PnL unavailable", and totals say what they leave out.
+- Price and cost are separate. A price is a shared fact labeled `oracle` or `swap`. A cost is this wallet's, labeled `paid` or `unknown`. A swap's cost and proceeds are what actually changed hands, valued on the side with an oracle, preferring USDC. They aren't the oracle price of what was bought or sold.
+- `unknown` is never $0. A position with an unknown cost shows "PnL unavailable", totals say what they leave out, and a total with nothing known shows as unavailable.
+- Coverage only moves up to the block every table has processed, so a lagging dataset can't skip blocks, and the UI says when it's behind.
 - ETH and WETH are one position, so wrapping is never a sale.
-- A swap price outside a token's plausible range is rejected, and the leg has no price.
+- A swap whose implied price is outside a token's plausible range, or far from its oracle, is rejected. It has no value on either side.
 
 ## Known gaps
 

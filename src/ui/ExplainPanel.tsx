@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useLayoutEffect, useRef } from "react"
 import type { LegEffect } from "../core/portfolio.ts"
 import { formatAmount, formatPrice, formatSignedAmount, formatTime, shortHash } from "./format.ts"
 import { describeEffect, type Explanation } from "./explain.ts"
@@ -53,18 +53,37 @@ function LegRow({ effect }: { effect: LegEffect }) {
 }
 
 export function ExplainPanel({ explanation, onClose }: { explanation: Explanation; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null)
   const close = useRef<HTMLButtonElement>(null)
-  useEffect(() => {
+
+  // A native modal keeps focus inside and makes the page behind it inert. Closing by unmounting doesn't restore focus.
+  useLayoutEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const element = dialog.current
+    if (!element) return
+    if (!element.open) element.showModal()
     close.current?.focus()
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose()
+    return () => {
+      element.close()
+      opener?.focus()
     }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [onClose])
+  }, [])
+
   return (
-    <div className="scrim" onClick={onClose}>
-      <aside className="panel" role="dialog" aria-modal="true" aria-label={explanation.title} onClick={(e) => e.stopPropagation()}>
+    <dialog
+      ref={dialog}
+      className="panel"
+      aria-label={explanation.title}
+      onCancel={(e) => {
+        e.preventDefault()
+        onClose()
+      }}
+      onClick={(e) => {
+        // A click on the dialog itself can only be on its backdrop, because the body fills it.
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="panel-body">
         <header className="panel-head">
           <h2>{explanation.title}</h2>
           <button ref={close} type="button" className="link" onClick={onClose}>
@@ -86,7 +105,7 @@ export function ExplainPanel({ explanation, onClose }: { explanation: Explanatio
             <LegRow key={effect.leg.id} effect={effect} />
           ))}
         </ul>
-      </aside>
-    </div>
+      </div>
+    </dialog>
   )
 }

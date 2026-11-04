@@ -4,7 +4,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { isAddress, type Head } from "../src/core/api.ts"
 import { DEMO_ADDRESS, DEMO_WALLET } from "../src/core/fixtures.ts"
-import { createQuery } from "./amp.ts"
+import { createQuery, describeError } from "./amp.ts"
 import { datasetSource, rawSource, type Source } from "./source.ts"
 import { createWallets } from "./wallets.ts"
 
@@ -26,14 +26,18 @@ function createSource(env: Env): Source | null {
   return rawSource(query, { baseDataset, network: env.PRICETAG_RPC_NETWORK || "base_mainnet", historyBlocks })
 }
 
+/** The request's decoded path, or null when the URL is malformed. Clients can send anything here. */
+export function pathOf(req: IncomingMessage): string | null {
+  try {
+    return decodeURIComponent(new URL(req.url ?? "/", "http://localhost").pathname)
+  } catch {
+    return null
+  }
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" })
   res.end(JSON.stringify(body))
-}
-
-/** Amp's client can throw errors with an empty message. These never contain the token, which only travels in a header. */
-function describeError(error: unknown): string {
-  return (error instanceof Error && error.message) || String(error)
 }
 
 /** Query errors can quote our SQL or the endpoint. The browser gets a fixed message, and the detail stays in the server log. */
@@ -85,7 +89,11 @@ export function createApi(env: Env) {
   const wallets = source ? createWallets(source, pollHead) : null
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-    const path = new URL(req.url ?? "/", "http://localhost").pathname
+    const path = pathOf(req)
+    if (path === null) {
+      sendJson(res, 400, { error: "Bad request" })
+      return true
+    }
     if (!path.startsWith("/api/")) return false
     if (req.method !== "GET") {
       sendJson(res, 405, { error: "Method not allowed" })

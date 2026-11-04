@@ -1,7 +1,7 @@
 // Turns a wallet's rows in the dataset's shapes into the priced legs the fold reads.
 // Pure, so it can run on fixtures, on the raw dataset's rows and on the Pricetag dataset's rows alike.
 
-import type { CostLabel, FoldLeg } from "./fold.ts"
+import { usdOf, type CostLabel, type FoldLeg } from "./fold.ts"
 import { normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
 
 export type PriceSource = "oracle" | "swap" | "market"
@@ -133,6 +133,16 @@ export function isSanePrice(token: Token, usdMicros: string, ethUsdMicros: strin
   return ratio >= token.sanity.eth[0] && ratio <= token.sanity.eth[1]
 }
 
+/** How far a swap's implied price can be from the oracle of a token that has one. Wide enough for real slippage. */
+const ORACLE_BAND: [min: number, max: number] = [0.8, 1.25]
+
+function isSaneAgainstOracle(impliedUsdMicros: bigint, oracleUsdMicros: string): boolean {
+  const ratio = Number(impliedUsdMicros) / Number(oracleUsdMicros)
+  return ratio >= ORACLE_BAND[0] && ratio <= ORACLE_BAND[1]
+}
+
+const REJECTED_NOTE = "Rejected this swap's implied price, because it's far from any plausible value."
+
 type Input = {
   account: string
   rows: readonly LegRow[]
@@ -178,7 +188,8 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         priceUsdMicros: ethMicros,
         priceSource: ethMicros === null ? null : "oracle",
         priceNote: ethMicros === null ? "The oracle read failed at this block." : null,
-        unitCostUsdMicros: null,
+        costUsdMicros: null,
+        proceedsUsdMicros: null,
         costLabel: "unknown",
         parts: [row],
       })
@@ -198,22 +209,49 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     const isSwap = moved.length === 2 && moved.some((n) => n.delta > 0n) && moved.some((n) => n.delta < 0n)
     const pricedRow = priced.find((p) => p.tx_hash === first.tx_hash && p.account === me)
 
-    for (const net of moved) {
+    const resolved = moved.map((net) => {
       let price = oracle(net.token)
       let priceSource: PriceSource | null = price === null ? null : "oracle"
       let priceNote: string | null = null
+      let rejected = false
       if (net.token.oracle && price === null) priceNote = "The oracle read failed at this block."
       if (!net.token.oracle) {
         const swap = pricedRow?.priced.source === "swap" && pricedRow.priced.token === net.token.symbol ? pricedRow.priced.usd_micros : null
         if (swap === null) priceNote = isSwap ? "The other side of this swap has no price." : "No swap in this transaction, and no oracle for this token."
         else if (!isSwap) priceNote = "This transaction isn't a simple swap."
-        else if (!isSanePrice(net.token, swap, ethMicros)) priceNote = "Rejected this swap's implied price, because it's far from any plausible value."
-        else {
+        else if (!isSanePrice(net.token, swap, ethMicros)) {
+          priceNote = REJECTED_NOTE
+          rejected = true
+        } else {
           price = swap
           priceSource = "swap"
         }
       }
-      const paid = isSwap && net.delta > 0n && price !== null
+      return { net, price, priceSource, priceNote, rejected }
+    })
+
+    // The oracle price is the shared fact, but a swap's cost and proceeds are what actually changed hands. So both
+    // sides share one USD value: the amount on the side an oracle can value, preferring USDC, whose oracle is closest
+    // to what was really paid. Otherwise buying above the oracle and selling below it would show up as a profit.
+    const usdcSide = resolved.find((r) => r.net.token.oracle === "usdc" && r.price !== null)
+    const anchor = isSwap ? (usdcSide ?? resolved.find((r) => r.net.token.oracle === "eth" && r.price !== null)) : undefined
+    const abs = (delta: bigint) => (delta < 0n ? -delta : delta)
+    let tradeUsd = anchor ? usdOf(abs(anchor.net.delta), BigInt(anchor.price as string), anchor.net.token.decimals) : null
+    const other = anchor && resolved.find((r) => r !== anchor)
+    if (anchor && other && tradeUsd !== null) {
+      const implied = (tradeUsd * 10n ** BigInt(other.net.token.decimals)) / abs(other.net.delta)
+      const absurd = other.net.token.oracle && other.price !== null && !isSaneAgainstOracle(implied, other.price)
+      if (other.rejected || absurd) {
+        // A wrong trade value must never reach a total, so neither side gets one.
+        tradeUsd = null
+        anchor.priceNote = REJECTED_NOTE
+        other.priceNote = REJECTED_NOTE
+      }
+    }
+
+    for (const { net, price, priceSource, priceNote } of resolved) {
+      const value = tradeUsd !== null && price !== null ? tradeUsd.toString() : null
+      const paid = net.delta > 0n && value !== null
       const costLabel: CostLabel = paid ? "paid" : "unknown"
       legs.push({
         ...base,
@@ -225,7 +263,8 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         priceUsdMicros: price,
         priceSource,
         priceNote,
-        unitCostUsdMicros: paid ? price : null,
+        costUsdMicros: paid ? value : null,
+        proceedsUsdMicros: net.delta < 0n ? value : null,
         costLabel,
         parts: net.parts,
       })

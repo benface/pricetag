@@ -15,15 +15,17 @@ export type FoldLeg = {
   delta: string
   decimals: number
   /**
-   * swap: a debit is a sale at `priceUsdMicros`.
+   * swap: a debit is a sale for `proceedsUsdMicros`.
    * transfer: a debit carries its cost away with no gain or loss.
    * gas: a debit is a sale at `priceUsdMicros`, and that value is then spent as a fee.
    */
   kind: "swap" | "transfer" | "gas"
-  /** USD price of one whole token at this leg's block, or null when there's no usable price. */
+  /** The shared fact: USD price of one whole token at this leg's block, or null when there's no usable price. */
   priceUsdMicros: string | null
-  /** Credits only: what one whole token cost this wallet. Ignored when `costLabel` is "unknown". */
-  unitCostUsdMicros: string | null
+  /** Credits only: what this wallet actually paid for the whole leg. Ignored when `costLabel` is "unknown". */
+  costUsdMicros: string | null
+  /** Swap debits only: what this wallet actually received for the whole leg, or null when that isn't known. */
+  proceedsUsdMicros: string | null
   costLabel: CostLabel
 }
 
@@ -42,6 +44,8 @@ export type PositionState = {
   lots: Lot[]
   /** From disposals whose cost and proceeds are both known. */
   realizedUsdMicros: string
+  /** Units `realizedUsdMicros` comes from, which tells a real $0 from nothing being known. */
+  resolvedDisposedQty: string
   /** Units disposed of with an unknown cost or unknown proceeds. Realized PnL is unavailable while this is above 0. */
   unresolvedDisposedQty: string
   gasUsdMicros: string
@@ -59,6 +63,7 @@ export function emptyPosition(method: Method, decimals: number): PositionState {
     decimals,
     lots: [],
     realizedUsdMicros: "0",
+    resolvedDisposedQty: "0",
     unresolvedDisposedQty: "0",
     gasUsdMicros: "0",
     unpricedGasQty: "0",
@@ -67,15 +72,15 @@ export function emptyPosition(method: Method, decimals: number): PositionState {
   }
 }
 
-function usdOf(qty: bigint, unitUsdMicros: bigint, decimals: number): bigint {
+export function usdOf(qty: bigint, unitUsdMicros: bigint, decimals: number): bigint {
   return (qty * unitUsdMicros) / 10n ** BigInt(decimals)
 }
 
 function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
-  const known = leg.costLabel !== "unknown" && leg.unitCostUsdMicros !== null
+  const known = leg.costLabel !== "unknown" && leg.costUsdMicros !== null
   const lot: Lot = {
     qty: qty.toString(),
-    costUsdMicros: known ? usdOf(qty, BigInt(leg.unitCostUsdMicros as string), leg.decimals).toString() : null,
+    costUsdMicros: known ? leg.costUsdMicros : null,
     label: known ? leg.costLabel : "unknown",
     legId: leg.id,
   }
@@ -155,12 +160,16 @@ export function applyLeg(state: PositionState, leg: FoldLeg): PositionState {
   }
 
   const price = leg.priceUsdMicros === null ? null : BigInt(leg.priceUsdMicros)
-  // What left with no cost we can see: its PnL can't be known, whatever the price was.
+  let proceeds: bigint | null
+  if (leg.kind === "gas") proceeds = price === null ? null : usdOf(taken.knownQty, price, state.decimals)
+  else proceeds = leg.proceedsUsdMicros === null ? null : (BigInt(leg.proceedsUsdMicros) * taken.knownQty) / qty
+
+  // What left with no cost we can see: its PnL can't be known, whatever it sold for.
   let unresolved = taken.unknownQty + taken.shortfall
-  if (price === null) unresolved += taken.knownQty
+  if (proceeds === null) unresolved += taken.knownQty
   else {
-    const proceeds = usdOf(taken.knownQty, price, state.decimals)
     next.realizedUsdMicros = (BigInt(state.realizedUsdMicros) + proceeds - taken.knownCost).toString()
+    next.resolvedDisposedQty = (BigInt(state.resolvedDisposedQty) + taken.knownQty).toString()
   }
   next.unresolvedDisposedQty = (BigInt(state.unresolvedDisposedQty) + unresolved).toString()
 

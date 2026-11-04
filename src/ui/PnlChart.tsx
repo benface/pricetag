@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import type { PnlPoint } from "../core/portfolio.ts"
 import { formatClock, formatSignedUsd, formatTime } from "./format.ts"
 
+const showPnl = (point: PnlPoint) => (point.pnlUsdMicros === null ? "⚠ Unavailable" : formatSignedUsd(point.pnlUsdMicros))
+
 const HEIGHT = 220
 const MARGIN = { top: 16, right: 84, bottom: 26, left: 64 }
 
@@ -39,8 +41,9 @@ export function PnlChart({ points, onSelect }: Props) {
 
   const chart = useMemo(() => {
     const times = points.map((p) => new Date(p.timestamp).getTime())
-    const values = points.map((p) => Number(p.pnlUsdMicros) / 1e6)
-    const { ticks, step } = niceTicks(Math.min(0, ...values), Math.max(0, ...values))
+    const values = points.map((p) => (p.pnlUsdMicros === null ? null : Number(p.pnlUsdMicros) / 1e6))
+    const known = values.filter((v) => v !== null)
+    const { ticks, step } = niceTicks(Math.min(0, ...known), Math.max(0, ...known))
     const low = ticks[0] ?? 0
     const high = ticks[ticks.length - 1] ?? 1
     const start = times[0] ?? 0
@@ -49,15 +52,21 @@ export function PnlChart({ points, onSelect }: Props) {
     const plotHeight = HEIGHT - MARGIN.top - MARGIN.bottom
     const x = (t: number) => MARGIN.left + (end === start ? plotWidth : ((t - start) / (end - start)) * plotWidth)
     const y = (v: number) => MARGIN.top + (1 - (v - low) / (high - low || 1)) * plotHeight
-    // PnL holds still between transactions in this series, so it's drawn as steps.
-    const path = points
-      .map((_, i) => {
-        const px = x(times[i] as number)
-        const py = y(values[i] as number)
-        return i === 0 ? `M${px},${py}` : `H${px}V${py}`
-      })
-      .join("")
-    return { times, values, ticks, x, y, path, plotWidth, formatTick: tickFormat(step) }
+    // PnL holds still between transactions in this series, so it's drawn as steps. Where it's unavailable, the line
+    // stops rather than passing through $0.
+    let path = ""
+    let drawing = false
+    values.forEach((value, i) => {
+      const px = x(times[i] as number)
+      if (value === null) {
+        if (drawing) path += `H${px}`
+        drawing = false
+        return
+      }
+      path += drawing ? `H${px}V${y(value)}` : `M${px},${y(value)}`
+      drawing = true
+    })
+    return { times, values, ticks, x, y, path, plotWidth, hasData: known.length > 0, formatTick: tickFormat(step) }
   }, [points, width])
 
   const nearest = (clientX: number) => {
@@ -77,6 +86,8 @@ export function PnlChart({ points, onSelect }: Props) {
   }
 
   const point = active === null ? null : (points[active] ?? null)
+  const last = points[points.length - 1]
+  const lastValue = chart.values[points.length - 1]
   const xLabels = points.length > 1 ? [0, points.length - 1] : [0]
   const showMarkers = points.length <= 60
 
@@ -102,19 +113,28 @@ export function PnlChart({ points, onSelect }: Props) {
           <tbody>
             {points.map((p) => (
               <tr key={`${p.blockNum}-${p.txHash ?? "latest"}`}>
-                <td>{formatTime(p.timestamp)}</td>
+                <td>
+                  {p.txHash ? (
+                    <button type="button" className="num-button" aria-label={`Explain the transaction at ${formatTime(p.timestamp)}`} onClick={() => onSelect(p)}>
+                      {formatTime(p.timestamp)}
+                    </button>
+                  ) : (
+                    `${formatTime(p.timestamp)} (now)`
+                  )}
+                </td>
                 <td>{p.blockNum.toLocaleString("en-US")}</td>
-                <td className="num">{formatSignedUsd(p.pnlUsdMicros)}</td>
+                <td className="num">{showPnl(p)}</td>
                 <td className="num">{p.excludedCount}</td>
               </tr>
             ))}
           </tbody>
         </table>
       ) : null}
+      {!asTable && !chart.hasData ? <p className="notice warn chart-empty">⚠ Nothing here has a known cost and a known price yet, so there's no PnL to chart. It isn't $0.</p> : null}
       <div
         ref={box}
         className="chart"
-        hidden={asTable}
+        hidden={asTable || !chart.hasData}
         onPointerMove={(e) => setActive(nearest(e.clientX))}
         onPointerLeave={() => setActive(null)}
         onClick={(e) => {
@@ -139,11 +159,14 @@ export function PnlChart({ points, onSelect }: Props) {
           ))}
           <path d={chart.path} className="line" />
           {showMarkers
-            ? points.map((p, i) => <circle key={`${p.blockNum}-${i}`} cx={chart.x(chart.times[i] as number)} cy={chart.y(chart.values[i] as number)} r={4} className="dot" />)
+            ? points.map((p, i) => {
+                const value = chart.values[i]
+                return value === null || value === undefined ? null : <circle key={`${p.blockNum}-${i}`} cx={chart.x(chart.times[i] as number)} cy={chart.y(value)} r={4} className="dot" />
+              })
             : null}
-          {points.length > 0 ? (
-            <text x={chart.x(chart.times[points.length - 1] as number) + 10} y={chart.y(chart.values[points.length - 1] as number)} dy="0.32em" className="end-label">
-              {formatSignedUsd((points[points.length - 1] as PnlPoint).pnlUsdMicros)}
+          {last && lastValue !== null && lastValue !== undefined ? (
+            <text x={chart.x(chart.times[points.length - 1] as number) + 10} y={chart.y(lastValue)} dy="0.32em" className="end-label">
+              {showPnl(last)}
             </text>
           ) : null}
           {active !== null ? <line x1={chart.x(chart.times[active] as number)} x2={chart.x(chart.times[active] as number)} y1={MARGIN.top} y2={HEIGHT - MARGIN.bottom} className="crosshair" /> : null}
@@ -156,7 +179,7 @@ export function PnlChart({ points, onSelect }: Props) {
               top: 8,
             }}
           >
-            <strong>{formatSignedUsd(point.pnlUsdMicros)}</strong>
+            <strong>{showPnl(point)}</strong>
             <span>{formatTime(point.timestamp)}</span>
             <span>Block {point.blockNum.toLocaleString("en-US")}</span>
             {point.excludedCount > 0 ? <span>⚠ Leaves out {point.excludedCount} unknown {point.excludedCount === 1 ? "amount" : "amounts"}</span> : null}

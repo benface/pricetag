@@ -13,15 +13,17 @@ function leg(partial: Partial<Omit<FoldLeg, "delta">> & { delta: bigint }): Fold
     decimals: 18,
     kind: "swap",
     priceUsdMicros: null,
-    unitCostUsdMicros: null,
+    costUsdMicros: null,
+    proceedsUsdMicros: null,
     costLabel: "unknown",
     ...rest,
     delta: delta.toString(),
   }
 }
+const total = (qty: bigint, usd: bigint) => ((qty * usd * USD) / ETH).toString()
 const buy = (qty: bigint, usd: bigint) =>
-  leg({ delta: qty, priceUsdMicros: (usd * USD).toString(), unitCostUsdMicros: (usd * USD).toString(), costLabel: "paid" })
-const sell = (qty: bigint, usd: bigint) => leg({ delta: -qty, priceUsdMicros: (usd * USD).toString() })
+  leg({ delta: qty, priceUsdMicros: (usd * USD).toString(), costUsdMicros: total(qty, usd), costLabel: "paid" })
+const sell = (qty: bigint, usd: bigint) => leg({ delta: -qty, priceUsdMicros: (usd * USD).toString(), proceedsUsdMicros: total(qty, usd) })
 const receive = (qty: bigint, usd: bigint | null = null) =>
   leg({ delta: qty, kind: "transfer", priceUsdMicros: usd === null ? null : (usd * USD).toString() })
 const sendOut = (qty: bigint) => leg({ delta: -qty, kind: "transfer" })
@@ -148,6 +150,22 @@ describe("unknown is never $0", () => {
     assert.equal(valuePosition(s, micros(300n)).unknownCostQty, (ETH / 2n).toString())
   })
 
+  both("cost and proceeds are what changed hands, not the price: a $0 round trip stays $0", (method) => {
+    const bought = leg({ delta: ETH, priceUsdMicros: micros(2400n), costUsdMicros: micros(2500n), costLabel: "paid" })
+    const sold = leg({ delta: -ETH, priceUsdMicros: micros(2600n), proceedsUsdMicros: micros(2500n) })
+    const s = run(method, [bought, sold])
+    assert.equal(s.realizedUsdMicros, "0")
+    assert.equal(s.resolvedDisposedQty, ETH.toString())
+    assert.equal(valuePosition(s, micros(2600n)).realizedUsdMicros, "0")
+  })
+
+  both("a partial sale takes its share of the proceeds, and only the known part counts", (method) => {
+    const s = run(method, [buy(ETH, 100n), sell(3n * ETH, 200n)])
+    assert.equal(s.realizedUsdMicros, micros(100n))
+    assert.equal(s.resolvedDisposedQty, ETH.toString())
+    assert.equal(s.unresolvedDisposedQty, (2n * ETH).toString())
+  })
+
   both("a sale with no price leaves realized PnL unavailable", (method) => {
     const s = run(method, [buy(ETH, 100n), leg({ delta: -ETH })])
     assert.equal(valuePosition(s, null).realizedUsdMicros, null)
@@ -169,7 +187,7 @@ describe("unknown is never $0", () => {
   })
 
   both("a cost label of unknown ignores any unit cost it was given", (method) => {
-    const v = valuePosition(run(method, [leg({ delta: ETH, unitCostUsdMicros: micros(1n), costLabel: "unknown" })]), micros(5n))
+    const v = valuePosition(run(method, [leg({ delta: ETH, costUsdMicros: micros(1n), costLabel: "unknown" })]), micros(5n))
     assert.equal(v.costUsdMicros, null)
   })
 })

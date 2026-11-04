@@ -27,17 +27,28 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>) 
   async function refresh(address: string): Promise<Cached> {
     const head = await currentHead()
     const cached = wallets.get(address)
-    if (cached && cached.coveredTo >= head.blockNum) return cached
+    if (cached && cached.latest.blockNum >= head.blockNum) return cached
 
     const fromBlock = cached?.fromBlock ?? source.startBlock ?? Math.max(0, head.blockNum - (source.historyBlocks ?? 0))
-    const readFrom = cached ? Math.max(fromBlock, cached.coveredTo - REORG_BLOCKS + 1) : fromBlock
-    const window = await source.readWindow(address, readFrom, head.blockNum)
+    // Coverage only moves up to what's been processed. If it followed the chain, a table catching up later would
+    // never be read for the blocks it skipped past.
+    const processed = await source.processedThrough(cached?.coveredTo ?? fromBlock, head.blockNum)
+    const coveredTo = processed ?? cached?.coveredTo ?? fromBlock - 1
 
-    const rows = [...(cached?.rows.filter((r) => r.block_num < readFrom) ?? []), ...window.rows]
+    let rows = cached?.rows ?? []
+    let priced = cached?.priced ?? []
     const known = new Map(cached?.references ?? [])
-    for (const block of known.keys()) if (block >= readFrom) known.delete(block)
-    const missing = [...new Set(rows.map((r) => r.block_num))].filter((b) => !known.has(b))
-    for (const reference of await source.readReferences(missing)) known.set(reference.block_num, reference)
+    const gasUnknownTxs = new Set(cached?.gasUnknownTxs ?? [])
+    if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo)) {
+      const readFrom = cached ? Math.max(fromBlock, cached.coveredTo - REORG_BLOCKS + 1) : fromBlock
+      const window = await source.readWindow(address, readFrom, coveredTo)
+      rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
+      for (const block of known.keys()) if (block >= readFrom) known.delete(block)
+      const missing = [...new Set(rows.map((r) => r.block_num))].filter((b) => !known.has(b))
+      for (const reference of await source.readReferences(missing)) known.set(reference.block_num, reference)
+      priced = window.priced ? [...priced.filter((p) => p.block_num < readFrom), ...window.priced] : derivePricedRows(rows, [...known.values()])
+      for (const tx of window.gasUnknownTxs) gasUnknownTxs.add(tx)
+    }
 
     // Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong.
     const latest = await source.readLatestReference(head.blockNum)
@@ -47,20 +58,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>) 
     if (latest && eth) prices.ETH = { usdMicros: eth, source: "oracle", blockNum: latest.block_num }
     if (latest && usdc) prices.USDC = { usdMicros: usdc, source: "oracle", blockNum: latest.block_num }
 
-    const priced = window.priced
-      ? [...(cached?.priced.filter((p) => p.block_num < readFrom) ?? []), ...window.priced]
-      : derivePricedRows(rows, [...known.values()])
-
-    const next: Cached = {
-      fromBlock,
-      coveredTo: head.blockNum,
-      rows,
-      priced,
-      references: known,
-      prices,
-      latest: head,
-      gasUnknownTxs: new Set([...(cached?.gasUnknownTxs ?? []), ...window.gasUnknownTxs]),
-    }
+    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknownTxs }
     wallets.delete(address)
     wallets.set(address, next)
     if (wallets.size > MAX_WALLETS) wallets.delete(wallets.keys().next().value as string)
