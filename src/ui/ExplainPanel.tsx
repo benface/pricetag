@@ -21,8 +21,8 @@ function LegRow({ effect }: { effect: LegEffect }) {
         </span>
       </div>
       <div className="leg-tags">
-        <span className="tag">{leg.kind}</span>
-        {leg.priceUsdMicros !== null && leg.priceSource ? (
+        <span className="tag">{leg.opening ? "opening balance" : leg.kind}</span>
+        {leg.opening ? null : leg.priceUsdMicros !== null && leg.priceSource ? (
           <span className="tag">
             {formatPrice(leg.priceUsdMicros)} · {leg.priceSource}
           </span>
@@ -34,9 +34,11 @@ function LegRow({ effect }: { effect: LegEffect }) {
       <p className="small">{describeEffect(effect)}.</p>
       {leg.priceNote ? <p className="small muted">{leg.priceNote}</p> : null}
       {netting ? <p className="small muted">{netting}</p> : null}
-      <a className="small" href={`https://basescan.org/tx/${leg.txHash}`} target="_blank" rel="noreferrer noopener">
-        {shortHash(leg.txHash)} on Basescan ↗
-      </a>
+      {leg.opening ? null : (
+        <a className="small" href={`https://basescan.org/tx/${leg.txHash}`} target="_blank" rel="noreferrer noopener">
+          {shortHash(leg.txHash)} on Basescan ↗
+        </a>
+      )}
     </li>
   )
 }

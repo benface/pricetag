@@ -138,13 +138,30 @@ FROM self.net_legs a
 JOIN self.net_legs b ON a._block_num = b._block_num AND a.tx_hash = b.tx_hash AND a.account = b.account
 WHERE a.side = 'debit' AND b.side = 'credit' AND ${since}`,
 
+    // What each account really moved per token off the allowlist in a transaction. What nets to zero moved nothing.
+    // NFTs net by ID, each counting once, because an ID isn't a quantity. An amount that can't be read, as with ERC-1155,
+    // still says something moved.
+    unlisted_moves: `SELECT block_num, tx_hash, account, token FROM (
+  SELECT block_num, tx_hash, account, token,
+    self.pt_net(string_agg(CASE WHEN kind = 'unlisted_nft' THEN CASE WHEN side = 'credit' THEN '1' ELSE '-1' END WHEN side = 'credit' THEN amount ELSE concat('-', amount) END, ',')) AS net,
+    bool_or(COALESCE(amount, '') = '') AS unreadable
+  FROM self.unlisted_legs
+  GROUP BY block_num(), block_num, tx_hash, account, token, CASE WHEN kind = 'unlisted_nft' THEN amount ELSE '' END
+) WHERE (get_field(net, 'side') <> '' OR unreadable) AND ${since}`,
+
+    // Counts an account's pairs and its unlisted moves in a transaction, since a payment could be for either. Amp can't
+    // run NOT EXISTS or LEFT JOIN, so counting them together is how a pair with an unlisted move gets left out.
     // The filter has to sit above the GROUP BY, because Amp can't see a start block through an aggregate.
     pair_counts: `SELECT bn, tx_hash, account, pair_count FROM (
-  SELECT block_num() AS bn, tx_hash, account, COUNT(*) AS pair_count
-  FROM self.pairs GROUP BY block_num(), tx_hash, account
+  SELECT block_num() AS bn, tx_hash, account, COUNT(*) AS pair_count FROM (
+    SELECT block_num, tx_hash, account FROM self.pairs
+    UNION ALL
+    SELECT block_num, tx_hash, account FROM self.unlisted_moves
+  ) GROUP BY block_num(), tx_hash, account
 ) WHERE ${since}`,
 
-    // Transactions moving several tokens pair unrelated amounts, so only an account's single pair gets a price.
+    // Transactions moving several tokens pair unrelated amounts, so only an account's single pair gets a price, and
+    // only if nothing off the allowlist moved with it.
     single_pairs: `SELECT p.block_num, p.timestamp, p.tx_hash, p.account, p.sold_token, p.sold_amount, p.bought_token, p.bought_amount
 FROM self.pairs p
 JOIN self.pair_counts c ON p._block_num = c._block_num AND p.tx_hash = c.tx_hash AND p.account = c.account

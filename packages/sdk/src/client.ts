@@ -124,7 +124,7 @@ export function pricetagClient(query: Query, config: Pick<PricetagConfig, "datas
       for (const r of await reader.readTxRows(swaps.map((s) => s.row))) moved.set(r.tx_hash, [...(moved.get(r.tx_hash) ?? []), r])
       const prices = swaps.map(({ row, timestamp, reference }): PricePoint => {
         // The same path a wallet's legs take, so a price the app would reject, like one from a swap that also moved a
-        // token off the allowlist, is unknown here too. `priced_legs` alone can't tell those apart.
+        // token off the allowlist, is unknown here too.
         const legs = buildPricedLegs({ account: row.account, rows: moved.get(row.tx_hash) ?? [], references: [reference], priced: [row] })
         const leg = legs.find((l) => l.asset === found.asset)
         const usdMicros = leg?.priceSource === "swap" ? leg.priceUsdMicros : null

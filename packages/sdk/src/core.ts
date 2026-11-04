@@ -3,4 +3,5 @@
 export * from "./fold.ts"
 export * from "./legs.ts"
 export * from "./portfolio.ts"
+export * from "./reconcile.ts"
 export * from "./tokens.ts"

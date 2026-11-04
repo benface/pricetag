@@ -841,9 +841,62 @@
       },
       "network": "base-mainnet"
     },
+    "unlisted_moves": {
+      "input": {
+        "sql": "SELECT block_num, tx_hash, account, token FROM (\n  SELECT block_num, tx_hash, account, token,\n    self.pt_net(string_agg(CASE WHEN kind = 'unlisted_nft' THEN CASE WHEN side = 'credit' THEN '1' ELSE '-1' END WHEN side = 'credit' THEN amount ELSE concat('-', amount) END, ',')) AS net,\n    bool_or(COALESCE(amount, '') = '') AS unreadable\n  FROM self.unlisted_legs\n  GROUP BY block_num(), block_num, tx_hash, account, token, CASE WHEN kind = 'unlisted_nft' THEN amount ELSE '' END\n) WHERE (get_field(net, 'side') <> '' OR unreadable) AND block_num() >= 53514029"
+      },
+      "schema": {
+        "arrow": {
+          "fields": [
+            {
+              "name": "_block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "_ts",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "tx_hash",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": false
+            },
+            {
+              "name": "account",
+              "type": {
+                "FixedSizeBinary": 20
+              },
+              "nullable": true
+            },
+            {
+              "name": "token",
+              "type": {
+                "FixedSizeBinary": 20
+              },
+              "nullable": false
+            }
+          ]
+        }
+      },
+      "network": "base-mainnet"
+    },
     "pair_counts": {
       "input": {
-        "sql": "SELECT bn, tx_hash, account, pair_count FROM (\n  SELECT block_num() AS bn, tx_hash, account, COUNT(*) AS pair_count\n  FROM self.pairs GROUP BY block_num(), tx_hash, account\n) WHERE block_num() >= 53514029"
+        "sql": "SELECT bn, tx_hash, account, pair_count FROM (\n  SELECT block_num() AS bn, tx_hash, account, COUNT(*) AS pair_count FROM (\n    SELECT block_num, tx_hash, account FROM self.pairs\n    UNION ALL\n    SELECT block_num, tx_hash, account FROM self.unlisted_moves\n  ) GROUP BY block_num(), tx_hash, account\n) WHERE block_num() >= 53514029"
       },
       "schema": {
         "arrow": {

@@ -185,7 +185,7 @@ describe("getPrices", () => {
   })
 
   it("doesn't publish a swap price from a transaction that also moved a token off the allowlist", async () => {
-    // WORK-346: priced_legs can't see the other token, so it prices AERO from the whole payment.
+    // The dataset leaves these out of priced_legs now, but an older manifest's row must still not become a price.
     const { client } = fakeAmp({
       priced_legs: [pricedRow("aa", USDC, "1000000000", AERO, String(500n * E18), swapTo("2000000"))],
       legs: [leg("aa", USDC, ME, "debit", "1000000000", "erc20"), leg("aa", AERO, ME, "credit", String(500n * E18), "erc20")],
@@ -258,7 +258,8 @@ describe("buildPortfolio", () => {
     const { positions } = buildPortfolio(DEMO_WALLET.legs, "average", DEMO_WALLET.prices)
     const effects = positions.flatMap((p) => p.effects)
     assert.equal(effects.length, DEMO_WALLET.legs.length)
-    assert.ok(effects.every((e) => e.leg.txHash.startsWith("0x") && "priceSource" in e.leg))
+    // An opening balance is the one leg with no transaction: it's what the chain said before the first block read.
+    assert.ok(effects.every((e) => (e.leg.opening || e.leg.txHash.startsWith("0x")) && "priceSource" in e.leg))
   })
 
   it("leaves value and unrealized PnL unknown without current prices, rather than $0", () => {
@@ -307,7 +308,7 @@ describe("the package boundary", () => {
       }
     }
     walk("core.ts")
-    assert.deepEqual([...seen].sort(), ["core.ts", "fold.ts", "legs.ts", "portfolio.ts", "tokens.ts"])
+    assert.deepEqual([...seen].sort(), ["core.ts", "fold.ts", "legs.ts", "portfolio.ts", "reconcile.ts", "tokens.ts"])
   })
 
   it("has the app's browser code import only that part", () => {

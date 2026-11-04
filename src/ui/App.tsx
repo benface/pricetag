@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { foldPositions, hasAnswer, isAddress, pnlOverTime, sumTotals, type Coverage, type Exclusion, type Method, type PnlPoint, type Position } from "@pricetag/sdk/core"
+import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
+import { foldPositions, hasAnswer, isAddress, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, type Coverage, type Exclusion, type Method, type PnlPoint, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
-import { explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
-import { formatAmount, formatDuration, formatPrice, formatSignedUsd, formatUsd } from "../core/format.ts"
+import { explainMetric, explainPoint, explainTotal, mismatchCause, type Explanation, type Metric, type TotalMetric } from "../core/explain.ts"
+import { formatAmount, formatDuration, formatPrice, formatSignedAmount, formatSignedUsd, formatUsd } from "../core/format.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { useWallet } from "./useWallet.ts"
 
@@ -28,6 +28,13 @@ function describeExcluded(excluded: readonly Exclusion[]): string {
   return [...byReason.entries()].map(([reason, assets]) => `${assets.join(", ")} (${reason})`).join("; ")
 }
 
+function OnchainCheck({ position, onClick }: { position: Position; onClick: () => void }) {
+  const status = position.reconciliation?.status
+  if (status === "reconciled") return <Num label={`${position.asset} reconciled with its onchain balance`} onClick={onClick} tone="gain">✓ Reconciled</Num>
+  if (status === "incomplete") return <Num label={`${position.asset} doesn't match its onchain balance`} onClick={onClick} tone="warn">⚠ Incomplete</Num>
+  return <Num label={`${position.asset} not checked against its onchain balance`} onClick={onClick} tone="warn">⚠ Not checked</Num>
+}
+
 function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: (e: Explanation) => void }) {
   const open = (position: Position, metric: Metric) => () => onExplain(explainMetric(position, metric))
   return (
@@ -38,6 +45,7 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
           <thead>
             <tr>
               <th>Asset</th>
+              <th>Onchain</th>
               <th className="num">Amount</th>
               <th className="num">Avg cost</th>
               <th className="num">Value</th>
@@ -50,51 +58,65 @@ function Holdings({ positions, onExplain }: { positions: Position[]; onExplain: 
               const { asset, decimals, values, state } = position
               const held = BigInt(values.qty) > 0n
               const unknown = BigInt(values.unknownCostQty) > 0n
+              const mismatch = position.reconciliation?.status === "incomplete" ? position.reconciliation : null
+              const flagged = mismatch !== null || BigInt(state.shortfallQty) > 0n
               return (
-                <tr key={asset} className={held ? "" : "closed"}>
-                  <td>
-                    <strong>{asset}</strong>
-                    {asset === "ETH" ? <span className="muted small"> incl. WETH</span> : null}
-                  </td>
-                  <td className="num">
-                    <Num label={`${asset} amount`} onClick={open(position, "amount")} tone={BigInt(state.shortfallQty) > 0n ? "warn" : null}>
-                      {BigInt(state.shortfallQty) > 0n ? "⚠ " : ""}
-                      {formatAmount(values.qty, decimals)}
-                    </Num>
-                  </td>
-                  <td className="num">
-                    {held ? (
-                      <Num label={`${asset} average cost`} onClick={open(position, "average")} tone={unknown ? "warn" : null}>
-                        {values.averageCostUsdMicros ? formatPrice(values.averageCostUsdMicros) : "⚠ Unknown"}
+                <Fragment key={asset}>
+                  <tr className={`${held ? "" : "closed"} ${mismatch ? "mismatched" : ""}`}>
+                    <td>
+                      <strong>{asset}</strong>
+                      {asset === "ETH" ? <span className="muted small"> incl. WETH</span> : null}
+                    </td>
+                    <td>
+                      <OnchainCheck position={position} onClick={open(position, "onchain")} />
+                    </td>
+                    <td className="num">
+                      <Num label={`${asset} amount`} onClick={open(position, "amount")} tone={flagged ? "warn" : null}>
+                        {flagged ? "⚠ " : ""}
+                        {formatAmount(values.qty, decimals)}
                       </Num>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                  <td className="num">
-                    {held ? (
-                      <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueUsdMicros === null ? "warn" : null}>
-                        {values.valueUsdMicros ? formatUsd(values.valueUsdMicros) : "⚠ No price"}
+                    </td>
+                    <td className="num">
+                      {held ? (
+                        <Num label={`${asset} average cost`} onClick={open(position, "average")} tone={unknown ? "warn" : null}>
+                          {values.averageCostUsdMicros ? formatPrice(values.averageCostUsdMicros) : "⚠ Unknown"}
+                        </Num>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td className="num">
+                      {held ? (
+                        <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueUsdMicros === null ? "warn" : null}>
+                          {values.valueUsdMicros ? formatUsd(values.valueUsdMicros) : "⚠ No price"}
+                        </Num>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td className="num">
+                      <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedUsdMicros)}>
+                        {values.realizedUsdMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.realizedUsdMicros)}
                       </Num>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                  <td className="num">
-                    <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedUsdMicros)}>
-                      {values.realizedUsdMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.realizedUsdMicros)}
-                    </Num>
-                  </td>
-                  <td className="num">
-                    {held ? (
-                      <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedUsdMicros)}>
-                        {values.unrealizedUsdMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.unrealizedUsdMicros)}
-                      </Num>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                </tr>
+                    </td>
+                    <td className="num">
+                      {held ? (
+                        <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedUsdMicros)}>
+                          {values.unrealizedUsdMicros === null ? "⚠ PnL unavailable" : formatSignedUsd(values.unrealizedUsdMicros)}
+                        </Num>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                  </tr>
+                  {mismatch ? (
+                    <tr className="mismatch">
+                      <td colSpan={7}>
+                        Computed {formatAmount(mismatch.computedQty, decimals)} · Actual {formatAmount(mismatch.actualQty, decimals)} · Difference {formatSignedAmount(mismatch.differenceQty, decimals)} {asset}. {mismatchCause(asset, mismatch.differenceQty)}
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               )
             })}
           </tbody>
@@ -134,9 +156,10 @@ export function App() {
     go(value.toLowerCase())
   }
 
-  const positions = useMemo(() => (wallet ? foldPositions(wallet.legs, method, wallet.prices) : []), [wallet, method])
-  const totals = useMemo(() => sumTotals(positions), [positions])
-  const points = useMemo(() => (wallet ? pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest) : []), [wallet, method])
+  const positions = useMemo(() => (wallet ? foldPositions(wallet.legs, method, wallet.prices, wallet) : []), [wallet, method])
+  const unread = useMemo(() => (wallet ? unreadAssets(positions, wallet) : []), [wallet, positions])
+  const totals = useMemo(() => sumTotals(positions, unread), [positions, unread])
+  const points = useMemo(() => (wallet ? pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest, unconfirmedAssets(positions, unread)) : []), [wallet, method, positions, unread])
   const close = useCallback(() => setExplanation(null), [])
   const openTotal = (metric: TotalMetric) => setExplanation(explainTotal(positions, totals, metric))
   const openPoint = (point: PnlPoint) => setExplanation(explainPoint(positions, point))
@@ -194,13 +217,16 @@ export function App() {
           {wallet.mode === "demo" ? <p className="notice">Demo data, not a real wallet. Every case the app has to get right is in here.</p> : null}
           {hasStarted(wallet) ? (
             <p className="notice">
-              Covers blocks {wallet.coverage.fromBlock.toLocaleString("en-US")} to {wallet.coverage.toBlock.toLocaleString("en-US")} (about {formatDuration(wallet.coverage.toBlock - wallet.coverage.fromBlock)}) and 10 tokens plus ETH. Anything earlier or
-              off the list isn't counted, so amounts are what moved in this window, not full balances.
+              Covers blocks {wallet.coverage.fromBlock.toLocaleString("en-US")} to {wallet.coverage.toBlock.toLocaleString("en-US")} (about {formatDuration(wallet.coverage.toBlock - wallet.coverage.fromBlock)}) and 10 tokens plus ETH.{" "}
+              {wallet.openingUnread.length === 0
+                ? "What the wallet held before that comes from the chain, at an unknown cost. Tokens off the list aren't counted."
+                : "What the wallet held before that couldn't all be read yet, so some amounts may not be full balances. Tokens off the list aren't counted."}
             </p>
           ) : null}
           {wallet.gasUnknownTxs.length > 0 ? <p className="notice warn">⚠ Gas couldn't be worked out for {wallet.gasUnknownTxs.length} transactions, so ETH is overstated by that much.</p> : null}
+          {wallet.l1FeeUnknownTxs.length > 0 ? <p className="notice warn">⚠ Couldn't read the network fee of {wallet.l1FeeUnknownTxs.length} transactions yet, so gas paid is low and ETH's PnL is unavailable until it can.</p> : null}
 
-          {wallet.legs.length === 0 && !hasStarted(wallet) ? null : wallet.legs.length === 0 ? (
+          {positions.length === 0 && !hasStarted(wallet) ? null : positions.length === 0 && unread.length === 0 ? (
             <section className="empty">
               <p>
                 No movements for <code>{wallet.address}</code> in these blocks.
@@ -236,7 +262,7 @@ export function App() {
                 </div>
               </section>
               <PnlChart points={points} onSelect={openPoint} />
-              <Holdings positions={positions} onExplain={setExplanation} />
+              {positions.length > 0 ? <Holdings positions={positions} onExplain={setExplanation} /> : null}
             </>
           )}
         </main>

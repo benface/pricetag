@@ -3,7 +3,7 @@
 import { TOKENS, tokenByAddress, valuePosition, type LegEffect, type PnlPoint, type Position, type PricedLeg, type Totals } from "@pricetag/sdk/core"
 import { formatAmount, formatPrice, formatSignedUsd, formatUsd, shortHash } from "./format.ts"
 
-export type Metric = "amount" | "average" | "value" | "realized" | "unrealized"
+export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"
 
 export type Explanation = {
   title: string
@@ -18,6 +18,7 @@ const METRIC_TITLES: Record<Metric, string> = {
   value: "Value",
   realized: "Realized PnL",
   unrealized: "Unrealized PnL",
+  onchain: "Onchain check",
 }
 
 function diff(after: string, before: string): bigint {
@@ -50,18 +51,53 @@ export function describeEffect({ leg, before, after }: LegEffect): string {
   return parts.join(", ")
 }
 
+/** Why what we saw and the chain might disagree, by which way they do. */
+export function mismatchCause(asset: string, differenceQty: string): string {
+  const difference = BigInt(differenceQty)
+  if (difference === 0n) return "The end balance matches, but more left than arrived, so something moved that we can't see."
+  if (asset === "ETH") {
+    return difference > 0n
+      ? "This wallet holds more ETH than its transactions explain. Most likely a contract sent it some, which we can't see yet."
+      : "This wallet holds less ETH than its transactions explain. Most likely a contract turned WETH into ETH and sent it elsewhere, while we counted it as coming here."
+  }
+  return `This balance changed in a way ${asset}'s transfers don't show, as with a token whose balance adjusts by itself.`
+}
+
+/** The whole comparison, in words. */
+function onchainLines({ asset, decimals, reconciliation, effects }: Position): string[] {
+  if (reconciliation === null) return ["There's no onchain balance to compare this with."]
+  if (reconciliation.status === "unchecked") {
+    const held = reconciliation.heldIsCurrent || reconciliation.heldQty === null ? [] : ["The amount is the last balance read, plus what's moved since."]
+    return [`Not checked. ${reconciliation.reason} PnL is unavailable until this balance is confirmed, which happens by itself.`, ...held]
+  }
+  const amount = (qty: string) => `${formatAmount(qty, decimals)} ${asset}`
+  const block = reconciliation.blockNum.toLocaleString("en-US")
+  if (reconciliation.status === "reconciled") {
+    const opening = effects.some(({ leg }) => leg.opening) ? "what it already held, plus every transaction since," : "its transactions"
+    return [`Matches the chain exactly: ${opening} add up to ${amount(reconciliation.actualQty)} at block ${block}.`]
+  }
+  return [
+    `Worked out from its transactions: ${amount(reconciliation.computedQty)}.`,
+    `Onchain at block ${block}: ${amount(reconciliation.actualQty)}.`,
+    `Difference: ${BigInt(reconciliation.differenceQty) > 0n ? "+" : ""}${amount(reconciliation.differenceQty)}.`,
+    mismatchCause(asset, reconciliation.differenceQty),
+    "Value uses the onchain balance. PnL is unavailable, because we know some of this wallet's activity is missing.",
+  ]
+}
+
 /** The rows a leg nets together, or null when it's just one. */
 export function describeNetting(leg: PricedLeg): string | null {
   if (leg.parts.length < 2) return null
   const rows = leg.parts.map((p) => {
     const token = tokenByAddress(p.token)
-    return `${p.side === "credit" ? "+" : "−"}${formatAmount(p.amount, token?.decimals ?? 18)} ${token?.symbol ?? p.token}`
+    const fee = p.kind === "gas" ? " gas" : p.kind === "l1_fee" ? " data fee" : ""
+    return `${p.side === "credit" ? "+" : "−"}${formatAmount(p.amount, token?.decimals ?? 18)} ${token?.symbol ?? p.token}${fee}`
   })
   return `Nets ${leg.parts.length} rows: ${rows.join(", ")}`
 }
 
 export function explainMetric(position: Position, metric: Metric): Explanation {
-  const { asset, decimals, values, state, price, effects } = position
+  const { asset, decimals, values, state, price, effects, reconciliation } = position
   const unknown = BigInt(values.unknownCostQty) > 0n
   const qty = `${formatAmount(values.qty, decimals)} ${asset}`
   const unknownQty = `${formatAmount(values.unknownCostQty, decimals)} ${asset}`
@@ -73,10 +109,20 @@ export function explainMetric(position: Position, metric: Metric): Explanation {
   const lines: string[] = []
   let value: string | null = null
 
+  const incomplete = reconciliation?.status === "incomplete"
+  const unconfirmed = reconciliation !== null && reconciliation.status !== "reconciled"
+  if (unconfirmed && (metric === "average" || metric === "realized" || metric === "unrealized")) {
+    return { title: `${asset}: ${METRIC_TITLES[metric]}`, value: null, lines: onchainLines(position), effects: [...effects].reverse() }
+  }
+
   switch (metric) {
+    case "onchain":
+      value = reconciliation?.status === "reconciled" ? "✓ Reconciled" : incomplete ? "⚠ Incomplete" : "Not checked"
+      lines.push(...onchainLines(position))
+      break
     case "amount":
       value = qty
-      lines.push("What moved in the blocks this app has read. It isn't checked against the onchain balance yet.")
+      lines.push(...onchainLines(position))
       if (BigInt(state.shortfallQty) > 0n) {
         lines.push(`${formatAmount(state.shortfallQty, decimals)} ${asset} left that we never saw arrive, so this wallet's history is incomplete.`)
       }
@@ -89,7 +135,7 @@ export function explainMetric(position: Position, metric: Metric): Explanation {
     case "value":
       value = values.valueUsdMicros && formatUsd(values.valueUsdMicros)
       lines.push(priceLine)
-      if (values.valueUsdMicros) lines.push(`${qty} × that price.`)
+      if (values.valueUsdMicros) lines.push(`${qty} × that price.${incomplete ? " That's the onchain balance, because its transactions don't add up to it." : ""}`)
       break
     case "realized":
       value = values.realizedUsdMicros && formatSignedUsd(values.realizedUsdMicros)
@@ -134,7 +180,7 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
     else lines.push(`Realized ${showSigned(totals.realizedUsdMicros)}, unrealized ${showSigned(totals.unrealizedUsdMicros)}, less ${totals.gasUsdMicros === null ? "gas that's unavailable" : `${formatUsd(totals.gasUsdMicros)} of gas`}.`)
   }
   for (const position of positions) {
-    const v = valuePosition(position.state, position.price?.usdMicros ?? null)
+    const v = position.values
     const part = {
       pnl: null,
       value: v.valueUsdMicros && BigInt(v.qty) > 0n ? formatUsd(v.valueUsdMicros) : null,
@@ -144,15 +190,20 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
     }[metric]
     if (part) lines.push(`${position.asset}: ${part}`)
   }
-  if (metric === "gas") lines.push("L2 gas only. Amp's data doesn't have L1 data fees yet, so this is slightly low.")
+  if (metric === "gas") lines.push("Gas, plus the data fee each transaction pays to be posted to Ethereum.")
   if (totals.unpricedGas && (metric === "gas" || metric === "pnl")) lines.push("Some gas had no price at its block, so it isn't included.")
   const relevant = totals.excluded.filter(({ reason }) => {
-    if (metric === "value") return reason === "no current price" || reason === "incomplete history"
-    if (metric === "realized") return reason === "sold at an unknown cost"
+    if (metric === "value") return reason === "no current price" || reason === "incomplete history" || reason === "balance couldn't be read"
+    if (metric === "realized") return reason === "sold at an unknown cost" || reason === "doesn't match its onchain balance" || reason === "not checked against its onchain balance"
     if (metric === "unrealized") return reason !== "sold at an unknown cost"
     return metric === "pnl"
   })
   for (const { asset, reason } of relevant) lines.push(`Not included: ${asset} (${reason}).`)
+  if (metric === "value") {
+    for (const { asset, reconciliation } of positions) {
+      if (reconciliation?.status === "unchecked" && !reconciliation.heldIsCurrent) lines.push(`${asset}'s value is an estimate, because its balance couldn't be read.`)
+    }
+  }
   return {
     title: TOTAL_TITLES[metric],
     value,

@@ -18,11 +18,33 @@ public enum Wording {
 
     public static func coverage(_ portfolio: Portfolio) -> String {
         let span = portfolio.coverage
-        return "Covers blocks \(Format.block(span.fromBlock)) to \(Format.block(span.toBlock)) (about \(Format.duration(blocks: span.toBlock - span.fromBlock))) and \(portfolio.trackedTokens) tokens plus ETH. Anything earlier or off the list isn't counted, so amounts are what moved in this window, not full balances."
+        let opening = portfolio.openingUnread.isEmpty
+            ? "What the wallet held before that comes from the chain, at an unknown cost."
+            : "What the wallet held before that couldn't all be read yet, so some amounts may not be full balances."
+        return "Covers blocks \(Format.block(span.fromBlock)) to \(Format.block(span.toBlock)) (about \(Format.duration(blocks: span.toBlock - span.fromBlock))) and \(portfolio.trackedTokens) tokens plus ETH. \(opening) Tokens off the list aren't counted."
     }
 
     public static func gasUnknown(_ count: Int) -> String {
         "Gas couldn't be worked out for \(count) \(count == 1 ? "transaction" : "transactions"), so ETH is overstated by that much."
+    }
+
+    public static func networkFeeUnknown(_ count: Int) -> String {
+        "Couldn't read the network fee of \(count) \(count == 1 ? "transaction" : "transactions") yet, so gas paid is low and ETH's PnL is unavailable until it can."
+    }
+
+    /// What the onchain check found, or nil when there's nothing to say.
+    public static func check(_ position: Position) -> String? {
+        guard let check = position.reconciliation else { return nil }
+        switch check.status {
+        case .reconciled:
+            return "Matches the chain exactly."
+        case .unchecked:
+            return "Not checked. \(check.reason ?? "") PnL is unavailable until this balance is confirmed."
+        case .incomplete:
+            guard let computed = check.computedQty, let actual = check.actualQty, let difference = check.differenceQty else { return nil }
+            let signed = difference.hasPrefix("-") ? "" : "+"
+            return "Worked out \(Format.amount(computed, decimals: position.decimals)), onchain \(Format.amount(actual, decimals: position.decimals)), difference \(signed)\(Format.amount(difference, decimals: position.decimals)) \(position.asset). PnL is unavailable."
+        }
     }
 
     /// What's missing while a dataset catches up to the chain. nil when it isn't behind.

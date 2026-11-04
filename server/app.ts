@@ -6,6 +6,7 @@ import { createQuery, describeError, isAddress, type Method } from "@pricetag/sd
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { DEMO_ADDRESS, DEMO_WALLET } from "../src/core/fixtures.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
+import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
 import { datasetSource, rawSource, type Source } from "./source.ts"
 import { createWallets } from "./wallets.ts"
 
@@ -22,14 +23,15 @@ function createSource(env: Env): Source | null {
   if (!env.AMP_QUERY_URL) return null
   const query = createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined)
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
+  const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
   if (env.PRICETAG_DATASET) {
     const startBlock = Number(env.PRICETAG_START_BLOCK)
     if (!Number.isSafeInteger(startBlock) || startBlock <= 0) throw new Error("PRICETAG_DATASET needs PRICETAG_START_BLOCK")
-    return datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock })
+    return datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network })
   }
   const historyBlocks = Number(env.PRICETAG_HISTORY_BLOCKS || 1800)
   if (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
-  return rawSource(query, { baseDataset, network: env.PRICETAG_RPC_NETWORK || "base_mainnet", historyBlocks })
+  return rawSource(query, { baseDataset, network, historyBlocks })
 }
 
 /** The request's decoded path, or null when the URL is malformed. Clients can send anything here. */
@@ -92,7 +94,7 @@ export function createApi(env: Env) {
     polling = false
   }
 
-  const wallets = source ? createWallets(source, pollHead) : null
+  const wallets = source ? createWallets(source, pollHead, createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL)) : null
 
   /**
    * Reads a wallet, or answers the request with why it can't.

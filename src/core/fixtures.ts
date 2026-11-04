@@ -1,8 +1,8 @@
 // A demo wallet in the `legs` and `reference_prices` shapes. Every case the UI has to get right is in here:
-// swaps, gas, a wrap, a plain transfer with an unknown cost, an absurd swap price, a sale of unknown-cost tokens, and a
-// swap that also moved a token off the allowlist.
+// swaps, gas, a wrap, a plain transfer with an unknown cost, an absurd swap price, a sale of unknown-cost tokens, a swap
+// that also moved a token off the allowlist, an opening balance, and a balance the legs don't explain.
 
-import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, normalizeAddress, type LegKind, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, normalizeAddress, openingLegs, type LegKind, type LegRow, type ReferenceRow } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
 
 export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
@@ -87,11 +87,22 @@ const references: ReferenceRow[] = [
   reference(HEAD_OFFSET, 2640),
 ]
 
+const legs = [
+  // DAI that was already there before the first block read, and hasn't moved since.
+  ...openingLegs({ blockNum: START_BLOCK - 1, amounts: { DAI: (250n * E18).toString() } }, new Date(START_TIME - 2000).toISOString()),
+  ...buildPricedLegs({ account: DEMO_ADDRESS, rows, references, priced: derivePricedRows(rows, references) }),
+]
+
+// Everything matches the chain, except cbBTC: it holds more than the legs explain.
+const balances = new Map<string, bigint>()
+for (const leg of legs) balances.set(leg.asset, (balances.get(leg.asset) ?? 0n) + BigInt(leg.delta))
+balances.set("cbBTC", (balances.get("cbBTC") ?? 0n) + 500_000n)
+
 export const DEMO_WALLET: WalletResponse = {
   address: DEMO_ADDRESS,
   mode: "demo",
   coverage: { fromBlock: START_BLOCK, toBlock: START_BLOCK + HEAD_OFFSET },
-  legs: buildPricedLegs({ account: DEMO_ADDRESS, rows, references, priced: derivePricedRows(rows, references) }),
+  legs,
   references,
   prices: {
     ETH: { usdMicros: "2640000000", source: "oracle", blockNum: START_BLOCK + HEAD_OFFSET },
@@ -99,6 +110,11 @@ export const DEMO_WALLET: WalletResponse = {
   },
   latest: { blockNum: START_BLOCK + HEAD_OFFSET, timestamp: new Date(START_TIME + HEAD_OFFSET * 2000).toISOString() },
   gasUnknownTxs: [],
+  l1FeeUnknownTxs: [],
+  openingUnread: [],
+  lastBalances: {},
+  unreadBalances: [],
+  balances: { blockNum: START_BLOCK + HEAD_OFFSET, amounts: Object.fromEntries([...balances].map(([asset, amount]) => [asset, amount.toString()])) },
 }
 
 export const DEMO_ROWS = rows

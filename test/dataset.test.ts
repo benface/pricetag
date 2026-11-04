@@ -100,6 +100,20 @@ describe("pairing", () => {
   it("drops what nets to zero", () => {
     assert.match(net, /WHERE get_field\(net, 'side'\) <> ''/)
   })
+
+  it("only prices an account's pair when nothing off the allowlist moved with it", () => {
+    const counts = manifest.tables.pair_counts!.input.sql
+    assert.match(counts, /FROM self\.pairs\s+UNION ALL\s+SELECT block_num, tx_hash, account FROM self\.unlisted_moves/)
+    assert.match(manifest.tables.single_pairs!.input.sql, /c\.pair_count = 1/)
+  })
+
+  it("nets unlisted tokens per asset, with an NFT counting once per ID, and keeps what it can't read", () => {
+    const moves = manifest.tables.unlisted_moves!.input.sql
+    assert.match(moves, /FROM self\.unlisted_legs/)
+    assert.match(moves, /GROUP BY block_num\(\), block_num, tx_hash, account, token, CASE WHEN kind = 'unlisted_nft' THEN amount ELSE '' END/)
+    assert.match(moves, /CASE WHEN kind = 'unlisted_nft' THEN CASE WHEN side = 'credit' THEN '1' ELSE '-1' END/)
+    assert.match(moves, /WHERE \(get_field\(net, 'side'\) <> '' OR unreadable\)/)
+  })
 })
 
 describe("the UDFs match the app", () => {
