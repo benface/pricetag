@@ -60,6 +60,11 @@ type Cached = {
   openingReadAt: Record<string, number>
   /** The chain's head at the last refresh, which a wallet read as of a fixed block can't tell from `latest`. */
   readAtHead: number
+  /**
+   * How far the tables had got, which is `coveredTo` unless this is a wallet read as of a fixed block. Its coverage stops
+   * there, and the chain's head can't speak for tables still serving a reorg's old blocks, so this is what says they've moved on.
+   */
+  tablesReached: number
   /** At `coveredTo`, the same block the rows reach, or the check would fail whenever a dataset is slightly behind. */
   closing: BalanceSnapshot | null
   /** Every asset's last successful read, because a failed read mustn't look like an empty wallet. */
@@ -156,6 +161,7 @@ function rewound(wallet: Cached, block: number): Cached {
   return {
     ...wallet,
     coveredTo: Math.min(wallet.coveredTo, last),
+    tablesReached: Math.min(wallet.tablesReached, last),
     rows: wallet.rows.filter((r) => r.block_num < block),
     priced: wallet.priced.filter((p) => p.block_num < block),
     references: kept(wallet.references, (reference) => reference.blockNum),
@@ -195,13 +201,11 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
   const reorgs: Reorg[] = []
 
   /**
-   * The first block a reorg replaced that this wallet's last read can't be sure of, or null when there's none. Until a read
-   * gets past it, every read goes back to here, however far that is. A wallet read as of a fixed block never gets past it,
-   * so only the chain can say.
+   * The first block a reorg replaced that this wallet's last read can't be sure of, or null when there's none. Until the
+   * tables get past it, every read goes back to here, however far that is.
    */
   function unsettledFrom(wallet: Cached, { to }: WalletRange): number | null {
-    const reached = to === undefined ? wallet.coveredTo : wallet.readAtHead
-    const unsettled = reorgs.filter(({ from, settledAt }) => reached < settledAt && (to === undefined || from <= to))
+    const unsettled = reorgs.filter(({ from, settledAt }) => wallet.tablesReached < settledAt && (to === undefined || from <= to))
     return unsettled.length > 0 ? Math.min(...unsettled.map(({ from }) => from)) : null
   }
 
@@ -242,6 +246,10 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const coveredTo = processed ?? cached?.coveredTo ?? fromBlock - 1
     const tip = tipOf(range, coveredTo, chain)
     const reorgable = range.to !== undefined && cached !== undefined && (fixedMayChange(cached, chain) || unsettled !== null)
+    // Before the rows, so a read that finds the tables far enough along has what they've rewritten. It's a query, so only when there's a reorg to settle.
+    const { to } = range
+    const looksPast = to !== undefined && (unsettled !== null || (!cached && reorgs.some(({ from }) => from <= to)))
+    const tablesReached = (to === undefined ? coveredTo : looksPast ? await source.processedThrough(coveredTo, chain.blockNum) : null) ?? cached?.tablesReached ?? coveredTo
 
     let rows = cached?.rows ?? []
     let priced = cached?.priced ?? []
@@ -301,14 +309,14 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
     const prices = latestPrices(await source.readLatestReference(head.blockNum))
 
-    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknown, opening, openingReadAt, readAtHead: chain.blockNum, closing, lastBalances, l1Fees, staleFeeTxs, ethBalances }
+    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknown, opening, openingReadAt, readAtHead: chain.blockNum, tablesReached, closing, lastBalances, l1Fees, staleFeeTxs, ethBalances }
     wallets.delete(key)
     wallets.set(key, next)
     if (wallets.size > MAX_WALLETS) wallets.delete(wallets.keys().next().value as string)
     return next
   }
 
-  function responseOf(address: string, wallet: Omit<Cached, "openingReadAt" | "readAtHead">): WalletData {
+  function responseOf(address: string, wallet: Omit<Cached, "openingReadAt" | "readAtHead" | "tablesReached">): WalletData {
     const references = [...wallet.references.values()]
     const l1 = l1FeeRows(wallet.rows, wallet.l1Fees)
     const { opening, closing } = wallet
@@ -398,12 +406,12 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
     /**
      * A reorg replaced every block from `block` on, so forget them, however far back that is, and keep reading them until
-     * reads are past `tip`, the newest block the old chain is known to have reached, by as many blocks as any reorg is
+     * the tables are past `tip`, the newest block the old chain is known to have reached, by as many blocks as any reorg is
      * re-read for. A wallet read that started before this finishes first. A wallet that held balances from before `block`
      * is read again from the start if the reorg reached them.
      */
     async rewind(block: number, tip: number): Promise<void> {
-      reorgs.push({ from: block, settledAt: Math.max(tip, ...[...wallets.values()].map((wallet) => wallet.latest.blockNum)) + REORG_BLOCKS })
+      reorgs.push({ from: block, settledAt: Math.max(tip, ...[...wallets.values()].flatMap((wallet) => [wallet.latest.blockNum, wallet.tablesReached])) + REORG_BLOCKS })
       while (inflight.size > 0) await Promise.allSettled(inflight.values())
       for (const [key, wallet] of wallets) {
         if (block <= wallet.fromBlock) wallets.delete(key)

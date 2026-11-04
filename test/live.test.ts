@@ -4,8 +4,10 @@ import { createServer as createHttp2Server } from "node:http2"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { createPricetag, type WalletUpdate } from "@pricetag/sdk"
+import type { RateRound } from "@pricetag/sdk/core"
 import { createRangeStream, createWallets, datasetSource, followChain, parseStreamRange, pricetagClient, type BlockMark, type ChainTick, type FollowConfig, type Query, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
+import { createRates } from "../server/rates.ts"
 import { fakeAmp, type Tables } from "./support/fake-amp.ts"
 
 const ME = "00000000000000000000000000000000000000aa"
@@ -442,6 +444,54 @@ describe("watchWallet", () => {
       await updates.return()
     })
 
+    it("won't let the chain's head settle a read as of a fixed block while the tables serve the old blocks", async () => {
+      const state = { head: 150, through: 150, tables: OLD }
+      let reads = 0
+      const query: Query = async <T,>(sql: string) => {
+        if (sql.includes(".legs WHERE block_num BETWEEN")) reads++
+        return fakeAmp(state.tables, state.through).query<T>(sql)
+      }
+      const source = datasetSource(query, { dataset: "benface/pricetag@0.0.1", baseDataset: "b", startBlock: 50, network: "base_mainnet" })
+      const wallets = createWallets(source, async () => ({ blockNum: state.head, timestamp: new Date(1_800_000_000_000).toISOString() }), async () => new Map(), QUIET)
+      const range = { from: 50, to: 125 }
+      const hashes = async () => (await wallets.get(ADDRESS, range)).legs.filter((leg) => !leg.opening).map((leg) => leg.txHash)
+      assert.deepEqual(await hashes(), ["0xaa"])
+      await wallets.rewind(100, 150)
+
+      // The chain goes well past where it would be settled, with the tables still at the old tip.
+      for (const head of [151, 180, 300]) {
+        state.head = head
+        assert.deepEqual(await hashes(), ["0xaa"])
+        assert.equal(wallets.unsettledFrom(ADDRESS, range), 100)
+      }
+
+      state.tables = NEW
+      state.through = 151
+      assert.deepEqual(await hashes(), ["0xbb"])
+      assert.equal(wallets.unsettledFrom(ADDRESS, range), 100)
+
+      // Only once they're past it, and that read is the one that says so, with what they rewrote.
+      state.tables = { ...NEW, legs: [creditAt(121, "cc", "8")], reference_prices: [{ ...REFERENCE, block_num: "121" }] }
+      state.through = 180
+      assert.deepEqual(await hashes(), ["0xcc"])
+      assert.equal(wallets.unsettledFrom(ADDRESS, range), null)
+
+      // Settled, and now it's fixed: nothing read again, even if a later table changed.
+      const settled = reads
+      state.head = 400
+      await hashes()
+      await hashes()
+      assert.equal(reads, settled)
+    })
+
+    it("doesn't touch a read as of a block before the reorg", async () => {
+      const { chain, client } = chainAt(150, { ...OLD, legs: [creditAt(90, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "90" }] })
+      const asOf = { to: 95 }
+      assert.equal((await client.getPortfolio(ADDRESS, asOf)).unsettledFrom, null)
+      chain.block = chain.through = 190
+      assert.equal((await client.getPortfolio(ADDRESS, asOf)).unsettledFrom, null)
+    })
+
     it("replaces a read as of a fixed block, which never gets past the reorg itself", async () => {
       const { chain, hand, client } = chainAt(150, OLD)
       const asOf = { to: 125 }
@@ -602,6 +652,30 @@ describe("the server's live events while the dataset catches up", () => {
     }
     stop.abort()
     await reader.cancel().catch(() => {})
+  })
+})
+
+describe("exchange rates after a reorg", () => {
+  it("reads a settled block's rate again once a reorg replaced it, and only then", async () => {
+    const asked: number[][] = []
+    const round = (block: number, answer: string) => ({ roundId: "1", answer, updatedAt: block }) as unknown as RateRound
+    let answer = "1"
+    const readRates = createRates(async (_feed, blocks) => {
+      asked.push([...blocks])
+      return new Map(blocks.map((block) => [block, round(block, answer)]))
+    })
+    const wallet = { latest: { blockNum: 200, timestamp: new Date(1_800_000_000_000).toISOString() }, legs: [{ blockNum: 100 }, { blockNum: 150 }] } as Parameters<typeof readRates>[1]
+    await readRates("CAD", wallet)
+    assert.deepEqual(asked.at(-1), [100, 150, 200])
+    await readRates("CAD", wallet)
+    assert.equal(asked.length, 1)
+
+    answer = "2"
+    readRates.rewind!(120)
+    const rates = await readRates("CAD", wallet)
+    assert.deepEqual(asked.at(-1), [150, 200])
+    assert.equal((rates?.byBlock[150] as unknown as { answer: string }).answer, "2")
+    assert.equal((rates?.byBlock[100] as unknown as { answer: string }).answer, "1")
   })
 })
 

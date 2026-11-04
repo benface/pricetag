@@ -6,12 +6,17 @@ import { CURRENCIES, type CurrencyCode, type Rates, type RateRound } from "@pric
 import { REORG_BLOCKS } from "@pricetag/sdk/internal"
 import type { RoundReader } from "./source.ts"
 
-export function createRates(readRounds: RoundReader) {
+type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletResponse, "legs" | "latest">) => Promise<Rates | null>
+
+/** Reads rates, and forgets the ones from blocks a reorg replaced, when it can. */
+export type RatesReader = ReadRates & { rewind?(block: number): void }
+
+export function createRates(readRounds: RoundReader): RatesReader {
   const settled = new Map<CurrencyCode, Map<number, RateRound>>()
   const newest = new Map<CurrencyCode, NonNullable<Rates["latest"]>>()
 
   /** A read that fails throws. A block the feed had no answer for is just left out, and isn't remembered, so it's tried again. */
-  return async function ratesFor(currency: CurrencyCode, wallet: Pick<WalletResponse, "legs" | "latest">): Promise<Rates | null> {
+  const ratesFor: ReadRates = async (currency, wallet) => {
     const feed = CURRENCIES[currency].feed
     if (!feed) return null
     const known = settled.get(currency) ?? new Map<number, RateRound>()
@@ -34,4 +39,11 @@ export function createRates(readRounds: RoundReader) {
     if (latest) newest.set(currency, latest)
     return { byBlock, latest }
   }
+
+  return Object.assign(ratesFor, {
+    rewind(block: number) {
+      for (const known of settled.values()) for (const at of known.keys()) if (at >= block) known.delete(at)
+      for (const [currency, latest] of newest) if (latest.blockNum >= block) newest.delete(currency)
+    },
+  })
 }

@@ -149,6 +149,7 @@ export function createApi(env: Env, created: Created | null = createSource(env))
   /** Blocks some already-read wallets hold were replaced. The next read of each replaces them, however far back it was. */
   async function rewindTo(block: number, tip: number) {
     await Promise.all([...new Set([wallets, ...rules.map((r) => r.wallets)])].map((w) => w?.rewind(block, Math.max(head?.blockNum ?? 0, tip))))
+    created?.readRates.rewind?.(block)
     // The new chain can be shorter, and the head is only read from the last one on.
     if (head && head.blockNum >= block) head = { ...head, blockNum: block - 1 }
   }
