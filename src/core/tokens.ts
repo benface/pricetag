@@ -21,15 +21,15 @@ export type Token = {
   decimals: number
   /** The position this token folds into. WETH and ETH are one position, so wrapping is never a sale. */
   asset: string
-  /** A Chainlink feed prices it. Its `swap` price is never used. */
+  /** A Chainlink feed prices it, so `sanity` only applies to a swap at a block where the feed's read failed. */
   oracle?: "eth" | "usdc"
   sanity?: Sanity
 }
 
 export const TOKENS: readonly Token[] = [
-  { address: ETH_ADDRESS, symbol: "ETH", decimals: 18, asset: "ETH", oracle: "eth" },
+  { address: ETH_ADDRESS, symbol: "ETH", decimals: 18, asset: "ETH", oracle: "eth", sanity: { usd: [100, 100_000] } },
   { address: WETH_ADDRESS, symbol: "WETH", decimals: 18, asset: "ETH", oracle: "eth" },
-  { address: USDC_ADDRESS, symbol: "USDC", decimals: 6, asset: "USDC", oracle: "usdc" },
+  { address: USDC_ADDRESS, symbol: "USDC", decimals: 6, asset: "USDC", oracle: "usdc", sanity: { usd: [0.8, 1.2] } },
   { address: "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", symbol: "USDT", decimals: 6, asset: "USDT", sanity: { usd: [0.8, 1.2] } },
   { address: "0x50c5725949a6f0c72e6c4a641f24049a917db0cb", symbol: "DAI", decimals: 18, asset: "DAI", sanity: { usd: [0.8, 1.2] } },
   { address: "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22", symbol: "cbETH", decimals: 18, asset: "cbETH", sanity: { eth: [0.8, 1.6] } },

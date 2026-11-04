@@ -1,0 +1,58 @@
+// The request handler behind `pnpm start`: the API, then the built app. One bad request must never stop the server.
+
+import { createReadStream, existsSync, statSync } from "node:fs"
+import type { IncomingMessage, ServerResponse } from "node:http"
+import { extname, join, resolve, sep } from "node:path"
+import { pathOf } from "./app.ts"
+
+const TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript",
+  ".css": "text/css",
+  ".svg": "image/svg+xml",
+  ".map": "application/json",
+}
+// No scripts from anywhere but this server.
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+
+function sendText(res: ServerResponse, status: number, text: string) {
+  res.writeHead(status, { "content-type": "text/plain" })
+  res.end(text)
+}
+
+function serveStatic(req: IncomingMessage, res: ServerResponse, dist: string) {
+  const path = pathOf(req)
+  if (path === null) {
+    sendText(res, 400, "Bad request")
+    return
+  }
+  const requested = resolve(join(dist, path))
+  const inside = requested === dist || requested.startsWith(dist + sep)
+  const file = inside && existsSync(requested) && statSync(requested).isFile() ? requested : join(dist, "index.html")
+  if (!existsSync(file)) {
+    sendText(res, 503, "Run `pnpm build` first.")
+    return
+  }
+  res.writeHead(200, {
+    "content-type": TYPES[extname(file)] ?? "application/octet-stream",
+    "content-security-policy": CSP,
+    "x-content-type-options": "nosniff",
+  })
+  createReadStream(file)
+    .on("error", () => res.destroy())
+    .pipe(res)
+}
+
+export function createHandler(handleApi: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>, dist: string) {
+  return (req: IncomingMessage, res: ServerResponse) => {
+    handleApi(req, res)
+      .then((handled) => {
+        if (!handled) serveStatic(req, res, dist)
+      })
+      .catch((error: unknown) => {
+        console.error("Request failed:", error instanceof Error ? error.message : String(error))
+        if (res.headersSent) res.destroy()
+        else sendText(res, 500, "Something went wrong.")
+      })
+  }
+}

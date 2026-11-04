@@ -10,7 +10,10 @@ export type Head = { blockNum: number; timestamp: string }
 export type WalletResponse = {
   address: string
   mode: Mode
-  /** The blocks read. Anything before `fromBlock` isn't seen, so balances are only what moved since then. */
+  /**
+   * The blocks read. Anything before `fromBlock` isn't seen, so balances are only what moved since then.
+   * `toBlock` can be behind `latest` while a derived table catches up, and is below `fromBlock` until it starts.
+   */
   coverage: { fromBlock: number; toBlock: number }
   legs: PricedLeg[]
   references: ReferenceRow[]
