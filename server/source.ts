@@ -19,6 +19,8 @@ export type Source = {
   head(after: number | null): Promise<Head | null>
   readWindow(address: string, from: number, to: number): Promise<WindowRows>
   readReferences(blocks: readonly number[]): Promise<ReferenceRow[]>
+  /** The newest oracle read at or just before `head`, or null if there's none recent enough to call current. */
+  readLatestReference(head: number): Promise<ReferenceRow | null>
 }
 
 const hexOf = (address: string) => address.replace(/^0x/, "").toLowerCase()
@@ -51,6 +53,9 @@ async function readHead(query: Query, dataset: string, after: number | null): Pr
   return row ? { blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) } : null
 }
 
+/** About 2 minutes. A derived table runs a block or two behind the head, and older than this isn't a current price. */
+const MAX_PRICE_AGE_BLOCKS = 60
+
 export function rawSource(query: Query, config: { baseDataset: string; network: string; historyBlocks: number }): Source {
   const ds = `"${config.baseDataset}"`
   const allowlist = ERC20_ADDRESSES.map((a) => `X'${hexOf(a)}'`).join(", ")
@@ -61,11 +66,31 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
     return result
   }
 
+  const readReferences = (blocks: readonly number[]) =>
+    inBlocks<Row>(
+      blocks,
+      // The filter sits in an inner subquery with a LIMIT, and the outer query reads no field of the result.
+      // WORK-320 found the other shapes can run eth_call on every block on the chain.
+      (filter, count) =>
+        `SELECT block_num,
+           rpc.${config.network}.eth_call(NULL, evm_encode_hex('${ETH_USD_FEED}'), evm_encode_params('latestRoundData()'), block_num) AS e,
+           rpc.${config.network}.eth_call(NULL, evm_encode_hex('${USDC_USD_FEED}'), evm_encode_params('latestRoundData()'), block_num) AS u
+         FROM (SELECT block_num FROM ${ds}.blocks WHERE ${filter} LIMIT ${count})`,
+    ).then((rows) =>
+      rows.map((r) => ({
+        block_num: asNumber(r.block_num),
+        eth_usd: decodeRoundAnswer((r.e as { data?: string } | null)?.data),
+        usdc_usd: decodeRoundAnswer((r.u as { data?: string } | null)?.data),
+      })),
+    )
+
   return {
     mode: "raw",
     startBlock: null,
     historyBlocks: config.historyBlocks,
     head: (after) => readHead(query, config.baseDataset, after),
+    readReferences,
+    readLatestReference: async (head) => (await readReferences([head]))[0] ?? null,
 
     async readWindow(address, from, to) {
       const me = hexOf(address)
@@ -142,29 +167,17 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
       })
       return { rows, priced: null, gasUnknownTxs }
     },
-
-    // The filter sits in an inner subquery with a LIMIT, and the outer query reads no field of the result.
-    // WORK-320 found the other shapes can run eth_call on every block on the chain.
-    readReferences: (blocks) =>
-      inBlocks<Row>(
-        blocks,
-        (filter, count) =>
-          `SELECT block_num,
-             rpc.${config.network}.eth_call(NULL, evm_encode_hex('${ETH_USD_FEED}'), evm_encode_params('latestRoundData()'), block_num) AS e,
-             rpc.${config.network}.eth_call(NULL, evm_encode_hex('${USDC_USD_FEED}'), evm_encode_params('latestRoundData()'), block_num) AS u
-           FROM (SELECT block_num FROM ${ds}.blocks WHERE ${filter} LIMIT ${count})`,
-      ).then((rows) =>
-        rows.map((r) => ({
-          block_num: asNumber(r.block_num),
-          eth_usd: decodeRoundAnswer((r.e as { data?: string } | null)?.data),
-          usdc_usd: decodeRoundAnswer((r.u as { data?: string } | null)?.data),
-        })),
-      ),
   }
 }
 
 export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; startBlock: number }): Source {
   const ds = `"${config.dataset}"`
+  const referenceColumns = "block_num, get_field(eth_round, 'c1') AS eth_usd, get_field(usdc_round, 'c1') AS usdc_usd"
+  const toReference = (r: Row): ReferenceRow => ({
+    block_num: asNumber(r.block_num),
+    eth_usd: decimalString(r.eth_usd) ?? "",
+    usdc_usd: decimalString(r.usdc_usd) ?? "",
+  })
   return {
     mode: "dataset",
     startBlock: config.startBlock,
@@ -212,10 +225,17 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
     async readReferences(blocks) {
       const result: ReferenceRow[] = []
       for (const { filter } of blockFilters(blocks)) {
-        const rows = await query<Row>(`SELECT block_num, get_field(eth_round, 'c1') AS eth_usd, get_field(usdc_round, 'c1') AS usdc_usd FROM ${ds}.reference_prices WHERE ${filter}`)
-        for (const r of rows) result.push({ block_num: asNumber(r.block_num), eth_usd: decimalString(r.eth_usd) ?? "", usdc_usd: decimalString(r.usdc_usd) ?? "" })
+        const rows = await query<Row>(`SELECT ${referenceColumns} FROM ${ds}.reference_prices WHERE ${filter}`)
+        result.push(...rows.map(toReference))
       }
       return result
+    },
+
+    async readLatestReference(head) {
+      const rows = await query<Row>(
+        `SELECT ${referenceColumns} FROM ${ds}.reference_prices WHERE block_num BETWEEN ${head - MAX_PRICE_AGE_BLOCKS} AND ${head} ORDER BY block_num DESC LIMIT 1`,
+      )
+      return rows[0] ? toReference(rows[0]) : null
     },
   }
 }

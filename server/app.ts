@@ -38,9 +38,14 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body))
 }
 
+/** Amp's client can throw errors with an empty message. These never contain the token, which only travels in a header. */
+function describeError(error: unknown): string {
+  return (error instanceof Error && error.message) || String(error)
+}
+
 /** Query errors can quote our SQL or the endpoint. The browser gets a fixed message, and the detail stays in the server log. */
 function sendAmpError(res: ServerResponse, error: unknown) {
-  console.error("Amp query failed:", (error instanceof Error && error.message) || "unknown error")
+  console.error("Amp query failed:", describeError(error))
   sendJson(res, 502, { error: "Couldn't read from Amp." })
 }
 
@@ -75,7 +80,7 @@ export function createApi(env: Env) {
           message = `event: head\ndata: ${JSON.stringify(current)}\n\n`
         }
       } catch (error) {
-        console.error("Head poll failed:", (error instanceof Error && error.message) || "unknown error")
+        console.error("Head poll failed:", describeError(error))
         message = `event: down\ndata: {}\n\n`
       }
       if (message) for (const subscriber of subscribers) subscriber.write(message)

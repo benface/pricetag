@@ -3,7 +3,7 @@
 import { valuePosition } from "./fold.ts"
 import type { PricedLeg } from "./legs.ts"
 import type { LegEffect, PnlPoint, Position, Totals } from "./portfolio.ts"
-import { tokenByAddress } from "./tokens.ts"
+import { TOKENS, tokenByAddress } from "./tokens.ts"
 import { formatAmount, formatPrice, formatSignedUsd, formatUsd, shortHash } from "./format.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized"
@@ -70,7 +70,9 @@ export function explainMetric(position: Position, metric: Metric): Explanation {
   const unknownQty = `${formatAmount(values.unknownCostQty, decimals)} ${asset}`
   const priceLine = price
     ? `Current price: ${formatPrice(price.usdMicros)}, from the ${price.source} at block ${price.blockNum.toLocaleString("en-US")}.`
-    : `There's no current price for ${asset}. Only ETH and USDC have an oracle so far.`
+    : TOKENS.some((t) => t.symbol === asset && t.oracle)
+      ? `There's no current price for ${asset}, because the latest oracle read failed or is too old. An old price would quietly be wrong.`
+      : `There's no current price for ${asset}. Only ETH and USDC have an oracle so far.`
   const lines: string[] = []
   let value: string | null = null
 
