@@ -2,10 +2,10 @@
 // Keeps each wallet's rows in memory: one full read, then only new blocks, because a wallet read scans the whole range.
 
 import { describeError, type Logger } from "./amp.ts"
-import { buildPricedLegs, derivePricedRows, settleUnwraps, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PricedRow, type Reference } from "./legs.ts"
+import { buildPricedLegs, derivePricedRows, oneWaySendBalanceBlocks, settleUnwraps, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PricedRow, type Reference } from "./legs.ts"
 import { MARKET_MAX_AGE_BLOCKS, marketPrice, type MarketPrice, type MarketTrade } from "./market.ts"
 import type { CostNote } from "./notes.ts"
-import { latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
+import { foldPositions, latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
 import type { ReadL1Fees } from "./receipts.ts"
 import { openingLegs, type BalanceSnapshot } from "./reconcile.ts"
 import { ASSETS, TOKENS, tokenByAddress } from "./tokens.ts"
@@ -81,7 +81,7 @@ type Cached = {
   marketChecked: boolean
   /** Transactions whose fee is older than the balance read of their block. See `isL1FeeCurrent`. */
   staleFeeTxs: string[]
-  /** Plain ETH at the end of the blocks `settleUnwraps` needs. */
+  /** Plain ETH at the end of the blocks `settleUnwraps` reads, when they've been worth reading. */
   ethBalances: Map<number, string>
 }
 
@@ -243,21 +243,45 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     }
   }
 
+  /**
+   * The balances a wallet's ETH still needs to say where it went wrong. A wallet whose ETH adds up has nothing unseen to
+   * find, so it costs no reads, however many tokens it sends.
+   */
+  function unreadSendBlocks(address: string, wallet: Cached): number[] {
+    const blocks = oneWaySendBalanceBlocks(wallet.rows).filter((block) => !wallet.ethBalances.has(block))
+    if (blocks.length === 0) return []
+    const data = responseOf(address, wallet)
+    // The same check the wallet's position gets, because a balance can match after ETH left that never arrived. Whether it did doesn't depend on the method.
+    const eth = foldPositions(data.legs, "average", {}, data).find((position) => position.asset === "ETH")
+    return eth?.reconciliation?.status === "incomplete" ? blocks : []
+  }
+
+  /** A failed read leaves what's unread as it was. The next refresh tries again. */
+  async function readEthBalances(address: string, blocks: readonly number[], into: Map<number, string>) {
+    if (blocks.length === 0) return
+    try {
+      for (const [block, balance] of await source.readEthBalances(address, blocks)) into.set(block, balance)
+    } catch (error) {
+      logger.warn(`ETH balance read failed: ${describeError(error)}`)
+    }
+  }
+
   /** A wallet read as of a fixed block has no new block coming, so what it's still missing has to be read without one. */
-  const isFixedCurrent = (wallet: Cached, head: Head, chain: Head) =>
+  const isFixedCurrent = (address: string, wallet: Cached, head: Head, chain: Head) =>
     wallet.coveredTo >= head.blockNum &&
     isComplete(wallet.opening) &&
     isComplete(wallet.closing) &&
     wallet.rows.every((r) => r.kind !== "gas" || isL1FeeSettled(wallet.l1Fees.get(r.tx_hash), r.block_num, chain.blockNum)) &&
     unwrapBalanceBlocks(wallet.rows).every((block) => wallet.ethBalances.has(block)) &&
     !fixedMayChange(wallet, chain) &&
-    !openingMayChange(wallet, chain)
+    !openingMayChange(wallet, chain) &&
+    unreadSendBlocks(address, wallet).length === 0
 
   async function refresh(address: string, key: string, range: WalletRange): Promise<Cached> {
     const chain = await currentHead()
     const head = headAsOf(chain, range.to)
     const cached = wallets.get(key)
-    if (cached && (range.to === undefined ? cached.latest.blockNum >= head.blockNum : isFixedCurrent(cached, head, chain))) return cached
+    if (cached && (range.to === undefined ? cached.latest.blockNum >= head.blockNum : isFixedCurrent(address, cached, head, chain))) return cached
 
     const fromBlock = cached?.fromBlock ?? range.from ?? source.startBlock ?? Math.max(0, head.blockNum - (source.historyBlocks ?? 0))
     // Coverage only moves up to what's been processed. If it followed the chain, a table catching up later would
@@ -313,13 +337,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const staleFeeTxs = rows.filter((r) => r.kind === "gas" && !isL1FeeCurrent(l1Fees.get(r.tx_hash), r.block_num, tip)).map((r) => r.tx_hash)
 
     const unreadEth = unwrapBalanceBlocks(rows).filter((block) => !ethBalances.has(block)).slice(0, MAX_ETH_BALANCES_PER_READ)
-    if (unreadEth.length > 0) {
-      try {
-        for (const [block, balance] of await source.readEthBalances(address, unreadEth)) ethBalances.set(block, balance)
-      } catch (error) {
-        logger.warn(`ETH balance read failed: ${describeError(error)}`)
-      }
-    }
+    await readEthBalances(address, unreadEth, ethBalances)
 
     let opening = cached?.opening ?? null
     const openingReadAt = { ...cached?.openingReadAt }
@@ -350,6 +368,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     }
 
     const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknown, opening, openingReadAt, readAtHead: chain.blockNum, closing, lastBalances, l1Fees, staleFeeTxs, ethBalances, notes, notesReadTo, marketChecked }
+    // This comes after the claims and the closing balance, because whether ETH adds up depends on both.
+    await readEthBalances(address, unreadSendBlocks(address, next).slice(0, MAX_ETH_BALANCES_PER_READ - unreadEth.length), ethBalances)
     wallets.delete(key)
     wallets.set(key, next)
     if (wallets.size > MAX_WALLETS) wallets.delete(wallets.keys().next().value as string)
@@ -360,7 +380,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const references = [...wallet.references.values()]
     const l1 = l1FeeRows(wallet.rows, wallet.l1Fees)
     const { opening, closing } = wallet
-    const { rows, priced } = settleUnwraps({
+    const { rows, priced, unseenEth } = settleUnwraps({
       rows: [...wallet.rows, ...l1.rows],
       priced: wallet.priced,
       references,
@@ -386,6 +406,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       openingUnread: ASSETS.filter((asset) => opening?.amounts[asset] === undefined),
       lastBalances: Object.fromEntries(Object.entries(wallet.lastBalances).filter(([asset]) => closing?.amounts[asset] === undefined)),
       unreadBalances: wallet.coveredTo >= wallet.fromBlock ? ASSETS.filter((asset) => closing?.amounts[asset] === undefined) : [],
+      unseenEth,
       notes: wallet.notes,
       marketChecked: wallet.marketChecked,
     }

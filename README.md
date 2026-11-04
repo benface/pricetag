@@ -100,9 +100,11 @@ FORK_OF=benface/pricetag@0.1.0 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node datase
 ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.1.1
 ```
 
-Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.1.1` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging.
+Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.1.1` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging. List the versions first and use a free tag, because registering a tag that exists moves it without saying so.
 
 **Replacing the dataset it forks means replacing the fork too.** The fork reads the job of the version it names, so stopping that job stops the fork. Deploy a fork of the new version before stopping the old one, then change all four lines together.
+
+**A new dataset name needs a new manifest hash.** Amp finds a dataset's active tables by hash and table name, not by dataset name, so one manifest under two names can read and write the same tables. That's why `benface/pricetag@0.0.1` is `dataset/pricetag.json` at this start block plus a one-line SQL comment. A manifest with new SQL already has its own hash.
 
 `pnpm amp:start` turns the fork off while it runs, because it isn't registered on a local Amp. Hot wallet decisions and tax reports always read by the default rule, whatever the switch says.
 
@@ -252,4 +254,5 @@ What a pass doesn't show, which the interface also says:
 - The dataset nets per token, then only prices an account's single pair. A split route that nets to one token out and one in gets a price. A token that mostly cancels out (under half of what moved is left) is what a router or pool kept, so it gets no price. Paying with ETH and WETH together makes two pairs, so the other token has no price, though the app still knows what was paid. A pair gets no price either when something off the allowlist moved with it, unless that token netted to zero.
 - There are no traces: a WETH `Withdrawal` is only a claim that ETH reached the transaction's sender, because a contract can send it elsewhere or keep a cut. The server settles each claim against the wallet's ETH balance before and after its block (`settleUnwraps`). When that can't say how much arrived, the swap's cost and proceeds stay unknown, even if its other token's balance matches.
 - Other internal ETH transfers aren't seen: a smart wallet's ETH from a swap, because a bundler sends its transactions, a swap through a pool that pays out ETH directly, and a bridge deposit's minted ETH (type 126), because `transactions` has no `mint` column. All of these show up as `incomplete`.
+- When ETH is `incomplete`, the server reads its balance around each transaction that took a token and gave nothing back. If ETH rose in that block by more than its transactions explain, that transaction's proceeds become unknown, and ETH's check names it. It isn't valued from that ETH, because a stranger's payment in the same block looks the same. That also means a real send landing beside such a payment shows as unknown. A wallet whose ETH matches costs no extra reads.
 - Rebasing tokens and internal ETH transfers aren't resolved, only flagged. A flagged position's PnL stays unavailable until they are.

@@ -4,6 +4,10 @@ import Testing
 
 /// `test/portfolio.test.ts` writes the vectors from the web app's wording, so both say the same thing.
 struct WordingVectors: Decodable {
+    struct UnseenEthVector: Decodable {
+        let unseen: [UnseenEth]
+        let text: String
+    }
     struct Action: Decodable {
         let kind: String
         let incoming: Bool
@@ -50,6 +54,7 @@ struct WordingVectors: Decodable {
     let feesUnknown: [FeesUnknown]
     let behind: [Behind]
     let stale: String
+    let unseenEth: [UnseenEthVector]
     let feedDetail: [String]
     let pnlHelp: [PnlHelp]
     let linkedFailed: [FeesUnknown]
@@ -84,6 +89,7 @@ struct WordingVectors: Decodable {
         for vector in vectors.feesUnknown { #expect(Wording.feesUnknown(vector.count) == vector.text) }
         for vector in vectors.behind { #expect(Wording.behind(blocks: vector.blocks) == vector.text) }
         #expect(Wording.stale(lastUpdate: "Nov 4 at 5:40 AM") == vectors.stale)
+        for vector in vectors.unseenEth { #expect(Wording.unseenEthCause(vector.unseen) == vector.text) }
         #expect([Mode.demo, .raw, .dataset].map { Wording.feedDetail($0, block: 1000) } == vectors.feedDetail)
         for vector in vectors.pnlHelp { #expect(Wording.pnlHelp(for: vector.text) == vector.help) }
         let sentences = vectors.sentences
