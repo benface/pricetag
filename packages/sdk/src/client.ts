@@ -23,7 +23,10 @@ export type PricetagConfig = {
   baseDataset?: string | undefined
   /** The dataset's first block, which every read starts from unless it says otherwise. */
   startBlock?: number | undefined
-  /** Where `getPortfolio` reads L1 fees from. Without one, it can't check ETH against the chain for a wallet that sent anything, and says so. */
+  /**
+   * Where L1 fees are read from. Without one, `getPortfolio` can't check ETH against the chain for a wallet that sent
+   * anything, and `getLegs` can't confirm a swap paid out in unwrapped ETH. Both say so.
+   */
   rpcUrl?: string | undefined
   /** The network name Amp knows the chain by, as in `rpc.base_mainnet.eth_call`, which reads onchain balances. */
   network?: string | undefined
@@ -67,6 +70,9 @@ export type WalletLegs = {
   references: Reference[]
   /** Transactions this wallet sent whose gas couldn't be worked out, so ETH is overstated by that much. */
   gasUnknownTxs: string[]
+  l1Fees: L1FeeStatus
+  /** Transactions whose gas legs leave out their L1 fee. A swap paid out in unwrapped ETH in one of them stays unknown. */
+  l1FeeUnknownTxs: string[]
 }
 
 /** A wallet's holdings, cost and PnL in USD, the same way the app works them out. */
@@ -158,6 +164,13 @@ export function pricetagClient(query: Query, config: ClientConfig) {
   let chainHead: Head | null = null
   const wallets = createWallets(source, async () => chainHead as Head, readL1Fees ?? (async () => new Map()), config.logger)
 
+  const l1FeeStatus = (unknownTxs: readonly string[]): L1FeeStatus => (unknownTxs.length === 0 ? "read" : readL1Fees ? "pending" : "no rpc url")
+
+  async function readWallet(account: string, from: number, to: number | undefined): Promise<WalletData> {
+    chainHead = (await reader.head(chainHead?.blockNum ?? null)) ?? chainHead
+    return chainHead ? wallets.get(account, { from, to }) : emptyWallet(account, from)
+  }
+
   /** A range with its first block filled in, or an error saying what's wrong with it. */
   function resolveRange({ from = startBlock, to }: BlockRange): { from: number; to: number | undefined } {
     if (from === undefined) throw new Error("No first block: pass `from`, or `startBlock` in createPricetag's config.")
@@ -178,8 +191,7 @@ export function pricetagClient(query: Query, config: ClientConfig) {
     if (!isAddress(address)) throw new Error(`${address} isn't a Base address`)
     const account = normalizeAddress(address)
     const { from, to } = resolveRange(range)
-    chainHead = (await reader.head(chainHead?.blockNum ?? null)) ?? chainHead
-    const wallet = chainHead ? await wallets.get(account, { from, to }) : emptyWallet(account, from)
+    const wallet = await readWallet(account, from, to)
     const { coverage, legs, gasUnknownTxs, l1FeeUnknownTxs, openingUnread } = wallet
     const { view: _, ...folded } = foldWallet(wallet, method)
     const started = hasStarted(wallet)
@@ -192,7 +204,7 @@ export function pricetagClient(query: Query, config: ClientConfig) {
       missing: started ? describeMissing({ totals: folded.totals, gasUnknownTxs, l1FeeUnknownTxs }) : [`everything, because the dataset hasn't processed block ${from}`],
       legs,
       gasUnknownTxs,
-      l1Fees: l1FeeUnknownTxs.length === 0 ? "read" : readL1Fees ? "pending" : "no rpc url",
+      l1Fees: l1FeeStatus(l1FeeUnknownTxs),
       l1FeeUnknownTxs,
       openingUnread,
       unsettledFrom: wallets.unsettledFrom(account, { from, to }),
@@ -263,21 +275,33 @@ export function pricetagClient(query: Query, config: ClientConfig) {
 
     /**
      * A wallet's legs in the range, priced and labeled the same way the app's are. They're what moved, not what the wallet
-     * holds: there's no opening balance or L1 fee in them. For that, and to match the app, use `getPortfolio`.
+     * holds, so there's no opening balance in them, and no position is checked against the chain. For that, use `getPortfolio`.
+     *
+     * With an `rpcUrl`, these are the app's legs, because they come from the same read: gas includes L1 fees, and a swap
+     * paid out in unwrapped ETH is confirmed against the wallet's balance. Without one, gas has no L1 fee and that swap
+     * stays unknown, so this skips the balance reads, which couldn't confirm anything.
      */
     async getLegs(address: string, range: BlockRange = {}): Promise<WalletLegs> {
       if (!isAddress(address)) throw new Error(`${address} isn't a Base address`)
       const account = normalizeAddress(address)
+      if (readL1Fees) {
+        const { from, to } = resolveRange(range)
+        const { coverage, legs, references, gasUnknownTxs, l1FeeUnknownTxs } = await readWallet(account, from, to)
+        return { address: account, blocks: coverage, legs: legs.filter((l) => !l.opening), references, gasUnknownTxs, l1Fees: l1FeeStatus(l1FeeUnknownTxs), l1FeeUnknownTxs }
+      }
       const blocks = await blocksRead(range, WALLET_TABLES)
-      if (blocks.toBlock < blocks.fromBlock) return { address: account, blocks, legs: [], references: [], gasUnknownTxs: [] }
+      if (blocks.toBlock < blocks.fromBlock) return { address: account, blocks, legs: [], references: [], gasUnknownTxs: [], l1Fees: "read", l1FeeUnknownTxs: [] }
       const { rows, priced, gasUnknown } = await reader.readWindow(account, blocks.fromBlock, blocks.toBlock)
       const references = await reader.readReferences(rows.map((r) => r.block_num))
-      return { address: account, blocks, legs: buildPricedLegs({ account, rows, references, priced }), references, gasUnknownTxs: gasUnknown.map((tx) => tx.tx_hash) }
+      const l1FeeUnknownTxs = rows.filter((r) => r.kind === "gas").map((r) => r.tx_hash)
+      return { address: account, blocks, legs: buildPricedLegs({ account, rows, references, priced }), references, gasUnknownTxs: gasUnknown.map((tx) => tx.tx_hash), l1Fees: l1FeeStatus(l1FeeUnknownTxs), l1FeeUnknownTxs }
     },
 
     /**
      * A token's prices in the range, by symbol or address. A token with an oracle has one price a block, and any other
-     * token has one for each swap that gave one. A swap that couldn't be priced is still there, as unknown.
+     * token has one for each swap that gave one. A swap that couldn't be priced is still there, as unknown. That includes
+     * a sender's swap paid out in unwrapped ETH, even with an `rpcUrl`: confirming it takes that wallet's balance and fees
+     * for each swap, and another account's row in the same transaction, like the pool's, usually prices it anyway.
      */
     async getPrices(token: string, range: BlockRange = {}): Promise<TokenPrices> {
       const found = findToken(token)
@@ -326,6 +350,8 @@ function emptyWallet(address: string, from: number): WalletData {
     currency: "USD",
     rates: null,
     coverage: { fromBlock: from, toBlock: from - 1 },
+    notes: [],
+    marketChecked: false,
     legs: [],
     references: [],
     prices: {},
@@ -337,6 +363,7 @@ function emptyWallet(address: string, from: number): WalletData {
     openingUnread: [...ASSETS],
     lastBalances: {},
     unreadBalances: [],
+    unseenEth: [],
   }
 }
 

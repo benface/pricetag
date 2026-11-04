@@ -95,6 +95,8 @@ enum TestScene: String, CaseIterable {
     case mainReading = "main-reading"
     case mainServerDown = "main-server-down"
     case mainNotUpdating = "main-not-updating"
+    case mainLinkedFailed = "main-linked-failed"
+    case resolve
     case changeWallet = "change-wallet"
     case popover
     case popoverNoWallet = "popover-no-wallet"
@@ -108,7 +110,7 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .changeWallet, .popover, .popoverNoWallet, .popoverNotUpdating: .none
+        case .changeWallet, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve: .none
         default: .titled
         }
     }
@@ -118,6 +120,7 @@ enum TestScene: String, CaseIterable {
         case .mainReading: .neverAnswers
         case .mainServerDown: .serverDown
         case .mainNotUpdating, .popoverNotUpdating: .stopsAnswering
+        case .mainLinkedFailed: .linkedFails
         default: .demo
         }
     }
@@ -141,14 +144,16 @@ enum TestScene: String, CaseIterable {
 
         let isReady: () -> Bool = { [feed] in
             switch feed {
-            case .demo: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .linkedFails: store.feed == .noWallet || store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
             case .stopsAnswering: store.feed == .serverUnreachable && store.portfolio != nil
             }
         }
         switch self {
-        case .main, .mainTransactions, .mainDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating:
+        case .resolve:
+            return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
+        case .main, .mainTransactions, .mainDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
@@ -187,7 +192,7 @@ private struct NoOneThere: UserPresence {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 private final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering }
+    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails }
 
     private let feed: Feed
     private let reads = Mutex(0)
@@ -196,13 +201,18 @@ private final class FixtureSource: PortfolioSource {
         self.feed = feed
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         let read = reads.withLock { reads in
             reads += 1
             return reads
         }
         switch feed {
         case .demo: break
+        case .linkedFails:
+            // The demo, with one of its linked wallets unreadable.
+            guard let url = Bundle.main.url(forResource: "demo-portfolio", withExtension: "json"), var object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else { throw FetchError.rejected("There's no fixture called demo-portfolio.") }
+            object["linkedFailed"] = ["0x00000000000000000000000000000000000de301"]
+            return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
         case .neverAnswers: try await Task.sleep(for: .seconds(600))
         case .serverDown: throw FetchError.unreachable
         case .stopsAnswering: if read > 1 { throw FetchError.unreachable }
@@ -210,20 +220,26 @@ private final class FixtureSource: PortfolioSource {
         return try decode("demo-portfolio")
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
         try decode("demo-explanation")
     }
 
-    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
         throw FetchError.unreachable
     }
 
-    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
         throw FetchError.unreachable
     }
 
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
         throw FetchError.rejected("There's no tax report fixture.")
+    }
+
+    /// What each answer would do, as the demo's own numbers, so a card shows them in place.
+    func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview] {
+        let totals = (try decode("demo-portfolio") as Portfolio).totals
+        return candidates.map { _ in BookPreview(pnlMicros: totals.pnlMicros, pnlStatus: .partial, estimatedMicros: totals.estimatedMicros, unresolvedMicros: totals.unresolvedMicros, open: 4, pending: false, failed: false) }
     }
 
     private func decode<T: Decodable>(_ name: String) throws -> T {

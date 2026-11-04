@@ -66,6 +66,7 @@ public struct TaxReport: Codable, Sendable, Equatable {
     public let rowCount: Int
     public let unresolvedCount: Int
     public let estimatedCount: Int
+    public let selfReportedCount: Int
     /// Only rows whose gain is known, and nil when none is. Read it next to `unresolvedCount`.
     public let gainMicros: String?
     public let disclaimer: String
@@ -83,17 +84,24 @@ public struct TaxReportRequest: Hashable, Sendable {
     public let scope: TaxScope
     public let currency: CurrencyCode
     public let otherWallets: [String]
+    /// The wallets this app already knows are the user's, like its hot and cold ones.
+    public let linked: [String]
     public let serverURL: URL
+    public let book: Book
 
-    var queryItems: [URLQueryItem] {
-        var items = [
-            URLQueryItem(name: "country", value: country.rawValue),
-            URLQueryItem(name: "method", value: method.rawValue),
-            URLQueryItem(name: "scope", value: scope.rawValue),
-            URLQueryItem(name: "currency", value: currency.rawValue),
-        ]
-        if !otherWallets.isEmpty { items.append(URLQueryItem(name: "also", value: otherWallets.joined(separator: ","))) }
-        return items
+    /// What goes with the request. A post, because answers don't belong in a URL, where they'd end up in logs.
+    var body: Body {
+        var seen = Set<String>()
+        return Body(country: country, method: method, scope: scope, currency: currency, also: (otherWallets + linked).filter { seen.insert($0).inserted }, book: book)
+    }
+
+    struct Body: Encodable, Equatable {
+        let country: TaxCountry
+        let method: CostMethod
+        let scope: TaxScope
+        let currency: CurrencyCode
+        let also: [String]
+        let book: Book
     }
 }
 
@@ -169,10 +177,10 @@ public final class TaxReportModel {
     }
 
     /// nil with no wallet, or while what's typed can't be sent.
-    public func request(address: String?, currency: CurrencyCode, serverURL: URL) -> TaxReportRequest? {
+    public func request(address: String?, currency: CurrencyCode, serverURL: URL, book: Book = Book(), linked: [String] = []) -> TaxReportRequest? {
         guard let address, badWallet(for: address) == nil else { return nil }
         let isDemo = address == WalletAddress.demo
-        return TaxReportRequest(address: address, country: country, method: method, scope: scope, currency: currency, otherWallets: isDemo ? [] : otherWallets, serverURL: serverURL)
+        return TaxReportRequest(address: address, country: country, method: method, scope: scope, currency: currency, otherWallets: isDemo ? [] : otherWallets, linked: isDemo ? [] : linked, serverURL: serverURL, book: book)
     }
 
     /// What's on screen goes as soon as the choices change, because it's about the old ones.

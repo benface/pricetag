@@ -2,6 +2,8 @@
 // Clients that can't run it, like the Mac app, read the portfolio it computes instead.
 
 import { hasStarted, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type UnlistedToken, type WalletData } from "@pricetag/sdk/core"
+import type { Estimates } from "@pricetag/sdk/core"
+import type { Meter, Question } from "./resolve.ts"
 import type { TaxCountryCode, TaxScope } from "./tax.ts"
 
 export { hasStarted }
@@ -23,6 +25,11 @@ export type PortfolioPosition = {
   shortfallQty: string
   legCount: number
   reconciliation: Reconciliation | null
+  /** No price, in any form, at any block. Often spam. It's listed apart, and can't affect PnL. */
+  noMarket: boolean
+  estimates: Estimates
+  /** Its cost is unknown, and answering a question could change that. */
+  resolvable: boolean
 }
 
 /** How a portfolio's money got out of USD. */
@@ -63,6 +70,27 @@ export type PortfolioResponse = {
   totals: Totals
   pnlStatus: PnlStatus
   points: PnlPoint[]
+  /** What's left to ask, most useful first. */
+  questions: Question[]
+  meter: Meter
+  /** Linked wallets that aren't read yet, so what came from them shows as unresolved for now. */
+  linkedReading: string[]
+  /** Linked wallets whose last read failed. It's tried again with each request, and what they sent stays unresolved or out of date until it works. */
+  linkedFailed: string[]
+  marketChecked: boolean
+}
+
+/** What the headline would say with a different set of answers, before any of them is final. */
+export type BookPreview = {
+  pnlMicros: string | null
+  pnlStatus: PnlStatus
+  estimatedMicros: string
+  unresolvedMicros: string
+  open: number
+  /** A wallet these answers link hasn't been read yet, so this can't say yet. */
+  pending: boolean
+  /** A wallet these answers link couldn't be read. */
+  failed: boolean
 }
 
 /** One number's explanation: how it's worked out, and the legs behind it, newest first. */
@@ -88,6 +116,10 @@ export type ExplanationLeg = {
   priceSource: PricedLeg["priceSource"]
   priceNote: string | null
   costLabel: PricedLeg["costLabel"]
+  /** Its cost or proceeds rest on an estimate. */
+  estimated: boolean
+  /** Some of what arrived has a known cost and some doesn't. */
+  partlyUnknown: boolean
   blockNum: number
   timestamp: string
   txHash: string
@@ -114,6 +146,8 @@ export type TaxReportResponse = {
   rowCount: number
   unresolvedCount: number
   estimatedCount: number
+  /** Rows with a known gain that partly rests on a cost the user gave. */
+  selfReportedCount: number
   /** Only rows whose gain is known, and null when none is. Read it next to `unresolvedCount`. */
   gainMicros: string | null
   disclaimer: string

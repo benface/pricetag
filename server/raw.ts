@@ -8,6 +8,7 @@ export const DEPOSIT_TOPIC = "e1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2
 export const WITHDRAWAL_TOPIC = "7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65"
 export const TRANSFER_SINGLE_TOPIC = "c3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62"
 export const TRANSFER_BATCH_TOPIC = "4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb"
+export const ANSWER_UPDATED_TOPIC = "0559884fd3a460db3073b7fc896cc77986f16e378210ded43186175bf646fc5f"
 
 /** OP Stack deposits are paid for on L1, so they cost no L2 gas. */
 const DEPOSIT_TX_TYPE = 126
@@ -94,8 +95,8 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
     }
     if (tx.status && BigInt(tx.value) > 0n) {
       const eth = { ...base, log_index: 0, token: ETH_ADDRESS, account: me, amount: tx.value, kind: "eth" as const }
-      if (from === me) rows.push({ ...eth, side: "debit" })
-      if (tx.to !== null && normalizeAddress(tx.to) === me) rows.push({ ...eth, side: "credit" })
+      if (from === me) rows.push({ ...eth, side: "debit", counterparty: tx.to === null ? null : normalizeAddress(tx.to) })
+      if (tx.to !== null && normalizeAddress(tx.to) === me) rows.push({ ...eth, side: "credit", counterparty: from })
     }
   }
 
@@ -118,8 +119,8 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
       // An ERC-721 transfer has its token ID in topic3, where an ERC-20's amount is in its data.
       const nftId = log.topic3 === null ? null : BigInt(`0x${log.topic3}`).toString()
       const row = nftId !== null ? { ...base, amount: nftId, kind: "unlisted_nft" as const } : { ...base, kind: listed ? ("erc20" as const) : ("unlisted" as const) }
-      if (first === me) rows.push({ ...row, side: "debit" })
-      if (topicToAddress(log.topic2) === me) rows.push({ ...row, side: "credit" })
+      if (first === me) rows.push({ ...row, side: "debit", counterparty: topicToAddress(log.topic2) })
+      if (topicToAddress(log.topic2) === me) rows.push({ ...row, side: "credit", counterparty: first })
     } else if (log.topic0 === TRANSFER_SINGLE_TOPIC || log.topic0 === TRANSFER_BATCH_TOPIC) {
       // A batch can hold many IDs and amounts, so an empty amount just says something moved. That's all the guard needs.
       const row = { ...base, amount: "", kind: "unlisted" as const }
@@ -162,6 +163,32 @@ export function decodeRound(data: string | null | undefined): RateRound | null {
   if (!answer || answer === "0" || !updatedAt || updatedAt.length !== 64) return null
   return { answer, updatedAt: Number(BigInt(`0x${updatedAt}`)) }
 }
+
+/**
+ * Fills in who was on the other side of each ERC-20 and plain ETH row, from `Transfer` logs and the transactions behind them.
+ * The dataset's `legs` table has one row per side, and doesn't say.
+ */
+export function withCounterparties(rows: readonly LegRow[], logs: readonly Pick<RawLog, "tx_hash" | "log_index" | "topic1" | "topic2">[], txs: readonly Pick<RawTx, "tx_hash" | "from" | "to">[]): LegRow[] {
+  const byLog = new Map(logs.map((log) => [`${normalizeAddress(log.tx_hash)}:${log.log_index}`, log]))
+  const byTx = new Map(txs.map((tx) => [normalizeAddress(tx.tx_hash), tx]))
+  return rows.map((row) => {
+    if (row.kind === "erc20") {
+      const log = byLog.get(`${row.tx_hash}:${row.log_index}`)
+      if (!log) return row
+      return { ...row, counterparty: topicToAddress(row.side === "credit" ? log.topic1 : log.topic2) }
+    }
+    if (row.kind === "eth") {
+      const tx = byTx.get(row.tx_hash)
+      if (!tx) return row
+      if (row.side === "credit") return { ...row, counterparty: normalizeAddress(tx.from) }
+      return { ...row, counterparty: tx.to === null ? null : normalizeAddress(tx.to) }
+    }
+    return row
+  })
+}
+
+/** Rows' blocks worth looking up, so a wallet's first read doesn't scan every block for the few that touch it. */
+export const counterpartyBlocks = (rows: readonly LegRow[]): number[] => [...new Set(rows.filter((r) => r.kind === "erc20" || r.kind === "eth").map((r) => r.block_num))]
 
 /** The `answer` word of a `latestRoundData()` result, or "" when the read failed. */
 export function decodeRoundAnswer(data: string | null | undefined): string {

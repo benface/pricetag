@@ -12,13 +12,13 @@ actor ScriptedSource: PortfolioSource {
         self.answers = answers
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         methods.append(method)
         currencies.append(currency)
         return try answers.removeFirst().get()
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -26,11 +26,11 @@ actor ScriptedSource: PortfolioSource {
         throw FetchError.unreachable
     }
 
-    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
         throw FetchError.unreachable
     }
 
-    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
         throw FetchError.unreachable
     }
 }
@@ -39,11 +39,11 @@ actor ScriptedSource: PortfolioSource {
 actor GatedSource: PortfolioSource {
     private var waiting: CheckedContinuation<Portfolio, any Error>?
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         try await withCheckedThrowingContinuation { waiting = $0 }
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -51,11 +51,11 @@ actor GatedSource: PortfolioSource {
         throw FetchError.unreachable
     }
 
-    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
         throw FetchError.unreachable
     }
 
-    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
         throw FetchError.unreachable
     }
 
@@ -329,7 +329,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     @Test func aPartialTotalWarns() throws {
         let summary = FeedSummary(feed: .live, portfolio: try demoPortfolio())
         #expect(summary.isWarning)
-        #expect(summary.text == "Demo +$74.28")
+        #expect(summary.text == "Demo ≈+$149.30")
     }
 
     @Test func anUnavailableTotalHasNoNumber() throws {
@@ -352,7 +352,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     @Test func aCompleteTotalDoesntWarn() throws {
         let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .complete))
         #expect(!summary.isWarning)
-        #expect(summary.text == "+$74.28")
+        #expect(summary.text == "≈+$149.30")
     }
 }
 
@@ -361,9 +361,10 @@ actor RuledSource: PortfolioSource {
     static let market = PricingRule(id: "market-price", name: "Market price", summary: "", dataset: "a/b@0.0.1", hash: String(repeating: "a", count: 64))
     static let cautious = PricingRule(id: "cautious-eth", name: "Cautious ETH", summary: "", dataset: "a/c@0.0.1", hash: String(repeating: "b", count: 64))
     private(set) var asked: [String?] = []
+    private(set) var askedAboutProof: [String?] = []
     var failing = false
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         asked.append(rule)
         if failing { throw FetchError.ampUnavailable("Couldn't read this wallet's data.") }
         let portfolio = try demoPortfolio()
@@ -372,7 +373,7 @@ actor RuledSource: PortfolioSource {
         return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -380,12 +381,14 @@ actor RuledSource: PortfolioSource {
         throw FetchError.unreachable
     }
 
-    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
-        throw FetchError.unreachable
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
+        askedAboutProof.append(rule)
+        return try resource("proof", as: Proof.self)
     }
 
-    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
-        throw FetchError.unreachable
+    func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
+        askedAboutProof.append(rule)
+        return try resource("verification", as: Verification.self)
     }
 
     func rules() async throws -> [PricingRule] { [Self.market, Self.cautious] }
@@ -454,6 +457,18 @@ actor RuledSource: PortfolioSource {
         store.stop()
         #expect(before != store.explanationRequest(for: .total(.pnl)))
     }
+
+    @Test func aProofIsAboutTheRuleOnScreen() async throws {
+        let source = RuledSource()
+        let store = makeStore(source)
+        await store.refreshRules()
+        _ = try await store.proof(leg: "x", address: "demo")
+        store.setRule(RuledSource.cautious.id)
+        store.stop()
+        _ = try await store.proof(leg: "x", address: "demo")
+        _ = try await store.verification(leg: "x", address: "demo")
+        #expect(await source.askedAboutProof == [nil, RuledSource.cautious.id, RuledSource.cautious.id])
+    }
 }
 
 /// Answers every read the same way, counts them, and reports new blocks when a test says so.
@@ -477,15 +492,12 @@ actor PushedSource: PortfolioSource {
 
     nonisolated func headEvents() -> AsyncThrowingStream<Void, any Error>? { events }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], timeout: Duration) async throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         reads += 1
         return answer
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) async throws -> Explanation { throw FetchError.unreachable }
-    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
-    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof { throw FetchError.unreachable }
-    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
 }
 
 @MainActor

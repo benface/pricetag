@@ -39,6 +39,7 @@ public struct ExplanationRequest: Hashable, Sendable {
     public let rule: String?
     public let linked: [String]
     public let serverURL: URL
+    public let book: Book
 }
 
 @MainActor
@@ -57,6 +58,10 @@ public final class PortfolioStore {
     public private(set) var method: CostMethod
     public private(set) var currency: CurrencyCode
     public private(set) var serverURL: URL
+    /// What the user has said about where things came from. It stays on this device.
+    public private(set) var book: Book
+    /// What each answer replaced, newest last, so Undo is always there.
+    public private(set) var undoStack: [Book] = []
     /// The server's pricing rules. Empty when it has only one, so there's nothing to choose.
     public private(set) var rules: [PricingRule] = []
     /// What to ask the server for, or nil for its default.
@@ -100,6 +105,7 @@ public final class PortfolioStore {
         self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
         self.currency = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
         self.serverURL = serverURL
+        self.book = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.selectedRule = defaults.string(forKey: Keys.rule)
         self.feed = address == nil ? .noWallet : .reading
         self.source = makeSource(serverURL)
@@ -228,7 +234,7 @@ public final class PortfolioStore {
 
     public func comparison() async throws -> RuleComparison {
         guard let address else { throw CancellationError() }
-        return try await source.comparison(address: address, method: method, currency: currency, linked: linked(for: address))
+        return try await source.comparison(address: address, method: method, currency: currency, linked: linked(for: address), book: book)
     }
 
     public func setServerURL(_ url: URL) {
@@ -244,25 +250,72 @@ public final class PortfolioStore {
         start()
     }
 
+    /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced.
+    public func setBook(_ next: Book) {
+        guard next != book else { return }
+        undoStack.append(book)
+        store(next)
+    }
+
+    public func undo() {
+        guard let previous = undoStack.popLast() else { return }
+        store(previous)
+    }
+
+    private func store(_ next: Book) {
+        book = next
+        defaults.set(try? JSONEncoder().encode(next), forKey: Keys.book)
+        start()
+    }
+
+    /// What these answers would do to the headline. Nothing's kept, so asking changes nothing.
+    public func previews(of candidates: [Book]) async throws -> [BookPreview] {
+        guard let address else { throw FetchError.unreachable }
+        return try await source.previews(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), candidates: candidates)
+    }
+
+    /// Every movement as a spreadsheet, marked so an estimate or an unknown can't pass for an exact number.
+    public func exportCSV() async throws -> String {
+        guard let address else { throw FetchError.unreachable }
+        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), book: book)
+    }
+
+    /// Reads an exchange's history, and keeps what it found on this device. Says how many withdrawals had no usable cost.
+    public func importCoinbase(csv: String) async throws -> ExchangeImport {
+        let imported = try await source.importCoinbase(csv: csv)
+        var next = book
+        next.withdrawals = imported.withdrawals
+        setBook(next)
+        return imported
+    }
+
+    /// Links a wallet that proved it's this user's by signing. Says whether the signature holds up.
+    public func linkProved(_ wallet: String, signature: String) async throws -> Bool {
+        guard let address, WalletAddress.isValid(address) else { return false }
+        guard try await source.verifyLink(owner: address, address: wallet, signature: signature) else { return false }
+        setBook(book.answering(wallet, .mine, focus: address))
+        return true
+    }
+
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), serverURL: serverURL) }
+        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), serverURL: serverURL, book: book) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
         // A request from before a change has nothing to say about what's on screen now.
         guard request == explanationRequest(for: request.target) else { throw CancellationError() }
-        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked)
+        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked, book: request.book)
     }
 
     public func proof(leg: String, address: String) async throws -> Proof {
         guard address == self.address else { throw CancellationError() }
-        return try await source.proof(leg: leg, address: address, currency: currency)
+        return try await source.proof(leg: leg, address: address, currency: currency, rule: selectedRule)
     }
 
     public func verification(leg: String, address: String) async throws -> Verification {
         guard address == self.address else { throw CancellationError() }
-        return try await source.verification(leg: leg, address: address, currency: currency)
+        return try await source.verification(leg: leg, address: address, currency: currency, rule: selectedRule)
     }
 
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
@@ -271,7 +324,7 @@ public final class PortfolioStore {
         return try await source.taxReport(request)
     }
 
-    private func linked(for address: String) -> [String] {
+    public func linked(for address: String) -> [String] {
         // Costs only carry over onto a wallet that's the user's own. A wallet being watched could be anyone's.
         linkedWallets.contains(address) ? linkedWallets.filter { $0 != address } : []
     }
@@ -286,15 +339,16 @@ public final class PortfolioStore {
         let currency = self.currency
         let rule = selectedRule
         let serverURL = self.serverURL
+        let book = self.book
         let linked = linked(for: address)
         // An answer that arrives after a change is about something else, whatever it says.
-        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && currency == self.currency && rule == self.selectedRule && serverURL == self.serverURL && linked == self.linked(for: address) }
+        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && currency == self.currency && rule == self.selectedRule && serverURL == self.serverURL && book == self.book && linked == self.linked(for: address) }
         let isOtherRule = rule != nil && portfolio?.rule != rule
         // The first read in a currency also reads its rate at each of this wallet's transactions, and the first by a rule
         // reads the wallet again, so they get as long as a first read.
         let timeout: Duration = portfolio?.currency == currency && !isOtherRule ? .seconds(15) : .seconds(180)
         do {
-            let next = try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, timeout: timeout)
+            let next = try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: book, timeout: timeout)
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
@@ -330,6 +384,7 @@ public final class PortfolioStore {
         static let method = "method"
         static let currency = "currency"
         static let server = "serverURL"
+        static let book = "answers"
         static let rule = "pricingRule"
     }
 }

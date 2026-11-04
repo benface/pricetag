@@ -4,8 +4,8 @@ import { createServer as createHttp2Server } from "node:http2"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { createPricetag, type WalletUpdate } from "@pricetag/sdk"
-import type { RateRound } from "@pricetag/sdk/core"
-import { createRangeStream, createWallets, datasetSource, followChain, parseStreamRange, pricetagClient, type BlockMark, type ChainTick, type FollowConfig, type Query, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
+import type { CostNote, RateRound } from "@pricetag/sdk/core"
+import { createRangeStream, createWallets, datasetSource, followChain, parseStreamRange, pricetagClient, type BlockMark, type ChainTick, type FollowConfig, type Query, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
 import { createRates } from "../server/rates.ts"
 import { fakeAmp, type Tables } from "./support/fake-amp.ts"
@@ -484,6 +484,33 @@ describe("watchWallet", () => {
       assert.equal(reads, settled)
     })
 
+    it("replaces cost notes and market prices from those blocks too, past the ones it would re-read anyway", async () => {
+      const state = { through: 150, tables: { ...OLD, legs: [{ ...creditAt(100, "aa", "5"), kind: "gas", side: "debit" }, { ...creditAt(105, "dd", "5"), token: "940181a94a35a4569e4529a3cdfb74e38fd98631", kind: "erc20" }], reference_prices: [{ ...REFERENCE, block_num: "100" }, { ...REFERENCE, block_num: "105" }] } as Tables, note: "old", price: "1" }
+      const query: Query = async <T,>(sql: string) => fakeAmp(state.tables, state.through).query<T>(sql)
+      const noteAt = (blockNum: number): CostNote => ({ noteTx: `0x${state.note}`, blockNum, txHash: `0x${"ab".repeat(32)}`, asset: "ETH", usdMicros: "1" })
+      const source: Source = {
+        ...datasetSource(query, { dataset: "benface/pricetag@0.0.1", baseDataset: "b", startBlock: 50, network: "base_mainnet" }),
+        readNotes: async (_address, blocks) => blocks.map(noteAt),
+        marketReady: async () => true,
+        readMarketTrades: async () => [],
+      }
+      const marketReads: number[] = []
+      const counting: Source = { ...source, readMarketTrades: async (_asset, _from, to) => (marketReads.push(to), []) }
+      const wallets = createWallets(counting, async () => ({ blockNum: state.through, timestamp: new Date(1_800_000_000_000).toISOString() }), async () => new Map(), QUIET)
+      const noteTxs = async () => (await wallets.get(ADDRESS, { from: 50 })).notes.map((note) => note.noteTx)
+      assert.deepEqual(await noteTxs(), ["0xold"])
+
+      marketReads.length = 0
+      await wallets.rewind(100, 150)
+      // The tables haven't rewritten anything yet, so the read gets the old note back.
+      assert.deepEqual(await noteTxs(), ["0xold"])
+      assert.ok(marketReads.length > 0, "a market price from the replaced blocks is read again")
+
+      state.note = "new"
+      state.through = 151
+      assert.deepEqual(await noteTxs(), ["0xnew"])
+    })
+
     it("doesn't touch a read as of a block before the reorg", async () => {
       const { chain, client } = chainAt(150, { ...OLD, legs: [creditAt(90, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "90" }] })
       const asOf = { to: 95 }
@@ -622,7 +649,7 @@ describe("the server's live events while the dataset catches up", () => {
     const api = createApi({}, {
       source,
       readRates: async () => ({ byBlock: {}, latest: null }),
-      proofs: { datasets: async () => [], readBlock: async () => null },
+      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
       follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET },
     })
     server = createServer((req, res) => void api(req, res))
@@ -692,7 +719,7 @@ describe("the server after a reorg the tables haven't rewritten yet", () => {
     const api = createApi({}, {
       source,
       readRates: async () => ({ byBlock: {}, latest: null }),
-      proofs: { datasets: async () => [], readBlock: async () => null },
+      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
       follow: { stream: hand.stream, sql: "SELECT 1", readMark, logger: QUIET, pollMs: 1, retryMs: 60_000 },
     })
     server = createServer((req, res) => void api(req, res))
@@ -741,7 +768,7 @@ describe("the server's live events", () => {
     const api = createApi({}, {
       source: headAt100,
       readRates: async () => ({ byBlock: {}, latest: null }),
-      proofs: { datasets: async () => [], readBlock: async () => null },
+      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
       follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET },
     })
     server = createServer((req, res) => void api(req, res))

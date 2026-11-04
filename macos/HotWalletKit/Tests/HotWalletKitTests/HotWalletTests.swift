@@ -305,6 +305,20 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(await rig.chain.sent.count == 1, "already swept")
     }
 
+    @Test func neverSweepsAGainThatRestsOnAnEstimate() async throws {
+        let rig = await Rig(underCap, portfolio: .success(portfolio(realized: "10000000", estimatedRealized: true)))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.isEmpty)
+    }
+
+    @Test func neverSweepsAGainWhileALinkedWalletCantBeRead() async throws {
+        let rig = await Rig(underCap, portfolio: .success(portfolio(realized: "10000000", linkedFailed: ["0x00000000000000000000000000000000000000cc"])))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.isEmpty)
+    }
+
     @Test func aGainOnlyCountsAsSweptOnceItLands() async throws {
         let rig = await Rig(underCap, portfolio: .success(portfolio(realized: "12000000")))
         await rig.wallet.readHistory()
@@ -344,8 +358,8 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
 @MainActor
 @Suite struct PriceTests {
-    @Test func aTokenTheServerPricesCountsTowardTheCap() async throws {
-        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [dai: oneEth * 500]), portfolio: .success(portfolio(positions: [position("DAI", decimals: 18, priceMicros: "1000000")])))
+    @Test func aTokenWithAFeedCountsTowardTheCap() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [dai: oneEth * 500], prices: ["DAI": Money.dollar]))
         await rig.wallet.readHistory()
         await rig.wallet.tick()
         #expect(await rig.chain.sent.count == 1)
@@ -354,6 +368,15 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
     @Test func aTokenWithNoPriceIsFlaggedAndStaysPut() async throws {
         let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [dai: oneEth * 500]))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.isEmpty)
+        #expect(rig.wallet.unpricedSymbols == ["DAI"])
+    }
+
+    /// A market price is good enough to show, but what moves money only trusts what it read from the chain itself.
+    @Test func aPriceFromTheServerMovesNothing() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [dai: oneEth * 500]), portfolio: .success(portfolio(positions: [position("DAI", decimals: 18, priceMicros: "1000000")])))
         await rig.wallet.readHistory()
         await rig.wallet.tick()
         #expect(await rig.chain.sent.isEmpty)
@@ -751,6 +774,100 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.wallet.tick()
         #expect(rig.wallet.rotationHold == .notEnoughGas)
         #expect(rig.wallet.notices.contains { $0.text == HotWalletWording.noGas })
+    }
+
+    /// A token transfer costs $30 at this fee, the highest `FeeQuote.isPlausible` allows.
+    private static let expensiveFees = FeeQuote(maxFeePerGas: 100_000_000_000, maxPriorityFeePerGas: 1_000_000, l1FeeWei: 0)
+
+    @Test func aRotationKeepsTheOldKeyWhenGasCostsMoreThanAPricedToken() async throws {
+        #expect(Self.expensiveFees.isPlausible)
+        let rig = await Rig(snapshot(eth: 0, tokens: [dai: 20 * oneEth], prices: ["DAI": Money.dollar], fees: Self.expensiveFees))
+        await rig.wallet.readHistory()
+        await rig.wallet.replaceKey()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(await rig.signer.signed.isEmpty)
+        #expect(await rig.signer.hasKey(hotAddress), "the 20 DAI never moved, and the user never agreed to leave it")
+        #expect(rig.wallet.address == hotAddress)
+        #expect(rig.wallet.rotationHold == .notWorthTheGas(["DAI"]))
+        #expect(rig.wallet.notices.contains { $0.text == HotWalletWording.rotationHeldByGas(["DAI"]) })
+    }
+
+    @Test func aRotationKeepsTheOldKeyWhenGasCostsMoreThanAnUnpricedToken() async throws {
+        let rig = await Rig(snapshot(eth: 0, tokens: [dai: 20 * oneEth], fees: Self.expensiveFees))
+        await rig.wallet.readHistory()
+        await rig.wallet.replaceKey()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(await rig.signer.hasKey(hotAddress))
+        #expect(rig.wallet.rotationHold == .notEnoughGas)
+    }
+
+    @Test func dustOfAnyTokenKeepsTheOldKeyAtOrdinaryFees() async throws {
+        for (dust, price) in [(usdc, nil), (weth, nil), (dai, Money.dollar)] as [(Token, UInt128?)] {
+            let prices = price.map { [dust.asset: $0] } ?? [:]
+            let rig = await Rig(snapshot(eth: 0, tokens: [dust: 1], prices: prices))
+            await rig.wallet.readHistory()
+            await rig.wallet.replaceKey()
+            for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+            #expect(await rig.signer.hasKey(hotAddress), "\(dust.symbol)")
+            #expect(rig.wallet.rotationHold == .notWorthTheGas([dust.symbol]))
+        }
+    }
+
+    @Test func aHeldTokenMovesOnceGasFalls() async throws {
+        let rig = await Rig(snapshot(eth: 0, tokens: [dai: 20 * oneEth], prices: ["DAI": Money.dollar], fees: Self.expensiveFees), portfolio: .success(portfolio(toBlock: 2000)))
+        await rig.wallet.replaceKey()
+        await rig.wallet.tick()
+        #expect(rig.wallet.rotationHold == .notWorthTheGas(["DAI"]))
+
+        await rig.chain.set(snapshot(eth: oneEth / 1000, tokens: [dai: 20 * oneEth], prices: ["DAI": Money.dollar]))
+        await rig.wallet.tick()
+        #expect(rig.wallet.rotationHold == nil)
+        #expect(await rig.signer.signed.contains { $0.to == dai.contract && recipient($0) == nextAddress })
+        #expect(await rig.signer.hasKey(hotAddress), "the old key stays until it's empty")
+    }
+
+    @Test func ethTheGasMakesNotWorthMovingKeepsTheOldKeyToo() async throws {
+        // About $10 of ETH, and $6.30 to send it.
+        let rig = await Rig(snapshot(eth: oneEth / 300, fees: Self.expensiveFees))
+        await rig.wallet.readHistory()
+        await rig.wallet.replaceKey()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(await rig.signer.hasKey(hotAddress))
+        #expect(rig.wallet.rotationHold == .notWorthTheGas(["ETH"]))
+    }
+
+    /// What it says could be someone's reason to give up what's there for good, so it can't claim more than is known.
+    @Test func aHoldOverEthDoesntSayItsWorthLessThanItsGas() async throws {
+        let unpriced = await Rig(snapshot(eth: 2 * cheapFees.costWei(of: Base.eth), ethUsd: nil))
+        // About $10 of ETH, and $6.30 to send it.
+        let priced = await Rig(snapshot(eth: oneEth / 300, fees: Self.expensiveFees))
+        for rig in [unpriced, priced] {
+            await rig.wallet.replaceKey()
+            await rig.wallet.tick()
+            #expect(rig.wallet.rotationHold == .notWorthTheGas(["ETH"]))
+            #expect(await rig.signer.hasKey(hotAddress))
+            #expect(rig.wallet.notices.contains { $0.text == "The old key still holds some ETH that gas makes too costly to move right now. It keeps the old key, and moves it if that changes, until you choose to leave it behind." })
+        }
+    }
+
+    @Test func whatsLeftAfterTheLastTransferDoesntKeepTheOldKey() async throws {
+        // Paying for ETH's own last transfer always leaves a little, so this has to be able to finish.
+        let rig = await Rig(snapshot(eth: cheapFees.costWei(of: Base.eth)), portfolio: .success(portfolio(toBlock: 2000)))
+        await rig.wallet.replaceKey()
+        await rig.wallet.readHistory()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(rig.wallet.rotationHold == nil)
+        #expect(await rig.signer.hasKey(hotAddress) == false)
+    }
+
+    @Test func theUserCanStillLeaveHeldTokensBehind() async throws {
+        let rig = await Rig(snapshot(eth: 0, tokens: [usdc: 1]))
+        await rig.wallet.replaceKey()
+        await rig.wallet.tick()
+        #expect(rig.wallet.rotationHold == .notWorthTheGas(["USDC"]))
+        await rig.wallet.finishRotationLeavingFundsBehind()
+        #expect(await rig.signer.hasKey(hotAddress) == false)
+        #expect(rig.wallet.address == nextAddress)
     }
 
     @Test func deletingAsksFirstAndForgetsTheKey() async throws {

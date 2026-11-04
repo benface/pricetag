@@ -7,7 +7,7 @@ import { ProofPanel } from "./ProofPanel.tsx"
 /** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS_SHOWN = 200
 
-function LegRow({ effect, currency, address }: { effect: LegEffect; currency: CurrencyCode; address: string }) {
+function LegRow({ effect, currency, address, rule }: { effect: LegEffect; currency: CurrencyCode; address: string; rule: string | null }) {
   const { leg } = effect
   const [showsProof, setShowsProof] = useState(false)
   const toggleProof = () => setShowsProof((shown) => !shown)
@@ -34,6 +34,8 @@ function LegRow({ effect, currency, address }: { effect: LegEffect; currency: Cu
           <span className="tag warn">⚠ No price</span>
         )}
         {incoming ? <span className={leg.costLabel === "unknown" ? "tag warn" : "tag"}>{leg.costLabel === "unknown" ? `⚠ ${costTag(leg.costLabel)}` : costTag(leg.costLabel)}</span> : null}
+        {incoming && leg.costLabel !== "unknown" && leg.costMicros === null ? <span className="tag warn">⚠ Partly unknown</span> : null}
+        {leg.estimated ? <span className="tag">≈ Estimate</span> : null}
       </div>
       <p className="small" title={pnlHelp(describeEffect(effect, currency))}>
         {describeEffect(effect, currency)}.
@@ -51,12 +53,12 @@ function LegRow({ effect, currency, address }: { effect: LegEffect; currency: Cu
           </button>
         </div>
       )}
-      {showsProof && !leg.opening ? <ProofPanel key={`${address}:${currency}`} address={address} legId={leg.id} currency={currency} /> : null}
+      {showsProof && !leg.opening ? <ProofPanel key={`${address}:${currency}:${rule}`} address={address} legId={leg.id} currency={currency} rule={rule} /> : null}
     </li>
   )
 }
 
-export function ExplainPanel({ explanation, address, onClose }: { explanation: Explanation; address: string; onClose: () => void }) {
+export function ExplainPanel({ explanation, address, rule, onClose }: { explanation: Explanation; address: string; rule: string | null; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const close = useRef<HTMLButtonElement>(null)
 
@@ -104,7 +106,7 @@ export function ExplainPanel({ explanation, address, onClose }: { explanation: E
         <h3>{activityTitle(explanation.effects.length, Math.min(explanation.effects.length, MAX_LEGS_SHOWN))}</h3>
         <ul className="legs">
           {explanation.effects.slice(0, MAX_LEGS_SHOWN).map((effect) => (
-            <LegRow key={effect.leg.id} effect={effect} currency={explanation.currency} address={address} />
+            <LegRow key={effect.leg.id} effect={effect} currency={explanation.currency} address={address} rule={rule} />
           ))}
         </ul>
       </div>

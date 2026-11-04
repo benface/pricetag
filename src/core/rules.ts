@@ -9,7 +9,7 @@ export const CAUTIOUS_RULE_ID = "cautious-eth"
 
 export const RULE_TEXT: Record<string, Pick<PricingRule, "name" | "summary">> = {
   [MARKET_RULE_ID]: { name: "Market price", summary: "ETH counts at what Chainlink's price feed says at each block." },
-  [CAUTIOUS_RULE_ID]: { name: "Cautious ETH", summary: "ETH counts at 1% below that price, closer to what you'd get if you sold it. Every other price is the same." },
+  [CAUTIOUS_RULE_ID]: { name: "Cautious ETH", summary: "ETH counts at 1% below Chainlink's price, closer to what you'd get if you sold it. Every other price is the same." },
 }
 
 /** One number by each rule, in the wallet's main currency, except `usdPrice`. A null is unavailable, not zero. */
@@ -23,9 +23,12 @@ export type RuleRow = {
   /** This side's sum leaves something out. `warnings` says what. */
   aPartial: boolean
   bPartial: boolean
+  /** This side rests on an estimate, and so does a difference from it. `warnings` says how much. */
+  aEstimated: boolean
+  bEstimated: boolean
 }
 
-export type RuleTransaction = { txHash: string; blockNum: number; timestamp: string; asset: string; label: "Cost" | "Sold for" | "Network fee"; a: string | null; b: string | null; difference: string | null }
+export type RuleTransaction = { txHash: string; blockNum: number; timestamp: string; asset: string; label: "Cost" | "Sold for" | "Network fee"; a: string | null; b: string | null; difference: string | null; aEstimated: boolean; bEstimated: boolean }
 
 /** What two rules make of one wallet at the same block, so the only difference between them is the rule. */
 export type RuleComparison = {
