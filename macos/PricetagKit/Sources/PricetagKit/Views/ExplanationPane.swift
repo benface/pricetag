@@ -1,73 +1,32 @@
 import SwiftUI
 
 /// What's behind a number: how it's worked out, in the server's words, then its legs, their prices and transactions.
-/// Reads again on each new block, unless it's still reading. While it does, the last answer stays up, so nothing flashes.
 public struct ExplanationPane: View {
     let target: ExplainTarget
     let store: PortfolioStore
-    @State private var loaded: Loaded?
-    @State private var failure: String?
-    @State private var isLoading = false
-
-    private struct Loaded {
-        let target: ExplainTarget
-        let explanation: Explanation
-    }
-
-    private struct LoadKey: Hashable {
-        let target: ExplainTarget
-        let method: CostMethod
-    }
+    @State private var model: ExplanationModel
 
     public init(target: ExplainTarget, store: PortfolioStore) {
         self.target = target
         self.store = store
+        _model = State(initialValue: ExplanationModel(fetch: { try await store.explanation(for: $0) }))
     }
 
     public var body: some View {
         Group {
-            if let loaded, loaded.target == target {
-                content(loaded.explanation)
-            } else if let failure {
+            if let explanation = model.explanation {
+                content(explanation)
+            } else if let failure = model.failure {
                 ContentUnavailableView("Couldn't load this", systemImage: "exclamationmark.triangle", description: Text(failure))
             } else {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: LoadKey(target: target, method: store.method)) {
-            await load()
+        .task(id: store.explanationRequest(for: target)) {
+            await model.show(store.explanationRequest(for: target))
         }
-        // Not part of the task's id: a new block must not cancel a read, or a slow one would never finish.
         .onChange(of: store.portfolio?.latest.blockNum) {
-            if !isLoading { Task { await load() } }
-        }
-    }
-
-    private func load() async {
-        let target = target
-        let method = store.method
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            let explanation = try await store.explanation(of: target)
-            // Something else was picked while this was on its way.
-            guard target == self.target, method == store.method else { return }
-            loaded = Loaded(target: target, explanation: explanation)
-            failure = nil
-        } catch is CancellationError {
-            return
-        } catch {
-            if target == self.target, loaded?.target != target {
-                loaded = nil
-                failure = (error as? FetchError).map(Self.message) ?? "The server didn't answer."
-            }
-        }
-    }
-
-    private static func message(_ error: FetchError) -> String {
-        switch error {
-        case .unreachable: "Can't reach the server."
-        case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message): message
+            Task { await model.refresh() }
         }
     }
 
@@ -88,7 +47,7 @@ public struct ExplanationPane: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                     }
-                    if !store.feed.isLive, store.portfolio != nil {
+                    if store.feed.isStale {
                         WarningText("Not updating").font(.callout)
                     }
                 }

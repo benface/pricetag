@@ -130,11 +130,13 @@ public struct FeedBadge: View {
     private var text: String {
         switch feed {
         case .noWallet: return "No wallet"
-        case .reading: return "Reading"
+        // With numbers on screen, they're the previous answer until the new one arrives.
+        case .reading: return portfolio == nil ? "Reading" : "Updating"
         case .live:
             guard let portfolio else { return "Reading" }
             if portfolio.mode == .demo { return Mode.demo.label }
-            return "Live · block \(Format.block(portfolio.latest.blockNum))"
+            return "Live · block \(Format.block(portfolio.coverage.toBlock))"
+        case .catchingUp: return portfolio.map { "Catching up · block \(Format.block($0.coverage.toBlock))" } ?? "Catching up"
         default: return "Not updating"
         }
     }

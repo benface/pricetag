@@ -25,7 +25,17 @@ public enum Wording {
         "Gas couldn't be worked out for \(count) \(count == 1 ? "transaction" : "transactions"), so ETH is overstated by that much."
     }
 
+    /// What's missing while a dataset catches up to the chain. nil when it isn't behind.
+    public static func catchingUp(_ portfolio: Portfolio) -> String? {
+        if !portfolio.progress.started {
+            return "The Pricetag dataset hasn't reached block \(Format.block(portfolio.coverage.fromBlock)) yet, so there's nothing to show for this wallet so far."
+        }
+        if portfolio.progress.behindBlocks == 0 { return nil }
+        return "The Pricetag dataset has only processed up to block \(Format.block(portfolio.coverage.toBlock)), \(Format.block(portfolio.progress.behindBlocks)) blocks behind the chain. Anything after that isn't in these numbers yet."
+    }
+
     public static let unpricedGas = "Some gas had no price at its block, and isn't in this total."
     public static let demo = "Demo data, not a real wallet. Every case the app has to get right is in here."
     public static let pnlUnavailable = "PnL unavailable"
+    public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart."
 }

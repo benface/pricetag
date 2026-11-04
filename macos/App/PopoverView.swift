@@ -53,6 +53,8 @@ struct PopoverView: View {
             switch (store.feed, portfolio) {
             case (.noWallet, _):
                 Text("No wallet yet. Open the window to add one.").foregroundStyle(.secondary)
+            case (_, let portfolio?) where !portfolio.progress.started:
+                Text("Nothing to show yet.").foregroundStyle(.secondary)
             case (_, let portfolio?) where portfolio.isEmpty:
                 Text("No movements for this wallet in the blocks read.").foregroundStyle(.secondary)
             case (_, let portfolio?):

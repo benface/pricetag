@@ -39,6 +39,8 @@ struct MacApp: App {
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
                 }
                 Divider()
+                Button(navigation.showsTransactions ? "Show Chart" : "Show Transactions") { navigation.showsTransactions.toggle() }
+                    .keyboardShortcut("t", modifiers: .command)
                 Button("Refresh") { store.start() }
                     .keyboardShortcut("r", modifiers: .command)
                 Button("Change Wallet…") { navigation.isChangingWallet = true }

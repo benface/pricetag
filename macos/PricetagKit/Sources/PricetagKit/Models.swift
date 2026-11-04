@@ -80,7 +80,7 @@ public struct SumCoverage: Codable, Sendable, Equatable {
     public let known: Int
     public let missing: Int
 
-    public var nothingKnown: Bool { missing > 0 && known == 0 }
+    /// The sum has an answer, and it leaves something out. With nothing known, the server sends no sum at all.
     public var isPartial: Bool { missing > 0 && known > 0 }
 }
 
@@ -88,14 +88,16 @@ public struct TotalsCoverage: Codable, Sendable, Equatable {
     public let value: SumCoverage
     public let realized: SumCoverage
     public let unrealized: SumCoverage
+    public let pnl: SumCoverage
 }
 
+/// Each sum is nil when nothing in it is known. That isn't $0, and a known $0 stays an answer.
 public struct Totals: Codable, Sendable, Equatable {
-    public let valueUsdMicros: String
-    public let realizedUsdMicros: String
-    public let unrealizedUsdMicros: String
-    public let gasUsdMicros: String
-    public let pnlUsdMicros: String
+    public let valueUsdMicros: String?
+    public let realizedUsdMicros: String?
+    public let unrealizedUsdMicros: String?
+    public let gasUsdMicros: String?
+    public let pnlUsdMicros: String?
     public let excluded: [Exclusion]
     public let unpricedGas: Bool
     public let coverage: TotalsCoverage
@@ -106,7 +108,7 @@ public enum PnlStatus: String, Codable, Sendable {
     case complete
     /// It leaves something out, and `totals.excluded` says what.
     case partial
-    /// It has nothing known in it, so it must not be shown as a number.
+    /// It has nothing known in it, so there's no number to show.
     case unavailable
 }
 
@@ -114,11 +116,19 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public let blockNum: Int
     public let timestamp: String
     public let txHash: String?
-    public let pnlUsdMicros: String
+    /// nil when nothing is known at this point, which isn't $0.
+    public let pnlUsdMicros: String?
     public let excludedCount: Int
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
     public var date: Date? { parseTimestamp(timestamp) }
+}
+
+public struct ReadProgress: Codable, Sendable, Equatable {
+    /// False until what's read reaches the wallet's first block.
+    public let started: Bool
+    /// 0 until it's far enough behind the chain to say so.
+    public let behindBlocks: Int
 }
 
 public struct Portfolio: Codable, Sendable, Equatable {
@@ -128,6 +138,7 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let coverage: Coverage
     public let trackedTokens: Int
     public let latest: Head
+    public let progress: ReadProgress
     public let gasUnknownTxs: [String]
     public let positions: [Position]
     public let totals: Totals
@@ -136,6 +147,9 @@ public struct Portfolio: Codable, Sendable, Equatable {
 
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
     public var isEmpty: Bool { positions.isEmpty }
+    public var hasChartableData: Bool { points.contains { $0.pnlUsdMicros != nil } }
+    /// Every point with a transaction behind it, newest first.
+    public var transactions: [PnlPoint] { points.filter { $0.txHash != nil }.reversed() }
 }
 
 public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {

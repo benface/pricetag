@@ -14,27 +14,31 @@ public struct PnlHeadline: View {
         self.onOpen = onOpen
     }
 
-    private var isAvailable: Bool { portfolio.pnlStatus != .unavailable }
+    /// nil when there's no number to show, and that says so instead of showing $0.
+    private var pnl: String? {
+        portfolio.pnlStatus == .unavailable ? nil : portfolio.totals.pnlUsdMicros
+    }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text("Total PnL").font(.caption).foregroundStyle(.secondary)
             Button(action: onOpen) {
                 Group {
-                    if isAvailable {
-                        LiveNumber(Format.signedUSD(portfolio.totals.pnlUsdMicros), tone: isLive ? Tone(signed: portfolio.totals.pnlUsdMicros) : .neutral)
+                    if let pnl {
+                        LiveNumber(Format.signedUSD(pnl), tone: isLive ? Tone(signed: pnl) : .neutral)
                     } else {
                         WarningText(Wording.pnlUnavailable)
                     }
                 }
-                .font(.system(size: isAvailable ? size : size * 0.7, weight: .semibold, design: .rounded))
+                .font(.system(size: pnl != nil ? size : size * 0.7, weight: .semibold, design: .rounded))
                 // One line whatever it says: a big number shrinks to fit instead of pushing everything down.
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
                 .opacity(isLive ? 1 : 0.55)
+                .animation(.easeOut(duration: 0.15), value: isLive)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("Total PnL, \(isAvailable ? Format.signedUSD(portfolio.totals.pnlUsdMicros) : Wording.pnlUnavailable)")
+            .accessibilityLabel("Total PnL, \(pnl.map(Format.signedUSD) ?? Wording.pnlUnavailable)")
             .accessibilityHint("Shows the legs behind this number")
             PnlCaveats(portfolio: portfolio)
         }
@@ -70,12 +74,13 @@ public struct PnlCaveats: View {
 /// One of the sums beside the total. It says when it's partial, and shows no number when nothing's known.
 public struct TotalStat: View {
     let label: String
-    let text: String
+    /// nil when nothing in the sum is known.
+    let text: String?
     let coverage: SumCoverage?
     let isLive: Bool
     let onOpen: () -> Void
 
-    public init(label: String, text: String, coverage: SumCoverage? = nil, isLive: Bool, onOpen: @escaping () -> Void) {
+    public init(label: String, text: String?, coverage: SumCoverage? = nil, isLive: Bool, onOpen: @escaping () -> Void) {
         self.label = label
         self.text = text
         self.coverage = coverage
@@ -87,37 +92,38 @@ public struct TotalStat: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
                 Text(label).foregroundStyle(.secondary)
-                if coverage?.isPartial == true {
+                if text != nil, coverage?.isPartial == true {
                     Text("partial").foregroundStyle(Tone.warning.style)
                 }
             }
             .font(.caption)
             Button(action: onOpen) {
                 Group {
-                    if coverage?.nothingKnown == true {
-                        WarningText("Unavailable")
-                    } else {
+                    if let text {
                         LiveNumber(text)
+                    } else {
+                        WarningText("Unavailable")
                     }
                 }
                 .font(.body.weight(.medium))
                 .lineLimit(1)
                 .opacity(isLive ? 1 : 0.55)
+                .animation(.easeOut(duration: 0.15), value: isLive)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("\(label), \(coverage?.nothingKnown == true ? "unavailable" : text)\(coverage?.isPartial == true ? ", partial" : "")")
+            .accessibilityLabel("\(label), \(text ?? "unavailable")\(text != nil && coverage?.isPartial == true ? ", partial" : "")")
         }
     }
 }
 
 extension Portfolio {
     /// The four sums beside the total, in reading order.
-    public var totalStats: [(metric: TotalMetric, label: String, text: String, coverage: SumCoverage?)] {
+    public var totalStats: [(metric: TotalMetric, label: String, text: String?, coverage: SumCoverage?)] {
         [
-            (.value, "Value", Format.usd(totals.valueUsdMicros), totals.coverage.value),
-            (.realized, "Realized", Format.signedUSD(totals.realizedUsdMicros), totals.coverage.realized),
-            (.unrealized, "Unrealized", Format.signedUSD(totals.unrealizedUsdMicros), totals.coverage.unrealized),
-            (.gas, "Gas paid", Format.usd(totals.gasUsdMicros), nil),
+            (.value, "Value", totals.valueUsdMicros.map(Format.usd), totals.coverage.value),
+            (.realized, "Realized", totals.realizedUsdMicros.map(Format.signedUSD), totals.coverage.realized),
+            (.unrealized, "Unrealized", totals.unrealizedUsdMicros.map(Format.signedUSD), totals.coverage.unrealized),
+            (.gas, "Gas paid", totals.gasUsdMicros.map(Format.usd), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
     }
 }

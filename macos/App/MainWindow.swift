@@ -19,6 +19,10 @@ struct MainWindow: View {
             .sheet(isPresented: $navigation.isChangingWallet) {
                 WalletSheet(store: store)
             }
+            // What's open belongs to the wallet it was opened on.
+            .onChange(of: store.address) {
+                navigation.target = nil
+            }
     }
 
     private var subtitle: String {
@@ -85,31 +89,56 @@ struct MainWindow: View {
     private func details(_ portfolio: Portfolio) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             notices(portfolio)
-            if portfolio.isEmpty {
+            if !portfolio.progress.started {
+                ContentUnavailableView("Nothing to show yet", systemImage: "hourglass", description: Text("The dataset hasn't reached this wallet's first block."))
+            } else if portfolio.isEmpty {
                 ContentUnavailableView("No movements", systemImage: "tray", description: Text("Nothing moved for \(portfolio.address) in these blocks."))
             } else {
                 summary(portfolio)
-                GroupBox {
-                    // With nothing known, the series is all zeros, and a flat line at $0 would read as an answer.
-                    if portfolio.pnlStatus == .unavailable {
-                        Text("Nothing to chart until a cost or a price is known.")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, minHeight: 170)
-                    } else {
-                        PnlChartView(points: portfolio.points, isLive: isLive) { navigation.target = .transaction($0) }
-                            .frame(height: 170)
-                            .padding(6)
-                    }
-                }
+                history(portfolio)
                 HoldingsTable(portfolio: portfolio, isLive: isLive, target: $navigation.target)
                     .frame(minHeight: 150)
             }
-            Text(Wording.coverage(portfolio))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if portfolio.progress.started {
+                Text(Wording.coverage(portfolio))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(16)
+    }
+
+    /// The same size whichever it shows, so switching moves nothing else.
+    private func history(_ portfolio: Portfolio) -> some View {
+        GroupBox {
+            Group {
+                if navigation.showsTransactions {
+                    TransactionsTable(transactions: portfolio.transactions, isLive: isLive, target: $navigation.target)
+                } else if portfolio.hasChartableData {
+                    PnlChartView(points: portfolio.points, isLive: isLive) { navigation.target = .transaction($0) }
+                        .padding(6)
+                } else {
+                    Text(Wording.nothingToChart)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(height: 170)
+        } label: {
+            HStack {
+                Spacer()
+                Picker("History", selection: $navigation.showsTransactions) {
+                    Text("Chart").tag(false)
+                    Text("Transactions").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+                .help("Chart or transactions (⌘T)")
+            }
+        }
     }
 
     @ViewBuilder
@@ -230,6 +259,58 @@ private struct HoldingsTable: View {
         }
         .buttonStyle(NumberButtonStyle())
         .accessibilityLabel("\(position.asset) \(metric.rawValue), \(text)")
+    }
+}
+
+/// Each transaction the chart plots. Up and down move through them and show each one's legs.
+private struct TransactionsTable: View {
+    let transactions: [PnlPoint]
+    let isLive: Bool
+    @Binding var target: ExplainTarget?
+    @State private var selection: PnlPoint.ID?
+    @FocusState private var isFocused: Bool
+
+    private var targetHash: String? {
+        if case .transaction(let hash) = target { hash } else { nil }
+    }
+
+    var body: some View {
+        Table(transactions, selection: $selection) {
+            TableColumn("Time") { point in
+                Text(point.date.map(Format.time) ?? point.timestamp)
+            }
+            TableColumn("Block") { point in
+                Text(Format.block(point.blockNum)).monospacedDigit()
+            }
+            .alignment(.numeric)
+            TableColumn("Total PnL after") { point in
+                HStack(spacing: 4) {
+                    if point.pnlUsdMicros == nil { WarningIcon() }
+                    LiveNumber(point.pnlUsdMicros.map(Format.signedUSD) ?? "Unavailable", tone: isLive ? Tone(signed: point.pnlUsdMicros) : .neutral)
+                }
+            }
+            .alignment(.numeric)
+            TableColumn("Leaves out") { point in
+                if point.excludedCount > 0 {
+                    LiveNumber("\(point.excludedCount) unknown", tone: .warning)
+                } else {
+                    Text("—").foregroundStyle(.tertiary)
+                }
+            }
+            .alignment(.numeric)
+        }
+        .tableStyle(.inset)
+        .alternatingRowBackgrounds(.disabled)
+        .focused($isFocused)
+        .onAppear { isFocused = true }
+        .onChange(of: selection) { _, id in
+            guard let hash = transactions.first(where: { $0.id == id })?.txHash, hash != targetHash else { return }
+            target = .transaction(hash)
+        }
+        .onChange(of: target, initial: true) {
+            selection = transactions.first { $0.txHash == targetHash }?.id
+        }
+        .accessibilityLabel("Transactions")
     }
 }
 

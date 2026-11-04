@@ -20,6 +20,18 @@ import Testing
         #expect(usdc.values.averageCostUsdMicros == nil)
     }
 
+    @Test func keepsUnknownPointsUnknown() throws {
+        let portfolio = try demoPortfolio()
+        #expect(portfolio.points.first?.pnlUsdMicros == nil)
+        #expect(portfolio.hasChartableData)
+    }
+
+    @Test func listsTransactionsNewestFirstWithoutTheLatestPoint() throws {
+        let transactions = try demoPortfolio().transactions
+        #expect(transactions.allSatisfy { $0.txHash != nil })
+        #expect(transactions.map(\.blockNum) == transactions.map(\.blockNum).sorted(by: >))
+    }
+
     @Test func readsAnExplanation() throws {
         let explanation = try resource("demo-explanation", as: Explanation.self)
         #expect(explanation.title == "AERO: Realized PnL")

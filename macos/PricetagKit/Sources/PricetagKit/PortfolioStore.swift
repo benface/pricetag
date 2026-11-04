@@ -10,6 +10,8 @@ public enum FeedState: Equatable, Sendable {
     case live
     /// The server and Amp both answer, but Amp's newest block is old.
     case behind(seconds: Int)
+    /// The chain is current, but the dataset hasn't processed up to it yet.
+    case catchingUp
     case serverUnreachable
     case ampUnavailable(String)
     case noAmpConfigured(String)
@@ -17,6 +19,22 @@ public enum FeedState: Equatable, Sendable {
 
     /// Only this state may show a number as current.
     public var isLive: Bool { self == .live }
+
+    /// The last read failed or is old, so whatever's on screen has stopped moving.
+    public var isStale: Bool {
+        switch self {
+        case .noWallet, .reading, .live, .catchingUp: false
+        case .behind, .serverUnreachable, .ampUnavailable, .noAmpConfigured, .rejected: true
+        }
+    }
+}
+
+/// One number's explanation, in full context, because the same number means something else on another wallet, method or server.
+public struct ExplanationRequest: Hashable, Sendable {
+    public let target: ExplainTarget
+    public let address: String
+    public let method: CostMethod
+    public let serverURL: URL
 }
 
 @MainActor
@@ -26,7 +44,8 @@ public final class PortfolioStore {
     /// Past this, the newest block is too old to call live. Base makes a block every 2 s.
     static let behindAfterSeconds = 120
 
-    /// What the store holds, which may not be current: read `feed` before calling it live.
+    /// What the store holds, which may not be current: read `feed` before calling it live. While a new method's numbers
+    /// are on their way, the feed is `.reading` and this still holds the old method's, so the screen doesn't jump.
     public private(set) var portfolio: Portfolio?
     public private(set) var feed: FeedState
     public private(set) var updatedAt: Date?
@@ -96,6 +115,7 @@ public final class PortfolioStore {
         guard method != self.method else { return }
         self.method = method
         defaults.set(method.rawValue, forKey: Keys.method)
+        if address != nil { feed = .reading }
         start()
     }
 
@@ -104,28 +124,41 @@ public final class PortfolioStore {
         serverURL = url
         defaults.set(url.absoluteString, forKey: Keys.server)
         source = makeSource(url)
+        // Another server's numbers can be different facts, so these aren't kept even for a moment.
+        portfolio = nil
+        updatedAt = nil
+        if address != nil { feed = .reading }
         start()
     }
 
-    public func explanation(of target: ExplainTarget) async throws -> Explanation {
-        guard let address else { throw FetchError.rejected("There's no wallet to explain.") }
-        return try await source.explanation(of: target, address: address, method: method)
+    /// nil with no wallet, when there's nothing to explain.
+    public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
+        address.map { ExplanationRequest(target: target, address: $0, method: method, serverURL: serverURL) }
+    }
+
+    public func explanation(for request: ExplanationRequest) async throws -> Explanation {
+        // A request from before a change has nothing to say about what's on screen now.
+        guard request == explanationRequest(for: request.target) else { throw CancellationError() }
+        return try await source.explanation(of: request.target, address: request.address, method: request.method)
     }
 
     /// One read. Returns how long to wait before the next one.
     func poll() async -> Duration {
         guard let address else { return unreachableDelay }
         let method = self.method
+        let serverURL = self.serverURL
+        // An answer that arrives after a change is about something else, whatever it says.
+        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && serverURL == self.serverURL }
         let timeout: Duration = portfolio == nil ? .seconds(180) : .seconds(15)
         do {
             let next = try await source.portfolio(address: address, method: method, timeout: timeout)
-            try Task.checkCancellation()
+            guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
             feed = state(of: next)
             return reachableDelay
         } catch {
-            if Task.isCancelled || error is CancellationError { return .zero }
+            guard isCurrent(), !(error is CancellationError) else { return .zero }
             // Numbers by another method are wrong now, not just old, and there's no way to get the right ones.
             if portfolio?.method != method { portfolio = nil }
             feed = state(of: error)
@@ -136,7 +169,8 @@ public final class PortfolioStore {
     private func state(of portfolio: Portfolio) -> FeedState {
         guard portfolio.mode != .demo, let newest = portfolio.latest.date else { return .live }
         let age = Int(now().timeIntervalSince(newest))
-        return age > Self.behindAfterSeconds ? .behind(seconds: age) : .live
+        if age > Self.behindAfterSeconds { return .behind(seconds: age) }
+        return portfolio.progress.started && portfolio.progress.behindBlocks == 0 ? .live : .catchingUp
     }
 
     private func state(of error: any Error) -> FeedState {

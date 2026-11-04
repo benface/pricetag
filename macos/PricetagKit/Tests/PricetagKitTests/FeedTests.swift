@@ -21,12 +21,36 @@ actor ScriptedSource: PortfolioSource {
     }
 }
 
+/// Holds one read open until it's told how to answer.
+actor GatedSource: PortfolioSource {
+    private var waiting: CheckedContinuation<Portfolio, any Error>?
+
+    func portfolio(address: String, method: CostMethod, timeout: Duration) async throws -> Portfolio {
+        try await withCheckedThrowingContinuation { waiting = $0 }
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func waitUntilAsked() async {
+        while waiting == nil { await Task.yield() }
+    }
+
+    func answer(_ result: Result<Portfolio, FetchError>) {
+        waiting?.resume(with: result.mapError { $0 as any Error })
+        waiting = nil
+    }
+}
+
 /// `demoPortfolio()`, but from a real source, and with its newest block at a given time.
-func realPortfolio(at date: Date, status: PnlStatus? = nil) throws -> Portfolio {
+func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod = .average, progress: ReadProgress? = nil) throws -> Portfolio {
     var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
     object["mode"] = "raw"
+    object["method"] = method.rawValue
     object["latest"] = ["blockNum": 53_505_400, "timestamp": date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))]
     if let status { object["pnlStatus"] = status.rawValue }
+    if let progress { object["progress"] = ["started": progress.started, "behindBlocks": progress.behindBlocks] }
     return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
 }
 
@@ -87,6 +111,25 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil) throws -> Portfolio 
         #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Behind")
     }
 
+    @Test func aDatasetBehindTheChainIsntLive() async throws {
+        let behind = try realPortfolio(at: now, progress: ReadProgress(started: true, behindBlocks: 50))
+        let (store, _, _) = makeStore([.success(behind)])
+        await _ = store.poll()
+        #expect(store.feed == .catchingUp)
+        #expect(!store.feed.isStale)
+        let notice = try #require(store.feed.staleNotice(serverURL: store.serverURL, portfolio: store.portfolio))
+        #expect(notice.contains("50 blocks behind"))
+        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Catching up")
+    }
+
+    @Test func aDatasetThatHasntStartedIsntLive() async throws {
+        let waiting = try realPortfolio(at: now, progress: ReadProgress(started: false, behindBlocks: 0))
+        let (store, _, _) = makeStore([.success(waiting)])
+        await _ = store.poll()
+        #expect(store.feed == .catchingUp)
+        #expect(try #require(store.feed.staleNotice(serverURL: store.serverURL, portfolio: store.portfolio)).contains("hasn't reached"))
+    }
+
     @Test func demoDataIsNeverBehind() async throws {
         let (store, _, _) = makeStore([.success(try demoPortfolio())])
         await _ = store.poll()
@@ -109,6 +152,80 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil) throws -> Portfolio 
         store.setWallet("demo")
         store.stop()
         #expect(store.portfolio == nil)
+        #expect(store.feed == .reading)
+    }
+
+    @Test func aNewMethodStopsCallingTheOldNumbersLiveAtOnce() async throws {
+        let (store, _, _) = makeStore([.success(try realPortfolio(at: now)), .success(try realPortfolio(at: now, method: .fifo))])
+        await _ = store.poll()
+        store.setMethod(.fifo)
+        store.stop()
+        #expect(store.method == .fifo)
+        #expect(store.portfolio?.method == .average)
+        #expect(store.feed == .reading)
+        #expect(!store.feed.isLive)
+        await _ = store.poll()
+        #expect(store.portfolio?.method == .fifo)
+        #expect(store.feed == .live)
+    }
+
+    @Test func aNewServerDropsTheOldServersNumbersAtOnce() async throws {
+        let (store, _, _) = makeStore([.success(try realPortfolio(at: now)), .success(try realPortfolio(at: now))])
+        await _ = store.poll()
+        store.setServerURL(URL(string: "http://127.0.0.1:9999")!)
+        store.stop()
+        #expect(store.portfolio == nil)
+        #expect(store.feed == .reading)
+        await _ = store.poll()
+        #expect(store.feed == .live)
+    }
+
+    @Test func aFailureAfterANewServerDoesntBringBackAnything() async throws {
+        let (store, _, _) = makeStore([.success(try realPortfolio(at: now)), .failure(.unreachable)])
+        await _ = store.poll()
+        store.setServerURL(URL(string: "http://127.0.0.1:9999")!)
+        store.stop()
+        await _ = store.poll()
+        #expect(store.portfolio == nil)
+        #expect(store.feed == .serverUnreachable)
+    }
+
+    /// A read that started before a change, and only answers after it.
+    func answerLate(after change: (PortfolioStore) -> Void, answer: Result<Portfolio, FetchError>) async throws -> PortfolioStore {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let gate = GatedSource()
+        let now = now
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in gate }, now: { now })
+        let read = Task { await store.poll() }
+        await gate.waitUntilAsked()
+        change(store)
+        store.stop()
+        let before = store.feed
+        await gate.answer(answer)
+        _ = await read.value
+        #expect(store.feed == before)
+        return store
+    }
+
+    @Test func ignoresALateAnswerFromTheOldMethod() async throws {
+        let store = try await answerLate(after: { $0.setMethod(.fifo) }, answer: .success(try realPortfolio(at: now)))
+        #expect(store.portfolio == nil)
+        #expect(store.feed == .reading)
+    }
+
+    @Test func ignoresALateAnswerFromTheOldServer() async throws {
+        let store = try await answerLate(after: { $0.setServerURL(URL(string: "http://127.0.0.1:9999")!) }, answer: .success(try realPortfolio(at: now)))
+        #expect(store.portfolio == nil)
+    }
+
+    @Test func ignoresALateAnswerFromTheOldWallet() async throws {
+        let store = try await answerLate(after: { $0.setWallet("0xdef") }, answer: .success(try realPortfolio(at: now)))
+        #expect(store.portfolio == nil)
+    }
+
+    @Test func ignoresALateFailureFromTheOldMethod() async throws {
+        let store = try await answerLate(after: { $0.setMethod(.fifo) }, answer: .failure(.unreachable))
         #expect(store.feed == .reading)
     }
 
@@ -152,6 +269,17 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil) throws -> Portfolio 
         let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .unavailable))
         #expect(summary.isWarning)
         #expect(summary.text == "PnL unavailable")
+    }
+
+    @Test func aNullTotalHasNoNumberWhateverTheStatusSays() throws {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
+        var totals = object["totals"] as! [String: Any]
+        totals["pnlUsdMicros"] = NSNull()
+        object["totals"] = totals
+        let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        let summary = FeedSummary(feed: .live, portfolio: portfolio)
+        #expect(summary.isWarning)
+        #expect(!summary.text.contains("$"))
     }
 
     @Test func aCompleteTotalDoesntWarn() throws {
