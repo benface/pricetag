@@ -15,8 +15,8 @@ public enum FetchError: Error, Equatable, Sendable {
 
 public protocol PortfolioSource: Sendable {
     /// `linked` is the user's other wallets, which transfers between carry their cost.
-    func portfolio(address: String, method: CostMethod, linked: [String], timeout: Duration) async throws -> Portfolio
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, linked: [String]) async throws -> Explanation
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], timeout: Duration) async throws -> Portfolio
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> Explanation
 }
 
 public struct PricetagClient: PortfolioSource {
@@ -30,16 +30,16 @@ public struct PricetagClient: PortfolioSource {
         session = URLSession(configuration: configuration)
     }
 
-    public func portfolio(address: String, method: CostMethod, linked: [String], timeout: Duration) async throws -> Portfolio {
-        try await get("/api/portfolio/\(address)", query: query(method: method, linked: linked), timeout: timeout)
+    public func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], timeout: Duration) async throws -> Portfolio {
+        try await get("/api/portfolio/\(address)", query: settings(method, currency, linked), timeout: timeout)
     }
 
-    public func explanation(of target: ExplainTarget, address: String, method: CostMethod, linked: [String]) async throws -> Explanation {
-        try await get("/api/portfolio/\(address)/explain", query: query(method: method, linked: linked) + target.queryItems, timeout: .seconds(30))
+    public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> Explanation {
+        try await get("/api/portfolio/\(address)/explain", query: settings(method, currency, linked) + target.queryItems, timeout: .seconds(30))
     }
 
-    private func query(method: CostMethod, linked: [String]) -> [URLQueryItem] {
-        var items = [URLQueryItem(name: "method", value: method.rawValue)]
+    private func settings(_ method: CostMethod, _ currency: CurrencyCode, _ linked: [String]) -> [URLQueryItem] {
+        var items = [URLQueryItem(name: "method", value: method.rawValue), URLQueryItem(name: "currency", value: currency.rawValue)]
         if !linked.isEmpty { items.append(URLQueryItem(name: "linked", value: linked.joined(separator: ","))) }
         return items
     }

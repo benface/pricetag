@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
-import { describeError, isNotStarted } from "../server/amp.ts"
+import { describeError, isNotStarted } from "@pricetag/sdk"
 import { datasetSource } from "../server/source.ts"
 
 /** Sends the path exactly as written, which fetch wouldn't. */
@@ -67,9 +67,25 @@ describe("the server", () => {
   })
 })
 
+describe("the balance read", () => {
+  it("is one eth_call at that exact block, with no table, so it can read before a dataset's first block", async () => {
+    const queries: string[] = []
+    const query = async <T>(sql: string) => {
+      queries.push(sql)
+      return [{ r: { data: null, message: "boom" } }] as T[]
+    }
+    const source = datasetSource(query, { baseDataset: "base", dataset: "ds", startBlock: 1, network: "base_mainnet" })
+    assert.equal(await source.readBalances("0x00000000000000000000000000000000000000cc", 41), null)
+    assert.equal(queries.length, 1)
+    assert.match(queries[0]!, /^SELECT rpc\.base_mainnet\.eth_call\(NULL, /)
+    assert.match(queries[0]!, /, 41\) AS r$/)
+    assert.doesNotMatch(queries[0]!, /FROM/)
+  })
+})
+
 describe("a dataset whose tables haven't started", () => {
   const notStarted = { _tag: "ArrowFlightError", message: "", cause: { _tag: "ArrowFlightError", cause: { rawMessage: "failed to resolve batch query snapshot | Caused by: no common canonical watermark is available for batch snapshot" } } }
-  const config = { baseDataset: "base", dataset: "ds", startBlock: 1 }
+  const config = { baseDataset: "base", dataset: "ds", startBlock: 1, network: "base_mainnet" }
 
   it("reads as not processed yet, rather than as an outage", async () => {
     assert.ok(isNotStarted(notStarted))

@@ -1,7 +1,7 @@
 // Turns a wallet's rows in the dataset's shapes into the priced legs the fold reads.
 // Pure, so it can run on fixtures, on the raw dataset's rows and on the Pricetag dataset's rows alike.
 
-import { usdOf, type CostLabel, type FoldLeg } from "./fold.ts"
+import { worth, type CostLabel, type FoldLeg } from "./fold.ts"
 import { normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
 
 export type PriceSource = "oracle" | "swap" | "market"
@@ -10,7 +10,10 @@ export type PriceSource = "oracle" | "swap" | "market"
  * `unlisted`: `amount` is a quantity, or empty when it can't be read, as with ERC-1155.
  * `unlisted_nft`: `amount` is an ERC-721 token ID, which identifies one asset and is not a quantity.
  */
-export type LegKind = "erc20" | "eth" | "gas" | "wrap" | "unwrap" | "unlisted" | "unlisted_nft"
+export type LegKind = "erc20" | "eth" | "gas" | "l1_fee" | "wrap" | "unwrap" | "unlisted" | "unlisted_nft"
+
+/** What a transaction cost to send. L2 gas comes from Amp's data, and the L1 data fee from its receipt. */
+const isFeeRow = (row: LegRow) => row.kind === "gas" || row.kind === "l1_fee"
 
 /** A row of `legs`. `token` and `account` are 0x-prefixed lowercase hex, `amount` a decimal string. */
 export type LegRow = {
@@ -32,6 +35,12 @@ export type ReferenceRow = { block_num: number; eth_usd: string; usdc_usd: strin
 /** The result of `pt_price`, in the shape `priced_legs` stores it. */
 export type PtPrice = { token: string; usd_micros: string; source: "swap" | "unknown" }
 
+/**
+ * The result of `pt_net`. No side means it nets to zero, or an amount couldn't be read. No amount means most of it
+ * cancelled out, as with what a router or pool kept: something moved, but it isn't a trade that can be priced.
+ */
+export type PtNet = { amount: string; side: "debit" | "credit" | "" }
+
 /** A row of `priced_legs`. */
 export type PricedRow = {
   block_num: number
@@ -44,6 +53,16 @@ export type PricedRow = {
   priced: PtPrice
 }
 
+/** What a leg converted out of USD was before that, and the rate that took it there. */
+export type LegConversion = {
+  priceUsdMicros: string | null
+  costUsdMicros: string | null
+  proceedsUsdMicros: string | null
+  /** What one USD bought at this leg's block, or null when there's no rate for it. */
+  rateMicros: string | null
+}
+
+/** Fresh from `buildPricedLegs`, its money is in USD. An app showing another currency converts it before folding. */
 export type PricedLeg = FoldLeg & {
   asset: string
   blockNum: number
@@ -55,6 +74,10 @@ export type PricedLeg = FoldLeg & {
   priceNote: string | null
   /** The rows this leg nets together, so a click can show them. */
   parts: LegRow[]
+  /** Only on a leg converted out of USD. */
+  conversion?: LegConversion
+  /** What the wallet already held before the first block read. It isn't a transaction, so `txHash` is empty. */
+  opening?: boolean
 }
 
 /** The same calculation as the dataset's `pt_price` UDF. A test runs both on the same inputs. */
@@ -89,38 +112,84 @@ export function ptPrice(
   return none
 }
 
+/** The same calculation as the dataset's `pt_net` UDF, on comma-separated signed amounts. A test runs both. */
+export function ptNet(amounts: string): PtNet {
+  const none: PtNet = { amount: "", side: "" }
+  if (!amounts) return none
+  let net = 0n
+  let gross = 0n
+  for (const part of amounts.split(",")) {
+    if (!/^-?\d+$/.test(part)) return none
+    const amount = BigInt(part)
+    net += amount
+    gross += amount < 0n ? -amount : amount
+  }
+  if (net === 0n) return none
+  const size = net < 0n ? -net : net
+  return { amount: size * 2n < gross ? "" : size.toString(), side: net > 0n ? "credit" : "debit" }
+}
+
+const isPlainAmount = (amount: string) => /^\d+$/.test(amount)
+
 /**
- * What the dataset's `pairs`, `single_pairs` and `priced_legs` tables compute, for one wallet's rows.
- * Used when reading the raw dataset, and for fixtures, so both go through the same path as the real table.
+ * What one account's rows of tokens off the allowlist amount to in one transaction, like the dataset's `unlisted_moves`.
+ * `moves` has each asset's net movement that isn't zero, and `unreadable` says an amount couldn't be read.
+ */
+function netUnlisted(rows: readonly LegRow[]): { moves: bigint[]; unreadable: boolean } {
+  const nets = new Map<string, bigint>()
+  let unreadable = false
+  for (const row of rows) {
+    if (!isPlainAmount(row.amount)) {
+      unreadable = true
+      continue
+    }
+    // Fungible tokens net by contract. An NFT nets by contract and ID, each one counting once: IDs aren't amounts.
+    const isNft = row.kind === "unlisted_nft"
+    const asset = isNft ? `${row.token}#${row.amount}` : row.token
+    const size = isNft ? 1n : BigInt(row.amount)
+    nets.set(asset, (nets.get(asset) ?? 0n) + (row.side === "credit" ? size : -size))
+  }
+  return { moves: [...nets.values()].filter((delta) => delta !== 0n), unreadable }
+}
+
+/**
+ * What the dataset's `net_legs`, `pairs`, `unlisted_moves`, `pair_counts`, `single_pairs` and `priced_legs` tables
+ * compute, for one wallet's rows. Used when reading the raw dataset, and for fixtures, so both go through the same path
+ * as the real table.
  */
 export function derivePricedRows(rows: readonly LegRow[], references: readonly ReferenceRow[]): PricedRow[] {
   const refs = new Map(references.map((r) => [r.block_num, r]))
-  const byTx = new Map<string, LegRow[]>()
+  const byTx = new Map<string, { first: LegRow; amounts: Map<string, string[]>; unlisted: LegRow[] }>()
   for (const row of rows) {
-    // Like the dataset's `legs`, which pairs are made from: gas isn't traded, and unlisted tokens have no decimals.
-    if (row.kind === "gas" || row.kind === "unlisted" || row.kind === "unlisted_nft") continue
+    // Like the dataset's `legs`, which pairs are made from: gas isn't traded.
+    if (isFeeRow(row)) continue
     const key = `${row.account}:${row.tx_hash}`
-    byTx.set(key, [...(byTx.get(key) ?? []), row])
+    const tx = byTx.get(key) ?? { first: row, amounts: new Map<string, string[]>(), unlisted: [] }
+    // Unlisted tokens have no decimals, so they make no pair, but they do stop the pair's price.
+    if (row.kind === "unlisted" || row.kind === "unlisted_nft") tx.unlisted.push(row)
+    else tx.amounts.set(row.token, [...(tx.amounts.get(row.token) ?? []), row.side === "credit" ? row.amount : `-${row.amount}`])
+    byTx.set(key, tx)
   }
   const result: PricedRow[] = []
-  for (const txRows of byTx.values()) {
-    const pairs = txRows
-      .filter((a) => a.side === "debit")
-      .flatMap((a) => txRows.filter((b) => b.side === "credit" && b.token !== a.token).map((b) => [a, b] as const))
-    const [pair] = pairs
-    if (!pair || pairs.length !== 1) continue
-    const [sold, bought] = pair
-    const ref = refs.get(sold.block_num)
+  for (const { first, amounts, unlisted } of byTx.values()) {
+    const nets = [...amounts].map(([token, signed]) => ({ token, ...ptNet(signed.join(",")) }))
+    const sold = nets.filter((n) => n.side === "debit")
+    const bought = nets.filter((n) => n.side === "credit")
+    if (sold.length !== 1 || bought.length !== 1) continue
+    const { moves, unreadable } = netUnlisted(unlisted)
+    if (unreadable || moves.length > 0) continue
+    const ref = refs.get(first.block_num)
     if (!ref) continue
+    const [out, into] = [sold[0]!, bought[0]!]
     result.push({
-      block_num: sold.block_num,
-      tx_hash: sold.tx_hash,
-      account: sold.account,
-      sold_token: sold.token,
-      sold_amount: sold.amount,
-      bought_token: bought.token,
-      bought_amount: bought.amount,
-      priced: ptPrice(sold.token, sold.amount, bought.token, bought.amount, ref.eth_usd, ref.usdc_usd),
+      block_num: first.block_num,
+      tx_hash: first.tx_hash,
+      account: first.account,
+      sold_token: out.token,
+      sold_amount: out.amount,
+      bought_token: into.token,
+      bought_amount: into.amount,
+      priced: ptPrice(out.token, out.amount, into.token, into.amount, ref.eth_usd, ref.usdc_usd),
     })
   }
   return result
@@ -149,8 +218,6 @@ function isSaneAgainstOracle(impliedUsdMicros: bigint, oracleUsdMicros: string):
 
 const REJECTED_NOTE = "Rejected this swap's implied price, because it's far from any plausible value."
 const UNLISTED_NOTE = "This transaction also moved a token off the allowlist, so what was paid or received can't be split between them."
-
-const isPlainAmount = (amount: string) => /^\d+$/.test(amount)
 
 type Input = {
   account: string
@@ -185,41 +252,32 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     const oracle = (t: Token) => (t.oracle === "eth" ? ethMicros : t.oracle === "usdc" ? usdcMicros : null)
     const base = { blockNum: first.block_num, timestamp: first.timestamp, txHash: first.tx_hash, txIndex: first.tx_index }
 
-    for (const row of txRows) {
-      if (row.kind !== "gas") continue
+    const feeRows = txRows.filter(isFeeRow)
+    if (feeRows.length > 0) {
       legs.push({
         ...base,
-        id: `${row.tx_hash}:gas`,
+        id: `${first.tx_hash}:gas`,
         asset: "ETH",
-        delta: `-${row.amount}`,
+        delta: `-${feeRows.reduce((sum, row) => sum + BigInt(row.amount), 0n)}`,
         decimals: 18,
         kind: "gas",
-        priceUsdMicros: ethMicros,
+        priceMicros: ethMicros,
         priceSource: ethMicros === null ? null : "oracle",
         priceNote: ethMicros === null ? "The oracle read failed at this block." : null,
-        costUsdMicros: null,
-        proceedsUsdMicros: null,
+        costMicros: null,
+        proceedsMicros: null,
         costLabel: "unknown",
-        parts: [row],
+        parts: feeRows,
       })
     }
 
     const nets = new Map<string, { token: Token; delta: bigint; parts: LegRow[] }>()
-    const unlisted = new Map<string, bigint>()
-    let unlistedUnreadable = false
+    const unlisted: LegRow[] = []
     for (const row of txRows) {
-      if (row.kind === "gas") continue
+      if (isFeeRow(row)) continue
       const token = tokenByAddress(row.token)
       if (!token) {
-        if (!isPlainAmount(row.amount)) {
-          unlistedUnreadable = true
-          continue
-        }
-        // Fungible tokens net by contract. An NFT nets by contract and ID, each one counting once: IDs aren't amounts.
-        const isNft = row.kind === "unlisted_nft"
-        const asset = isNft ? `${row.token}#${row.amount}` : row.token
-        const size = isNft ? 1n : BigInt(row.amount)
-        unlisted.set(asset, (unlisted.get(asset) ?? 0n) + (row.side === "credit" ? size : -size))
+        unlisted.push(row)
         continue
       }
       const net = nets.get(token.asset) ?? { token: TOKENS.find((t) => t.symbol === token.asset)!, delta: 0n, parts: [] }
@@ -229,7 +287,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     }
     const moved = [...nets.values()].filter((n) => n.delta !== 0n)
     // One token out and one in is only a swap if nothing else moved. Otherwise the payment could be for both.
-    const unlistedMoves = [...unlisted.values()].filter((delta) => delta !== 0n)
+    const { moves: unlistedMoves, unreadable: unlistedUnreadable } = netUnlisted(unlisted)
     const hasUnlisted = unlistedUnreadable || unlistedMoves.length > 0
     const isSwap = !hasUnlisted && moved.length === 2 && moved.some((n) => n.delta > 0n) && moved.some((n) => n.delta < 0n)
     // Something left and something arrived, but it can't be valued as a swap. It's still not a plain transfer: a debit
@@ -267,7 +325,7 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
     const usdcSide = resolved.find((r) => r.net.token.oracle === "usdc" && r.price !== null)
     const anchor = isSwap ? (usdcSide ?? resolved.find((r) => r.net.token.oracle === "eth" && r.price !== null)) : undefined
     const abs = (delta: bigint) => (delta < 0n ? -delta : delta)
-    let tradeUsd = anchor ? usdOf(abs(anchor.net.delta), BigInt(anchor.price as string), anchor.net.token.decimals) : null
+    let tradeUsd = anchor ? worth(abs(anchor.net.delta), BigInt(anchor.price as string), anchor.net.token.decimals) : null
     const other = anchor && resolved.find((r) => r !== anchor)
     if (anchor && other && tradeUsd !== null) {
       const implied = (tradeUsd * 10n ** BigInt(other.net.token.decimals)) / abs(other.net.delta)
@@ -293,11 +351,11 @@ export function buildPricedLegs({ account, rows, references, priced }: Input): P
         delta: net.delta.toString(),
         decimals: net.token.decimals,
         kind: isExchange ? "swap" : "transfer",
-        priceUsdMicros: price,
+        priceMicros: price,
         priceSource,
         priceNote,
-        costUsdMicros: paid ? value : null,
-        proceedsUsdMicros: net.delta < 0n ? value : null,
+        costMicros: paid ? value : null,
+        proceedsMicros: net.delta < 0n ? value : null,
         costLabel,
         parts: net.parts,
       })

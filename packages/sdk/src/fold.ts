@@ -5,6 +5,9 @@
 //
 // Price and cost stay separate. A leg's price is a shared fact. Its cost is personal, and when it's
 // unknown it stays unknown: it never becomes $0, and anything that depends on it becomes null.
+//
+// Money is in millionths of one currency, and the fold doesn't care which. Gains are only right when it runs in the
+// currency they're reported in, because a gain in CAD isn't a gain in USD at some later rate.
 
 export type Method = "average" | "fifo"
 export type CostLabel = "paid" | "inherited" | "received at market" | "self-reported" | "unknown"
@@ -15,24 +18,24 @@ export type FoldLeg = {
   delta: string
   decimals: number
   /**
-   * swap: a debit is a sale for `proceedsUsdMicros`.
+   * swap: a debit is a sale for `proceedsMicros`.
    * transfer: a debit carries its cost away with no gain or loss.
-   * gas: a debit is a sale at `priceUsdMicros`, and that value is then spent as a fee.
+   * gas: a debit is a sale at `priceMicros`, and that value is then spent as a fee.
    */
   kind: "swap" | "transfer" | "gas"
-  /** The shared fact: USD price of one whole token at this leg's block, or null when there's no usable price. */
-  priceUsdMicros: string | null
+  /** The shared fact: price of one whole token at this leg's block, or null when there's no usable price. */
+  priceMicros: string | null
   /** Credits only: what this wallet actually paid for the whole leg. Ignored when `costLabel` is "unknown". */
-  costUsdMicros: string | null
+  costMicros: string | null
   /** Swap debits only: what this wallet actually received for the whole leg, or null when that isn't known. */
-  proceedsUsdMicros: string | null
+  proceedsMicros: string | null
   costLabel: CostLabel
 }
 
 export type Lot = {
   qty: string
   /** Total cost of this lot, or null when it's unknown. */
-  costUsdMicros: string | null
+  costMicros: string | null
   label: CostLabel | "mixed"
   legId: string
 }
@@ -43,18 +46,18 @@ export type PositionState = {
   /** Known-cost and unknown-cost units held. Average cost keeps at most one lot of each. */
   lots: Lot[]
   /** From disposals whose cost and proceeds are both known. */
-  realizedUsdMicros: string
-  /** Units `realizedUsdMicros` comes from, which tells a real $0 from nothing being known. */
+  realizedMicros: string
+  /** Units `realizedMicros` comes from, which tells a real $0 from nothing being known. */
   resolvedDisposedQty: string
   /** Units disposed of with an unknown cost or unknown proceeds. Realized PnL is unavailable while this is above 0. */
   unresolvedDisposedQty: string
-  gasUsdMicros: string
-  /** Units spent on gas with no price at that block, so their USD value isn't in `gasUsdMicros`. */
+  gasMicros: string
+  /** Units spent on gas with no price at that block, so their value isn't in `gasMicros`. */
   unpricedGasQty: string
   /** Units that left beyond what we saw arrive, so this wallet's history is incomplete. */
   shortfallQty: string
   /** Cost carried away by outgoing transfers. It's not a loss, so it's not in any PnL. */
-  transferredOutCostUsdMicros: string
+  transferredOutCostMicros: string
 }
 
 export function emptyPosition(method: Method, decimals: number): PositionState {
@@ -62,53 +65,56 @@ export function emptyPosition(method: Method, decimals: number): PositionState {
     method,
     decimals,
     lots: [],
-    realizedUsdMicros: "0",
+    realizedMicros: "0",
     resolvedDisposedQty: "0",
     unresolvedDisposedQty: "0",
-    gasUsdMicros: "0",
+    gasMicros: "0",
     unpricedGasQty: "0",
     shortfallQty: "0",
-    transferredOutCostUsdMicros: "0",
+    transferredOutCostMicros: "0",
   }
 }
 
-export function usdOf(qty: bigint, unitUsdMicros: bigint, decimals: number): bigint {
-  return (qty * unitUsdMicros) / 10n ** BigInt(decimals)
+export function worth(qty: bigint, unitMicros: bigint, decimals: number): bigint {
+  return (qty * unitMicros) / 10n ** BigInt(decimals)
 }
 
 function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
-  const known = leg.costLabel !== "unknown" && leg.costUsdMicros !== null
+  const known = leg.costLabel !== "unknown" && leg.costMicros !== null
   const lot: Lot = {
     qty: qty.toString(),
-    costUsdMicros: known ? leg.costUsdMicros : null,
+    costMicros: known ? leg.costMicros : null,
     label: known ? leg.costLabel : "unknown",
     legId: leg.id,
   }
   if (state.method === "fifo") return [...state.lots, lot]
 
-  const pool = state.lots.find((l) => (l.costUsdMicros === null) === !known)
+  const pool = state.lots.find((l) => (l.costMicros === null) === !known)
   if (!pool) return [...state.lots, lot]
   const merged: Lot = {
     qty: (BigInt(pool.qty) + qty).toString(),
-    costUsdMicros: known ? (BigInt(pool.costUsdMicros as string) + BigInt(lot.costUsdMicros as string)).toString() : null,
+    costMicros: known ? (BigInt(pool.costMicros as string) + BigInt(lot.costMicros as string)).toString() : null,
     label: pool.label === lot.label ? pool.label : "mixed",
     legId: pool.legId,
   }
   return state.lots.map((l) => (l === pool ? merged : l))
 }
 
-type Taken = { lots: Lot[]; knownQty: bigint; knownCost: bigint; unknownQty: bigint; shortfall: bigint }
+type Taken = { lots: Lot[]; knownQty: bigint; knownCost: bigint; unknownQty: bigint; shortfall: bigint; parts: TakenLot[] }
+
+/** Part of a lot that leaves in a debit. Its cost is null when that's unknown. */
+export type TakenLot = { qty: bigint; costMicros: bigint | null }
 
 function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint } {
   const lotQty = BigInt(lot.qty)
-  const lotCost = lot.costUsdMicros === null ? null : BigInt(lot.costUsdMicros)
+  const lotCost = lot.costMicros === null ? null : BigInt(lot.costMicros)
   // Taking a whole lot takes all of its cost, so rounding never leaves dust behind.
   if (qty === lotQty) return { rest: null, cost: lotCost ?? 0n }
   const cost = lotCost === null ? 0n : (lotCost * qty) / lotQty
   const rest: Lot = {
     ...lot,
     qty: (lotQty - qty).toString(),
-    costUsdMicros: lotCost === null ? null : (lotCost - cost).toString(),
+    costMicros: lotCost === null ? null : (lotCost - cost).toString(),
   }
   return { rest, cost }
 }
@@ -117,7 +123,7 @@ function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint } {
 function take(state: PositionState, qty: bigint): Taken {
   const held = state.lots.reduce((sum, l) => sum + BigInt(l.qty), 0n)
   const taking = qty < held ? qty : held
-  const result: Taken = { lots: [], knownQty: 0n, knownCost: 0n, unknownQty: 0n, shortfall: qty - taking }
+  const result: Taken = { lots: [], knownQty: 0n, knownCost: 0n, unknownQty: 0n, shortfall: qty - taking, parts: [] }
 
   let remaining = taking
   state.lots.forEach((lot, i) => {
@@ -132,13 +138,20 @@ function take(state: PositionState, qty: bigint): Taken {
     }
     const { rest, cost } = shrink(lot, n)
     if (rest) result.lots.push(rest)
-    if (lot.costUsdMicros === null) result.unknownQty += n
+    result.parts.push({ qty: n, costMicros: lot.costMicros === null ? null : cost })
+    if (lot.costMicros === null) result.unknownQty += n
     else {
       result.knownQty += n
       result.knownCost += cost
     }
   })
   return result
+}
+
+/** What a debit of `qty` takes, lot by lot, in the order this method takes them. Units never seen arriving have an unknown cost. */
+export function lotsTaken(state: PositionState, qty: bigint): TakenLot[] {
+  const { parts, shortfall } = take(state, qty)
+  return shortfall > 0n ? [...parts, { qty: shortfall, costMicros: null }] : parts
 }
 
 export function applyLeg(state: PositionState, leg: FoldLeg): PositionState {
@@ -155,27 +168,27 @@ export function applyLeg(state: PositionState, leg: FoldLeg): PositionState {
   }
 
   if (leg.kind === "transfer") {
-    next.transferredOutCostUsdMicros = (BigInt(state.transferredOutCostUsdMicros) + taken.knownCost).toString()
+    next.transferredOutCostMicros = (BigInt(state.transferredOutCostMicros) + taken.knownCost).toString()
     return next
   }
 
-  const price = leg.priceUsdMicros === null ? null : BigInt(leg.priceUsdMicros)
+  const price = leg.priceMicros === null ? null : BigInt(leg.priceMicros)
   let proceeds: bigint | null
-  if (leg.kind === "gas") proceeds = price === null ? null : usdOf(taken.knownQty, price, state.decimals)
-  else proceeds = leg.proceedsUsdMicros === null ? null : (BigInt(leg.proceedsUsdMicros) * taken.knownQty) / qty
+  if (leg.kind === "gas") proceeds = price === null ? null : worth(taken.knownQty, price, state.decimals)
+  else proceeds = leg.proceedsMicros === null ? null : (BigInt(leg.proceedsMicros) * taken.knownQty) / qty
 
   // What left with no cost we can see: its PnL can't be known, whatever it sold for.
   let unresolved = taken.unknownQty + taken.shortfall
   if (proceeds === null) unresolved += taken.knownQty
   else {
-    next.realizedUsdMicros = (BigInt(state.realizedUsdMicros) + proceeds - taken.knownCost).toString()
+    next.realizedMicros = (BigInt(state.realizedMicros) + proceeds - taken.knownCost).toString()
     next.resolvedDisposedQty = (BigInt(state.resolvedDisposedQty) + taken.knownQty).toString()
   }
   next.unresolvedDisposedQty = (BigInt(state.unresolvedDisposedQty) + unresolved).toString()
 
   if (leg.kind === "gas") {
     if (price === null) next.unpricedGasQty = (BigInt(state.unpricedGasQty) + qty).toString()
-    else next.gasUsdMicros = (BigInt(state.gasUsdMicros) + usdOf(qty, price, state.decimals)).toString()
+    else next.gasMicros = (BigInt(state.gasMicros) + worth(qty, price, state.decimals)).toString()
   }
   return next
 }
@@ -184,34 +197,34 @@ export type PositionValues = {
   qty: string
   unknownCostQty: string
   /** null whenever part of the position has an unknown cost. */
-  costUsdMicros: string | null
+  costMicros: string | null
   /** Per whole token. null whenever part of the position has an unknown cost. */
-  averageCostUsdMicros: string | null
+  averageCostMicros: string | null
   /** null when there's no current price. */
-  valueUsdMicros: string | null
+  valueMicros: string | null
   /** null when something it depends on is unknown. Never 0 in that case. */
-  realizedUsdMicros: string | null
-  unrealizedUsdMicros: string | null
+  realizedMicros: string | null
+  unrealizedMicros: string | null
 }
 
-export function valuePosition(state: PositionState, priceUsdMicros: string | null): PositionValues {
+export function valuePosition(state: PositionState, priceMicros: string | null): PositionValues {
   let qty = 0n
   let unknownCostQty = 0n
   let cost = 0n
   for (const lot of state.lots) {
     qty += BigInt(lot.qty)
-    if (lot.costUsdMicros === null) unknownCostQty += BigInt(lot.qty)
-    else cost += BigInt(lot.costUsdMicros)
+    if (lot.costMicros === null) unknownCostQty += BigInt(lot.qty)
+    else cost += BigInt(lot.costMicros)
   }
   const costKnown = unknownCostQty === 0n
-  const value = priceUsdMicros === null ? null : usdOf(qty, BigInt(priceUsdMicros), state.decimals)
+  const value = priceMicros === null ? null : worth(qty, BigInt(priceMicros), state.decimals)
   return {
     qty: qty.toString(),
     unknownCostQty: unknownCostQty.toString(),
-    costUsdMicros: costKnown ? cost.toString() : null,
-    averageCostUsdMicros: costKnown && qty > 0n ? ((cost * 10n ** BigInt(state.decimals)) / qty).toString() : null,
-    valueUsdMicros: value === null ? null : value.toString(),
-    realizedUsdMicros: BigInt(state.unresolvedDisposedQty) === 0n ? state.realizedUsdMicros : null,
-    unrealizedUsdMicros: costKnown && value !== null ? (value - cost).toString() : null,
+    costMicros: costKnown ? cost.toString() : null,
+    averageCostMicros: costKnown && qty > 0n ? ((cost * 10n ** BigInt(state.decimals)) / qty).toString() : null,
+    valueMicros: value === null ? null : value.toString(),
+    realizedMicros: BigInt(state.unresolvedDisposedQty) === 0n ? state.realizedMicros : null,
+    unrealizedMicros: costKnown && value !== null ? (value - cost).toString() : null,
   }
 }

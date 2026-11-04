@@ -7,7 +7,7 @@
 // and UDFs that never return null or throw, because one bad row stops the whole dataset.
 
 import { readFileSync, writeFileSync } from "node:fs"
-import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, TOKENS, USDC_USD_FEED, WETH_ADDRESS } from "../src/core/tokens.ts"
+import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, TOKENS, USDC_USD_FEED, WETH_ADDRESS } from "@pricetag/sdk/core"
 
 const MANIFEST = new URL("./pricetag.json", import.meta.url)
 
@@ -122,17 +122,46 @@ FROM (
   FROM base.blocks
 ) WHERE ${since}`,
 
+    // What each account gained or lost per token in a transaction, so a split route is one movement. Amounts can reach
+    // 2^256, so pt_net sums them with BigInt. What nets to zero goes, and pt_net leaves the amount empty for what mostly
+    // cancels out. That's what a router or pool kept, not a trade, so its pair still counts but has no price.
+    net_legs: `SELECT block_num, timestamp, tx_hash, account, token, get_field(net, 'side') AS side, get_field(net, 'amount') AS amount FROM (
+  SELECT block_num, timestamp, tx_hash, account, token, self.pt_net(string_agg(CASE WHEN side = 'credit' THEN amount ELSE concat('-', amount) END, ',')) AS net
+  FROM self.legs WHERE kind <> 'gas'
+  GROUP BY block_num(), block_num, timestamp, tx_hash, account, token
+) WHERE get_field(net, 'side') <> '' AND ${since}`,
+
     pairs: `SELECT a.block_num, a.timestamp, a.tx_hash, a.account,
   a.token AS sold_token, a.amount AS sold_amount,
   b.token AS bought_token, b.amount AS bought_amount
-FROM self.legs a
-JOIN self.legs b ON a._block_num = b._block_num AND a.tx_hash = b.tx_hash AND a.account = b.account
-WHERE a.side = 'debit' AND b.side = 'credit' AND a.kind <> 'gas' AND b.kind <> 'gas' AND a.token <> b.token AND ${since}`,
+FROM self.net_legs a
+JOIN self.net_legs b ON a._block_num = b._block_num AND a.tx_hash = b.tx_hash AND a.account = b.account
+WHERE a.side = 'debit' AND b.side = 'credit' AND ${since}`,
 
-    pair_counts: `SELECT block_num() AS bn, tx_hash, account, COUNT(*) AS pair_count
-FROM self.pairs WHERE ${since} GROUP BY block_num(), tx_hash, account`,
+    // What each account really moved per token off the allowlist in a transaction. What nets to zero moved nothing.
+    // NFTs net by ID, each counting once, because an ID isn't a quantity. An amount that can't be read, as with ERC-1155,
+    // still says something moved.
+    unlisted_moves: `SELECT block_num, tx_hash, account, token FROM (
+  SELECT block_num, tx_hash, account, token,
+    self.pt_net(string_agg(CASE WHEN kind = 'unlisted_nft' THEN CASE WHEN side = 'credit' THEN '1' ELSE '-1' END WHEN side = 'credit' THEN amount ELSE concat('-', amount) END, ',')) AS net,
+    bool_or(COALESCE(amount, '') = '') AS unreadable
+  FROM self.unlisted_legs
+  GROUP BY block_num(), block_num, tx_hash, account, token, CASE WHEN kind = 'unlisted_nft' THEN amount ELSE '' END
+) WHERE (get_field(net, 'side') <> '' OR unreadable) AND ${since}`,
 
-    // Transactions moving several tokens pair unrelated amounts, so only an account's single pair gets a price.
+    // Counts an account's pairs and its unlisted moves in a transaction, since a payment could be for either. Amp can't
+    // run NOT EXISTS or LEFT JOIN, so counting them together is how a pair with an unlisted move gets left out.
+    // The filter has to sit above the GROUP BY, because Amp can't see a start block through an aggregate.
+    pair_counts: `SELECT bn, tx_hash, account, pair_count FROM (
+  SELECT block_num() AS bn, tx_hash, account, COUNT(*) AS pair_count FROM (
+    SELECT block_num, tx_hash, account FROM self.pairs
+    UNION ALL
+    SELECT block_num, tx_hash, account FROM self.unlisted_moves
+  ) GROUP BY block_num(), tx_hash, account
+) WHERE ${since}`,
+
+    // Transactions moving several tokens pair unrelated amounts, so only an account's single pair gets a price, and
+    // only if nothing off the allowlist moved with it.
     single_pairs: `SELECT p.block_num, p.timestamp, p.tx_hash, p.account, p.sold_token, p.sold_amount, p.bought_token, p.bought_amount
 FROM self.pairs p
 JOIN self.pair_counts c ON p._block_num = c._block_num AND p.tx_hash = c.tx_hash AND p.account = c.account
@@ -148,7 +177,7 @@ WHERE ${since}`,
   }
 }
 
-/** The dataset's copy of `ptPrice` in src/core/legs.ts. test/dataset.test.ts runs both on the same inputs. */
+/** The dataset's copy of `ptPrice` in packages/sdk/src/legs.ts. test/dataset.test.ts runs both on the same inputs. */
 export function ptPriceSource(): string {
   const tokens = TOKENS.map((t) => `  '${hex(t.address)}': { symbol: '${t.symbol}', decimals: ${t.decimals}, asset: '${t.asset}', oracle: ${t.oracle ? `'${t.oracle}'` : "null"} }`).join(",\n")
   return `
@@ -169,6 +198,26 @@ function pt_price(soldToken, soldAmount, boughtToken, boughtAmount, ethUsd, usdc
   if (s.oracle) return { source: 'swap', token: b.symbol, usd_micros: usdPerToken(boughtAmount, b.decimals, soldAmount, s.decimals, answer[s.oracle]) };
   if (b.oracle) return { source: 'swap', token: s.symbol, usd_micros: usdPerToken(soldAmount, s.decimals, boughtAmount, b.decimals, answer[b.oracle]) };
   return none;
+}
+`
+}
+
+/** The dataset's copy of `ptNet` in packages/sdk/src/legs.ts. test/dataset.test.ts runs both on the same inputs. */
+export function ptNetSource(): string {
+  return `
+function pt_net(amounts) {
+  const none = { amount: '', side: '' };
+  if (!amounts) return none;
+  let net = 0n, gross = 0n;
+  for (const part of String(amounts).split(',')) {
+    if (!/^-?\\d+$/.test(part)) return none;
+    const amount = BigInt(part);
+    net += amount;
+    gross += amount < 0n ? -amount : amount;
+  }
+  if (net === 0n) return none;
+  const size = net < 0n ? -net : net;
+  return { amount: size * 2n < gross ? '' : size.toString(), side: net > 0n ? 'credit' : 'debit' };
 }
 `
 }
@@ -198,6 +247,11 @@ function functions() {
       // Struct fields have to be declared in alphabetical order.
       outputType: { Struct: [utf8Field("source"), utf8Field("token"), utf8Field("usd_micros")] },
       source: { source: ptPriceSource(), filename: "pt_price.js" },
+    },
+    pt_net: {
+      inputTypes: ["Utf8"],
+      outputType: { Struct: [utf8Field("amount"), utf8Field("side")] },
+      source: { source: ptNetSource(), filename: "pt_net.js" },
     },
     pt_gas: {
       inputTypes: ["Utf8", "Utf8", "Utf8", "Utf8", "Utf8", "Utf8"],

@@ -87,6 +87,22 @@ private func plan(_ holdings: [Holding], cap: UInt128 = cap, fees: FeeQuote = ch
         #expect(result.blockers == [.notEnoughGas])
     }
 
+    @Test func flagsTokensItCantMoveEvenUnderTheCap() {
+        let result = plan(holdings(eth: 0, (usdc, usdcUnits(10), Money.dollar)))
+        #expect(result.blockers == [.notEnoughGas])
+        #expect(result.excessUsdMicros == 0)
+    }
+
+    @Test func dustWithNoGasIsntWorthFlagging() {
+        let result = plan(holdings(eth: 0, (usdc, 1, Money.dollar)))
+        #expect(result.blockers.isEmpty)
+    }
+
+    @Test func aTokenWithNoPriceAndNoGasIsStillStuck() {
+        let result = plan(holdings(eth: 0, (dai, oneEth, nil)))
+        #expect(result.blockers == [.notEnoughGas])
+    }
+
     @Test func skipsDust() {
         let result = plan(holdings(eth: SweepPlanner.minimumGasReserveWei, (usdc, usdcUnits(50) + 500_000, Money.dollar)))
         #expect(result.transfers.isEmpty)

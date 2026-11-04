@@ -5,18 +5,20 @@ import SwiftUI
 /// The line stops where nothing is known. The same transactions are in `TransactionsTable`, for the keyboard and VoiceOver.
 public struct PnlChartView: View {
     let points: [PnlPoint]
+    let currency: CurrencyCode
     let isLive: Bool
     let onSelect: (String) -> Void
     @State private var hovered: PnlSeries.Plotted?
 
-    public init(points: [PnlPoint], isLive: Bool, onSelect: @escaping (String) -> Void) {
+    public init(points: [PnlPoint], currency: CurrencyCode, isLive: Bool, onSelect: @escaping (String) -> Void) {
         self.points = points
+        self.currency = currency
         self.isLive = isLive
         self.onSelect = onSelect
     }
 
     private var lineStyle: AnyShapeStyle {
-        let tone = Tone(signed: points.last { $0.pnlUsdMicros != nil }?.pnlUsdMicros)
+        let tone = Tone(signed: points.last { $0.pnlMicros != nil }?.pnlMicros)
         // A Color, because a chart reads plain styles like `.secondary` as shades of its accent.
         return isLive && tone != .neutral ? tone.style : AnyShapeStyle(Color.secondary)
     }
@@ -45,8 +47,8 @@ public struct PnlChartView: View {
                     .foregroundStyle(hovered.value == nil ? AnyShapeStyle(Color.clear) : lineStyle)
                     .annotation(position: .top, spacing: 6, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
                         VStack(spacing: 1) {
-                            if let pnl = hovered.point.pnlUsdMicros {
-                                Text(Format.signedUSD(pnl)).monospacedDigit().fontWeight(.medium)
+                            if let pnl = hovered.point.pnlMicros {
+                                Text(Format.signedMoney(pnl, currency)).monospacedDigit().fontWeight(.medium)
                             } else {
                                 WarningText("Unavailable").fontWeight(.medium)
                             }
@@ -68,7 +70,7 @@ public struct PnlChartView: View {
                 AxisValueLabel {
                     if let amount = value.as(Double.self) {
                         // Formatted first: `Text(_:format:)` would swap in the system's locale, and print US$ in Canada.
-                        Text(amount.formatted(.currency(code: "USD").locale(Locale(identifier: "en_US")).notation(.compactName).precision(.fractionLength(0...2)))).monospacedDigit()
+                        Text(amount.formatted(.currency(code: currency.rawValue).locale(currency.locale).notation(.compactName).precision(.fractionLength(0...2)))).monospacedDigit()
                     }
                 }
             }
@@ -100,7 +102,7 @@ public struct PnlChartView: View {
             }
         }
         .opacity(isLive ? 1 : 0.6)
-        .accessibilityLabel("Total PnL over time, ending at \(points.last?.pnlUsdMicros.map(Format.signedUSD) ?? "unavailable")")
+        .accessibilityLabel("Total PnL over time, ending at \(points.last?.pnlMicros.map { Format.signedMoney($0, currency) } ?? "unavailable")")
     }
 
     private func date(at location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy) -> Date? {

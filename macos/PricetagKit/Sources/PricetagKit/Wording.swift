@@ -18,11 +18,33 @@ public enum Wording {
 
     public static func coverage(_ portfolio: Portfolio) -> String {
         let span = portfolio.coverage
-        return "Covers blocks \(Format.block(span.fromBlock)) to \(Format.block(span.toBlock)) (about \(Format.duration(blocks: span.toBlock - span.fromBlock))) and \(portfolio.trackedTokens) tokens plus ETH. Anything earlier or off the list isn't counted, so amounts are what moved in this window, not full balances."
+        let opening = portfolio.openingUnread.isEmpty
+            ? "What the wallet held before that comes from the chain, at an unknown cost."
+            : "What the wallet held before that couldn't all be read yet, so some amounts may not be full balances."
+        return "Covers blocks \(Format.block(span.fromBlock)) to \(Format.block(span.toBlock)) (about \(Format.duration(blocks: span.toBlock - span.fromBlock))) and \(portfolio.trackedTokens) tokens plus ETH. \(opening) Tokens off the list aren't counted."
     }
 
     public static func gasUnknown(_ count: Int) -> String {
         "Gas couldn't be worked out for \(count) \(count == 1 ? "transaction" : "transactions"), so ETH is overstated by that much."
+    }
+
+    public static func networkFeeUnknown(_ count: Int) -> String {
+        "Couldn't read the network fee of \(count) \(count == 1 ? "transaction" : "transactions") yet, so gas paid is low and ETH's PnL is unavailable until it can."
+    }
+
+    /// What the onchain check found, or nil when there's nothing to say.
+    public static func check(_ position: Position) -> String? {
+        guard let check = position.reconciliation else { return nil }
+        switch check.status {
+        case .reconciled:
+            return "Matches the chain exactly."
+        case .unchecked:
+            return "Not checked. \(check.reason ?? "") PnL is unavailable until this balance is confirmed."
+        case .incomplete:
+            guard let computed = check.computedQty, let actual = check.actualQty, let difference = check.differenceQty else { return nil }
+            let signed = difference.hasPrefix("-") ? "" : "+"
+            return "Worked out \(Format.amount(computed, decimals: position.decimals)), onchain \(Format.amount(actual, decimals: position.decimals)), difference \(signed)\(Format.amount(difference, decimals: position.decimals)) \(position.asset). PnL is unavailable."
+        }
     }
 
     /// What's missing while a dataset catches up to the chain. nil when it isn't behind.
@@ -32,6 +54,21 @@ public enum Wording {
         }
         if portfolio.progress.behindBlocks == 0 { return nil }
         return "The Pricetag dataset has only processed up to block \(Format.block(portfolio.coverage.toBlock)), \(Format.block(portfolio.progress.behindBlocks)) blocks behind the chain. Anything after that isn't in these numbers yet."
+    }
+
+    /// What's unavailable because of a missing exchange rate. Empty in USD, or with every rate there.
+    public static func missingRates(_ portfolio: Portfolio) -> [String] {
+        guard let exchange = portfolio.exchange else { return [] }
+        let code = portfolio.currency.rawValue
+        var lines: [String] = []
+        let count = exchange.missingRateTxs.count
+        if count > 0 {
+            lines.append("\(count == 1 ? "1 transaction has" : "\(Format.block(count)) transactions have") no USD to \(code) rate, so what depends on \(count == 1 ? "it" : "them") is unavailable in \(code).")
+        }
+        if exchange.latestRateMicros == nil {
+            lines.append("There's no current USD to \(code) rate, so what's held has no current value.")
+        }
+        return lines
     }
 
     public static let unpricedGas = "Some gas had no price at its block, and isn't in this total."

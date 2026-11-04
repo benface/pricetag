@@ -8,10 +8,13 @@ public enum AlarmCheck {
         return outgoingTxs.filter { !signed.contains($0.lowercased()) }.map { .unknownTransaction(hash: $0.lowercased()) }
     }
 
-    /// Against the node: the number of transactions this key has sent, which a thief can't help but increase.
-    public static func findings(onchainNonce: UInt64, records: [SignedRecord]) -> [StolenKeyAlarm.Finding] {
-        let expected = nextNonce(records: records, onchainNonce: 0)
-        return onchainNonce > expected ? [.nonceAhead(signed: expected, onchain: onchainNonce)] : []
+    /// Against the node: every transaction a key sends uses up the next nonce, starting at 0, so each nonce the chain has used
+    /// has to be one this device signed. A gap stays a gap however many transactions come after it, including this app's own.
+    public static func findings(onchainNonce: UInt64, records: [SignedRecord], acknowledgedThrough: UInt64? = nil) -> [StolenKeyAlarm.Finding] {
+        let start = min(acknowledgedThrough ?? 0, onchainNonce)
+        let signed = Set(records.filter { $0.status != .dropped && $0.nonce >= start && $0.nonce < onchainNonce }.map(\.nonce))
+        let unexplained = onchainNonce - start - UInt64(signed.count)
+        return unexplained > 0 ? [.nonceAhead(signed: onchainNonce - unexplained, onchain: onchainNonce)] : []
     }
 
     /// One past the last nonce signed that's still in play. A dropped transaction's nonce gets used again.

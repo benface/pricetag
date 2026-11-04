@@ -11,7 +11,7 @@ public enum HotWalletWording {
     public static let sweepsOnlyWhileOpen = "Sweeps only run while the app is open. If it's closed, whatever arrives stays here until it opens again."
 
     public static func usd(_ micros: UInt128) -> String {
-        Format.usd(String(micros))
+        Format.money(String(micros), .USD)
     }
 
     public static func overCap(by excess: UInt128, hasDestination: Bool) -> String {
@@ -34,6 +34,12 @@ public enum HotWalletWording {
     public static let feesLookWrong = "The network is quoting far higher fees than Base ever charges, so nothing was signed. Check the network address in Settings."
     public static let keyMissing = "This device no longer has this wallet's key, so nothing here can be moved. This can happen after restoring onto a different device."
     public static let rotating = "Moving everything off the old key. It's deleted once there's nothing left on it."
+
+    public static func rotationHeldByOtherTokens(_ count: Int) -> String {
+        "The old key still holds \(count) \(count == 1 ? "token" : "tokens") this app doesn't track, and it won't touch them. It keeps the old key until you choose to leave \(count == 1 ? "it" : "them") behind."
+    }
+
+    public static let rotationCantCheck = "Everything this app tracks has moved, but it can't check the old key for other tokens right now. It keeps the old key until it can, or until you choose to delete it."
 
     public static func alarm(_ alarm: StolenKeyAlarm) -> String {
         alarm.findings.map {

@@ -304,7 +304,7 @@ private struct HotWalletDetails: View {
                 Button("Replace Key…") { isConfirmingRotation = true }
                     .disabled(wallet.rotation != nil || wallet.isWorking || wallet.isKeyMissing)
             }
-            if wallet.rotation != nil, wallet.plan?.blockers.contains(.notEnoughGas) == true || wallet.notices.contains(where: { $0.text == HotWalletWording.noGas }) {
+            if wallet.rotationHold != nil {
                 Button("Delete the Old Key and Leave What's on It…", role: .destructive) { isConfirmingAbandon = true }
             }
         } footer: {
@@ -323,12 +323,21 @@ private struct HotWalletDetails: View {
                 Button("Sweep Everything to Savings Instead") { Task { await wallet.sweepEverything() } }
             }
         } message: {
-            Text("Makes a new key, moves everything to it, then deletes the old one. It costs gas, and publicly links the two addresses. It also clears any token approvals the old key gave.")
+            Text("Makes a new key, moves every token this app tracks to it, then deletes the old one. If the old key holds other tokens, it stays until you choose to leave them. This costs gas, and publicly links the two addresses. It also clears any token approvals the old key gave.")
         }
         .confirmationDialog("Delete the old key?", isPresented: $isConfirmingAbandon) {
             Button("Delete and Leave It Behind", role: .destructive) { Task { await wallet.finishRotationLeavingFundsBehind() } }
         } message: {
-            Text("What's still on the old address can never be moved again.")
+            Text(abandonMessage)
+        }
+    }
+
+    private var abandonMessage: String {
+        let lost = "What's still on the old address can never be moved again."
+        return switch wallet.rotationHold {
+        case .otherTokens(let count): "It holds \(count) \(count == 1 ? "token" : "tokens") this app doesn't track. \(lost)"
+        case .cantCheckOtherTokens: "This app can't check right now whether it holds other tokens. \(lost)"
+        case .notEnoughGas, nil: "It holds tokens with no ETH to move them. \(lost)"
         }
     }
 

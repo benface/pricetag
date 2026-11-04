@@ -77,6 +77,15 @@ public enum SweepPlanner {
         plan.excessUsdMicros = plan.valueUsdMicros.subtractingClamped(capUsdMicros)
 
         var ethForGas = holdings.first { $0.token.isNative }?.balance ?? 0
+        // Whether or not anything is over the cap: tokens it can't move are stuck, and the user should hear that before it matters.
+        let transferCost = fees.costWei(gas: FeeQuote.tokenTransferGas)
+        let isStuck = holdings.contains { holding in
+            guard !holding.token.isNative, holding.balance > 0 else { return false }
+            guard let value = holding.valueUsdMicros, let ethPrice else { return true }
+            return value > Money.usdMicros(of: transferCost, priceMicros: ethPrice, decimals: 18)
+        }
+        if isStuck, ethForGas < transferCost { plan.blockers.insert(.notEnoughGas) }
+
         let wantsGain = pendingGainUsdMicros >= minimumSweep
         guard plan.excessUsdMicros > 0 || wantsGain else { return plan }
         guard let destination, destination != .zero else {

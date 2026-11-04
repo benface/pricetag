@@ -16,6 +16,14 @@ public final class HotWallet {
         case unavailable(String)
     }
 
+    public enum RotationHold: Equatable, Sendable {
+        case notEnoughGas
+        /// Tokens off the allowlist, which this app never calls, so they can't be moved from here.
+        case otherTokens(Int)
+        /// Amp is the only way to see those tokens, and it isn't answering.
+        case cantCheckOtherTokens
+    }
+
     public private(set) var availability: Availability = .ready
     public private(set) var settings: WalletSettings
     public private(set) var state: DeviceWalletState
@@ -28,6 +36,8 @@ public final class HotWallet {
     /// Why the last sweep didn't go out. Automatic sweeps wait a while before trying again.
     public private(set) var sweepProblem: String?
     public private(set) var isWorking = false
+    /// What's keeping a rotation from deleting the old key. The user can still choose to leave it behind.
+    public private(set) var rotationHold: RotationHold?
     public var onLinkedWalletsChange: (([String]) -> Void)?
 
     public var address: EthereumAddress? { state.active }
@@ -54,6 +64,8 @@ public final class HotWallet {
     @ObservationIgnored private var emptyReads = 0
     @ObservationIgnored private var pausedUntil: Date?
     @ObservationIgnored private var lastInLine: Task<Void, Never>?
+    /// The newest block a settled transaction is in. A snapshot from before it still counts what that transaction moved.
+    @ObservationIgnored private var settledThroughBlock: UInt64 = 0
 
     /// How long a sweep that didn't work waits before trying again.
     static let pauseAfterFailure: TimeInterval = 300
@@ -155,6 +167,7 @@ public final class HotWallet {
             try await settlePending(address: address, snapshot: snapshot)
             checkNonce(address: address, snapshot: snapshot)
             refreshPlan(snapshot: snapshot, address: address)
+            guard snapshot.blockNumber >= settledThroughBlock else { return }
             try await act(address: address, snapshot: snapshot)
         } catch is CancellationError {
         } catch let error as ChainError {
@@ -171,7 +184,8 @@ public final class HotWallet {
         guard let address else { return }
         let linked = linkedWallets.filter { $0 != address.lowercased }
         do {
-            let portfolio = try await portfolioSource().portfolio(address: address.lowercased, method: costMethod(), linked: linked, timeout: .seconds(180))
+            // Always USD, like the cap and the balances it's compared with.
+            let portfolio = try await portfolioSource().portfolio(address: address.lowercased, method: costMethod(), currency: .USD, linked: linked, timeout: .seconds(180))
             guard !Task.isCancelled, address == self.address else { return }
             self.portfolio = portfolio
             ampProblem = false
@@ -215,17 +229,30 @@ public final class HotWallet {
             let everything = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: rotation.destination)
             guard everything.transfers.isEmpty else {
                 emptyReads = 0
+                rotationHold = everything.blockers.contains(.notEnoughGas) ? .notEnoughGas : nil
                 try await execute(everything, from: address, to: rotation.destination, reason: .rotation, snapshot: snapshot)
                 return
             }
+            rotationHold = rotationHold(after: everything, address: address)
+            guard rotationHold == nil else {
+                emptyReads = 0
+                return
+            }
             // Deleting a key can't be undone, so one read saying it's empty isn't enough.
-            emptyReads = everything.blockers.isEmpty ? emptyReads + 1 : 0
+            emptyReads += 1
             if emptyReads >= Self.readsBeforeAlarm { try await finishRotation(rotation) }
             return
         }
         if let pausedUntil, now() < pausedUntil { return }
         guard !isKeyMissing, let plan, !plan.transfers.isEmpty, let destination = settings.sweepDestination else { return }
         try await execute(plan, from: address, to: destination, reason: .aboveCap, snapshot: snapshot)
+    }
+
+    /// Why the old key has to stay, now that what this app can move has moved. It can't see tokens off the allowlist itself.
+    private func rotationHold(after plan: SweepPlan, address: EthereumAddress) -> RotationHold? {
+        if plan.blockers.contains(.notEnoughGas) { return .notEnoughGas }
+        guard !ampProblem, let portfolio, portfolio.address == address.lowercased, portfolio.progress.started, portfolio.progress.behindBlocks == 0 else { return .cantCheckOtherTokens }
+        return portfolio.unlisted.isEmpty ? nil : .otherTokens(portfolio.unlisted.count)
     }
 
     // MARK: - What's here
@@ -246,7 +273,7 @@ public final class HotWallet {
         case "USDC": return snapshot.usdcUsdMicros
         default:
             // Nothing but the server knows these, and only when the price it has is one it stands behind.
-            return portfolio?.positions.first { $0.asset == token.asset }?.price.flatMap { UInt128($0.usdMicros) }
+            return portfolio?.positions.first { $0.asset == token.asset }?.price.flatMap { UInt128($0.micros) }
         }
     }
 
@@ -276,7 +303,7 @@ public final class HotWallet {
     }
 
     private func pendingGain(address: EthereumAddress) -> UInt128 {
-        guard let totals = portfolio?.totals, totals.coverage.realized.missing == 0, let text = totals.realizedUsdMicros, let realized = UInt128(text) else { return 0 }
+        guard let totals = portfolio?.totals, totals.coverage.realized.missing == 0, let text = totals.realizedMicros, let realized = UInt128(text) else { return 0 }
         return realized.subtractingClamped(state.sweptGains[address].flatMap { UInt128($0) } ?? 0)
     }
 
@@ -285,12 +312,17 @@ public final class HotWallet {
         guard address != nil, availability == .ready else { return [] }
         var notices: [Notice] = []
         if isKeyMissing { notices.append(.init(.warning, HotWalletWording.keyMissing)) }
-        if rotation != nil { notices.append(.init(.info, HotWalletWording.rotating)) }
+        switch rotationHold {
+        case .otherTokens(let count): notices.append(.init(.warning, HotWalletWording.rotationHeldByOtherTokens(count)))
+        case .cantCheckOtherTokens: notices.append(.init(.warning, HotWalletWording.rotationCantCheck))
+        case .notEnoughGas, nil:
+            if rotation != nil { notices.append(.init(.info, HotWalletWording.rotating)) }
+        }
         if chainProblem != nil { notices.append(.init(.warning, HotWalletWording.cantReachChain)) }
         if let snapshot, snapshot.chainID != Base.chainID { notices.append(.init(.warning, HotWalletWording.wrongChain)) }
         if let sweepProblem { notices.append(.init(.warning, sweepProblem)) }
         if let plan {
-            if plan.blockers.contains(.notEnoughGas) { notices.append(.init(.warning, HotWalletWording.noGas)) }
+            if plan.blockers.contains(.notEnoughGas) || rotationHold == .notEnoughGas { notices.append(.init(.warning, HotWalletWording.noGas)) }
             if plan.excessUsdMicros > 0, !plan.excessIsDust || plan.blockers.contains(.noDestination) {
                 notices.append(.init(.warning, HotWalletWording.overCap(by: plan.excessUsdMicros, hasDestination: settings.sweepDestination != nil)))
             } else if plan.excessIsDust {
@@ -394,6 +426,7 @@ public final class HotWallet {
             let snapshot = try await chain.snapshot(of: address)
             self.snapshot = snapshot
             guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
+            guard snapshot.blockNumber >= settledThroughBlock else { throw ChainError.rejected("The last sweep is still showing up. Try again in a moment.") }
             guard !(state.records[address] ?? []).contains(where: { $0.status == .pending }) else { throw ChainError.rejected("A sweep is still on its way. Try again in a moment.") }
             let everything = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: destination)
             if everything.blockers.contains(.notEnoughGas), everything.transfers.isEmpty { throw ChainError.rejected(HotWalletWording.noGas) }
@@ -429,14 +462,17 @@ public final class HotWallet {
         state.active = rotation.to
         state.rotation = nil
         state.alarm = nil
+        state.acknowledgedThroughNonce = nil
         try persist()
         try await signer.deleteKey(rotation.from)
         snapshot = nil
         plan = nil
         portfolio = nil
+        rotationHold = nil
         nonceAheadTicks = 0
         emptyReads = 0
         missedReceipts = [:]
+        settledThroughBlock = 0
         publishLinkedWallets()
     }
 
@@ -449,10 +485,13 @@ public final class HotWallet {
             state.active = nil
             state.rotation = nil
             state.alarm = nil
+            state.acknowledgedThroughNonce = nil
             try persist()
             snapshot = nil
             plan = nil
             portfolio = nil
+            rotationHold = nil
+            settledThroughBlock = 0
             publishLinkedWallets()
         }
     }
@@ -461,6 +500,9 @@ public final class HotWallet {
     public func dismissAlarm() {
         guard let alarm else { return }
         state.acknowledged += alarm.findings
+        for case .nonceAhead(_, let onchain) in alarm.findings {
+            state.acknowledgedThroughNonce = max(state.acknowledgedThroughNonce ?? 0, onchain)
+        }
         state.alarm = nil
         nonceAheadTicks = 0
         try? persist()
@@ -526,7 +568,12 @@ public final class HotWallet {
                     amount: String(transfer.amount), usdMicros: transfer.usdMicros.map { String($0) }, gainUsdMicros: String(transfer.gainUsdMicros),
                     reason: reason, createdAt: now(), status: .pending
                 )
-                state.records[address, default: []].append(record)
+                // Signing the same thing again gives the same hash, and that's one transaction, however many times it's sent.
+                if let index = state.records[address]?.firstIndex(where: { $0.hash == record.hash }) {
+                    state.records[address]?[index] = record
+                } else {
+                    state.records[address, default: []].append(record)
+                }
                 try persist()
                 do {
                     try await chain.send(signed)
@@ -549,10 +596,12 @@ public final class HotWallet {
     }
 
     private func settlePending(address: EthereumAddress, snapshot: ChainSnapshot) async throws {
-        for record in state.records[address] ?? [] where record.status == .pending {
+        let records = state.records[address] ?? []
+        for record in records where record.status == .pending || wasDroppedButMayHaveLanded(record, among: records, snapshot: snapshot) {
             if let receipt = try await chain.receipt(of: record.hash) {
                 updateRecord(hash: record.hash, address: address) { $0.status = receipt.succeeded ? .confirmed : .failed }
                 missedReceipts[record.hash] = nil
+                settledThroughBlock = max(settledThroughBlock, receipt.blockNumber)
                 if receipt.succeeded, let gain = UInt128(record.gainUsdMicros), gain > 0 {
                     let swept = state.sweptGains[address].flatMap { UInt128($0) } ?? 0
                     state.sweptGains[address] = String(swept + gain)
@@ -562,6 +611,8 @@ public final class HotWallet {
                     pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
                 }
                 try persist()
+            } else if record.status == .dropped {
+                continue
             } else if snapshot.nonce > record.nonce {
                 // Its nonce is used, but not by this transaction, or the node just hasn't found the receipt yet.
                 let misses = (missedReceipts[record.hash] ?? 0) + 1
@@ -578,8 +629,13 @@ public final class HotWallet {
         }
     }
 
+    /// Given up on, but something has used its nonce and nothing else this app signed did. It may have landed late.
+    private func wasDroppedButMayHaveLanded(_ record: SignedRecord, among records: [SignedRecord], snapshot: ChainSnapshot) -> Bool {
+        record.status == .dropped && snapshot.nonce > record.nonce && !records.contains { $0.nonce == record.nonce && $0.status != .dropped }
+    }
+
     private func checkNonce(address: EthereumAddress, snapshot: ChainSnapshot) {
-        let findings = AlarmCheck.findings(onchainNonce: snapshot.nonce, records: state.records[address] ?? [])
+        let findings = AlarmCheck.findings(onchainNonce: snapshot.nonce, records: state.records[address] ?? [], acknowledgedThrough: state.acknowledgedThroughNonce)
         guard !findings.isEmpty else {
             nonceAheadTicks = 0
             return
@@ -592,6 +648,8 @@ public final class HotWallet {
         let new = findings.filter { !state.acknowledged.contains($0) && !(state.alarm?.findings.contains($0) ?? false) }
         guard !new.isEmpty else { return }
         if var alarm = state.alarm {
+            // The count is one fact that changes, so the newest replaces the last rather than adding a line.
+            if new.contains(where: \.isNonceCount) { alarm.findings.removeAll(where: \.isNonceCount) }
             alarm.findings += new
             state.alarm = alarm
         } else {

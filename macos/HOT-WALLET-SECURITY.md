@@ -40,8 +40,9 @@ The RPC is configurable and untrusted.
 - [x] It can't change where money goes, since destinations are local and go into what's signed.
 - [x] It can't get an absurd fee signed: quotes above 100 gwei are refused.
 - [x] A failed read fails the whole tick, so it can't look like an empty wallet.
-- [x] Deleting a key during a rotation takes three reads in a row saying it's empty.
-- [ ] **A lying node can still cost something.** It can claim false balances, which wastes gas on sweeps that fail. It can raise a false alarm, or hide activity from the nonce check, though not from the comparison with Amp. If it says the old key is empty for three reads during a rotation, the key is deleted and whatever's still there is lost.
+- [x] Every read in a tick is pinned to one block, and nothing is signed from a read older than the last receipt, so a slow node can't cause the same excess to be swept twice.
+- [x] Deleting a key during a rotation takes three reads in a row saying it's empty, plus an answer from Amp that it holds no tokens off the allowlist. Without that, the old key stays until the user chooses to leave what's on it.
+- [ ] **A lying node can still cost something.** It can claim false balances, which wastes gas on sweeps that fail. It can raise a false alarm, or hide activity from the nonce check, though not from the comparison with Amp. If it and the server both say the old key is empty during a rotation, the key is deleted and whatever's still there is lost.
 
 ## Cap and sweeps
 
@@ -56,11 +57,13 @@ The RPC is configurable and untrusted.
 ## Stolen key alarm
 
 - [x] Each transaction is written to disk before it's broadcast, so nothing this app sent can look stolen, even after a crash.
-- [x] It raises an alarm on: any transaction from Amp's data that took funds or paid gas and that this app didn't sign, a higher nonce than this app signed for, and another transaction using a nonce this app signed for. The node checks must hold for three reads, since load-balanced nodes can disagree.
+- [x] It raises an alarm on: any transaction from Amp's data that took funds or paid gas and that this app didn't sign, any used nonce this app has no transaction for, and another transaction using a nonce this app signed for. The node checks must hold for three reads, since load-balanced nodes can disagree.
+- [x] A gap in the nonces stays a gap after this app's own later transactions and after a restart, because it's worked out from what's on disk. Sweeps continue meanwhile, since moving money to savings is what you'd want anyway.
 - [x] A zero-value "address poisoning" transfer doesn't raise it, because it doesn't move anything.
 - [x] It plays a sound, opens the window, changes the menu bar, and stops top-ups. It offers to sweep what's left and replace the key. It survives a restart.
 - [ ] **It only tells you afterwards.** A thief with the key can drain the wallet before anything here reads the chain.
 - [ ] **Rotation has limited value.** It costs gas and publicly links the old and new addresses. Its main benefit is clearing old token approvals.
+- [ ] **Rotation can only see other tokens through Amp,** and only in the blocks the server reads. An old token outside that window isn't seen, and is left behind when the key is deleted.
 
 ## Dependencies
 

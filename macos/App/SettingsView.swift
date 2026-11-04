@@ -14,6 +14,15 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
+                Picker("Main currency", selection: Binding(get: { store.currency }, set: { store.setCurrency($0) })) {
+                    ForEach(CurrencyCode.allCases) { Text("\($0.rawValue) · \($0.name)").tag($0) }
+                }
+            } footer: {
+                Text("Costs use the exchange rate when each transaction happened, and current values use the current rate. If a rate is missing, the value shows as unavailable.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
                 TextField("Server", text: $server, prompt: Text(PortfolioStore.defaultServerURL.absoluteString))
                     .onSubmit(applyServer)
                 if let serverError {

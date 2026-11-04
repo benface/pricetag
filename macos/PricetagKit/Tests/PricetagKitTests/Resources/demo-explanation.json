@@ -1,6 +1,8 @@
 {
+  "currency": "USD",
   "title": "AERO: Realized PnL",
   "value": "+$74.99",
+  "sourceValue": null,
   "lines": [
     "Proceeds minus cost, on what was sold or spent on gas. Gas itself is a separate cost in the total."
   ],
@@ -12,15 +14,17 @@
       "delta": "-300000000000000000000",
       "decimals": 18,
       "kind": "swap",
-      "priceUsdMicros": "1499700",
+      "priceMicros": "1499700",
       "priceSource": "swap",
       "priceNote": null,
       "costLabel": "unknown",
       "blockNum": 53502400,
       "timestamp": "2026-11-04T09:20:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
+      "opening": false,
       "effect": "Sold for $449.91, realized +$74.99",
-      "netting": null
+      "netting": null,
+      "conversion": null
     },
     {
       "id": "0xde30000000000000000000000000000000000000000000000000000000000004:AERO",
@@ -28,15 +32,17 @@
       "delta": "800000000000000000000",
       "decimals": 18,
       "kind": "swap",
-      "priceUsdMicros": "1249750",
+      "priceMicros": "1249750",
       "priceSource": "swap",
       "priceNote": null,
       "costLabel": "paid",
       "blockNum": 53500900,
       "timestamp": "2026-11-04T08:30:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
+      "opening": false,
       "effect": "Adds 800 AERO for $999.80",
-      "netting": null
+      "netting": null,
+      "conversion": null
     }
   ]
 }

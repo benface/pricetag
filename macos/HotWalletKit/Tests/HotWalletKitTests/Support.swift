@@ -43,9 +43,15 @@ actor FakeChain: ChainClient {
         current = snapshot
     }
 
-    func set(_ snapshot: ChainSnapshot) { current = snapshot }
-    func setReceipt(_ hash: String, succeeded: Bool) { receipts[hash] = Receipt(succeeded: succeeded) }
-    func confirmAll() { for transaction in sent { receipts[transaction.hash] = Receipt(succeeded: true) } }
+    /// A new read always comes from after any receipt so far, unless a test says otherwise by not calling this.
+    func set(_ snapshot: ChainSnapshot) {
+        current = snapshot
+        current.blockNumber = max(snapshot.blockNumber, receipts.values.map(\.blockNumber).max() ?? 0, current.blockNumber)
+    }
+
+    /// Receipts land in the block after the current read, like a node that's moved on since then.
+    func setReceipt(_ hash: String, succeeded: Bool) { receipts[hash] = Receipt(succeeded: succeeded, blockNumber: current.blockNumber + 1) }
+    func confirmAll() { for transaction in sent { setReceipt(transaction.hash, succeeded: true) } }
     func setSendFailure(_ failure: ChainError?) { sendFailure = failure }
     func setEstimateFailure(_ failure: ChainError?) { estimateFailure = failure }
     func setOnSend(_ body: @escaping @Sendable (SignedTransaction) -> Void) { onSend = body }
@@ -133,12 +139,12 @@ actor ScriptedPortfolios: PortfolioSource {
 
     func set(_ next: Result<Portfolio, FetchError>) { self.next = next }
 
-    func portfolio(address: String, method: CostMethod, linked: [String], timeout: Duration) throws -> Portfolio {
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], timeout: Duration) throws -> Portfolio {
         self.linked.append(linked)
         return try next.get()
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, linked: [String]) throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) throws -> Explanation {
         throw FetchError.unreachable
     }
 }
@@ -148,15 +154,15 @@ func portfolio(address: EthereumAddress = hotAddress, outgoing: [String] = [], r
     let realizedText = realized.map { "\"\($0)\"" } ?? "null"
     let json = """
     {
-      "address": "\(address.lowercased)", "mode": "raw", "method": "average",
+      "address": "\(address.lowercased)", "mode": "raw", "method": "average", "currency": "USD", "exchange": null,
       "coverage": { "fromBlock": 1, "toBlock": 1000 }, "trackedTokens": 10,
       "latest": { "blockNum": 1000, "timestamp": "2026-11-04T00:00:00.000Z" },
       "progress": { "started": true, "behindBlocks": 0 },
-      "gasUnknownTxs": [], "outgoingTxs": [\(outgoing.map { "\"\($0)\"" }.joined(separator: ","))],
+      "gasUnknownTxs": [], "l1FeeUnknownTxs": [], "openingUnread": [], "unreadAssets": [], "outgoingTxs": [\(outgoing.map { "\"\($0)\"" }.joined(separator: ","))],
       "unlisted": [\(unlisted.map { "{ \"token\": \"\($0)\", \"transfers\": 1 }" }.joined(separator: ","))],
       "positions": [\(positions.joined(separator: ","))],
       "totals": {
-        "valueUsdMicros": null, "realizedUsdMicros": \(realizedText), "unrealizedUsdMicros": null, "gasUsdMicros": null, "pnlUsdMicros": null,
+        "valueMicros": null, "realizedMicros": \(realizedText), "unrealizedMicros": null, "gasMicros": null, "pnlMicros": null,
         "excluded": [], "unpricedGas": false,
         "coverage": {
           "value": { "known": 0, "missing": 0 }, "realized": { "known": 1, "missing": \(realizedMissing) },
@@ -172,9 +178,9 @@ func portfolio(address: EthereumAddress = hotAddress, outgoing: [String] = [], r
 func position(_ asset: String, decimals: Int, priceMicros: String) -> String {
     """
     { "asset": "\(asset)", "decimals": \(decimals), "note": null,
-      "price": { "usdMicros": "\(priceMicros)", "source": "market", "blockNum": 1 },
-      "values": { "qty": "0", "unknownCostQty": "0", "costUsdMicros": null, "averageCostUsdMicros": null, "valueUsdMicros": null, "realizedUsdMicros": null, "unrealizedUsdMicros": null },
-      "pnlUsdMicros": null, "shortfallQty": "0", "legCount": 1 }
+      "price": { "micros": "\(priceMicros)", "source": "market", "blockNum": 1 },
+      "values": { "qty": "0", "unknownCostQty": "0", "costMicros": null, "averageCostMicros": null, "valueMicros": null, "realizedMicros": null, "unrealizedMicros": null },
+      "pnlMicros": null, "shortfallQty": "0", "legCount": 1, "reconciliation": null }
     """
 }
 

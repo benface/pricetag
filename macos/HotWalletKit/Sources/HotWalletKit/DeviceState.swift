@@ -22,7 +22,7 @@ public struct SignedRecord: Codable, Equatable, Identifiable, Sendable {
     public let usdMicros: String?
     public let gainUsdMicros: String
     public let reason: Reason
-    public let createdAt: Date
+    public var createdAt: Date
     public var status: Status
 
     public var id: String { hash }
@@ -50,6 +50,10 @@ public struct StolenKeyAlarm: Codable, Equatable, Sendable {
         case nonceAhead(signed: UInt64, onchain: UInt64)
         /// Something else used a nonce this app signed for.
         case nonceTaken(nonce: UInt64, ours: String)
+
+        var isNonceCount: Bool {
+            if case .nonceAhead = self { true } else { false }
+        }
     }
 
     public var address: EthereumAddress
@@ -75,6 +79,8 @@ public struct DeviceWalletState: Codable, Equatable, Sendable {
     public var alarm: StolenKeyAlarm?
     /// What the user has looked at and said was fine.
     public var acknowledged: [StolenKeyAlarm.Finding] = []
+    /// Nonces below this have been looked at and said to be fine, so they're no longer a gap.
+    public var acknowledgedThroughNonce: UInt64?
     public var rotation: Rotation?
 
     public init() {}

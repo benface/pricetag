@@ -69,6 +69,8 @@ button { font: inherit; cursor: pointer; color: inherit; }
   background: var(--surface-1);
   font-weight: 600;
 }
+.currency { display: flex; align-items: center; gap: 8px; }
+.currency select { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); color: inherit; }
 .badge { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-1); white-space: nowrap; }
 .badge.live::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--gain); margin-right: 6px; }
 .badge.warn { background: var(--warn-fill); border-color: var(--warn-border); color: var(--warn-ink); }
@@ -111,6 +113,8 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .chart-empty { padding: 32px 0; text-align: center; }
 .table.compact { font-size: 13px; }
 .closed td { color: var(--text-secondary); }
+.mismatched td { border-bottom: 0; }
+.mismatch td { white-space: normal; font-size: 13px; color: var(--warn-ink); background: var(--warn-fill); border-radius: 6px; }
 .num-button { background: none; border: 0; padding: 2px 4px; margin: -2px -4px; border-radius: 6px; font: inherit; color: inherit; text-decoration: underline dotted var(--axis) 1px; text-underline-offset: 3px; }
 .num-button:hover { background: var(--grid); }
 .num-button:focus-visible, .link:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--series); outline-offset: 1px; }

@@ -146,13 +146,71 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.chainProblem == .unreachable)
     }
 
-    @Test func aPendingTransactionThatNeverLandsIsDropped() async throws {
+    @Test func aPendingTransactionThatNeverLandsIsSentAgainAsTheSameRecord() async throws {
         let clock = Clock()
         let rig = await Rig(over, now: { clock.now })
         await rig.wallet.tick()
         clock.advance(HotWallet.pendingTimeout + 1)
         await rig.wallet.tick()
-        #expect(rig.wallet.records.contains { $0.status == .dropped })
+        #expect(await rig.chain.sent.count == 2)
+        #expect(rig.wallet.records.count == 1)
+        #expect(rig.wallet.records.first?.status == .pending)
+
+        await rig.chain.confirmAll()
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(50)], nonce: 1))
+        await rig.wallet.tick()
+        #expect(rig.wallet.records.first?.status == .confirmed)
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(500)], nonce: 1))
+        await rig.wallet.tick()
+        #expect(rig.wallet.records.count == 2, "the next deposit still sweeps")
+    }
+
+    @Test func aRetriedGainOnlyCountsOnce() async throws {
+        let clock = Clock()
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(30)]), portfolio: .success(portfolio(realized: "12000000")), now: { clock.now })
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        clock.advance(HotWallet.pendingTimeout + 1)
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(18)], nonce: 1))
+        await rig.wallet.tick()
+        await rig.wallet.tick()
+        #expect(rig.stateStore.saved.sweptGains[hotAddress] == "12000000")
+    }
+
+    @Test func oneGivenUpOnThatLandsLateIsntSuspicious() async throws {
+        let clock = Clock()
+        let rig = await Rig(over, now: { clock.now })
+        await rig.wallet.tick()
+        let hash = try #require(rig.wallet.records.first?.hash)
+        // Too old to wait for, and the retry is refused, so it's dropped. Then the first attempt turns out to have landed.
+        clock.advance(HotWallet.pendingTimeout + 1)
+        await rig.chain.setSendFailure(.rejected("already known"))
+        await rig.wallet.tick()
+        #expect(rig.wallet.records.first?.status == .dropped)
+        await rig.chain.setSendFailure(nil)
+        await rig.chain.setReceipt(hash, succeeded: true)
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(50)], nonce: 1))
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(rig.wallet.records.first?.status == .confirmed)
+        #expect(rig.wallet.alarm == nil)
+    }
+
+    @Test func aSweepWaitsForBalancesFromAfterTheLastReceipt() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)]))
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.count == 1)
+        await rig.wallet.sweepEverything()
+        #expect(await rig.chain.sent.count == 1, "by hand too")
+        #expect(rig.wallet.sweepProblem != nil)
+
+        // Once a read is from after it, and there's still too much, it sweeps again.
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1))
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.count == 2)
     }
 
     @Test func aRevertedSweepPauses() async throws {
@@ -333,6 +391,48 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.alarm?.findings.contains(.nonceTaken(nonce: 0, ours: hash)) == true)
     }
 
+    @Test func aGapSurvivesThisAppsOwnLaterTransactionsAndARestart() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1), portfolio: .failure(.unreachable))
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(50)], nonce: 2))
+        // A new launch, with only what's on disk.
+        let settings = MemorySettingsStore()
+        let chain = rig.chain, signer = rig.signer, portfolios = rig.portfolios
+        let restarted = HotWallet(signer: signer, settingsStore: settings, stateStore: rig.stateStore, portfolioSource: { portfolios }, makeChain: { _ in chain })
+        for _ in 0..<HotWallet.readsBeforeAlarm { await restarted.tick() }
+        #expect(restarted.alarm?.findings == [.nonceAhead(signed: 1, onchain: 2)])
+    }
+
+    @Test func aDismissedGapStaysDismissedButANewOneDoesnt() async throws {
+        let rig = await Rig(snapshot(nonce: 1))
+        for _ in 0..<HotWallet.readsBeforeAlarm { await rig.wallet.tick() }
+        rig.wallet.dismissAlarm()
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1))
+        await rig.wallet.tick()
+        #expect(await rig.signer.signed.last?.nonce == 1)
+        await rig.chain.confirmAll()
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(50)], nonce: 2))
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(rig.wallet.alarm == nil, "this app's own sweep isn't a new gap")
+
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(50)], nonce: 3))
+        for _ in 0..<HotWallet.readsBeforeAlarm { await rig.wallet.tick() }
+        #expect(rig.wallet.alarm?.findings == [.nonceAhead(signed: 2, onchain: 3)])
+    }
+
+    @Test func aFreshAlarmReplacesTheCountRatherThanAddingToIt() async throws {
+        let rig = await Rig(snapshot(nonce: 1))
+        for _ in 0..<HotWallet.readsBeforeAlarm { await rig.wallet.tick() }
+        await rig.chain.set(snapshot(nonce: 2))
+        await rig.wallet.tick()
+        #expect(rig.wallet.alarm?.findings == [.nonceAhead(signed: 0, onchain: 2)])
+    }
+
+    @Test func anAbsurdNonceFromANodeDoesntHang() {
+        #expect(AlarmCheck.findings(onchainNonce: .max, records: []) == [.nonceAhead(signed: 0, onchain: .max)])
+    }
+
     @Test func sweepsKeepGoingDuringAnAlarm() async throws {
         let rig = await Rig(over, portfolio: .success(portfolio(outgoing: [otherHash])))
         await rig.wallet.readHistory()
@@ -405,6 +505,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(signed.contains { $0.to == usdc.contract && recipient($0) == nextAddress })
         #expect(await signer.hasKey(hotAddress), "the old key stays until it's empty")
 
+        await wallet.readHistory()
         await chain.confirmAll()
         await chain.set(snapshot(eth: 0, nonce: 2))
         for _ in 1..<HotWallet.readsBeforeAlarm { await wallet.tick() }
@@ -438,6 +539,8 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await wallet.tick()
         #expect(await signer.signed.contains { $0.to == usdc.contract && recipient($0) == coldAddress })
 
+        await portfolios.set(.success(portfolio()))
+        await wallet.readHistory()
         await chain.confirmAll()
         await chain.set(snapshot(eth: 0, nonce: 2))
         for _ in 0..<HotWallet.readsBeforeAlarm { await wallet.tick() }
@@ -454,6 +557,54 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.wallet.finishRotationLeavingFundsBehind()
         #expect(rig.wallet.address != hotAddress)
         #expect(await rig.signer.hasKey(hotAddress) == false)
+    }
+
+    @Test func aRotationKeepsTheOldKeyWhileItHoldsOtherTokens() async throws {
+        let spam = "0x00000000000000000000000000000000000000f1"
+        let rig = await Rig(snapshot(eth: 0), portfolio: .success(portfolio(unlisted: [spam])))
+        await rig.wallet.readHistory()
+        await rig.wallet.replaceKey()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(rig.wallet.rotationHold == .otherTokens(1))
+        #expect(await rig.signer.hasKey(hotAddress))
+        #expect(rig.wallet.address == hotAddress)
+        #expect(rig.wallet.notices.contains { $0.text == HotWalletWording.rotationHeldByOtherTokens(1) })
+        #expect(await rig.signer.signed.isEmpty, "and it never touches them")
+
+        await rig.wallet.finishRotationLeavingFundsBehind()
+        #expect(await rig.signer.hasKey(hotAddress) == false, "only when the user says so")
+        #expect(rig.wallet.address == nextAddress)
+    }
+
+    @Test func aRotationKeepsTheOldKeyWhenItCantLookForOtherTokens() async throws {
+        let rig = await Rig(snapshot(eth: 0), portfolio: .failure(.unreachable))
+        await rig.wallet.replaceKey()
+        await rig.wallet.readHistory()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        #expect(rig.wallet.rotationHold == .cantCheckOtherTokens)
+        #expect(await rig.signer.hasKey(hotAddress))
+
+        await rig.portfolios.set(.success(portfolio()))
+        await rig.wallet.readHistory()
+        for _ in 0..<HotWallet.readsBeforeAlarm { await rig.wallet.tick() }
+        #expect(rig.wallet.address == nextAddress, "and carries on once it can")
+    }
+
+    @Test func aRotationStuckWithoutGasSaysSoAndOffersAWayOut() async throws {
+        let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(10)]))
+        await rig.wallet.replaceKey()
+        await rig.wallet.tick()
+        #expect(rig.wallet.rotationHold == .notEnoughGas)
+        #expect(rig.wallet.notices.contains { $0.text == HotWalletWording.noGas })
+    }
+
+    @Test func aRotationThatRunsOutOfGasPartWaySaysSo() async throws {
+        // Enough for one token, but not both.
+        let rig = await Rig(snapshot(eth: cheapFees.costWei(of: usdc), tokens: [usdc: usdcUnits(10), dai: oneEth]))
+        await rig.wallet.replaceKey()
+        await rig.wallet.tick()
+        #expect(rig.wallet.rotationHold == .notEnoughGas)
+        #expect(rig.wallet.notices.contains { $0.text == HotWalletWording.noGas })
     }
 
     @Test func deletingAsksFirstAndForgetsTheKey() async throws {
@@ -497,6 +648,12 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.wallet.tick()
         #expect(texts(rig.wallet).count == 1)
         #expect(texts(rig.wallet).first?.contains("over the cap, with nowhere to sweep it") == true)
+    }
+
+    @Test func tokensWithNoGasSaySoEvenUnderTheCap() async throws {
+        let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(10)]))
+        await rig.wallet.tick()
+        #expect(texts(rig.wallet).contains(HotWalletWording.noGas))
     }
 
     @Test func noGasSaysSo() async throws {

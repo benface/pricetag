@@ -108,6 +108,13 @@ struct AnvilTests {
         await running.replaceKey()
         let rotation = try #require(running.rotation)
         #expect(rotation.destination == cold)
+        // With Amp down it can't rule out other tokens, so the old key stays until there's an answer.
+        await running.readHistory()
+        for _ in 0..<6 where running.rotationHold == nil { await running.tick() }
+        #expect(running.rotationHold == .cantCheckOtherTokens)
+        #expect(try await vault.hasKey(hot))
+        await unreachable.set(.success(portfolio(address: hot)))
+        await running.readHistory()
         for _ in 0..<6 where running.rotation != nil { await running.tick() }
         #expect(running.rotation == nil)
         #expect(running.address == rotation.to)

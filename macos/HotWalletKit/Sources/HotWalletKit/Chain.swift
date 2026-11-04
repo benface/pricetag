@@ -57,9 +57,12 @@ public struct FeeQuote: Equatable, Sendable {
 
 public struct Receipt: Equatable, Sendable {
     public let succeeded: Bool
+    /// Balances read from before this block don't reflect the transaction yet.
+    public let blockNumber: UInt64
 
-    public init(succeeded: Bool) {
+    public init(succeeded: Bool, blockNumber: UInt64) {
         self.succeeded = succeeded
+        self.blockNumber = blockNumber
     }
 }
 
@@ -94,22 +97,23 @@ public struct RPCChainClient: ChainClient {
 
     public func snapshot(of address: EthereumAddress) async throws -> ChainSnapshot {
         let tokens = Base.tokens.filter { !$0.isNative }
+        guard let block = try await single("eth_getBlockByNumber", ["latest", false]) as? [String: Any], let timestamp = block["timestamp"], let number = block["number"] as? String, let baseFee = block["baseFeePerGas"] else { throw ChainError.unreadable }
+        // Everything at this one block, so a balance can't be from before a transaction whose receipt is from after it.
         var calls: [(String, [Any])] = [
             ("eth_chainId", []),
-            ("eth_getBlockByNumber", ["latest", false]),
-            ("eth_getTransactionCount", [address.lowercased, "latest"]),
-            ("eth_getBalance", [address.lowercased, "latest"]),
+            ("eth_blockNumber", []),
+            ("eth_getTransactionCount", [address.lowercased, number]),
+            ("eth_getBalance", [address.lowercased, number]),
             ("eth_maxPriorityFeePerGas", []),
-            call(Base.ethUsdFeed, Calldata.latestRoundData),
-            call(Base.usdcUsdFeed, Calldata.latestRoundData),
-            call(Base.gasPriceOracle, Calldata.l1Fee(ofPayloadBytes: Calldata.typicalSweepBytes)),
+            call(Base.ethUsdFeed, Calldata.latestRoundData, at: number),
+            call(Base.usdcUsdFeed, Calldata.latestRoundData, at: number),
+            call(Base.gasPriceOracle, Calldata.l1Fee(ofPayloadBytes: Calldata.typicalSweepBytes), at: number),
         ]
-        calls += tokens.map { call($0.contract!, Calldata.balanceOf(address)) }
+        calls += tokens.map { call($0.contract!, Calldata.balanceOf(address), at: number) }
         let answers = try await batch(calls)
 
         // A balance or fee that can't be read fails the whole read, so a failure can't look like an empty wallet.
         let chainID = try Self.quantity(answers[0].get())
-        guard let block = try answers[1].get() as? [String: Any], let timestamp = block["timestamp"], let number = block["number"], let baseFee = block["baseFeePerGas"] else { throw ChainError.unreadable }
         let blockTime = try Self.quantity(timestamp)
         var balances: [Token: UInt128] = [Base.eth: try Self.quantity(answers[3].get())]
         for (index, token) in tokens.enumerated() {
@@ -140,12 +144,13 @@ public struct RPCChainClient: ChainClient {
 
     public func receipt(of hash: String) async throws -> Receipt? {
         guard let receipt = try await single("eth_getTransactionReceipt", [hash]) as? [String: Any] else { return nil }
-        guard let status = receipt["status"] else { throw ChainError.unreadable }
-        return Receipt(succeeded: try Self.quantity(status) == 1)
+        // A node can say a transaction is in a block without having a block number for it yet, which isn't settled.
+        guard let status = receipt["status"], let block = receipt["blockNumber"], !(block is NSNull) else { return nil }
+        return Receipt(succeeded: try Self.quantity(status) == 1, blockNumber: UInt64(try Self.quantity(block)))
     }
 
-    private func call(_ to: EthereumAddress, _ data: [UInt8]) -> (String, [Any]) {
-        ("eth_call", [["to": to.lowercased, "data": "0x" + Hex.encode(data)], "latest"])
+    private func call(_ to: EthereumAddress, _ data: [UInt8], at block: String) -> (String, [Any]) {
+        ("eth_call", [["to": to.lowercased, "data": "0x" + Hex.encode(data)], block])
     }
 
     private func single(_ method: String, _ parameters: [Any]) async throws -> Any? {

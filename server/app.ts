@@ -2,12 +2,14 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { isAddress, type Head, type WalletResponse } from "../src/core/api.ts"
-import { DEMO_ADDRESS, DEMO_WALLET } from "../src/core/fixtures.ts"
-import type { Method } from "../src/core/fold.ts"
-import { createQuery, describeError } from "./amp.ts"
-import { explainPortfolio, parseExplainTarget, portfolioOf, withLinkedCosts } from "./portfolio.ts"
-import { datasetSource, rawSource, type Source } from "./source.ts"
+import { createQuery, describeError, isAddress, type Method } from "@pricetag/sdk"
+import type { Head, WalletResponse } from "../src/core/api.ts"
+import { isCurrencyCode, type CurrencyCode } from "../src/core/currency.ts"
+import { DEMO_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
+import { explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
+import { createRates } from "./rates.ts"
+import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
+import { datasetSource, feedRounds, rawSource, type Source } from "./source.ts"
 import { createWallets } from "./wallets.ts"
 
 type Env = Record<string, string | undefined>
@@ -19,18 +21,25 @@ function parseMethod(value: string | null): Method | null {
   return value === "fifo" ? "fifo" : null
 }
 
-function createSource(env: Env): Source | null {
+function parseCurrency(value: string | null): CurrencyCode | null {
+  if (value === null) return "USD"
+  return isCurrencyCode(value) ? value : null
+}
+
+function createSource(env: Env): { source: Source; readRates: ReturnType<typeof createRates> } | null {
   if (!env.AMP_QUERY_URL) return null
   const query = createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined)
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
+  const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
+  const readRates = createRates(feedRounds(query, { baseDataset, network }))
   if (env.PRICETAG_DATASET) {
     const startBlock = Number(env.PRICETAG_START_BLOCK)
     if (!Number.isSafeInteger(startBlock) || startBlock <= 0) throw new Error("PRICETAG_DATASET needs PRICETAG_START_BLOCK")
-    return datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock })
+    return { source: datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates }
   }
   const historyBlocks = Number(env.PRICETAG_HISTORY_BLOCKS || 1800)
   if (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
-  return rawSource(query, { baseDataset, network: env.PRICETAG_RPC_NETWORK || "base_mainnet", historyBlocks })
+  return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates }
 }
 
 /** Each one is a wallet read, so this stays well under what the server keeps in memory. */
@@ -64,7 +73,9 @@ function sendAmpError(res: ServerResponse, error: unknown) {
   sendJson(res, 502, { error: "Couldn't read from Amp." })
 }
 
-export function createApi(env: Env, source: Source | null = createSource(env)) {
+export function createApi(env: Env, created: ReturnType<typeof createSource> = createSource(env)) {
+  const source = created?.source ?? null
+
   let head: Head | null = null
   const subscribers = new Set<ServerResponse>()
   let polling = false
@@ -102,7 +113,7 @@ export function createApi(env: Env, source: Source | null = createSource(env)) {
     polling = false
   }
 
-  const wallets = source ? createWallets(source, pollHead) : null
+  const wallets = source ? createWallets(source, pollHead, createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL)) : null
 
   /**
    * Reads a wallet, or answers the request with why it can't.
@@ -120,6 +131,18 @@ export function createApi(env: Env, source: Source | null = createSource(env)) {
     }
     try {
       return (!fresh && wallets.peek(address)) || (await wallets.get(address))
+    } catch (error) {
+      sendAmpError(res, error)
+      return null
+    }
+  }
+
+  /** A wallet with the rates to show it in `currency`, or answers the request with why it can't. Never falls back to USD. */
+  async function inCurrency(wallet: WalletResponse, currency: CurrencyCode, res: ServerResponse): Promise<WalletResponse | null> {
+    if (currency === "USD") return wallet
+    try {
+      const rates = created && wallet.mode !== "demo" ? await created.readRates(currency, wallet) : demoRates(currency)
+      return { ...wallet, currency, rates }
     } catch (error) {
       sendAmpError(res, error)
       return null
@@ -148,16 +171,23 @@ export function createApi(env: Env, source: Source | null = createSource(env)) {
       return true
     }
 
+    const params = new URL(req.url ?? "/", "http://localhost").searchParams
+    const currency = parseCurrency(params.get("currency"))
+    if (!currency) {
+      sendJson(res, 400, { error: "That currency isn't supported." })
+      return true
+    }
+
     const walletMatch = /^\/api\/wallet\/([^/]+)$/.exec(path)
     if (walletMatch) {
-      const wallet = await readWallet(walletMatch[1] as string, res)
+      const read = await readWallet(walletMatch[1] as string, res)
+      const wallet = read && (await inCurrency(read, currency, res))
       if (wallet) sendJson(res, 200, wallet)
       return true
     }
 
     const portfolioMatch = /^\/api\/portfolio\/([^/]+)(\/explain)?$/.exec(path)
     if (portfolioMatch) {
-      const params = new URL(req.url ?? "/", "http://localhost").searchParams
       const method = parseMethod(params.get("method"))
       if (!method) {
         sendJson(res, 400, { error: "The method is either average or fifo." })
@@ -174,24 +204,21 @@ export function createApi(env: Env, source: Source | null = createSource(env)) {
         return true
       }
       const read = await readWallet(portfolioMatch[1] as string, res, { fresh: !target })
-      if (!read) return true
-      let wallet = read
-      const others = wallet.mode === "demo" ? [] : linked.filter((address) => address !== wallet.address)
-      if (others.length > 0) {
-        const linkedWallets: WalletResponse[] = []
-        for (const address of others) {
-          // A cost that can't be read isn't a cost of zero, so this answers with the failure instead of a wrong number.
-          const other = await readWallet(address, res, { fresh: !target })
-          if (!other) return true
-          linkedWallets.push(other)
-        }
-        wallet = withLinkedCosts(wallet, linkedWallets, method)
+      const wallet = read && (await inCurrency(read, currency, res))
+      if (!wallet) return true
+      const linkedWallets: WalletResponse[] = []
+      for (const address of wallet.mode === "demo" ? [] : linked.filter((address) => address !== wallet.address)) {
+        // A cost that can't be read isn't a cost of zero, so this answers with the failure instead of a wrong number.
+        const other = await readWallet(address, res, { fresh: !target })
+        const converted = other && (await inCurrency(other, currency, res))
+        if (!converted) return true
+        linkedWallets.push(converted)
       }
       if (!target) {
-        sendJson(res, 200, portfolioOf(wallet, method))
+        sendJson(res, 200, portfolioOf(wallet, method, linkedWallets))
         return true
       }
-      const explanation = explainPortfolio(wallet, method, target)
+      const explanation = explainPortfolio(wallet, method, target, linkedWallets)
       if (explanation) sendJson(res, 200, explanation)
       else sendJson(res, 404, { error: "This wallet has nothing like that." })
       return true
