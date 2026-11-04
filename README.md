@@ -23,6 +23,7 @@ pnpm mac:build   # only builds it, to macos/build/
 pnpm check:mac   # the Swift tests, the app's build, and the shared packages' builds for iOS
 pnpm check:keychain  # the real Secure Enclave and Keychain, with a throwaway key, from a signed debug build
 pnpm check:anvil     # real signing and sweeps against a local fork of Base, with no real funds. It needs Foundry
+pnpm mac:shot    # screenshots from fixtures that never open a window you'd see or take focus. See macos/TESTING.md
 ```
 
 It reads from the server on http://127.0.0.1:8787, set in Settings, so it runs on whatever the server runs on: with no `.env.local`, that's the demo wallet. It remembers the wallet, method and currency across restarts.
@@ -35,6 +36,7 @@ The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<a
 - `macos/HotWalletKit/`: the hot wallet, which also builds for iOS. `KeyVault` is the only code that touches a key, and `HotWalletKit` decides what to do and can only ask it to sign.
 - `macos/App/`: the menu bar item, popover, window and settings.
 - `macos/Config/App.xcconfig`: the app's name, in one place.
+- `macos/TESTING.md`: how to test and screenshot the app without interrupting whoever's using this Mac.
 
 ### Spending money and savings
 
