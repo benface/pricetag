@@ -1,0 +1,39 @@
+{
+  "blockNum": 53500900,
+  "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
+  "source": [
+    "Worked out from this exchange: 1,000 USDC for 800 AERO.",
+    "The USDC is valued at Chainlink's USDC/USD price at this block."
+  ],
+  "movements": [
+    "Log #2: 800 AERO received",
+    "Log #1: 1,000 USDC sent"
+  ],
+  "links": [
+    {
+      "title": "This transaction's logs on Basescan",
+      "url": "https://basescan.org/tx/0xde30000000000000000000000000000000000000000000000000000000000004#eventlog"
+    },
+    {
+      "title": "Chainlink's USDC/USD contract on Basescan",
+      "url": "https://basescan.org/address/0x7e860098F58bBFC8648a4311b374B1D669a2bc6B"
+    }
+  ],
+  "datasets": [
+    {
+      "title": "Base's blocks",
+      "name": "edgeandnode/base_mainnet@0.0.2",
+      "hash": "6428aaca2cf57b8403ca3ab8bc657b361926ce6beeb6577477c85684e6ea569e"
+    },
+    {
+      "title": "Base's blocks",
+      "name": "a/b@1",
+      "hash": null
+    }
+  ],
+  "scope": [
+    "Checking the block shows that the data Amp stored matches the block's header. It doesn't show that the header is on Base's real chain, or that the dataset's calculations ran correctly. A dataset's fingerprint only identifies its recipe.",
+    "It covers the amounts exchanged. It doesn't cover Chainlink's price, used to value them, because block headers don't record calls to a contract."
+  ],
+  "unavailable": null
+}

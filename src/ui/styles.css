@@ -145,6 +145,19 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .leg-tags { display: flex; gap: 6px; flex-wrap: wrap; }
 .tag { font-size: 12px; padding: 1px 7px; border-radius: 6px; background: var(--grid); }
 .tag.warn { background: var(--warn-fill); color: var(--warn-ink); font-weight: 600; }
+.tag-button { border: 0; color: inherit; font-family: inherit; line-height: inherit; cursor: pointer; }
+.tag-button:hover { text-decoration: underline; }
+.leg-links { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+.proof { margin-top: 6px; padding: 10px 12px; border: 1px solid var(--grid); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+.proof h4 { margin: 0 0 2px; font-size: 12px; font-weight: 600; }
+.proof ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.proof .hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; overflow-wrap: anywhere; user-select: all; }
+.proof .verify { align-self: flex-start; }
+.check { display: grid; grid-template-columns: 18px 1fr; column-gap: 4px; }
+.check-mark { font-weight: 700; }
+.check.passed .check-mark { color: var(--gain); }
+.check.failed .check-mark, .check.unchecked .check-mark { color: var(--warn-ink); }
+.proof-result.failed, .proof-result.unchecked { color: var(--warn-ink); font-weight: 600; }
 .tax-link { text-align: right; margin: -6px 2px 14px; }
 .tax { display: flex; flex-direction: column; gap: 12px; }
 .tax .notice { margin: 0; }

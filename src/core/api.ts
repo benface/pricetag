@@ -168,3 +168,35 @@ type Progress = Pick<WalletResponse, "coverage" | "latest">
 
 export const hasStarted = ({ coverage }: Progress) => coverage.toBlock >= coverage.fromBlock
 export const isBehind = ({ coverage, latest }: Progress) => latest.blockNum - coverage.toBlock > BEHIND_BLOCKS
+
+/** A dataset behind a number, by name and manifest hash. The hash is null when it couldn't be read, and is never guessed. */
+export type ProofDataset = { title: string; name: string; hash: string | null }
+
+export type ProofLink = { title: string; url: string }
+
+/** What's behind one leg's price. All of it is in words, because clients only show it. */
+export type ProofResponse = {
+  blockNum: number
+  txHash: string
+  source: string[]
+  movements: string[]
+  links: ProofLink[]
+  datasets: ProofDataset[]
+  /** What checking the block does and doesn't show for this leg. */
+  scope: string[]
+  /** Why the block can't be checked, or null when it can. */
+  unavailable: string | null
+}
+
+export type CheckStatus = "passed" | "failed" | "unchecked"
+
+export type ProofCheck = { title: string; status: CheckStatus; detail: string }
+
+/** The block's commitments recomputed from what Amp stored, and whether this leg is in them. `status` is the worst of `checks`. */
+export type VerificationResponse = {
+  blockNum: number
+  blockHash: string
+  status: CheckStatus
+  summary: string
+  checks: ProofCheck[]
+}

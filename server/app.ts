@@ -10,6 +10,8 @@ import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
 import { createRates } from "./rates.ts"
 import { DEFAULT_RPC_URL, createL1FeeReader } from "./receipts.ts"
+import { createDepositReader } from "./block.ts"
+import { createManifestReader, createProofs, proofOf, verificationOf, type BlockRead, type Proofs } from "./proof.ts"
 import { datasetSource, feedRounds, rawSource, type Source } from "./source.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 import { createWallets } from "./wallets.ts"
@@ -17,6 +19,7 @@ import { createWallets } from "./wallets.ts"
 type Env = Record<string, string | undefined>
 
 const POLL_MS = 2000
+const DEMO_UNVERIFIABLE = "This is the demo wallet, so there's no real block to check."
 
 function parseMethod(value: string | null): Method | null {
   if (value === null || value === "average") return "average"
@@ -46,12 +49,18 @@ function pinned(dataset: string, hash: string | undefined): string {
   return `${dataset.split("@")[0]}@${hash}`
 }
 
-function createSource(env: Env): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates> } | null {
+function createSource(env: Env): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs } | null {
   if (!env.AMP_QUERY_URL) return null
   const query = createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined)
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
   const readRates = createRates(feedRounds(query, { baseDataset, network }))
+  const proofs = createProofs(query, {
+    baseDataset,
+    dataset: env.PRICETAG_DATASET || null,
+    readDeposits: createDepositReader(env.BASE_RPC_URL || DEFAULT_RPC_URL),
+    readManifestHash: createManifestReader(env.AMP_ADMIN_URL || `${env.AMP_QUERY_URL}/controller`, env.AMP_QUERY_TOKEN || undefined),
+  })
   if (env.PRICETAG_DATASET) {
     const startBlock = Number(env.PRICETAG_START_BLOCK)
     if (!Number.isSafeInteger(startBlock) || startBlock <= 0) throw new Error("PRICETAG_DATASET needs PRICETAG_START_BLOCK")
@@ -67,13 +76,13 @@ function createSource(env: Env): { source: Source; rules?: RuleSource[]; readRat
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, dataset),
         ruleSource(CAUTIOUS_RULE_ID, env.PRICETAG_FORK_DATASET, env.PRICETAG_FORK_HASH, pinned(env.PRICETAG_FORK_DATASET, env.PRICETAG_FORK_HASH)),
       ]
-      return { source: rules[0]!.source, rules, readRates }
+      return { source: rules[0]!.source, rules, readRates, proofs }
     }
-    return { source: datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates }
+    return { source: datasetSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates, proofs }
   }
   const historyBlocks = Number(env.PRICETAG_HISTORY_BLOCKS || 1800)
   if (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
-  return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates }
+  return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates, proofs }
 }
 
 /** Each one is a wallet read, so this stays well under what the server keeps in memory. */
@@ -102,9 +111,9 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 }
 
 /** Query errors can quote our SQL or the endpoint. The browser gets a fixed message, and the detail stays in the server log. */
-function sendAmpError(res: ServerResponse, error: unknown) {
+function sendAmpError(res: ServerResponse, error: unknown, message = "Couldn't read this wallet's data.") {
   console.error("Amp query failed:", describeError(error))
-  sendJson(res, 502, { error: "Couldn't read this wallet's data." })
+  sendJson(res, 502, { error: message })
 }
 
 export function createApi(env: Env, created: ReturnType<typeof createSource> = createSource(env)) {
@@ -297,6 +306,36 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
       const read = await readWallet(walletMatch[1] as string, res, { fresh: true, rule })
       const wallet = read && (await inCurrency(read, currency, res))
       if (wallet) sendJson(res, 200, wallet)
+      return true
+    }
+
+    const proofMatch = /^\/api\/portfolio\/([^/]+)\/(proof|verify)$/.exec(path)
+    if (proofMatch) {
+      const wallet = await readWallet(proofMatch[1] as string, res, { fresh: false, rule: null })
+      if (!wallet) return true
+      const leg = wallet.legs.find(({ id }) => id === params.get("leg"))
+      if (!leg || leg.opening) {
+        sendJson(res, 404, { error: "There's no transaction behind that." })
+        return true
+      }
+      const proofs = wallet.mode === "demo" ? null : (created?.proofs ?? null)
+      if (proofMatch[2] === "proof") {
+        sendJson(res, 200, proofOf(leg, wallet.legs, currency, proofs ? await proofs.datasets() : [], proofs ? null : DEMO_UNVERIFIABLE))
+        return true
+      }
+      if (!proofs) {
+        sendJson(res, 400, { error: DEMO_UNVERIFIABLE })
+        return true
+      }
+      let read: BlockRead | null
+      try {
+        read = await proofs.readBlock(leg.blockNum)
+      } catch (error) {
+        sendAmpError(res, error, "Couldn't read this block.")
+        return true
+      }
+      if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits))
+      else sendJson(res, 404, { error: "Amp doesn't have this block." })
       return true
     }
 

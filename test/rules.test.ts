@@ -6,6 +6,7 @@ import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, type LegRow } from "@pricetag/sdk/co
 import type { PortfolioResponse } from "../src/core/api.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule, type RuleComparison } from "../src/core/rules.ts"
 import { createApi } from "../server/app.ts"
+import type { Proofs } from "../server/proof.ts"
 import type { Source } from "../server/source.ts"
 
 const ME = "0x00000000000000000000000000000000000000aa"
@@ -47,12 +48,14 @@ function sourceAt(ethAnswer: bigint, through = HEAD, reads: string[] = []): Sour
   }
 }
 
+const NO_PROOFS: Proofs = { datasets: async () => [], readBlock: async () => null }
+
 const rule = (id: string): PricingRule => ({ id, ...RULE_TEXT[id]!, dataset: `a/${id}@0.0.1`, hash: "a".repeat(64) })
 
 async function serve(forkThrough: number, forkReads: string[] = []): Promise<{ server: Server; base: string }> {
   const market = sourceAt(ETH_ANSWER)
   const cautious = sourceAt((ETH_ANSWER * 99n) / 100n, forkThrough, forkReads)
-  const api = createApi({}, { source: market, readRates: async () => ({ byBlock: {}, latest: null }), rules: [{ rule: rule(MARKET_RULE_ID), source: market }, { rule: rule(CAUTIOUS_RULE_ID), source: cautious }] })
+  const api = createApi({}, { source: market, readRates: async () => ({ byBlock: {}, latest: null }), proofs: NO_PROOFS, rules: [{ rule: rule(MARKET_RULE_ID), source: market }, { rule: rule(CAUTIOUS_RULE_ID), source: cautious }] })
   const server = createServer((req, res) => void api(req, res))
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   return { server, base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }
@@ -124,7 +127,7 @@ type Overrides = Partial<Source>
 async function compareWith(a: Overrides, b: Overrides, { through = [HEAD, HEAD] as [number, number], query = "", readRates = async () => ({ byBlock: {}, latest: null }) as never } = {}) {
   const market = { ...sourceAt(ETH_ANSWER, through[0]), ...a }
   const cautious = { ...sourceAt((ETH_ANSWER * 99n) / 100n, through[1]), ...b }
-  const api = createApi({}, { source: market, readRates, rules: [{ rule: rule(MARKET_RULE_ID), source: market }, { rule: rule(CAUTIOUS_RULE_ID), source: cautious }] })
+  const api = createApi({}, { source: market, readRates, proofs: NO_PROOFS, rules: [{ rule: rule(MARKET_RULE_ID), source: market }, { rule: rule(CAUTIOUS_RULE_ID), source: cautious }] })
   const server = createServer((req, res) => void api(req, res))
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/portfolio/${ME}/compare${query}`)

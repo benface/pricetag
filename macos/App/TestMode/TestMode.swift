@@ -214,6 +214,14 @@ private final class FixtureSource: PortfolioSource {
         try decode("demo-explanation")
     }
 
+    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+        throw FetchError.unreachable
+    }
+
+    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+        throw FetchError.unreachable
+    }
+
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
         throw FetchError.rejected("There's no tax report fixture.")
     }

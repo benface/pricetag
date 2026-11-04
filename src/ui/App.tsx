@@ -334,7 +334,7 @@ export function App() {
         </main>
       ) : null}
 
-      {explanation ? <ExplainPanel explanation={explanation} onClose={close} /> : null}
+      {explanation && wallet ? <ExplainPanel explanation={explanation} address={wallet.address} onClose={close} /> : null}
       {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} onClose={() => setTaxOpen(false)} /> : null}
     </div>
   )
