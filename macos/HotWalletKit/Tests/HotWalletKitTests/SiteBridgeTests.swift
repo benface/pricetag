@@ -1004,7 +1004,7 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
     }
 
     @Test func aSocketPathThatFits() throws {
-        let path = try #require(BridgeEndpoint.socketPath(bundleIdentifier: "com.benface.pricetag.mac.wallet"))
+        let path = try #require(BridgeEndpoint.socketPath(bundleIdentifier: "com.benface.pricetag.macos.wallet"))
         #expect(path.hasSuffix("/Library/Group Containers/\(BridgeEndpoint.group)/wallet.sock"))
     }
 }

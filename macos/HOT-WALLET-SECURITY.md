@@ -105,7 +105,7 @@ The RPC is configurable and untrusted.
 
 - [x] Only a provisioned build can reach the data protection Keychain. Without one, the app says it can't hold a key, and everything else works.
 - [ ] **The Keychain ties the key to the signing team.** The team is pinned in `macos/run.sh`, and changing it makes an existing key unreadable. Sweep everything out first.
-- [ ] **The personal team's profile lasts 7 days.** `pnpm mac` renews it. A build older than that stops launching, and a wallet that isn't running isn't sweeping.
+- [ ] **The team's profile lasts a year.** It's Benface Inc.'s, and `pnpm mac` renews it. A build older than that stops launching, and a wallet that isn't running isn't sweeping.
 
 ## Not tested by a machine
 

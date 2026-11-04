@@ -18,7 +18,7 @@ guard CommandLine.arguments.dropFirst().first == extensionOrigin else { fail("Th
 let appURL = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 guard let bundleIdentifier = Bundle(url: appURL)?.bundleIdentifier else { fail("This has to run from inside the app.") }
 guard let home = getpwuid(getuid())?.pointee.pw_dir else { fail("There's no home folder.") }
-let path = String(cString: home) + "/Library/Group Containers/83535P4H56.com.benface.pricetag.bridge/\(bundleIdentifier.split(separator: ".").last ?? "app").sock"
+let path = String(cString: home) + "/Library/Group Containers/R7TNNTC382.com.benface.pricetag.bridge/\(bundleIdentifier.split(separator: ".").last ?? "app").sock"
 
 let app = socket(AF_UNIX, SOCK_STREAM, 0)
 guard app >= 0 else { fail("Couldn't make a socket.") }

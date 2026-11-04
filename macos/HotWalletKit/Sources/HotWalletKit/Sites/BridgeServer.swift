@@ -5,7 +5,7 @@ import Foundation
 /// that belongs to this team. Sandboxed apps can only listen on sockets inside a container like this. `macos/BridgeHost/main.swift`
 /// works out the same path, and a test keeps them the same.
 public enum BridgeEndpoint {
-    public static let group = "83535P4H56.com.benface.pricetag.bridge"
+    public static let group = "R7TNNTC382.com.benface.pricetag.bridge"
 
     public static func socketPath(bundleIdentifier: String) -> String? {
         guard let passwd = getpwuid(getuid()), let home = passwd.pointee.pw_dir else { return nil }

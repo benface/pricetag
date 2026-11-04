@@ -1,6 +1,6 @@
 // The small program the browser starts for the extension. See BridgeHost/main.swift.
 PRODUCT_NAME = pricetag-bridge
-PRODUCT_BUNDLE_IDENTIFIER = com.benface.pricetag.mac.bridge
+PRODUCT_BUNDLE_IDENTIFIER = com.benface.pricetag.macos.bridge
 
 SDKROOT = macosx
 MACOSX_DEPLOYMENT_TARGET = 27.0
