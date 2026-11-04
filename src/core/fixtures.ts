@@ -1,5 +1,6 @@
 // A demo wallet in the `legs` and `reference_prices` shapes. Every case the UI has to get right is in here:
-// swaps, gas, a wrap, a plain transfer with an unknown cost, an absurd swap price, and a sale of unknown-cost tokens.
+// swaps, gas, a wrap, a plain transfer with an unknown cost, an absurd swap price, a sale of unknown-cost tokens, and a
+// swap that also moved a token off the allowlist.
 
 import type { WalletResponse } from "./api.ts"
 import { buildPricedLegs, derivePricedRows, type LegKind, type LegRow, type ReferenceRow } from "./legs.ts"
@@ -10,6 +11,8 @@ export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
 const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
 const CBBTC = "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"
 const DEGEN = "0x4ed4e862860bed51a9570b96d89af5e1b0efefed"
+const VIRTUAL = "0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b"
+const UNLISTED = "0x000000000000000000000000000000000000f00d"
 const E18 = 10n ** 18n
 const E6 = 10n ** 6n
 
@@ -55,6 +58,8 @@ const rows: LegRow[] = [
   ...tx(3000, [[CBBTC, "credit", 2_000_000n]]),
   // A swap implying an absurd DEGEN price: rejected, so it never reaches a total.
   ...tx(3600, [[ETH_ADDRESS, "debit", GAS, "gas"], [USDC_ADDRESS, "debit", 1n], [DEGEN, "credit", 50_000n * E18]]),
+  // Pays USDC for VIRTUAL and a token off the allowlist, so VIRTUAL's share of the payment can't be known.
+  ...tx(4200, [[ETH_ADDRESS, "debit", GAS, "gas"], [USDC_ADDRESS, "debit", 100n * E6], [VIRTUAL, "credit", 50n * E18], [UNLISTED, "credit", 9n * E18, "unlisted"]]),
   // Sells ETH higher than it was bought.
   ...tx(4800, [[ETH_ADDRESS, "debit", GAS, "gas"], [WETH_ADDRESS, "debit", E18 / 2n], [USDC_ADDRESS, "credit", 1_300n * E6]]),
 ]
@@ -78,6 +83,7 @@ const references: ReferenceRow[] = [
   reference(2400, 2510),
   reference(3000, 2552),
   reference(3600, 2583),
+  reference(4200, 2590),
   reference(4800, 2600),
   reference(HEAD_OFFSET, 2640),
 ]

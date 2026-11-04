@@ -6,7 +6,95 @@
   "tables": {
     "base_legs": {
       "input": {
-        "sql": "SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind FROM (\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, t.value AS amount, 'erc20' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'Transfer(address indexed from, address indexed to, uint256 value)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('Transfer(address indexed from, address indexed to, uint256 value)') AND topic3 IS NULL AND address IN (X'4200000000000000000000000000000000000006', X'833589fcd6edb6e08f4c7c32d4f71b54bda02913', X'fde4c96c8593536e31f229ea8f37b2ada2699bb2', X'50c5725949a6f0c72e6c4a641f24049a917db0cb', X'2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22', X'c1cba3fcea344f92d9239c08c0568f6f2f0ee452', X'cbb7c0000ab88b473b1f5afd9ef808440eed33bf', X'940181a94a35a4569e4529a3cdfb74e38fd98631', X'0b3e328455c4059eeb9e3f84b5543f74e24e7e1b', X'4ed4e862860bed51a9570b96d89af5e1b0efefed'))\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, t.value AS amount, 'erc20' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'Transfer(address indexed from, address indexed to, uint256 value)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('Transfer(address indexed from, address indexed to, uint256 value)') AND topic3 IS NULL AND address IN (X'4200000000000000000000000000000000000006', X'833589fcd6edb6e08f4c7c32d4f71b54bda02913', X'fde4c96c8593536e31f229ea8f37b2ada2699bb2', X'50c5725949a6f0c72e6c4a641f24049a917db0cb', X'2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22', X'c1cba3fcea344f92d9239c08c0568f6f2f0ee452', X'cbb7c0000ab88b473b1f5afd9ef808440eed33bf', X'940181a94a35a4569e4529a3cdfb74e38fd98631', X'0b3e328455c4059eeb9e3f84b5543f74e24e7e1b', X'4ed4e862860bed51a9570b96d89af5e1b0efefed'))\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.dst AS account, 'credit' AS side, t.wad AS amount, 'wrap' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'Deposit(address indexed dst, uint256 wad)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('Deposit(address indexed dst, uint256 wad)') AND address = X'4200000000000000000000000000000000000006')\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.src AS account, 'debit' AS side, t.wad AS amount, 'unwrap' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'Withdrawal(address indexed src, uint256 wad)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('Withdrawal(address indexed src, uint256 wad)') AND address = X'4200000000000000000000000000000000000006')\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, arrow_cast(0, 'UInt32') AS log_index, arrow_cast(X'0000000000000000000000000000000000000000', 'FixedSizeBinary(20)') AS token, \"from\" AS account, 'debit' AS side, value AS amount, 'eth' AS kind FROM base.transactions WHERE status AND value <> '0'\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, arrow_cast(0, 'UInt32') AS log_index, arrow_cast(X'0000000000000000000000000000000000000000', 'FixedSizeBinary(20)') AS token, \"to\" AS account, 'credit' AS side, value AS amount, 'eth' AS kind FROM base.transactions WHERE status AND value <> '0' AND \"to\" IS NOT NULL\n) WHERE block_num() >= 53511115"
+        "sql": "SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind FROM (\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, t.value AS amount, 'erc20' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'Transfer(address indexed from, address indexed to, uint256 value)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('Transfer(address indexed from, address indexed to, uint256 value)') AND topic3 IS NULL AND address IN (X'4200000000000000000000000000000000000006', X'833589fcd6edb6e08f4c7c32d4f71b54bda02913', X'fde4c96c8593536e31f229ea8f37b2ada2699bb2', X'50c5725949a6f0c72e6c4a641f24049a917db0cb', X'2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22', X'c1cba3fcea344f92d9239c08c0568f6f2f0ee452', X'cbb7c0000ab88b473b1f5afd9ef808440eed33bf', X'940181a94a35a4569e4529a3cdfb74e38fd98631', X'0b3e328455c4059eeb9e3f84b5543f74e24e7e1b', X'4ed4e862860bed51a9570b96d89af5e1b0efefed'))\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, t.value AS amount, 'erc20' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'Transfer(address indexed from, address indexed to, uint256 value)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('Transfer(address indexed from, address indexed to, uint256 value)') AND topic3 IS NULL AND address IN (X'4200000000000000000000000000000000000006', X'833589fcd6edb6e08f4c7c32d4f71b54bda02913', X'fde4c96c8593536e31f229ea8f37b2ada2699bb2', X'50c5725949a6f0c72e6c4a641f24049a917db0cb', X'2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22', X'c1cba3fcea344f92d9239c08c0568f6f2f0ee452', X'cbb7c0000ab88b473b1f5afd9ef808440eed33bf', X'940181a94a35a4569e4529a3cdfb74e38fd98631', X'0b3e328455c4059eeb9e3f84b5543f74e24e7e1b', X'4ed4e862860bed51a9570b96d89af5e1b0efefed'))\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.dst AS account, 'credit' AS side, t.wad AS amount, 'wrap' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'Deposit(address indexed dst, uint256 wad)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('Deposit(address indexed dst, uint256 wad)') AND address = X'4200000000000000000000000000000000000006')\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.src AS account, 'debit' AS side, t.wad AS amount, 'unwrap' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'Withdrawal(address indexed src, uint256 wad)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('Withdrawal(address indexed src, uint256 wad)') AND address = X'4200000000000000000000000000000000000006')\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, arrow_cast(0, 'UInt32') AS log_index, arrow_cast(X'0000000000000000000000000000000000000000', 'FixedSizeBinary(20)') AS token, \"from\" AS account, 'debit' AS side, value AS amount, 'eth' AS kind FROM base.transactions WHERE status AND value <> '0'\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, arrow_cast(0, 'UInt32') AS log_index, arrow_cast(X'0000000000000000000000000000000000000000', 'FixedSizeBinary(20)') AS token, \"to\" AS account, 'credit' AS side, value AS amount, 'eth' AS kind FROM base.transactions WHERE status AND value <> '0' AND \"to\" IS NOT NULL\n) WHERE block_num() >= 53514029"
+      },
+      "schema": {
+        "arrow": {
+          "fields": [
+            {
+              "name": "_block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "_ts",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "timestamp",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "tx_hash",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": false
+            },
+            {
+              "name": "tx_index",
+              "type": "UInt32",
+              "nullable": false
+            },
+            {
+              "name": "log_index",
+              "type": "UInt32",
+              "nullable": false
+            },
+            {
+              "name": "token",
+              "type": {
+                "FixedSizeBinary": 20
+              },
+              "nullable": false
+            },
+            {
+              "name": "account",
+              "type": {
+                "FixedSizeBinary": 20
+              },
+              "nullable": true
+            },
+            {
+              "name": "side",
+              "type": "Utf8",
+              "nullable": false
+            },
+            {
+              "name": "amount",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "kind",
+              "type": "Utf8",
+              "nullable": false
+            }
+          ]
+        }
+      },
+      "network": "base-mainnet"
+    },
+    "unlisted_legs": {
+      "input": {
+        "sql": "SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind FROM (\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, t.value AS amount, 'unlisted' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'Transfer(address indexed from, address indexed to, uint256 value)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('Transfer(address indexed from, address indexed to, uint256 value)') AND topic3 IS NULL AND address NOT IN (X'4200000000000000000000000000000000000006', X'833589fcd6edb6e08f4c7c32d4f71b54bda02913', X'fde4c96c8593536e31f229ea8f37b2ada2699bb2', X'50c5725949a6f0c72e6c4a641f24049a917db0cb', X'2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22', X'c1cba3fcea344f92d9239c08c0568f6f2f0ee452', X'cbb7c0000ab88b473b1f5afd9ef808440eed33bf', X'940181a94a35a4569e4529a3cdfb74e38fd98631', X'0b3e328455c4059eeb9e3f84b5543f74e24e7e1b', X'4ed4e862860bed51a9570b96d89af5e1b0efefed'))\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, t.value AS amount, 'unlisted' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'Transfer(address indexed from, address indexed to, uint256 value)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('Transfer(address indexed from, address indexed to, uint256 value)') AND topic3 IS NULL AND address NOT IN (X'4200000000000000000000000000000000000006', X'833589fcd6edb6e08f4c7c32d4f71b54bda02913', X'fde4c96c8593536e31f229ea8f37b2ada2699bb2', X'50c5725949a6f0c72e6c4a641f24049a917db0cb', X'2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22', X'c1cba3fcea344f92d9239c08c0568f6f2f0ee452', X'cbb7c0000ab88b473b1f5afd9ef808440eed33bf', X'940181a94a35a4569e4529a3cdfb74e38fd98631', X'0b3e328455c4059eeb9e3f84b5543f74e24e7e1b', X'4ed4e862860bed51a9570b96d89af5e1b0efefed'))\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, t.id AS amount, 'unlisted_nft' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'Transfer(address indexed from, address indexed to, uint256 indexed id)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('Transfer(address indexed from, address indexed to, uint256 indexed id)') AND topic3 IS NOT NULL AND address NOT IN (X'4200000000000000000000000000000000000006', X'833589fcd6edb6e08f4c7c32d4f71b54bda02913', X'fde4c96c8593536e31f229ea8f37b2ada2699bb2', X'50c5725949a6f0c72e6c4a641f24049a917db0cb', X'2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22', X'c1cba3fcea344f92d9239c08c0568f6f2f0ee452', X'cbb7c0000ab88b473b1f5afd9ef808440eed33bf', X'940181a94a35a4569e4529a3cdfb74e38fd98631', X'0b3e328455c4059eeb9e3f84b5543f74e24e7e1b', X'4ed4e862860bed51a9570b96d89af5e1b0efefed'))\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, t.id AS amount, 'unlisted_nft' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'Transfer(address indexed from, address indexed to, uint256 indexed id)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('Transfer(address indexed from, address indexed to, uint256 indexed id)') AND topic3 IS NOT NULL AND address NOT IN (X'4200000000000000000000000000000000000006', X'833589fcd6edb6e08f4c7c32d4f71b54bda02913', X'fde4c96c8593536e31f229ea8f37b2ada2699bb2', X'50c5725949a6f0c72e6c4a641f24049a917db0cb', X'2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22', X'c1cba3fcea344f92d9239c08c0568f6f2f0ee452', X'cbb7c0000ab88b473b1f5afd9ef808440eed33bf', X'940181a94a35a4569e4529a3cdfb74e38fd98631', X'0b3e328455c4059eeb9e3f84b5543f74e24e7e1b', X'4ed4e862860bed51a9570b96d89af5e1b0efefed'))\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, '' AS amount, 'unlisted' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)') AND TRUE)\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, '' AS amount, 'unlisted' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)') AND TRUE)\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, '' AS amount, 'unlisted' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'TransferBatch(address indexed operator, address indexed from, address indexed to, uint256[] ids, uint256[] values)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('TransferBatch(address indexed operator, address indexed from, address indexed to, uint256[] ids, uint256[] values)') AND TRUE)\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, '' AS amount, 'unlisted' AS kind FROM (SELECT block_num, timestamp, tx_hash, tx_index, log_index, address AS token, evm_decode_log(topic1, topic2, topic3, data, 'TransferBatch(address indexed operator, address indexed from, address indexed to, uint256[] ids, uint256[] values)') AS t\n    FROM base.logs WHERE topic0 = evm_topic('TransferBatch(address indexed operator, address indexed from, address indexed to, uint256[] ids, uint256[] values)') AND TRUE)\n) WHERE block_num() >= 53514029"
       },
       "schema": {
         "arrow": {
@@ -94,7 +182,7 @@
     },
     "tx_gas": {
       "input": {
-        "sql": "SELECT a.block_num, a.timestamp, a.tx_hash, a.tx_index, a.\"from\" AS account,\n  CAST(a.gas_used AS VARCHAR) AS cumulative, CAST(p.gas_used AS VARCHAR) AS previous,\n  CAST(a.gas_price AS VARCHAR) AS gas_price, CAST(a.max_fee_per_gas AS VARCHAR) AS max_fee, CAST(a.max_priority_fee_per_gas AS VARCHAR) AS max_priority\nFROM base.transactions a\nJOIN base.transactions p ON a._block_num = p._block_num AND a.tx_index = p.tx_index + 1\nWHERE a.type <> 126 AND block_num() >= 53511115"
+        "sql": "SELECT a.block_num, a.timestamp, a.tx_hash, a.tx_index, a.\"from\" AS account,\n  CAST(a.gas_used AS VARCHAR) AS cumulative, CAST(p.gas_used AS VARCHAR) AS previous,\n  CAST(a.gas_price AS VARCHAR) AS gas_price, CAST(a.max_fee_per_gas AS VARCHAR) AS max_fee, CAST(a.max_priority_fee_per_gas AS VARCHAR) AS max_priority\nFROM base.transactions a\nJOIN base.transactions p ON a._block_num = p._block_num AND a.tx_index = p.tx_index + 1\nWHERE a.type <> 126 AND block_num() >= 53514029"
       },
       "schema": {
         "arrow": {
@@ -180,7 +268,7 @@
     },
     "gas_legs": {
       "input": {
-        "sql": "SELECT g.block_num, g.timestamp, g.tx_hash, g.tx_index, arrow_cast(0, 'UInt32') AS log_index, arrow_cast(X'0000000000000000000000000000000000000000', 'FixedSizeBinary(20)') AS token, g.account AS account, 'debit' AS side,\n  self.pt_gas(g.cumulative, g.previous, g.gas_price, g.max_fee, g.max_priority, CAST(b.base_fee_per_gas AS VARCHAR)) AS amount, 'gas' AS kind\nFROM self.tx_gas g\nJOIN base.blocks b ON g._block_num = b._block_num\nWHERE block_num() >= 53511115"
+        "sql": "SELECT g.block_num, g.timestamp, g.tx_hash, g.tx_index, arrow_cast(0, 'UInt32') AS log_index, arrow_cast(X'0000000000000000000000000000000000000000', 'FixedSizeBinary(20)') AS token, g.account AS account, 'debit' AS side,\n  self.pt_gas(g.cumulative, g.previous, g.gas_price, g.max_fee, g.max_priority, CAST(b.base_fee_per_gas AS VARCHAR)) AS amount, 'gas' AS kind\nFROM self.tx_gas g\nJOIN base.blocks b ON g._block_num = b._block_num\nWHERE block_num() >= 53514029"
       },
       "schema": {
         "arrow": {
@@ -268,7 +356,7 @@
     },
     "unwrap_legs": {
       "input": {
-        "sql": "SELECT l.block_num, l.timestamp, l.tx_hash, l.tx_index, l.log_index, arrow_cast(X'0000000000000000000000000000000000000000', 'FixedSizeBinary(20)') AS token, x.\"from\" AS account, 'credit' AS side,\n  get_field(evm_decode_log(l.topic1, l.topic2, l.topic3, l.data, 'Withdrawal(address indexed src, uint256 wad)'), 'wad') AS amount, 'unwrap' AS kind\nFROM base.logs l\nJOIN base.transactions x ON l._block_num = x._block_num AND l.tx_hash = x.tx_hash\nWHERE l.address = X'4200000000000000000000000000000000000006' AND l.topic0 = evm_topic('Withdrawal(address indexed src, uint256 wad)') AND block_num() >= 53511115"
+        "sql": "SELECT l.block_num, l.timestamp, l.tx_hash, l.tx_index, l.log_index, arrow_cast(X'0000000000000000000000000000000000000000', 'FixedSizeBinary(20)') AS token, x.\"from\" AS account, 'credit' AS side,\n  get_field(evm_decode_log(l.topic1, l.topic2, l.topic3, l.data, 'Withdrawal(address indexed src, uint256 wad)'), 'wad') AS amount, 'unwrap' AS kind\nFROM base.logs l\nJOIN base.transactions x ON l._block_num = x._block_num AND l.tx_hash = x.tx_hash\nWHERE l.address = X'4200000000000000000000000000000000000006' AND l.topic0 = evm_topic('Withdrawal(address indexed src, uint256 wad)') AND block_num() >= 53514029"
       },
       "schema": {
         "arrow": {
@@ -356,7 +444,7 @@
     },
     "legs": {
       "input": {
-        "sql": "SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind FROM (\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind FROM self.base_legs\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind FROM self.gas_legs\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind FROM self.unwrap_legs\n) WHERE block_num() >= 53511115"
+        "sql": "SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind FROM (\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind FROM self.base_legs\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind FROM self.gas_legs\n  UNION ALL\n  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind FROM self.unwrap_legs\n) WHERE block_num() >= 53514029"
       },
       "schema": {
         "arrow": {
@@ -444,7 +532,7 @@
     },
     "reference_prices": {
       "input": {
-        "sql": "SELECT block_num, timestamp,\n  evm_decode_type(e.data, '(uint80,int256,uint256,uint256,uint80)') AS eth_round,\n  evm_decode_type(u.data, '(uint80,int256,uint256,uint256,uint80)') AS usdc_round\nFROM (\n  SELECT block_num, timestamp,\n    rpc.base_mainnet.eth_call(NULL, evm_encode_hex('0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70'), evm_encode_params('latestRoundData()'), block_num) AS e,\n    rpc.base_mainnet.eth_call(NULL, evm_encode_hex('0x7e860098F58bBFC8648a4311b374B1D669a2bc6B'), evm_encode_params('latestRoundData()'), block_num) AS u\n  FROM base.blocks\n) WHERE block_num() >= 53511115"
+        "sql": "SELECT block_num, timestamp,\n  evm_decode_type(e.data, '(uint80,int256,uint256,uint256,uint80)') AS eth_round,\n  evm_decode_type(u.data, '(uint80,int256,uint256,uint256,uint80)') AS usdc_round\nFROM (\n  SELECT block_num, timestamp,\n    rpc.base_mainnet.eth_call(NULL, evm_encode_hex('0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70'), evm_encode_params('latestRoundData()'), block_num) AS e,\n    rpc.base_mainnet.eth_call(NULL, evm_encode_hex('0x7e860098F58bBFC8648a4311b374B1D669a2bc6B'), evm_encode_params('latestRoundData()'), block_num) AS u\n  FROM base.blocks\n) WHERE block_num() >= 53514029"
       },
       "schema": {
         "arrow": {
@@ -602,7 +690,7 @@
     },
     "pairs": {
       "input": {
-        "sql": "SELECT a.block_num, a.timestamp, a.tx_hash, a.account,\n  a.token AS sold_token, a.amount AS sold_amount,\n  b.token AS bought_token, b.amount AS bought_amount\nFROM self.legs a\nJOIN self.legs b ON a._block_num = b._block_num AND a.tx_hash = b.tx_hash AND a.account = b.account\nWHERE a.side = 'debit' AND b.side = 'credit' AND a.kind <> 'gas' AND b.kind <> 'gas' AND a.token <> b.token AND block_num() >= 53511115"
+        "sql": "SELECT a.block_num, a.timestamp, a.tx_hash, a.account,\n  a.token AS sold_token, a.amount AS sold_amount,\n  b.token AS bought_token, b.amount AS bought_amount\nFROM self.legs a\nJOIN self.legs b ON a._block_num = b._block_num AND a.tx_hash = b.tx_hash AND a.account = b.account\nWHERE a.side = 'debit' AND b.side = 'credit' AND a.kind <> 'gas' AND b.kind <> 'gas' AND a.token <> b.token AND block_num() >= 53514029"
       },
       "schema": {
         "arrow": {
@@ -682,7 +770,7 @@
     },
     "pair_counts": {
       "input": {
-        "sql": "SELECT block_num() AS bn, tx_hash, account, COUNT(*) AS pair_count\nFROM self.pairs WHERE block_num() >= 53511115 GROUP BY block_num(), tx_hash, account"
+        "sql": "SELECT block_num() AS bn, tx_hash, account, COUNT(*) AS pair_count\nFROM self.pairs WHERE block_num() >= 53514029 GROUP BY block_num(), tx_hash, account"
       },
       "schema": {
         "arrow": {
@@ -733,7 +821,7 @@
     },
     "single_pairs": {
       "input": {
-        "sql": "SELECT p.block_num, p.timestamp, p.tx_hash, p.account, p.sold_token, p.sold_amount, p.bought_token, p.bought_amount\nFROM self.pairs p\nJOIN self.pair_counts c ON p._block_num = c._block_num AND p.tx_hash = c.tx_hash AND p.account = c.account\nWHERE c.pair_count = 1 AND block_num() >= 53511115"
+        "sql": "SELECT p.block_num, p.timestamp, p.tx_hash, p.account, p.sold_token, p.sold_amount, p.bought_token, p.bought_amount\nFROM self.pairs p\nJOIN self.pair_counts c ON p._block_num = c._block_num AND p.tx_hash = c.tx_hash AND p.account = c.account\nWHERE c.pair_count = 1 AND block_num() >= 53514029"
       },
       "schema": {
         "arrow": {
@@ -813,7 +901,7 @@
     },
     "priced_legs": {
       "input": {
-        "sql": "SELECT p.block_num, p.timestamp, p.tx_hash, p.account,\n  p.sold_token, p.sold_amount, p.bought_token, p.bought_amount,\n  get_field(r.eth_round, 'c1') AS eth_usd, get_field(r.usdc_round, 'c1') AS usdc_usd,\n  self.pt_price(evm_decode_hex(p.sold_token), p.sold_amount, evm_decode_hex(p.bought_token), p.bought_amount, get_field(r.eth_round, 'c1'), get_field(r.usdc_round, 'c1')) AS priced\nFROM self.single_pairs p\nJOIN self.reference_prices r ON p._block_num = r._block_num\nWHERE block_num() >= 53511115"
+        "sql": "SELECT p.block_num, p.timestamp, p.tx_hash, p.account,\n  p.sold_token, p.sold_amount, p.bought_token, p.bought_amount,\n  get_field(r.eth_round, 'c1') AS eth_usd, get_field(r.usdc_round, 'c1') AS usdc_usd,\n  self.pt_price(evm_decode_hex(p.sold_token), p.sold_amount, evm_decode_hex(p.bought_token), p.bought_amount, get_field(r.eth_round, 'c1'), get_field(r.usdc_round, 'c1')) AS priced\nFROM self.single_pairs p\nJOIN self.reference_prices r ON p._block_num = r._block_num\nWHERE block_num() >= 53514029"
       },
       "schema": {
         "arrow": {

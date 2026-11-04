@@ -87,11 +87,29 @@ describe("a dataset whose tables haven't started", () => {
   })
 
   it("the slowest table sets how far a read can go", async () => {
-    const tops: Record<string, number> = { legs: 90, priced_legs: 70, reference_prices: 80 }
+    const tops: Record<string, number> = { legs: 90, unlisted_legs: 95, priced_legs: 70, reference_prices: 80 }
     const query = async <T>(sql: string) => {
       const table = /\.(\w+) WHERE/.exec(sql)![1]!
       return [{ block_num: String(tops[table]) }] as T[]
     }
     assert.equal(await datasetSource(query, config).processedThrough(1, 100), 70)
+    tops.unlisted_legs = 60
+    assert.equal(await datasetSource(query, config).processedThrough(1, 100), 60)
+  })
+
+  it("keeps an NFT row's kind and ID, including ID 0, so both data paths net it the same way", async () => {
+    const leg = { block_num: "5", timestamp: 0, tx_hash: "aa", tx_index: 1, log_index: 0, token: "bb", account: "cc", side: "credit" }
+    const query = async <T>(sql: string) => (sql.includes(".unlisted_legs") ? [{ ...leg, amount: "0", kind: "unlisted_nft" }, { ...leg, amount: "0", kind: "unlisted" }] : []) as T[]
+    const window = await datasetSource(query, config).readWindow("0x00000000000000000000000000000000000000cc", 1, 10)
+    assert.deepEqual(window.rows.map((r) => [r.kind, r.amount]), [["unlisted_nft", "0"], ["unlisted", "0"]])
+  })
+
+  it("reads unlisted rows as evidence, even with a null amount, and still drops empty gas", async () => {
+    const leg = { block_num: "5", timestamp: 0, tx_hash: "aa", tx_index: 1, log_index: 0, token: "bb", account: "cc", side: "credit" }
+    const query = async <T>(sql: string) =>
+      (sql.includes(".unlisted_legs") ? [{ ...leg, amount: null, kind: "unlisted" }] : sql.includes(".legs") ? [{ ...leg, amount: "", kind: "gas" }] : []) as T[]
+    const window = await datasetSource(query, config).readWindow("0x00000000000000000000000000000000000000cc", 1, 10)
+    assert.deepEqual(window.rows.map((r) => [r.kind, r.amount]), [["unlisted", ""]])
+    assert.equal(window.gasUnknownTxs.length, 1)
   })
 })

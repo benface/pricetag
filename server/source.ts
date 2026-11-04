@@ -5,9 +5,9 @@
 
 import type { Head, Mode } from "../src/core/api.ts"
 import type { LegRow, PricedRow, ReferenceRow } from "../src/core/legs.ts"
-import { ERC20_ADDRESSES, ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS } from "../src/core/tokens.ts"
+import { ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS } from "../src/core/tokens.ts"
 import { decimalString, isNotStarted, type Query } from "./amp.ts"
-import { DEPOSIT_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
+import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
 export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknownTxs: string[] }
 
@@ -63,7 +63,6 @@ const MAX_PRICE_AGE_BLOCKS = 60
 
 export function rawSource(query: Query, config: { baseDataset: string; network: string; historyBlocks: number }): Source {
   const ds = `"${config.baseDataset}"`
-  const allowlist = ERC20_ADDRESSES.map((a) => `X'${hexOf(a)}'`).join(", ")
 
   async function inBlocks<T>(blocks: readonly number[], sql: (filter: string, count: number) => string): Promise<T[]> {
     const result: T[] = []
@@ -132,15 +131,17 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
         topic0: String(l.topic0),
         topic1: l.topic1 == null ? null : String(l.topic1),
         topic2: l.topic2 == null ? null : String(l.topic2),
+        topic3: l.topic3 == null ? null : String(l.topic3),
         data: String(l.data),
       })
-      const logColumns = "block_num, timestamp, tx_hash, tx_index, log_index, address, topic0, topic1, topic2, data"
+      const logColumns = "block_num, timestamp, tx_hash, tx_index, log_index, address, topic0, topic1, topic2, topic3, data"
       const logs = (
         await query<Row>(
           `SELECT ${logColumns} FROM ${ds}.logs
-           WHERE ${range} AND address IN (${allowlist}) AND topic3 IS NULL
-             AND topic0 IN (X'${TRANSFER_TOPIC}', X'${DEPOSIT_TOPIC}', X'${WITHDRAWAL_TOPIC}')
-             AND (topic1 = ${topic} OR topic2 = ${topic})`,
+           WHERE ${range} AND (
+             (topic0 IN (X'${TRANSFER_TOPIC}', X'${DEPOSIT_TOPIC}', X'${WITHDRAWAL_TOPIC}') AND (topic1 = ${topic} OR topic2 = ${topic}))
+             OR (topic0 IN (X'${TRANSFER_SINGLE_TOPIC}', X'${TRANSFER_BATCH_TOPIC}') AND (topic2 = ${topic} OR topic3 = ${topic}))
+           )`,
         )
       ).map(toLog)
 
@@ -198,7 +199,7 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
 
     async processedThrough(after, head) {
       let through = head
-      for (const table of ["legs", "priced_legs", "reference_prices"]) {
+      for (const table of ["legs", "unlisted_legs", "priced_legs", "reference_prices"]) {
         const rows = await readOrEmpty(`SELECT block_num FROM ${ds}.${table} WHERE block_num BETWEEN ${after} AND ${head} ORDER BY block_num DESC LIMIT 1`)
         if (!rows[0]) return null
         through = Math.min(through, asNumber(rows[0].block_num))
@@ -209,13 +210,13 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
     async readWindow(address, from, to) {
       const me = hexOf(address)
       const range = `block_num BETWEEN ${from} AND ${to}`
-      const legRows = await query<Row>(
-        `SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`,
-      )
+      const legColumns = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
+      const legRows = await query<Row>(`SELECT ${legColumns} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
+      const unlistedRows = await query<Row>(`SELECT ${legColumns} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
       const pricedRows = await query<Row>(
         `SELECT block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced FROM ${ds}.priced_legs WHERE ${range} AND account = X'${me}'`,
       )
-      const rows = legRows.map((l): LegRow => ({
+      const toLegRow = (l: Row): LegRow => ({
         block_num: asNumber(l.block_num),
         timestamp: asIso(l.timestamp),
         tx_hash: prefixed(String(l.tx_hash)),
@@ -224,12 +225,14 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
         token: prefixed(String(l.token)),
         account: prefixed(String(l.account)),
         side: l.side as LegRow["side"],
-        amount: String(l.amount),
+        amount: l.amount == null ? "" : String(l.amount),
         kind: l.kind as LegRow["kind"],
-      }))
+      })
+      const rows = legRows.map(toLegRow)
       return {
         // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
-        rows: rows.filter((r) => r.amount !== "" && r.amount !== "0"),
+        // An unlisted row stays either way, because it's evidence that something moved.
+        rows: [...rows.filter((r) => r.amount !== "" && r.amount !== "0"), ...unlistedRows.map(toLegRow)],
         gasUnknownTxs: rows.filter((r) => r.kind === "gas" && r.amount === "").map((r) => r.tx_hash),
         priced: pricedRows.map((p) => ({
           block_num: asNumber(p.block_num),
