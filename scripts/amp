@@ -4,12 +4,26 @@
 #   scripts/amp stop    Stops it and deletes everything it created.
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$REPO_DIR/.env.local"
 
+# An absolute path with symlinks resolved, so the same folder always compares equal.
+resolve_dir() {
+  if [ -d "$1" ]; then
+    (cd "$1" && pwd -P)
+  else
+    case "$1" in
+      /*) printf '%s' "$1" ;;
+      *) printf '%s/%s' "$PWD" "$1" ;;
+    esac
+  fi
+}
+
 AMP_BIN="$HOME/.amp/bin"
-STATE_DIR="${PRICETAG_AMP_DIR:-$HOME/Library/Caches/pricetag-amp}"
+STATE_DIR="$(resolve_dir "${PRICETAG_AMP_DIR:-$HOME/Library/Caches/pricetag-amp}")"
+# The ports and this name are fixed, so one local Amp runs at a time. The label says whose it is.
 CONTAINER="pricetag-amp-metadb"
+OWNER_LABEL="pricetag.amp.state-dir"
 POSTGRES_IMAGE="postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
 
 FLIGHT_PORT=1602
@@ -100,6 +114,21 @@ running_pid() {
 running_ampd_pid() { running_pid ampd 'ampd solo'; }
 running_throttle_pid() { running_pid rpc-throttle 'rpc-throttle'; }
 
+# Prints the state directory that owns the container, and fails if there's no container.
+metadb_owner() {
+  docker inspect -f "{{ index .Config.Labels \"$OWNER_LABEL\" }}" "$CONTAINER" 2> /dev/null
+}
+
+refuse_foreign_metadb() {
+  local owner
+  owner="$(metadb_owner)" || return 0
+  [ "$owner" != "$STATE_DIR" ] || return 0
+  if [ -n "$owner" ]; then
+    die "another local Amp owns $CONTAINER. Stop it with: PRICETAG_AMP_DIR=$owner scripts/amp stop"
+  fi
+  die "a $CONTAINER container that this script didn't start already exists. Remove it with: docker rm -f -v $CONTAINER"
+}
+
 stop_process() {
   local pid attempt
   pid="$("$1")" || return 0
@@ -112,11 +141,18 @@ stop_process() {
   kill -9 "$pid"
 }
 
+stop_processes() {
+  stop_process running_ampd_pid ampd
+  stop_process running_throttle_pid "the RPC throttle"
+}
+
+# Prints the chain's head, or nothing and fails. printf would turn a missing result into block 0.
 rpc_head() {
-  local response
+  local response result
   response="$(curl -fsS --max-time 15 -H 'content-type: application/json' \
     -d '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' "$RPC_URL")" || return 1
-  printf '%d' "$(jq -er .result <<< "$response")"
+  result="$(jq -er '.result | select(type == "string" and test("^0x[0-9a-fA-F]+$"))' <<< "$response" 2> /dev/null)" || return 1
+  printf '%d' "$result"
 }
 
 rpc_head_with_retries() {
@@ -143,13 +179,23 @@ check_tools() {
   docker info > /dev/null 2>&1 || die "Docker isn't running. Start Docker Desktop and try again."
 }
 
-check_ports() {
+# Prints the first of our ports that something is listening on, and fails if none is.
+port_in_use() {
   local port
   for port in "$FLIGHT_PORT" "$ADMIN_PORT" "$WORKER_HEALTH_PORT" "$RPC_THROTTLE_PORT"; do
     if lsof -nP -iTCP:"$port" -sTCP:LISTEN > /dev/null 2>&1; then
-      die "port $port is already in use, so another Amp may be running."
+      printf '%s' "$port"
+      return 0
     fi
   done
+  return 1
+}
+
+check_ports() {
+  local port
+  if port="$(port_in_use)"; then
+    die "port $port is already in use, so another Amp may be running."
+  fi
 }
 
 # The URL and any key in it stay in this process's environment, so ampd and its files never see them.
@@ -176,6 +222,7 @@ start_metadb() {
   say "Starting a throwaway Postgres..."
   # Bound to localhost on a free port, and removed with its data when stopped.
   docker run -d --rm --name "$CONTAINER" \
+    --label "$OWNER_LABEL=$STATE_DIR" \
     -e POSTGRES_HOST_AUTH_METHOD=trust \
     -p 127.0.0.1::5432 \
     "$POSTGRES_IMAGE" > /dev/null
@@ -267,6 +314,7 @@ wait_for_head() {
   local started=$SECONDS chain pair line ready at
   while [ $((SECONDS - started)) -lt "$HEAD_TIMEOUT_SECS" ]; do
     running_ampd_pid > /dev/null || die "ampd exited. See $STATE_DIR/ampd.log"
+    running_throttle_pid > /dev/null || die "the RPC throttle exited. See $STATE_DIR/rpc-throttle.log"
     chain="$(rpc_head 2> /dev/null || true)"
     if [ -n "$chain" ]; then
       ready=1
@@ -295,9 +343,12 @@ cmd_start() {
     die "the local Amp is already running (PID $pid). Run scripts/amp stop first."
   fi
   check_tools
+  # Before changing anything, make sure nothing here belongs to another local Amp.
+  refuse_foreign_metadb
+  stop_processes
+  check_ports
   # Whatever a crash or a restart left behind.
   cmd_stop > /dev/null 2>&1
-  check_ports
 
   BASE_RPC_URL="$(env_value BASE_RPC_URL)"
   BASE_RPC_URL="${BASE_RPC_URL:-$DEFAULT_RPC_URL}"
@@ -321,6 +372,7 @@ cmd_start() {
   start_block=$((head - history_blocks))
 
   mkdir -p "$STATE_DIR"
+  STATE_DIR="$(resolve_dir "$STATE_DIR")"
   printf '%s' "$ENV_FILE" > "$STATE_DIR/env_file"
   trap 'say "Start failed. See $STATE_DIR/ampd.log, then clean up with: scripts/amp stop"' EXIT
   start_rpc_throttle
@@ -347,21 +399,30 @@ cmd_start() {
 }
 
 cmd_stop() {
-  local env_file
-  env_file="$(cat "$STATE_DIR/env_file" 2> /dev/null || printf '%s' "$ENV_FILE")"
-  stop_process running_ampd_pid ampd
-  stop_process running_throttle_pid "the RPC throttle"
+  refuse_foreign_metadb
+  local env_file port
+  env_file="$(cat "$STATE_DIR/env_file" 2> /dev/null || true)"
+  stop_processes
   docker rm -f -v "$CONTAINER" > /dev/null 2>&1 || true
   # By name, so a mistyped PRICETAG_AMP_DIR can't delete anything else.
-  rm -rf "$STATE_DIR"/{config.toml,providers,manifests,data,ampd.log,ampd.pid,rpc-throttle.log,rpc-throttle.pid,env_file,base_mainnet.json,pricetag.json}
+  rm -rf "${STATE_DIR:?}"/{config.toml,providers,manifests,data,ampd.log,ampd.pid,rpc-throttle.log,rpc-throttle.pid,env_file,base_mainnet.json,pricetag.json}
   rmdir "$STATE_DIR" 2> /dev/null || true
+  if port="$(port_in_use)"; then
+    # With no record here, the block in .env.local could be the running Amp's.
+    if [ -n "$env_file" ]; then ENV_FILE="$env_file" remove_env_block; fi
+    say "Stopped what this directory started, but something else is using port $port."
+    return 0
+  fi
   # The folder it was started from, which may be another checkout.
-  ENV_FILE="$env_file" remove_env_block
+  ENV_FILE="${env_file:-$ENV_FILE}" remove_env_block
   say "Stopped. Nothing is left running, and its data and settings are gone."
 }
 
-case "${1:-}" in
-  start) cmd_start ;;
-  stop) cmd_stop ;;
-  *) say "Usage: scripts/amp start|stop"; exit 2 ;;
-esac
+# test/amp-script.test.ts sources this file to call its functions.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    start) cmd_start ;;
+    stop) cmd_stop ;;
+    *) say "Usage: scripts/amp start|stop"; exit 2 ;;
+  esac
+fi

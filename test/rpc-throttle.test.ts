@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createServer, type RequestListener, type Server } from "node:http"
-import type { AddressInfo } from "node:net"
+import { connect, type AddressInfo } from "node:net"
 import { describe, it } from "node:test"
 import { createThrottle } from "../scripts/rpc-throttle.ts"
 
@@ -86,6 +86,80 @@ describe("the RPC throttle", () => {
       },
     )
     assert.equal(calls, 1)
+  })
+
+  it("survives a client that disconnects partway through its request", async () => {
+    await withThrottle(
+      1000,
+      (_req, res) => {
+        res.end("ok")
+      },
+      async (url) => {
+        const { hostname, port } = new URL(url)
+        await new Promise<void>((resolve) => {
+          const socket = connect(Number(port), hostname, () => {
+            socket.write("POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 100\r\n\r\npartial", () => {
+              socket.destroy()
+              resolve()
+            })
+          })
+        })
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        assert.equal(await (await call(url)).text(), "ok")
+      },
+    )
+  })
+
+  it("survives a client that disconnects while waiting for the RPC", async () => {
+    let calls = 0
+    let answerLate = () => {}
+    let markReached = () => {}
+    const reached = new Promise<void>((resolve) => {
+      markReached = resolve
+    })
+    await withThrottle(
+      1000,
+      (_req, res) => {
+        calls += 1
+        if (calls === 1) {
+          answerLate = () => res.end("late")
+          markReached()
+        } else {
+          res.end("ok")
+        }
+      },
+      async (url) => {
+        const abandoned = new AbortController()
+        const request = fetch(url, { method: "POST", body: "{}", signal: abandoned.signal }).catch(() => null)
+        await reached
+        abandoned.abort()
+        await request
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        answerLate()
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        assert.equal(await (await call(url)).text(), "ok")
+      },
+    )
+  })
+
+  it("answers 502 when the RPC's response breaks partway through", async () => {
+    let calls = 0
+    await withThrottle(
+      1000,
+      (_req, res) => {
+        calls += 1
+        if (calls === 1) {
+          res.writeHead(200, { "content-length": "100" })
+          res.write("partial", () => res.destroy())
+        } else {
+          res.end("ok")
+        }
+      },
+      async (url) => {
+        assert.equal((await call(url)).status, 502)
+        assert.equal(await (await call(url)).text(), "ok")
+      },
+    )
   })
 
   it("answers 502 without quoting the URL when the RPC can't be reached", async () => {

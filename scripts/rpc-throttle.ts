@@ -23,11 +23,12 @@ export function createThrottle(target: string, perSecond: number): Server {
   }
 
   return createServer(async (req, res) => {
-    const chunks: Buffer[] = []
-    for await (const chunk of req) chunks.push(chunk as Buffer)
-    const body = Buffer.concat(chunks)
-
+    // Everything is inside the try, because nothing restarts this process if an error escapes.
     try {
+      const chunks: Buffer[] = []
+      for await (const chunk of req) chunks.push(chunk as Buffer)
+      const body = Buffer.concat(chunks)
+
       for (let attempt = 0; ; attempt++) {
         await waitForSlot()
         const upstream = await fetch(target, {
@@ -41,8 +42,10 @@ export function createThrottle(target: string, perSecond: number): Server {
           nextSlot = Math.max(nextSlot, Date.now() + PAUSE_AFTER_429_MS)
           continue
         }
+        // Read it first, so a response that breaks partway can still become a 502.
+        const response = Buffer.from(await upstream.arrayBuffer())
         res.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") ?? "application/json" })
-        res.end(Buffer.from(await upstream.arrayBuffer()))
+        res.end(response)
         return
       }
     } catch (error) {
