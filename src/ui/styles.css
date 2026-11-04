@@ -145,6 +145,19 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .leg-tags { display: flex; gap: 6px; flex-wrap: wrap; }
 .tag { font-size: 12px; padding: 1px 7px; border-radius: 6px; background: var(--grid); }
 .tag.warn { background: var(--warn-fill); color: var(--warn-ink); font-weight: 600; }
+.tax-link { text-align: right; margin: -6px 2px 14px; }
+.tax { display: flex; flex-direction: column; gap: 12px; }
+.tax .notice { margin: 0; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field select, .field textarea { font: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); color: inherit; }
+.field textarea { font-family: ui-monospace, Menlo, monospace; resize: vertical; }
+.tax-counts { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; }
+.tax-counts dd { margin: 0; font-size: 17px; font-weight: 600; }
+.warn-text { color: var(--warn-ink); }
+.primary { padding: 9px 14px; border-radius: 8px; border: 0; background: var(--text-primary); color: var(--surface-1); font-weight: 600; }
+.primary:disabled { opacity: 0.5; cursor: default; }
+.tax-notes p { margin-top: 6px; color: var(--text-secondary); }
+.tax-notes summary { cursor: pointer; }
 @media (max-width: 800px) {
   .summary { grid-template-columns: 1fr; }
 }

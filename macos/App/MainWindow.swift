@@ -20,9 +20,13 @@ struct MainWindow: View {
             .sheet(isPresented: $navigation.isChangingWallet) {
                 WalletSheet(store: store)
             }
+            .sheet(isPresented: $navigation.isExportingTaxReport) {
+                TaxReportView(store: store) { navigation.isExportingTaxReport = false }
+            }
             // What's open belongs to the wallet it was opened on.
             .onChange(of: store.address) {
                 navigation.target = nil
+                navigation.isExportingTaxReport = false
             }
     }
 
@@ -53,6 +57,11 @@ struct MainWindow: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .help("\(Wording.methodHelp) (⌘1, ⌘2)")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button("Tax Report", systemImage: "doc.text") { navigation.isExportingTaxReport = true }
+                .disabled(store.address == nil)
+                .help("Export a tax report (⌘E)")
         }
         ToolbarItem(placement: .status) {
             FeedBadge(feed: store.feed, portfolio: portfolio)

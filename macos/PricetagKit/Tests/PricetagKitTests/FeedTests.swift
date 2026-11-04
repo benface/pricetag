@@ -21,6 +21,10 @@ actor ScriptedSource: PortfolioSource {
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) async throws -> Explanation {
         throw FetchError.unreachable
     }
+
+    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
+        throw FetchError.unreachable
+    }
 }
 
 /// Holds one read open until it's told how to answer.
@@ -32,6 +36,10 @@ actor GatedSource: PortfolioSource {
     }
 
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
         throw FetchError.unreachable
     }
 

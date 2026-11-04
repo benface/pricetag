@@ -34,6 +34,7 @@ import {
 import { PnlChart } from "./PnlChart.tsx"
 import { RulesPanel } from "./RulesPanel.tsx"
 import { useRules } from "./useRules.ts"
+import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
 
 function readAddress(): string | null {
@@ -169,6 +170,7 @@ export function App() {
   const [inputError, setInputError] = useState<string | null>(null)
   const [method, setMethod] = useState<Method>("average")
   const [target, setTarget] = useState<ExplainTarget | null>(null)
+  const [taxOpen, setTaxOpen] = useState(false)
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
   const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule)
@@ -177,6 +179,7 @@ export function App() {
     const onPop = () => {
       setAddress(readAddress())
       setTarget(null)
+      setTaxOpen(false)
     }
     window.addEventListener("popstate", onPop)
     return () => window.removeEventListener("popstate", onPop)
@@ -186,6 +189,7 @@ export function App() {
     window.history.pushState(null, "", `?address=${next}`)
     setAddress(next)
     setTarget(null)
+    setTaxOpen(false)
   }
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -318,6 +322,11 @@ export function App() {
                   ))}
                 </div>
               </section>
+              <p className="tax-link">
+                <button type="button" className="link" onClick={() => setTaxOpen(true)}>
+                  Export a tax report…
+                </button>
+              </p>
               <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
               {positions.length > 0 ? <Holdings positions={positions} currency={currency} explain={setTarget} /> : null}
             </>
@@ -326,6 +335,7 @@ export function App() {
       ) : null}
 
       {explanation ? <ExplainPanel explanation={explanation} onClose={close} /> : null}
+      {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} onClose={() => setTaxOpen(false)} /> : null}
     </div>
   )
 }

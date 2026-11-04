@@ -203,6 +203,12 @@ public final class PortfolioStore {
         return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked)
     }
 
+    public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
+        // A request from before a change of server has nothing to say about what's on screen now.
+        guard request.serverURL == serverURL else { throw CancellationError() }
+        return try await source.taxReport(request)
+    }
+
     private func linked(for address: String) -> [String] {
         // Costs only carry over onto a wallet that's the user's own. A wallet being watched could be anyone's.
         linkedWallets.contains(address) ? linkedWallets.filter { $0 != address } : []

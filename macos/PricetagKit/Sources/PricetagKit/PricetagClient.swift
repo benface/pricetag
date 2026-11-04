@@ -20,6 +20,7 @@ public protocol PortfolioSource: Sendable {
     /// Empty when the server has only one, so there's nothing to choose.
     func rules() async throws -> [PricingRule]
     func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> RuleComparison
+    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
 }
 
 extension PortfolioSource {
@@ -44,6 +45,11 @@ public struct PricetagClient: PortfolioSource {
 
     public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) async throws -> Explanation {
         try await get("/api/portfolio/\(address)/explain", query: settings(method, currency, rule, linked) + target.queryItems, timeout: .seconds(30))
+    }
+
+    /// Reads every wallet in it, so it gets as long as a first read.
+    public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
+        try await get("/api/tax-report/\(request.address)", query: request.queryItems, timeout: .seconds(180))
     }
 
     public func rules() async throws -> [PricingRule] {

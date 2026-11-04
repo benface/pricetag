@@ -66,6 +66,9 @@ struct MacApp: App {
                     .keyboardShortcut("r", modifiers: .command)
                 Button("Change Wallet…") { navigation.isChangingWallet = true }
                     .keyboardShortcut("l", modifiers: .command)
+                Button("Export Tax Report…") { navigation.isExportingTaxReport = true }
+                    .keyboardShortcut("e", modifiers: .command)
+                    .disabled(store.address == nil)
             }
             CommandGroup(before: .windowList) {
                 OpenHotWalletCommand()
