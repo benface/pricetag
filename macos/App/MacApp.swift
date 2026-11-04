@@ -74,6 +74,17 @@ struct MacApp: App {
             CommandGroup(before: .windowList) {
                 OpenHotWalletCommand()
             }
+            CommandGroup(after: .newItem) {
+                Button("Resolve Unknowns…") { navigation.resolve() }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(store.portfolio?.questions.isEmpty != false)
+                Button("Export as CSV…") { navigation.isExporting = true }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    .disabled(store.portfolio == nil)
+                Button("Undo Last Answer") { store.undo() }
+                    .keyboardShortcut("z", modifiers: [.command, .option])
+                    .disabled(store.undoStack.isEmpty)
+            }
         }
 
         Window(HotWalletWording.title, id: WindowID.hotWallet) {

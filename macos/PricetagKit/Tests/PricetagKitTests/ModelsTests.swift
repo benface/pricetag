@@ -96,7 +96,7 @@ import Testing
 
 @Test func anOpeningBalanceIsNotATransaction() throws {
     let json = """
-    {"id":"opening:DAI","asset":"DAI","delta":"5","decimals":18,"kind":"transfer","priceMicros":null,"priceSource":null,"priceNote":null,"costLabel":"unknown","blockNum":1,"timestamp":"2026-11-04T00:00:00.000Z","txHash":"","opening":true,"effect":"Adds 5 DAI","netting":null}
+    {"id":"opening:DAI","asset":"DAI","delta":"5","decimals":18,"kind":"transfer","priceMicros":null,"priceSource":null,"priceNote":null,"costLabel":"unknown","estimated":false,"partlyUnknown":false,"blockNum":1,"timestamp":"2026-11-04T00:00:00.000Z","txHash":"","opening":true,"effect":"Adds 5 DAI","netting":null}
     """
     let leg = try JSONDecoder().decode(ExplanationLeg.self, from: Data(json.utf8))
     #expect(leg.transactionURL == nil)

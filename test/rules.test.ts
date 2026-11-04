@@ -3,7 +3,8 @@ import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, type LegRow } from "@pricetag/sdk/core"
-import type { PortfolioResponse } from "../src/core/api.ts"
+import type { BookPreview, PortfolioResponse } from "../src/core/api.ts"
+import { costKey, emptyBook } from "../src/core/book.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule, type RuleComparison } from "../src/core/rules.ts"
 import { createApi } from "../server/app.ts"
 import type { Proofs } from "../server/proof.ts"
@@ -98,11 +99,11 @@ describe("reading by a pricing rule", () => {
     const row = (label: string) => comparison.rows.find((r) => r.label === label)
     assert.equal(comparison.blockNum, HEAD)
     assert.deepEqual([comparison.a.id, comparison.b.id], [MARKET_RULE_ID, CAUTIOUS_RULE_ID])
-    const whole = { aPartial: false, bPartial: false }
+    const whole = { aPartial: false, bPartial: false, aEstimated: false, bEstimated: false }
     assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "3000000000", b: "2970000000", difference: "-30000000", ...whole })
     assert.deepEqual(row("Value"), { label: "Value", format: "money", a: "3000000000", b: "2970000000", difference: "-30000000", ...whole })
     // The USDC it paid with arrived with an unknown cost, so the total says it leaves that out.
-    assert.deepEqual(row("Total PnL"), { label: "Total PnL", format: "signed", a: "0", b: "-30000000", difference: "-30000000", aPartial: true, bPartial: true })
+    assert.deepEqual(row("Total PnL"), { label: "Total PnL", format: "signed", a: "0", b: "-30000000", difference: "-30000000", aPartial: true, bPartial: true, aEstimated: false, bEstimated: false })
     assert.ok(comparison.warnings.some((warning) => warning.includes("USDC")))
     assert.equal(comparison.changedTxs, 0, "it paid in USDC, so no cost changed")
   })
@@ -115,6 +116,47 @@ describe("reading by a pricing rule", () => {
     await fetch(`${base}/api/portfolio/${ME}?rule=${CAUTIOUS_RULE_ID}&linked=${OTHER}`)
     assert.ok(!forkReads.includes(ME), "already read")
     assert.ok(!forkReads.includes(OTHER), "already read")
+  })
+
+  describe("with answers, which are posted", () => {
+    const post = (path: string, body: object) => fetch(`${base}/api/portfolio/${ME}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method: "average", currency: "USD", ...body }) })
+    const answered = { ...emptyBook(), costs: { [costKey(ME, "0xa:USDC")]: { micros: "3000000000", currency: "USD" as const } } }
+
+    it("reads by the rule asked for, or the first", async () => {
+      assert.equal(((await (await post("", {})).json()) as PortfolioResponse).rule, MARKET_RULE_ID)
+      const cautious = (await (await post("", { rule: CAUTIOUS_RULE_ID })).json()) as PortfolioResponse
+      assert.equal(cautious.rule, CAUTIOUS_RULE_ID)
+      assert.equal(cautious.positions.find((position) => position.asset === "ETH")!.values.valueMicros, "2970000000")
+    })
+
+    it("refuses a rule this server doesn't have", async () => {
+      assert.equal((await post("", { rule: "nope" })).status, 400)
+    })
+
+    it("previews and explains by that rule", async () => {
+      const previews = async (rule?: string) => ((await (await post("/preview", { rule, candidates: [answered] })).json()) as { previews: BookPreview[] }).previews[0]!
+      assert.equal((await previews()).pnlMicros, "0")
+      assert.equal((await previews(CAUTIOUS_RULE_ID)).pnlMicros, "-30000000")
+      const explained = (await (await fetch(`${base}/api/portfolio/${ME}/explain?metric=pnl`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method: "average", currency: "USD", rule: CAUTIOUS_RULE_ID, book: answered }) })).json()) as { lines: string[] }
+      assert.ok(explained.lines.includes(ruleNote(RULE_TEXT[CAUTIOUS_RULE_ID]!)))
+    })
+
+    it("reads a linked wallet by that rule", async () => {
+      await post("", { rule: CAUTIOUS_RULE_ID, linked: [OTHER] })
+      const read = (await (await post("", { rule: CAUTIOUS_RULE_ID, linked: [OTHER] })).json()) as PortfolioResponse
+      assert.deepEqual(read.linkedFailed, [])
+      assert.deepEqual(read.linkedReading, [])
+    })
+
+    it("compares with the same answers as the main screen, on both sides", async () => {
+      const comparison = (await (await post("/compare", { book: answered })).json()) as RuleComparison
+      const total = comparison.rows.find((r) => r.label === "Total PnL")!
+      assert.deepEqual([total.a, total.b, total.aPartial, total.bPartial], ["0", "-30000000", false, false], "the USDC's cost was answered, so nothing's left out")
+    })
+
+    it("refuses a bad compare", async () => {
+      assert.equal((await post("/compare", { linked: ["nope"] })).status, 400)
+    })
   })
 
   it("refuses a bad compare request", async () => {

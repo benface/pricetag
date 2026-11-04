@@ -154,6 +154,34 @@ describe("taxRows", () => {
     assert.deepEqual([row?.status, row?.gainMicros], ["estimated", usd(1000)])
   })
 
+  it("marks a trade valued from the market as estimated, in what was paid and what was received", () => {
+    // 100 AERO bought for $100, traded for 100 VIRTUAL worth an estimated $100, then sold for $150.
+    const legs = [
+      leg(10, 100n * E18, { asset: "AERO", id: "a", costMicros: usd(100), costLabel: "paid" }),
+      leg(20, -100n * E18, { asset: "AERO", id: "b", proceedsMicros: usd(100), estimated: true }),
+      leg(20, 100n * E18, { asset: "VIRTUAL", id: "c", kind: "swap", costMicros: usd(100), costLabel: "paid", estimated: true }),
+      leg(30, -100n * E18, { asset: "VIRTUAL", id: "d", proceedsMicros: usd(150) }),
+    ]
+    const rows = taxRows([walletOf(A, legs, { balances: { blockNum: 1000, amounts: { AERO: "0", VIRTUAL: "0" } } })], { method: "fifo", scope: "per-wallet" })
+    assert.deepEqual(rows.map((row) => [row.asset, row.status, row.gainMicros]), [["AERO", "estimated", usd(0)], ["VIRTUAL", "estimated", usd(50)]])
+    assert.match(rows[0]?.reason ?? "", /^What it sold for is an estimate/, "AERO was really paid for, and only what it fetched is estimated")
+    assert.match(rows[1]?.reason ?? "", /^Part of its cost is an estimate/, "VIRTUAL really sold for $150, and only what it cost is estimated")
+  })
+
+  it("says which side of a sale is the estimate", () => {
+    const reason = (legs: PricedLeg[]) => taxRows([walletOf(A, legs, { balances: { blockNum: 1000, amounts: { ETH: "0" } } })], { method: "fifo", scope: "per-wallet" })[0]?.reason
+    assert.equal(reason([buy(10, 1n, 1000), sell(30, 1n, 1500)]), null, "neither")
+    assert.match(reason([buy(10, 1n, 1000), leg(30, -E18, { proceedsMicros: usd(1500), estimated: true })]) ?? "", /^What it sold for is an estimate/)
+    assert.match(reason([leg(10, E18, { costMicros: usd(1000), costLabel: "received at market" }), sell(30, 1n, 1500)]) ?? "", /^Part of its cost is an estimate/)
+    assert.match(reason([leg(10, E18, { costMicros: usd(1000), costLabel: "received at market" }), leg(30, -E18, { proceedsMicros: usd(1500), estimated: true })]) ?? "", /^What it sold for and part of its cost are estimates/)
+  })
+
+  it("doesn't call a real cost estimated because it was mixed with another real one", () => {
+    const legs = [buy(10, 1n, 1000), leg(20, E18, { costMicros: usd(1000), costLabel: "self-reported" }), sell(30, 1n, 2000)]
+    const [row] = taxRows([walletOf(A, legs, { balances: { blockNum: 1000, amounts: { ETH: E18.toString() } } })], { method: "average", scope: "per-wallet" })
+    assert.equal(row?.status, "resolved")
+  })
+
   describe("across wallets", () => {
     // A buys, moves it to B, and B sells.
     const move = 20
