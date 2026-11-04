@@ -59,7 +59,7 @@ public struct ExplanationPane: View {
             }
             Section(Wording.activityTitle(count: explanation.legCount, shown: explanation.legs.count)) {
                 ForEach(explanation.legs) { leg in
-                    LegRow(leg: leg, currency: explanation.currency)
+                    LegRow(leg: leg, currency: explanation.currency, store: store)
                 }
             }
         }
@@ -69,10 +69,13 @@ public struct ExplanationPane: View {
 public struct LegRow: View {
     let leg: ExplanationLeg
     let currency: CurrencyCode
+    let store: PortfolioStore
+    @State private var showsProof = false
 
-    public init(leg: ExplanationLeg, currency: CurrencyCode) {
+    public init(leg: ExplanationLeg, currency: CurrencyCode, store: PortfolioStore) {
         self.leg = leg
         self.currency = currency
+        self.store = store
     }
 
     public var body: some View {
@@ -103,10 +106,22 @@ public struct LegRow: View {
                         Label("\(Format.shortHash(leg.txHash)) on Basescan", systemImage: "arrow.up.right.square")
                     }
                 }
+                if !leg.opening {
+                    Button {
+                        showsProof.toggle()
+                    } label: {
+                        Label("Proof", systemImage: showsProof ? "chevron.down" : "chevron.right")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+                }
                 Spacer(minLength: 0)
                 Text("Block \(Format.block(leg.blockNum))").foregroundStyle(.secondary).monospacedDigit()
             }
             .font(.caption)
+            if showsProof, let address = store.address {
+                ProofPanel(leg: leg.id, address: address, store: store).id("\(address):\(leg.id):\(currency.rawValue)")
+            }
         }
         .padding(.vertical, 3)
     }
@@ -124,7 +139,14 @@ public struct LegRow: View {
     private var tagList: some View {
         Tag(leg.opening ? Wording.startingBalance : Wording.action(kind: leg.kind, isIncoming: leg.isIncoming))
         if let price = leg.priceMicros, let source = leg.priceSource {
-            Tag("\(Format.price(price, currency)) · \(Wording.priceSource(source))")
+            Button {
+                showsProof.toggle()
+            } label: {
+                Tag("\(Format.price(price, currency)) · \(Wording.priceSource(source))")
+            }
+            .buttonStyle(.plain)
+            .disabled(leg.opening)
+            .help(leg.opening ? "" : "See where this price comes from")
         } else {
             Tag("No price", isWarning: true)
         }

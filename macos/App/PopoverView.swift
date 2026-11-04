@@ -1,9 +1,11 @@
+import HotWalletKit
 import PricetagKit
 import SwiftUI
 
 /// What the menu bar opens: the total, holdings with their cost and PnL, and a way into the window.
 struct PopoverView: View {
     let store: PortfolioStore
+    let hotWallet: HotWallet
     let navigation: Navigation
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
@@ -22,6 +24,8 @@ struct PopoverView: View {
                 holdings(portfolio)
                 Divider()
             }
+            spendingMoney
+            Divider()
             footer
         }
         .frame(width: 380)
@@ -103,7 +107,49 @@ struct PopoverView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
+    private var spendingMoney: some View {
+        Button {
+            dismiss()
+            openWindow(id: WindowID.hotWallet)
+            DockPresence.bringForward()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: hotWallet.needsAttention ? "exclamationmark.triangle.fill" : "banknote")
+                    .foregroundStyle(hotWallet.needsAttention ? Tone.warning.style : AnyShapeStyle(.secondary))
+                Text(HotWalletWording.title)
+                Spacer()
+                Text(spendingMoneySummary)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.callout)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var spendingMoneySummary: String {
+        if hotWallet.alarm != nil { return "Key may be stolen" }
+        guard hotWallet.address != nil else { return "Set up" }
+        guard let plan = hotWallet.plan else { return "Reading…" }
+        return "\(HotWalletWording.usd(plan.valueUsdMicros)) of \(HotWalletWording.usd(hotWallet.settings.capUsdMicros))"
+    }
+
     private var footer: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let rule = store.activeRuleName {
+                Text("\(Wording.rulesTitle): \(rule)").font(.caption).foregroundStyle(.secondary)
+            }
+            footerControls
+        }
+    }
+
+    private var footerControls: some View {
         HStack {
             Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
                 ForEach(CostMethod.allCases) { Text($0.label).tag($0) }

@@ -1,0 +1,230 @@
+import Foundation
+@testable import KeyVault
+import PricetagKit
+@testable import HotWalletKit
+
+let hotAddress = EthereumAddress("0x1111111111111111111111111111111111111111")!
+let nextAddress = EthereumAddress("0x2222222222222222222222222222222222222222")!
+let coldAddress = EthereumAddress("0x1234567890123456789012345678901234567890")!
+
+func token(_ symbol: String) -> Token {
+    Base.tokens.first { $0.symbol == symbol }!
+}
+
+let usdc = token("USDC")
+let dai = token("DAI")
+let weth = token("WETH")
+
+let ethPrice: UInt128 = 3000 * Money.dollar
+let oneEth: UInt128 = 1_000_000_000_000_000_000
+
+/// 0.01 gwei gas, and an L1 fee of a tenth of a cent or so. Like Base on an ordinary day.
+let cheapFees = FeeQuote(maxFeePerGas: 10_000_000, maxPriorityFeePerGas: 1_000_000, l1FeeWei: 300_000_000_000)
+
+func usdcUnits(_ dollars: UInt128) -> UInt128 { dollars * 1_000_000 }
+
+func snapshot(eth: UInt128 = oneEth / 100, tokens: [Token: UInt128] = [:], nonce: UInt64 = 0, chainID: UInt64 = Base.chainID, ethUsd: UInt128? = ethPrice, fees: FeeQuote = cheapFees) -> ChainSnapshot {
+    var balances: [Token: UInt128] = [Base.eth: eth]
+    for (token, balance) in tokens { balances[token] = balance }
+    return ChainSnapshot(chainID: chainID, blockNumber: 1000, nonce: nonce, balances: balances, ethUsdMicros: ethUsd, usdcUsdMicros: Money.dollar, fees: fees)
+}
+
+actor FakeChain: ChainClient {
+    var current: ChainSnapshot
+    var receipts: [String: Receipt] = [:]
+    var estimate: UInt64 = 60000
+    var sendFailure: ChainError?
+    var estimateFailure: ChainError?
+    private(set) var sent: [SignedTransaction] = []
+    /// Set after each send, to read what was on disk at that moment.
+    var onSend: (@Sendable (SignedTransaction) -> Void)?
+
+    init(_ snapshot: ChainSnapshot) {
+        current = snapshot
+    }
+
+    /// A new read always comes from after any receipt so far, unless a test says otherwise by not calling this.
+    func set(_ snapshot: ChainSnapshot) {
+        current = snapshot
+        current.blockNumber = max(snapshot.blockNumber, receipts.values.map(\.blockNumber).max() ?? 0, current.blockNumber)
+    }
+
+    /// Receipts land in the block after the current read, like a node that's moved on since then.
+    func setReceipt(_ hash: String, succeeded: Bool) { receipts[hash] = Receipt(succeeded: succeeded, blockNumber: current.blockNumber + 1) }
+    func confirmAll() { for transaction in sent { setReceipt(transaction.hash, succeeded: true) } }
+    func setSendFailure(_ failure: ChainError?) { sendFailure = failure }
+    func setEstimateFailure(_ failure: ChainError?) { estimateFailure = failure }
+    func setOnSend(_ body: @escaping @Sendable (SignedTransaction) -> Void) { onSend = body }
+
+    func snapshot(of address: EthereumAddress) throws -> ChainSnapshot { current }
+
+    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) throws -> UInt64 {
+        if let estimateFailure { throw estimateFailure }
+        return data.isEmpty ? 21000 : estimate
+    }
+
+    func send(_ transaction: SignedTransaction) throws {
+        if let sendFailure { throw sendFailure }
+        sent.append(transaction)
+        onSend?(transaction)
+    }
+
+    func receipt(of hash: String) -> Receipt? { receipts[hash] }
+}
+
+/// Remembers what it was asked to sign. It holds no key at all: the real vault has its own tests.
+actor FakeSigner: Signer {
+    private(set) var signed: [UnsignedTransaction] = []
+    private var keys: [EthereumAddress]
+    private var unused: [EthereumAddress]
+
+    init(keys: [EthereumAddress] = [], next: [EthereumAddress] = [hotAddress, nextAddress]) {
+        self.keys = keys
+        unused = next
+    }
+
+    func createKey() -> EthereumAddress {
+        let key = unused.removeFirst()
+        keys.append(key)
+        return key
+    }
+
+    func sign(_ transaction: UnsignedTransaction, from address: EthereumAddress) throws -> SignedTransaction {
+        guard keys.contains(address) else { throw KeyVault.Failure.noSuchKey }
+        signed.append(transaction)
+        // Unique bytes for a unique hash. A node would reject this: the anvil test covers real signatures.
+        return SignedTransaction(raw: transaction.signingPayload)
+    }
+
+    func hasKey(_ address: EthereumAddress) -> Bool { keys.contains(address) }
+    func deleteKey(_ address: EthereumAddress) { keys.removeAll { $0 == address } }
+    func addresses() -> [EthereumAddress] { keys }
+}
+
+final class MemoryStateStore: DeviceStateStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var state = DeviceWalletState()
+
+    var saved: DeviceWalletState { lock.withLock { state } }
+
+    func load() throws -> DeviceWalletState { saved }
+    func save(_ state: DeviceWalletState) throws { lock.withLock { self.state = state } }
+}
+
+final class MemorySettingsStore: WalletSettingsStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var settings = WalletSettings()
+
+    func load() -> WalletSettings { lock.withLock { settings } }
+    func save(_ settings: WalletSettings) { lock.withLock { self.settings = settings } }
+}
+
+struct FakePresence: UserPresence {
+    let allows: Bool
+
+    struct Refused: Error {}
+
+    func confirm(reason: String) throws {
+        if !allows { throw Refused() }
+    }
+}
+
+actor ScriptedPortfolios: PortfolioSource {
+    private var next: Result<Portfolio, FetchError>
+    private(set) var linked: [[String]] = []
+
+    init(_ next: Result<Portfolio, FetchError>) {
+        self.next = next
+    }
+
+    func set(_ next: Result<Portfolio, FetchError>) { self.next = next }
+
+    /// Each read's pricing rule. Money only ever moves by the default.
+    private(set) var rules: [String?] = []
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], timeout: Duration) throws -> Portfolio {
+        self.linked.append(linked)
+        rules.append(rule)
+        return try next.get()
+    }
+
+    func proof(leg: String, address: String, currency: CurrencyCode) throws -> Proof {
+        throw FetchError.unreachable
+    }
+
+    func verification(leg: String, address: String, currency: CurrencyCode) throws -> Verification {
+        throw FetchError.unreachable
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func taxReport(_ request: TaxReportRequest) throws -> TaxReport {
+        throw FetchError.unreachable
+    }
+}
+
+/// A portfolio as the server would send it, from JSON, so the test uses the same decoding as the app.
+func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, outgoing: [String] = [], realized: String? = "0", realizedMissing: Int = 0, positions: [String] = [], unlisted: [String] = []) -> Portfolio {
+    let realizedText = realized.map { "\"\($0)\"" } ?? "null"
+    let json = """
+    {
+      "address": "\(address.lowercased)", "mode": "raw", "method": "average", "currency": "USD", "exchange": null,
+      "coverage": { "fromBlock": 1, "toBlock": \(toBlock) }, "trackedTokens": 10,
+      "latest": { "blockNum": 1000, "timestamp": "2026-11-04T00:00:00.000Z" },
+      "progress": { "started": true, "behindBlocks": 0 },
+      "gasUnknownTxs": [], "l1FeeUnknownTxs": [], "openingUnread": [], "unreadAssets": [], "outgoingTxs": [\(outgoing.map { "\"\($0)\"" }.joined(separator: ","))],
+      "unlisted": [\(unlisted.map { "{ \"token\": \"\($0)\", \"transfers\": 1 }" }.joined(separator: ","))],
+      "positions": [\(positions.joined(separator: ","))],
+      "totals": {
+        "valueMicros": null, "realizedMicros": \(realizedText), "unrealizedMicros": null, "gasMicros": null, "pnlMicros": null,
+        "excluded": [], "unpricedGas": false,
+        "coverage": {
+          "value": { "known": 0, "missing": 0 }, "realized": { "known": 1, "missing": \(realizedMissing) },
+          "unrealized": { "known": 0, "missing": 0 }, "pnl": { "known": 0, "missing": 0 }
+        }
+      },
+      "pnlStatus": "complete", "points": []
+    }
+    """
+    return try! JSONDecoder().decode(Portfolio.self, from: Data(json.utf8))
+}
+
+func position(_ asset: String, decimals: Int, priceMicros: String) -> String {
+    """
+    { "asset": "\(asset)", "decimals": \(decimals), "note": null,
+      "price": { "micros": "\(priceMicros)", "source": "market", "blockNum": 1 },
+      "values": { "qty": "0", "unknownCostQty": "0", "costMicros": null, "averageCostMicros": null, "valueMicros": null, "realizedMicros": null, "unrealizedMicros": null },
+      "pnlMicros": null, "shortfallQty": "0", "legCount": 1, "reconciliation": null }
+    """
+}
+
+@MainActor
+struct Rig {
+    let wallet: HotWallet
+    let chain: FakeChain
+    let signer: FakeSigner
+    let stateStore: MemoryStateStore
+    let portfolios: ScriptedPortfolios
+
+    /// A wallet that exists already, with a cold wallet to sweep to unless told otherwise.
+    init(_ snapshot: ChainSnapshot = HotWalletKitTests.snapshot(), withCold: Bool = true, presence: Bool = true, portfolio read: Result<Portfolio, FetchError> = .success(portfolio()), now: @escaping @Sendable () -> Date = { Date() }) async {
+        let chain = FakeChain(snapshot)
+        let signer = FakeSigner(keys: [hotAddress], next: [nextAddress])
+        let stateStore = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hotAddress
+        try! stateStore.save(state)
+        let settingsStore = MemorySettingsStore()
+        var settings = WalletSettings()
+        if withCold { settings.add(ColdWallet(address: coldAddress, name: "Ledger", confirmedOnDeviceAt: Date())) }
+        settingsStore.save(settings)
+        let portfolios = ScriptedPortfolios(read)
+        self.chain = chain
+        self.signer = signer
+        self.stateStore = stateStore
+        self.portfolios = portfolios
+        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: FakePresence(allows: presence), portfolioSource: { portfolios }, makeChain: { _ in chain }, now: now)
+    }
+}

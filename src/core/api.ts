@@ -3,10 +3,14 @@
 
 import type { BalanceSnapshot, Head, LatestPrice, LatestPrices, Method, PnlPoint, PnlStatus, PositionValues, PricedLeg, Reconciliation, ReferenceRow, Totals } from "@pricetag/sdk/core"
 import type { CurrencyCode, Rates } from "./currency.ts"
+import type { TaxCountryCode, TaxScope } from "./tax.ts"
 
 export type { Head, PnlStatus }
 
 export type Mode = "demo" | "raw" | "dataset"
+
+/** A token off the allowlist that this wallet holds. It has no trusted price and may be malicious, so nothing ever calls it. */
+export type UnlistedToken = { token: string; transfers: number }
 
 export type WalletResponse = {
   address: string
@@ -22,6 +26,11 @@ export type WalletResponse = {
   latest: Head
   /** Transactions this wallet sent whose gas couldn't be worked out, so the fees are too low, and ETH worked out from its legs is too high. */
   gasUnknownTxs: string[]
+  /** The pricing rule this was read through, when the server has more than one. */
+  rule?: string
+  /** Set when that rule isn't the default, because the prices it shows aren't what their labels alone would say. */
+  ruleNote?: string | null
+  unlisted: UnlistedToken[]
   /** What this response is meant to be shown in. Its money is always USD, and `viewWallet` converts it. */
   currency: CurrencyCode
   /** Null for USD. */
@@ -67,6 +76,8 @@ export type PortfolioResponse = {
   address: string
   mode: Mode
   method: Method
+  /** The pricing rule this was read through, or null when the server has only one. */
+  rule: string | null
   currency: CurrencyCode
   /** Null for USD. */
   exchange: PortfolioExchange | null
@@ -77,6 +88,9 @@ export type PortfolioResponse = {
   /** Whether what's read has reached the chain. `behindBlocks` is 0 until it's far enough behind to say so. */
   progress: { started: boolean; behindBlocks: number }
   gasUnknownTxs: string[]
+  /** Every transaction that took something from this wallet or that it paid gas for. A hot wallet compares these with what it signed. */
+  outgoingTxs: string[]
+  unlisted: UnlistedToken[]
   l1FeeUnknownTxs: string[]
   openingUnread: string[]
   /** Assets with no position because nothing could be read about them, which isn't the same as holding none. */
@@ -123,6 +137,30 @@ export type ExplanationLeg = {
   conversion: string | null
 }
 
+/** A tax report, ready to save. See `src/core/tax.ts`. */
+export type TaxReportResponse = {
+  /** The one asked about comes first. */
+  wallets: string[]
+  country: TaxCountryCode
+  method: Method
+  scope: TaxScope
+  currency: CurrencyCode
+  /** What this country calls for, so a client can tell an override. */
+  defaults: { method: Method; scope: TaxScope }
+  rowCount: number
+  unresolvedCount: number
+  estimatedCount: number
+  /** Only rows whose gain is known, and null when none is. Read it next to `unresolvedCount`. */
+  gainMicros: string | null
+  disclaimer: string
+  /** What's wrong with this file in particular. */
+  warnings: string[]
+  /** What this report never does, and what it covers. */
+  notes: string[]
+  filename: string
+  csv: string
+}
+
 /** A derived table is normally a block or two behind the chain. More than this is worth saying out loud. */
 const BEHIND_BLOCKS = 5
 
@@ -130,3 +168,35 @@ type Progress = Pick<WalletResponse, "coverage" | "latest">
 
 export const hasStarted = ({ coverage }: Progress) => coverage.toBlock >= coverage.fromBlock
 export const isBehind = ({ coverage, latest }: Progress) => latest.blockNum - coverage.toBlock > BEHIND_BLOCKS
+
+/** A dataset behind a number, by name and manifest hash. The hash is null when it couldn't be read, and is never guessed. */
+export type ProofDataset = { title: string; name: string; hash: string | null }
+
+export type ProofLink = { title: string; url: string }
+
+/** What's behind one leg's price. All of it is in words, because clients only show it. */
+export type ProofResponse = {
+  blockNum: number
+  txHash: string
+  source: string[]
+  movements: string[]
+  links: ProofLink[]
+  datasets: ProofDataset[]
+  /** What checking the block does and doesn't show for this leg. */
+  scope: string[]
+  /** Why the block can't be checked, or null when it can. */
+  unavailable: string | null
+}
+
+export type CheckStatus = "passed" | "failed" | "unchecked"
+
+export type ProofCheck = { title: string; status: CheckStatus; detail: string }
+
+/** The block's commitments recomputed from what Amp stored, and whether this leg is in them. `status` is the worst of `checks`. */
+export type VerificationResponse = {
+  blockNum: number
+  blockHash: string
+  status: CheckStatus
+  summary: string
+  checks: ProofCheck[]
+}

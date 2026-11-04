@@ -154,6 +154,14 @@ public struct ReadProgress: Codable, Sendable, Equatable {
     public let behindBlocks: Int
 }
 
+/// A token off the allowlist that a wallet holds. Nothing ever calls it, because it has no trusted price and may be malicious.
+public struct UnlistedToken: Codable, Sendable, Equatable, Identifiable {
+    public let token: String
+    public let transfers: Int
+
+    public var id: String { token }
+}
+
 /// How a portfolio's money got out of USD. The server converts each amount at the rate when it happened.
 public struct PortfolioExchange: Codable, Sendable, Equatable {
     /// Where the rates came from, in words.
@@ -168,6 +176,8 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let address: String
     public let mode: Mode
     public let method: CostMethod
+    /// The pricing rule this was read through, or nil when the server has only one.
+    public let rule: String?
     /// What every amount in here is in.
     public let currency: CurrencyCode
     /// nil for USD.
@@ -177,6 +187,8 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let latest: Head
     public let progress: ReadProgress
     public let gasUnknownTxs: [String]
+    public let outgoingTxs: [String]
+    public let unlisted: [UnlistedToken]
     public let l1FeeUnknownTxs: [String]
     /// Assets whose balance before the first block couldn't be read yet.
     public let openingUnread: [String]
@@ -231,6 +243,58 @@ public struct Explanation: Codable, Sendable, Equatable {
     public let legs: [ExplanationLeg]
 }
 
+/// A dataset behind a number. `hash` is nil when it couldn't be read, and it's never guessed.
+public struct ProofDataset: Codable, Sendable, Equatable, Identifiable {
+    public let title: String
+    public let name: String
+    public let hash: String?
+
+    public var id: String { name }
+}
+
+public struct ProofLink: Codable, Sendable, Equatable, Identifiable {
+    public let title: String
+    public let url: String
+
+    public var id: String { url }
+    public var destination: URL? { URL(string: url) }
+}
+
+/// What's behind one row's price, in the server's words.
+public struct Proof: Codable, Sendable, Equatable {
+    public let blockNum: Int
+    public let txHash: String
+    public let source: [String]
+    public let movements: [String]
+    public let links: [ProofLink]
+    public let datasets: [ProofDataset]
+    /// What checking the block does and doesn't show for this row.
+    public let scope: [String]
+    /// Why the block can't be checked. nil when it can.
+    public let unavailable: String?
+}
+
+public enum CheckStatus: String, Codable, Sendable {
+    case passed, failed, unchecked
+}
+
+public struct ProofCheck: Codable, Sendable, Equatable, Identifiable {
+    public let title: String
+    public let status: CheckStatus
+    public let detail: String
+
+    public var id: String { title }
+}
+
+/// The block's commitments recomputed from what Amp stored. `status` is the worst of `checks`.
+public struct Verification: Codable, Sendable, Equatable {
+    public let blockNum: Int
+    public let blockHash: String
+    public let status: CheckStatus
+    public let summary: String
+    public let checks: [ProofCheck]
+}
+
 public enum TotalMetric: String, Sendable, Hashable, CaseIterable {
     case pnl, value, realized, unrealized, gas
 }
@@ -269,4 +333,66 @@ func isPositive(_ units: String) -> Bool {
 
 func parseTimestamp(_ value: String) -> Date? {
     try? Date(value, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+}
+
+/// A dataset version the server can read a wallet through. Queries are pinned to `hash`, so it's what actually gets read.
+public struct PricingRule: Codable, Sendable, Equatable, Hashable, Identifiable {
+    public let id: String
+    public let name: String
+    public let summary: String
+    public let dataset: String
+    public let hash: String
+
+    public init(id: String, name: String, summary: String, dataset: String, hash: String) {
+        self.id = id
+        self.name = name
+        self.summary = summary
+        self.dataset = dataset
+        self.hash = hash
+    }
+}
+
+/// One number by each rule. A nil is unavailable, not zero.
+public struct RuleRow: Codable, Sendable, Equatable, Identifiable {
+    public let label: String
+    /// `signed` or `money` in the wallet's currency, or `usdPrice`, which is always in USD.
+    public let format: String
+    public let a: String?
+    public let b: String?
+    /// nil unless both sides are made of the same known amounts, because anything else isn't a difference between rules.
+    public let difference: String?
+    /// This side's sum leaves something out. `warnings` says what.
+    public let aPartial: Bool
+    public let bPartial: Bool
+
+    public var id: String { label }
+}
+
+public struct RuleTransaction: Codable, Sendable, Equatable, Identifiable {
+    public let txHash: String
+    public let blockNum: Int
+    public let timestamp: String
+    public let asset: String
+    public let label: String
+    public let a: String?
+    public let b: String?
+    public let difference: String?
+
+    public var id: String { "\(txHash):\(asset):\(label)" }
+}
+
+/// What two rules make of one wallet at the same block, so the only difference between them is the rule.
+public struct RuleComparison: Codable, Sendable, Equatable {
+    public let address: String
+    public let currency: CurrencyCode
+    public let blockNum: Int
+    public let a: PricingRule
+    public let b: PricingRule
+    public let why: String
+    /// What the numbers leave out or can't vouch for, the same as they'd say on the main screen.
+    public let warnings: [String]
+    public let rows: [RuleRow]
+    /// The newest few that came out differently. `changedTxs` says how many there are.
+    public let transactions: [RuleTransaction]
+    public let changedTxs: Int
 }

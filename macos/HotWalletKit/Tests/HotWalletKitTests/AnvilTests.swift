@@ -1,0 +1,168 @@
+import Foundation
+import KeyVault
+import PricetagKit
+import Testing
+@testable import HotWalletKit
+
+private let rpc = ProcessInfo.processInfo.environment["ANVIL_RPC_URL"].flatMap(URL.init(string:))
+private let liveRPC = ProcessInfo.processInfo.environment["BASE_READ_RPC_URL"].flatMap(URL.init(string:))
+
+/// Holds what the Secure Enclave wrapped, in place of the Keychain, which `swift test` can't reach. See `pnpm check:keychain`.
+private final class MemoryKeys: SealedKeyStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [EthereumAddress: SealedKey] = [:]
+
+    func save(_ sealed: SealedKey, for address: EthereumAddress) throws { lock.withLock { items[address] = sealed } }
+    func load(_ address: EthereumAddress) throws -> SealedKey? { lock.withLock { items[address] } }
+    func delete(_ address: EthereumAddress) throws { lock.withLock { _ = items.removeValue(forKey: address) } }
+    func addresses() throws -> [EthereumAddress] { lock.withLock { Array(items.keys) } }
+}
+
+private func anvil(_ method: String, _ parameters: [Any]) async throws -> Any? {
+    var request = URLRequest(url: rpc!)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "content-type")
+    request.httpBody = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": 1, "method": method, "params": parameters] as [String: Any])
+    let (data, _) = try await URLSession.shared.data(for: request)
+    let answer = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    if let error = answer["error"] { Issue.record("\(method) failed: \(error)") }
+    return answer["result"]
+}
+
+private func hex(_ value: UInt128) -> String { "0x" + String(value, radix: 16) }
+
+/// The public node allows 25 requests a second per IP, shared with anything else on this network.
+private func readingPastTheRateLimit() async throws -> ChainSnapshot {
+    let client = RPCChainClient(url: liveRPC!)
+    let address = EthereumAddress("0x4200000000000000000000000000000000000006")!
+    for _ in 0..<5 {
+        if let snapshot = try? await client.snapshot(of: address) { return snapshot }
+        try await Task.sleep(for: .seconds(3))
+    }
+    return try await client.snapshot(of: address)
+}
+
+/// Only reads. A node's batch limits and its fee answers are the sort of thing a fork doesn't show.
+@Suite(.enabled(if: liveRPC != nil))
+struct LiveBaseTests {
+    @Test func aRealSnapshotReads() async throws {
+        let snapshot = try await readingPastTheRateLimit()
+        #expect(snapshot.chainID == Base.chainID)
+        #expect(snapshot.ethUsdMicros != nil)
+        #expect(snapshot.usdcUsdMicros != nil)
+        #expect(snapshot.fees.l1FeeWei > 0)
+        let reserve = SweepPlanner.gasReserve(snapshot.fees)
+        print("Live Base: maxFee \(snapshot.fees.maxFeePerGas) wei, tip \(snapshot.fees.maxPriorityFeePerGas) wei, L1 fee \(snapshot.fees.l1FeeWei) wei, reserve \(reserve) wei, ETH \(snapshot.ethUsdMicros ?? 0), USDC \(snapshot.usdcUsdMicros ?? 0)")
+        #expect(reserve == SweepPlanner.minimumGasReserveWei, "fees on Base should be nowhere near the minimum reserve")
+    }
+}
+
+/// Everything real but the Keychain: a fresh key from the vault, wrapped by the Secure Enclave, signing for a local fork of Base,
+/// whose node checks the signatures. No key here is ever written down, and none holds anything outside this fork.
+/// `pnpm check:anvil` starts the fork and runs this.
+@MainActor
+@Suite(.enabled(if: rpc != nil), .serialized)
+struct AnvilTests {
+    @Test func theWholeLifeOfAHotWallet() async throws {
+        let vault = KeyVault(store: MemoryKeys())
+        let hot = try await vault.createKey()
+        let cold = try await vault.createKey()
+        let client = RPCChainClient(url: rpc!)
+
+        let stateStore = MemoryStateStore()
+        let settingsStore = MemorySettingsStore()
+        let unreachable = ScriptedPortfolios(.failure(.unreachable))
+        var state = DeviceWalletState()
+        state.active = hot
+        try stateStore.save(state)
+        let running = HotWallet(signer: vault, settingsStore: settingsStore, stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { unreachable }, makeChain: { _ in client })
+        try running.addColdWallet(address: cold.lowercased, name: "Fork")
+        running.setCap(dollars: 50)
+
+        // An exchange withdrawal lands: $500 of USDC, on top of a little ETH. Far over the cap, for a moment.
+        _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth / 1000)])
+        _ = try await anvil("anvil_dealERC20", [hot.lowercased, usdc.contract!.lowercased, hex(usdcUnits(500))])
+
+        await running.tick()
+        #expect(running.chainProblem == nil)
+        #expect(running.sweepProblem == nil)
+        let before = try #require(running.snapshot)
+        #expect(before.chainID == Base.chainID)
+        #expect(before.ethUsdMicros != nil, "the fork's Chainlink feed reads")
+        #expect(before.usdcUsdMicros != nil)
+        #expect(before.fees.l1FeeWei > 0, "the fork's gas price oracle reads")
+        #expect(running.records.count == 1)
+        #expect(running.records.first?.symbol == "USDC")
+
+        // The node recovers the sender from the signature, so a balance moving here proves the signature's real.
+        await running.tick()
+        #expect(running.records.first?.status == .confirmed)
+        let coldAfter = try await client.snapshot(of: cold)
+        let hotAfter = try await client.snapshot(of: hot)
+        #expect((coldAfter.balances[usdc] ?? 0) > usdcUnits(400))
+        #expect(hotAfter.nonce == 1)
+        // Anvil mines just after a send returns, so that tick's balances can be from before the receipt it found. It signs nothing
+        // from those, which `hotAfter.nonce` just showed, and this tick's are from after it.
+        await running.tick()
+        #expect(running.snapshot?.nonce == 1)
+        let left = try #require(running.plan)
+        #expect(left.valueUsdMicros <= 51 * Money.dollar, "about the cap is left")
+        #expect(left.valueUsdMicros >= 49 * Money.dollar)
+        #expect((hotAfter.balances[Base.eth] ?? 0) >= SweepPlanner.gasReserve(hotAfter.fees) / 2, "gas stays")
+        #expect(running.alarm == nil)
+
+        // Someone else signs with this key. Anvil lets this test pretend to be them, without any key at all.
+        _ = try await anvil("anvil_impersonateAccount", [hot.lowercased])
+        _ = try await anvil("eth_sendTransaction", [["from": hot.lowercased, "to": cold.lowercased, "value": "0x1"]])
+        _ = try await anvil("anvil_stopImpersonatingAccount", [hot.lowercased])
+        for _ in 0..<HotWallet.readsBeforeAlarm { await running.tick() }
+        #expect(running.alarm?.findings == [.nonceAhead(signed: 1, onchain: 2)])
+        #expect(!running.canTopUp)
+
+        // What's left goes to savings, and the key is replaced.
+        await running.replaceKey()
+        let rotation = try #require(running.rotation)
+        #expect(rotation.destination == cold)
+        // With Amp down it can't rule out other tokens, so the old key stays until there's an answer.
+        await running.readHistory()
+        for _ in 0..<6 where running.rotationHold == nil { await running.tick() }
+        #expect(running.rotationHold == .cantCheckOtherTokens)
+        #expect(try await vault.hasKey(hot))
+        let head = try await client.snapshot(of: hot).blockNumber
+        await unreachable.set(.success(portfolio(address: hot, toBlock: head + 1000)))
+        await running.readHistory()
+        for _ in 0..<6 where running.rotation != nil { await running.tick() }
+        #expect(running.rotation == nil)
+        #expect(running.address == rotation.to)
+        #expect(running.alarm == nil)
+        #expect(try await vault.hasKey(hot) == false)
+        let emptied = try await client.snapshot(of: hot)
+        #expect(emptied.balances[usdc] == 0)
+        #expect((try await client.snapshot(of: cold)).balances[usdc] == usdcUnits(500))
+    }
+
+    @Test func sweepsEverythingIncludingEth() async throws {
+        let vault = KeyVault(store: MemoryKeys())
+        let hot = try await vault.createKey()
+        let cold = try await vault.createKey()
+        let client = RPCChainClient(url: rpc!)
+        let stateStore = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hot
+        try stateStore.save(state)
+        let unreachable = ScriptedPortfolios(.failure(.unreachable))
+        let wallet = HotWallet(signer: vault, settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { unreachable }, makeChain: { _ in client })
+        try wallet.addColdWallet(address: cold.lowercased, name: "Fork")
+
+        _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth)])
+        _ = try await anvil("anvil_dealERC20", [hot.lowercased, usdc.contract!.lowercased, hex(usdcUnits(5))])
+        await wallet.sweepEverything()
+        #expect(wallet.sweepProblem == nil)
+        #expect(wallet.records.map(\.symbol).sorted() == ["ETH", "USDC"])
+        await wallet.tick()
+        #expect(wallet.records.allSatisfy { $0.status == .confirmed })
+        let after = try await client.snapshot(of: cold)
+        #expect(after.balances[usdc] == usdcUnits(5))
+        #expect((after.balances[Base.eth] ?? 0) > oneEth * 99 / 100)
+    }
+}

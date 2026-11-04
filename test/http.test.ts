@@ -47,6 +47,62 @@ describe("the server", () => {
     })
   }
 
+  it("has no rules to choose from when it has only one", async () => {
+    assert.deepEqual(JSON.parse((await get(server, "/api/rules")).body), { rules: [] })
+  })
+
+  it("won't quietly read by another rule than the one asked for", async () => {
+    assert.equal((await get(server, "/api/wallet/demo?rule=nope")).status, 400)
+    assert.equal((await get(server, "/api/portfolio/demo?rule=nope")).status, 400)
+  })
+
+  it("has nothing to compare with only one rule", async () => {
+    assert.equal((await get(server, "/api/portfolio/demo/compare")).status, 404)
+  })
+
+  it("won't start with a fork it can't pin", () => {
+    const env = { AMP_QUERY_URL: "http://127.0.0.1:1", PRICETAG_DATASET: "a/b@0.0.1", PRICETAG_START_BLOCK: "5", PRICETAG_FORK_DATASET: "a/c@0.0.1" }
+    assert.throws(() => createApi(env), /manifest hash/)
+    assert.throws(() => createApi({ ...env, PRICETAG_DATASET_HASH: "a".repeat(64) }), /manifest hash/)
+    assert.throws(() => createApi({ ...env, PRICETAG_DATASET_HASH: "a".repeat(64), PRICETAG_FORK_HASH: "nope" }), /manifest hash/)
+  })
+
+  it("lists both rules by name, dataset and hash when there's a fork, with the default first", async () => {
+    const hash = { PRICETAG_DATASET_HASH: "a".repeat(64), PRICETAG_FORK_HASH: "b".repeat(64) }
+    const api = createApi({ AMP_QUERY_URL: "http://127.0.0.1:1", PRICETAG_DATASET: "a/b@0.0.1", PRICETAG_START_BLOCK: "5", PRICETAG_FORK_DATASET: "a/c@0.0.1", ...hash })
+    const fork = createServer(createHandler(api, dist))
+    await new Promise<void>((resolve) => fork.listen(0, "127.0.0.1", resolve))
+    const { rules } = JSON.parse((await get(fork, "/api/rules")).body) as { rules: { id: string; dataset: string; hash: string }[] }
+    assert.equal((await get(fork, "/api/portfolio/demo/compare")).status, 400)
+    fork.close()
+    assert.deepEqual(rules.map((r) => [r.dataset, r.hash]), [["a/b@0.0.1", "a".repeat(64)], ["a/c@0.0.1", "b".repeat(64)]])
+  })
+
+  it("shows the proof behind a demo row, and says there's no real block to check", async () => {
+    const { legs } = JSON.parse((await get(server, "/api/wallet/demo")).body) as { legs: { id: string; opening?: boolean }[] }
+    const leg = legs.find((candidate) => !candidate.opening) as { id: string }
+    const query = `leg=${encodeURIComponent(leg.id)}`
+    const proof = await get(server, `/api/portfolio/demo/proof?${query}`)
+    assert.equal(proof.status, 200)
+    const body = JSON.parse(proof.body) as { unavailable: string; datasets: unknown[]; scope: string[] }
+    assert.match(body.unavailable, /demo wallet/)
+    assert.deepEqual(body.datasets, [])
+    assert.match(body.scope[0] as string, /matches the block's header/)
+    assert.equal((await get(server, `/api/portfolio/demo/verify?${query}`)).status, 400)
+  })
+
+  it("has no proof for what isn't a transaction", async () => {
+    assert.equal((await get(server, "/api/portfolio/demo/proof?leg=nope")).status, 404)
+    assert.equal((await get(server, "/api/portfolio/demo/verify")).status, 404)
+    assert.equal((await get(server, "/api/portfolio/demo/proof?leg=opening:ETH")).status, 404)
+  })
+
+  it("won't read a wallet for proof with no data source", async () => {
+    const address = "0x1111111111111111111111111111111111111111"
+    assert.equal((await get(server, `/api/portfolio/${address}/proof?leg=x`)).status, 503)
+    assert.equal((await get(server, "/api/portfolio/nope/verify?leg=x")).status, 400)
+  })
+
   it("a malformed URL is a 400", async () => {
     assert.equal((await get(server, "/%")).status, 400)
     assert.equal((await get(server, "/api/%")).status, 400)

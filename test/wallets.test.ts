@@ -795,6 +795,20 @@ describe("settling unwrap credits", () => {
       assert.deepEqual(feeReads.sort(), ["0xother", TX990].sort())
     })
 
+    it("settles the same on one set of facts, whichever rule reads them and at an older block", async () => {
+      const fees: ReadL1Fees = async (requests) => new Map(requests.map((r) => [r.txHash, "1000000000000"]))
+      const read = async (blocks: readonly number[]) => new Map(blocks.map((b) => [b, b === 990 ? (E18 * 5n - 100n - 1_000_000_000_000n + E18).toString() : (E18 * 5n).toString()]))
+      const first = fake(new Map([[990, rows]]), () => reference(1000), undefined, undefined, read)
+      // The other rule's own balance read fails, which must not be what tells the two apart.
+      const second = fake(new Map([[990, rows]]), () => reference(1000))
+      const [a, b] = [createWallets(first.source, headAt(1000), fees), createWallets(second.source, headAt(1000), async () => new Map())]
+      await a.get(ME)
+      await b.get(ME)
+      const facts = (await a.factsAt(ME, 995, { withBalances: false }))!
+      const sales = [a.pricedOn(ME, facts, {})!, b.pricedOn(ME, facts, {})!].map((wallet) => wallet.legs.find((l) => l.asset === "cbBTC")!)
+      assert.deepEqual(sales.map((l) => [l.proceedsMicros, l.unsettledCredit]), [[WHOLE, undefined], [WHOLE, undefined]])
+    })
+
     it("doesn't read a fee again in a block with no claim", async () => {
       const fees: string[] = []
       const read: ReadL1Fees = async (requests) => {

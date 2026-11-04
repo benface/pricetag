@@ -14,8 +14,20 @@ public enum FetchError: Error, Equatable, Sendable {
 }
 
 public protocol PortfolioSource: Sendable {
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, timeout: Duration) async throws -> Portfolio
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode) async throws -> Explanation
+    /// `linked` is the user's other wallets, which transfers between carry their cost.
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], timeout: Duration) async throws -> Portfolio
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) async throws -> Explanation
+    /// Empty when the server has only one, so there's nothing to choose.
+    func rules() async throws -> [PricingRule]
+    func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> RuleComparison
+    func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
+    func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof
+    func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification
+}
+
+extension PortfolioSource {
+    public func rules() async throws -> [PricingRule] { [] }
+    public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
 }
 
 public struct PricetagClient: PortfolioSource {
@@ -29,16 +41,47 @@ public struct PricetagClient: PortfolioSource {
         session = URLSession(configuration: configuration)
     }
 
-    public func portfolio(address: String, method: CostMethod, currency: CurrencyCode, timeout: Duration) async throws -> Portfolio {
-        try await get("/api/portfolio/\(address)", query: settings(method, currency), timeout: timeout)
+    public func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], timeout: Duration) async throws -> Portfolio {
+        try await get("/api/portfolio/\(address)", query: settings(method, currency, rule, linked), timeout: timeout)
     }
 
-    public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode) async throws -> Explanation {
-        try await get("/api/portfolio/\(address)/explain", query: settings(method, currency) + target.queryItems, timeout: .seconds(30))
+    public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String]) async throws -> Explanation {
+        try await get("/api/portfolio/\(address)/explain", query: settings(method, currency, rule, linked) + target.queryItems, timeout: .seconds(30))
     }
 
-    private func settings(_ method: CostMethod, _ currency: CurrencyCode) -> [URLQueryItem] {
-        [URLQueryItem(name: "method", value: method.rawValue), URLQueryItem(name: "currency", value: currency.rawValue)]
+    public func proof(leg: String, address: String, currency: CurrencyCode) async throws -> Proof {
+        try await get("/api/portfolio/\(address)/proof", query: legQuery(leg, currency), timeout: .seconds(30))
+    }
+
+    /// A block's rows can take a while on a busy server, and the read is one query at a time.
+    public func verification(leg: String, address: String, currency: CurrencyCode) async throws -> Verification {
+        try await get("/api/portfolio/\(address)/verify", query: legQuery(leg, currency), timeout: .seconds(120))
+    }
+
+    private func legQuery(_ leg: String, _ currency: CurrencyCode) -> [URLQueryItem] {
+        [URLQueryItem(name: "leg", value: leg), URLQueryItem(name: "currency", value: currency.rawValue)]
+    }
+
+    /// Reads every wallet in it, so it gets as long as a first read.
+    public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
+        try await get("/api/tax-report/\(request.address)", query: request.queryItems, timeout: .seconds(180))
+    }
+
+    public func rules() async throws -> [PricingRule] {
+        let body: RulesBody = try await get("/api/rules", query: [], timeout: .seconds(15))
+        return body.rules
+    }
+
+    public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String]) async throws -> RuleComparison {
+        // It reads the wallet by both rules, and a first read can take a minute each.
+        try await get("/api/portfolio/\(address)/compare", query: settings(method, currency, nil, linked), timeout: .seconds(180))
+    }
+
+    private func settings(_ method: CostMethod, _ currency: CurrencyCode, _ rule: String?, _ linked: [String]) -> [URLQueryItem] {
+        var items = [URLQueryItem(name: "method", value: method.rawValue), URLQueryItem(name: "currency", value: currency.rawValue)]
+        if let rule { items.append(URLQueryItem(name: "rule", value: rule)) }
+        if !linked.isEmpty { items.append(URLQueryItem(name: "linked", value: linked.joined(separator: ","))) }
+        return items
     }
 
     private func get<Body: Decodable>(_ path: String, query: [URLQueryItem], timeout: Duration) async throws -> Body {
@@ -71,6 +114,10 @@ public struct PricetagClient: PortfolioSource {
         case 503: throw FetchError.noAmpConfigured(message)
         default: throw FetchError.rejected(message)
         }
+    }
+
+    private struct RulesBody: Decodable {
+        let rules: [PricingRule]
     }
 
     private struct ErrorBody: Decodable {

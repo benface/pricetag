@@ -36,17 +36,20 @@ function diff(after: string, before: string): bigint {
 export type ExplainContext = {
   view: Pick<WalletView, "currency" | "latestRate" | "missingRateTxs">
   source: { positions: Position[]; totals: Totals; points: PnlPoint[] } | null
+  /** Said on every explanation when a pricing rule other than the default is on. */
+  ruleNote?: string | null
 }
 
 /** Explaining a USD number: there's nothing to convert, and nothing to say about rates. */
 export const USD_CONTEXT: ExplainContext = { view: { currency: "USD", latestRate: null, missingRateTxs: [] }, source: null }
 
 export function explainContext(wallet: WalletResponse, view: WalletView, method: Method): ExplainContext {
-  if (view.currency === "USD") return { view, source: null }
+  const ruleNote = wallet.ruleNote ?? null
+  if (view.currency === "USD") return { view, source: null, ruleNote }
   const usd = usdView(wallet)
   const positions = foldPositions(usd.legs, method, usd.prices, wallet)
   const unread = unreadAssets(positions, wallet)
-  return { view, source: { positions, totals: sumTotals(positions, unread), points: pnlOverTime(usd.legs, method, usd.prices, usd.markPrice, wallet.latest, unconfirmedAssets(positions, unread)) } }
+  return { view, ruleNote, source: { positions, totals: sumTotals(positions, unread), points: pnlOverTime(usd.legs, method, usd.prices, usd.markPrice, wallet.latest, unconfirmedAssets(positions, unread)) } }
 }
 
 /** Where a currency's rates come from, in words. It's said wherever a rate is used, since it isn't the source of the prices. */
@@ -319,7 +322,12 @@ export function explainPoint(positions: readonly Position[], point: PnlPoint, { 
 export type ExplainTarget = { kind: "total"; metric: TotalMetric } | { kind: "asset"; asset: string; metric: Metric } | { kind: "tx"; txHash: string }
 
 /** What a target says about these numbers, or null when they have no such asset or transaction. */
-export function explainTarget(target: ExplainTarget, { positions, totals, points }: { positions: readonly Position[]; totals: Totals; points: readonly PnlPoint[] }, context: ExplainContext): Explanation | null {
+export function explainTarget(target: ExplainTarget, facts: { positions: readonly Position[]; totals: Totals; points: readonly PnlPoint[] }, context: ExplainContext = USD_CONTEXT): Explanation | null {
+  const explanation = explainNumber(target, facts, context)
+  return explanation && context.ruleNote ? { ...explanation, lines: [...explanation.lines, context.ruleNote] } : explanation
+}
+
+function explainNumber(target: ExplainTarget, { positions, totals, points }: { positions: readonly Position[]; totals: Totals; points: readonly PnlPoint[] }, context: ExplainContext): Explanation | null {
   if (target.kind === "total") return explainTotal(positions, totals, target.metric, context)
   if (target.kind === "asset") {
     const position = positions.find((p) => p.asset === target.asset)

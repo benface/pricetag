@@ -8,15 +8,37 @@ repo=$(dirname "$here")
 port=${PORT:-8787}
 build="$here/build"
 name=$(sed -n 's/^APP_NAME = //p' "$here/Config/App.xcconfig")
-app="$build/Build/Products/Release/$name.app"
 
 # Signing with a real identity keeps the sandbox from treating each rebuild as a different app.
 identity=$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' | head -n 1)
+# The Keychain ties a hot wallet's key to the signing team, so a different team can't read a key this one made. That's why
+# this is pinned rather than picked from whatever's installed. It's a personal team, whose profiles last 7 days: each build renews it.
+team=83535P4H56
 
-xcodebuild -quiet \
-  -project "$here/App.xcodeproj" -scheme App -configuration Release \
-  -derivedDataPath "$build" -destination 'platform=macOS' \
-  CODE_SIGN_IDENTITY="${identity:--}" build
+# Packages only ever come from the committed Package.resolved.
+build_app() {
+  xcodebuild -quiet \
+    -project "$here/App.xcodeproj" -scheme App -configuration "$configuration" \
+    -derivedDataPath "$build" -destination 'platform=macOS' \
+    -onlyUsePackageVersionsFromResolvedFile "$@" build
+}
+
+configuration=${CONFIGURATION:-Release}
+app="$build/Build/Products/$configuration/$name.app"
+
+# The hot wallet's key needs the device-only Keychain, and only a provisioned build can reach it. Without that team signed in to
+# Xcode, this still builds a working app, which says it can't hold a key. Everything else works.
+#
+# Leaving out the base entitlements drops get-task-allow, so a debugger can't attach to a release build and read its memory.
+if build_app -allowProvisioningUpdates \
+  APP_SIGN_STYLE=Automatic APP_TEAM="$team" APP_SIGN_IDENTITY="Apple Development" \
+  APP_ENTITLEMENTS=Config/HotWallet.entitlements \
+  APP_INJECT_BASE_ENTITLEMENTS="$([ "$configuration" = Release ] && echo NO || echo YES)"; then
+  echo "Signed for team $team, so this build can hold a hot wallet."
+else
+  echo "Couldn't provision this build, so it can't hold a hot wallet. To fix that, sign in to Xcode with the account for team $team." >&2
+  build_app APP_SIGN_IDENTITY="${identity:--}"
+fi
 
 [ "${1:-}" = "--build-only" ] && { echo "Built $app"; exit 0; }
 

@@ -32,6 +32,9 @@ import {
   staleSentence,
 } from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
+import { RulesPanel } from "./RulesPanel.tsx"
+import { useRules } from "./useRules.ts"
+import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
 
 function readAddress(): string | null {
@@ -167,13 +170,16 @@ export function App() {
   const [inputError, setInputError] = useState<string | null>(null)
   const [method, setMethod] = useState<Method>("average")
   const [target, setTarget] = useState<ExplainTarget | null>(null)
+  const [taxOpen, setTaxOpen] = useState(false)
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
-  const { wallet, loading, error } = useWallet(address, chosenCurrency)
+  const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
+  const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule)
 
   useEffect(() => {
     const onPop = () => {
       setAddress(readAddress())
       setTarget(null)
+      setTaxOpen(false)
     }
     window.addEventListener("popstate", onPop)
     return () => window.removeEventListener("popstate", onPop)
@@ -183,6 +189,7 @@ export function App() {
     window.history.pushState(null, "", `?address=${next}`)
     setAddress(next)
     setTarget(null)
+    setTaxOpen(false)
   }
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -245,6 +252,7 @@ export function App() {
         {wallet ? <LiveBadge wallet={wallet} stale={error !== null} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
+      {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={wallet?.rule ?? null} address={address} method={method} currency={currency} /> : null}
 
       {!address ? (
         <section className="empty">
@@ -314,6 +322,11 @@ export function App() {
                   ))}
                 </div>
               </section>
+              <p className="tax-link">
+                <button type="button" className="link" onClick={() => setTaxOpen(true)}>
+                  Export a tax report…
+                </button>
+              </p>
               <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
               {positions.length > 0 ? <Holdings positions={positions} currency={currency} explain={setTarget} /> : null}
             </>
@@ -321,7 +334,8 @@ export function App() {
         </main>
       ) : null}
 
-      {explanation ? <ExplainPanel explanation={explanation} onClose={close} /> : null}
+      {explanation && wallet ? <ExplainPanel explanation={explanation} address={wallet.address} onClose={close} /> : null}
+      {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} onClose={() => setTaxOpen(false)} /> : null}
     </div>
   )
 }
