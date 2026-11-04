@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, MARKET_MAX_AGE_BLOCKS, marketPrice, marketTrades, type LegRow, type MarketRow, type MarketTrade, type Reference } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, TOKEN_FEEDS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, MARKET_MAX_AGE_BLOCKS, marketPrice, marketTrades, type LegRow, type MarketRow, type MarketTrade, type Reference } from "@pricetag/sdk/core"
 import type { Query } from "@pricetag/sdk/internal"
 import { resolvingSource } from "../server/source.ts"
 
@@ -168,5 +168,42 @@ describe("where a rule's market prices come from", () => {
     const source = resolvingSource(query, { baseDataset: "base", dataset: "pricetag", priceDataset: "pricing", startBlock: 1, network: "base" })
     await source.readMarketTrades?.("AERO", 1, 2)
     assert.ok(asked[0]?.includes(`"pricing".priced_legs`))
+  })
+})
+
+describe("reading the token feeds", () => {
+  const word = (value: bigint) => value.toString(16).padStart(64, "0")
+  const roundData = (answer: bigint, updatedAt: bigint) => `${word(1n)}${word(answer)}${word(0n)}${word(updatedAt)}${word(1n)}`
+  const BLOCK = { block_num: 50, timestamp: Date.parse("2026-11-04T00:00:00.000Z") }
+
+  function fakeQuery(row: Record<string, unknown> | null) {
+    const asked: string[] = []
+    const query = (async (sql: string) => {
+      asked.push(sql)
+      return row ? [row] : []
+    }) as unknown as Query
+    return { asked, source: resolvingSource(query, { baseDataset: "base", dataset: "pricetag", startBlock: 1, network: "base_mainnet" }) }
+  }
+
+  it("reads every feed in one bounded query, and leaves out a failed one", async () => {
+    const { asked, source } = fakeQuery({ ...BLOCK, f0: { data: roundData(63_000_000n, 1000n) }, f1: null })
+    const rounds = await source.readFeedRounds?.(["AERO", "DAI"], 50)
+    assert.deepEqual(rounds, { AERO: { answer: "63000000", updatedAt: 1000, blockNum: 50, timestamp: "2026-11-04T00:00:00.000Z" } })
+    assert.equal(asked.length, 1)
+    assert.ok(asked[0]?.includes(TOKEN_FEEDS.AERO!.address))
+    assert.ok(asked[0]?.includes(TOKEN_FEEDS.DAI!.address))
+    assert.ok(asked[0]?.includes(`FROM (SELECT block_num, timestamp FROM "base".blocks WHERE block_num BETWEEN 50 AND 50 AND block_num IN (50) LIMIT 1)`), "see the note on eth_call's shape in readReferences")
+  })
+
+  it("has nothing to ask about a token with no feed, or a block with no row", async () => {
+    const none = fakeQuery(null)
+    assert.deepEqual(await none.source.readFeedRounds?.(["ETH"], 50), {})
+    assert.equal(none.asked.length, 0)
+    assert.deepEqual(await none.source.readFeedRounds?.(["AERO"], 50), {})
+  })
+
+  it("leaves out a negative answer", async () => {
+    const { source } = fakeQuery({ ...BLOCK, f0: { data: roundData((1n << 256n) - 1n, 1000n) } })
+    assert.deepEqual(await source.readFeedRounds?.(["AERO"], 50), {})
   })
 })

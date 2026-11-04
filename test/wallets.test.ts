@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { portfolioOf } from "../server/portfolio.ts"
 import { createWallets, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
-import { ASSETS, ETH_ADDRESS, type LegRow, type Reference } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, type FeedRound, type LegRow, type Reference } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 
@@ -580,6 +580,124 @@ describe("reconciling", () => {
     head = 1001
     await wallets.get(ME)
     assert.deepEqual(reads, [960, 1001])
+  })
+})
+
+describe("current prices from the token feeds", () => {
+  const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
+  const DAI = "0x50c5725949a6f0c72e6c4a641f24049a917db0cb"
+  const WSTETH = "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452"
+  const NOW = Date.parse("2026-11-04T00:00:00.000Z") / 1000
+  const held = (block: number, token: string): LegRow => ({ ...row(block), token, kind: "erc20", amount: (10n ** 18n).toString() })
+  const round = (answer: string, block = 990, updatedAt = NOW - 60): FeedRound => ({ answer, updatedAt, blockNum: block, timestamp: "2026-11-04T00:00:00.000Z" })
+
+  function feedFake(rows: LegRow[], answers: Record<string, FeedRound | undefined>, changes: Partial<Source> = {}) {
+    const reads: [readonly string[], number][] = []
+    const marketReads: string[] = []
+    const { source } = fake(new Map(rows.map((r) => [r.block_num, [r]])), () => reference(1000))
+    const withFeeds: Source = {
+      ...source,
+      marketReady: async () => true,
+      async readMarketTrades(asset, _from, to) {
+        marketReads.push(asset)
+        return [1, 2, 3].map((n) => ({ blockNum: to - n, txHash: `0x${n}`, asset, usdMicros: "1300000", notionalUsdMicros: "500000000" }))
+      },
+      async readFeedRounds(assets, block) {
+        reads.push([assets, block])
+        return Object.fromEntries(assets.flatMap((asset) => (answers[asset] ? [[asset, answers[asset]]] : [])))
+      },
+      ...changes,
+    }
+    return { source: withFeeds, reads, marketReads }
+  }
+
+  it("values what's held at its feed, labeled as an oracle price, ahead of the market", async () => {
+    const { source, reads, marketReads } = feedFake([held(950, AERO)], { AERO: round("63000000") })
+    const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.deepEqual(wallet.prices.AERO, { micros: "630000", source: "oracle", blockNum: 990 })
+    assert.deepEqual(reads, [[["AERO"], 990]], "only what's held, at the head's bucket")
+    assert.equal(wallet.marketChecked, true)
+    assert.ok(marketReads.every((asset) => asset === "AERO"))
+    assert.equal(wallet.legs[0]?.priceSource, "market", "a past leg's price isn't what this changes")
+  })
+
+  it("reads nothing for what a wallet doesn't hold", async () => {
+    const { source, reads } = feedFake([], {})
+    assert.deepEqual((await createWallets(source, headAt(1000), noFees).get(ME)).prices.AERO, undefined)
+    assert.deepEqual(reads, [])
+  })
+
+  it("falls back to the market when the feed is too old, in the future or implausible", async () => {
+    for (const answers of [{ AERO: round("63000000", 990, NOW - 26 * 3600 - 1) }, { AERO: round("63000000", 990, NOW + 1) }, { AERO: round("1", 990) }, {}]) {
+      const { source } = feedFake([held(950, AERO)], answers)
+      const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+      assert.equal(wallet.prices.AERO?.source, "market", JSON.stringify(answers))
+      assert.equal(wallet.marketChecked, true)
+    }
+  })
+
+  it("has no price, and doesn't call that no market, with no feed and no trades", async () => {
+    const { source } = feedFake([held(950, DAI)], { DAI: round("50000000") }, { readMarketTrades: async () => [] })
+    const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.equal(wallet.prices.DAI, undefined)
+    assert.equal(wallet.marketChecked, false, "a depeg or an outage isn't a token nobody trades")
+  })
+
+  it("prices an answer in ETH with ETH's price, and has none without it", async () => {
+    const rate = { wstETH: round("1250000000000000000") }
+    const priced = await createWallets(feedFake([held(950, WSTETH)], rate).source, headAt(1000), noFees).get(ME)
+    assert.deepEqual(priced.prices.wstETH, { micros: "3000000000", source: "oracle", blockNum: 990 })
+    const noEth = { ...feedFake([held(950, WSTETH)], rate, { readMarketTrades: async () => [] }).source, readLatestReference: async () => null }
+    assert.equal((await createWallets(noEth, headAt(1000), noFees).get(ME)).prices.wstETH, undefined)
+  })
+
+  it("rejects a USD answer outside bounds that are in ETH", async () => {
+    const cbEth = "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22"
+    const { source } = feedFake([held(950, cbEth)], { cbETH: round("500000000000") }, { readMarketTrades: async () => [] })
+    assert.equal((await createWallets(source, headAt(1000), noFees).get(ME)).prices.cbETH, undefined, "$5,000 is over twice ETH's $2,400")
+  })
+
+  it("survives a failed read, and tries again", async () => {
+    let fail = true
+    const logged: string[] = []
+    const logger = { ...console, warn: (message: string) => logged.push(message) }
+    const { source } = feedFake([held(950, AERO)], { AERO: round("63000000") }, {
+      async readFeedRounds() {
+        if (fail) throw new Error("boom")
+        return { AERO: round("63000000") }
+      },
+    })
+    let head = 1000
+    const wallets = createWallets(source, async () => headAt(head)(), noFees, logger)
+    assert.equal((await wallets.get(ME)).prices.AERO?.source, "market")
+    assert.match(logged[0] ?? "", /Feed read failed/)
+    fail = false
+    head = 1001
+    assert.equal((await wallets.get(ME)).prices.AERO?.source, "oracle")
+  })
+
+  it("reads each feed once per bucket, whichever wallet asks", async () => {
+    const OTHER = "0x00000000000000000000000000000000000000bb"
+    const { source, reads } = feedFake([held(950, AERO), { ...held(951, AERO), account: OTHER }], { AERO: round("63000000") })
+    const wallets = createWallets(source, headAt(1000), noFees)
+    await wallets.get(ME)
+    await wallets.get(OTHER)
+    assert.equal(reads.length, 1)
+  })
+
+  it("gives both rules the same answer, each with its own ETH price", async () => {
+    const answers = { wstETH: round("1250000000000000000") }
+    const first = feedFake([held(950, WSTETH)], answers)
+    const second = feedFake([held(950, WSTETH)], {}, { async readFeedRounds() { throw new Error("boom") } })
+    const [a, b] = [createWallets(first.source, headAt(1000), noFees), createWallets(second.source, headAt(1000), noFees)]
+    await a.get(ME)
+    await b.get(ME)
+    const facts = (await a.factsAt(ME, 995, { withBalances: false }))!
+    const eth = (usd: string) => ({ ETH: { micros: usd, source: "oracle" as const, blockNum: 995 } })
+    assert.equal(a.pricedOn(ME, facts, eth("2400000000"))!.prices.wstETH?.micros, "3000000000")
+    assert.equal(b.pricedOn(ME, facts, eth("2000000000"))!.prices.wstETH?.micros, "2500000000", "the other rule's read failed, and the facts still say this")
+    const older = (await a.factsAt(ME, 985, { withBalances: false }))!
+    assert.equal(a.pricedOn(ME, older, eth("2400000000"))!.prices.wstETH?.source, undefined, "an answer from after that block would be the wrong one")
   })
 })
 

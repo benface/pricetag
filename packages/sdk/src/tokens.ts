@@ -9,6 +9,36 @@ export const USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 export const ETH_USD_FEED = "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70"
 export const USDC_USD_FEED = "0x7e860098F58bBFC8648a4311b374B1D669a2bc6B"
 
+const SHORT_HEARTBEAT = 3600
+const DAILY_HEARTBEAT = 26 * 3600
+
+/** A Chainlink feed for a token the dataset has no oracle reads for. It only gives current prices, and its bounds are the token's `sanity`. */
+export type TokenFeed = {
+  address: string
+  /** What `description()` says onchain. */
+  description: string
+  decimals: number
+  /** The answer is in ETH rather than USD, so it's only as good as ETH's price. */
+  answersInEth: boolean
+  /** Past the feed's heartbeat with room to spare. Older than this and the price is gone rather than old. */
+  maxAgeSeconds: number
+}
+
+const usdFeed = (address: string, description: string, maxAgeSeconds: number): TokenFeed => ({ address, description, decimals: 8, answersInEth: false, maxAgeSeconds })
+
+/** By asset. The hot wallet reads the same ones with its own copy, `Oracle.others` in `Chain.swift`, which a test compares to this. */
+export const TOKEN_FEEDS: Readonly<Record<string, TokenFeed | undefined>> = {
+  USDT: usdFeed("0xf19d560eb8d2adf07bd6d13ed03e1d11215721f9", "USDT / USD", DAILY_HEARTBEAT),
+  DAI: usdFeed("0x591e79239a7d679378ec8c847e5038150364c78f", "DAI / USD", DAILY_HEARTBEAT),
+  cbETH: usdFeed("0xd7818272b9e248357d13057aab0b417af31e817d", "CBETH / USD", SHORT_HEARTBEAT),
+  // There's no USD feed for this one on Base.
+  wstETH: { address: "0x43a5c292a453a3bf3606fa856197f09d7b74251a", description: "WSTETH / ETH", decimals: 18, answersInEth: true, maxAgeSeconds: DAILY_HEARTBEAT },
+  cbBTC: usdFeed("0x07da0e54543a844a80abe69c8a12f22b3aa59f9d", "cbBTC / USD", SHORT_HEARTBEAT),
+  AERO: usdFeed("0x4ec5970fc728c5f65ba413992cd5ff6fd70fcff0", "AERO / USD", DAILY_HEARTBEAT),
+  VIRTUAL: usdFeed("0xeaf310161c9ef7c813a14f8fef6fb271434019f7", "VIRTUAL / USD", DAILY_HEARTBEAT),
+  DEGEN: usdFeed("0xe62bce5d7cb9d16ab8b4d622538bc0a50a5799c2", "DEGEN / USD", DAILY_HEARTBEAT),
+}
+
 /**
  * A swap price outside this range is rejected, and the leg has no usable price. Swaps can imply absurd prices:
  * WORK-319 saw up to 6.6e12× the oracle. The ranges are wide on purpose, so they only catch those.
@@ -21,7 +51,7 @@ export type Token = {
   decimals: number
   /** The position this token folds into. WETH and ETH are one position, so wrapping is never a sale. */
   asset: string
-  /** A Chainlink feed prices it, so `sanity` only applies to a swap at a block where the feed's read failed. */
+  /** The dataset reads a Chainlink feed for it at every block, so `sanity` only applies to a swap at a block where that read failed. */
   oracle?: "eth" | "usdc"
   sanity?: Sanity
 }
