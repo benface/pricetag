@@ -137,6 +137,18 @@ export function buildPortfolio(legs: readonly PricedLeg[], method: Method, price
   return { method, positions, totals: sumTotals(positions) }
 }
 
+/**
+ * Whether `totals.pnlUsdMicros` can be read as the wallet's PnL.
+ * partial: it leaves something out. unavailable: it's null, because nothing in it is known.
+ */
+export type PnlStatus = "complete" | "partial" | "unavailable"
+
+/** `gasUnknownTxs` comes with a wallet's legs. The fold never sees that gas, so `totals` alone can't tell it's missing. */
+export function pnlStatus(totals: Totals, gasUnknownTxs: readonly string[] = []): PnlStatus {
+  if (totals.pnlUsdMicros === null) return "unavailable"
+  return totals.excluded.length === 0 && !totals.unpricedGas && gasUnknownTxs.length === 0 ? "complete" : "partial"
+}
+
 export type PnlPoint = {
   blockNum: number
   timestamp: string

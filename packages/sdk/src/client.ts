@@ -2,7 +2,7 @@
 // Everything keeps its price source and transaction, and what can't be priced stays unknown.
 
 import { createQuery, type Query } from "./amp.ts"
-import { datasetReader } from "./dataset.ts"
+import { ORACLE_TABLES, SWAP_TABLES, WALLET_TABLES, datasetReader } from "./dataset.ts"
 import { answerToMicros, buildPricedLegs, type LegRow, type PricedLeg, type PriceSource, type ReferenceRow } from "./legs.ts"
 import { latestPrices, type LatestPrices } from "./portfolio.ts"
 import { TOKENS, isAddress, normalizeAddress, tokenByAddress, type Token } from "./tokens.ts"
@@ -22,7 +22,7 @@ export type PricetagConfig = {
 export type BlockRange = { from: number; to?: number | undefined }
 
 /**
- * The blocks actually read, which `toBlock` can leave short of what was asked while a table catches up.
+ * The blocks actually read, which `toBlock` can leave short of what was asked while a table this read uses catches up.
  * `toBlock` is below `fromBlock` when nothing in the range has been processed yet. No rows then doesn't mean nothing happened.
  */
 export type BlocksRead = { fromBlock: number; toBlock: number }
@@ -79,12 +79,12 @@ export function pricetagClient(query: Query, config: Pick<PricetagConfig, "datas
   if (!config.dataset) throw new Error("Pricetag needs a dataset, like benface/pricetag@0.0.1")
   const reader = datasetReader(query, { dataset: config.dataset, baseDataset: config.baseDataset ?? "edgeandnode/base_mainnet@0.0.2" })
 
-  async function blocksRead(range: BlockRange): Promise<BlocksRead> {
+  async function blocksRead(range: BlockRange, tables: readonly string[]): Promise<BlocksRead> {
     checkRange(range)
     const nothing = { fromBlock: range.from, toBlock: range.from - 1 }
     const head = range.to ?? (await reader.head(range.from))?.blockNum
     if (head === undefined) return nothing
-    const processed = await reader.processedThrough(range.from, head)
+    const processed = await reader.processedThrough(range.from, head, tables)
     return processed === null ? nothing : { fromBlock: range.from, toBlock: processed }
   }
 
@@ -93,7 +93,7 @@ export function pricetagClient(query: Query, config: Pick<PricetagConfig, "datas
     async getLegs(address: string, range: BlockRange): Promise<WalletLegs> {
       if (!isAddress(address)) throw new Error(`${address} isn't a Base address`)
       const account = normalizeAddress(address)
-      const blocks = await blocksRead(range)
+      const blocks = await blocksRead(range, WALLET_TABLES)
       if (blocks.toBlock < blocks.fromBlock) return { address: account, blocks, legs: [], references: [], gasUnknownTxs: [] }
       const { rows, priced, gasUnknownTxs } = await reader.readWindow(account, blocks.fromBlock, blocks.toBlock)
       const references = await reader.readReferences(rows.map((r) => r.block_num))
@@ -106,7 +106,7 @@ export function pricetagClient(query: Query, config: Pick<PricetagConfig, "datas
      */
     async getPrices(token: string, range: BlockRange): Promise<TokenPrices> {
       const found = findToken(token)
-      const blocks = await blocksRead(range)
+      const blocks = await blocksRead(range, found.oracle ? ORACLE_TABLES : SWAP_TABLES)
       const result = { token: found.symbol, blocks }
       if (blocks.toBlock < blocks.fromBlock) return { ...result, prices: [] }
 

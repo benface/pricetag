@@ -21,19 +21,22 @@ Which prints something like this:
 Blocks 53515266 to 53515680: 1356 legs
 ETH: 1.209804786286906 | cost $2,931.29 | value $2,932.02 (oracle) | realized unknown | unrealized $0.73
 USDC: 3159.098126 | cost $3,158.55 | value $3,158.55 (oracle) | realized unknown | unrealized $0.00
-PnL: $0.73, gas $0.00, leaving out: ETH, USDC
+PnL: $0.73 (partial), gas $0.00, leaving out: ETH, USDC
 Latest: USDC in 0x34355602d8da6870b10a3fab054e756d7c243c1f1fd6fb5e8c7cfcbcdb3e0410, price $1.00 (oracle), cost paid
 ```
 
 The whole script is [`examples/portfolio.ts`](examples/portfolio.ts). The part that matters:
 
 ```ts
-import { buildPortfolio, createPricetag } from "@pricetag/sdk"
+import { buildPortfolio, createPricetag, pnlStatus } from "@pricetag/sdk"
 
 const pricetag = createPricetag({ url: "http://127.0.0.1:1602", dataset: "benface/pricetag@0.0.1" })
 
-const { legs, blocks } = await pricetag.getLegs(address, { from: startBlock })
+const { legs, blocks, gasUnknownTxs } = await pricetag.getLegs(address, { from: startBlock })
+if (blocks.toBlock < blocks.fromBlock) throw new Error("Nothing in this range has been processed yet")
+
 const { positions, totals } = buildPortfolio(legs, "average", await pricetag.getLatestPrices())
+const status = pnlStatus(totals, gasUnknownTxs) // "complete", "partial" or "unavailable"
 ```
 
 `pnpm amp:start` writes `AMP_QUERY_URL`, `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` to `.env.local`, and the example reads them from there. A dataset only has data from its start block on, so that's the earliest `from` that returns anything.
@@ -49,16 +52,18 @@ Amounts are in a token's smallest unit, and USD values are in micros (millionths
 | `getPrices(token, { from, to? })` | `{ token, prices, blocks }`: a token's prices, by symbol or address. It throws on a token off the allowlist, which has no prices to give. |
 | `getLatestPrices()` | The current prices to value positions at. Only ETH and USDC have one, and only with a recent oracle read. |
 | `buildPortfolio(legs, method, prices?)` | `{ method, positions, totals }`, where `method` is `"average"` or `"fifo"`. It's pure, so it needs no Amp. Without `prices`, values and unrealized PnL stay unknown. |
+| `pnlStatus(totals, gasUnknownTxs?)` | Whether `totals.pnlUsdMicros` can be read as the wallet's PnL: `complete`, `partial` or `unavailable`. |
 
 Browser code should import `@pricetag/sdk/core`. It has `buildPortfolio` and the rest of the pure code, without the Amp client.
 
-Three things to check on every result:
+Things to check on every result:
 
-- **`blocks`:** what was actually read. `toBlock` can stop short of what you asked for while a table catches up, and it's below `fromBlock` when nothing in the range has been processed yet. So no rows doesn't always mean nothing happened.
+- **`blocks`:** what was actually read. `toBlock` can stop short of what you asked for while a table catches up, and it's below `fromBlock` when nothing in the range has been processed yet. So no rows doesn't always mean nothing happened: check this before folding, because a portfolio of no legs adds up to $0. Each call only waits for the tables it reads, so `getPrices` for ETH, WETH or USDC only needs `reference_prices`, and other tokens need `legs`, `unlisted_legs` and `priced_legs`.
+- **Gas:** `gasUnknownTxs` lists transactions whose gas couldn't be worked out. The fold never sees that gas, so `totals` can't say it's missing, and ETH is overstated by that much. Show the list, and pass it to `pnlStatus`. `totals.unpricedGas` means some gas had no price at its block, so it isn't in `totals.gasUsdMicros`.
 - **Price:** a leg's `priceSource` is `oracle`, `swap` or null. When it's null, `priceNote` says why. In `getPrices`, an unknown price stays in the list with `source: "unknown"` and a `note`.
 - **Transaction:** a leg has its `txHash` and the rows it nets together in `parts`. A swap price has its `txHash` and `account`. An oracle price is read at a block, so its `txHash` is null. A position's legs are in `effects`.
 
-`totals` adds up only what's known, and `totals.excluded` says what it leaves out. Don't read a total without it.
+`totals` adds up only what's known, and `totals.excluded` says what it leaves out. Don't read a total without `pnlStatus` and `totals.excluded`: a `partial` total of $0.00 is what's known so far, not a wallet that broke even.
 
 ## What the tables mean
 

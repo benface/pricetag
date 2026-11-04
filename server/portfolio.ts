@@ -1,8 +1,8 @@
 // The portfolio a wallet's legs fold into, for clients that don't run the fold themselves.
 // One source of PnL logic: this calls what the browser calls, and adds nothing to the math.
 
-import { TOKENS, buildPortfolio, foldPositions, pnlOverTime, sumTotals, type LegEffect, type Method, type Position, type Totals } from "@pricetag/sdk/core"
-import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PnlStatus, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
+import { TOKENS, buildPortfolio, foldPositions, pnlOverTime, pnlStatus, sumTotals, type LegEffect, type Method, type Position, type Totals } from "@pricetag/sdk/core"
+import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting, explainMetric, explainPoint, explainTotal, type Explanation, type Metric, type TotalMetric } from "../src/core/explain.ts"
 
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
@@ -37,11 +37,6 @@ function positionOf({ asset, decimals, price, values, state, effects }: Position
   return { asset, decimals, note: asset === "ETH" ? "incl. WETH" : null, price, values, pnlUsdMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length }
 }
 
-function pnlStatusOf(totals: Totals, gasUnknownTxs: readonly string[]): PnlStatus {
-  if (totals.pnlUsdMicros === null) return "unavailable"
-  return totals.excluded.length === 0 && !totals.unpricedGas && gasUnknownTxs.length === 0 ? "complete" : "partial"
-}
-
 export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioResponse {
   const { positions, totals } = buildPortfolio(wallet.legs, method, wallet.prices)
   return {
@@ -56,7 +51,7 @@ export function portfolioOf(wallet: WalletResponse, method: Method): PortfolioRe
     gasUnknownTxs: wallet.gasUnknownTxs,
     positions: positions.map(positionOf),
     totals,
-    pnlStatus: pnlStatusOf(totals, wallet.gasUnknownTxs),
+    pnlStatus: pnlStatus(totals, wallet.gasUnknownTxs),
     points: pnlOverTime(wallet.legs, method, wallet.prices, wallet.references, wallet.latest),
   }
 }

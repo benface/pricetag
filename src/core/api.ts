@@ -1,9 +1,9 @@
 // What the server sends its clients. The browser runs the fold itself, because cost is personal.
 // Clients that can't run it, like the Mac app, read the portfolio it computes instead.
 
-import type { Head, LatestPrice, LatestPrices, Method, PnlPoint, PositionValues, PricedLeg, ReferenceRow, Totals } from "@pricetag/sdk/core"
+import type { Head, LatestPrice, LatestPrices, Method, PnlPoint, PnlStatus, PositionValues, PricedLeg, ReferenceRow, Totals } from "@pricetag/sdk/core"
 
-export type { Head }
+export type { Head, PnlStatus }
 
 export type Mode = "demo" | "raw" | "dataset"
 
@@ -35,12 +35,6 @@ export type PortfolioPosition = {
   shortfallQty: string
   legCount: number
 }
-
-/**
- * Whether `totals.pnlUsdMicros` can be read as the wallet's PnL.
- * partial: it leaves something out, and `totals.excluded` says what. unavailable: it's null, because nothing in it is known.
- */
-export type PnlStatus = "complete" | "partial" | "unavailable"
 
 /** A wallet's holdings, cost and PnL, already folded by one method. */
 export type PortfolioResponse = {

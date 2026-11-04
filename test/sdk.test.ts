@@ -1,8 +1,9 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, pricetagClient, sumTotals, type Query } from "@pricetag/sdk"
+import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, pnlStatus, sumTotals } from "@pricetag/sdk"
 import { DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
+import { fakeAmp } from "./support/fake-amp.ts"
 
 const ME = "00000000000000000000000000000000000000aa"
 const POOL = "00000000000000000000000000000000000000bb"
@@ -41,21 +42,6 @@ const pricedRow = (tx: string, soldToken: string, soldAmount: string, boughtToke
 })
 const swapTo = (usdMicros: string, token = "AERO") => ({ source: "swap", token, usd_micros: usdMicros })
 
-type Tables = { legs?: unknown[]; unlisted_legs?: unknown[]; priced_legs?: unknown[]; reference_prices?: unknown[] }
-
-/** Answers by table, and keeps every query so a test can see what was asked. `through` is how far each table has processed. */
-function fakeAmp(tables: Tables, through: number | null = 200) {
-  const queries: string[] = []
-  const query: Query = async <T>(sql: string) => {
-    queries.push(sql)
-    if (/ORDER BY block_num DESC LIMIT 1/.test(sql) && sql.includes("SELECT block_num FROM")) return (through === null ? [] : [{ block_num: String(through) }]) as T[]
-    if (sql.includes(".blocks")) return [{ block_num: "200", timestamp: 1_800_000_000_000 }] as T[]
-    const table = /\.(legs|unlisted_legs|priced_legs|reference_prices) WHERE/.exec(sql)?.[1] as keyof Tables
-    return (tables[table] ?? []) as T[]
-  }
-  return { query, queries, client: pricetagClient(query, { dataset: "benface/pricetag@0.0.1" }) }
-}
-
 describe("getLegs", () => {
   it("prices a wallet's swap, with its source and transaction", async () => {
     const { client } = fakeAmp({
@@ -81,6 +67,11 @@ describe("getLegs", () => {
     const { client, queries } = fakeAmp({}, 150)
     assert.deepEqual((await client.getLegs(`0x${ME}`, { from: 50 })).blocks, { fromBlock: 50, toBlock: 150 })
     assert.ok(queries.some((q) => q.includes(".legs WHERE block_num BETWEEN 50 AND 150")))
+  })
+
+  it("waits for the slowest of every table a wallet needs", async () => {
+    const { client } = fakeAmp({}, { legs: 200, unlisted_legs: 200, priced_legs: 200, reference_prices: 150 })
+    assert.deepEqual((await client.getLegs(`0x${ME}`, { from: 50 })).blocks, { fromBlock: 50, toBlock: 150 })
   })
 
   it("reads no further than `to`, even when more has been processed", async () => {
@@ -132,6 +123,38 @@ describe("getPrices", () => {
     const { prices } = await client.getPrices("ETH", { from: 50 })
     assert.deepEqual(prices.map((p) => [p.usdMicros, p.source]), [[null, "unknown"], [null, "unknown"]])
     assert.ok(prices.every((p) => p.note))
+  })
+
+  for (const token of ["ETH", "WETH", "USDC"]) {
+    it(`reads ${token} when only reference_prices has reached the range`, async () => {
+      const rows = [100, 101].map((block) => ({ block_num: String(block), timestamp: 0, answer: ETH_ANSWER }))
+      const { client } = fakeAmp({ reference_prices: rows }, { legs: null, unlisted_legs: null, priced_legs: null, reference_prices: 101 })
+      const { prices, blocks } = await client.getPrices(token, { from: 100, to: 101 })
+      assert.deepEqual(blocks, { fromBlock: 100, toBlock: 101 })
+      assert.deepEqual(prices.map((p) => p.blockNum), [100, 101])
+    })
+  }
+
+  it("isn't held back by swap tables that lag the oracle", async () => {
+    const { client, queries } = fakeAmp({}, { legs: 110, unlisted_legs: 120, priced_legs: 130, reference_prices: 150 })
+    assert.deepEqual((await client.getPrices("ETH", { from: 100 })).blocks, { fromBlock: 100, toBlock: 150 })
+    assert.ok(queries.some((q) => q.includes("reference_prices WHERE block_num BETWEEN 100 AND 150")))
+  })
+
+  it("says nothing was read when reference_prices hasn't reached an oracle token's range", async () => {
+    const { client } = fakeAmp({}, { legs: 150, unlisted_legs: 150, priced_legs: 150, reference_prices: null })
+    assert.deepEqual(await client.getPrices("ETH", { from: 100 }), { token: "ETH", blocks: { fromBlock: 100, toBlock: 99 }, prices: [] })
+  })
+
+  it("has a swap token wait for the tables its prices come from, and not reference_prices", async () => {
+    const { client } = fakeAmp({}, { legs: 120, unlisted_legs: 150, priced_legs: 150, reference_prices: null })
+    assert.deepEqual((await client.getPrices("AERO", { from: 100 })).blocks, { fromBlock: 100, toBlock: 120 })
+  })
+
+  it("says nothing was read when priced_legs hasn't reached a swap token's range", async () => {
+    const { client, queries } = fakeAmp({}, { legs: 150, unlisted_legs: 150, priced_legs: null, reference_prices: 150 })
+    assert.deepEqual((await client.getPrices("AERO", { from: 100 })).blocks, { fromBlock: 100, toBlock: 99 })
+    assert.ok(!queries.some((q) => q.includes("BETWEEN")))
   })
 
   it("prices a token without an oracle from its swaps, with the transaction", async () => {
@@ -243,6 +266,30 @@ describe("buildPortfolio", () => {
     const { positions } = buildPortfolio(legs, "average")
     const eth = positions.find((p) => p.asset === "ETH")!
     assert.deepEqual([eth.values.valueUsdMicros, eth.values.unrealizedUsdMicros, eth.price], [null, null, null])
+  })
+})
+
+describe("pnlStatus", () => {
+  const { totals } = buildPortfolio([], "average")
+
+  it("calls a known zero complete", () => {
+    assert.equal(pnlStatus(totals), "complete")
+  })
+
+  it("calls a total partial when gas couldn't be worked out, even with nothing excluded", () => {
+    assert.equal(pnlStatus(totals, ["0xaa"]), "partial")
+  })
+
+  it("calls a total partial when gas had no price", () => {
+    assert.equal(pnlStatus({ ...totals, unpricedGas: true }), "partial")
+  })
+
+  it("calls a total partial when it leaves something out", () => {
+    assert.equal(pnlStatus({ ...totals, excluded: [{ asset: "ETH", reason: "unknown cost" }] }), "partial")
+  })
+
+  it("calls a total with no answer unavailable", () => {
+    assert.equal(pnlStatus({ ...totals, pnlUsdMicros: null }), "unavailable")
   })
 })
 

@@ -86,6 +86,11 @@ export type SwapRow = { row: PricedRow; timestamp: string; reference: ReferenceR
 
 export type OracleRow = { block_num: number; timestamp: string; answer: string }
 
+/** Each read only waits for the tables it uses, so a lagging table doesn't hide what's ready in another. */
+export const WALLET_TABLES = ["legs", "unlisted_legs", "priced_legs", "reference_prices"]
+export const ORACLE_TABLES = ["reference_prices"]
+export const SWAP_TABLES = ["legs", "unlisted_legs", "priced_legs"]
+
 export function datasetReader(query: Query, config: { baseDataset: string; dataset: string }) {
   const ds = `"${config.dataset}"`
   const readOrEmpty = (sql: string) =>
@@ -97,12 +102,12 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
     head: (after: number | null) => readHead(query, config.baseDataset, after),
 
     /**
-     * The newest block, in `after`..`head`, that every table a wallet read needs has processed, or null if none has.
+     * The newest block, in `after`..`head`, that all these tables have processed, or null if one has none.
      * Reads never go past this. A derived table can lag the chain, and a block read before it's processed looks empty.
      */
-    async processedThrough(after: number, head: number): Promise<number | null> {
+    async processedThrough(after: number, head: number, tables: readonly string[] = WALLET_TABLES): Promise<number | null> {
       let through = head
-      for (const table of ["legs", "unlisted_legs", "priced_legs", "reference_prices"]) {
+      for (const table of tables) {
         const rows = await readOrEmpty(`SELECT block_num FROM ${ds}.${table} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`)
         if (!rows[0]) return null
         through = Math.min(through, asNumber(rows[0].block_num))
