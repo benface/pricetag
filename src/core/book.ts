@@ -49,7 +49,7 @@ export type Purchase = {
   blockNum: number | null
   /** Everything paid, fees included, in what it was paid in. */
   cost: Money
-  /** The same in USD, when the provider says, for a read in a currency `cost` can't be converted to. */
+  /** The same in USD, when the provider says, for a read in a currency `cost` can't be converted to at the rate when it arrived. */
   costUsdMicros: string | null
 }
 

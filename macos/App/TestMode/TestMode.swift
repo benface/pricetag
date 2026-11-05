@@ -824,15 +824,17 @@ enum TestScene: String, CaseIterable {
             purchase("no-delivery", dollars: 15, OnrampOrder(id: "no-delivery", status: .failed, failure: .delivery)),
             purchase("no-payment", dollars: 20, asset: "USDC", OnrampOrder(id: "no-payment", status: .failed, failure: .payment)),
             purchase("held", dollars: 25, OnrampOrder(id: "held", status: .succeeded, asset: "ETH", units: "8000000000000000", wallet: wallet, network: "base", txHash: hash, blockNum: 50)),
+            purchase("no-rate", dollars: 25, OnrampOrder(id: "no-rate", status: .succeeded, asset: "ETH", units: "8000000000000000", wallet: wallet, network: "base", txHash: hash, blockNum: 50, paidIn: "SEK")),
             purchase("different", dollars: 25, delivered("different")),
             purchase("recorded", dollars: 25, delivered("recorded")),
+            purchase("recorded-eur", dollars: 25, OnrampOrder(id: "recorded-eur", status: .succeeded, asset: "ETH", units: "8000000000000000", wallet: wallet, network: "base", txHash: hash, blockNum: 50, cost: Money(micros: "23150000", currency: .EUR))),
             purchase("arriving", dollars: 25, delivered("arriving")),
             purchase("going", dollars: 30, OnrampOrder(id: "going", status: .pending)),
             purchase("page", dollars: 20),
         ]
     }
 
-    private static let purchaseMatches: [String: PurchaseMatch.State] = ["different": .unmatched, "recorded": .recorded, "arriving": .waiting]
+    private static let purchaseMatches: [String: PurchaseMatch.State] = ["different": .unmatched, "recorded": .recorded, "recorded-eur": .recorded, "arriving": .waiting]
 
     /// What a site asks for in each of its scenes.
     private func siteRequest(from wallet: String) -> (method: String, parameters: JSONValue?) {
