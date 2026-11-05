@@ -786,7 +786,7 @@ public final class HotWallet {
         )
         let l1Fee = try await chain.l1Fee(ofPayload: unsigned.signingPayload)
         let fees = FeeQuote(maxFeePerGas: snapshot.fees.maxFeePerGas, maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas, l1FeeWei: l1Fee)
-        return SiteQuote(
+        var quote = SiteQuote(
             gasLimit: gasLimit,
             maxFeePerGas: snapshot.fees.maxFeePerGas,
             feeWei: fees.costWei(gas: UInt128(gasLimit)),
@@ -794,6 +794,30 @@ public final class HotWallet {
             ethBalance: snapshot.balances[Base.eth] ?? 0,
             tokenUsdMicros: Base.tokens.first { $0.contract == transaction.to }.flatMap { price(of: $0, snapshot: snapshot) }
         )
+        if TransactionReview(transaction, quote: quote).isUnreadableCall {
+            quote.preview = await preview(of: transaction, from: address, gasLimit: gasLimit, snapshot: snapshot)
+        }
+        return quote
+    }
+
+    /// What the node says a call would do. It sees what's about to be sent, as it does for the estimate above. A node that can't do this,
+    /// says no, or doesn't answer clearly leaves the approval saying what it always did.
+    private func preview(of transaction: SiteTransaction, from address: EthereumAddress, gasLimit: UInt64, snapshot: ChainSnapshot) async -> CallPreview? {
+        let parameters = CallSimulation.parameters(transaction, from: address, nonce: snapshot.nonce, gasLimit: gasLimit, fees: snapshot.fees)
+        guard case .success(let result)? = try? await chain.read(CallSimulation.method, parameters), let simulation = CallSimulation(result, wallet: address, value: transaction.value) else { return nil }
+        // A snapshot only has prices for what's held, and what a swap brings in usually isn't.
+        var prices: [Token: UInt128] = [:]
+        for token in simulation.tokens {
+            if let known = price(of: token, snapshot: snapshot) {
+                prices[token] = known
+            } else if let feed = Oracle.others[token.asset], let blockTime = simulation.blockTime {
+                let call: JSONValue = .object(["to": .string(feed.address.lowercased), "data": .string("0x" + Hex.encode(Calldata.latestRoundData))])
+                if case .success(.string(let round))? = try? await chain.read("eth_call", .array([call, .string("latest")])) {
+                    prices[token] = Oracle.price(round, feed: feed, blockTime: blockTime, ethUsdMicros: snapshot.ethUsdMicros)
+                }
+            }
+        }
+        return simulation.preview { prices[$0] }
     }
 
     /// Only after the user approved exactly this in the app. It's in line with sweeps, since two at once would use the same nonce.

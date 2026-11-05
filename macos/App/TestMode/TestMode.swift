@@ -318,6 +318,9 @@ enum TestScene: String, CaseIterable {
     case siteConnect = "site-connect"
     case siteTransaction = "site-transaction"
     case siteTransactionCAD = "site-transaction-cad"
+    case sitePreview = "site-preview"
+    case sitePreviewUnknown = "site-preview-unknown"
+    case sitePreviewLong = "site-preview-long"
     case siteUnlimitedApproval = "site-unlimited-approval"
     case siteTypedPermit = "site-typed-permit"
 
@@ -383,7 +386,7 @@ enum TestScene: String, CaseIterable {
         case .hotWalletUnreadable: .unreadableRecords
         case .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .settingsShowingSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD: .funded
         case .siteConnect: .funded
-        case .siteTransaction, .siteTransactionCAD, .siteUnlimitedApproval, .siteTypedPermit: .connectedToSite
+        case .siteTransaction, .siteTransactionCAD, .sitePreview, .sitePreviewUnknown, .sitePreviewLong, .siteUnlimitedApproval, .siteTypedPermit: .connectedToSite
         case .hotWalletTopUpOneDollar: .nearCap
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD, .popoverHotWalletNoSavings, .addSavingsFinished, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet: .noSavings
         case .hotWalletNoPrice: .noPrice
@@ -638,14 +641,16 @@ enum TestScene: String, CaseIterable {
             if TestMode.live != nil { return TestScreen(view: AnyView(RuleComparisonSheet(store: store)), isReady: isReady) }
             guard let comparison: RuleComparison = try? FixtureSource.decode(self == .ruleComparison ? "demo-rule-comparison" : "demo-rule-comparison-cad") else { TestMode.fail("There's no comparison fixture.") }
             return TestScreen(view: AnyView(RuleComparisonTable(comparison: comparison).padding(20).frame(width: 720).background(.background)), isReady: { true })
-        case .siteConnect, .siteTransaction, .siteTransactionCAD, .siteUnlimitedApproval, .siteTypedPermit:
+        case .siteConnect, .siteTransaction, .siteTransactionCAD, .sitePreview, .sitePreviewUnknown, .sitePreviewLong, .siteUnlimitedApproval, .siteTypedPermit:
             guard let wallet = hotWallet.address?.lowercased else { TestMode.fail("This scene's hot wallet has no address.") }
             let bridge = SiteBridge(wallet: hotWallet)
             let request = siteRequest(from: wallet)
             // Through the real checks and wording, up to the window. Nothing answers it there, so it goes no further.
             _ = bridge.begin(SiteRequest(connection: UUID(), id: "1", origin: HotWalletFixture.site, method: request.method, parameters: request.parameters))
             let armed = ContinuousClock.now + SiteApprovalView.armingDelay
-            return TestScreen(view: AnyView(SiteApprovalWindow(bridge: bridge).navigationTitle(SiteApprovalWindow.title)), isReady: { bridge.current != nil && ContinuousClock.now >= armed })
+            // The long one as a laptop would show it, whatever screen this runs on.
+            let heightLimit: CGFloat? = self == .sitePreviewLong ? 760 : nil
+            return TestScreen(view: AnyView(SiteApprovalWindow(bridge: bridge).environment(\.confirmationHeightLimit, heightLimit).navigationTitle(SiteApprovalWindow.title)), isReady: { bridge.current != nil && ContinuousClock.now >= armed })
         }
     }
 
@@ -659,6 +664,12 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .siteTransaction, .siteTransactionCAD:
             return transaction(to: "0x3333333333333333333333333333333333333333", value: "0x71afd498d0000", data: "0x12345678" + String(repeating: "0", count: 24) + spender)
+        case .sitePreview:
+            return transaction(to: HotWalletFixture.swapRouter, value: "0x0", data: "0x12345678")
+        case .sitePreviewUnknown:
+            return transaction(to: HotWalletFixture.unknownRouter, value: "0x71afd498d0000", data: "0x12345678")
+        case .sitePreviewLong:
+            return transaction(to: HotWalletFixture.longRouter, value: "0x0", data: "0x12345678")
         case .siteUnlimitedApproval:
             return transaction(to: usdc, value: "0x0", data: "0x095ea7b3" + String(repeating: "0", count: 24) + spender + String(repeating: "f", count: 64))
         case .siteTypedPermit:

@@ -36,6 +36,10 @@ actor FakeChain: ChainClient {
     var sendFailure: ChainError?
     var estimateFailure: ChainError?
     var readFailure: ChainError?
+    /// What a node says to `eth_simulateV1`, and to reading a price feed.
+    var simulation: RPCAnswer = .failure(SiteError(code: -32601, message: "the method eth_simulateV1 does not exist/is not available"))
+    var feedRound: RPCAnswer = .failure(SiteError(code: 3, message: "execution reverted"))
+    private(set) var simulationParameters: JSONValue?
     private(set) var sent: [SignedTransaction] = []
     private(set) var reads: [String] = []
     private(set) var l1FeePayloads: [[UInt8]] = []
@@ -66,6 +70,8 @@ actor FakeChain: ChainClient {
     func setSendFailure(_ failure: ChainError?) { sendFailure = failure }
     func setEstimateFailure(_ failure: ChainError?) { estimateFailure = failure }
     func setReadFailure(_ failure: ChainError?) { readFailure = failure }
+    func setSimulation(_ answer: RPCAnswer) { simulation = answer }
+    func setFeedRound(_ answer: RPCAnswer) { feedRound = answer }
     func failSnapshots(_ times: Int, with failure: ChainError) { snapshotFailures = Array(repeating: failure, count: times) }
     func setOnSend(_ body: @escaping @Sendable (SignedTransaction) -> Void) { onSend = body }
 
@@ -115,6 +121,11 @@ actor FakeChain: ChainClient {
 
     func read(_ method: String, _ parameters: JSONValue) -> RPCAnswer {
         reads.append(method)
+        if method == "eth_simulateV1" {
+            simulationParameters = parameters
+            return simulation
+        }
+        if method == "eth_call", case .string(let to)? = parameters[0]?["to"], Oracle.others.values.contains(where: { $0.address.lowercased == to }) { return feedRound }
         return .success(.string("0xread"))
     }
 
