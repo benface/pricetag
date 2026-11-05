@@ -50,6 +50,7 @@ struct MainWindow: View {
             sidebar
         } detail: {
             page
+                .environment(\.updatingNote, store.updatingNote)
                 .frame(minWidth: 320, minHeight: 320)
                 .navigationTitle(navigation.section.title)
                 // The wallet comes first when there's only room for one of them.
@@ -167,7 +168,7 @@ struct MainWindow: View {
         // In a narrow window Buy's label takes its room, and pushing either into the overflow menu would hide Buy. ⌘R and the View menu still refresh.
         if store.address != nil, navigation.section == .overview || navigation.section == .transactions, width >= Self.sidebarWidth || hotWallet.availability != .ready {
             ToolbarItem(placement: .primaryAction) {
-                Button("Refresh", systemImage: "arrow.clockwise") { store.start() }
+                Button("Refresh", systemImage: "arrow.clockwise") { store.refresh() }
                     .help("Refresh (⌘R)")
             }
         }
@@ -248,13 +249,17 @@ struct MainWindow: View {
                 NoWalletYet(navigation: navigation)
             }
         } else if let portfolio {
-            if !portfolio.progress.started {
-                ContentUnavailableView("Almost There", systemImage: "hourglass", description: Text(Wording.notStarted))
-            } else if portfolio.isEmpty {
-                NoActivity(portfolio: portfolio, navigation: navigation, notices: notices(portfolio))
-            } else {
-                content(portfolio)
+            Group {
+                if !portfolio.progress.started {
+                    ContentUnavailableView("Almost There", systemImage: "hourglass", description: Text(Wording.notStarted))
+                } else if portfolio.isEmpty {
+                    NoActivity(portfolio: portfolio, navigation: navigation, notices: notices(portfolio))
+                } else {
+                    content(portfolio)
+                }
             }
+            // Another wallet starts from the top with nothing selected, and its numbers appear rather than rolling from these.
+            .id(store.address)
         } else if store.feed == .reading {
             ContentUnavailableView {
                 ProgressView().controlSize(.large)
@@ -318,7 +323,7 @@ struct MainWindow: View {
         if !portfolio.linkedFailed.isEmpty {
             HStack(spacing: 8) {
                 Notice(.warning, Wording.linkedFailed(portfolio.linkedFailed.count))
-                Button("Try Again") { store.start() }
+                Button("Try Again") { store.refresh() }
             }
         }
         if !portfolio.linkedReading.isEmpty {
@@ -438,7 +443,8 @@ private struct CompactHolding: View {
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
                 LiveNumber(position.isHeld ? position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price" : "—", tone: position.values.valueMicros == nil ? .secondary : .neutral)
-                LiveNumber(position.pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized || position.estimates.unrealized) } ?? Wording.pnlUnavailable, tone: position.pnlMicros == nil ? .secondary : Tone(signed: position.pnlMicros))
+                    .updatingMark()
+                LiveNumber(position.pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized || position.estimates.unrealized) } ?? Wording.pnlUnavailable, tone: position.pnlMicros == nil ? .secondary : isLive ? Tone(signed: position.pnlMicros) : .neutral)
                     .font(.caption)
             }
         }
@@ -537,8 +543,9 @@ private struct HoldingsTable: View {
                 if position.isHeld {
                     let value = position.values.valueMicros
                     number(position, .value, value.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price", tone: value == nil ? .secondary : .neutral)
+                        .updatingMark()
                 } else {
-                    dash
+                    dash.updatingMark()
                 }
             }
             .width(min: Column.value, ideal: Column.value, max: limit(Column.value))
@@ -666,7 +673,9 @@ private struct TransactionsTable: View {
             .width(min: 100)
             TableColumn("Total PnL") { point in
                 LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: point.pnlMicros == nil ? .secondary : isLive ? Tone(signed: point.pnlMicros) : .neutral)
+                    .opacity(isLive ? 1 : 0.55)
                     .help(Wording.pnlHelp)
+                    .updatingMark()
             }
             .width(min: 90, ideal: 90, max: 110)
             .alignment(.numeric)
@@ -791,7 +800,7 @@ private struct Unavailable: View {
         } description: {
             Text(store.feed.staleNotice(serverURL: store.serverURL, portfolio: nil) ?? "")
         } actions: {
-            Button("Try Again") { store.start() }
+            Button("Try Again") { store.refresh() }
                 .buttonStyle(.borderedProminent)
         }
     }

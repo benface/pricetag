@@ -6,7 +6,7 @@ import Observation
 
 public enum FeedState: Equatable, Sendable {
     case noWallet
-    /// Waiting on an answer, which the first time for a wallet can take a minute. Numbers on screen are the previous answer.
+    /// Waiting on an answer, which the first time for a wallet can take a minute. Numbers on screen are the last answer, and may be old.
     case reading
     case live
     /// The server and Amp both answer, but Amp's newest block is old.
@@ -51,8 +51,9 @@ public final class PortfolioStore {
     /// As long as a read of a wallet the server hasn't read yet can take.
     static let firstReadTimeout: Duration = .seconds(180)
 
-    /// What the store holds, which may not be current: read `feed` before calling it live. While a new method's, currency's
-    /// or rule's numbers are on their way, the feed is `.reading` and this still holds the old ones, so the screen doesn't jump.
+    /// What the store holds, which may not be current: read `feed` before calling it live. While a new wallet's, method's, currency's
+    /// or rule's numbers are on their way, the feed is `.reading` and this holds the last ones known, so the screen doesn't go blank.
+    /// They're always this wallet's, though they can be by the last method, currency or rule it was read in.
     public private(set) var portfolio: Portfolio?
     public private(set) var feed: FeedState
     public private(set) var updatedAt: Date?
@@ -78,6 +79,9 @@ public final class PortfolioStore {
     public private(set) var savedWallets: [SavedWallet]
 
     @ObservationIgnored private var source: any PortfolioSource
+    @ObservationIgnored private var cache: PortfolioCache
+    /// Something changed, so the server can answer from what it last read while the real read runs.
+    @ObservationIgnored private var wantsLastRead = true
     @ObservationIgnored private let makeSource: @Sendable (URL) -> any PortfolioSource
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let now: @Sendable () -> Date
@@ -101,6 +105,8 @@ public final class PortfolioStore {
 
     public init(
         defaults: UserDefaults = .standard,
+        /// Where each wallet's last numbers stay across launches, or nil to keep them only in memory.
+        cacheDirectory: URL? = nil,
         makeSource: @escaping @Sendable (URL) -> any PortfolioSource = { PricetagClient(serverURL: $0) },
         now: @escaping @Sendable () -> Date = { Date() },
         reachableDelay: Duration = .seconds(2),
@@ -136,9 +142,17 @@ public final class PortfolioStore {
         self.savedWallets = saved
         self.feed = address == nil ? .noWallet : .reading
         self.source = makeSource(serverURL)
+        self.cache = PortfolioCache(directory: cacheDirectory, now: now())
+        if address != nil { portfolio = lastKnown() }
     }
 
-    /// Starts following, or starts over, say after a change or when asked to refresh.
+    /// Reads now, with the numbers on screen marked as on their way, because someone asked and should see it happen.
+    public func refresh() {
+        if address != nil { feed = .reading }
+        start()
+    }
+
+    /// Starts following, or starts over, say after a change.
     public func start() {
         stop()
         Task { await refreshRules() }
@@ -214,9 +228,11 @@ public final class PortfolioStore {
         if let next, next != WalletAddress.demo {
             saveWallets(SavedWallet.seeing(next, at: now(), in: savedWallets, own: book.linkedWallets))
         }
-        portfolio = nil
+        // In the same moment as the address, so one wallet's numbers are never on screen under another.
+        portfolio = lastKnown()
         updatedAt = nil
         feed = next == nil ? .noWallet : .reading
+        wantsLastRead = true
         start()
     }
 
@@ -241,6 +257,7 @@ public final class PortfolioStore {
     /// Takes it off the list, and shows `next` if it was the one showing.
     public func removeWallet(_ address: String, showing next: String?) {
         saveWallets(savedWallets.filter { $0.address != address })
+        cache.forget(address)
         if self.address == address { setWallet(next) }
     }
 
@@ -264,15 +281,14 @@ public final class PortfolioStore {
         guard method != self.method else { return }
         self.method = method
         defaults.set(method.rawValue, forKey: Keys.method)
-        if address != nil { feed = .reading }
-        start()
+        settingsChanged()
     }
 
     public func setLinkedWallets(_ wallets: [String]) {
         let next = wallets.map { $0.lowercased() }
         guard next != linkedWallets else { return }
         linkedWallets = next
-        if address != nil, pollTask != nil { start() }
+        if address != nil, pollTask != nil { answersChanged() }
     }
 
     /// The answers, with the accounts in this wallet as `mine`. Nobody's asked about those, so there's nothing to undo or save, and
@@ -363,16 +379,40 @@ public final class PortfolioStore {
         guard currency != self.currency else { return }
         self.currency = currency
         defaults.set(currency.rawValue, forKey: Keys.currency)
-        if address != nil { feed = .reading }
-        start()
+        settingsChanged()
     }
 
     public func setRule(_ id: String) {
         guard id != (selectedRule ?? rules.first?.id) else { return }
         selectedRule = id
         defaults.set(id, forKey: Keys.rule)
+        settingsChanged()
+    }
+
+    /// The numbers for these settings if they've been read before. If not, the ones on screen stay until the new ones arrive.
+    private func settingsChanged() {
+        if let known = lastKnown() { portfolio = known }
+        answersChanged()
+    }
+
+    /// The numbers on screen aren't what they'd be now, so they can't be called live, and the next ones are on their way.
+    private func answersChanged() {
         if address != nil { feed = .reading }
+        wantsLastRead = true
         start()
+    }
+
+    /// What this wallet last showed on this server, by these settings if it can be.
+    private func lastKnown() -> Portfolio? {
+        guard let address else { return nil }
+        return cache.last(of: address, on: serverURL, preferring: isForCurrentSettings)
+    }
+
+    /// Whether these numbers answer what's being asked now. With no rule chosen, it's the server's first, and with no list of rules yet, there's no telling.
+    private func isForCurrentSettings(_ portfolio: Portfolio) -> Bool {
+        guard portfolio.method == method, portfolio.currency == currency else { return false }
+        guard let rule = selectedRule ?? rules.first?.id else { return true }
+        return portfolio.rule == rule
     }
 
     /// The rule the numbers on screen were read through, when it isn't the server's default, so they can say so.
@@ -389,8 +429,7 @@ public final class PortfolioStore {
         if let chosen = selectedRule, !next.contains(where: { $0.id == chosen }) {
             selectedRule = nil
             defaults.removeObject(forKey: Keys.rule)
-            if address != nil { feed = .reading }
-            start()
+            settingsChanged()
         }
     }
 
@@ -405,12 +444,11 @@ public final class PortfolioStore {
         defaults.set(url.absoluteString, forKey: Keys.server)
         source = makeSource(url)
         rules = []
-        // Another server's numbers can be different facts, so these aren't kept even for a moment.
-        portfolio = nil
+        // Another server's numbers can be different facts, so these aren't kept even for a moment. What's known is this server's own.
+        portfolio = lastKnown()
         currentRate = nil
         updatedAt = nil
-        if address != nil { feed = .reading }
-        start()
+        answersChanged()
     }
 
     /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced.
@@ -441,7 +479,7 @@ public final class PortfolioStore {
         defaults.set(try? JSONEncoder().encode(next), forKey: Keys.book)
         answerDetails = answerDetails.keeping([next] + undoStack)
         saveDetails()
-        start()
+        answersChanged()
     }
 
     /// A book built on `book` has the accounts in it, and they aren't answers. What was said about one before it was an account stays.
@@ -542,6 +580,16 @@ public final class PortfolioStore {
         let linked = linked(for: address)
         // An answer that arrives after a change is about something else, whatever it says.
         let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && currency == self.currency && rule == self.selectedRule && serverURL == self.serverURL && book == self.book && linked == self.linked(for: address) }
+        if wantsLastRead {
+            wantsLastRead = false
+            // Comes straight back when the server has read this wallet, so a change of method or an answer doesn't wait on the chain. It's no help if it can't.
+            let last = try? await source.lastRead(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address))
+            guard isCurrent() else { return .zero }
+            if let last, shouldShow(last) {
+                portfolio = last
+                cache.remember(last, of: address, on: serverURL, at: now())
+            }
+        }
         let isOtherRule = rule != nil && portfolio?.rule != rule
         // The first read in a currency also reads its rate at each of this wallet's transactions, and the first by a rule
         // reads the wallet again, so they get as long as a first read.
@@ -554,16 +602,23 @@ public final class PortfolioStore {
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
+            cache.remember(next, of: address, on: serverURL, at: now())
             feed = state(of: next)
             expireLive()
             return reachableDelay
         } catch {
             guard isCurrent(), !(error is CancellationError) else { return .zero }
             // Numbers by another method or rule, or in another currency, are wrong now, not just old, and there's no way to get the right ones.
-            if portfolio?.method != method || portfolio?.currency != currency || isOtherRule { portfolio = nil }
+            if let portfolio, !isForCurrentSettings(portfolio) { self.portfolio = nil }
             feed = state(of: error)
             return feed == .serverUnreachable ? unreachableDelay : reachableDelay
         }
+    }
+
+    /// Not when it's behind numbers on screen that answer the same question, as it can be after a reorg or if the app has seen further.
+    private func shouldShow(_ last: Portfolio) -> Bool {
+        guard let portfolio, isForCurrentSettings(portfolio) else { return true }
+        return last.latest.blockNum >= portfolio.latest.blockNum
     }
 
     /// Stops calling these numbers live once they're older than a read should leave them, say after a Mac sleeps. Checking when a read starts
