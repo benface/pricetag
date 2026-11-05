@@ -162,7 +162,7 @@ struct SendConfirmation: View {
     let done: () -> Void
 
     static func gate(for model: SendModel) -> ApprovalPrompt {
-        ApprovalPrompt(notBefore: { model.nextPromptAt }) { prompt, _ in
+        ApprovalPrompt(needsReview: ApprovalPrompt.needsReview, notBefore: { model.nextPromptAt }) { prompt, _ in
             await model.sendConfirmed(in: prompt)
         }
     }
@@ -210,7 +210,7 @@ struct SweepSheet: View {
 
     init(wallet: HotWallet, gate: ApprovalPrompt? = nil) {
         self.wallet = wallet
-        _gate = State(initialValue: gate ?? ApprovalPrompt(notBefore: { wallet.nextPromptAt }) { prompt, _ in
+        _gate = State(initialValue: gate ?? ApprovalPrompt(needsReview: ApprovalPrompt.needsReview, notBefore: { wallet.nextPromptAt }) { prompt, _ in
             await wallet.sweepConfirmed(in: prompt)
         })
     }

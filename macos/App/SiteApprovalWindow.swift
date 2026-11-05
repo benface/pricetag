@@ -15,7 +15,7 @@ struct SiteApprovalWindow: View {
             if let failure = bridge.failure {
                 SiteFailureView(failure: failure) { bridge.dismissFailure() }
             } else if let approval = bridge.current {
-                SiteApprovalView(approval: approval, waitingBehind: bridge.pending.count - 1, money: bridge.money, gate: ApprovalPrompt(needsAcknowledgment: approval.needsAcknowledgment, notBefore: { bridge.nextPromptAt }) { prompt, acknowledged in
+                SiteApprovalView(approval: approval, waitingBehind: bridge.pending.count - 1, money: bridge.money, gate: ApprovalPrompt(needsAcknowledgment: approval.needsAcknowledgment, needsReview: ApprovalPrompt.needsReview, notBefore: { bridge.nextPromptAt }) { prompt, acknowledged in
                     await bridge.approve(approval.id, acknowledged: acknowledged, in: prompt)
                 }) {
                     Task { await bridge.approve(approval.id) }

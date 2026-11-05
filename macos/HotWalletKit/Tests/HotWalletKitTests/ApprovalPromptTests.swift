@@ -47,8 +47,8 @@ private func settle(until condition: () -> Bool = { false }) async {
 
 @MainActor
 struct ApprovalPromptTests {
-    private func gate(_ asked: Asked, needsAcknowledgment: Bool = false, notBefore: Date? = nil, pauses: Pauses = Pauses(), now: Date = Date()) -> ApprovalPrompt {
-        let gate = ApprovalPrompt(needsAcknowledgment: needsAcknowledgment, notBefore: { notBefore }, now: { now }, sleep: { pauses.record($0) }, perform: asked.answer)
+    private func gate(_ asked: Asked, needsAcknowledgment: Bool = false, needsReview: Bool = false, notBefore: Date? = nil, pauses: Pauses = Pauses(), now: Date = Date()) -> ApprovalPrompt {
+        let gate = ApprovalPrompt(needsAcknowledgment: needsAcknowledgment, needsReview: needsReview, notBefore: { notBefore }, now: { now }, sleep: { pauses.record($0) }, perform: asked.answer)
         gate.promptPaired(gate.prompt)
         return gate
     }
@@ -74,6 +74,41 @@ struct ApprovalPromptTests {
         await settle()
         #expect(asked.prompts.isEmpty)
         #expect(gate.phase == .needsAcknowledgment)
+        gate.acknowledge()
+        await settle { gate.phase == .done }
+        #expect(asked.acknowledged == [true])
+    }
+
+    /// With VoiceOver on, reading an amount and a whole address takes as long as it takes, so no moment is long enough.
+    @Test func withVoiceOverNothingIsAskedUntilTheUserSaysTheyveHeardIt() async {
+        let asked = Asked()
+        asked.answers = [.done]
+        let gate = gate(asked, needsReview: true)
+        gate.windowChanged(isInFront: true)
+        await settle()
+        #expect(asked.prompts.isEmpty)
+        #expect(gate.phase == .needsReview)
+        // Acknowledging a warning that isn't there doesn't skip the review.
+        gate.acknowledge()
+        gate.tryAgain()
+        await settle()
+        #expect(gate.phase == .needsReview)
+        gate.reviewed()
+        await settle { gate.phase == .done }
+        #expect(asked.prompts.count == 1)
+        #expect(asked.acknowledged == [false], "a review isn't a warning's acknowledgment")
+    }
+
+    @Test func aStrongWarningsAcknowledgmentIsTheReviewToo() async {
+        let asked = Asked()
+        asked.answers = [.done]
+        let gate = gate(asked, needsAcknowledgment: true, needsReview: true)
+        gate.windowChanged(isInFront: true)
+        await settle()
+        #expect(gate.phase == .needsAcknowledgment)
+        gate.reviewed()
+        await settle()
+        #expect(asked.prompts.isEmpty, "the review can't stand in for the warning")
         gate.acknowledge()
         await settle { gate.phase == .done }
         #expect(asked.acknowledged == [true])
