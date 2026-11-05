@@ -150,8 +150,26 @@ enum TestScene: String, CaseIterable {
     case sendCAD = "send-cad"
     case sendKnown = "send-known"
     case sendWaiting = "send-waiting"
+    case sendSent = "send-sent"
+    case sendStopped = "send-stopped"
+    case sweep
+    case sweepCAD = "sweep-cad"
     case siteConnect = "site-connect"
+    case siteSend = "site-send"
+    case siteSendToken = "site-send-token"
+    case siteLongAmount = "site-long-amount"
+    case siteCall = "site-call"
+    case siteApprove = "site-approve"
     case siteUnlimited = "site-unlimited"
+    case siteUnlimitedAcknowledged = "site-unlimited-acknowledged"
+    case siteMessage = "site-message"
+    case siteMessageUnreadable = "site-message-unreadable"
+    case siteStopped = "site-stopped"
+    case siteNext = "site-next"
+    case siteBehind = "site-behind"
+    case siteSending = "site-sending"
+    case siteSent = "site-sent"
+    case siteFailure = "site-failure"
     case publishCost = "publish-cost"
     case publishCAD = "publish-cost-cad"
     case publishWaiting = "publish-cost-waiting"
@@ -167,7 +185,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
-             .send, .sendCAD, .sendKnown, .sendWaiting, .siteConnect, .siteUnlimited, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
+             .send, .sendCAD, .sendKnown, .sendWaiting, .sendSent, .sendStopped, .sweep, .sweepCAD, .siteConnect, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteSending, .siteSent, .siteFailure, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
         }
@@ -201,7 +219,7 @@ enum TestScene: String, CaseIterable {
 
     private var currency: CurrencyCode {
         switch self {
-        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .hotWalletCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD, .publishCAD, .ruleComparisonCAD: .CAD
+        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .hotWalletCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD, .sweepCAD, .publishCAD, .ruleComparisonCAD: .CAD
         default: .USD
         }
     }
@@ -210,8 +228,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
-        case .sendWaiting: .waitingForTouchID
+        case .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown, .sendWaiting, .sendSent, .sendStopped, .sweep, .sweepCAD: .funded
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
         case .hotWalletNoPrice: .noPrice
         case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap: .overCap
@@ -292,21 +309,22 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet, address: HotWalletFixture.savings.lowercased)), isReady: isReady)
         case .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD:
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet)), isReady: isReady)
-        case .send, .sendCAD, .sendKnown, .sendWaiting:
+        case .send, .sendCAD, .sendKnown, .sendWaiting, .sendSent, .sendStopped:
             let model = SendModel(wallet: hotWallet, store: store)
             model.token = Base.tokens.first { $0.symbol == "USDC" }!
             model.amountText = "12.50"
             model.addressText = TestScene.recipient
-            let isWaiting = self == .sendWaiting
-            // It never gets past the prompt, and there's no key behind it anyway.
-            if isWaiting { Task { _ = await model.send() } }
-            return TestScreen(view: AnyView(SendSheet(model: model)), isReady: { !isWaiting || model.isSending })
-        case .siteConnect, .siteUnlimited:
-            let approval: SiteApproval = self == .siteConnect
-                ? .sceneConnect(origin: "https://app.uniswap.org")
-                : .sceneUnlimitedApproval(origin: "https://app.uniswap.org", token: EthereumAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")!, spender: EthereumAddress("0x0000000000000000000000000000000000c0ffee")!)
-            // Its buttons answer nothing, so nothing can get as far as a key.
-            return TestScreen(view: AnyView(SiteApprovalView(approval: approval, waitingBehind: 0, usd: { hotWallet.usd($0) }, approve: { _ in }, reject: {}).frame(width: 480)), isReady: isReady)
+            switch self {
+            // Touch ID's part never happens here: this only draws what's around it.
+            case .sendWaiting: return TestScreen(view: AnyView(SendConfirmation(model: model, gate: .scene(.asking), done: {}).frame(width: 460)), isReady: isReady)
+            case .sendSent: return TestScreen(view: AnyView(SendConfirmation(model: model, gate: .scene(.done), done: {}).frame(width: 460)), isReady: isReady)
+            case .sendStopped: return TestScreen(view: AnyView(SendConfirmation(model: model, gate: .scene(.stopped(nil)), done: {}).frame(width: 460)), isReady: isReady)
+            default: return TestScreen(view: AnyView(SendSheet(model: model)), isReady: isReady)
+            }
+        case .sweep, .sweepCAD:
+            return TestScreen(view: AnyView(SweepSheet(wallet: hotWallet, gate: .scene(.asking))), isReady: isReady)
+        case .siteConnect, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteSending, .siteSent, .siteFailure:
+            return siteScreen(hotWallet: hotWallet, isReady: isReady)
         case .publishCost, .publishCAD, .publishWaiting:
             let draft = CostNoteDraft(wallet: "0x00000000000000000000000000000000000de301", txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
             return TestScreen(view: AnyView(PublishCostSheet(draft: draft, currency: currency, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
@@ -314,6 +332,48 @@ enum TestScene: String, CaseIterable {
             guard let comparison: RuleComparison = try? FixtureSource.decode(self == .ruleComparison ? "demo-rule-comparison" : "demo-rule-comparison-cad") else { TestMode.fail("There's no comparison fixture.") }
             return TestScreen(view: AnyView(RuleComparisonTable(comparison: comparison).padding(20).frame(width: 720).background(.background)), isReady: { true })
         }
+    }
+
+    /// The approval window in each state, from what a real request reads as. Its buttons answer nothing, so nothing can get as far as a key.
+    private func siteScreen(hotWallet: HotWallet, isReady: @escaping () -> Bool) -> TestScreen {
+        let site = "https://app.uniswap.org"
+        let usdc = EthereumAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")!
+        let friend = EthereumAddress("0x0000000000000000000000000000000000c0ffee")!
+        let word = { (bytes: [UInt8]) in [UInt8](repeating: 0, count: 32 - bytes.count) + bytes }
+        let address = word(Hex.decode(friend.lowercased) ?? [])
+        let transfer = [0xA9, 0x05, 0x9C, 0xBB] + address + word([0x0B, 0xEB, 0xC2, 0x00])
+        let limited = [0x09, 0x5E, 0xA7, 0xB3] + address + word([0x02, 0xFA, 0xF0, 0x80])
+        let approval: SiteApproval
+        var phase = ApprovalPrompt.Phase.asking
+        var waitingBehind = 0
+        switch self {
+        case .siteConnect: approval = .sceneConnect(origin: site)
+        case .siteSendToken, .siteStopped, .siteSending, .siteSent: approval = .sceneTransaction(origin: site, to: usdc, data: transfer)
+        case .siteLongAmount: approval = .sceneTransaction(origin: site, to: friend, value: 123_456_789_012_345_678)
+        case .siteCall: approval = .sceneTransaction(origin: site, to: friend, value: 1_000_000_000_000_000, data: [0xDE, 0xAD, 0xBE, 0xEF] + address)
+        case .siteApprove: approval = .sceneTransaction(origin: site, to: usdc, data: limited)
+        case .siteUnlimited, .siteUnlimitedAcknowledged: approval = .sceneUnlimitedApproval(origin: site, token: usdc, spender: friend)
+        case .siteMessage: approval = .sceneMessage(origin: site, text: "Sign in to Uniswap\n\nThis doesn't cost anything.\nNonce: 8f2a91c4")
+        case .siteMessageUnreadable: approval = .sceneUnreadableMessage(origin: site)
+        default: approval = .sceneTransaction(origin: site, to: friend, value: 2_000_000_000_000_000)
+        }
+        if self == .siteStopped { phase = .stopped(nil) }
+        if self == .siteBehind { phase = .waiting }
+        if self == .siteUnlimited || self == .siteMessageUnreadable { phase = .needsAcknowledgment }
+        if self == .siteNext {
+            phase = .waiting
+            waitingBehind = 2
+        }
+        let view: AnyView
+        switch self {
+        case .siteSending, .siteSent:
+            view = AnyView(SiteProgressView(work: SiteWork(origin: site, isTransaction: true, sceneApproval: approval), usd: { hotWallet.usd($0) }, isDone: self == .siteSent))
+        case .siteFailure:
+            view = AnyView(SiteFailureView(failure: SiteFailure(sceneOrigin: site, isTransaction: true, reason: HotWalletWording.feesRoseAfterApproval), dismiss: {}))
+        default:
+            view = AnyView(SiteApprovalView(approval: approval, waitingBehind: waitingBehind, usd: { hotWallet.usd($0) }, gate: .scene(phase, isInFront: self != .siteBehind), connect: {}, reject: {}))
+        }
+        return TestScreen(view: AnyView(view.frame(width: 480).background(.background)), isReady: isReady)
     }
 
     private static let recipient = "0x0000000000000000000000000000000000c0ffee"

@@ -122,6 +122,75 @@ private let stolen = "0x" + String(repeating: "ab", count: 32)
 }
 
 @MainActor
+@Suite struct ConfirmingASendTests {
+    private func model(presence: Bool = true) async throws -> (SendModel, PortfolioStore, Rig) {
+        let rig = await Rig(funded, presence: presence)
+        await rig.wallet.tick()
+        let source = ScriptedPortfolios(.success(portfolio()))
+        let store = PortfolioStore(defaults: UserDefaults(suiteName: "send-tests-\(UUID().uuidString)")!, makeSource: { _ in source })
+        let model = SendModel(wallet: rig.wallet, store: store)
+        model.token = usdc
+        model.amountText = "5"
+        model.addressText = friend.lowercased
+        return (model, store, rig)
+    }
+
+    @Test func onlyWhatCanBeSentGetsAsFarAsConfirming() async throws {
+        let (model, store, _) = try await model()
+        defer { store.stop() }
+        model.amountText = "99999"
+        model.confirm()
+        #expect(model.stage == .composing)
+        model.amountText = "5"
+        model.confirm()
+        #expect(model.stage == .confirming)
+        model.backToEditing()
+        #expect(model.stage == .composing)
+    }
+
+    @Test func aConfirmedSendGoesOutAndSaysSo() async throws {
+        let (model, store, rig) = try await model()
+        defer { store.stop() }
+        model.confirm()
+        #expect(await model.sendConfirmed(in: PresencePrompt()) == .done)
+        #expect(model.stage == .sent)
+        #expect(await rig.signer.signed.count == 1)
+        #expect(rig.wallet.nextPromptAt != nil)
+    }
+
+    @Test func aPromptThatSaysNoSendsNothingAndStaysOnTheConfirmation() async throws {
+        let (model, store, rig) = try await model(presence: false)
+        defer { store.stop() }
+        model.confirm()
+        guard case .failed = await model.sendConfirmed(in: PresencePrompt()) else {
+            Issue.record("It should say why")
+            return
+        }
+        #expect(model.stage == .confirming)
+        #expect(await rig.signer.signed.isEmpty)
+    }
+
+    @Test func theSweepShownIsWhatItWouldMove() async throws {
+        let rig = await Rig(funded, presence: true)
+        await rig.wallet.tick()
+        let preview = try #require(rig.wallet.sweepPreview)
+        #expect(preview.transfers.contains { $0.token == usdc && $0.amount == usdcUnits(20) })
+        let eth = try #require(preview.transfers.first { $0.token.isNative })
+        #expect(eth.amount < oneEth / 200, "it can't move what pays for moving it")
+        #expect(preview.valueUsdMicros != nil)
+        #expect(preview.feeWei > 0)
+    }
+
+    @Test func sweepingSaysWhetherItWentOut() async throws {
+        let rig = await Rig(funded, presence: false)
+        #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
+        #expect(await rig.signer.signed.isEmpty)
+        let allowed = await Rig(funded, presence: true)
+        #expect(await allowed.wallet.sweepEverything(in: PresencePrompt()))
+    }
+}
+
+@MainActor
 @Suite struct SendTests {
     @Test func aTokenGoesToWhoeverWasChosenAfterAsking() async throws {
         let rig = await Rig(funded, presence: true)

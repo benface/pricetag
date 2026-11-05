@@ -69,6 +69,7 @@ public enum HotWalletWording {
     public static let sendingToARetiredKey = "That's an old key from this Mac, whose private key is gone. Nothing could ever move what's sent there."
     public static let sendingToNobody = "Nobody can use that address. What's sent there is gone."
     public static let sendingToAToken = "That's a token's contract, not a wallet. What's sent there is usually gone for good."
+    public static let touchIDDidNotConfirm = "Touch ID didn't confirm this, so nothing happened."
     public static let lastOneStillShowingUp = "The last transaction is still showing up. Try again in a moment."
     public static let lastOneOnItsWay = "The last transaction is still on its way. Try again in a moment."
     public static let networkBusy = "The network is limiting how often this app can ask it things. Try again in a moment, or set a dedicated network address in Settings."

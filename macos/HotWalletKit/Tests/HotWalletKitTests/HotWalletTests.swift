@@ -41,7 +41,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     @Test func twoAtOnceDontUseTheSameNonce() async throws {
         let rig = await Rig(snapshot(eth: oneEth / 100, tokens: [usdc: usdcUnits(500)]))
         async let tick: Void = rig.wallet.tick()
-        async let sweep: Void = rig.wallet.sweepEverything()
+        async let sweep = rig.wallet.sweepEverything()
         _ = await (tick, sweep)
         let nonces = await rig.signer.signed.map(\.nonce)
         #expect(Set(nonces).count == nonces.count)

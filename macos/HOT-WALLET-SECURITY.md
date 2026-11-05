@@ -21,6 +21,14 @@ To check it yourself: `pnpm check:mac` for the logic, `pnpm check:keychain` for 
 
 Manual sends (Send, Publish a Cost, Sweep Everything, Replace Key, Delete) and anything a site asks to send or sign ask for Touch ID, or the login password where there's none. Automatic sweeps don't, because they have to run with nobody there.
 
+Send, Sweep Everything and site requests ask with no click, as soon as what's being approved is on screen, inside the same window (`LAAuthenticationView`), so nothing covers it. Where that isn't possible, like with no sensor in reach or after too many tries, macOS's own dialog asks, and its text names the site and what leaves. What keeps a touch from approving something unseen (`ApprovalPrompt`):
+
+- [x] Nothing asks until its window is visible, key, and in the active app, and an inline prompt stops if that changes. The approval window floats, so another window can't cover it.
+- [x] Nothing asks until a strong warning has been acknowledged. Acknowledging is a click that waits a second after the window opens.
+- [x] The next prompt waits 2 seconds after any answer, yes or no, so a second touch can't approve what comes next. This holds across windows, and for a request that arrives after the last one has gone.
+- [x] Each ask has its own `LAContext`, with no reuse window, so no touch counts twice.
+- [x] A cancelled prompt leaves the request waiting, and only a click asks again. Rejecting is one click, and Escape does the same.
+
 - [ ] **It isn't enforced by the enclave.** The same wrapping key has to open with no prompt for sweeps, so the prompt lives in the app. It stops someone at an unlocked Mac, not malware running as this user.
 
 ## Where money can go
@@ -45,12 +53,12 @@ A browser extension lets websites use this wallet. A site can do real damage wit
 - [x] The extension never sees a key, and doesn't log or store anything. It runs as it's committed, with no build step and no dependencies, and asks only for `nativeMessaging`.
 - [x] Approvals only appear in the app's own window, showing the site and what's being signed. The wire protocol has no message for answering one, and a test sends the attempts anyone would try.
 - [x] Rejecting is the default: Return, Esc and closing the window all reject. Approve can't be pressed for the first second, so a window opening under the pointer can't catch a click, and it has no keyboard shortcut.
-- [x] Sending and signing also ask for Touch ID. A refused prompt leaves the request waiting, and signs nothing.
+- [x] Sending and signing also ask for Touch ID, right away, with the site and what's being signed on screen. A refused prompt leaves the request waiting, and signs nothing.
 - [x] The origin comes from the browser (`sender.origin`), not the page, and is checked again in the app. Only top-level pages on HTTPS or this Mac can ask: no iframes, and no plain HTTP that anyone on the network could change.
 - [x] Only the hot wallet is ever exposed. Nothing in the bridge can read a cold wallet, and a request naming any other address is refused.
 - [x] Only Base. Other chains are refused for switching, sending and typed data, and what's signed always carries chain ID 8453. A signature with no chain in its data gets a strong warning.
 - [x] `eth_sign` is refused outright, and the vault has no way to sign a bare hash: every message's digest starts with 0x19, which can't begin a transaction. So is anything else not on a short list, including EIP-7702 authorizations and contract creation.
-- [x] Unlimited token approvals, approve-for-all, typed-data permits and orders, unreadable messages, and sign-ins for a different site all get a strong warning, and approving takes ticking that you understand. It looks for what these have in common, so a contract call it can't read just says it can't read it.
+- [x] Unlimited token approvals, approve-for-all, typed-data permits and orders, unreadable messages, and sign-ins for a different site all get a strong warning, and approving takes saying you trust the site, before Touch ID asks. It looks for what these have in common, so a contract call it can't read just says it can't read it.
 - [x] The site doesn't choose the fee, gas or nonce. What's signed keeps to the gas and fee per gas that were approved. If fees rise, it keeps that limit, and if the base fee passes it, the transaction couldn't land, so nothing's signed.
 - [x] The amount being sent is shown to the last digit, so a margin a site adds can't be rounded out of sight.
 - [x] If something approved doesn't happen, the app's window says why, since a site's own message about it can say anything. It only says nothing was sent when that's certain. If a broadcast gets no clear answer, the transaction stays on its way and the receipt check settles it. Each failure stays up until it's been seen, even with other approvals going on.
@@ -121,7 +129,7 @@ The RPC is configurable and untrusted.
 
 These need a person at the Mac:
 
-- [ ] The Touch ID prompt itself, on Sweep Everything, Replace Key and site requests. The logic around it is tested with a stand-in.
+- [ ] The Touch ID prompt itself, inline on Send, Sweep Everything and site requests, and in macOS's dialog everywhere else. The logic around it is tested with a stand-in.
 - [ ] The approval window with a person at it. `pnpm check:extension` answers it through a debug build's stand-in, which a release build doesn't have.
 - [ ] A site with real funds on a real browser.
 - [ ] Reading an address on a real Ledger or Keystone screen.

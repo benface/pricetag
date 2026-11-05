@@ -50,6 +50,20 @@ public struct SweepPlan: Equatable, Sendable {
     public var notWorthTheGas: [Token] = []
 }
 
+public struct SweepPreview: Equatable, Sendable {
+    public let transfers: [PlannedTransfer]
+    public let feeWei: UInt128
+    public let feeUsdMicros: UInt128?
+
+    /// What it's all worth, unless something in it has no price, which isn't counted as $0.
+    public var valueUsdMicros: UInt128? {
+        transfers.reduce(UInt128?(0)) { total, transfer in
+            guard let total, let usd = transfer.usdMicros else { return nil }
+            return total + usd
+        }
+    }
+}
+
 public enum SweepPlanner {
     /// Below this a sweep isn't worth making, whatever gas costs.
     public static let minimumSweep: UInt128 = Money.dollar
