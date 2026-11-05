@@ -30,11 +30,11 @@ export const pnlHelp = (text: string): string | undefined => (text.includes("PnL
 export const tokenLabel = (symbol: string) => (symbol === "WETH" ? "wrapped ETH" : symbol)
 
 export const ETH_NOTE = "incl. wrapped ETH"
-export const DEMO_NOTICE = "Demo data, not a real wallet. Every case the app has to get right is in here."
+export const DEMO_NOTICE = "Demo data, not a real wallet."
 export const PNL_UNAVAILABLE = "PnL unavailable"
 export const NOTHING_TO_CHART = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
 export const UNPRICED_FEES = "Some network fees had no price at the time, and aren't in this total."
-export const READING = "Reading this wallet's history. The first read can take a minute, then only new activity is read."
+export const READING = "Reading this wallet. The first read can take a minute."
 export const NOT_AN_ADDRESS = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 
 export const RULES_TITLE = "Pricing rule"
@@ -139,7 +139,7 @@ export function feesUnknownSentence(count: number): string {
   return `Network fees couldn't be worked out for ${count} ${count === 1 ? "transaction" : "transactions"}, so the network fees shown are too low.`
 }
 
-export const NOT_STARTED = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."
+export const NOT_STARTED = "Numbers appear once the data reaches this wallet."
 
 export function behindSentence(ms: number): string {
   // Under half a minute would round to "0 min", which reads as not behind at all.

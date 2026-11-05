@@ -387,6 +387,31 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(all.first?.asset == "cbBTC")
     }
 
+    @Test func aValueMissingAHoldingSaysSoEvenWhenThatHoldingIsntListed() throws {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
+        var positions = object["positions"] as! [[String: Any]]
+        let index = try #require(positions.firstIndex { $0["asset"] as? String == "USDC" })
+        var values = positions[index]["values"] as! [String: Any]
+        values["valueMicros"] = NSNull()
+        positions[index]["values"] = values
+        object["positions"] = positions
+        var totals = object["totals"] as! [String: Any]
+        var coverage = totals["coverage"] as! [String: Any]
+        coverage["value"] = ["known": 6, "missing": 1]
+        totals["coverage"] = coverage
+        object["totals"] = totals
+        let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(!portfolio.largestHoldings(5).map(\.asset).contains("USDC"))
+        #expect(portfolio.isValuePartial)
+        #expect(portfolio.valueLeavesOut == "USDC has no price right now, so it isn't in this value.")
+    }
+
+    @Test func aWholeValueIsntPartial() throws {
+        let portfolio = try demoPortfolio()
+        #expect(!portfolio.isValuePartial)
+        #expect(portfolio.valueLeavesOut == nil)
+    }
+
     @Test func attentionFitsInAFewWords() throws {
         #expect(try demoPortfolio().shortAttention == "$3,603.42 has an unknown cost")
         #expect(try realPortfolio(at: Date(), status: .complete).shortAttention?.contains("\n") != true)

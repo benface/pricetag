@@ -269,10 +269,10 @@ public struct ResolveFlow: View {
                         .help("Writes what you paid on Base, where anyone can read it")
                 }
             }
-            Text("This stays on this Mac. Publishing a cost onchain would tie your wallets together in public, so that's never done without asking.")
+            Text("This stays on this Mac.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .help("Publishing a cost onchain would tie your wallets together in public, so that's never done without asking.")
             if let failure = model.failure { WarningText(failure).font(.callout) }
         }
         .padding(16)
@@ -301,11 +301,10 @@ public struct ResolveFlow: View {
             if let portfolio = store.portfolio {
                 Text(nowText(portfolio)).font(.title3.weight(.semibold)).monospacedDigit()
                 if let excluded = Wording.excluded(portfolio.totals.excluded) {
-                    Text("Every question's answered. What's left isn't a question: \(excluded)")
+                    Text("Every question's answered.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .help(excluded)
                 }
             }
             if let failed = store.portfolio?.linkedFailed.count, failed > 0 {
@@ -314,14 +313,15 @@ public struct ResolveFlow: View {
             }
             if let portfolio = store.portfolio, !portfolio.linkedReading.isEmpty {
                 let waiting = portfolio.linkedReading.count
-                Text("Still reading your other \(waiting == 1 ? "wallet" : "wallets"). What came from \(waiting == 1 ? "it" : "them") has an unknown cost until that's done.")
+                Text("Still reading your other \(waiting == 1 ? "wallet" : "wallets").")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
             if !model.skipped.isEmpty {
-                Text("\(model.skipped.count) skipped, and still flagged.").font(.callout).foregroundStyle(Tone.warning.style)
+                Text("\(model.skipped.count) skipped").font(.callout).foregroundStyle(.secondary)
                 Button("Go Back to Them") { model.revisitSkipped() }
+                    .buttonStyle(.borderedProminent)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

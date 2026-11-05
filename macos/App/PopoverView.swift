@@ -165,6 +165,12 @@ struct PopoverView: View {
                         Text(portfolio.currency.rawValue)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        // As readable as what it qualifies, because it changes what the number means.
+                        if portfolio.isValuePartial {
+                            Text("partial")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
                     } else {
                         Text("Value unavailable")
                             .font(.title3.weight(.semibold))
@@ -173,7 +179,8 @@ struct PopoverView: View {
                 }
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("Value, \(portfolio.totalValueText ?? "unavailable")")
+            .help(portfolio.valueLeavesOut ?? "")
+            .accessibilityLabel("Value, \(portfolio.totalValueText ?? "unavailable")\(portfolio.isValuePartial ? ", partial" : "")")
             .accessibilityHint("Shows the activity behind this number")
             Button { open(.total(.pnl)) } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -274,13 +281,13 @@ struct PopoverView: View {
             if hotWallet.canSend {
                 HStack(spacing: 8) {
                     Button {
-                        navigation.wantsSend = true
+                        navigation.send()
                         openHotWallet()
                     } label: {
                         Label("Send", systemImage: "arrow.up").frame(maxWidth: .infinity)
                     }
                     Button {
-                        navigation.wantsTopUp = true
+                        navigation.topUp()
                         openHotWallet()
                     } label: {
                         Label("Top Up", systemImage: "arrow.down").frame(maxWidth: .infinity)
@@ -338,8 +345,9 @@ struct PopoverView: View {
     }
 
     private func openHotWallet() {
+        navigation.section = .spendingMoney
         dismiss()
-        openWindow(id: WindowID.hotWallet)
+        openWindow(id: WindowID.main)
         DockPresence.bringForward()
     }
 

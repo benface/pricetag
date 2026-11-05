@@ -40,6 +40,8 @@ What macOS allows, found by trying it on macOS 27.2:
 
 Not tried, because it would have interrupted: running this while a full-screen app or another Space is in front.
 
+The `route-*` scenes check more than looks: they press what the menu bar's Send and Top Up press, with the window closed and with it open on another section, and fail unless the sheet opens.
+
 ## 3. Test behavior with logic tests
 
 Don't drive the UI. Anything that decides what happens belongs in `PricetagKit` or another package, with a test next to `FeedTests.swift`. Scenes set up the state you want to see, so you don't need to click your way to it.
