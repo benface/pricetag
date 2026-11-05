@@ -160,6 +160,8 @@ export type ExplanationLeg = {
   summary: string
   /** What about it isn't known, in words, or null when nothing is. */
   unknown: string | null
+  /** Answering a question about this asset could fix what isn't known. */
+  answerable: boolean
   /** What this leg did to its position, in words. */
   effect: string
   /** The rows this leg nets together, in words, or null when it's just one. */

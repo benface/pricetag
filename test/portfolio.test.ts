@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting, summarizeEffect } from "../src/core/explain.ts"
@@ -177,6 +177,55 @@ describe("portfolioOf", () => {
     assert.ok(eth.some(([summary, unknown]) => summary === "Received $47.84 of ETH." && unknown === "What this cost isn't known yet."))
     // Money after "Bought" would read as what was paid, which isn't known here.
     assert.deepEqual(legs("VIRTUAL"), [["Bought 50 VIRTUAL, worth $105.00.", "What this cost isn't known yet."]])
+  })
+
+  describe("says what's actually missing when a gain isn't known", () => {
+    const ETH = 10n ** 18n
+    const PRICE = "2000000000"
+    const leg = (delta: bigint, extra: Partial<PricedLeg> = {}) => ({ id: "leg", asset: "ETH", decimals: 18, delta: delta.toString(), kind: "swap", priceMicros: PRICE, costMicros: null, proceedsMicros: null, costLabel: "unknown", ...extra }) as PricedLeg
+    const bought = leg(ETH, { costMicros: "2000000000", costLabel: "paid" })
+    const unknownCost = leg(ETH, { kind: "transfer" })
+    const sold = { proceedsMicros: "1000000000" }
+    /** What the last leg says, after the ones before it. */
+    const saysIn = (method: Method, legs: PricedLeg[]) => {
+      const last = legs.at(-1) as PricedLeg
+      const before = legs.slice(0, -1).reduce(applyLeg, emptyPosition(method, 18))
+      const { unknown, answerable } = summarizeEffect({ leg: last, before, after: applyLeg(before, last) }, "USD")
+      return [unknown, answerable]
+    }
+    const says = (...legs: PricedLeg[]) => saysIn("average", legs)
+
+    it("on a sale", () => {
+      assert.deepEqual(says(unknownCost, leg(-ETH / 2n, sold)), ["The gain on 0.5 ETH isn't known, because what it cost isn't known yet.", true])
+      assert.deepEqual(says(bought, leg(-ETH / 2n)), ["The gain on 0.5 ETH isn't known, because what you received has no usable value.", false], "and no question about its cost can fix that")
+      assert.deepEqual(says(unknownCost, leg(-ETH / 2n)), ["The gain on 0.5 ETH isn't known, because what it cost isn't known yet, and what you received has no usable value.", true])
+    })
+
+    it("on a network fee", () => {
+      const fee = (extra: Partial<PricedLeg> = {}) => leg(-ETH / 2n, { kind: "gas", ...extra })
+      assert.deepEqual(says(unknownCost, fee()), ["The gain on 0.5 ETH isn't known, because what it cost isn't known yet.", true])
+      assert.deepEqual(says(bought, fee({ priceMicros: null })), ["The gain on 0.5 ETH isn't known, because it has no price at this block.", false])
+      assert.deepEqual(says(unknownCost, fee({ priceMicros: null })), ["The gain on 0.5 ETH isn't known, because what it cost isn't known yet, and it has no price at this block.", true])
+    })
+
+    it("when only some of it is missing a cost", () => {
+      const half = leg(ETH / 2n, { kind: "transfer" })
+      const paid = leg(ETH / 2n, { costMicros: "1000000000", costLabel: "paid" })
+      assert.deepEqual(saysIn("fifo", [paid, half, leg(-ETH)]), ["The gain on 1 ETH isn't known, because what some of it cost isn't known yet, and what you received has no usable value.", true])
+    })
+
+    it("when more left than arrived, which no question is about", () => {
+      assert.deepEqual(says(bought, leg(-ETH * 2n, { proceedsMicros: "4000000000" })), ["The gain on 1 ETH isn't known, because 1 ETH more left than we saw arrive.", false])
+      assert.deepEqual(says(unknownCost, leg(-ETH * 2n)), ["The gain on 2 ETH isn't known, because 1 ETH more left than we saw arrive, and what some of it cost isn't known yet, and what you received has no usable value.", true])
+      assert.deepEqual(says(bought, leg(-ETH * 2n, { kind: "transfer" })), ["1 ETH more left than we saw arrive, so what it cost isn't known.", false], "a transfer has no gain to talk about")
+    })
+
+    it("and offers no question where nobody can answer", () => {
+      assert.deepEqual(says(leg(ETH, { kind: "transfer", orderUnknown: "always" })), ["What this cost isn't known yet.", false])
+      assert.deepEqual(says(leg(ETH, { kind: "transfer", unsettledCredit: true })), ["What this cost isn't known yet.", false])
+      assert.deepEqual(says(unknownCost), ["What this cost isn't known yet.", true])
+      assert.deepEqual(says(unknownCost, leg(-ETH / 2n, { ...sold, orderUnknown: "always" })), ["The gain on 0.5 ETH isn't known, because what it cost isn't known yet.", false])
+    })
   })
 
   it("matches the files the Swift package reads", () => {

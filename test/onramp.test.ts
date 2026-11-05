@@ -321,6 +321,10 @@ describe("a purchase's cost", () => {
       const moved = explainPortfolio(savings, "average", { kind: "asset", asset: "USDC", metric: "amount" }, [hot], linkedBook(purchase()))!.legs[0]!
       assert.deepEqual([moved.costLabel, moved.costSource], ["inherited", "Bought on Coinbase"], "it says who sold it, and stays what it is here")
       assert.match(moved.effect, /from what your other wallet paid, fees included\. Bought on Coinbase/)
+      assert.equal(moved.summary, "Received $25.00 of USDC from your other wallet.", "moving what was bought isn't buying it again")
+      assert.equal(moved.unknown, null)
+      const bought = explainPortfolio(hot, "average", { kind: "asset", asset: "USDC", metric: "amount" }, [savings], linkedBook(purchase()))!.legs.find((l) => l.txHash === TX)!
+      assert.equal(bought.summary, "Bought $25.80 of USDC, fees included.", "where it was bought, it's still a purchase")
       assert.equal(costTag(leg.costLabel, leg.purchaseSource), "Cost: Bought on Coinbase, from your other wallet")
       assert.ok(exportCsv(fold.positions, "USD").includes("inherited: Bought on Coinbase"))
     })
@@ -332,6 +336,8 @@ describe("a purchase's cost", () => {
       const costOf = (focus: WalletResponse, other: WalletResponse) => foldBook(focus, [other], "average", book).positions.find((p) => p.asset === "USDC")!.values.costMicros
       assert.equal(costOf(savings, hot), "15480000")
       assert.equal(costOf(hot, savings), "10320000")
+      const moved = explainPortfolio(savings, "average", { kind: "asset", asset: "USDC", metric: "amount" }, [hot], book)!.legs[0]!
+      assert.deepEqual([moved.summary, moved.costLabel, moved.costSource], ["Received $15.00 of USDC from your other wallet.", "inherited", "Bought on Coinbase"])
     })
 
     it("does the same for ETH that arrived in a batched payout", () => {

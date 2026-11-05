@@ -33,6 +33,7 @@
       "opening": false,
       "summary": "Sent $5.24 of ETH, with no gain or loss.",
       "unknown": null,
+      "answerable": false,
       "effect": "Sent out with $4.71 of known cost, so no gain or loss",
       "netting": null,
       "conversion": null
@@ -56,6 +57,7 @@
       "opening": false,
       "summary": "Received $1,360.00 of cbBTC.",
       "unknown": "What this cost isn't known yet.",
+      "answerable": true,
       "effect": "Adds 0.02 cbBTC at an unknown cost",
       "netting": null,
       "conversion": null
@@ -79,6 +81,7 @@
       "opening": false,
       "summary": "Received $199.98 of USDT.",
       "unknown": null,
+      "answerable": false,
       "effect": "Adds 200 USDT for about $199.98, from the price when it arrived",
       "netting": null,
       "conversion": null
@@ -102,6 +105,7 @@
       "opening": false,
       "summary": "Received $47.84 of ETH.",
       "unknown": "What this cost isn't known yet.",
+      "answerable": true,
       "effect": "Adds 0.02 ETH at an unknown cost",
       "netting": null,
       "conversion": null
@@ -125,6 +129,7 @@
       "opening": false,
       "summary": "Received $4,999.00 of USDC.",
       "unknown": "What this cost isn't known yet.",
+      "answerable": true,
       "effect": "Adds 5,000 USDC at an unknown cost",
       "netting": null,
       "conversion": null
@@ -148,6 +153,7 @@
       "opening": true,
       "summary": "Already held 250 DAI when this history starts.",
       "unknown": "What this cost isn't known yet.",
+      "answerable": true,
       "effect": "Adds 250 DAI at an unknown cost",
       "netting": null,
       "conversion": null

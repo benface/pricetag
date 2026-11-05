@@ -129,44 +129,54 @@ export function describeEffect({ leg, before, after }: LegEffect, currency: Curr
   return parts.join(", ")
 }
 
-/** What a leg did, in one plain sentence led by its amount in money, and what about it isn't known. `describeEffect` has the rest. */
-export function summarizeEffect({ leg, before, after }: LegEffect, currency: CurrencyCode): { summary: string; unknown: string | null } {
+/** What a leg did, in one plain sentence led by its amount in money, what about it isn't known, and whether answering a question could fix that. `describeEffect` has the rest. */
+export function summarizeEffect({ leg, before, after }: LegEffect, currency: CurrencyCode): { summary: string; unknown: string | null; answerable: boolean } {
   const money = (micros: string | bigint) => formatMoney(micros, currency)
   const qty = BigInt(leg.delta.replace("-", ""))
   const amount = (units: bigint) => `${formatAmount(units, leg.decimals)} ${leg.asset}`
   const value = leg.priceMicros === null ? null : worth(qty, BigInt(leg.priceMicros), leg.decimals)
   // Money first, as people count it. Without a price, the amount is all there is to say.
   const what = (micros: bigint | string | null, about = false) => (micros === null ? amount(qty) : `${about ? "about " : ""}${money(micros)} of ${leg.asset}`)
+  // Nobody can answer which came first, or what the chain hasn't confirmed yet.
+  const orderUnknown = orderMatters(leg, before.method)
   if (BigInt(leg.delta) > 0n) {
     const unknown = leg.costMicros !== null ? null : leg.pieces?.some((p) => p.costMicros !== null) ? "What part of this cost isn't known yet." : "What this cost isn't known yet."
-    if (leg.opening) return { summary: `Already held ${what(value)} when this history starts.`, unknown }
-    if (leg.kind === "swap" || leg.purchaseSource) {
+    const facts = { unknown, answerable: unknown !== null && !orderUnknown && !leg.unsettledCredit }
+    if (leg.opening) return { summary: `Already held ${what(value)} when this history starts.`, ...facts }
+    // Bought and then moved here keeps what was paid as its cost, but this movement is the move.
+    if (leg.costLabel !== "inherited" && (leg.kind === "swap" || leg.purchaseSource)) {
       // Money after "Bought" reads as what was paid, so a price's worth says so when that's all there is.
-      if (leg.costMicros === null) return { summary: `Bought ${amount(qty)}${value === null ? "" : `, worth ${money(value)}`}.`, unknown }
-      return { summary: `Bought ${what(leg.costMicros, leg.estimated)}${leg.purchaseSource ? ", fees included" : ""}.`, unknown }
+      if (leg.costMicros === null) return { summary: `Bought ${amount(qty)}${value === null ? "" : `, worth ${money(value)}`}.`, ...facts }
+      return { summary: `Bought ${what(leg.costMicros, leg.estimated)}${leg.purchaseSource ? ", fees included" : ""}.`, ...facts }
     }
-    return { summary: `Received ${what(value)}${leg.costLabel === "inherited" ? " from your other wallet" : ""}.`, unknown }
+    return { summary: `Received ${what(value)}${leg.costLabel === "inherited" ? " from your other wallet" : ""}.`, ...facts }
   }
   const realized = diff(after.realizedMicros, before.realizedMicros)
   const unresolved = diff(after.unresolvedDisposedQty, before.unresolvedDisposedQty)
   const shortfall = diff(after.shortfallQty, before.shortfallQty)
-  const unknown =
-    shortfall > 0n
-      ? `${amount(shortfall)} more left than we saw arrive, so its gain isn't known.`
-      : unresolved > 0n && leg.kind !== "transfer"
-        ? `The gain on ${amount(unresolved)} isn't known, because what it cost isn't known yet.`
-        : null
+  if (leg.kind === "transfer") {
+    const unknown = shortfall > 0n ? `${amount(shortfall)} more left than we saw arrive, so what it cost isn't known.` : null
+    return { summary: `Sent ${what(value)}, with no gain or loss.`, unknown, answerable: false }
+  }
+  // A shortfall is also an unknown cost, but it isn't one any question is about, since nothing is known to have arrived.
+  const missingCost = diff(after.unknownCostDisposedQty, before.unknownCostDisposedQty) - shortfall
+  const causes = [
+    ...(shortfall > 0n ? [`${amount(shortfall)} more left than we saw arrive`] : []),
+    ...(missingCost > 0n ? [`what ${missingCost < unresolved ? "some of it" : "it"} cost isn't known yet`] : []),
+    ...(diff(after.unknownProceedsQty, before.unknownProceedsQty) > 0n ? [leg.kind === "gas" ? "it has no price at this block" : "what you received has no usable value"] : []),
+  ]
+  const unknown = unresolved > 0n ? `The gain on ${amount(unresolved)} isn't known, because ${causes.join(", and ")}.` : null
+  const answerable = missingCost > 0n && !orderUnknown
   if (leg.kind === "gas") {
     const fee = diff(after.gasMicros, before.gasMicros)
-    return { summary: leg.priceMicros === null ? `Paid ${amount(qty)} in network fees.` : `Paid ${money(fee)} in network fees.`, unknown }
+    return { summary: leg.priceMicros === null ? `Paid ${amount(qty)} in network fees.` : `Paid ${money(fee)} in network fees.`, unknown, answerable }
   }
-  if (leg.kind === "transfer") return { summary: `Sent ${what(value)}, with no gain or loss.`, unknown }
-  if (leg.proceedsMicros === null) return { summary: `Sold ${amount(qty)}, for something with no usable value.`, unknown }
+  if (leg.proceedsMicros === null) return { summary: `Sold ${amount(qty)}, for something with no usable value.`, unknown, answerable }
   const sold = `Sold ${what(leg.proceedsMicros, leg.estimated)}`
   const gain = `a ${money(realized < 0n ? -realized : realized)} ${realized < 0n ? "loss" : "gain"}`
-  if (unknown) return { summary: realized === 0n ? `${sold}.` : `${sold}, ${gain} on part of it.`, unknown }
-  if (realized === 0n) return { summary: `${sold}, with no gain or loss.`, unknown }
-  return { summary: `${sold}, ${gain}.`, unknown }
+  if (unknown) return { summary: realized === 0n ? `${sold}.` : `${sold}, ${gain} on part of it.`, unknown, answerable }
+  if (realized === 0n) return { summary: `${sold}, with no gain or loss.`, unknown, answerable }
+  return { summary: `${sold}, ${gain}.`, unknown, answerable }
 }
 
 /** Why what we saw and the chain might disagree, by which way they do. */

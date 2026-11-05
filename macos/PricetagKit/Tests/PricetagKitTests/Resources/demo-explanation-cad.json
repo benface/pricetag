@@ -28,6 +28,7 @@
       "opening": false,
       "summary": "Sold $618.01 of AERO, a $107.21 gain.",
       "unknown": null,
+      "answerable": false,
       "effect": "Sold for $618.01, realized +$107.21",
       "netting": null,
       "conversion": "In USD: $1.50 each, $449.91 received. 1 USD = $1.3736 CAD at this block, from Chainlink's CAD / USD price on Base."
@@ -51,6 +52,7 @@
       "opening": false,
       "summary": "Bought $1,362.13 of AERO.",
       "unknown": null,
+      "answerable": false,
       "effect": "Adds 800 AERO for $1,362.13",
       "netting": null,
       "conversion": "In USD: $1.25 each, $999.80 paid. 1 USD = $1.3624 CAD at this block, from Chainlink's CAD / USD price on Base."

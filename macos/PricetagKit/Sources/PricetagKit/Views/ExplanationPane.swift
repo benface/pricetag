@@ -106,7 +106,7 @@ public struct LegRow: View {
         _showsProof = State(initialValue: showsProof)
     }
 
-    /// A fee is a cost of doing something, not something the person did, so it reads quieter. Its unknown is the same every time, so it's a word, not a line.
+    /// A fee is a cost of doing something, not something the person did, so it reads quieter. Its unknown is a word, not a line, with the reason in its tooltip.
     private var isFee: Bool { leg.kind == "gas" }
 
     public var body: some View {
@@ -146,7 +146,7 @@ public struct LegRow: View {
                 }
                 HStack(spacing: 14) {
                     proofButton
-                    if leg.unknown != nil, questions > 0, let onResolve {
+                    if leg.answerable, questions > 0, let onResolve {
                         Button(Wording.answerQuestions(questions)) { onResolve(leg.asset) }
                             .buttonStyle(.plain)
                             .foregroundStyle(.tint)

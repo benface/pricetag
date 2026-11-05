@@ -359,6 +359,8 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let summary: String
     /// What about it isn't known, in words. nil when nothing is.
     public let unknown: String?
+    /// Answering a question about this asset could fix what isn't known.
+    public let answerable: Bool
     public let effect: String
     public let netting: String?
     /// What this leg was in USD and the rate that converted it, in words. nil when it's in USD.

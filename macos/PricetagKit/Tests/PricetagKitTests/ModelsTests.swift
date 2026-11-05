@@ -105,7 +105,7 @@ import Testing
 
 @Test func anOpeningBalanceIsNotATransaction() throws {
     let json = """
-    {"id":"opening:DAI","asset":"DAI","delta":"5","decimals":18,"kind":"transfer","priceMicros":null,"priceSource":null,"priceNote":null,"costLabel":"unknown","estimated":false,"partlyUnknown":false,"blockNum":1,"timestamp":"2026-11-04T00:00:00.000Z","txHash":"","opening":true,"summary":"Already held 5 DAI when this history starts.","unknown":"What this cost isn't known yet.","effect":"Adds 5 DAI","netting":null}
+    {"id":"opening:DAI","asset":"DAI","delta":"5","decimals":18,"kind":"transfer","priceMicros":null,"priceSource":null,"priceNote":null,"costLabel":"unknown","estimated":false,"partlyUnknown":false,"blockNum":1,"timestamp":"2026-11-04T00:00:00.000Z","txHash":"","opening":true,"summary":"Already held 5 DAI when this history starts.","unknown":"What this cost isn't known yet.","answerable":true,"effect":"Adds 5 DAI","netting":null}
     """
     let leg = try JSONDecoder().decode(ExplanationLeg.self, from: Data(json.utf8))
     #expect(leg.transactionURL == nil)
@@ -113,7 +113,7 @@ import Testing
 
 @Test func ethThatArrivedWithNoTransactionToNameHasNoLinkOrProof() throws {
     let json = """
-    {"id":"unseen:53525052:ETH","asset":"ETH","delta":"2061830000000000","decimals":18,"kind":"transfer","priceMicros":"2424450000","priceSource":"oracle","priceNote":null,"costLabel":"unknown","estimated":false,"partlyUnknown":false,"blockNum":53525052,"timestamp":"2026-11-05T00:44:04.000Z","txHash":"","opening":false,"summary":"Received $5.00 of ETH.","unknown":"What this cost isn't known yet.","effect":"Adds 0.00206 ETH at an unknown cost","netting":null,"conversion":null}
+    {"id":"unseen:53525052:ETH","asset":"ETH","delta":"2061830000000000","decimals":18,"kind":"transfer","priceMicros":"2424450000","priceSource":"oracle","priceNote":null,"costLabel":"unknown","estimated":false,"partlyUnknown":false,"blockNum":53525052,"timestamp":"2026-11-05T00:44:04.000Z","txHash":"","opening":false,"summary":"Received $5.00 of ETH.","unknown":"What this cost isn't known yet.","answerable":true,"effect":"Adds 0.00206 ETH at an unknown cost","netting":null,"conversion":null}
     """
     let leg = try JSONDecoder().decode(ExplanationLeg.self, from: Data(json.utf8))
     #expect(leg.isIncoming)
