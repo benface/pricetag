@@ -92,7 +92,7 @@ struct AddColdWalletSheet: View {
             case .pick, .keystoneScan: EmptyView()
             case .ledgerBrowser: EmptyView()
             case .paste:
-                Button("Continue") { model.next() }
+                Button("Next") { model.next() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(model.parsed == nil)
             case .check:
@@ -326,9 +326,9 @@ private struct LedgerBrowserStep: View {
                 Notice(.warning, AddSavingsWording.noBrowser(found.defaultThatCant))
                 Link("Get Chrome", destination: DeviceBrowsers.getChrome)
             }
-            TroubleList(troubles: page.troubles, isExpanded: showsTrouble)
             Button("Paste an Address Instead") { model.enterByHand() }
                 .buttonStyle(.link)
+            TroubleList(troubles: page.troubles, isExpanded: showsTrouble)
         }
     }
 
@@ -432,6 +432,9 @@ private struct CheckStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let progress = model.progress {
+                StepDots(current: progress.current, total: progress.total)
+            }
             Text(page.title)
                 .font(.title2.bold())
             Text(page.body)
