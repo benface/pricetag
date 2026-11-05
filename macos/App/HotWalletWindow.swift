@@ -7,6 +7,8 @@ import SwiftUI
 struct HotWalletWindow: View {
     let wallet: HotWallet
     let store: PortfolioStore
+    let siteBridge: SiteBridge
+    let navigation: Navigation
 
     var body: some View {
         Group {
@@ -21,9 +23,9 @@ struct HotWalletWindow: View {
                 ContentUnavailableView("Can't Open This Wallet", systemImage: "exclamationmark.triangle", description: Text(message))
             case .ready:
                 if wallet.address == nil {
-                    HotWalletSetup(wallet: wallet)
+                    HotWalletSetup(wallet: wallet, store: store)
                 } else {
-                    HotWalletDetails(wallet: wallet, store: store)
+                    HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation)
                 }
             }
         }
@@ -35,6 +37,7 @@ struct HotWalletWindow: View {
 /// Says what this is before there's anything to lose.
 private struct HotWalletSetup: View {
     let wallet: HotWallet
+    let store: PortfolioStore
     @State private var understands = false
 
     var body: some View {
@@ -44,7 +47,7 @@ private struct HotWalletSetup: View {
                 .foregroundStyle(.secondary)
             Text("This Mac's spending money")
                 .font(.title.bold())
-            Text("A small balance for everyday use, with no recovery phrase to write down. Your savings stay on a hardware wallet, and anything here above the cap goes to them by itself.")
+            Text("\(HotWalletWording.summary) Your savings stay on a hardware wallet, and anything here above the cap goes to them by itself.")
                 .fixedSize(horizontal: false, vertical: true)
             Notice(.warning, HotWalletWording.cannotBeRestored)
             VStack(alignment: .leading, spacing: 6) {
@@ -58,7 +61,12 @@ private struct HotWalletSetup: View {
             Toggle("I understand this money can't be restored if this Mac is lost", isOn: $understands)
             HStack {
                 Spacer()
-                Button("Create Spending Money") { Task { await wallet.createWallet() } }
+                Button("Create Spending Money") {
+                    Task {
+                        await wallet.createWallet()
+                        if let address = wallet.address { store.showNewWallet(address.lowercased) }
+                    }
+                }
                     .buttonStyle(.borderedProminent)
                     .disabled(!understands || wallet.isWorking)
             }
@@ -74,6 +82,8 @@ private struct HotWalletSetup: View {
 private struct HotWalletDetails: View {
     let wallet: HotWallet
     let store: PortfolioStore
+    let siteBridge: SiteBridge
+    let navigation: Navigation
     @State private var isAddingCold = false
     @State private var isToppingUp = false
     @State private var isSending = false
@@ -97,12 +107,18 @@ private struct HotWalletDetails: View {
             holdings
             if !wallet.unlisted.isEmpty { untouched }
             savings
+            if !wallet.connectedSites.isEmpty { sites }
             actions
             if !wallet.records.isEmpty { activity }
         }
         .formStyle(.grouped)
         .sheet(isPresented: $isAddingCold) { AddColdWalletSheet(wallet: wallet) }
         .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet) }
+        .onChange(of: navigation.wantsTopUp, initial: true) { _, wants in
+            guard wants else { return }
+            navigation.wantsTopUp = false
+            if wallet.canTopUp { isToppingUp = true }
+        }
         .sheet(isPresented: $isSending) { SendSheet(model: SendModel(wallet: wallet, store: store)) }
     }
 
@@ -288,6 +304,23 @@ private struct HotWalletDetails: View {
         }
     }
 
+    private var sites: some View {
+        Section {
+            ForEach(wallet.connectedSites, id: \.self) { origin in
+                LabeledContent(origin) {
+                    Button("Disconnect") { siteBridge.disconnect(origin) }
+                        .buttonStyle(.borderless)
+                }
+            }
+        } header: {
+            Text("Connected Sites")
+        } footer: {
+            Text("They can see this wallet's address and ask you to approve things. Disconnecting doesn't undo any token approvals you already gave them.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var actions: some View {
         Section {
             HStack {
@@ -369,6 +402,7 @@ private struct HotWalletDetails: View {
         case .aboveCap: record.gainUsdMicros == "0" ? "Above the cap" : "Above the cap or realized gains"
         case .manual: "Swept by you"
         case .rotation: "Replacing the key"
+        case .site: record.site ?? "A site"
         case .sent: "Sent to \(Format.shortHash(record.to.checksummed))"
         case .note: "Published for anyone to read"
         }
@@ -480,7 +514,9 @@ struct TopUpSheet: View {
             } else {
                 LabeledContent("Amount") {
                     HStack {
+                        // A slider needs two ends, and with room for one dollar, the other end is too much.
                         Slider(value: $dollars, in: 1...Double(max(room, 2)), step: 1)
+                            .disabled(room < 2)
                         Text(wallet.usd(dollars: Int(dollars)))
                             .monospacedDigit()
                             .frame(width: 56, alignment: .trailing)
@@ -523,6 +559,8 @@ struct TopUpSheet: View {
         .padding(20)
         .frame(width: 460)
         .onAppear { dollars = Double(max(1, min(room, 20))) }
+        // A read can leave less room than there was when this opened. What's chosen stays if it still fits.
+        .onChange(of: room) { dollars = min(dollars, Double(max(room, 1))) }
     }
 
     private var ethHint: String {

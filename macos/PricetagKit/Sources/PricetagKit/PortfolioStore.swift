@@ -182,6 +182,12 @@ public final class PortfolioStore {
         start()
     }
 
+    /// A wallet the user just made is what they want to see, unless they're already looking at a real one. Only the user replaces that.
+    public func showNewWallet(_ address: String) {
+        guard self.address == nil || self.address == WalletAddress.demo else { return }
+        setWallet(address)
+    }
+
     public func setMethod(_ method: CostMethod) {
         guard method != self.method else { return }
         self.method = method

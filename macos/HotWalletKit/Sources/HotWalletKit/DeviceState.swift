@@ -11,6 +11,8 @@ public struct SignedRecord: Codable, Equatable, Identifiable, Sendable {
 
     public enum Reason: String, Codable, Sendable {
         case aboveCap, manual, rotation
+        /// A site asked, and the user approved it in this app.
+        case site
         /// The user sent it to someone, or to another wallet of theirs.
         case sent
         /// A cost the user published. `symbol` is the token it's about, and nothing moved.
@@ -28,10 +30,12 @@ public struct SignedRecord: Codable, Equatable, Identifiable, Sendable {
     public let reason: Reason
     public var createdAt: Date
     public var status: Status
+    /// The site that asked for it, when `reason` is `.site`.
+    public var site: String?
 
     public var id: String { hash }
 
-    public init(hash: String, nonce: UInt64, to: EthereumAddress, symbol: String, decimals: Int, amount: String, usdMicros: String?, gainUsdMicros: String, reason: Reason, createdAt: Date, status: Status) {
+    public init(hash: String, nonce: UInt64, to: EthereumAddress, symbol: String, decimals: Int, amount: String, usdMicros: String?, gainUsdMicros: String, reason: Reason, createdAt: Date, status: Status, site: String? = nil) {
         self.hash = hash
         self.nonce = nonce
         self.to = to
@@ -43,6 +47,7 @@ public struct SignedRecord: Codable, Equatable, Identifiable, Sendable {
         self.reason = reason
         self.createdAt = createdAt
         self.status = status
+        self.site = site
     }
 }
 
@@ -95,6 +100,8 @@ public struct DeviceWalletState: Codable, Equatable, Sendable {
     /// The newest block a settled transaction of this key's is in. A read from before it still counts what that transaction moved,
     /// so nothing signs from one, including right after a restart.
     public var settledThroughBlock: UInt64?
+    /// The sites the user let see this key's address, by origin. Optional because older records don't have it.
+    public var connectedSites: [String]?
 
     public init() {}
 }

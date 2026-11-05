@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Patina</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Spending money</h1>
+      <span class="label">Hackathon, small funds only</span>
+    </header>
+    <p class="amount"><span id="value" class="value unknown">—</span> <span id="cap" class="cap"></span></p>
+    <div class="meter"><div id="fill" class="fill"></div></div>
+    <div class="address-row">
+      <span id="address" class="address"></span>
+      <button id="copy" class="copy" type="button" title="Copy address" aria-label="Copy address" hidden>
+        <svg id="copy-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="2" /><path d="M10.5 3.5a1.5 1.5 0 0 0-1.5-1h-4.5a2 2 0 0 0-2 2V9A1.5 1.5 0 0 0 3.5 10.5" /></svg>
+        <svg id="copied-icon" viewBox="0 0 16 16" aria-hidden="true" hidden><path d="m3.5 8.5 3 3 6-7" /></svg>
+      </button>
+    </div>
+    <p id="status" class="status" role="status"></p>
+    <button id="top-up" class="top-up" type="button" disabled>Top Up…</button>
+    <p class="note">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.75 13 3.5v4c0 3-2 5.25-5 6.75-3-1.5-5-3.75-5-6.75v-4z" /></svg>
+      <span>You only approve things in the Patina app. An approval on a web page isn't real.</span>
+    </p>
+    <script src="popup.js"></script>
+  </body>
+</html>

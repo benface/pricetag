@@ -1132,6 +1132,24 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(texts(rig.wallet).first?.contains("over the cap, with nowhere to sweep it") == true)
     }
 
+    @Test func aGainWithNoColdWalletStillSaysToAddOne() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(10)]), withCold: false, portfolio: .success(portfolio(realized: "12000000")))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(rig.wallet.plan?.blockers == [.noDestination])
+        #expect(rig.wallet.plan?.excessUsdMicros == 0)
+        #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .USD)])
+        #expect(rig.wallet.needsAttention)
+    }
+
+    @Test func overTheCapWithAGainAndNoColdWalletSaysSoOnce() async throws {
+        let rig = await Rig(over, withCold: false, portfolio: .success(portfolio(realized: "12000000")))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(texts(rig.wallet).count == 1)
+        #expect(texts(rig.wallet).first?.contains("over the cap, with nowhere to sweep it") == true)
+    }
+
     @Test func tokensWithNoGasSaySoEvenUnderTheCap() async throws {
         let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(10)]))
         await rig.wallet.tick()
@@ -1259,4 +1277,26 @@ private struct FailingChain: ChainClient {
     func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) throws -> UInt64 { throw ChainError.unreachable }
     func send(_ transaction: SignedTransaction) throws { throw ChainError.unreachable }
     func receipt(of hash: String) throws -> Receipt? { throw ChainError.unreachable }
+    func read(_ method: String, _ parameters: JSONValue) throws -> RPCAnswer { throw ChainError.unreachable }
+    func l1Fee(ofPayload payload: [UInt8]) throws -> UInt128 { throw ChainError.unreachable }
+}
+
+@Suite struct ShownWalletWordingTests {
+    private let spending = "0x00000000000000000000000000000000000de301"
+    private let other = "0x00000000000000000000000000000000000de302"
+
+    @Test func noWalletShowingIsNeverCalledSpendingMoney() {
+        // Two nils are equal, which is how a fresh install came to be told it held a key.
+        #expect(HotWalletWording.shownWallet(nil, spendingMoney: nil) == "No wallet is showing. Choose one in the main window.")
+        #expect(HotWalletWording.shownWallet(nil, spendingMoney: spending) == "No wallet is showing. Choose one in the main window.")
+    }
+
+    @Test func aWalletYouLookedUpIsOnlyRead() {
+        #expect(HotWalletWording.shownWallet(other, spendingMoney: nil) == "This wallet is only read, and nothing signs for it.")
+        #expect(HotWalletWording.shownWallet(other, spendingMoney: spending) == "This wallet is only read, and nothing signs for it. The one key in this app is below.")
+    }
+
+    @Test func spendingMoneySaysSo() {
+        #expect(HotWalletWording.shownWallet(spending, spendingMoney: spending).hasPrefix("This is this Mac's spending money"))
+    }
 }

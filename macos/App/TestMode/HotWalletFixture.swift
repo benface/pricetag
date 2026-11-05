@@ -35,6 +35,7 @@ struct HotWalletFixture {
     static let waitingForTouchID = HotWalletFixture(promptNeverAnswers: true)
     static let noSavings = HotWalletFixture(hasSavings: false, balances: ["ETH": 1_000_000_000_000_000, "USDC": 10_000_000])
     static let noPrice = HotWalletFixture(balances: ["ETH": 5_000_000_000_000_000, "USDC": 20_000_000, "AERO": 12_000_000_000_000_000_000])
+    static let nearCap = HotWalletFixture(balances: ["ETH": 5_000_000_000_000_000, "USDC": 36_000_000])
     static let overCap = HotWalletFixture(balances: ["ETH": 10_000_000_000_000_000, "USDC": 80_000_000])
     static let overCapNoSavings = HotWalletFixture(hasSavings: false, balances: ["ETH": 10_000_000_000_000_000, "USDC": 80_000_000])
     static let keyMissing = HotWalletFixture(keys: .isMissing)
@@ -114,6 +115,7 @@ private nonisolated struct NoKeys: Signer {
 
     func createKey() async throws -> EthereumAddress { TestMode.fail("A scene tried to make a key.") }
     func sign(_ transaction: UnsignedTransaction, from address: EthereumAddress) async throws -> SignedTransaction { TestMode.fail("A scene tried to sign.") }
+    func sign(_ message: SignableMessage, from address: EthereumAddress) async throws -> MessageSignature { TestMode.fail("A scene tried to sign a message.") }
     func hasKey(_ address: EthereumAddress) async throws -> Bool { answer == .hasIt }
     func deleteKey(_ address: EthereumAddress) async throws { TestMode.fail("A scene tried to delete a key.") }
 
@@ -163,5 +165,7 @@ private nonisolated struct FixtureChain: ChainClient {
     func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64 { TestMode.fail("A scene tried to send a transaction.") }
     func send(_ transaction: SignedTransaction) async throws { TestMode.fail("A scene tried to send a transaction.") }
     func receipt(of hash: String) async throws -> Receipt? { nil }
+    func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer { TestMode.fail("A scene tried to read for a site.") }
+    func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128 { TestMode.fail("A scene tried to price a transaction.") }
 }
 #endif

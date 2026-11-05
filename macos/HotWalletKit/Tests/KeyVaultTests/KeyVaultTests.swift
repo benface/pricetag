@@ -54,6 +54,34 @@ enum RLPDecoder {
         return (KeyVault(store: store, wrapper: TestWrapper()), store)
     }
 
+    /// The answer is from viem's `hashMessage`.
+    @Test func messagesAreHashedWithTheirPrefix() {
+        #expect(SignableMessage.personal(Array("hello".utf8)).digest.map { Hex.encode($0) } == "50b2c43fd39106bafbba0da34fc430e1f91e3c96ea2acee2bc34119f92b37750")
+    }
+
+    @Test func aMessageSignsForItsOwnAddress() async throws {
+        let (vault, _) = vault()
+        let address = try await vault.createKey()
+        for message in [SignableMessage.personal(Array("hello".utf8)), .typedData(domainSeparator: [UInt8](repeating: 1, count: 32), structHash: [UInt8](repeating: 2, count: 32))] {
+            let signature = try await vault.sign(message, from: address)
+            #expect(signature.v == 27 || signature.v == 28)
+            #expect(signature.hex.count == 132)
+            let recovered = try Secp256k1.recover(digest: try #require(message.digest), signature: .init(r: signature.r, s: signature.s, yParity: signature.v - 27))
+            #expect(EthereumAddress(uncompressedPublicKey: recovered) == address)
+        }
+    }
+
+    /// Every digest a message can make starts from 0x19, so no site can get a transaction signed by calling it a message.
+    @Test func aMessageCantBeATransaction() async throws {
+        let (vault, _) = vault()
+        let address = try await vault.createKey()
+        let payload = transaction().signingPayload
+        #expect(SignableMessage.personal(payload).digest != keccak256(payload))
+        await #expect(throws: KeyVault.Failure.notAMessage) {
+            _ = try await vault.sign(.typedData(domainSeparator: [1], structHash: [2]), from: address)
+        }
+    }
+
     @Test func createsAKeyThatSignsForItsOwnAddress() async throws {
         let (vault, _) = vault()
         let address = try await vault.createKey()

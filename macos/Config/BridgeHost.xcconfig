@@ -1,0 +1,23 @@
+// The small program the browser starts for the extension. See BridgeHost/main.swift.
+PRODUCT_NAME = pricetag-bridge
+PRODUCT_BUNDLE_IDENTIFIER = com.benface.pricetag.macos.bridge
+
+SDKROOT = macosx
+MACOSX_DEPLOYMENT_TARGET = 27.0
+SWIFT_VERSION = 6.0
+ENABLE_USER_SCRIPT_SANDBOXING = YES
+ENABLE_HARDENED_RUNTIME = YES
+CREATE_INFOPLIST_SECTION_IN_BINARY = YES
+GENERATE_INFOPLIST_FILE = YES
+SKIP_INSTALL = YES
+
+// Signed like the app, but never with its entitlements: all this one can do is reach the app's socket. See run.sh.
+BRIDGE_ENTITLEMENTS =
+APP_SIGN_IDENTITY = -
+APP_TEAM =
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = $(APP_SIGN_IDENTITY)
+DEVELOPMENT_TEAM = $(APP_TEAM)
+CODE_SIGN_ENTITLEMENTS = $(BRIDGE_ENTITLEMENTS)
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
+ALWAYS_SEARCH_USER_PATHS = NO
