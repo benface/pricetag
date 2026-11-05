@@ -94,6 +94,15 @@ public struct SiteQuote: Equatable, Sendable {
     public let feeWei: UInt128
     public let ethUsdMicros: UInt128?
     public let ethBalance: UInt128
+    /// When the destination is a token this app has a price for.
+    public var tokenUsdMicros: UInt128?
+}
+
+/// Something leaving this wallet, to the last digit.
+public struct ReviewAmount: Equatable, Sendable {
+    public let text: String
+    public let symbol: String
+    public let usdMicros: UInt128?
 }
 
 public struct TransactionReview: Equatable, Sendable {
@@ -112,6 +121,25 @@ public struct TransactionReview: Equatable, Sendable {
     let decimals: Int
     let amount: String
     let usdMicros: String?
+    /// Who gets a transfer, which for a token isn't `to`, the token's own contract.
+    public var recipient: EthereumAddress?
+    /// Who's being allowed to spend.
+    public var spender: EthereumAddress?
+    /// What leaves, when that's something this app can read. Otherwise the headline is all there is to say.
+    public var moved: ReviewAmount?
+
+    /// Any ETH that goes along with what `moved` or the headline already says.
+    public var alsoSendsEth: Bool { value > 0 && moved?.symbol != "ETH" }
+
+    /// What it does, for a sentence that goes on to say who's asking.
+    var promptWords: String {
+        let words = headline.lowercasedFirst
+        return alsoSendsEth ? "\(words) and send \(Money.text(ofUnits: value, decimals: 18)) ETH" : words
+    }
+}
+
+extension String {
+    var lowercasedFirst: String { prefix(1).lowercased() + dropFirst() }
 }
 
 extension TransactionReview {
@@ -155,6 +183,11 @@ extension TransactionReview {
         var warnings: [SiteWarning] = []
         var headline: String?
         var recorded: (symbol: String, decimals: Int, amount: UInt128)?
+        var recipient: EthereumAddress?
+        var spender: EthereumAddress?
+        var moved: ReviewAmount?
+        let valueUsd = quote.ethUsdMicros.map { Money.usdMicros(of: transaction.value, priceMicros: $0, decimals: 18) }
+        let movedEth = ReviewAmount(text: Money.text(ofUnits: transaction.value, decimals: 18), symbol: "ETH", usdMicros: valueUsd)
 
         func asset(_ token: Token?) -> String { token?.symbol ?? "this token" }
         func amountText(_ amount: UInt128, _ token: Token?) -> String {
@@ -163,13 +196,18 @@ extension TransactionReview {
 
         switch selector {
         case Selectors.transfer:
-            if let recipient = arguments.address(0), let amount = arguments.amount(1) {
-                headline = "Send \(amountText(amount, token)) to \(SiteWording.address(recipient))"
-                if let token { recorded = (token.symbol, token.decimals, amount) }
+            if let to = arguments.address(0), let amount = arguments.amount(1) {
+                headline = "Send \(amountText(amount, token)) to \(SiteWording.address(to))"
+                recipient = to
+                if let token {
+                    recorded = (token.symbol, token.decimals, amount)
+                    moved = ReviewAmount(text: Money.text(ofUnits: amount, decimals: token.decimals), symbol: token.symbol, usdMicros: quote.tokenUsdMicros.map { Money.usdMicros(of: amount, priceMicros: $0, decimals: token.decimals) })
+                }
             }
         case Selectors.increaseAllowance:
             // This adds to whatever's already allowed, which nothing here has read. So it can't say what the total comes to, and adding nothing doesn't stop anything.
-            if let spender = arguments.address(0).map(SiteWording.address) {
+            spender = arguments.address(0)
+            if let spender = spender.map(SiteWording.address) {
                 let amount = arguments.amount(1)
                 if amount == 0 {
                     headline = "Add nothing to what \(spender) can spend of your \(asset(token))"
@@ -181,7 +219,8 @@ extension TransactionReview {
                 }
             }
         case Selectors.approve:
-            if let spender = arguments.address(0).map(SiteWording.address) {
+            spender = arguments.address(0)
+            if let spender = spender.map(SiteWording.address) {
                 let amount = arguments.amount(1)
                 if amount == 0 {
                     headline = "Stop \(spender) from spending your \(asset(token))"
@@ -193,7 +232,8 @@ extension TransactionReview {
                 }
             }
         case Selectors.permit2Approve:
-            if let spender = arguments.address(1).map(SiteWording.address) {
+            spender = arguments.address(1)
+            if let spender = spender.map(SiteWording.address) {
                 let approved = arguments.address(0).flatMap { address in Base.tokens.first { $0.contract == address } }
                 let amount = arguments.amount(2)
                 if amount == 0 {
@@ -206,7 +246,8 @@ extension TransactionReview {
                 }
             }
         case Selectors.setApprovalForAll:
-            if let spender = arguments.address(0).map(SiteWording.address), let flag = arguments.amount(1) {
+            spender = arguments.address(0)
+            if let spender = spender.map(SiteWording.address), let flag = arguments.amount(1) {
                 if flag == 0 {
                     headline = "Stop \(spender) from moving your items in this collection"
                 } else {
@@ -215,7 +256,8 @@ extension TransactionReview {
                 }
             }
         case Selectors.permit:
-            if let spender = arguments.address(1).map(SiteWording.address) {
+            spender = arguments.address(1)
+            if let spender = spender.map(SiteWording.address) {
                 headline = "Let \(spender) spend your \(asset(token))"
                 warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(token)), isStrong: true))
             }
@@ -225,15 +267,17 @@ extension TransactionReview {
 
         if transaction.data.isEmpty {
             headline = "Send \(Money.text(ofUnits: transaction.value, decimals: 18)) ETH to \(SiteWording.address(transaction.to))"
+            recipient = transaction.to
+            moved = movedEth
         }
         if headline == nil {
+            if transaction.value > 0 { moved = movedEth }
             headline = transaction.value > 0 ? "Send \(Money.text(ofUnits: transaction.value, decimals: 18)) ETH in a contract call" : "Make a contract call"
             warnings.append(SiteWarning(SiteWording.unreadableCall))
         }
         if transaction.to == .zero { warnings.append(SiteWarning(SiteWording.burn, isStrong: true)) }
         if transaction.value + quote.feeWei > quote.ethBalance { warnings.append(SiteWarning(SiteWording.notEnoughEth)) }
 
-        let valueUsd = quote.ethUsdMicros.map { Money.usdMicros(of: transaction.value, priceMicros: $0, decimals: 18) }
         self.init(
             headline: headline ?? "",
             to: transaction.to,
@@ -247,7 +291,10 @@ extension TransactionReview {
             symbol: recorded?.symbol ?? "ETH",
             decimals: recorded?.decimals ?? 18,
             amount: String(recorded?.amount ?? transaction.value),
-            usdMicros: recorded == nil ? valueUsd.map { String($0) } : nil
+            usdMicros: recorded == nil ? valueUsd.map { String($0) } : nil,
+            recipient: recipient,
+            spender: spender,
+            moved: moved
         )
     }
 }

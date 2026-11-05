@@ -89,7 +89,7 @@ private struct HotWalletDetails: View {
     @State private var isSending = false
     /// A new savings wallet to send a little to, once its sheet has gone.
     @State private var testingSavings: EthereumAddress?
-    @State private var isConfirmingSweep = false
+    @State private var isSweeping = false
     @State private var isConfirmingRotation = false
     @State private var isConfirmingAbandon = false
 
@@ -134,6 +134,7 @@ private struct HotWalletDetails: View {
                 return model
             }())
         }
+        .sheet(isPresented: $isSweeping) { SweepSheet(wallet: wallet) }
     }
 
     private func alarmBanner(_ alarm: StolenKeyAlarm) -> some View {
@@ -342,7 +343,7 @@ private struct HotWalletDetails: View {
                     .disabled(!wallet.canSend)
                 Button("Top Up from Savings…") { isToppingUp = true }
                     .disabled(!wallet.canTopUp)
-                Button("Sweep Everything…") { isConfirmingSweep = true }
+                Button("Sweep Everything…") { isSweeping = true }
                     .disabled(wallet.settings.sweepDestination == nil || wallet.isWorking || wallet.isKeyMissing)
                     .help(wallet.settings.sweepDestination == nil ? "Add a savings wallet first" : "Move everything on this wallet to your savings")
                 Spacer()
@@ -357,15 +358,10 @@ private struct HotWalletDetails: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .confirmationDialog("Sweep everything to your savings?", isPresented: $isConfirmingSweep) {
-            Button("Sweep Everything") { Task { await wallet.sweepEverything() } }
-        } message: {
-            Text("Moves every token this app tracks and all the ETH it can, in separate transactions. Touch ID or your password confirms it.")
-        }
         .confirmationDialog("Replace this wallet's key?", isPresented: $isConfirmingRotation) {
             Button("Replace Key") { Task { await wallet.replaceKey() } }
             if wallet.settings.sweepDestination != nil {
-                Button("Sweep Everything to Savings Instead") { Task { await wallet.sweepEverything() } }
+                Button("Sweep Everything to Savings Instead") { isSweeping = true }
             }
         } message: {
             Text("Makes a new key, moves every token this app tracks to it, then deletes the old one. If the old key holds other tokens, or some that gas makes too costly to move, it stays until you choose to leave them. This costs gas, and publicly links the two addresses. It also clears any token approvals the old key gave.")
