@@ -91,7 +91,7 @@ PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.1.0
 PRICETAG_FORK_HASH=c5c66a117461e8990c4a5638919ddf9ca3c9ae9333982d9583d127d93ab1705e
 ```
 
-Queries are pinned to those hashes, so a hash on screen is what was read, and a wrong one fails instead of showing other numbers. With no fork set, nothing changes: there's no switch and no header.
+Queries are pinned to those hashes, Proof's included, so a hash on screen is what was read, and a wrong one fails instead of showing other numbers. With no fork set, nothing changes: there's no switch and no header, and `PRICETAG_DATASET_HASH` isn't used.
 
 The fork here is `dataset/cautious-eth.json`, from `cautiousEthTablesSql` in `dataset/build.ts`. Its one rule is that ETH counts at 1% below the Chainlink feed, so a token priced against ETH follows it, by its trades or by a feed in ETH like wstETH's. It only materializes the tables a rule decides, `reference_prices` and `priced_legs`, and reads everything else from the dataset it forks. So it starts from the same block, and can only differ by the rule. The transactions always come from the first dataset.
 
@@ -235,7 +235,7 @@ Click a price, or Proof, on any row of an explanation. It shows where that price
 - **Block fingerprint:** the header's fields hash to the block's hash.
 - **Transactions:** every transaction rebuilds the header's `transactions_root`, and each one hashes to its stored `tx_hash`.
 - **Results and logs:** every receipt and log rebuilds the header's `receipts_root`.
-- **This activity:** the row's transaction is in that data, and its Transfer logs or ETH value match its amounts. A network fee's L2 part is worked out again from its gas, the block's base fee, and only the fee fields its transaction type hashes. For a swap price, that includes the other side of the exchange.
+- **This activity:** the row's transaction is in that data, and its Transfer logs or ETH value match its amounts. A network fee's L2 part is worked out again from its gas, the block's base fee, and only the fee fields its transaction type hashes. For a swap price, that includes the other side of the exchange. Unwrapped ETH is checked against its `Withdrawal` logs as recorded, whatever the balance then says arrived.
 - **Chainlink's update:** the block with the update behind the price, which can be a different one, passes the same three checks. Its log has to be an `AnswerUpdated` from that feed's aggregator, in the transaction `reference_prices` names, with the answer `price_updates` stored. That answer then has to work out to the row's price, directly or, for a swap price, through what was paid. Reading the raw dataset, there's no update to check, so this check doesn't appear.
 
 It's done here and not with `ampctl verify` because that can't check Base: every Base block starts with an OP Stack deposit (type `0x7e`), which it doesn't support. It fails v0.0.42 and nightly `47b6fa2` alike, and today's source still rejects the type. Amp doesn't store what a deposit's hash also covers (`sourceHash`, `mint`, `isSystemTx`), so those three come from `BASE_RPC_URL`. A wrong answer fails the check, because the result has to hash to the block's commitment. Every log and transaction it counts has to be in what's hashed, at the number it's stored with, or the check fails. If the RPC doesn't answer, Transactions says it's not checked. The fingerprints come from Amp's admin API at `AMP_ADMIN_URL`, with the server's token.
@@ -247,6 +247,7 @@ What a pass doesn't show, which the interface also says:
 - That Chainlink's number is right. It only shows that Chainlink published it.
 - That the update was still the latest at the row's block. That comes from `carried` and `reference_prices`, so it's the derived SQL again.
 - An `oracle` price, or the oracle side of a `swap` price, when reading the raw dataset or a local Amp before its first real update, because `eth_call` results aren't in a block's commitments. The same goes for exchange rates and L1 fees, which aren't in the commitments either, so an L1 fee's amount is never compared.
+- How much ETH reached a wallet from unwrapping. A `Withdrawal` log only records what was unwrapped, and a contract can keep a cut or send the ETH elsewhere, so the logs are checked as recorded, and what arrived is listed apart: worked out from the wallet's balance across the block when `settleUnwraps` could, and otherwise not confirmed. A swap price uses that amount, so it rests on the balance too.
 - That a transaction's `from` is right. Signatures are in the commitment, but aren't recovered to compare them with the stored sender, so a row that takes its account from the sender (fees, ETH sent, unwrapped ETH received) says so.
 
 `server/verify.ts` is the pure part, tested on real rows and on tampered ones. Keccak comes from `@noble/hashes`, since whether Node has it depends on its build. `server/block.ts` reads a block and `server/proof.ts` puts it into words. It's valid for blocks since Canyon (January 2024), because older deposits' receipts are encoded differently.
