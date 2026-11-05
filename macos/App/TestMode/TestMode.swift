@@ -481,13 +481,14 @@ final class FixtureSource: PortfolioSource {
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
         if feed == .firstRun {
             // In the words `onchainLines` in `src/core/explain.ts` uses for this balance.
-            return Explanation(currency: currency, title: "ETH: Balance check", value: nil, sourceValue: nil, lines: [
+            let object: [String: Any] = ["currency": currency.rawValue, "title": "ETH: Balance check", "value": NSNull(), "sourceValue": NSNull(), "legCount": 0, "legs": [Any](), "lines": [
                 "Worked out from its transactions: -0.00041 ETH.",
                 "Actual balance at block 53,525,400: 0.00164 ETH.",
                 "Difference: +0.00206 ETH.",
                 "This wallet holds more ETH than its transactions explain. Most likely a contract sent it some, which we can't see yet.",
                 "Value uses the actual balance. PnL is unavailable, because we know some of this wallet's activity is missing.",
-            ], legCount: 0, legs: [])
+            ]]
+            return try JSONDecoder().decode(Explanation.self, from: JSONSerialization.data(withJSONObject: object))
         }
         return try Self.decode(target == .holdComparison ? "demo-hold-explanation" : fixture("demo-explanation", currency))
     }
