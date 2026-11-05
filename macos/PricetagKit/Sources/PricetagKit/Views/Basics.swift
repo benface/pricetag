@@ -29,14 +29,18 @@ public enum Tone {
         }
     }
 
+    /// How faded a number is once it's stopped updating: the least that keeps text at 4.5:1 on the window, measured from a render, with some room.
+    /// 0.55 measured 2.9:1 in light, and 0.7 measured 4.3:1. See `stale(_:)` and `ContrastTests`.
+    static let staleOpacity = 0.8
+
     var color: Color {
         switch self {
         case .neutral: .primary
         case .secondary: .secondary
-        // Mixed with the text color, so they hold enough contrast in both light and dark.
-        case .gain: Color.green.mix(with: .primary, by: 0.2)
-        case .loss: Color.red.mix(with: .primary, by: 0.1)
-        case .warning: Color.orange.mix(with: .primary, by: 0.15)
+        // Mixed with the text color, so they read at 4.5:1 or more on the window, in light and dark. Light is the harder one. See `ContrastTests`.
+        case .gain: Color.green.mix(with: .primary, by: 0.45)
+        case .loss: Color.red.mix(with: .primary, by: 0.3)
+        case .warning: Color.orange.mix(with: .primary, by: 0.45)
         }
     }
 }
@@ -51,6 +55,7 @@ public struct LiveNumber: View {
     @Environment(\.backgroundProminence) private var prominence
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.isStale) private var isStale
 
     public init(_ text: String, tone: Tone = .neutral) {
         self.init(AttributedString(text), plain: text, tone: tone)
@@ -70,13 +75,16 @@ public struct LiveNumber: View {
     public var body: some View {
         Text(styled)
             .monospacedDigit()
-            .foregroundStyle(prominence == .increased ? Tone.neutral.style : tone.style(contrast))
+            // Faded already, a color or a grey on top would leave too little contrast. The words still say what's unknown.
+            .foregroundStyle(prominence == .increased || isStale ? Tone.neutral.style : tone.style(contrast))
             .contentTransition(transition)
             .animation(Motion.number, value: text)
     }
 }
 
 extension EnvironmentValues {
+    /// Set on numbers that have stopped updating. See `stale(_:)`.
+    @Entry public var isStale = false
     /// Set while a read runs and the numbers on screen may change once it's done, to what a mark beside them says. See `updatingMark`.
     @Entry public var updatingNote: String?
 }
@@ -110,6 +118,26 @@ private struct UpdatingMark: View {
                 .accessibilityLabel("Updating")
                 .transition(.opacity)
         }
+    }
+}
+
+extension View {
+    /// Numbers that have stopped updating, or a holding that's gone, faded so they read as old while staying readable: at least 4.5:1 in light and dark.
+    /// They lose their color too, which is about how things are going now. With Increase Contrast on, they don't fade at all, and the banner above them still says so.
+    public func stale(_ isStale: Bool) -> some View {
+        modifier(StaleModifier(isStale: isStale))
+    }
+}
+
+private struct StaleModifier: ViewModifier {
+    let isStale: Bool
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.isStale, isStale)
+            .opacity(isStale && contrast != .increased ? Tone.staleOpacity : 1)
+            .animation(Motion.state, value: isStale)
     }
 }
 
