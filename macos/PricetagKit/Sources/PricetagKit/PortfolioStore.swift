@@ -68,7 +68,12 @@ public final class PortfolioStore {
     /// What the store holds, which may not be current: read `feed` before calling it live. While a new wallet's, method's, currency's
     /// or rule's numbers are on their way, the feed is `.reading` and this holds the last ones known, so the screen doesn't go blank.
     /// They're always this wallet's, though they can be by the last method, currency or rule it was read in.
-    public private(set) var portfolio: Portfolio?
+    public private(set) var portfolio: Portfolio? {
+        didSet { portfolioRevision &+= 1 }
+    }
+    /// Goes up each time `portfolio` is replaced, however that happens: a read, the last read on the server, or what's kept from
+    /// before. `updatedAt` only changes with a fresh read, so whatever's worked out from `portfolio` keys on this instead.
+    public private(set) var portfolioRevision = 0
     public private(set) var feed: FeedState
     public private(set) var updatedAt: Date?
     public private(set) var address: String?

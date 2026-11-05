@@ -18,18 +18,16 @@ struct TransactionsPage<Notices: View>: View {
     @State private var asset: String?
     @FocusState private var isSearching: Bool
 
-    /// What the list is built from. A read's time stands in for its points, which are too many to compare each time the view updates.
+    /// What the list is built from. The store's revision stands in for the portfolio, whose points are too many to compare each time
+    /// the view updates. It changes with every replacement, including numbers the server or this Mac kept from an earlier read.
     private struct Source: Equatable, Sendable {
-        let updatedAt: Date?
-        let address: String?
-        let points: Int
-        let lastPoint: String?
+        let revision: Int
         let signed: [SentTransaction]
         let names: [String: String]
     }
 
     private var source: Source {
-        Source(updatedAt: store.updatedAt, address: store.address, points: portfolio.points.count, lastPoint: portfolio.points.last?.id, signed: signed, names: names)
+        Source(revision: store.portfolioRevision, signed: signed, names: names)
     }
 
     /// What this Mac sent from the wallet showing, until the server has read it.
@@ -56,7 +54,8 @@ struct TransactionsPage<Notices: View>: View {
                 } else {
                     filterBar(log)
                     Divider()
-                    TransactionsTable(days: days, portfolio: portfolio, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
+                    // In the list's own currency, which is the one its amounts were read in, until the new list is ready.
+                    TransactionsTable(days: days, currency: log.currency, portfolio: portfolio, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
                         .overlay {
                             if days.isEmpty { ContentUnavailableView.search(text: query) }
                         }
@@ -69,7 +68,8 @@ struct TransactionsPage<Notices: View>: View {
         .searchFocused($isSearching)
         // Tens of thousands of rows take a moment to read, so that's done away from the screen.
         .task(id: source) {
-            let built = await readLog(portfolio.points, signed: source.signed, names: source.names)
+            // The points and their currency from the same portfolio.
+            let built = await readLog(portfolio.points, currency: portfolio.currency, signed: source.signed, names: source.names)
             guard !Task.isCancelled else { return }
             log = built
             if let asset, !built.assets.contains(asset) { self.asset = nil }
@@ -119,9 +119,9 @@ struct TransactionsPage<Notices: View>: View {
 }
 
 /// Away from the main thread, and outside the generic view, which a detached task can't capture.
-private func readLog(_ points: [PnlPoint], signed: [SentTransaction], names: [String: String]) async -> TransactionLog {
+private func readLog(_ points: [PnlPoint], currency: CurrencyCode, signed: [SentTransaction], names: [String: String]) async -> TransactionLog {
     await Task.detached(priority: .userInitiated) {
-        TransactionLog(points: points, signed: signed, names: names)
+        TransactionLog(points: points, currency: currency, signed: signed, names: names)
     }.value
 }
 
@@ -148,6 +148,9 @@ extension SentTransaction {
 /// The rows, under a heading for each day. Up and down move through them and show each one's details.
 private struct TransactionsTable: View {
     let days: [TransactionDay]
+    /// The rows' own, and not the portfolio's, which can already be in another one.
+    let currency: CurrencyCode
+    /// Only for what can be answered, which is about the numbers now.
     let portfolio: Portfolio
     let isLive: Bool
     @Binding var target: ExplainTarget?
@@ -157,7 +160,6 @@ private struct TransactionsTable: View {
     @State private var columns = TableColumnCustomization<TransactionItem>()
     @FocusState private var isFocused: Bool
 
-    private var currency: CurrencyCode { portfolio.currency }
     /// Below this, who it was with gives way. It's still in the details, and still searchable.
     private static let counterpartyWidth: CGFloat = 620
     private static let counterpartyID = "counterparty"

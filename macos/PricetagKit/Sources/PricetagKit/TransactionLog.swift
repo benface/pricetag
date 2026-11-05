@@ -113,9 +113,12 @@ public struct TransactionLog: Equatable, Sendable {
     public let items: [TransactionItem]
     /// Every token that moved, for the filter.
     public let assets: [String]
+    /// What the items' money is in. It comes with them, so a list being rebuilt in another currency never shows old amounts with the new symbol.
+    public let currency: CurrencyCode
 
     /// `names` maps lowercase addresses to what the person calls them. `signed` is what this Mac sent lately, which can be newer than what's read.
-    public init(points: [PnlPoint], signed: [SentTransaction] = [], names: [String: String] = [:], calendar: Calendar = .current) {
+    public init(points: [PnlPoint], currency: CurrencyCode = .USD, signed: [SentTransaction] = [], names: [String: String] = [:], calendar: Calendar = .current) {
+        self.currency = currency
         let failed = Set(signed.filter { $0.status == .failed }.map(\.txHash))
         var read = Set<String>()
         var items: [TransactionItem] = []
