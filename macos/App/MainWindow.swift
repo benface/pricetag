@@ -333,8 +333,8 @@ struct MainWindow: View {
                 .fixedSize(horizontal: false, vertical: true)
             PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
                 .arrives()
-            PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange) { navigation.target = .transaction($0) }
-                .frame(height: portfolio.hasChartableData && !portfolio.isTooNewToChart ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
+            PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange, metric: $navigation.chartMetric) { navigation.target = .transaction($0) }
+                .frame(height: portfolio.canChart(navigation.chartMetric) ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
             HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
             HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
         }
@@ -344,7 +344,7 @@ struct MainWindow: View {
 
     /// What can add or remove a whole block of the page.
     private func pageShape(_ portfolio: Portfolio) -> [Bool] {
-        [portfolio.attention == nil, portfolio.hasChartableData && !portfolio.isTooNewToChart, store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
+        [portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
     }
 
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {

@@ -41,6 +41,7 @@ final class Navigation {
         didSet { if section != oldValue { target = nil } }
     }
     var chartRange: ChartRange = .all
+    var chartMetric: ChartMetric = .pnl
     /// The number being explained in the details.
     var target: ExplainTarget?
     var isSwitchingWallet = false {

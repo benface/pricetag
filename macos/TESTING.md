@@ -9,6 +9,7 @@ macos/shot.sh list                       # every scene
 macos/shot.sh main out.png               # one scene, in light
 macos/shot.sh main out.png --dark        # one scene, in dark
 macos/shot.sh all some-folder            # every scene, in both
+macos/shot.sh main out.png --chart value # any scene, with the Overview chart on Value instead of PnL
 ```
 
 This is the default for visual checks. It builds a debug copy, runs it from its own temporary folder, draws the real SwiftUI views from fixtures in a window that's never shown, and removes everything when it's done. Each scene takes about a second. It ends by saying whether focus moved, and fails if it was this that moved it.

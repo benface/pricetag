@@ -25,6 +25,8 @@ enum TestMode {
         value(after: "--live-wallet").map { Live(server: server, wallet: $0.lowercased(), asset: value(after: "--live-asset") ?? "ETH") }
     }
     static let liveCurrency = value(after: "--live-currency").flatMap(CurrencyCode.init(rawValue:))
+    /// What the Overview chart shows, from `shot.sh --chart`.
+    static let chartMetric = value(after: "--chart-metric").flatMap(ChartMetric.init(rawValue:)) ?? .pnl
     /// A wallet's first read can take minutes.
     static let readyTimeout: TimeInterval = live == nil ? 5 : 240
     /// Live scenes load more after they appear, like the details and the tax report, and nothing here can tell when that's done.
@@ -159,6 +161,7 @@ struct TestScreen {
 final class MotionCue {
     var revision = 0
     var range = ChartRange.all
+    var metric = TestMode.chartMetric
     var scrubbed: Int?
     var stage = ProgressFooter.Stage.working("Sending…")
     var costIsKnown = false
@@ -172,7 +175,7 @@ private struct MotionChartScene: View {
     var body: some View {
         Group {
             if let portfolio = store.portfolio {
-                PnlHistorySection(portfolio: portfolio, isLive: true, range: Binding(get: { cue.range }, set: { cue.range = $0 }), scrubbedIndex: cue.scrubbed) { _ in }
+                PnlHistorySection(portfolio: portfolio, isLive: true, range: Binding(get: { cue.range }, set: { cue.range = $0 }), metric: Binding(get: { cue.metric }, set: { cue.metric = $0 }), scrubbedIndex: cue.scrubbed) { _ in }
                     .id(cue.revision)
             }
         }
@@ -193,7 +196,7 @@ private struct ContrastScene: View {
                 Notice(.warning, "This wallet's numbers aren't updating.")
                 PortfolioSummary(portfolio: portfolio, isLive: true, size: 40) { _ in }
                 PortfolioAttention(portfolio: portfolio, onOpen: { _ in }, onResolve: {})
-                PnlHistorySection(portfolio: portfolio, isLive: true, range: .constant(.all)) { _ in }
+                PnlHistorySection(portfolio: portfolio, isLive: true, range: .constant(.all), metric: .constant(TestMode.chartMetric)) { _ in }
                     .frame(height: 260)
             }
         }
@@ -501,6 +504,7 @@ enum TestScene: String, CaseIterable {
     /// Each plays something after the window appears, for `shot.sh --frames`. Hovering can't be done from here, so `motion-chart-scrub` moves what hovering moves.
     case motionChartDraw = "motion-chart-draw"
     case motionChartRange = "motion-chart-range"
+    case motionChartMetric = "motion-chart-metric"
     case motionChartScrub = "motion-chart-scrub"
     case motionSend = "motion-send"
     case motionCostKnown = "motion-cost-known"
@@ -515,7 +519,7 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .motionChartDraw, .motionChartRange, .motionChartScrub, .motionSend, .chartHover:
+        case .motionChartDraw, .motionChartRange, .motionChartMetric, .motionChartScrub, .motionSend, .chartHover:
             .none
         case .walletSwitcherNote, .walletSwitcherNewKey, .spendingMoneySetupSheet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .receive, .receiveNoSavings, .receiveCAD, .receiveNotSetUp, .receiveAlarm, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
@@ -768,6 +772,7 @@ enum TestScene: String, CaseIterable {
         if self == .walletSwitcherNewKey || self == .mainNoWalletAfterDeleting { store.setLinkedWallets(hotWallet.linkedWallets) }
         let navigation = Navigation(store: store, hotWallet: hotWallet)
         if self == .mainChartWeek { navigation.chartRange = .week }
+        navigation.chartMetric = TestMode.chartMetric
         if self == .mainTransactions || self == .mainTransactionsCAD || self == .mainTransactionsSmall || self == .mainTransactionsUpdating { navigation.section = .transactions }
         if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
         // Once the window has its size, as when someone clicks. Before that it's too small for the details to fit beside the section.
@@ -800,6 +805,8 @@ enum TestScene: String, CaseIterable {
             })
         case .motionChartRange:
             return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady, play: { cue.range = .week })
+        case .motionChartMetric:
+            return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady, play: { cue.metric = cue.metric == .pnl ? .value : .pnl })
         case .motionChartScrub:
             return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady, play: {
                 Task {
@@ -1313,7 +1320,9 @@ final class FixtureSource: PortfolioSource {
         case .longHistory:
             // Weeks of history, where a time of day on the axis would say nothing.
             return try demo {
-                let points = Self.points(every: 3 * 86_400, pnl: [1_000_000, 250_000_000, 1_250_000_000, 900_000_000, 400_000_000, 1_100_000_000, 800_000_000])
+                // Two deposits and a withdrawal, in whole dollars before and after each, with prices moving in between.
+                let value = [(0, 1000), (1080, 2080), (2150, 2150), (2010, 2010), (1890, 1390), (1460, 1460), (1420, 1420)]
+                let points = Self.points(every: 3 * 86_400, pnl: [1_000_000, 250_000_000, 1_250_000_000, 900_000_000, 400_000_000, 1_100_000_000, 800_000_000], value: value)
                 $0["points"] = points
                 // At 2 s a block, so what's offered goes back as far as these do.
                 $0["coverage"] = ["fromBlock": 53_500_000 - points.count * 3 * 86_400 / 2, "toBlock": 53_500_000]
@@ -1343,17 +1352,23 @@ final class FixtureSource: PortfolioSource {
     }
 
     /// Chart points this many seconds apart, the last one being now.
-    private static func points(every seconds: Int, pnl: [Int]) -> [[String: Any]] {
+    private static func points(every seconds: Int, pnl: [Int], value: [(before: Int, after: Int)] = []) -> [[String: Any]] {
         let start = Date(timeIntervalSince1970: 1_793_800_000)
         return pnl.enumerated().map { index, micros in
             let isLast = index == pnl.count - 1
-            return [
+            var point: [String: Any] = [
                 "blockNum": 53_500_000 + index,
                 "timestamp": start.addingTimeInterval(Double(index * seconds)).formatted(.iso8601),
                 "txHash": isLast ? NSNull() : "0xde3\(String(repeating: "0", count: 60))\(index)",
                 "pnlMicros": String(micros),
                 "excludedCount": 0,
-            ] as [String: Any]
+            ]
+            if value.indices.contains(index) {
+                point["valueBeforeMicros"] = String(value[index].before * 1_000_000)
+                point["valueMicros"] = String(value[index].after * 1_000_000)
+                point["valueExcludedCount"] = 0
+            }
+            return point
         }
     }
 
