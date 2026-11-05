@@ -199,7 +199,7 @@ struct HoldComparisonTests {
     @Test func saysWhatTheNumbersLeaveOutOnce() throws {
         let portfolio = try demoPortfolio()
         let attention = try #require(portfolio.attention)
-        #expect(attention.title.hasPrefix("$3,603.42 has an unknown cost, so it isn't in your PnL."))
+        #expect(attention.title.hasPrefix("$3,603.42 has an unknown cost, so it isn't in the PnL."))
         #expect(attention.title.hasSuffix("$899.98 is estimated."))
         #expect(attention.fullList == Wording.excluded(portfolio.totals.excluded))
         #expect(attention.details.isEmpty)
@@ -235,7 +235,7 @@ struct HoldComparisonTests {
 
     @Test func aBalanceWithNoRowStaysOnScreen() throws {
         let attention = try #require(try onlyReconciledPlusUnread().attention)
-        #expect(attention.details.contains("Couldn't read your USDC balance."))
+        #expect(attention.details.contains("Couldn't read the USDC balance."))
     }
 
     @Test func onlySaysBalancesMatchWhenTheyAllDo() throws {
