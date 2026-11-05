@@ -218,7 +218,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         }
         #expect(store.feed == .reading)
         #expect(store.portfolio == held)
-        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: $0).text == "Reading…" })
+        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: $0).text == "Updating…" })
         let later = now.addingTimeInterval(1)
         await gate.answer(.success(try realPortfolio(at: later)))
         await _ = second.value
@@ -358,30 +358,6 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         store.stop()
         #expect(store.portfolio == nil)
         #expect(store.feed == .reading)
-    }
-
-    @Test func aNewWalletShowsWhenThereIsNoWallet() {
-        let (store, _, _) = makeStore([])
-        store.setWallet(nil)
-        store.showNewWallet("0xDEF")
-        store.stop()
-        #expect(store.address == "0xdef")
-        #expect(store.feed == .reading)
-    }
-
-    @Test func aNewWalletReplacesTheDemoWallet() {
-        let (store, _, _) = makeStore([])
-        store.setWallet(WalletAddress.demo)
-        store.showNewWallet("0xdef")
-        store.stop()
-        #expect(store.address == "0xdef")
-    }
-
-    @Test func aNewWalletLeavesARealWalletShowing() {
-        let (store, _, _) = makeStore([])
-        store.showNewWallet("0xdef")
-        store.stop()
-        #expect(store.address == "0xabc")
     }
 
     @Test func aReplacedWalletIsFollowed() {
@@ -739,6 +715,10 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         let summary = FeedSummary(feed: .live, portfolio: portfolio, shows: .value)
         #expect(summary.isWarning)
         #expect(summary.text == "Value unavailable")
+    }
+
+    @Test func aFirstReadSaysSoWhateverItShows() {
+        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: .reading, portfolio: nil, shows: $0).text == "Reading…" })
     }
 
     @Test func iconOnlyShowsNoNumber() throws {

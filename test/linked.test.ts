@@ -149,13 +149,17 @@ describe("the portfolio endpoint with linked wallets", () => {
     ],
     [COLD]: [{ ...row(11, "0x2", COLD, "credit", ONE), counterparty: HOT }],
   }
+  let readWindowCalls = 0
   const source: Source = {
     mode: "raw",
     startBlock: 1,
     historyFrom: null,
     head: async () => ({ blockNum: 20, timestamp: "2026-11-04T00:00:00.000Z" }),
     processedThrough: async (_, head) => head,
-    readWindow: async (address) => ({ rows: rows[address] ?? [], priced: null, gasUnknown: [] }),
+    readWindow: async (address) => {
+      readWindowCalls += 1
+      return { rows: rows[address] ?? [], priced: null, gasUnknown: [] }
+    },
     readReferences: async (blocks) => blocks.map((block_num) => ({ blockNum: block_num, ethUsd: "300000000000", usdcUsd: "100000000" })),
     readLatestReference: async () => ({ blockNum: 20, ethUsd: "400000000000", usdcUsd: "100000000" }),
     readEthBalances: async () => new Map(),
@@ -204,6 +208,18 @@ describe("the portfolio endpoint with linked wallets", () => {
     assert.equal(portfolio.positions.find((p) => p.asset === "ETH")?.values.costMicros, "3000000000")
     assert.equal(portfolio.meter.answered, 0)
     assert.deepEqual(portfolio.linkedReading, [])
+  })
+
+  it("folds what it last read without a new read, and says when it hasn't read a wallet", async () => {
+    const last = (address: string, body: unknown) => fetch(`${base}/api/portfolio/${address}/last`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    const unread = "0x00000000000000000000000000000000000000ee"
+    assert.equal((await last(unread, { method: "average" })).status, 204)
+    await fetch(`${base}/api/portfolio/${COLD}`)
+    const reads = readWindowCalls
+    const answer = await last(COLD, { method: "fifo" })
+    assert.equal(answer.status, 200)
+    assert.equal(((await answer.json()) as PortfolioResponse).method, "fifo")
+    assert.equal(readWindowCalls, reads)
   })
 
   it("doesn't carry an answered wallet's cost onto one nobody's said is theirs, or read it for that", async () => {

@@ -27,11 +27,12 @@ struct MacApp: App {
         TestMode.runIfAsked()
         HotWalletDebug.runSelfTestIfAsked()
         #endif
-        let store = PortfolioStore()
+        let store = PortfolioStore(cacheDirectory: .portfolioCache)
         let hotWallet = HotWalletFactory.make(store: store)
-        let navigation = Navigation()
+        let navigation = Navigation(store: store, hotWallet: hotWallet)
         let siteBridge = SiteBridge(wallet: hotWallet)
         siteBridge.onTopUp = { navigation.wantsTopUp = true }
+        siteBridge.onReceive = { navigation.wantsReceive = true }
         navigation.onSwitcherClosed = { store.save(navigation.pendingWalletName, hotWallet: hotWallet) }
         AppLinks.onOpen = { url in
             if let link = AddSavingsLink(url: url) { navigation.addingSavings = link }
@@ -40,7 +41,9 @@ struct MacApp: App {
             store.setLinkedWallets($0)
             siteBridge.walletChanged()
         }
-        hotWallet.onKeyRetired = { store.followRetiredWallet($0.lowercased, to: $1?.lowercased) }
+        hotWallet.onKeyRetired = { old, next in
+            store.followRetiredWallet(old.lowercased, to: next?.lowercased ?? store.walletList(hotWallet: hotWallet).next(afterRemoving: old.lowercased))
+        }
         #if DEBUG
         HotWalletDebug.applyLaunchArguments(to: hotWallet, bridge: siteBridge)
         #endif
@@ -108,7 +111,7 @@ struct MacApp: App {
                 Picker("Cost", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
                     ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
                 }
-                Button("Refresh") { store.start() }
+                Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
             }
             CommandMenu("Wallet") {
@@ -141,7 +144,7 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
 
         Settings {
-            SettingsView(store: store, hotWallet: hotWallet)
+            SettingsView(store: store, hotWallet: hotWallet, tab: Bindable(navigation).settingsPane)
                 .holdsDockPresence()
         }
     }
@@ -165,13 +168,29 @@ private struct WalletCommands: View {
             navigation.switchWallet()
         }
         .keyboardShortcut("l", modifiers: .command)
+        Button("Receive…") {
+            openMainWindow()
+            navigation.isReceiving = true
+        }
+        .disabled(!hotWallet.canSend)
         Button("Buy…") {
             openMainWindow()
             navigation.isBuying = true
         }
         .disabled(hotWallet.availability != .ready)
+        Button(HotWalletWording.title) {
+            openMainWindow()
+            navigation.showSpendingMoney()
+        }
+        .keyboardShortcut("4", modifiers: .command)
+        .disabled(hotWallet.availability == .notProvisioned)
+        Button("Send…") {
+            openMainWindow()
+            navigation.send()
+        }
+        .disabled(!hotWallet.canSend)
         Divider()
-        WalletPicker(store: store, list: store.walletList(hotWallet: hotWallet), navigation: navigation, onChoose: openMainWindow)
+        WalletPicker(store: store, list: store.walletList(hotWallet: hotWallet), onChoose: openMainWindow)
     }
 
     private func openMainWindow() {
@@ -224,7 +243,7 @@ struct MenuBarLabel: View {
             .onChange(of: alarm?.findings.count) { _, count in
                 guard count != nil else { return }
                 NSSound(named: "Sosumi")?.play()
-                navigation.section = .spendingMoney
+                navigation.showSpendingMoney()
                 openWindow(id: WindowID.main)
                 DockPresence.bringForward()
                 NSApp.requestUserAttention(.criticalRequest)
@@ -253,13 +272,26 @@ struct MenuBarLabel: View {
                     return
                 }
                 #endif
-                navigation.section = .spendingMoney
+                navigation.showSpendingMoney()
+                openWindow(id: WindowID.main)
+                DockPresence.bringForward()
+            }
+            .onChange(of: navigation.wantsReceive) { _, wants in
+                guard wants else { return }
+                navigation.wantsReceive = false
+                #if DEBUG
+                if HotWalletDebug.isQuiet {
+                    FileHandle.standardError.write(Data("RECEIVE ASKED\n".utf8))
+                    return
+                }
+                #endif
+                navigation.isReceiving = true
                 openWindow(id: WindowID.main)
                 DockPresence.bringForward()
             }
             .onChange(of: navigation.addingSavings) { _, link in
                 guard link != nil else { return }
-                navigation.section = .spendingMoney
+                navigation.showSpendingMoney()
                 openWindow(id: WindowID.main)
                 DockPresence.bringForward()
             }

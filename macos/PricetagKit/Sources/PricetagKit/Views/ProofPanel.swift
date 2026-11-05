@@ -62,7 +62,7 @@ struct ProofPanel: View {
                             if let hash = dataset.hash {
                                 // On one line, because wrapping can add a hyphen, which would make it a different hash. Copying gets all of it.
                                 Text(hash)
-                                    .font(.caption2.monospaced())
+                                    .font(.caption.monospaced())
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
