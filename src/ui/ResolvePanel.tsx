@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
-import { formatAmount, formatMoney, formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { formatAmount, formatMoney, formatSignedMoney, plainAmount, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "../core/api.ts"
 import { answerSender, enterExchangeCosts, linkMessage, proofOwner, walletsBehind, type Book, type Money, type SenderAnswer } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
@@ -18,9 +18,9 @@ const OWNERSHIP: readonly { kind: Ownership; title: string; swipe: string }[] = 
 
 const SWIPE_PX = 110
 
-/** Dollars as typed, as micro-USD. Null when it isn't an amount. */
+/** An amount as typed, in millionths. Null when it isn't an amount. */
 function microsOf(text: string): string | null {
-  const clean = text.replace(/[$,\s]/g, "")
+  const clean = plainAmount(text) ?? ""
   if (!/^(\d+(\.\d*)?|\.\d+)$/.test(clean)) return null
   const [whole = "", fraction = ""] = clean.split(".")
   return BigInt(`${whole || "0"}${fraction.slice(0, 6).padEnd(6, "0")}`).toString()
@@ -224,7 +224,7 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
               {current.arrivals.map((arrival) => (
                 <label key={arrival.asset} className="small">
                   Paid for {formatAmount(arrival.units, arrival.decimals)} {arrival.asset}
-                  <input autoFocus inputMode="decimal" placeholder="$0.00" value={costs[arrival.asset] ?? ""} onChange={(e) => setCosts({ ...costs, [arrival.asset]: e.target.value })} />
+                  <input autoFocus inputMode="decimal" placeholder={formatMoney(0n, currency)} value={costs[arrival.asset] ?? ""} onChange={(e) => setCosts({ ...costs, [arrival.asset]: e.target.value })} />
                 </label>
               ))}
               {costBook ? <p className="small">That would make it {consequence(previewBook(wallet, others as WalletResponse[], method, costBook, failed), currency)}</p> : null}

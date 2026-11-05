@@ -2,13 +2,16 @@ import assert from "node:assert/strict"
 import { createPublicKey, generateKeyPairSync, verify } from "node:crypto"
 import { createServer, request, type Server } from "node:http"
 import { after, before, describe, it } from "node:test"
-import { ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, type LegRow, type Reference } from "@pricetag/sdk/core"
+import type { AddressInfo } from "node:net"
+import { ASSETS, CURRENCIES, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, type LegRow, type Reference } from "@pricetag/sdk/core"
+import type { Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
 import { createCoinbase as createOnramp, orderOf, requestToken } from "../server/coinbase.ts"
 import { unitsOf, type Onramp } from "../server/onramp.ts"
+import { readPaidRates } from "../server/rates.ts"
 import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
-import type { WalletResponse } from "../src/core/api.ts"
+import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { costKey, emptyBook, parseBook, type Book, type Purchase } from "../src/core/book.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { foldBook } from "../src/core/resolve.ts"
@@ -165,6 +168,108 @@ describe("a purchase's cost", () => {
       const direct = move(BLOCK, OTHER_TX, ME, "credit", ETH_BOUGHT, COINBASE, ETH_ADDRESS)
       assert.equal(legOf(wallet(ME, [direct]), bookWith(bought()), [], `${OTHER_TX}:ETH`).costLabel, "unknown")
     })
+  })
+
+  describe("paid in a currency with a feed", () => {
+    const AT = Math.floor(Date.UTC(2026, 10, 5) / 1000) + BLOCK
+    const round = (answer: string) => ({ answer, updatedAt: AT })
+    const eur = { cost: { micros: "23150000", currency: "EUR" as const } }
+    const paidRates = { EUR: { [BLOCK]: round("112000000") } }
+    const cadRates = { byBlock: { [BLOCK]: round("70000000") }, latest: null }
+
+    it("is exact to the cent when it's read in what was paid", () => {
+      const leg = legOf(wallet(ME, [delivered], { currency: "EUR", rates: { byBlock: { [BLOCK]: round("112000000") }, latest: null } }), bookWith(purchase(eur)))
+      assert.deepEqual([leg.costLabel, leg.costMicros, leg.purchaseSource], ["paid", "23150000", "Bought on Coinbase"])
+    })
+
+    it("converts at its own feed's rate when it arrived, and says what was paid", () => {
+      const leg = legOf(wallet(ME, [delivered], { paidRates }), bookWith(purchase(eur)))
+      assert.deepEqual([leg.costLabel, leg.costMicros, leg.purchaseSource], ["paid", "25928000", "Bought on Coinbase for €23.15"])
+    })
+
+    it("goes through USD for a third currency", () => {
+      const leg = legOf(wallet(ME, [delivered], { currency: "CAD", rates: cadRates, paidRates }), bookWith(purchase(eur)))
+      assert.equal(leg.costMicros, "37040000")
+    })
+
+    it("prefers the feed to the order's USD total, which only stands in", () => {
+      assert.equal(legOf(wallet(ME, [delivered], { paidRates }), bookWith(purchase({ ...eur, costUsdMicros: "26000000" }))).costMicros, "25928000")
+      assert.equal(legOf(wallet(ME, [delivered]), bookWith(purchase({ ...eur, costUsdMicros: "26000000" }))).costMicros, "26000000")
+    })
+
+    for (const [what, rounds] of [
+      ["no answer at its block", { EUR: { [BLOCK + 1]: round("112000000") } }],
+      ["a feed that had stopped", { EUR: { [BLOCK]: { answer: "112000000", updatedAt: AT - 4 * 24 * 60 * 60 } } }],
+      ["another currency's feed", { GBP: { [BLOCK]: round("135000000") } }],
+    ] as [string, WalletResponse["paidRates"]][]) {
+      it(`stays unknown and is asked about, with ${what}`, () => {
+        const fold = foldBook(wallet(ME, [delivered], { paidRates: rounds }), [], "average", bookWith(purchase(eur)))
+        assert.deepEqual([fold.legs[0]!.costLabel, fold.legs[0]!.costMicros], ["unknown", null])
+        assert.equal(fold.questions.length, 1)
+      })
+    }
+
+    it("never leaves a kind of dollar bare, beside another currency", () => {
+      const source = (cost: Purchase["cost"], changes: Partial<WalletResponse>) => legOf(wallet(ME, [delivered], changes), bookWith(purchase({ cost }))).purchaseSource
+      assert.equal(source({ micros: "7100000", currency: "CAD" }, { paidRates: { CAD: { [BLOCK]: round("70000000") } } }), "Bought on Coinbase for CA$7.10")
+      assert.equal(source({ micros: "7100000", currency: "USD" }, { currency: "CAD", rates: cadRates }), "Bought on Coinbase for US$7.10")
+      assert.equal(source({ micros: "7100000", currency: "CHF" }, { paidRates: { CHF: { [BLOCK]: round("120000000") } } }), "Bought on Coinbase for CHF\u00a07.10")
+    })
+
+    it("reaches the tax report, in the report's currency, with what was paid in its note", () => {
+      const cad = wallet(ME, [delivered, move(70, OTHER_TX, ME, "debit", 25n * E6, null), move(70, OTHER_TX, ME, "credit", 10n ** 16n, null, ETH_ADDRESS)], { currency: "CAD", rates: { byBlock: { [BLOCK]: round("70000000"), 70: round("70000000") }, latest: null }, paidRates })
+      const [sold] = taxRows([cad], { method: "average", scope: "per-wallet" }, { book: bookWith(purchase(eur)), costsFrom: [] }).filter((row) => row.type === "Sold")
+      assert.equal(sold!.costMicros, "37040000")
+      assert.equal(sold!.status, "resolved")
+      assert.match(sold!.reason ?? "", /Bought on Coinbase for €23\.15, fees included/)
+    })
+
+    it("survives the trip through what a client sends", () => {
+      for (const currency of ["EUR", "GBP", "CHF"] as const) {
+        assert.deepEqual(parseBook(bookWith(purchase({ cost: { micros: "1", currency } })))?.purchases?.[0]?.cost, { micros: "1", currency })
+      }
+    })
+  })
+
+  describe("rates for what was paid", () => {
+    const AT = Math.floor(Date.UTC(2026, 10, 5) / 1000) + BLOCK
+    const eur = purchase({ cost: { micros: "23150000", currency: "EUR" } })
+    const asks = () => {
+      const asked: { currency: string; blocks: number[] }[] = []
+      const readRates = async (currency: string, { legs }: Pick<WalletResponse, "legs" | "latest">) => {
+        asked.push({ currency, blocks: legs.map((leg) => leg.blockNum) })
+        return { byBlock: Object.fromEntries(legs.map((leg) => [leg.blockNum, { answer: "112000000", updatedAt: AT }])), latest: null }
+      }
+      return { asked, readRates: readRates as Parameters<typeof readPaidRates>[0] }
+    }
+    const w = wallet(ME, [move(40, OTHER_TX, ME, "credit", E6, null), delivered])
+
+    it("reads only that currency, only at the blocks it could have arrived in", async () => {
+      const { asked, readRates } = asks()
+      const rates = await readPaidRates(readRates, w, "USD", [bookWith(eur)])
+      assert.deepEqual(asked, [{ currency: "EUR", blocks: [BLOCK] }])
+      assert.deepEqual(rates, { EUR: { [BLOCK]: { answer: "112000000", updatedAt: AT } } })
+    })
+
+    it("finds a batched delivery by its block, when it doesn't name the transaction", async () => {
+      const { asked, readRates } = asks()
+      await readPaidRates(readRates, w, "USD", [bookWith({ ...eur, txHash: `0x${"ef".repeat(32)}` })])
+      assert.deepEqual(asked[0]?.blocks, [BLOCK])
+    })
+
+    for (const [what, shown, book] of [
+      ["it's what's being read", "EUR", bookWith(eur)],
+      ["it was paid in USD", "CAD", bookWith(purchase())],
+      ["it's another wallet's", "USD", bookWith({ ...eur, wallet: SAVINGS })],
+      ["nothing's been bought", "USD", emptyBook()],
+      ["it hasn't arrived", "USD", bookWith({ ...eur, txHash: `0x${"ef".repeat(32)}`, blockNum: null })],
+    ] as [string, "USD" | "EUR" | "CAD", Book][]) {
+      it(`reads nothing when ${what}`, async () => {
+        const { asked, readRates } = asks()
+        assert.equal(await readPaidRates(readRates, w, shown, [book]), undefined)
+        assert.deepEqual(asked, [])
+      })
+    }
   })
 
   describe("in another currency", () => {
@@ -343,6 +448,42 @@ describe("reading an order", () => {
   it("keeps the USD total, for a read that can't convert what was paid", () => {
     const order = orderOf({ ...raw, payment_total: { value: "7.10", currency: "CAD" }, payment_total_usd: { value: "5.07", currency: "USD" } })!
     assert.deepEqual([order.cost, order.costUsdMicros], [{ micros: "7100000", currency: "CAD" }, "5070000"])
+  })
+
+  describe("paid outside the US and Canada", () => {
+    const paidIn = (currency: string, value = "46.20") => ({ ...raw, payment_total: { value, currency }, payment_total_usd: { value: "50.00", currency: "USD" } })
+
+    for (const [currency, micros] of [["EUR", "46200000"], ["GBP", "46200000"], ["CHF", "46200000"]] as const) {
+      it(`keeps what was paid in ${currency}`, () => {
+        const order = orderOf(paidIn(currency))!
+        assert.deepEqual(order.cost, { micros, currency })
+        assert.equal(order.costUsdMicros, "50000000")
+        assert.equal(order.paidIn, null)
+      })
+    }
+
+    for (const currency of ["SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "RON", "ISK"]) {
+      it(`has no cost in ${currency}, and says that's why, without relying on Coinbase's USD figure`, () => {
+        const order = orderOf(paidIn(currency, "512.40"))!
+        assert.deepEqual([order.cost, order.costUsdMicros, order.paidIn], [null, null, currency])
+        assert.equal(order.status, "succeeded")
+        assert.equal(order.units, "5000000")
+      })
+    }
+
+    it("only names a currency for something bought with money", () => {
+      assert.equal(orderOf({ ...paidIn("SEK"), payment_method: "CRYPTO_WALLET" })!.paidIn, null)
+      assert.equal(orderOf({ ...paidIn("SEK"), type: "ONRAMP_TRANSACTION_TYPE_SEND" })!.paidIn, null)
+    })
+
+    it("only names what reads as a currency, since an app shows it", () => {
+      for (const currency of ["sek", "SEKS", "<b>", "", 5]) assert.equal(orderOf({ ...raw, payment_total: { value: "1", currency } })!.paidIn, null)
+    })
+
+    it("says nothing about a currency for an order it can read", () => {
+      assert.equal(orderOf(raw)!.paidIn, null)
+      assert.equal(orderOf({ ...raw, payment_total: undefined })!.paidIn, null)
+    })
   })
 
   it("knows every status, and treats one it doesn't as still going", () => {
@@ -579,5 +720,84 @@ describe("the routes", () => {
     const port = await serve(createOnramp(env, send))
     for (const ref of ["a/b", `${REF}/../token`, "a".repeat(65)]) assert.equal((await call(port, "GET", `/api/onramp/orders/${encodeURIComponent(ref)}`)).status, 404, ref)
     assert.equal(calls.length, 0)
+  })
+})
+
+describe("the server, reading a purchase paid in euros", () => {
+  const ADDRESS = "0x00000000000000000000000000000000000000c1"
+  const rows = [move(BLOCK, TX, ADDRESS, "credit", 25n * E6, COINBASE)]
+  const source: Source = {
+    mode: "raw",
+    startBlock: 1,
+    historyFrom: null,
+    head: async () => ({ blockNum: 100, timestamp: "2026-11-05T00:10:00.000Z" }),
+    processedThrough: async (_, head) => head,
+    readWindow: async () => ({ rows, priced: null, gasUnknown: [] }),
+    readReferences: async (blocks) => blocks.map((blockNum) => ({ blockNum, ethUsd: "200000000000", usdcUsd: "100000000" })),
+    readLatestReference: async () => ({ blockNum: 100, ethUsd: "200000000000", usdcUsd: "100000000" }),
+    readEthBalances: async () => new Map(),
+    readBalances: async (_, block) => ({ blockNum: block, amounts: { ...Object.fromEntries(ASSETS.map((asset) => [asset, "0"])), USDC: block >= BLOCK ? (25n * E6).toString() : "0" } }),
+  }
+  const AT = Math.floor(Date.UTC(2026, 10, 5) / 1000) + BLOCK
+  const asked: string[] = []
+  let failing = false
+  const answers: Record<string, string> = { EUR: "112000000", CAD: "70000000" }
+  const readRates = async (currency: string, { legs }: Pick<WalletResponse, "legs" | "latest">) => {
+    asked.push(currency)
+    if (failing) throw new Error("read failed")
+    const round = { answer: answers[currency] as string, updatedAt: AT }
+    return { byBlock: Object.fromEntries(legs.map((leg) => [leg.blockNum, round])), latest: { blockNum: 100, round } }
+  }
+  const eur = bookWith(purchase({ wallet: ADDRESS, cost: { micros: "23150000", currency: "EUR" } }))
+  let server: Server
+  let base: string
+  before(async () => {
+    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+    server = createServer((req, res) => void api(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+  after(() => server.close())
+  const post = async (path: string, body: unknown) => fetch(`${base}/api/${path}/${ADDRESS}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+  const costIn = async (currency: string, book: Book) => {
+    const response = (await (await post("portfolio", { method: "average", currency, book })).json()) as PortfolioResponse
+    return response.positions.find((position) => position.asset === "USDC")?.values.costMicros
+  }
+
+  it("is exact in euros, and converts at the feed's rate in anything else", async () => {
+    assert.equal(await costIn("EUR", eur), "23150000")
+    assert.equal(await costIn("USD", eur), "25928000")
+    assert.equal(await costIn("CAD", eur), "37040000")
+  })
+
+  it("only reads the extra rate when a purchase needs it", async () => {
+    asked.length = 0
+    await costIn("USD", emptyBook())
+    assert.deepEqual(asked, [])
+    await costIn("EUR", eur)
+    assert.deepEqual(asked, ["EUR"], "It's read once, for showing the wallet, and not again for the purchase")
+    asked.length = 0
+    await costIn("USD", eur)
+    assert.deepEqual(asked, ["EUR"])
+  })
+
+  it("reads the same rate for the tax report", async () => {
+    const response = await post("tax-report", { country: "CA", currency: "CAD", book: eur })
+    assert.equal(response.status, 200)
+    assert.deepEqual(asked.slice(-2).sort(), ["CAD", "EUR"])
+  })
+
+  it("answers with the failure when the rate can't be read, and not with an unknown cost", async () => {
+    failing = true
+    try {
+      assert.ok((await post("portfolio", { method: "average", currency: "USD", book: eur })).status >= 500)
+    } finally {
+      failing = false
+    }
+  })
+
+  it("takes the new currencies for showing a wallet, and no others", async () => {
+    for (const currency of ["EUR", "GBP", "CHF"]) assert.equal(CURRENCIES[currency as "EUR"].code, currency)
+    assert.equal((await post("portfolio", { method: "average", currency: "SEK", book: emptyBook() })).status, 400)
   })
 })

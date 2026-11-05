@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, chartMoneyTicks, plainAmount, derivePricedRows, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
@@ -352,6 +352,24 @@ describe("the portfolio API", () => {
 })
 
 describe("the formatters the Swift package repeats", () => {
+  it("reads an amount the way it was meant, or not at all", () => {
+    for (const [typed, plain] of [
+      ["$1,234.50", "1234.50"],
+      ["€46.20", "46.20"],
+      ["£1,234,567", "1234567"],
+      ["46,20", "46.20"],
+      ["46,2", "46.2"],
+      ["1,234", "1234"],
+      [" 12 ", "12"],
+      ["1.234,50", null],
+      ["12,3456", null],
+      ["1,23,456", null],
+      [",5", null],
+    ] as [string, string | null][]) {
+      assert.equal(plainAmount(typed), plain, typed)
+    }
+  })
+
   it("match the vectors it tests against", () => {
     const usd = ["0", "1", "1234", "9999", "10000", "1005000", "-1234", "-12340000", "2640000000", "1234567890123", "99999999", "999800"]
     const units: [string, number][] = [
@@ -371,6 +389,12 @@ describe("the formatters the Swift package repeats", () => {
       usd: usd.map((micros) => ({ micros, usd: formatMoney(micros, "USD"), signed: formatSignedMoney(micros, "USD") })),
       cad: usd.map((micros) => ({ micros, usd: formatMoney(micros, "CAD"), signed: formatSignedMoney(micros, "CAD") })),
       price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, "USD"), cad: formatPrice(micros, "CAD") })),
+      others: (["EUR", "GBP", "CHF"] as const).map((currency) => ({
+        currency,
+        money: usd.map((micros) => ({ micros, usd: formatMoney(micros, currency), signed: formatSignedMoney(micros, currency) })),
+        price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, currency) })),
+        chartTicks: [[0], [-0.0023], [0.75], [120], [-250000, 1250000]].map((values) => ({ values, ticks: chartMoneyTicks(values, currency) })),
+      })),
       labeledUsd: ["$2,376.00", "+$24.00", "-$24.00", "$0.004", "-$0.004"].map((text) => ({ text, usd: labelUsd(text, "USD"), cad: labelUsd(text, "CAD") })),
       amount: units.map(([value, decimals]) => ({ units: value, decimals, amount: formatAmount(value, decimals), signed: formatSignedAmount(value, decimals) })),
       chartTicks: [[], [0], [-0.0023], [-0.0015, -0.0023], [0.000001], [-0.2], [0.75], [8.5], [-3, 12], [120], [1250], [8000], [-250000, 1250000], [12000000]].map((values) => ({ values, usd: chartMoneyTicks(values, "USD"), cad: chartMoneyTicks(values, "CAD") })),

@@ -39,6 +39,22 @@ export function labelUsd(text: string, main: CurrencyCode): string {
   return main === "USD" ? text : text.replace("$", "US$")
 }
 
+/**
+ * An amount as someone typed it, with only digits and a decimal point left, or null when it can't be told what they meant.
+ * "46,20" is 46.20, because a comma only groups thousands in threes. Dropping it would make that 4,620.
+ */
+export function plainAmount(text: string): string | null {
+  const clean = text.replace(/[$€£\s]/g, "")
+  if (/^\d+,\d{1,2}$/.test(clean)) return clean.replace(",", ".")
+  if (clean.includes(",") && !/^\d{1,3}(,\d{3})+(\.\d*)?$/.test(clean)) return null
+  return clean.replaceAll(",", "")
+}
+
+/** What was paid, beside amounts in another currency, so no kind of dollar is left bare. This locale says US$, CA$, €, £ and CHF. */
+export function formatPaid(micros: string, currency: CurrencyCode): string {
+  return new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(Number(micros) / 1e6)
+}
+
 /** What one USD buys, to four decimals, which is how far exchange rates are usually quoted. */
 export function formatRate(rateMicros: string, currency: CurrencyCode): string {
   const { locale, symbol } = CURRENCIES[currency]

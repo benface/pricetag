@@ -74,7 +74,7 @@ export function costTag(label: CostLabel, source: string | null = null): string 
 }
 
 /** How a purchase's provider is named wherever its cost shows up. */
-export const purchaseSource = (provider: "coinbase") => ({ coinbase: "Bought on Coinbase" })[provider]
+export const purchaseSource = (provider: "coinbase", paid?: string) => `${{ coinbase: "Bought on Coinbase" }[provider]}${paid ? ` for ${paid}` : ""}`
 
 /** A cost's source, to finish "from …". */
 export const COST_WORDS: Record<CostLabel, string> = {

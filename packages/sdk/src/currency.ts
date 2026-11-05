@@ -8,7 +8,7 @@ import type { PricedLeg } from "./legs.ts"
 import { referenceMarks, type LatestPrices, type MarkPrice } from "./portfolio.ts"
 import type { WalletData } from "./wallet.ts"
 
-export type CurrencyCode = "USD" | "CAD"
+export type CurrencyCode = "USD" | "CAD" | "EUR" | "GBP" | "CHF"
 
 export type Currency = {
   code: CurrencyCode
@@ -20,10 +20,14 @@ export type Currency = {
   feed: { address: string; pair: string } | null
 }
 
-/** Adding a currency takes one line here and one in `Currency.swift`. Base has feeds for EUR, GBP, AUD, CHF, SGD and more. */
+/** Adding a currency takes one line here and one in `Currency.swift`. Base also has feeds for AUD and SGD. */
 export const CURRENCIES: Record<CurrencyCode, Currency> = {
   USD: { code: "USD", name: "US dollar", locale: "en-US", symbol: "$", feed: null },
   CAD: { code: "CAD", name: "Canadian dollar", locale: "en-CA", symbol: "$", feed: { address: "0xA840145F87572E82519d578b1F36340368a25D5d", pair: "CAD / USD" } },
+  EUR: { code: "EUR", name: "Euro", locale: "en-IE", symbol: "€", feed: { address: "0xc91D87E81faB8f93699ECf7Ee9B44D11e1D53F0F", pair: "EUR / USD" } },
+  GBP: { code: "GBP", name: "British pound", locale: "en-GB", symbol: "£", feed: { address: "0xCceA6576904C118037695eB71195a5425E69Fa15", pair: "GBP / USD" } },
+  // en-US because Intl writes -0.50 as "CHF-0.50" in en-CH. The space is the no-break one Intl puts there.
+  CHF: { code: "CHF", name: "Swiss franc", locale: "en-US", symbol: "CHF\u00a0", feed: { address: "0x3A1d6444fb6a402470098E23DaD0B7E86E14252F", pair: "CHF / USD" } },
 }
 
 export const CURRENCY_CODES = Object.keys(CURRENCIES) as CurrencyCode[]
@@ -40,13 +44,16 @@ export type RateRound = {
   updatedAt: number
 }
 
+/** Each feed's answers at the blocks purchases paid in that currency arrived in, for reading them in another. */
+export type PaidRates = Partial<Record<CurrencyCode, Rates["byBlock"]>>
+
 /** What a client needs to convert a wallet. Blocks the feed had no answer for are left out. */
 export type Rates = {
   byBlock: Record<string, RateRound>
   latest: { blockNum: number; round: RateRound } | null
 }
 
-/** Forex markets close for about 2 days a week, and the feed updates hourly when they're open. Older than this, it has stopped. */
+/** Forex markets close for about 2 days a week. CAD and EUR update hourly, and GBP and CHF daily, weekends included. Older than this, a feed has stopped. */
 const MAX_ROUND_AGE_SECONDS = 3 * 24 * 60 * 60
 
 const E8 = 10n ** 8n

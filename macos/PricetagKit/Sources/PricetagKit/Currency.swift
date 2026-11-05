@@ -4,7 +4,7 @@
 import Foundation
 
 public enum CurrencyCode: String, Codable, Sendable, CaseIterable, Identifiable {
-    case USD, CAD
+    case USD, CAD, EUR, GBP, CHF
 
     public var id: Self { self }
 
@@ -12,13 +12,18 @@ public enum CurrencyCode: String, Codable, Sendable, CaseIterable, Identifiable 
         switch self {
         case .USD: "US dollar"
         case .CAD: "Canadian dollar"
+        case .EUR: "Euro"
+        case .GBP: "British pound"
+        case .CHF: "Swiss franc"
         }
     }
 
     var locale: Locale {
         switch self {
-        case .USD: Locale(identifier: "en_US")
+        case .USD, .CHF: Locale(identifier: "en_US")
         case .CAD: Locale(identifier: "en_CA")
+        case .EUR: Locale(identifier: "en_IE")
+        case .GBP: Locale(identifier: "en_GB")
         }
     }
 
@@ -26,6 +31,9 @@ public enum CurrencyCode: String, Codable, Sendable, CaseIterable, Identifiable 
     var symbol: String {
         switch self {
         case .USD, .CAD: "$"
+        case .EUR: "€"
+        case .GBP: "£"
+        case .CHF: "CHF\u{00A0}"
         }
     }
 }

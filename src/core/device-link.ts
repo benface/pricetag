@@ -1,7 +1,7 @@
 // What a link can ask the hardware wallet flow to do. The Mac app has no device code, so its Add, Top Up and Publish buttons open
 // these. Anyone can make a link, so a link only ever fills in a form: nothing here is treated as true until the person says so.
 
-import { isAddress, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
+import { isAddress, normalizeAddress, plainAmount, type CurrencyCode } from "@pricetag/sdk/core"
 
 export type DeviceLink =
   | { kind: "add-savings"; device: "ledger" | null }
@@ -10,7 +10,7 @@ export type DeviceLink =
 
 /** Dollars as a link or a person writes them, as micro-USD. Null when it isn't an amount above zero. */
 export function usdMicrosOf(text: string | null): string | null {
-  const clean = text?.replace(/[$,\s]/g, "") ?? ""
+  const clean = plainAmount(text ?? "") ?? ""
   if (!/^(\d{1,12}(\.\d*)?|\.\d+)$/.test(clean)) return null
   const [whole = "", fraction = ""] = clean.split(".")
   const micros = BigInt(`${whole || "0"}${fraction.slice(0, 6).padEnd(6, "0")}`)
