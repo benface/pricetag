@@ -39,12 +39,18 @@ extension Question {
     }
 }
 
-/// Whatever holds a key that can publish a note. Only the hot wallet does: a cold wallet's notes need its device, and this app has no device code.
+/// Whatever holds a key that can publish a note. Only the hot wallet does: a cold wallet's notes need its device, and this app has no device code, so those go to the web app.
 @MainActor
 public protocol CostNoteWriter: AnyObject {
     func canWriteNote(from wallet: String) -> Bool
+    /// Whether this is a savings wallet, whose device can publish it through the web app.
+    func canWriteNoteOnDevice(from wallet: String) -> Bool
     /// True once it's on its way. False if it didn't go out, with `noteProblem` saying why, or nil if they changed their mind.
     /// Only ever from `wallet`, because a note counts for whoever sent it. A wallet that's changed since it was offered gets nothing signed.
     func writeNote(_ calldata: [UInt8], asset: String, from wallet: String) async -> Bool
     var noteProblem: String? { get }
+}
+
+extension CostNoteWriter {
+    public func canWriteNoteOnDevice(from wallet: String) -> Bool { false }
 }

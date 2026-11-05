@@ -4,7 +4,7 @@
 // Every query is bounded by block, because staging is shared.
 
 import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type FeedRound, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
-import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, settledThrough, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
+import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, readPayoutTxsAt, settledThrough, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRound, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
 
 /** A feed's answer at each block, leaving out blocks where the read failed. */
@@ -107,6 +107,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
     readNotes: (address, blocks) => readNotesAt(query, config.baseDataset, address, blocks),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
+    readPayoutTxs: (address, blocks) => readPayoutTxsAt(query, config.baseDataset, address, blocks),
     readFeedRounds: readFeedRoundsAt(query, config),
 
     async readWindow(address, from, to) {
