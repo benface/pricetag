@@ -27,9 +27,15 @@ function LegRow({ effect, currency, address, rule }: { effect: LegEffect; curren
       <div className="leg-tags">
         <span className="tag">{leg.opening ? STARTING_BALANCE : actionLabel(leg.kind, incoming)}</span>
         {leg.opening ? null : leg.priceMicros !== null && leg.priceSource ? (
-          <button type="button" className="tag tag-button" title="See where this price comes from" aria-expanded={showsProof} onClick={toggleProof}>
-            {formatPrice(leg.priceMicros, currency)} · {priceSourceLabel(leg.priceSource)}
-          </button>
+          leg.txHash ? (
+            <button type="button" className="tag tag-button" title="See where this price comes from" aria-expanded={showsProof} onClick={toggleProof}>
+              {formatPrice(leg.priceMicros, currency)} · {priceSourceLabel(leg.priceSource)}
+            </button>
+          ) : (
+            <span className="tag">
+              {formatPrice(leg.priceMicros, currency)} · {priceSourceLabel(leg.priceSource)}
+            </span>
+          )
         ) : (
           <span className="tag warn">⚠ No price</span>
         )}
@@ -43,7 +49,7 @@ function LegRow({ effect, currency, address, rule }: { effect: LegEffect; curren
       {leg.priceNote ? <p className="small muted">{leg.priceNote}</p> : null}
       {netting ? <p className="small muted">{netting}</p> : null}
       {conversion ? <p className="small muted">{conversion}</p> : null}
-      {leg.opening ? null : (
+      {leg.opening || !leg.txHash ? null : (
         <div className="leg-links small">
           <a href={`https://basescan.org/tx/${leg.txHash}`} target="_blank" rel="noreferrer noopener">
             {shortHash(leg.txHash)} on Basescan ↗
@@ -53,7 +59,7 @@ function LegRow({ effect, currency, address, rule }: { effect: LegEffect; curren
           </button>
         </div>
       )}
-      {showsProof && !leg.opening ? <ProofPanel key={`${address}:${currency}:${rule}`} address={address} legId={leg.id} currency={currency} rule={rule} /> : null}
+      {showsProof && !leg.opening && leg.txHash ? <ProofPanel key={`${address}:${currency}:${rule}`} address={address} legId={leg.id} currency={currency} rule={rule} /> : null}
     </li>
   )
 }

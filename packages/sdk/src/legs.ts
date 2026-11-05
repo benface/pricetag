@@ -21,8 +21,9 @@ export const PRICE_NOTES = {
  * Transfers of tokens off the allowlist. They have no position or price, but they say money went elsewhere.
  * `unlisted`: `amount` is a quantity, or empty when it can't be read, as with ERC-1155.
  * `unlisted_nft`: `amount` is an ERC-721 token ID, which identifies one asset and is not a quantity.
+ * `unseen_eth`: ETH the wallet's balance says arrived in a block with no row to show for it. See `creditUnseenEth`.
  */
-export type LegKind = "erc20" | "eth" | "gas" | "l1_fee" | "wrap" | "unwrap" | "unlisted" | "unlisted_nft"
+export type LegKind = "erc20" | "eth" | "gas" | "l1_fee" | "wrap" | "unwrap" | "unlisted" | "unlisted_nft" | "unseen_eth"
 
 /** What a transaction cost to send. L2 gas comes from Amp's data, and the L1 data fee from its receipt. */
 const isFeeRow = (row: LegRow) => row.kind === "gas" || row.kind === "l1_fee"
@@ -74,6 +75,12 @@ export const isUnwrapClaim = (row: LegRow) => row.kind === "unwrap" && row.side 
  * stranger's payment landing in the same block, which is why this never counts as what the token was sold for.
  */
 export type UnseenEth = { blockNum: number; amount: string; txHashes: string[] }
+
+/** A successful transaction in a block where ETH arrived with no row: one that names the wallet in its calldata, or that it sent. */
+export type PayoutTx = { blockNum: number; txHash: string; from: string; to: string | null; input: string }
+
+/** Who to ask about ETH that arrived with no row. A null sender means there's nobody to name, only what it cost. */
+export type EthPayer = { txHash: string; sender: string | null }
 
 /** A transaction whose gas couldn't be worked out, and the block it's in. It can have no rows at all. */
 export type GasUnknownTx = Pick<LegRow, "tx_hash" | "block_num">
@@ -427,6 +434,130 @@ export function settleUnwraps(input: SettleInput): { rows: LegRow[]; priced: Pri
   return { ...markUnseenEth({ ...input, rows }), priced }
 }
 
+/** Pieces each stretch of blocks is cut into per round, because reads in one query are far cheaper than rounds of queries. */
+const SEARCH_SECTIONS = 8
+
+/**
+ * The balances still needed to find each block where ETH moved by more than the wallet's rows explain. A stretch whose
+ * balance change its rows explain has nothing to find, short of ETH arriving and leaving unseen by the same amount, which
+ * nothing here can see, so only the rest get cut up, until each is one block. A claim that stands doesn't count as explaining anything.
+ */
+export function unseenEthSearchBlocks({ rows, ethBalances, fromBlock, through }: { rows: readonly LegRow[]; ethBalances: ReadonlyMap<number, string>; fromBlock: number; through: number }): number[] {
+  const start = fromBlock - 1
+  const ends = [start, through].filter((block) => !ethBalances.has(block))
+  if (ends.length > 0) return ends
+  const moves = rows.filter((row) => row.token === ETH_ADDRESS && row.kind !== "unseen_eth" && !isUnwrapClaim(row)).sort((a, b) => a.block_num - b.block_num)
+  const known = [...ethBalances.keys()].filter((block) => block >= start && block <= through).sort((a, b) => a - b)
+  const wanted: number[] = []
+  let next = 0
+  for (let i = 1; i < known.length; i++) {
+    const [from, to] = [known[i - 1]!, known[i]!]
+    let unexplained = BigInt(ethBalances.get(to)!) - BigInt(ethBalances.get(from)!)
+    for (; next < moves.length && moves[next]!.block_num <= to; next++) {
+      const row = moves[next]!
+      if (row.block_num > from) unexplained -= row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
+    }
+    if (unexplained === 0n || to - from < 2) continue
+    const points = Array.from({ length: SEARCH_SECTIONS - 1 }, (_, section) => from + Math.ceil(((to - from) * (section + 1)) / SEARCH_SECTIONS))
+    wanted.push(...new Set(points.filter((block) => block > from && block < to)))
+  }
+  return wanted
+}
+
+/** Whether what this transaction moved could be why ETH arrived with it: a token sold, or the change from paying too much. */
+function couldBringEth(txRows: readonly LegRow[]): boolean {
+  const moved = txRows.filter((row) => !isFeeRow(row))
+  return moved.some((row) => row.side === "debit") && (moved.some((row) => row.side === "credit") || moved.some((row) => row.side === "debit" && row.token !== ETH_ADDRESS))
+}
+
+/**
+ * Adds a credit for each block where the wallet's ETH rose by more than its rows explain, without traces to say why. The
+ * amount is the balance's, so it can't be ETH the wallet didn't receive, and it's left out whenever something else could
+ * explain the change: a claim that stands, or a fee that isn't known. Each credit is a movement of its own, because a
+ * balance can't say which transaction it came from. So it never changes what a trade traded, and a trade in the same block
+ * isn't valued at all, since this could be part of what it got. Nothing says where in its block it came either, and a
+ * named transaction is only the likeliest, so that never places it: `markUnknownOrder` says what that leaves unknown.
+ */
+export function creditUnseenEth({ rows, ethBalances, feeUnknownTxs, gasUnknownBlocks, account, fromBlock, through, payers, timestampOf }: Pick<SettleInput, "rows" | "ethBalances" | "feeUnknownTxs" | "gasUnknownBlocks"> & {
+  account: string
+  fromBlock: number
+  through: number
+  /** Who was behind the block's credit, where that's been read. */
+  payers: ReadonlyMap<number, EthPayer | null>
+  timestampOf: (block: number) => string
+}): LegRow[] {
+  const feeUnknown = new Set(feeUnknownTxs)
+  const gasUnknown = new Set(gasUnknownBlocks)
+  const byBlock = new Map<number, LegRow[]>()
+  for (const row of rows) byBlock.set(row.block_num, [...(byBlock.get(row.block_num) ?? []), row])
+  const credits: LegRow[] = []
+  const trades = new Set<string>()
+  for (const [block, after] of ethBalances) {
+    const before = ethBalances.get(block - 1)
+    if (before === undefined || block < fromBlock || block > through || gasUnknown.has(block)) continue
+    const blockRows = byBlock.get(block) ?? []
+    if (blockRows.some((row) => isUnwrapClaim(row) || feeUnknown.has(row.tx_hash))) continue
+    let arrived = BigInt(after) - BigInt(before)
+    for (const row of blockRows) {
+      if (row.token === ETH_ADDRESS) arrived -= row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
+    }
+    if (arrived <= 0n) continue
+    const payer = payers.get(block)
+    credits.push({
+      block_num: block,
+      timestamp: timestampOf(block),
+      tx_hash: payer?.txHash ?? "",
+      // Always first in its block, whichever transaction is named, so ETH spent there has something to come from.
+      tx_index: -1,
+      log_index: 0,
+      token: ETH_ADDRESS,
+      account,
+      side: "credit",
+      amount: arrived.toString(),
+      kind: "unseen_eth",
+      ...(payer?.sender ? { counterparty: payer.sender } : {}),
+    })
+    for (const [tx, txRows] of byTx(blockRows)) if (couldBringEth(txRows)) trades.add(tx)
+  }
+  return [...rows.map((row) => (trades.has(row.tx_hash) ? { ...row, unseenEth: true } : row)), ...credits]
+}
+
+/**
+ * Which transaction to name for ETH that arrived with no row. The balance already says how much, so all this decides is
+ * who gets asked about. The one naming the wallet and this exact amount, as a payout list does, or the only one there is.
+ * Anything else names nobody, because a transaction naming the wallet can be about something else entirely.
+ */
+export function payerOf(candidates: readonly PayoutTx[], account: string, amount: string): EthPayer | null {
+  const me = normalizeAddress(account).slice(2)
+  const word = BigInt(amount).toString(16).padStart(64, "0")
+  const exact = candidates.filter(({ input }) => input.includes(me) && input.includes(word))
+  const tx = exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : undefined
+  if (!tx) return null
+  const sender = tx.to === null ? null : normalizeAddress(tx.to)
+  return { txHash: tx.txHash, sender: sender === normalizeAddress(account) ? null : sender }
+}
+
+/**
+ * Sets apart ETH that arrived unseen, and whatever else moved ETH in its block, because a balance can't say which came
+ * first, and what each one cost can depend on it. That includes a network fee: however small, it's a cost nobody knows.
+ * It takes every wallet being folded together, so a pool has to ask again. See `FoldLeg["orderUnknown"]`.
+ */
+export function markUnknownOrder(legs: readonly PricedLeg[]): PricedLeg[] {
+  const moved = new Map<number, PricedLeg[]>()
+  for (const leg of legs) {
+    if (leg.asset === "ETH" && !leg.opening) moved.set(leg.blockNum, [...(moved.get(leg.blockNum) ?? []), leg])
+  }
+  const orders = new Map<number, NonNullable<PricedLeg["orderUnknown"]>>()
+  for (const [block, blockLegs] of moved) {
+    if (blockLegs.length < 2 || !blockLegs.some((leg) => leg.parts.some((part) => part.kind === "unseen_eth"))) continue
+    orders.set(block, blockLegs.some((leg) => BigInt(leg.delta) < 0n) ? "always" : "fifo")
+  }
+  return legs.map((leg) => {
+    const order = leg.asset === "ETH" && !leg.opening && leg.orderUnknown !== "always" ? orders.get(leg.blockNum) : undefined
+    return order ? { ...leg, orderUnknown: order } : leg
+  })
+}
+
 export const answerToMicros = (answer: string | undefined): string | null =>
   answer && BigInt(answer) > 0n ? (BigInt(answer) / 100n).toString() : null
 
@@ -467,7 +598,10 @@ type Input = {
 export function buildPricedLegs({ account, rows, references, priced, market }: Input): PricedLeg[] {
   const me = normalizeAddress(account)
   const refs = new Map(references.map((r) => [r.blockNum, r]))
-  const ordered = [...byTx(rows.filter((row) => row.account === me)).values()].sort((a, b) => a[0]!.block_num - b[0]!.block_num || a[0]!.tx_index - b[0]!.tx_index)
+  const own = rows.filter((row) => row.account === me)
+  // ETH that arrived with no row is its own movement. It goes ahead of whatever else its block did, so what left has something to come from.
+  const unseen = own.filter((row) => row.kind === "unseen_eth").map((row) => [row])
+  const ordered = [...unseen, ...byTx(own.filter((row) => row.kind !== "unseen_eth")).values()].sort((a, b) => a[0]!.block_num - b[0]!.block_num || a[0]!.tx_index - b[0]!.tx_index)
 
   const legs: PricedLeg[] = []
   for (const txRows of ordered) {
@@ -477,6 +611,26 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
     const usdcMicros = answerToMicros(ref?.usdcUsd)
     const oracle = (t: Token) => (t.oracle === "eth" ? ethMicros : t.oracle === "usdc" ? usdcMicros : null)
     const base = { blockNum: first.block_num, timestamp: first.timestamp, txHash: first.tx_hash, txIndex: first.tx_index }
+
+    if (first.kind === "unseen_eth") {
+      legs.push({
+        ...base,
+        // Not its transaction's hash: which one it is can be read later, and what's been answered about it mustn't change.
+        id: `unseen:${first.block_num}:ETH`,
+        asset: "ETH",
+        delta: first.amount,
+        decimals: 18,
+        kind: "transfer",
+        priceMicros: ethMicros,
+        priceSource: ethMicros === null ? null : "oracle",
+        priceNote: ethMicros === null ? PRICE_NOTES.feedFailed : null,
+        costMicros: null,
+        proceedsMicros: null,
+        costLabel: "unknown",
+        parts: [partOf(first)],
+      })
+      continue
+    }
 
     // The other token's balance can match while the amount it was traded for is wrong, so nothing here gets a value.
     const unsettledCredit = txRows.some(isUnwrapClaim)
@@ -520,12 +674,12 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
     // One token out and one in is only a swap if nothing else moved. Otherwise the payment could be for both.
     const { moves: unlistedMoves, unreadable: unlistedUnreadable } = netUnlisted(unlisted)
     const hasUnlisted = unlistedUnreadable || unlistedMoves.length > 0
-    const isSwap = !hasUnlisted && !unsettledCredit && moved.length === 2 && moved.some((n) => n.delta > 0n) && moved.some((n) => n.delta < 0n)
+    const unseenEth = txRows.some((row) => row.unseenEth)
+    const isSwap = !hasUnlisted && !unsettledCredit && !unseenEth && moved.length === 2 && moved.some((n) => n.delta > 0n) && moved.some((n) => n.delta < 0n)
     // Something left and something arrived, but it can't be valued as a swap. It's still not a plain transfer: a debit
     // here was traded for something, so it has unknown proceeds, rather than no gain or loss at all.
     const anyOut = moved.some((n) => n.delta < 0n) || unlistedMoves.some((delta) => delta < 0n)
     const anyIn = moved.some((n) => n.delta > 0n) || unlistedMoves.some((delta) => delta > 0n)
-    const unseenEth = txRows.some((row) => row.unseenEth)
     // A claim can cancel out what left, so whether anything arrived can't decide this while it stands.
     const isExchange = isSwap || unlistedUnreadable || unsettledCredit || unseenEth || (anyOut && anyIn)
     const pricedRow = priced.find((p) => p.tx_hash === first.tx_hash && p.account === me)
@@ -609,5 +763,5 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
       })
     }
   }
-  return legs
+  return markUnknownOrder(legs)
 }

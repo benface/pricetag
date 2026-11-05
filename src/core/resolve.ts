@@ -4,7 +4,7 @@
 // The rest come from here, and the fold then runs on the result. An unanswered sender stays unknown: it could be the user's
 // own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, emptyPosition, foldWallet, formatAmount, historyGaps, lessPaidAt, normalizeAddress, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, emptyPosition, foldWallet, formatAmount, historyGaps, lessPaidAt, normalizeAddress, orderMatters, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "./api.ts"
 import { costKey, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Receipt, type SenderAnswer } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
@@ -147,6 +147,12 @@ function exchangeShare(costs: readonly ExchangeCost[], wallet: string, legId: st
 }
 
 /** A credit the chain hasn't confirmed yet stays unknown: its amount is only what the transaction claims, so nothing can rest on it, and there's nothing to ask until it settles. */
+/**
+ * Whether a note about this leg's transaction and asset would be about more than this leg. A note gives one cost for what
+ * arrived in a transaction, and what its balance says arrived may not be part of that, so it can't be shared out or given to either.
+ */
+const noteIsAmbiguous = (leg: PricedLeg, legs: readonly PricedLeg[]) => legs.filter((other) => other.txHash === leg.txHash && other.asset === leg.asset && BigInt(other.delta) > 0n).length > 1
+
 const isOpenCredit = (leg: PricedLeg) => BigInt(leg.delta) > 0n && leg.costLabel === "unknown" && !leg.unsettledCredit
 
 const sum = (pieces: readonly CostPiece[]) => pieces.reduce((total, p) => total + BigInt(p.costMicros ?? "0"), 0n)
@@ -211,11 +217,17 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
   }
 
   const resolve = (side: Side, leg: PricedLeg): PricedLeg => {
+    // Nothing can be answered about one whose cost depends on an order nothing says, and what it paid doesn't settle that.
+    if (BigInt(leg.delta) > 0n && orderMatters(leg, method)) {
+      const { estimated: _, ...rest } = leg
+      return { ...rest, costLabel: "unknown", costMicros: null }
+    }
     if (!isOpenCredit(leg)) return leg
     const { wallet } = side
     const address = normalizeAddress(wallet.address)
     const units = BigInt(leg.delta)
-    const note = wallet.notes.filter((n) => n.txHash === leg.txHash && n.asset === leg.asset).at(-1)
+    const latestNote = wallet.notes.filter((n) => n.txHash === leg.txHash && n.asset === leg.asset).at(-1)
+    const note = latestNote && !noteIsAmbiguous(leg, side.view.legs) ? latestNote : undefined
     const sources = leg.kind === "transfer" && !leg.opening ? sourcesOf(leg) : null
     const reportedMoney: Money | undefined = book.costs[costKey(address, leg.id)] ?? (note ? { micros: note.usdMicros, currency: "USD" } : undefined) ?? withdrawals.get(costKey(address, leg.id))?.cost
     const report = reportedMoney ? moneyIn(side, reportedMoney, leg) : null
@@ -323,6 +335,9 @@ export const isBalanced = ({ open, answered, waiting }: Meter) => open === 0 && 
 
 const day = (timestamp: string) => new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
 
+/** Why this is being asked about at all, when no transaction shows it arriving. A balance can't say who sent it, so an address is only the likeliest. */
+const unseenEvidence = (sender: string | null) => `This wallet's ETH rose in this block with no transaction showing it${sender ? ". This is the contract most likely behind it" : ""}`
+
 function evidenceFor(sender: string, sides: readonly Side[], known: KnownSender | null, book: Book): string[] {
   const evidence = [...(known ? [`From a ${known.name} address`] : []), ...(book.senders[sender]?.kind === "mine" ? ["You've said this is your wallet. Choose My wallet if the one you're looking at is yours too, or Someone else if it isn't."] : [])]
   const sends = sides
@@ -358,7 +373,7 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
       transfers: 0,
       firstAt: leg.timestamp,
       lastAt: leg.timestamp,
-      evidence: sender ? evidenceFor(sender, sides, known, book) : (evidence ?? []),
+      evidence: [...(sender ? evidenceFor(sender, sides, known, book) : (evidence ?? [])), ...(leg.parts.some((p) => p.kind === "unseen_eth") ? [unseenEvidence(sender)] : [])],
       valueMicros: null,
       first: { leg, units },
       arrived: new Map<string, Arrival>(),
@@ -383,7 +398,7 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
       ...question,
       arrivals: [...arrived.values()],
       valueMicros: priced ? value.toString() : null,
-      noteAbout: question.receipts.length === 1 && !first.leg.opening && first.units === BigInt(first.leg.delta) ? first.leg.txHash : null,
+      noteAbout: question.receipts.length === 1 && !first.leg.opening && first.units === BigInt(first.leg.delta) && first.leg.txHash && !noteIsAmbiguous(first.leg, (sideOf.get(question.wallet) as Side).view.legs) ? first.leg.txHash : null,
     }))
     .sort((a, b) => {
       const [x, y] = [BigInt(a.valueMicros ?? "0"), BigInt(b.valueMicros ?? "0")]

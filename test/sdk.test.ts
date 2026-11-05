@@ -628,7 +628,7 @@ describe("getPortfolio", () => {
         chain.queries.length = 0
         await summary(kept)
         assert.ok(ethReads(chain.queries) > 0, "a missing balance is read again")
-        chain.tables = { ...claim, ethBalances: { 194: String(E18), 195: String(E18) } }
+        chain.tables = { ...claim, ethBalances: { 49: String(E18), 194: String(E18), 195: String(E18), 200: String(E18) } }
         await summary(kept)
         chain.queries.length = 0
         await summary(kept)

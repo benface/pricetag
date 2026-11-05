@@ -111,6 +111,16 @@ import Testing
     #expect(leg.transactionURL == nil)
 }
 
+@Test func ethThatArrivedWithNoTransactionToNameHasNoLinkOrProof() throws {
+    let json = """
+    {"id":"unseen:53525052:ETH","asset":"ETH","delta":"2061830000000000","decimals":18,"kind":"transfer","priceMicros":"2424450000","priceSource":"oracle","priceNote":null,"costLabel":"unknown","estimated":false,"partlyUnknown":false,"blockNum":53525052,"timestamp":"2026-11-05T00:44:04.000Z","txHash":"","opening":false,"effect":"Adds 0.00206 ETH at an unknown cost","netting":null,"conversion":null}
+    """
+    let leg = try JSONDecoder().decode(ExplanationLeg.self, from: Data(json.utf8))
+    #expect(leg.isIncoming)
+    #expect(!leg.hasTransaction)
+    #expect(leg.transactionURL == nil)
+}
+
 /// The Mac app's screenshot scenes read these, and one the models can't decode stops every scene that uses it.
 @Test func theAppsFixturesStillDecode() throws {
     let folder = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../App/TestMode").standardized
