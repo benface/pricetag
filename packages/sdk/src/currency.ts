@@ -78,6 +78,20 @@ const convert = (usdMicros: string | null, answer: bigint): string | null => (us
 /** What one USD buys, in millionths of the currency. */
 const rateOf = (answer: bigint) => ((E6 * E8) / answer).toString()
 
+/**
+ * What one USD buys now, in millionths of the currency, for showing what's held or typed right now. Null without a current
+ * answer. An older rate would quietly be wrong, so there's never one standing in for it.
+ */
+export function currentRateMicros(rates: Rates | null | undefined, at: string): string | null {
+  const answer = usableAnswer(rates?.latest?.round, at)
+  return answer === null ? null : rateOf(answer)
+}
+
+/** A USD amount in the currency, at a rate from `currentRateMicros`. */
+export function atCurrentRate(usdMicros: string, rateMicros: string): string {
+  return ((BigInt(usdMicros) * BigInt(rateMicros)) / E6).toString()
+}
+
 /** A wallet ready to fold: its money in `currency`, and what's needed to say how it got there. */
 export type WalletView = {
   currency: CurrencyCode

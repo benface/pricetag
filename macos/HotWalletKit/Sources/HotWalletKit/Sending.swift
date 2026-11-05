@@ -131,13 +131,13 @@ public final class SendModel {
         return wallet.holdings.first { $0.token == token }?.priceUsdMicros.map { Money.usdMicros(of: amount, priceMicros: $0, decimals: token.decimals) }
     }
 
-    public var usdText: String? { usdMicros.map(wallet.usd) }
+    public var worthText: String? { usdMicros.map(wallet.money) }
 
     /// What it should cost to send this token right now. It's read again before anything's signed.
     public var feeText: String? {
         guard let snapshot = wallet.snapshot else { return nil }
         let wei = snapshot.fees.costWei(of: token)
-        return snapshot.ethUsdMicros.map { wallet.usd(Money.usdMicros(of: wei, priceMicros: $0, decimals: 18)) } ?? "\(Format.amount(String(wei), decimals: 18)) ETH"
+        return snapshot.ethUsdMicros.map { wallet.money(Money.usdMicros(of: wei, priceMicros: $0, decimals: 18)) } ?? "\(Format.amount(String(wei), decimals: 18)) ETH"
     }
 
     /// What the user calls this address, if anything. It's only ever shown beside the address, because a name proves nothing.

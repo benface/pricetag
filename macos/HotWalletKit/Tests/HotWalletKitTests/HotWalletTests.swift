@@ -1235,36 +1235,58 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(!rig.wallet.needsAttention)
     }
 
-    @Test func usdSaysSoOnlyBesideAnotherCurrency() {
-        #expect(HotWalletWording.usd(50 * Money.dollar, beside: .USD) == "$50.00")
-        #expect(HotWalletWording.usd(50 * Money.dollar, beside: .CAD) == "US$50.00")
-        #expect(HotWalletWording.usd(4000, beside: .CAD) == "US$0.004")
-        #expect(HotWalletWording.usd(dollars: 25, beside: .USD) == "$25")
-        #expect(HotWalletWording.usd(dollars: 25, beside: .CAD) == "US$25")
-    }
-
-    @Test func noticesFollowTheMainCurrency() async throws {
-        var main = CurrencyCode.CAD
-        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei), withCold: false, mainCurrency: { main })
+    @Test func noticesFollowTheMainCurrencyAndItsRate() async throws {
+        var display = MoneyDisplay(main: .CAD, rateMicros: "1400000")
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei), withCold: false, moneyDisplay: { display })
         await rig.wallet.tick()
-        #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .CAD)])
-        #expect(texts(rig.wallet).first?.contains("US$25") == true)
-        #expect(rig.wallet.usd(dollars: 25) == "US$25")
-        main = .USD
-        #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .USD)])
-        #expect(rig.wallet.usd(dollars: 25) == "$25")
+        #expect(texts(rig.wallet).first?.contains("the cap stays at $35 ") == true)
+        #expect(rig.wallet.money(dollars: 25) == "$35")
+        #expect(rig.wallet.money(25 * Money.dollar) == "$35.00")
+        display = MoneyDisplay(main: .CAD)
+        #expect(texts(rig.wallet).first?.contains("the cap stays at US$25 ") == true)
+        #expect(rig.wallet.money(dollars: 25) == "US$25")
+        display = MoneyDisplay(main: .USD)
+        #expect(texts(rig.wallet).first?.contains("the cap stays at $25 ") == true)
+        #expect(rig.wallet.money(dollars: 25) == "$25")
+        #expect(rig.wallet.money(25 * Money.dollar) == "$25.00")
     }
 
-    @Test func overTheCapSaysWhichDollars() {
-        #expect(HotWalletWording.shortOverCap(by: 10 * Money.dollar, beside: .CAD) == "US$10.00 over the cap")
-        #expect(HotWalletWording.overCap(by: 10 * Money.dollar, hasDestination: true, beside: .CAD).hasPrefix("US$10.00 over the cap."))
-        #expect(HotWalletWording.overCap(by: 10 * Money.dollar, hasDestination: false, beside: .USD).hasPrefix("$10.00 over the cap,"))
+    @Test func overTheCapReadsInWhatsShown() {
+        let cad = MoneyDisplay(main: .CAD, rateMicros: "1400000")
+        #expect(HotWalletWording.shortOverCap(by: 10 * Money.dollar, in: cad) == "$14.00 over the cap")
+        #expect(HotWalletWording.shortOverCap(by: 10 * Money.dollar, in: MoneyDisplay(main: .CAD)) == "US$10.00 over the cap")
+        #expect(HotWalletWording.overCap(by: 10 * Money.dollar, hasDestination: true, in: cad).hasPrefix("$14.00 over the cap."))
+        #expect(HotWalletWording.overCap(by: 10 * Money.dollar, hasDestination: false, in: MoneyDisplay(main: .USD)).hasPrefix("$10.00 over the cap,"))
+    }
+
+    /// What moves money only ever looks at USD, whatever a rate says or stops saying.
+    @Test func aChangingRateChangesWhatsShownAndNothingElse() async throws {
+        var display = MoneyDisplay(main: .CAD, rateMicros: "1400000")
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(80)]), moneyDisplay: { display })
+        await rig.wallet.tick()
+        let cap = rig.wallet.settings.capUsdMicros
+        let plan = try #require(rig.wallet.plan)
+        #expect(rig.wallet.capText == "$70")
+        for rate in ["10000000", "100000", nil] as [String?] {
+            display = MoneyDisplay(main: .CAD, rateMicros: rate)
+            await rig.wallet.tick()
+            #expect(rig.wallet.settings.capUsdMicros == cap)
+            #expect(rig.wallet.plan?.excessUsdMicros == plan.excessUsdMicros)
+            #expect(rig.wallet.plan?.valueUsdMicros == plan.valueUsdMicros)
+        }
+    }
+
+    @Test func theCapCantPassItsCeilingAtAnyRate() async throws {
+        let rig = await Rig(moneyDisplay: { MoneyDisplay(main: .CAD, rateMicros: "1400000") })
+        rig.wallet.setCap(dollars: 140)
+        #expect(rig.wallet.settings.capUsdMicros == WalletSettings.capCeiling)
+        #expect(rig.wallet.capText == "$140")
     }
 
     @Test func noColdWalletSaysToAddOne() async throws {
         let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei), withCold: false)
         await rig.wallet.tick()
-        #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .USD)])
+        #expect(texts(rig.wallet) == [HotWalletWording.addSavings(in: MoneyDisplay(main: .USD))])
         #expect(rig.wallet.needsAttention)
         #expect(rig.wallet.notices.first?.short == HotWalletWording.shortNoSavings)
         #expect(rig.wallet.notices.first?.asksForSavings == true)
@@ -1303,7 +1325,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.wallet.tick()
         #expect(rig.wallet.plan?.blockers == [.noDestination])
         #expect(rig.wallet.plan?.excessUsdMicros == 0)
-        #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .USD)])
+        #expect(texts(rig.wallet) == [HotWalletWording.addSavings(in: MoneyDisplay(main: .USD))])
         #expect(rig.wallet.needsAttention)
     }
 
