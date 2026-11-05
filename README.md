@@ -275,7 +275,7 @@ What a pass doesn't show, which the interface also says:
 ## Known gaps
 
 - Sending isn't in the app yet, so "Is this yours?" at send time and linking every account from one device or recovery phrase wait for that. Neither can the app write a note yet, only read one.
-- Exchange names are only as good as the list in `src/core/senders.ts`. Each comes from a Basescan name tag or a traced owner. Only Coinbase's payouts have been traced, so a withdrawal from another exchange may not say where it came from, and neither will one from a Coinbase address not on the list. An imported history still matches them.
+- Exchange names are only as good as the list in `src/core/senders.ts`. Each comes from a Basescan name tag or a confirmed withdrawal. A withdrawal from an address not on the list won't say where it came from, and that includes some from Coinbase and any from another exchange. An imported history still matches them.
 - A cost entered in CAD can't be shown in USD for a wallet read in USD, because that read has no rates. It shows as unresolved there, and never as the wrong number.
 - Only the allowlist in `packages/sdk/src/tokens.ts` gets a position and a price. A transaction that also moves another token is never valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. Internal ETH isn't seen without traces, so it can't trigger this.
 - Market prices need the Pricetag dataset, so reading the raw dataset, a past transfer of a token with no oracle reads has no price.
