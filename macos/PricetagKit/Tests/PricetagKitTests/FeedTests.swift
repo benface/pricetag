@@ -218,7 +218,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         }
         #expect(store.feed == .reading)
         #expect(store.portfolio == held)
-        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Reading…")
+        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Updating…")
         let later = now.addingTimeInterval(1)
         await gate.answer(.success(try realPortfolio(at: later)))
         await _ = second.value
@@ -358,30 +358,6 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         store.stop()
         #expect(store.portfolio == nil)
         #expect(store.feed == .reading)
-    }
-
-    @Test func aNewWalletShowsWhenThereIsNoWallet() {
-        let (store, _, _) = makeStore([])
-        store.setWallet(nil)
-        store.showNewWallet("0xDEF")
-        store.stop()
-        #expect(store.address == "0xdef")
-        #expect(store.feed == .reading)
-    }
-
-    @Test func aNewWalletReplacesTheDemoWallet() {
-        let (store, _, _) = makeStore([])
-        store.setWallet(WalletAddress.demo)
-        store.showNewWallet("0xdef")
-        store.stop()
-        #expect(store.address == "0xdef")
-    }
-
-    @Test func aNewWalletLeavesARealWalletShowing() {
-        let (store, _, _) = makeStore([])
-        store.showNewWallet("0xdef")
-        store.stop()
-        #expect(store.address == "0xabc")
     }
 
     @Test func aReplacedWalletIsFollowed() {

@@ -102,20 +102,20 @@ public struct ResolveFlow: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text(headline).font(.title2.weight(.semibold))
+                Text(headline).font(.sheetTitle)
                 Spacer()
                 if let meter = model.meter, meter.open > 0 {
-                    Text("\(meter.open) left").font(.callout).foregroundStyle(.secondary).monospacedDigit().contentTransition(.numericText()).animation(.snappy, value: meter.open)
+                    Text("\(meter.open) left").font(.callout).foregroundStyle(.secondary).monospacedDigit().contentTransition(.numericText(value: Double(meter.open))).motion(Motion.number, value: meter.open)
                 }
             }
             ProgressView(value: model.meter?.progress ?? 0)
                 .tint(model.isBalanced ? Tone.gain.color : .accentColor)
-                .animation(reduceMotion ? nil : .snappy, value: model.meter)
+                .motion(Motion.state, value: model.meter)
                 .accessibilityLabel("Questions, \(model.meter?.open ?? 0) left")
             HStack(spacing: 6) {
                 Text("Now").foregroundStyle(.secondary)
                 if let portfolio = store.portfolio {
-                    Text(nowText(portfolio)).monospacedDigit().contentTransition(.numericText()).animation(.snappy, value: nowText(portfolio))
+                    LiveNumber(nowText(portfolio))
                 }
             }
             .font(.callout)
@@ -138,6 +138,7 @@ public struct ResolveFlow: View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(question.arrivals) { arrival in
                 Text("\(Format.amount(arrival.units, decimals: arrival.decimals)) \(arrival.asset)")
+                    .monospacedDigit()
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
             }
@@ -175,7 +176,7 @@ public struct ResolveFlow: View {
             DragGesture(minimumDistance: 12)
                 .onChanged { drag = $0.translation }
                 .onEnded { value in
-                    defer { withAnimation(.snappy) { drag = .zero } }
+                    defer { withAnimation(reduceMotion ? nil : Motion.state) { drag = .zero } }
                     if value.translation.width > Self.swipeDistance { model.answer(.mine) }
                     else if value.translation.width < -Self.swipeDistance { model.answer(.someoneElse) }
                     else if value.translation.height < -Self.swipeDistance { model.answer(.myExchange) }
@@ -184,7 +185,7 @@ public struct ResolveFlow: View {
         )
         .id(question.id)
         .transition(reduceMotion ? .opacity : .asymmetric(insertion: .scale(scale: 0.96).combined(with: .opacity), removal: .opacity))
-        .animation(.snappy, value: question.id)
+        .motion(Motion.state, value: question.id)
     }
 
     @ViewBuilder
@@ -320,7 +321,7 @@ public struct ResolveFlow: View {
             }
             if let failed = store.portfolio?.linkedFailed.count, failed > 0 {
                 WarningText(Wording.linkedFailed(failed)).font(.callout).fixedSize(horizontal: false, vertical: true)
-                Button("Try Again") { store.start() }
+                Button("Try Again") { store.refresh() }
             }
             if let portfolio = store.portfolio, !portfolio.linkedReading.isEmpty {
                 let waiting = portfolio.linkedReading.count

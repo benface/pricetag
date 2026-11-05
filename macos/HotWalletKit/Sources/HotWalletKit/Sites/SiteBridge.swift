@@ -129,6 +129,7 @@ public final class SiteBridge {
     /// Tells every tab on an origin something changed: `accountsChanged` with its accounts.
     @ObservationIgnored public var onAccountsChanged: ((_ origin: String, _ accounts: [String]) -> Void)?
     @ObservationIgnored public var onTopUp: (() -> Void)?
+    @ObservationIgnored public var onReceive: (() -> Void)?
 
     public var current: SiteApproval? { pending.first }
     public var working: SiteWork? { allWork.first }
@@ -337,6 +338,10 @@ public final class SiteBridge {
 
     public func requestTopUp() {
         onTopUp?()
+    }
+
+    public func requestReceive() {
+        onReceive?()
     }
 
     // MARK: - Requests

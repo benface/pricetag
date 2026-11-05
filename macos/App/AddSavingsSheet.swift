@@ -25,16 +25,19 @@ struct AddColdWalletSheet: View {
     let mac: AddSavingsMac
     let showsTrouble: Bool
     var onSendTest: (EthereumAddress) -> Void = { _ in }
+    /// Every saved wallet. The paste step offers the ones that could become savings.
+    var wallets: [WalletEntry] = []
     @State private var model: AddSavingsModel
     @Environment(\.dismiss) private var dismiss
 
-    init(wallet: HotWallet, navigation: Navigation?, server: URL, onSendTest: @escaping (EthereumAddress) -> Void) {
-        self.init(model: AddSavingsModel(wallet: wallet), navigation: navigation, server: server, mac: .real)
+    init(wallet: HotWallet, wallets: [WalletEntry], navigation: Navigation?, server: URL, onSendTest: @escaping (EthereumAddress) -> Void) {
+        self.init(model: AddSavingsModel(wallet: wallet), navigation: navigation, server: server, mac: .real, wallets: wallets)
         self.onSendTest = onSendTest
     }
 
-    init(model: AddSavingsModel, navigation: Navigation? = nil, server: URL, mac: AddSavingsMac, showsTrouble: Bool = false) {
+    init(model: AddSavingsModel, navigation: Navigation? = nil, server: URL, mac: AddSavingsMac, showsTrouble: Bool = false, wallets: [WalletEntry] = []) {
         _model = State(initialValue: model)
+        self.wallets = wallets
         self.navigation = navigation
         self.server = server
         self.mac = mac
@@ -72,7 +75,7 @@ struct AddColdWalletSheet: View {
         case .keystoneUnlock: StepPage(page: page, picture: .keystone(showsCode: false), model: model, showsTrouble: showsTrouble)
         case .keystoneReceive: StepPage(page: page, picture: .keystone(showsCode: true), model: model, showsTrouble: showsTrouble)
         case .keystoneScan: KeystoneScanStep(page: page, model: model, scanner: mac.scanner, showsTrouble: showsTrouble)
-        case .paste: PasteStep(page: page, model: model)
+        case .paste: PasteStep(page: page, model: model, wallets: wallets.filter(model.offers))
         case .check: CheckStep(page: page, model: model, showsTrouble: showsTrouble)
         case .finished: FinishedStep(model: model)
         }
@@ -126,7 +129,7 @@ private struct PickDevice: View {
         let page = AddSavingsWording.page(.pick, device: nil)
         VStack(alignment: .leading, spacing: 12) {
             Text(page.title)
-                .font(.title2.bold())
+                .font(.sheetTitle)
             Text(page.body)
                 .fixedSize(horizontal: false, vertical: true)
             ForEach(AddSavingsModel.Device.allCases, id: \.self) { device in
@@ -147,7 +150,7 @@ private struct PickDevice: View {
                     }
                     .padding(10)
                     .contentShape(Rectangle())
-                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .softBox()
                 }
                 .buttonStyle(.plain)
             }
@@ -196,7 +199,7 @@ private struct StepPage<Extra: View>: View {
                     .padding(.vertical, 4)
             }
             Text(page.title)
-                .font(.title2.bold())
+                .font(.sheetTitle)
             if !page.body.isEmpty {
                 Text(page.body)
                     .fixedSize(horizontal: false, vertical: true)
@@ -312,7 +315,7 @@ private struct LedgerBrowserStep: View {
                 .padding(.vertical, 8)
                 .accessibilityHidden(true)
             Text(found.browser.map { "Continue in \($0.name)" } ?? page.title)
-                .font(.title2.bold())
+                .font(.sheetTitle)
             if let browser = found.browser {
                 Text(AddSavingsWording.browserBody(browser.name, defaultThatCant: found.defaultThatCant))
                     .fixedSize(horizontal: false, vertical: true)
@@ -340,7 +343,7 @@ private struct LedgerBrowserStep: View {
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
                 Text("Finish in \(browser.name)")
-                    .font(.title2.bold())
+                    .font(.sheetTitle)
             }
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(AddSavingsWording.browserSteps(browser.name).enumerated()), id: \.offset) { index, line in
@@ -412,15 +415,12 @@ private struct KeystoneScanStep: View {
 private struct PasteStep: View {
     let page: AddSavingsWording.Page
     @Bindable var model: AddSavingsModel
+    let wallets: [WalletEntry]
 
     var body: some View {
         StepPage(page: page, picture: model.device?.picture, model: model) {
-            TextField("Address", text: $model.address, prompt: Text("0x…"))
-                .font(.body.monospaced())
-                .autocorrectionDisabled()
-            if model.parsed == nil, !model.address.isEmpty {
-                WarningText("That isn't a valid address.").font(.callout)
-            }
+            // Picking only fills this in. The next page still has the user check it against the device, whatever it's called here.
+            AddressField(prompt: "0x…", text: $model.address, wallets: wallets, read: AddressText.read)
         }
     }
 }
@@ -436,15 +436,16 @@ private struct CheckStep: View {
                 StepDots(current: progress.current, total: progress.total)
             }
             Text(page.title)
-                .font(.title2.bold())
+                .font(.sheetTitle)
             Text(page.body)
                 .fixedSize(horizontal: false, vertical: true)
             if let parsed = model.parsed {
                 // In groups, because nobody really compares 40 characters in one run.
-                Text(AddressText.grouped(parsed.checksummed))
-                    .font(.title3.monospaced())
+                AddressLine(parsed.checksummed)
+                    .font(.title3)
                     .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -476,9 +477,10 @@ private struct CheckStep: View {
                         .fixedSize(horizontal: false, vertical: true)
                     ForEach(model.suggestedAccounts, id: \.self) { account in
                         Toggle(isOn: accepted(account)) {
-                            Text(EthereumAddress(account).map { AddressText.grouped($0.checksummed) } ?? account)
-                                .font(.caption.monospaced())
-                                .fixedSize(horizontal: false, vertical: true)
+                            AddressLine(EthereumAddress(account)?.checksummed ?? account)
+                                .font(.subheadline)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                         }
                     }
                     Text("Costs will follow what moves to and from the ones you tick, and no money is sent there. Leave out any you don't recognize.")
@@ -512,7 +514,7 @@ private struct FinishedStep: View {
                 .padding(.vertical, 8)
                 .accessibilityHidden(true)
             Text(AddSavingsWording.page(.finished, device: model.device).title)
-                .font(.title2.bold())
+                .font(.sheetTitle)
             if model.sweepsGoHere {
                 Label(model.mayBeSweeping ? AddSavingsWording.sweepsStarted : "From now on, money above your cap goes here.", systemImage: "arrow.down.to.line")
                     .fixedSize(horizontal: false, vertical: true)

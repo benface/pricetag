@@ -55,6 +55,11 @@ struct PnlSeries {
         self.plotted = plotted
     }
 
+    /// A transaction by its ID, as these points say it is now. nil once it's out of view.
+    func transaction(id: String?) -> Plotted? {
+        id.flatMap { id in plotted.first { $0.id == id && $0.point.txHash != nil } }
+    }
+
     /// The transaction nearest to a date, known or not, so a click on a gap still opens its legs.
     func nearestTransaction(to date: Date) -> Plotted? {
         plotted.filter { $0.point.txHash != nil }.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }

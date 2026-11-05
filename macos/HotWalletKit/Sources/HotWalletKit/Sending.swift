@@ -72,6 +72,8 @@ public final class SendModel {
     }
 
     public private(set) var stage = Stage.composing
+    /// What this send put on its way, once it has.
+    private var sentHashes: [String] = []
     public var token: Token
     public var amountText = ""
     public var addressText = "" {
@@ -140,12 +142,24 @@ public final class SendModel {
         return snapshot.ethUsdMicros.map { wallet.money(Money.usdMicros(of: wei, priceMicros: $0, decimals: 18)) } ?? "\(Format.amount(String(wei), decimals: 18)) ETH"
     }
 
-    /// The name of a savings wallet, when that's what this is.
+    /// What the user calls this address, if anything. It's only ever shown beside the address, because a name proves nothing.
     public var recipientName: String? {
-        wallet.settings.coldWallets.first { $0.address == recipient }?.name
+        guard let recipient else { return nil }
+        return wallet.settings.coldWallets.first { $0.address == recipient }?.name ?? store.savedWallets.first { $0.address == recipient.lowercased }?.name
+    }
+
+    /// Whether a saved wallet is somewhere this can send to, so the list only offers what would work.
+    public func canSend(to entry: WalletEntry) -> Bool {
+        EthereumAddress(entry.address).map { wallet.problem(sendingTo: $0) == nil } ?? false
     }
 
     public var nextPromptAt: Date? { wallet.nextPromptAt }
+
+    /// What became of this send, once it's gone, from the receipts of exactly what it put on its way.
+    public var landing: Landing {
+        guard stage == .sent else { return .onItsWay }
+        return wallet.landing(of: sentHashes)
+    }
 
     public var maximum: UInt128 { wallet.maximumSend(of: token) }
 
@@ -196,6 +210,7 @@ public final class SendModel {
             failure = wallet.sweepProblem
             return false
         }
+        sentHashes = wallet.lastSubmitted
         stage = .sent
         if let answer, store.book.senders[recipient.lowercased] == nil {
             store.setBook(store.book.answering(recipient.lowercased, answer, focus: wallet.address?.lowercased))

@@ -131,7 +131,7 @@ private struct SiteRequestSummary<Footer: View>: View {
                 footer
             }
         case .message(let review):
-            ConfirmationView(asker: .site(approval.site), hero: .words(review.headline), rows: review.contract.map { [ConfirmationRow(label: "Contract", value: AddressText.grouped($0.checksummed), isAddress: true)] } ?? [], warnings: approval.warnings, message: review.body) {
+            ConfirmationView(asker: .site(approval.site), hero: .words(review.headline), rows: review.contract.map { [ConfirmationRow(label: "Contract", value: $0.checksummed, isAddress: true)] } ?? [], warnings: approval.warnings, message: review.body) {
                 footer
             }
         }
@@ -150,13 +150,13 @@ private struct SiteRequestSummary<Footer: View>: View {
             case .known(let amount):
                 ConfirmationRow(label: label, value: amount.usdMicros.map { "\(amount.text) \(amount.symbol) (\(money($0)))" } ?? "\(amount.text) \(amount.symbol)")
             case .unknown(let contract):
-                ConfirmationRow(label: label, value: AddressText.grouped(contract.checksummed), isAddress: true, name: "Unknown token")
+                ConfirmationRow(label: label, value: contract.checksummed, isAddress: true, name: "Unknown token")
             }
         }
         let allowances = preview.allowances.flatMap { allowance in
-            var rows = [ConfirmationRow(label: "You'd allow", value: AddressText.grouped(allowance.spender.checksummed), isAddress: true, name: "This address to spend \(allowance.words)")]
+            var rows = [ConfirmationRow(label: "You'd allow", value: allowance.spender.checksummed, isAddress: true, name: "This address to spend \(allowance.words)")]
             if let contract = allowance.unknownContract {
-                rows.append(ConfirmationRow(label: "For", value: AddressText.grouped(contract.checksummed), isAddress: true, name: allowance.isCollection ? "Unknown collection" : "Unknown token"))
+                rows.append(ConfirmationRow(label: "For", value: contract.checksummed, isAddress: true, name: allowance.isCollection ? "Unknown collection" : "Unknown token"))
             }
             return rows
         }
@@ -168,15 +168,15 @@ private struct SiteRequestSummary<Footer: View>: View {
     private func rows(_ review: TransactionReview) -> [ConfirmationRow] {
         var rows = review.preview.map(previewRows) ?? []
         if let recipient = review.recipient {
-            rows.append(ConfirmationRow(label: "To", value: AddressText.grouped(recipient.checksummed), isAddress: true))
+            rows.append(ConfirmationRow(label: "To", value: recipient.checksummed, isAddress: true))
         } else if let spender = review.spender {
-            rows.append(ConfirmationRow(label: "Spender", value: AddressText.grouped(spender.checksummed), isAddress: true))
+            rows.append(ConfirmationRow(label: "Spender", value: spender.checksummed, isAddress: true))
         } else {
-            rows.append(ConfirmationRow(label: "Contract", value: AddressText.grouped(review.to.checksummed), isAddress: true))
+            rows.append(ConfirmationRow(label: "Contract", value: review.to.checksummed, isAddress: true))
         }
         // A token this app doesn't know is only as good as its contract, so that's never tucked away.
         if review.toName == nil, review.recipient != review.to, review.recipient != nil || review.spender != nil {
-            rows.append(ConfirmationRow(label: "Contract", value: AddressText.grouped(review.to.checksummed), isAddress: true))
+            rows.append(ConfirmationRow(label: "Contract", value: review.to.checksummed, isAddress: true))
         }
         if review.alsoSendsEth {
             rows.append(ConfirmationRow(label: "Also sends", value: amount(Money.text(ofUnits: review.value, decimals: 18), usdMicros: review.valueUsdMicros)))
@@ -188,7 +188,7 @@ private struct SiteRequestSummary<Footer: View>: View {
     /// What's tucked away: the contract of a token this app knows, since the rows say who's on the other end of it.
     private func details(_ review: TransactionReview) -> [ConfirmationRow] {
         guard let name = review.toName, review.recipient != review.to, review.recipient != nil || review.spender != nil else { return [] }
-        return [ConfirmationRow(label: name, value: AddressText.grouped(review.to.checksummed), isAddress: true)]
+        return [ConfirmationRow(label: name, value: review.to.checksummed, isAddress: true)]
     }
 
     private func amount(_ text: String, usdMicros: UInt128?) -> String {
@@ -202,9 +202,14 @@ struct SiteProgressView: View {
     let money: (UInt128) -> String
     let isDone: Bool
 
+    /// This goes away a moment after it's out, before any transaction could have landed, so it never says more than that. The site and Spending Money follow it from there.
+    private var stage: ProgressFooter.Stage {
+        if work.isTransaction { isDone ? .handedOff : .working("Sending…") } else { isDone ? .finished("Signed") : .working("Signing…") }
+    }
+
     var body: some View {
         SiteRequestSummary(approval: work.approval, money: money) {
-            ProgressFooter(doing: work.isTransaction ? "Sending…" : "Signing…", done: work.isTransaction ? "Sent" : "Signed", isDone: isDone)
+            ProgressFooter(stage: stage)
         }
     }
 }
@@ -223,7 +228,7 @@ struct SiteFailureView: View {
                 .foregroundStyle(Tone.loss.style)
                 .accessibilityHidden(true)
             Text(failure.isTransaction ? "This Didn't Go Out" : "This Wasn't Signed")
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                .font(.displaySmall)
             Text(failure.site)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)

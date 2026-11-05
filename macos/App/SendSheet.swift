@@ -7,12 +7,14 @@ import SwiftUI
 /// Pressing Send goes straight to Touch ID, with what's being sent on screen.
 struct SendSheet: View {
     @State var model: SendModel
+    /// Every saved wallet. The form offers the ones this send permits.
+    var wallets: [WalletEntry] = []
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Group {
             if model.stage == .composing {
-                SendForm(model: model, dismiss: { dismiss() })
+                SendForm(model: model, wallets: wallets.filter(model.canSend(to:)), dismiss: { dismiss() })
             } else {
                 SendConfirmation(model: model, gate: SendConfirmation.gate(for: model)) { dismiss() }
             }
@@ -25,6 +27,7 @@ struct SendSheet: View {
 
 private struct SendForm: View {
     let model: SendModel
+    let wallets: [WalletEntry]
     let dismiss: () -> Void
 
     private enum Field { case amount, address }
@@ -40,7 +43,7 @@ private struct SendForm: View {
                 TextField("Amount", text: $model.amountText, prompt: Text("0"))
                     .labelsHidden()
                     .textFieldStyle(.plain)
-                    .font(.system(size: 46, weight: .semibold, design: .rounded))
+                    .font(.displayLarge)
                     .monospacedDigit()
                     .multilineTextAlignment(.center)
                     .focused($focus, equals: .amount)
@@ -57,14 +60,9 @@ private struct SendForm: View {
                 worth
             }
             VStack(alignment: .leading, spacing: 8) {
-                TextField("To", text: $model.addressText, prompt: Text("To: 0x…"))
-                    .labelsHidden()
+                AddressField("To", prompt: wallets.isEmpty ? "To: 0x…" : "To: 0x…, or a wallet's name", text: $model.addressText, wallets: wallets, read: AddressText.read, focus: $focus, equals: .address, onSubmit: next)
                     .textFieldStyle(.roundedBorder)
                     .controlSize(.large)
-                    .font(.body.monospaced())
-                    .autocorrectionDisabled()
-                    .focused($focus, equals: .address)
-                    .onSubmit(next)
                 recipient
             }
             if let failure = model.failure {
@@ -112,9 +110,12 @@ private struct SendForm: View {
     @ViewBuilder
     private var recipient: some View {
         if let address = model.recipient {
-            // In groups, because nobody really compares 40 characters in one run.
-            Text(AddressText.grouped(address.checksummed))
-                .font(.callout.monospaced())
+            if let name = model.recipientName {
+                Text(name).fontWeight(.medium)
+            }
+            // In groups, and however it got here, because a saved name doesn't say the address behind it is still the right one.
+            AddressLine(address.checksummed)
+                .font(.callout)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if let problem = model.recipientProblem {
@@ -126,8 +127,6 @@ private struct SendForm: View {
             } else if model.asksIfItsYours {
                 isThisYours
             }
-        } else if !model.addressText.isEmpty {
-            WarningText("That isn't a valid address.").font(.callout)
         }
     }
 
@@ -147,7 +146,7 @@ private struct SendForm: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .softBox()
     }
 }
 
@@ -166,10 +165,12 @@ struct SendConfirmation: View {
     var body: some View {
         ConfirmationView(asker: .spendingMoney, hero: .amount(Money.text(ofUnits: model.amount ?? 0, decimals: model.token.decimals), symbol: model.token.symbol), worth: model.worthText, rows: rows) {
             if model.stage == .sent || gate.phase == .done {
-                ProgressFooter(doing: "Sending…", done: "Sent", isDone: true)
-                    .task {
-                        try? await Task.sleep(for: .seconds(1.1))
-                        done()
+                ProgressFooter(stage: stage, close: done)
+                    // Only once it's landed. Up to then it stays, and there's a way to close it.
+                    .task(id: model.landing) {
+                        guard model.landing == .landed else { return }
+                        try? await Task.sleep(for: Motion.acknowledged)
+                        if !Task.isCancelled { done() }
                     }
             } else {
                 TouchIDFooter(gate: gate, verb: "send", doing: "Sending…", leaveTitle: "Edit") { model.backToEditing() }
@@ -178,10 +179,18 @@ struct SendConfirmation: View {
         .onExitCommand { if gate.backOut() { model.backToEditing() } }
     }
 
+    private var stage: ProgressFooter.Stage {
+        switch model.landing {
+        case .onItsWay: .onItsWay
+        case .landed: .finished("Sent")
+        case .didntLand: .didntLand("This didn't go through")
+        }
+    }
+
     private var rows: [ConfirmationRow] {
         var rows: [ConfirmationRow] = []
         if let address = model.recipient {
-            rows.append(ConfirmationRow(label: "To", value: AddressText.grouped(address.checksummed), isAddress: true, name: model.recipientName))
+            rows.append(ConfirmationRow(label: "To", value: address.checksummed, isAddress: true, name: model.recipientName))
         }
         if let fee = model.feeText { rows.append(ConfirmationRow(label: "Network fee", value: "About \(fee)")) }
         return rows
@@ -208,10 +217,11 @@ struct SweepSheet: View {
     var body: some View {
         ConfirmationView(asker: .spendingMoney, hero: hero, worth: worth, rows: rows) {
             if gate.phase == .done {
-                ProgressFooter(doing: "Sweeping…", done: "On its way", isDone: true)
-                    .task {
-                        try? await Task.sleep(for: .seconds(1.1))
-                        dismiss()
+                ProgressFooter(stage: sweepStage) { dismiss() }
+                    .task(id: landing) {
+                        guard landing == .landed else { return }
+                        try? await Task.sleep(for: Motion.acknowledged)
+                        if !Task.isCancelled { dismiss() }
                     }
             } else {
                 TouchIDFooter(gate: gate, verb: "sweep", doing: "Sweeping…", leaveTitle: hasFailed ? "Close" : "Cancel") { dismiss() }
@@ -219,6 +229,19 @@ struct SweepSheet: View {
         }
         .frame(width: 460)
         .interactiveDismissDisabled(wallet.isWorking)
+    }
+
+    /// Only what this sweep put on its way. An earlier attempt that didn't go out isn't part of it.
+    private var landing: Landing {
+        wallet.landing(of: wallet.lastSubmitted)
+    }
+
+    private var sweepStage: ProgressFooter.Stage {
+        switch landing {
+        case .onItsWay: .onItsWay
+        case .landed: .finished("Moved to your savings")
+        case .didntLand: .didntLand("Some of this didn't go through")
+        }
     }
 
     /// Part of it may have gone by then, and that can't be cancelled.
@@ -241,7 +264,7 @@ struct SweepSheet: View {
     private var rows: [ConfirmationRow] {
         var rows: [ConfirmationRow] = []
         if let destination {
-            rows.append(ConfirmationRow(label: "To", value: AddressText.grouped(destination.address.checksummed), isAddress: true, name: destination.name))
+            rows.append(ConfirmationRow(label: "To", value: destination.address.checksummed, isAddress: true, name: destination.name))
         }
         if let preview = wallet.sweepPreview, !preview.transfers.isEmpty {
             rows.append(ConfirmationRow(label: "Network fee", value: "About \(preview.feeUsdMicros.map(wallet.money) ?? "\(Format.amount(String(preview.feeWei), decimals: 18)) ETH")"))
@@ -251,9 +274,13 @@ struct SweepSheet: View {
 }
 
 enum AddressText {
-    static func grouped(_ address: String) -> String {
-        let digits = Array(address.dropFirst(2))
-        let groups = stride(from: 0, to: digits.count, by: 4).map { String(digits[$0..<min($0 + 4, digits.count)]) }
-        return "0x " + groups.joined(separator: " ")
+    /// For a place that moves money, where only an address will do. A payment request also names one, but that's usually a token's contract.
+    static func read(_ text: String) -> String? {
+        if case .address(let address) = ScannedAddress(text: text) { address.checksummed } else { nil }
+    }
+
+    /// For a place that only looks, where one address anywhere in what's pasted is clear enough, like in a link to an explorer's page.
+    static func readAnywhere(_ text: String) -> String? {
+        WalletAddress.pasted(in: text).flatMap { EthereumAddress($0)?.lowercased }
     }
 }

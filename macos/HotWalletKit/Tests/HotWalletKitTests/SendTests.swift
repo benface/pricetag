@@ -146,6 +146,29 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         return (model, store, rig)
     }
 
+    // MARK: Picking a saved wallet
+
+    @Test func offersOnlyWhereThisCanSend() async throws {
+        let (model, _, rig) = try await model()
+        let entry = { WalletEntry(address: $0, name: nil, kind: .watching) }
+        #expect(model.canSend(to: entry(friend.lowercased)))
+        #expect(!model.canSend(to: entry(try #require(rig.wallet.address).lowercased)))
+        #expect(!model.canSend(to: entry(EthereumAddress.zero.lowercased)))
+        #expect(!model.canSend(to: entry(try #require(usdc.contract).lowercased)))
+        #expect(!model.canSend(to: entry(WalletAddress.demo)))
+    }
+
+    /// The name's for finding it. The address is still what's on the confirmation, and a name can't stand in for a changed one.
+    @Test func aSavedNameComesWithTheAddressItBelongsTo() async throws {
+        let (model, store, _) = try await model()
+        #expect(model.recipientName == nil)
+        store.renameWallet(friend.lowercased, to: "Treasury")
+        #expect(model.recipientName == "Treasury")
+        #expect(model.recipient == friend)
+        model.addressText = "0x4444444444444444444444444444444444444444"
+        #expect(model.recipientName == nil)
+    }
+
     @Test func onlyWhatCanBeSentGetsAsFarAsConfirming() async throws {
         let (model, store, _) = try await model()
         defer { store.stop() }
@@ -831,5 +854,20 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1))
         await rig.wallet.tick()
         #expect(await rig.chain.sent.count == 2, "the next deposit still sweeps")
+    }
+}
+
+struct LandingTests {
+    private func record(_ nonce: UInt64, _ status: SignedRecord.Status) -> SignedRecord {
+        SignedRecord(hash: "0x\(nonce)", nonce: nonce, to: EthereumAddress("0x00000000000000000000000000000000000de302")!, symbol: "USDC", decimals: 6, amount: "1", usdMicros: nil, gainUsdMicros: "0", reason: .sent, createdAt: .distantPast, status: status)
+    }
+
+    @Test func nothingHasLandedUntilEveryReceiptSaysSo() {
+        #expect(Landing([]) == .onItsWay)
+        #expect(Landing([record(1, .pending)]) == .onItsWay)
+        #expect(Landing([record(1, .confirmed), record(2, .pending)]) == .onItsWay)
+        #expect(Landing([record(1, .confirmed), record(2, .confirmed)]) == .landed)
+        #expect(Landing([record(1, .confirmed), record(2, .failed)]) == .didntLand)
+        #expect(Landing([record(1, .pending), record(2, .dropped)]) == .didntLand)
     }
 }
