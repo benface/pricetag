@@ -199,7 +199,7 @@ struct SiteFailureView: View {
                 .accessibilityHidden(true)
             Text(failure.isTransaction ? "This Didn't Go Out" : "This Wasn't Signed")
                 .font(.system(size: 24, weight: .semibold, design: .rounded))
-            Text(failure.origin)
+            Text(failure.site)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
             Notice(.warning, failure.reason)
