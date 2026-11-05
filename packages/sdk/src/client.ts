@@ -362,6 +362,7 @@ function emptyWallet(address: string, from: number): WalletData {
     balances: null,
     openingUnread: [...ASSETS],
     lastBalances: {},
+    lastCheckableEth: null,
     unreadBalances: [],
     unseenEth: [],
   }

@@ -81,6 +81,8 @@ type Cached = {
   closing: BalanceSnapshot | null
   /** Every asset's last successful read, because a failed read mustn't look like an empty wallet. */
   lastBalances: Record<string, { blockNum: number; amount: string }>
+  /** The last ETH balance read with every fee up to it known. */
+  lastCheckableEth: { blockNum: number; amount: string } | null
   /** L1 fees by transaction. See `isL1FeeSettled`. */
   l1Fees: Map<string, L1Fee>
   notes: CostNote[]
@@ -122,7 +124,7 @@ type Reorg = { from: number; oldTip: number }
  * What happened to a wallet up to one block, without what any of it was worth. Two pricing rules read through the same
  * facts can only differ by the rule, because what's held, what moved and what fees came to are all the same object.
  */
-export type WalletFacts = Pick<Cached, "fromBlock" | "coveredTo" | "rows" | "latest" | "gasUnknown" | "opening" | "closing" | "lastBalances" | "l1Fees" | "staleFeeTxs" | "ethBalances" | "notes" | "notesReadTo" | "marketChecked"> & {
+export type WalletFacts = Pick<Cached, "fromBlock" | "coveredTo" | "rows" | "latest" | "gasUnknown" | "opening" | "closing" | "lastBalances" | "lastCheckableEth" | "l1Fees" | "staleFeeTxs" | "ethBalances" | "notes" | "notesReadTo" | "marketChecked"> & {
   /** What the feeds in `TOKEN_FEEDS` answered at or just before `coveredTo`, which is the chain's whatever rule prices the rest. */
   feedRounds: Record<string, FeedRound>
 }
@@ -239,6 +241,7 @@ function rewound(wallet: Cached, block: number): Cached {
     gasUnknown: kept(wallet.gasUnknown, (at) => at),
     closing: wallet.closing && wallet.closing.blockNum < block ? wallet.closing : null,
     lastBalances: Object.fromEntries(Object.entries(wallet.lastBalances).filter(([, balance]) => balance.blockNum < block)),
+    lastCheckableEth: wallet.lastCheckableEth && wallet.lastCheckableEth.blockNum < block ? wallet.lastCheckableEth : null,
     l1Fees: kept(wallet.l1Fees, (fee) => fee.blockNum),
     ethBalances: kept(wallet.ethBalances, (_, at) => at),
     notes: wallet.notes.filter((note) => note.blockNum < block),
@@ -469,6 +472,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const openingReadAt = { ...cached?.openingReadAt }
     let closing = cached?.closing ?? null
     const lastBalances = { ...cached?.lastBalances }
+    let lastCheckableEth = cached?.lastCheckableEth ?? null
     if (coveredTo >= fromBlock) {
       if (!isComplete(opening) || openingMayChange(cached, chain)) {
         const read = await readBalances(address, fromBlock - 1)
@@ -477,6 +481,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       }
       if (closing?.blockNum !== coveredTo || !isComplete(closing) || reorgable) closing = await readBalances(address, coveredTo)
       for (const [asset, amount] of Object.entries(closing?.amounts ?? {})) lastBalances[asset] = { blockNum: coveredTo, amount }
+      if (closing?.amounts.ETH !== undefined && l1FeeRows(rows, l1Fees).unknownTxs.length === 0) lastCheckableEth = { blockNum: coveredTo, amount: closing.amounts.ETH }
     }
 
     const prices = latestPrices(await source.readLatestReference(head.blockNum))
@@ -494,7 +499,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     }
     const marketChecked = marketRead && feedsLeftNoGap(heldAssets, prices)
 
-    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknown, opening, openingReadAt, readAtHead: chain.blockNum, tablesReached, closing, lastBalances, l1Fees, staleFeeTxs, ethBalances, notes, notesReadTo, marketChecked }
+    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknown, opening, openingReadAt, readAtHead: chain.blockNum, tablesReached, closing, lastBalances, lastCheckableEth, l1Fees, staleFeeTxs, ethBalances, notes, notesReadTo, marketChecked }
     // This comes after the claims and the closing balance, because whether ETH adds up depends on both.
     await readEthBalances(address, unreadSendBlocks(address, next).slice(0, MAX_ETH_BALANCES_PER_READ - unreadEth.length), ethBalances)
     wallets.delete(key)
@@ -536,6 +541,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       balances: closing,
       openingUnread: ASSETS.filter((asset) => opening?.amounts[asset] === undefined),
       lastBalances: Object.fromEntries(Object.entries(wallet.lastBalances).filter(([asset]) => closing?.amounts[asset] === undefined)),
+      lastCheckableEth: wallet.lastCheckableEth,
       unreadBalances: wallet.coveredTo >= wallet.fromBlock ? ASSETS.filter((asset) => closing?.amounts[asset] === undefined) : [],
       unseenEth,
       notes: wallet.notes,
@@ -576,6 +582,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         opening: wallet.opening,
         closing,
         lastBalances,
+        lastCheckableEth: wallet.lastCheckableEth && wallet.lastCheckableEth.blockNum <= through ? wallet.lastCheckableEth : null,
         l1Fees: wallet.l1Fees,
         staleFeeTxs: wallet.staleFeeTxs,
         ethBalances: wallet.ethBalances,

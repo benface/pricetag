@@ -77,6 +77,8 @@ export type PortfolioResponse = {
   linkedReading: string[]
   /** Linked wallets whose last read failed. It's tried again with each request, and what they sent stays unresolved or out of date until it works. */
   linkedFailed: string[]
+  /** Other wallets' history that can't be confirmed, which leaves what they sent here with an unknown cost. */
+  withheld: { wallet: string; asset: string }[]
   marketChecked: boolean
 }
 

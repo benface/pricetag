@@ -53,6 +53,7 @@ function walletOf(address: string, legs: PricedLeg[], changes: Partial<WalletRes
     legs,
     balances: { blockNum: 1000, amounts },
     lastBalances: {},
+    lastCheckableEth: null,
     unreadBalances: [],
     openingUnread: [],
     gasUnknownTxs: [],
@@ -623,6 +624,23 @@ describe("the user's answers in a report", () => {
       })
     }
 
+    it("says the same as the screen", () => {
+      const bought = walletOf(B, [arrived(hop, A, B), sell(30, 1n, 2500)])
+      const onScreen = foldBook(bought, [mismatched()], "fifo", mine).positions[0]
+      const row = eventsOf(taxReportOf([bought], US, { book: mine, costsFrom: [mismatched()] }))[0]
+      assert.deepEqual([onScreen?.values.realizedMicros, onScreen?.reconciliation?.status], [null, "reconciled"])
+      assert.deepEqual([row?.Cost, row?.Status], ["unknown", "UNRESOLVED"])
+    })
+
+    it("goes by the last read that worked, like the screen, when the latest one failed", () => {
+      const failed = walletOf(A, legs(), { balances: null, unreadBalances: ["ETH"], lastBalances: { ETH: { blockNum: hop, amount: "0" } } })
+      const bought = walletOf(B, [arrived(hop, A, B), sell(30, 1n, 2500)])
+      const screen = foldBook(bought, [failed], "fifo", mine).positions[0]
+      const row = eventsOf(taxReportOf([bought], US, { book: mine, costsFrom: [failed] }))[0]
+      assert.equal(screen?.values.realizedMicros, usd(1500))
+      assert.deepEqual([row?.Gain, row?.Status], ["1500.000000", "OK"])
+    })
+
     it("only touches what came from there", () => {
       const legs = [buy(5, 1n, 500), arrived(hop, A, B), sell(30, 1n, 2500), sell(40, 1n, 2500)]
       const rows = eventsOf(taxReportOf([walletOf(B, legs)], US, { book: mine, costsFrom: [mismatched()] }))
@@ -638,6 +656,19 @@ describe("the user's answers in a report", () => {
       const first = arrived(hop, A, B)
       const [row] = eventsOf(taxReportOf([walletOf(B, [first, sell(30, 1n, 2500)])], US, { book: { ...mine, costs: { [costKey(B, first.id)]: { micros: usd(900), currency: "USD" } } }, costsFrom: [mismatched()] }))
       assert.deepEqual([row?.Cost, row?.Status], ["900.000000", "SELF-REPORTED"])
+      const answered = taxReportOf([walletOf(B, [first, sell(30, 1n, 2500)])], US, { book: { ...mine, costs: { [costKey(B, first.id)]: { micros: usd(900), currency: "USD" } } }, costsFrom: [mismatched()] })
+      assert.ok(!answered.warnings.some((warning) => /history can't be confirmed/.test(warning)), "so there's nothing to warn about")
+    })
+
+    it("doesn't blame a wallet for an unknown cost that didn't come from it", () => {
+      const C = `0x${"c".repeat(40)}`
+      const elsewhere = () => walletOf(A, [buy(10, 1n, 1000), sent(hop, C)], { balances: { blockNum: 1000, amounts: { ETH: E18.toString() } } })
+      const book = answering({ [A]: { kind: "mine" }, [C]: { kind: "mine" } })
+      const unrelated = taxReportOf([walletOf(B, [arrived(hop, SELLER, B), sell(30, 1n, 2500)])], US, { book, costsFrom: [elsewhere(), walletOf(C, [arrived(hop, A, C)])] })
+      assert.equal(eventsOf(unrelated)[0]?.Status, "UNRESOLVED", "it has an unknown cost of its own")
+      assert.ok(!unrelated.warnings.some((warning) => /history can't be confirmed/.test(warning)))
+      const reached = taxReportOf([walletOf(C, [arrived(hop, A, C)])], US, { book, costsFrom: [elsewhere()] })
+      assert.ok(reached.warnings.some((warning) => /ETH history can't be confirmed/.test(warning)), "the wallet it did reach still says so")
     })
 
     it("doesn't change what a wallet's own history says about itself", () => {
