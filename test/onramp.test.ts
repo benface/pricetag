@@ -3,7 +3,7 @@ import { createPublicKey, generateKeyPairSync, verify } from "node:crypto"
 import { createServer, request, type Server } from "node:http"
 import { after, before, describe, it } from "node:test"
 import type { AddressInfo } from "node:net"
-import { ASSETS, CURRENCIES, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, type LegRow, type Reference } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, MAIN_CURRENCY_CODES, USDC_ADDRESS, buildPricedLegs, type LegRow, type Reference } from "@pricetag/sdk/core"
 import type { Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
@@ -170,14 +170,14 @@ describe("a purchase's cost", () => {
     })
   })
 
-  describe("paid in a currency with a feed", () => {
+  describe("paid in a currency that can't be shown yet", () => {
     const AT = Math.floor(Date.UTC(2026, 10, 5) / 1000) + BLOCK
     const round = (answer: string) => ({ answer, updatedAt: AT })
     const eur = { cost: { micros: "23150000", currency: "EUR" as const } }
     const paidRates = { EUR: { [BLOCK]: round("112000000") } }
     const cadRates = { byBlock: { [BLOCK]: round("70000000") }, latest: null }
 
-    it("is exact to the cent when it's read in what was paid", () => {
+    it("will be exact to the cent once it can be read in what was paid", () => {
       const leg = legOf(wallet(ME, [delivered], { currency: "EUR", rates: { byBlock: { [BLOCK]: round("112000000") }, latest: null } }), bookWith(purchase(eur)))
       assert.deepEqual([leg.costLabel, leg.costMicros, leg.purchaseSource], ["paid", "23150000", "Bought on Coinbase"])
     })
@@ -764,8 +764,7 @@ describe("the server, reading a purchase paid in euros", () => {
     return response.positions.find((position) => position.asset === "USDC")?.values.costMicros
   }
 
-  it("is exact in euros, and converts at the feed's rate in anything else", async () => {
-    assert.equal(await costIn("EUR", eur), "23150000")
+  it("converts at the feed's rate, in whatever it's read in", async () => {
     assert.equal(await costIn("USD", eur), "25928000")
     assert.equal(await costIn("CAD", eur), "37040000")
   })
@@ -774,11 +773,11 @@ describe("the server, reading a purchase paid in euros", () => {
     asked.length = 0
     await costIn("USD", emptyBook())
     assert.deepEqual(asked, [])
-    await costIn("EUR", eur)
-    assert.deepEqual(asked, ["EUR"], "It's read once, for showing the wallet, and not again for the purchase")
-    asked.length = 0
     await costIn("USD", eur)
     assert.deepEqual(asked, ["EUR"])
+    asked.length = 0
+    await costIn("USD", bookWith(purchase({ wallet: ADDRESS })))
+    assert.deepEqual(asked, [], "Paid in USD, read in USD")
   })
 
   it("reads the same rate for the tax report", async () => {
@@ -796,8 +795,8 @@ describe("the server, reading a purchase paid in euros", () => {
     }
   })
 
-  it("takes the new currencies for showing a wallet, and no others", async () => {
-    for (const currency of ["EUR", "GBP", "CHF"]) assert.equal(CURRENCIES[currency as "EUR"].code, currency)
-    assert.equal((await post("portfolio", { method: "average", currency: "SEK", book: emptyBook() })).status, 400)
+  it("won't show a wallet in what a purchase can only be paid in", async () => {
+    assert.deepEqual([...MAIN_CURRENCY_CODES], ["USD", "CAD"])
+    for (const currency of ["EUR", "GBP", "CHF", "SEK"]) assert.equal((await post("portfolio", { method: "average", currency, book: emptyBook() })).status, 400, currency)
   })
 })

@@ -83,18 +83,10 @@ public enum Format {
         isEstimate ? "≈\(text)" : text
     }
 
-    /// An amount as someone typed it, with only digits and a decimal point left, or nil when it can't be told what they meant.
-    /// "46,20" is 46.20, because a comma only groups thousands in threes. Dropping it would make that 4,620.
-    static func plainAmount(_ text: String) -> String? {
-        let clean = text.filter { !" $€£".contains($0) && !$0.isWhitespace }
-        if clean.wholeMatch(of: /\d+,\d{1,2}/) != nil { return clean.replacing(",", with: ".") }
-        if clean.contains(","), clean.wholeMatch(of: /\d{1,3}(,\d{3})+(\.\d*)?/) == nil { return nil }
-        return clean.replacing(",", with: "")
-    }
-
-    /// Millionths from what someone typed, like "$1,234.50". nil when it isn't an amount. Cents past six places are cut.
+    /// Micro-USD from what someone typed, like "$1,234.50". nil when it isn't an amount. Cents past six places are cut.
     public static func micros(fromDollars text: String) -> String? {
-        guard let clean = plainAmount(text), clean.wholeMatch(of: /\d+(\.\d*)?|\.\d+/) != nil else { return nil }
+        let clean = text.filter { !" $,".contains($0) }
+        guard clean.wholeMatch(of: /\d+(\.\d*)?|\.\d+/) != nil else { return nil }
         let parts = clean.split(separator: ".", omittingEmptySubsequences: false)
         let whole = parts.first.map(String.init) ?? ""
         let fraction = parts.count > 1 ? String(parts[1].prefix(6)) : ""

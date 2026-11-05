@@ -71,6 +71,10 @@ struct FormatVectors: Decodable {
         }
     }
 
+    @Test func onlyUSDAndCADCanBeChosenAsTheMainCurrencyForNow() {
+        #expect(CurrencyCode.mainChoices == [.USD, .CAD], "Beside MAIN_CURRENCY_CODES in currency.ts")
+    }
+
     @Test func otherCurrenciesMatchTheWebApp() {
         #expect(vectors.others.map(\.currency) == [.EUR, .GBP, .CHF])
         for other in vectors.others {

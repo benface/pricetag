@@ -180,15 +180,11 @@ const CAD_USD: [blockOffset: number, usd: number][] = [
   [HEAD_OFFSET, 0.715],
 ]
 
-/** The other currencies move with CAD in the demo, at about their real size against it. */
-const AGAINST_CAD: Partial<Record<CurrencyCode, number>> = { CAD: 1, EUR: 1.57, GBP: 1.88, CHF: 1.72 }
-
 /** What the feed would have answered for the demo's blocks. A currency with no demo data has no rates, like any other missing rate. */
 export function demoRates(currency: CurrencyCode): Rates {
-  const scale = AGAINST_CAD[currency]
-  const rounds = (scale ? CAD_USD : []).map(([offset, usd]) => ({
+  const rounds = (currency === "CAD" ? CAD_USD : []).map(([offset, usd]) => ({
     blockNum: START_BLOCK + offset,
-    round: { answer: String(Math.round(usd * (scale as number) * 1e8)), updatedAt: (START_TIME + offset * 2000) / 1000 },
+    round: { answer: String(Math.round(usd * 1e8)), updatedAt: (START_TIME + offset * 2000) / 1000 },
   }))
   return { byBlock: Object.fromEntries(rounds.map((r) => [r.blockNum, r.round])), latest: rounds.at(-1) ?? null }
 }

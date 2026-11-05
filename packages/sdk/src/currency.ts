@@ -1,4 +1,4 @@
-// The user's main currency. The dataset and the legs stay in USD, and this is the one place that converts them.
+// The user's main currency, and what a purchase was paid in. The dataset and the legs stay in USD, and this is the one place that converts them.
 //
 // Each amount converts at the rate when it happened, not at today's: a purchase at 1.30 and a sale at the same USD price
 // at 1.40 is a real gain in CAD. So this runs before the fold, which then adds up amounts that are already in CAD.
@@ -31,6 +31,13 @@ export const CURRENCIES: Record<CurrencyCode, Currency> = {
 }
 
 export const CURRENCY_CODES = Object.keys(CURRENCIES) as CurrencyCode[]
+
+/** What a portfolio can be shown in. The rest are only what something was paid in, until the screens are ready for them: add one here and in `Currency.swift`. */
+export const MAIN_CURRENCY_CODES: readonly CurrencyCode[] = ["USD", "CAD"]
+
+export function isMainCurrency(value: string | null | undefined): value is CurrencyCode {
+  return MAIN_CURRENCY_CODES.includes(value as CurrencyCode)
+}
 
 export function isCurrencyCode(value: string | null | undefined): value is CurrencyCode {
   return CURRENCY_CODES.includes(value as CurrencyCode)

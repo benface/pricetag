@@ -320,8 +320,6 @@ describe("links into the flow", () => {
 
   test("dollars", () => {
     assert.equal(usdMicrosOf("$1,250.50"), "1250500000")
-    assert.equal(usdMicrosOf("46,20"), "46200000", "It's a decimal comma, and never 4,620")
-    assert.equal(usdMicrosOf("1.234,50"), null, "It won't guess")
     assert.equal(usdMicrosOf(".5"), "500000")
     assert.equal(usdMicrosOf("0"), null)
     assert.equal(usdMicrosOf(null), null)

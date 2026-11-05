@@ -2,7 +2,7 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { isAddress, isCurrencyCode, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { isAddress, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createWallets, describeError, followChain, followRawSql, followSql, readHeadMark, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
@@ -40,7 +40,7 @@ const MAX_OTHER_WALLETS = 20
 
 function parseCurrency(value: string | null): CurrencyCode | null {
   if (value === null) return "USD"
-  return isCurrencyCode(value) ? value : null
+  return isMainCurrency(value) ? value : null
 }
 
 /** A pricing rule, and where a wallet's rows come from when it's read through that rule. */

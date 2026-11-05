@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, chartMoneyTicks, plainAmount, derivePricedRows, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
@@ -352,24 +352,6 @@ describe("the portfolio API", () => {
 })
 
 describe("the formatters the Swift package repeats", () => {
-  it("reads an amount the way it was meant, or not at all", () => {
-    for (const [typed, plain] of [
-      ["$1,234.50", "1234.50"],
-      ["€46.20", "46.20"],
-      ["£1,234,567", "1234567"],
-      ["46,20", "46.20"],
-      ["46,2", "46.2"],
-      ["1,234", "1234"],
-      [" 12 ", "12"],
-      ["1.234,50", null],
-      ["12,3456", null],
-      ["1,23,456", null],
-      [",5", null],
-    ] as [string, string | null][]) {
-      assert.equal(plainAmount(typed), plain, typed)
-    }
-  })
-
   it("match the vectors it tests against", () => {
     const usd = ["0", "1", "1234", "9999", "10000", "1005000", "-1234", "-12340000", "2640000000", "1234567890123", "99999999", "999800"]
     const units: [string, number][] = [

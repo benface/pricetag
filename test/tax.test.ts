@@ -811,7 +811,7 @@ describe("POST /api/tax-report", () => {
     assert.equal((await post("demo", { country: "CA", method: "lifo" })).status, 400)
     assert.equal((await post("demo", { country: "CA", method: 1 })).status, 400)
     assert.equal((await post("demo", { country: "CA", scope: "everything" })).status, 400)
-    assert.equal((await post("demo", { country: "CA", currency: "SEK" })).status, 400)
+    assert.equal((await post("demo", { country: "CA", currency: "EUR" })).status, 400)
     assert.equal((await post("demo", { country: "CA", book: { costs: { x: "nope" } } })).status, 400)
     assert.equal((await post(A, { country: "CA", also: "nope" })).status, 400)
     assert.equal((await post(A, { country: "CA", also: [1] })).status, 400)
@@ -936,19 +936,12 @@ describe("GET /api/tax-report", () => {
     assert.deepEqual([override.body.method, override.body.scope, override.body.defaults.method], ["average", "pooled", "fifo"])
   })
 
-  it("reports in euros, and says that's not what Canada or the US asks for", () => {
-    const report = taxReportOf([{ ...DEMO_WALLET, currency: "EUR", rates: demoRates("EUR") }], { country: "CA", method: "average", scope: "pooled" })
-    assert.equal(report.currency, "EUR")
-    assert.ok(report.warnings.some((line) => line.includes("This is in EUR, and Canada reports in CAD")))
-    assert.ok(report.warnings.some((line) => line.includes("Chainlink's EUR / USD price on Base")) || report.notes?.some((line) => line.includes("EUR / USD")))
-  })
-
   it("turns down what it can't do", async () => {
     assert.equal((await get("demo")).status, 400)
     assert.equal((await get("demo?country=FR")).status, 400)
     assert.equal((await get("demo?country=CA&method=lifo")).status, 400)
     assert.equal((await get("demo?country=CA&scope=everything")).status, 400)
-    assert.equal((await get("demo?country=CA&currency=SEK")).status, 400)
+    assert.equal((await get("demo?country=CA&currency=EUR")).status, 400)
     assert.equal((await get(`demo?country=CA&also=${A}`)).status, 400)
     assert.equal((await get(`${DEMO_ADDRESS}?country=CA&also=${A}`)).status, 400)
     assert.equal((await get(`${A}?country=CA&also=nope`)).status, 400)
