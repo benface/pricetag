@@ -2,7 +2,7 @@
 // Keeps each wallet's rows in memory: one full read, then only new blocks, because a wallet read scans the whole range.
 
 import { describeError, type Logger } from "./amp.ts"
-import { LAST_2S_BLOCK, blockBefore, timestampOfBlock } from "./chain.ts"
+import { LAST_2S_BLOCK, blockBefore, msBetweenBlocks, timestampOfBlock } from "./chain.ts"
 import { answerToMicros, buildPricedLegs, derivePricedRows, oneWaySendBalanceBlocks, settleUnwraps, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PricedRow, type Reference } from "./legs.ts"
 import { MARKET_MAX_AGE_MS, markNeeds, marketPrice, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
 import type { CostNote } from "./notes.ts"
@@ -198,8 +198,22 @@ type MarkRead = MarketRead & { block: number }
 /** What's held at each point on a wallet's chart. */
 const chartReads = (address: string, rows: readonly LegRow[], opening: BalanceSnapshot | null): MarkRead[] => markNeeds(address, rows, opening).map(({ asset, block }) => ({ asset, block, bucket: bucketOf(block) }))
 
-/** By `<asset>:<bucket>`, null when the feed gave no answer there. */
-type MarkRounds = ReadonlyMap<string, FeedRound | null>
+/** By `<asset>:<bucket>`. */
+type MarkRounds = ReadonlyMap<string, FeedRound>
+
+/** Grouped by bucket, because one query covers every feed in one. */
+function assetsByBucket(reads: readonly MarketRead[]): Map<number, string[]> {
+  const buckets = new Map<number, string[]>()
+  for (const read of new Map(reads.map((read) => [marketKey(read), read])).values()) buckets.set(read.bucket, [...(buckets.get(read.bucket) ?? []), read.asset])
+  return buckets
+}
+
+/**
+ * A feed's call can fail inside a query that worked, which looks just like a feed that can't answer there. So it's asked
+ * again this long later, twice as long each time, and then left to the market, or one that can't would cost queries forever.
+ */
+const NO_ANSWER_WAIT_MS = 60_000
+const NO_ANSWER_TRIES = 6
 
 /** What a feed makes a chart point's token worth, with ETH's price at that point, or null when it has no usable answer there. */
 function feedMark(mark: MarkRead, rounds: MarkRounds, references: Cached["references"]): string | null {
@@ -307,11 +321,10 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
   let marketReady: boolean | null = null
   /** Each asset's latest answer, shared by every wallet. A failed read isn't in here, so it's tried again. */
   const latestRounds = new Map<string, FeedRound>()
-  /**
-   * What the feeds answered at each chart point's bucket. A failed read isn't in here, so it's tried again. No answer stays
-   * remembered, because a feed that can't answer there would otherwise cost a query every refresh, and the market still prices that point.
-   */
-  const markRounds = new Map<string, FeedRound | null>()
+  /** What the feeds answered at each chart point's bucket. A failed read isn't in here, so it's tried again. */
+  const markRounds = new Map<string, FeedRound>()
+  /** Where a read worked and a feed gave no answer: how many times, and the chain's head at the last one. */
+  const noAnswers = new Map<string, { tries: number; atHead: number }>()
 
   /** The answers at `block`'s bucket, reading what's missing. A failure leaves those assets out, and it mustn't take the wallet down with it. */
   async function loadFeedRounds(assets: readonly string[], block: number): Promise<Record<string, FeedRound>> {
@@ -362,13 +375,20 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
   }
 
   /** One query however many feeds. False when what's next has to wait: the read failed, or a reorg happened during it. */
-  async function readMarkRounds(assets: readonly string[], bucket: number): Promise<boolean> {
+  async function readMarkRounds(assets: readonly string[], bucket: number, head: number): Promise<boolean> {
     if (!source.readFeedRounds) return false
     try {
       const startedAt = rewinds
       const rounds = await source.readFeedRounds(assets, bucket)
       if (startedAt !== rewinds) return false
-      for (const asset of assets) markRounds.set(marketKey({ asset, bucket }), rounds[asset] ?? null)
+      for (const asset of assets) {
+        const key = marketKey({ asset, bucket })
+        const round = rounds[asset]
+        if (round) {
+          markRounds.set(key, round)
+          noAnswers.delete(key)
+        } else noAnswers.set(key, { tries: (noAnswers.get(key)?.tries ?? 0) + 1, atHead: head })
+      }
       return true
     } catch (error) {
       logger.warn(`Feed read failed: ${describeError(error)}`)
@@ -376,14 +396,21 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     }
   }
 
-  const isFeedUnread = (read: MarketRead) => source.readFeedRounds !== undefined && TOKEN_FEEDS[read.asset] !== undefined && !markRounds.has(marketKey(read))
+  /** Whether this chart point's feed should be asked at this head. */
+  function isFeedDue(read: MarketRead, head: number): boolean {
+    const key = marketKey(read)
+    if (!source.readFeedRounds || !TOKEN_FEEDS[read.asset] || markRounds.has(key)) return false
+    const last = noAnswers.get(key)
+    return !last || (last.tries < NO_ANSWER_TRIES && msBetweenBlocks(last.atHead, head) >= NO_ANSWER_WAIT_MS * 2 ** (last.tries - 1))
+  }
 
   /**
    * Reads what's missing, `wanted` first, and says whether all of `wanted` is now known. `chart` only gets the reads left
    * over, and waiting for them doesn't count against what's known, because all that's missing without them is chart points.
-   * A chart point asks its feed first, like what's held now, and only needs the market when that gives no price.
+   * A chart point asks its feed first, like what's held now, and only needs the market when that gives no price. Asking a
+   * feed again comes last, so a feed that isn't answering can't hold up the rest of the chart.
    */
-  async function loadMarket(wanted: readonly MarketRead[], chart: readonly MarkRead[] = [], references: Cached["references"] = new Map()): Promise<boolean> {
+  async function loadMarket(wanted: readonly MarketRead[], chart?: { reads: readonly MarkRead[]; references: Cached["references"]; head: number }): Promise<boolean> {
     const startedAt = rewinds
     const usable = await canReadMarket()
     let left = MARKET_READS_PER_REFRESH
@@ -396,33 +423,41 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       marketUp = await readMarket(read)
     }
     for (const read of wanted) await readMissingMarket(read)
-    const unreadFeeds = new Map<number, string[]>()
-    for (const read of new Map(chart.filter(isFeedUnread).map((read) => [marketKey(read), read])).values()) unreadFeeds.set(read.bucket, [...(unreadFeeds.get(read.bucket) ?? []), read.asset])
-    for (const read of chart) {
-      const feeds = unreadFeeds.get(read.bucket)
-      if (feeds && left > 0 && feedsUp) {
+    if (chart) {
+      const { reads, references, head } = chart
+      const readFeeds = async (assets: readonly string[], bucket: number) => {
         left -= 1
-        feedsUp = await readMarkRounds(feeds, read.bucket)
-        unreadFeeds.delete(read.bucket)
+        feedsUp = await readMarkRounds(assets, bucket, head)
       }
-      if (!feedMark(read, markRounds, references)) await readMissingMarket(read)
+      const due = reads.filter((read) => isFeedDue(read, head))
+      const unasked = assetsByBucket(due.filter((read) => !noAnswers.has(marketKey(read))))
+      const askAgain = assetsByBucket(due.filter((read) => noAnswers.has(marketKey(read))))
+      for (const read of reads) {
+        const feeds = unasked.get(read.bucket)
+        if (feeds && left > 0 && feedsUp) {
+          await readFeeds(feeds, read.bucket)
+          unasked.delete(read.bucket)
+        }
+        if (!feedMark(read, markRounds, references)) await readMissingMarket(read)
+      }
+      for (const [bucket, assets] of askAgain) if (left > 0 && feedsUp) await readFeeds(assets, bucket)
     }
     return usable && startedAt === rewinds && wanted.every((w) => market.has(marketKey(w)))
   }
 
   /** Whether a read could still add a price this wallet needs. A failed read or the limit leaves some for the next refresh. */
-  function hasMarketReadsLeft(address: string, wallet: Cached): boolean {
+  function hasMarketReadsLeft(address: string, wallet: Cached, head: number): boolean {
     const usable = source.readMarketTrades !== undefined && source.marketReady !== undefined && marketReady !== false
     const unread = (read: MarketRead) => usable && !market.has(marketKey(read))
     const { wanted } = marketWanted(wallet, wallet.priced, Math.min(wallet.coveredTo, wallet.latest.blockNum), wallet.prices)
-    return wanted.some(unread) || chartReads(address, wallet.rows, wallet.opening).some((read) => isFeedUnread(read) || (!feedMark(read, markRounds, wallet.references) && unread(read)))
+    return wanted.some(unread) || chartReads(address, wallet.rows, wallet.opening).some((read) => isFeedDue(read, head) || (!feedMark(read, markRounds, wallet.references) && unread(read)))
   }
 
   /** Prices from a reorg's blocks may be from what it replaced. The trades behind one all come before its bucket's end. */
   function forgetPricesFrom(block: number) {
     for (const key of market.keys()) if (Number(key.split(":")[1]) >= block) market.delete(key)
     for (const [asset, round] of latestRounds) if (round.blockNum >= block) latestRounds.delete(asset)
-    for (const key of markRounds.keys()) if (Number(key.split(":")[1]) >= block) markRounds.delete(key)
+    for (const answers of [markRounds, noAnswers]) for (const key of answers.keys()) if (Number(key.split(":")[1]) >= block) answers.delete(key)
   }
 
   /** These prices for the end of `through`. An asset without one has no current price, rather than a later one. */
@@ -480,7 +515,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     !fixedMayChange(wallet, chain) &&
     !openingMayChange(wallet, chain) &&
     unreadSendBlocks(address, wallet).length === 0 &&
-    !hasMarketReadsLeft(address, wallet)
+    !hasMarketReadsLeft(address, wallet, chain.blockNum)
 
   async function refresh(address: string, key: string, range: WalletRange): Promise<Cached> {
     const chain = await currentHead()
@@ -574,7 +609,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     // At the head rather than at what's covered, like ETH's: a table that stops processing can't keep an old answer current.
     Object.assign(prices, feedPrices(await loadFeedRounds(heldAssets, bucketOf(head.blockNum, MARKET_HEAD_BUCKET_BLOCKS)), prices))
     const { headBucket, unpriced, wanted } = marketWanted(wallet, priced, Math.min(coveredTo, head.blockNum), prices)
-    const marketRead = await loadMarket(wanted, chartReads(address, rows, opening), known)
+    const marketRead = await loadMarket(wanted, { reads: chartReads(address, rows, opening), references: known, head: chain.blockNum })
     for (const asset of unpriced) {
       const price = market.get(`${asset}:${headBucket}`)
       if (price) prices[asset] = { micros: price.usdMicros, source: "market", blockNum: price.blockNum }
