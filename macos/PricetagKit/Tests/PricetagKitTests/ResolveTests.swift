@@ -120,6 +120,27 @@ actor BookSource: PortfolioSource {
         #expect(store.book.isEmpty)
     }
 
+    @Test func redoBringsBackWhatUndoTookAndSaysWhatEachDoes() throws {
+        let (store, _, _) = try makeStore()
+        store.setBook(store.book.answering(sender, .someoneElse, focus: wallet))
+        store.setBook(Book(), action: "Forget All Answers")
+        #expect(store.undoNames == ["Answer", "Forget All Answers"])
+        store.undo()
+        #expect(store.book.senders[sender] == .someoneElse)
+        #expect(store.redoNames == ["Forget All Answers"])
+        store.redo()
+        #expect(store.book.isEmpty)
+        #expect(store.undoNames == ["Answer", "Forget All Answers"])
+        #expect(store.redoStack.isEmpty)
+        store.undo()
+        // Something new happening means there's nothing left to redo.
+        store.setBook(store.book.enteringCost("k", Money(micros: "5", currency: .USD)))
+        #expect(store.redoStack.isEmpty)
+        store.redo()
+        #expect(store.book.costs["k"] != nil)
+        #expect(store.undoNames == ["Answer", "Answer"])
+    }
+
     @Test func sayingASendersYoursLinksThisWalletToo() {
         let book = Book().answering(sender, .mine, focus: wallet)
         #expect(book.linkedWallets == [wallet, sender].sorted())
