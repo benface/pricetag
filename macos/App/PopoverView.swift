@@ -146,7 +146,7 @@ struct PopoverView: View {
         let list = store.walletList(hotWallet: hotWallet)
         let current = list.entry(for: store.address)
         return Menu {
-            WalletPicker(store: store, list: list, navigation: navigation)
+            WalletPicker(store: store, list: list)
             Divider()
             Button("Add Wallet…") {
                 navigation.switchWallet()
@@ -407,7 +407,7 @@ struct PopoverView: View {
     }
 
     private func openHotWallet() {
-        navigation.section = .spendingMoney
+        navigation.showSpendingMoney()
         dismiss()
         openWindow(id: WindowID.main)
         DockPresence.bringForward()

@@ -404,6 +404,9 @@ public final class HotWallet {
         holdings.filter { $0.priceUsdMicros == nil && !$0.token.isNative }.map(\.token.symbol)
     }
 
+    /// Spending keys that have been replaced. Costs keep following them, and sends to them are refused.
+    public var replacedKeys: [String] { state.retired.map(\.lowercased) }
+
     public var linkedWallets: [String] {
         var wallets: [String] = []
         if let address { wallets.append(address.lowercased) }
@@ -544,6 +547,12 @@ public final class HotWallet {
         let accounts = addresses.compactMap(EthereumAddress.init).filter { $0 != .zero && $0 != address && !state.retired.contains($0) }
         guard !accounts.isEmpty else { return }
         updateSettings { $0.addDeviceAccounts(accounts) }
+    }
+
+    /// One the user no longer says is theirs. Nothing but costs ever depended on it.
+    public func unlinkDeviceAccount(_ address: EthereumAddress) {
+        guard settings.deviceAccounts.contains(address) else { return }
+        updateSettings { $0.removeDeviceAccount(address) }
     }
 
     public func removeColdWallet(_ address: EthereumAddress) {

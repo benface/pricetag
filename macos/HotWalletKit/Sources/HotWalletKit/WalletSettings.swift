@@ -61,6 +61,10 @@ public struct WalletSettings: Codable, Equatable, Sendable {
         for address in addresses where !deviceAccounts.contains(address) { deviceAccounts.append(address) }
     }
 
+    public mutating func removeDeviceAccount(_ address: EthereumAddress) {
+        deviceAccounts.removeAll { $0 == address }
+    }
+
     public var capCeiling: UInt128 { coldWallets.isEmpty ? Self.capCeilingWithoutCold : Self.capCeiling }
 
     public var capUsdMicros: UInt128 {
