@@ -349,7 +349,7 @@ struct PopoverView: View {
             Button("Set Up…", action: openHotWallet)
                 .controlSize(.small)
         } else if let plan = hotWallet.plan {
-            Text("\(hotWallet.usd(plan.valueUsdMicros)) of \(hotWallet.usd(hotWallet.settings.capUsdMicros))")
+            Text("\(hotWallet.money(plan.valueUsdMicros)) of \(hotWallet.capText)")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .contentTransition(.numericText(value: Double(plan.valueUsdMicros)))

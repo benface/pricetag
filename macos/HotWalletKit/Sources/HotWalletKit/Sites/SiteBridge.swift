@@ -274,9 +274,9 @@ public final class SiteBridge {
 
     public var nextPromptAt: Date? { wallet.nextPromptAt }
 
-    /// In the main currency when that isn't USD, like the rest of the wallet.
-    public func usd(_ micros: UInt128) -> String {
-        wallet.usd(micros)
+    /// In the main currency when there's a rate, like the rest of the wallet.
+    public func money(_ usdMicros: UInt128) -> String {
+        wallet.money(usdMicros)
     }
 
     public func reject(_ id: UUID) {
@@ -326,11 +326,11 @@ public final class SiteBridge {
         if let problem = wallet.siteProblem { status["problem"] = .string(problem.message) }
         if let address = wallet.address { status["address"] = .string(address.checksummed) }
         if let plan = wallet.plan {
-            status["value"] = .string(wallet.usd(plan.valueUsdMicros))
+            status["value"] = .string(wallet.money(plan.valueUsdMicros))
             status["share"] = .number(min(1, Double(plan.valueUsdMicros) / Double(max(wallet.settings.capUsdMicros, 1))))
             status["over"] = .bool(plan.excessUsdMicros > 0)
         }
-        status["cap"] = .string(wallet.usd(wallet.settings.capUsdMicros))
+        status["cap"] = .string(wallet.capText)
         status["sites"] = .number(Double(wallet.connectedSites.count))
         return .object(status)
     }

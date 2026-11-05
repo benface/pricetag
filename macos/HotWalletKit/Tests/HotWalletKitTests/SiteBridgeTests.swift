@@ -43,7 +43,7 @@ private struct SiteRig {
     let bridge: SiteBridge
     let connection = UUID()
 
-    init(_ start: ChainSnapshot = snapshot(), presence: CountingPresence = CountingPresence(), mainCurrency: @escaping @MainActor () -> CurrencyCode = { .USD }, now: @escaping @Sendable () -> Date = { Date() }) {
+    init(_ start: ChainSnapshot = snapshot(), presence: CountingPresence = CountingPresence(), moneyDisplay: @escaping @MainActor () -> MoneyDisplay = { MoneyDisplay(main: .USD) }, now: @escaping @Sendable () -> Date = { Date() }) {
         let chain = FakeChain(start)
         let signer = FakeSigner(keys: [hotAddress], next: [nextAddress])
         let stateStore = MemoryStateStore()
@@ -60,7 +60,7 @@ private struct SiteRig {
         self.stateStore = stateStore
         self.presence = presence
         self.portfolios = portfolios
-        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: presence, portfolioSource: { portfolios }, mainCurrency: mainCurrency, makeChain: { _ in chain }, now: now, readRetryDelay: .zero)
+        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: presence, portfolioSource: { portfolios }, moneyDisplay: moneyDisplay, makeChain: { _ in chain }, now: now, readRetryDelay: .zero)
         bridge = SiteBridge(wallet: wallet, now: now)
     }
 
@@ -291,7 +291,7 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
     }
 
     @Test func thePopupSaysWhichDollarsAndHowFull() async throws {
-        let rig = SiteRig(mainCurrency: { .CAD })
+        let rig = SiteRig(moneyDisplay: { MoneyDisplay(main: .CAD) })
         await rig.portfolios.set(.success(portfolio()))
         await rig.wallet.tick()
         let status = rig.bridge.popupStatus()
@@ -301,6 +301,15 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         let share = min(1, Double(plan.valueUsdMicros) / Double(rig.wallet.settings.capUsdMicros))
         #expect(status["share"] == .number(share))
         #expect(status["over"] == .bool(plan.excessUsdMicros > 0))
+    }
+
+    @Test func thePopupReadsInTheMainCurrencyAtTheCurrentRate() async throws {
+        let rig = SiteRig(moneyDisplay: { MoneyDisplay(main: .CAD, rateMicros: "1400000") })
+        await rig.portfolios.set(.success(portfolio()))
+        await rig.wallet.tick()
+        let status = rig.bridge.popupStatus()
+        #expect(status["cap"]?.string == "$70")
+        #expect(status["value"]?.string?.hasPrefix("$") == true)
     }
 
     @Test func aSiteOrTheUserCanDisconnect() async {

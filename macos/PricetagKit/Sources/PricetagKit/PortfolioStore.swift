@@ -59,6 +59,8 @@ public final class PortfolioStore {
     public private(set) var address: String?
     public private(set) var method: CostMethod
     public private(set) var currency: CurrencyCode
+    /// What one USD buys right now in `currency`, for what isn't part of a wallet's own read. Nil in USD, or with no current rate.
+    private var currentRate: CurrentRate?
     public private(set) var serverURL: URL
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
@@ -88,6 +90,10 @@ public final class PortfolioStore {
     @ObservationIgnored private var isPushed = false
     /// What the next read is waiting on, which a new block cuts short.
     @ObservationIgnored private var sleeper: Task<Void, Never>?
+    @ObservationIgnored private var rateTask: Task<Void, Never>?
+    @ObservationIgnored private let rateRetryDelay: Duration
+    private static let rateDelay: Duration = .seconds(300)
+    private static let rateLasts: TimeInterval = 60 * 60
     /// A block arrived during a read, which may have missed it.
     @ObservationIgnored private var wakePending = false
 
@@ -99,8 +105,10 @@ public final class PortfolioStore {
         unreachableDelay: Duration = .seconds(5),
         pushedDelay: Duration = .seconds(15),
         // The longest wait for a block, plus as long as a read gets before it's marked as on its way anyway.
-        liveFor: Duration = .seconds(30)
+        liveFor: Duration = .seconds(30),
+        rateRetryDelay: Duration = .seconds(30)
     ) {
+        self.rateRetryDelay = rateRetryDelay
         self.defaults = defaults
         self.makeSource = makeSource
         self.now = now
@@ -130,6 +138,12 @@ public final class PortfolioStore {
     public func start() {
         stop()
         Task { await refreshRules() }
+        rateTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let hasRead = await self?.readRate(), let delay = self?.rateRetryDelay else { return }
+                try? await Task.sleep(for: hasRead ? Self.rateDelay : delay)
+            }
+        }
         guard address != nil else { return }
         eventsTask = Task { [weak self] in await self?.followEvents() }
         pollTask = Task { [weak self] in
@@ -141,6 +155,8 @@ public final class PortfolioStore {
     }
 
     public func stop() {
+        rateTask?.cancel()
+        rateTask = nil
         pollTask?.cancel()
         pollTask = nil
         eventsTask?.cancel()
@@ -262,6 +278,34 @@ public final class PortfolioStore {
         !answers.isEmpty
     }
 
+    /// USD amounts as they should read right now.
+    public var moneyDisplay: MoneyDisplay {
+        MoneyDisplay(main: currency, rateMicros: currentRate?.currency == currency ? currentRate?.micros : nil)
+    }
+
+    /// Reads the current rate. A failed read keeps the last one for a while, because the feed moves hourly at most, and after that amounts go back to USD. An answer of no rate counts straight away.
+    /// True when the server answered, so a read that failed can be tried again sooner.
+    @discardableResult
+    public func readRate() async -> Bool {
+        let currency = self.currency
+        guard currency != .USD else {
+            currentRate = nil
+            return true
+        }
+        let source = self.source
+        let server = serverURL
+        do {
+            let micros = try await source.currentRate(currency: currency)
+            guard !Task.isCancelled, currency == self.currency, server == serverURL else { return true }
+            currentRate = micros.map { CurrentRate(currency: currency, micros: $0, readAt: now()) }
+            return true
+        } catch {
+            if Task.isCancelled { return true }
+            if let currentRate, now().timeIntervalSince(currentRate.readAt) > Self.rateLasts { self.currentRate = nil }
+            return false
+        }
+    }
+
     public func setCurrency(_ currency: CurrencyCode) {
         guard currency != self.currency else { return }
         self.currency = currency
@@ -310,6 +354,7 @@ public final class PortfolioStore {
         rules = []
         // Another server's numbers can be different facts, so these aren't kept even for a moment.
         portfolio = nil
+        currentRate = nil
         updatedAt = nil
         if address != nil { feed = .reading }
         start()
@@ -527,4 +572,10 @@ public final class PortfolioStore {
         static let rule = "pricingRule"
         static let savedWallets = "savedWallets"
     }
+}
+
+private struct CurrentRate {
+    let currency: CurrencyCode
+    let micros: String
+    let readAt: Date
 }

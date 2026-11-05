@@ -101,8 +101,8 @@ private struct SendForm: View {
     private var worth: some View {
         if let problem = model.amountProblem {
             WarningText(problem.message).font(.callout).fixedSize(horizontal: false, vertical: true)
-        } else if let usd = model.usdText {
-            Text(usd)
+        } else if let worth = model.worthText {
+            Text(worth)
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
@@ -163,7 +163,7 @@ struct SendConfirmation: View {
     }
 
     var body: some View {
-        ConfirmationView(asker: .spendingMoney, hero: .amount(Money.text(ofUnits: model.amount ?? 0, decimals: model.token.decimals), symbol: model.token.symbol), worth: model.usdText, rows: rows) {
+        ConfirmationView(asker: .spendingMoney, hero: .amount(Money.text(ofUnits: model.amount ?? 0, decimals: model.token.decimals), symbol: model.token.symbol), worth: model.worthText, rows: rows) {
             if model.stage == .sent || gate.phase == .done {
                 ProgressFooter(stage: stage, close: done)
                     // Only once it's landed. Up to then it stays, and there's a way to close it.
@@ -254,7 +254,7 @@ struct SweepSheet: View {
 
     private var hero: ConfirmationHero {
         guard let value = wallet.sweepPreview?.valueUsdMicros, wallet.sweepPreview?.transfers.isEmpty == false else { return .words("Everything") }
-        return .amount(wallet.usd(value), symbol: "")
+        return .amount(wallet.money(value), symbol: "")
     }
 
     /// Exactly what goes, to the last digit, under what it's worth.
@@ -269,7 +269,7 @@ struct SweepSheet: View {
             rows.append(ConfirmationRow(label: "To", value: destination.address.checksummed, isAddress: true, name: destination.name))
         }
         if let preview = wallet.sweepPreview, !preview.transfers.isEmpty {
-            rows.append(ConfirmationRow(label: "Network fee", value: "About \(preview.feeUsdMicros.map(wallet.usd) ?? "\(Format.amount(String(preview.feeWei), decimals: 18)) ETH")"))
+            rows.append(ConfirmationRow(label: "Network fee", value: "About \(preview.feeUsdMicros.map(wallet.money) ?? "\(Format.amount(String(preview.feeWei), decimals: 18)) ETH")"))
         }
         return rows
     }
