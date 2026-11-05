@@ -2,7 +2,8 @@ import HotWalletKit
 import PricetagKit
 import SwiftUI
 
-/// Picks what to buy and sends it to the provider's page, which takes the payment. It all lands in spending money, and what's above the cap sweeps to savings. This never signs anything.
+/// Picks what to buy and sends it to the provider's page, which takes the payment. It all lands in spending money, and what's above the cap
+/// sweeps to savings, or stays there until there's a savings wallet. This never signs anything.
 struct BuySheet: View {
     let wallet: HotWallet
     let purchases: PurchaseTracker
@@ -22,14 +23,16 @@ struct BuySheet: View {
         var id: Self { self }
     }
 
-    /// ETH first, because it also pays for what a sweep costs.
+    /// ETH first, because it also pays for what a sweep costs. Without savings it starts at the room left, since nothing would move what's above it.
     init(wallet: HotWallet, purchases: PurchaseTracker, typed: Int? = nil, asset: Asset = .eth, failure: String? = nil, started: @escaping () -> Void, addSavings: @escaping () -> Void) {
         self.wallet = wallet
         self.purchases = purchases
         self.started = started
         self.addSavings = addSavings
         let display = wallet.display
-        _typed = State(initialValue: typed ?? max(display.wholeAmount(BuyPlan.minimumUsdMicros, rounding: .up), min(display.wholeAmount(wallet.topUpRoom, rounding: .down), 20)))
+        let room = display.wholeAmount(wallet.topUpRoom, rounding: .down)
+        let start = wallet.settings.sweepDestination == nil ? room : min(room, 20)
+        _typed = State(initialValue: typed ?? max(display.wholeAmount(BuyPlan.minimumUsdMicros, rounding: .up), start))
         _asset = State(initialValue: asset)
         _failure = State(initialValue: failure)
     }
@@ -46,9 +49,10 @@ struct BuySheet: View {
         BuyPlan(usdMicros: usdMicros, token: token, priceUsdMicros: asset == .eth ? wallet.snapshot?.ethUsdMicros : wallet.snapshot?.usdcUsdMicros, holdings: wallet.holdings, capUsdMicros: wallet.settings.capUsdMicros, roomUsdMicros: wallet.topUpRoom, fees: wallet.snapshot?.fees, destination: wallet.settings.sweepDestination)
     }
 
-    /// What the savings wallet is called, because that's what someone knows it by.
-    private var savingsName: String {
-        wallet.settings.coldWallets.first { $0.address == wallet.settings.sweepDestination }?.name ?? "your savings"
+    /// What the savings wallet is called, because that's what someone knows it by. Nil without one.
+    private var savingsName: String? {
+        guard let destination = wallet.settings.sweepDestination else { return nil }
+        return wallet.settings.coldWallets.first { $0.address == destination }?.name ?? "your savings"
     }
 
     private var cryptoAmount: String? {
@@ -61,10 +65,14 @@ struct BuySheet: View {
                 .font(.sheetTitle)
             if wallet.address == nil {
                 Notice(.info, "What you buy lands in Spending Money, so that comes first.")
-            } else if !hasSavings {
-                Notice(.info, "What you buy lands in Spending Money, and anything above your cap moves to your savings. \(PurchaseWording.provider)'s page can change the amount, so add a savings wallet first.")
             } else {
                 form
+                if !hasSavings {
+                    Notice(.warning, HotWalletWording.buyWithoutSavings(cap: wallet.capText, provider: PurchaseWording.provider), actionTitle: HotWalletWording.addSavingsButton) {
+                        addSavings()
+                        dismiss()
+                    }
+                }
             }
             if let failure {
                 WarningText(failure).font(.callout)
@@ -106,18 +114,15 @@ struct BuySheet: View {
         case .belowMinimum:
             Text("\(PurchaseWording.provider)'s minimum is about \(display.whole(BuyPlan.minimumUsdMicros, rounding: .up)), depending on how you pay.")
                 .foregroundStyle(.secondary)
-        case .needsSavings:
-            // The sheet asks for one instead of showing this.
-            EmptyView()
         case .noGasToSweep:
-            Notice(.warning, "This wallet doesn't have enough ETH to move USDC to \(savingsName), so it could get stuck here. Buy ETH this time.")
+            Notice(.warning, HotWalletWording.buyNoGas(asset.rawValue, savings: savingsName))
         case .notReadYet:
             Text("Reading this wallet…")
                 .foregroundStyle(.secondary)
         case nil:
             VStack(alignment: .leading, spacing: 4) {
                 Text(whereItGoes)
-                if plan.sweeps > 0 {
+                if plan.aboveCap > 0, hasSavings {
                     Text("Keep \(AppName.current) open until it lands. If it's closed, it moves the next time it opens.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -128,9 +133,7 @@ struct BuySheet: View {
     }
 
     private var whereItGoes: String {
-        if plan.sweeps == 0 { return "It all stays in Spending Money." }
-        if plan.stays == 0 { return "Spending Money is full, so it all goes to \(savingsName)." }
-        return "\(wallet.money(plan.stays)) stays in Spending Money, the rest goes to \(savingsName)."
+        HotWalletWording.buyLands(fits: plan.fits > 0 ? wallet.money(plan.fits) : nil, aboveCap: plan.aboveCap > 0 ? wallet.money(plan.aboveCap) : nil, savings: savingsName)
     }
 
     private var buttons: some View {
@@ -142,12 +145,6 @@ struct BuySheet: View {
             if wallet.address == nil {
                 Button("Set Up Spending Money") {
                     started()
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
-            } else if !hasSavings {
-                Button("Add a Savings Wallet…") {
-                    addSavings()
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
