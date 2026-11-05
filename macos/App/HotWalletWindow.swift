@@ -148,8 +148,13 @@ struct HotWalletDetails<Overview: View>: View {
     @State private var litRow: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isChangingCap = false
+    /// What this Mac signed while the page was open, marked for a moment once its sheet has closed, so it's found.
+    @State private var newRows = NewRowMarks()
 
     private var address: EthereumAddress? { wallet.address }
+
+    /// The sheets here that can sign something.
+    private var isCoveredBySheet: Bool { isSending || isSweeping || isAddingCold || isToppingUp }
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -174,6 +179,18 @@ struct HotWalletDetails<Overview: View>: View {
         // Inside the page's scroll view, whichever page it's on, which is the one it scrolls.
         ScrollViewReader { proxy in
             content.onChange(of: navigation.shownRow, initial: true) { _, row in reveal(row, with: proxy) }
+        }
+        .onChange(of: wallet.records.map(\.hash)) { old, new in
+            newRows.rowsChanged(from: old, to: new, isCovered: isCoveredBySheet)
+        }
+        // A send's sheet stays until its receipt arrives, and a moment more, so that's when its row is there to see.
+        .onChange(of: isCoveredBySheet) { _, covered in
+            if !covered { newRows.uncovered() }
+        }
+        .task(id: newRows.lit) {
+            guard !newRows.lit.isEmpty else { return }
+            try? await Task.sleep(for: Motion.highlight)
+            if !Task.isCancelled { newRows.fade() }
         }
         .sheet(isPresented: $isAddingCold, onDismiss: { if testingSavings != nil { isSending = true } }) {
             AddColdWalletSheet(wallet: wallet, wallets: store.walletList(hotWallet: wallet).pickable, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
@@ -326,8 +343,11 @@ struct HotWalletDetails<Overview: View>: View {
                 PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), main: wallet.display.main) { purchases.dismiss(purchase) }
                     .lit(litRow == MoneyNotice.purchaseRow(purchase.ref))
                     .id(MoneyNotice.purchaseRow(purchase.ref))
+                    .arrives()
             }
         }
+        // One started or dismissed, without the rest jumping.
+        .motion(Motion.state, value: shownPurchases.map(\.id))
     }
 
     private var holdings: some View {
@@ -362,8 +382,8 @@ struct HotWalletDetails<Overview: View>: View {
     private var untouched: some View {
         DetailsSection("Other Tokens", footer: "Not tracked, and never touched. They can be malicious, so don't go looking for what they're worth.") {
             ForEach(wallet.unlisted) { token in
-                Text(token.token)
-                    .font(.caption.monospaced())
+                AddressLine(EthereumAddress(token.token)?.checksummed ?? token.token)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
@@ -525,10 +545,13 @@ struct HotWalletDetails<Overview: View>: View {
                 }
                 .contentShape(Rectangle())
                 .contextMenu { TransactionActions(hash: record.hash) }
+                .justAdded(newRows.lit.contains(record.hash))
                 .lit(litRow == MoneyNotice.recordRow(record.hash))
                 .id(MoneyNotice.recordRow(record.hash))
+                .arrives()
             }
         }
+        .motion(Motion.state, value: wallet.records.map(\.hash))
     }
 
     /// Scrolls to what a notification was about, and lights it up long enough to find it. It's taken, so the same click works twice.

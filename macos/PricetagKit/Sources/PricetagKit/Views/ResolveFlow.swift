@@ -42,6 +42,8 @@ public struct ResolveFlow: View {
             .frame(maxWidth: .infinity, minHeight: 330, alignment: .top)
             footer
         }
+        // One question to the next, and the last to the finish, fade rather than swap.
+        .motion(Motion.state, value: model.current?.id)
         .padding(20)
         .frame(width: 520)
         .focusable()
@@ -112,13 +114,16 @@ public struct ResolveFlow: View {
                 .tint(model.isBalanced ? Tone.gain.color : .accentColor)
                 .motion(Motion.state, value: model.meter)
                 .accessibilityLabel("Questions, \(model.meter?.open ?? 0) left")
-            HStack(spacing: 6) {
-                Text("Now").foregroundStyle(.secondary)
-                if let portfolio = store.portfolio {
-                    LiveNumber(nowText(portfolio))
+            // At the end, the number takes the middle of the sheet instead.
+            if model.current != nil {
+                HStack(spacing: 6) {
+                    Text("Now").foregroundStyle(.secondary)
+                    if let portfolio = store.portfolio {
+                        LiveNumber(nowText(portfolio))
+                    }
                 }
+                .font(.callout)
             }
-            .font(.callout)
         }
     }
 
@@ -311,7 +316,7 @@ public struct ResolveFlow: View {
                 .foregroundStyle(model.isBalanced ? Tone.gain.style : AnyShapeStyle(.secondary))
                 .symbolEffect(.bounce, value: model.isBalanced)
             if let portfolio = store.portfolio {
-                Text(nowText(portfolio)).font(.title3.weight(.semibold)).monospacedDigit()
+                finalNumber(portfolio)
                 if let excluded = Wording.excluded(portfolio.totals.excluded) {
                     Text("Every question's answered.")
                         .font(.callout)
@@ -337,6 +342,26 @@ public struct ResolveFlow: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Set like the Overview's, because it's the same number, and now it's the one this was for. What it still leaves out is said under it.
+    @ViewBuilder
+    private func finalNumber(_ portfolio: Portfolio) -> some View {
+        VStack(spacing: 4) {
+            Text("Total PnL").font(.subheadline).secondaryText()
+            if portfolio.pnlStatus != .unavailable, let pnl = portfolio.totals.pnlMicros {
+                DisplayNumber(Format.estimate(Format.signedMoney(pnl, portfolio.currency), isPositive(portfolio.totals.estimatedMicros)), size: 40, tone: Tone(signed: pnl))
+                if let caveat = Wording.headlineCaveat(portfolio.totals, portfolio.currency) {
+                    Text(caveat)
+                        .font(.callout)
+                        .secondaryText()
+                        .monospacedDigit()
+                        .multilineTextAlignment(.center)
+                }
+            } else {
+                Text(Wording.pnlUnavailable).font(.displaySmall).secondaryText()
+            }
+        }
     }
 
     private var footer: some View {
