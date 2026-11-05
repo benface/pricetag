@@ -15,7 +15,7 @@ pnpm dev                     # http://localhost:5173
 
 ## The Mac app
 
-Patina is a native menu bar app: live total PnL in the bar, holdings, cost and PnL in its popover, and a window where any number clicks through to its activity, price source and transaction. The wallet it shows is only read. The one key it holds is this Mac's spending money, below.
+Patina is a native menu bar app: live total PnL in the bar, holdings, cost and PnL in its popover, and a window where any number clicks through to its activity, price source and transaction. A wallet you look up is only read. The one key it holds is this Mac's spending money, below.
 
 ```sh
 pnpm mac         # builds the app, opens it, and runs the server until you press Ctrl-C
@@ -43,7 +43,7 @@ The numbers move on their own: `GET /api/events` says when there's a new block, 
 
 ### Spending money and savings
 
-The Mac app has a capped hot wallet, this Mac's "spending money", for everyday use with no recovery phrase. Anything above the cap goes to a hardware wallet, your "savings", by itself while the app runs. Open it from the popover or with ⇧⌘M. It's an unreviewed hackathon build, for small funds only. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what it protects against and what it doesn't.
+The Mac app has a capped hot wallet, this Mac's "spending money", for everyday use with no recovery phrase. Anything above the cap goes to a hardware wallet, your "savings", by itself while the app runs. Open it from the popover or with ⇧⌘M, or create it from the first screen, which then shows it. It's an unreviewed hackathon build, for small funds only. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what it protects against and what it doesn't.
 
 - **The key** comes from `SecRandomCopyBytes`, is wrapped by the Secure Enclave, and stays in a device-only Keychain item. It can't be restored or exported: lose the Mac and you lose what's on it, up to the cap.
 - **The cap** is yours to set, $50 by default and $100 at most, or $25 at most until you add a savings wallet. A plain address can't enforce a cap, so it's what triggers a sweep and not a hard limit. It's in USD whatever the main currency is, so with another main currency, this wallet's amounts say `US$`.
@@ -62,7 +62,7 @@ Holding a key needs a provisioned build, which `pnpm mac` makes when the team pi
 2. In `chrome://extensions`, turn on Developer mode, choose **Load unpacked**, and pick the `extension/` folder. It runs exactly as it is, with no build step.
 3. Pick **Patina** on the site. The app has to be open.
 
-The extension's button shows what's there and has a **Top up** button, which opens the app's top-up flow. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what this protects against and what it doesn't. Pages talk to the extension, which talks to a small host program inside the app bundle (`macos/BridgeHost`), which relays to a socket in the app (`macos/HotWalletKit/Sources/HotWalletKit/Sites`).
+The extension's button shows what's there, with the address to copy, and has a **Top Up…** button, which opens the app's top-up flow. It opens without waiting for the app, and fills in when the app answers. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what this protects against and what it doesn't. Pages talk to the extension, which talks to a small host program inside the app bundle (`macos/BridgeHost`), which relays to a socket in the app (`macos/HotWalletKit/Sources/HotWalletKit/Sites`).
 
 ## Where the data comes from
 
