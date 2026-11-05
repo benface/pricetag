@@ -3,7 +3,7 @@
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ERC20_ADDRESSES, ETH_USD_FEED, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type FeedRound, type LegRow, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
+import { ERC20_ADDRESSES, ETH_USD_FEED, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type FeedRound, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
 import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, settledThrough, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRound, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
 
@@ -197,19 +197,33 @@ const MARKET_ROWS = 300
 /** As many as `createWallets` keeps, so a wallet it still holds is here too. */
 const MAX_SHARED_WALLETS = 20
 
+/** A reorg from the block it replaced, and the newest block the old chain is known to have reached. */
+type Reorg = { from: number; oldTip: number }
+
+/** Whether an answer read as of `reached` is for good: past any reorg, and not in one the tables may not have rewritten yet. `createWallets` draws the same line. */
+function isFinal(block: number, reached: number, reorgs: readonly Reorg[]): boolean {
+  return block <= settledThrough(reached) && block < (unsettledFrom(reached, reorgs) ?? Infinity)
+}
+
+function unsettledFrom(reached: number, reorgs: readonly Reorg[]): number | null {
+  const unsettled = reorgs.filter(({ oldTip }) => settledThrough(reached) < oldTip)
+  return unsettled.length > 0 ? Math.min(...unsettled.map(({ from }) => from)) : null
+}
+
 /** What's been read of a wallet: its rows from `from` to `to`, and the answers for blocks that were past any reorg by then. */
 type SharedWallet = Pick<WindowRows, "rows" | "gasUnknown"> & { from: number; to: number; notes: Map<number, CostNote[]>; ethBalances: Map<number, string> }
 
 /**
  * The reads of a wallet that no pricing rule changes, each done once however many rules ask. Rules read one after the
  * other, so the second usually wants a few blocks more than the first. Blocks a reorg could still reach are always read
- * again, and everything older comes from what's held.
+ * again, and everything older comes from what's held, until `rewind` says a reorg went further back than that.
  */
 export function sharedReads(query: Query, config: { baseDataset: string; dataset: string; network: string }) {
   const reader = datasetReader(query, config)
   const base = `"${config.baseDataset}"`
   const wallets = new Map<string, SharedWallet>()
   const turns = new Map<string, Promise<void>>()
+  const reorgs: Reorg[] = []
 
   // One at a time per wallet, so a read that starts while another is running can use what that one found.
   function inTurn<T>(address: string, read: () => Promise<T>): Promise<T> {
@@ -242,7 +256,8 @@ export function sharedReads(query: Query, config: { baseDataset: string; dataset
       inTurn(address, async () => {
         const held = wallets.get(address)
         const extended = held && held.from <= from && from <= held.to + 1 ? held : null
-        const readFrom = extended ? Math.max(extended.from, settledThrough(extended.to) + 1) : from
+        // Until the tables get past a reorg, every read goes back to it, however far that is.
+        const readFrom = extended ? Math.max(extended.from, Math.min(settledThrough(extended.to) + 1, unsettledFrom(extended.to, reorgs) ?? Infinity)) : from
         const read = readFrom <= to ? await readRows(address, readFrom, to) : { rows: [], gasUnknown: [] }
         const unread = ({ block_num }: { block_num: number }) => block_num < readFrom || block_num > to
         const next: SharedWallet = {
@@ -267,7 +282,7 @@ export function sharedReads(query: Query, config: { baseDataset: string; dataset
         const read = await readNotesAt(query, config.baseDataset, address, unread)
         const known = blocks.flatMap((block) => held?.notes.get(block) ?? [])
         // Most blocks have none, and that's the answer that's worth keeping.
-        if (held) for (const block of unread) if (block <= settledThrough(held.to)) held.notes.set(block, read.filter((note) => note.blockNum === block))
+        if (held) for (const block of unread) if (isFinal(block, held.to, reorgs)) held.notes.set(block, read.filter((note) => note.blockNum === block))
         return [...known, ...read].sort((a, b) => a.blockNum - b.blockNum)
       }),
 
@@ -281,20 +296,45 @@ export function sharedReads(query: Query, config: { baseDataset: string; dataset
         const read = await readEthBalancesAt(query, config.network, config.baseDataset, address, blocks.filter((block) => !balances.has(block)))
         for (const [block, balance] of read) {
           balances.set(block, balance)
-          if (held && block <= settledThrough(held.to)) held.ethBalances.set(block, balance)
+          if (held && isFinal(block, held.to, reorgs)) held.ethBalances.set(block, balance)
         }
         return balances
       }),
+
+    /**
+     * Blocks from `block` on were replaced, and the old chain reached `tip`. A read that's already started finishes first,
+     * so what it found goes too.
+     */
+    async rewind(block: number, tip: number): Promise<void> {
+      reorgs.push({ from: block, oldTip: Math.max(tip, ...[...wallets.values()].map((wallet) => wallet.to)) })
+      const before = <T>(answers: Map<number, T>) => new Map([...answers].filter(([at]) => at < block))
+      const kept = ({ block_num }: { block_num: number }) => block_num < block
+      await Promise.allSettled(
+        [...wallets.keys()].map((address) =>
+          inTurn(address, async () => {
+            const held = wallets.get(address)
+            if (!held) return
+            if (block <= held.from) wallets.delete(address)
+            else if (block <= held.to) wallets.set(address, { ...held, to: block - 1, rows: held.rows.filter(kept), gasUnknown: held.gasUnknown.filter(kept), notes: before(held.notes), ethBalances: before(held.ethBalances) })
+          }),
+        ),
+      )
+    },
   }
 }
+
+export type SharedReads = ReturnType<typeof sharedReads>
 
 /**
  * L1 fees, read once for good when their block is already past any reorg, so a second pricing rule reading the same
  * wallet only pays for what the first hasn't read. `tip` is the newest block known, or null when none is.
  */
-export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL1Fees {
+export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL1Fees & { rewind(block: number, tip: number): void } {
   const settled = new Map<string, { blockNum: number; fee: string }>()
-  return async (requests) => {
+  const reorgs: Reorg[] = []
+  /** How many reorgs have been told about. A read that crossed one can't say which chain it got, so it isn't kept. */
+  let rewinds = 0
+  const readFees: ReadL1Fees = async (requests) => {
     const fees = new Map<string, string>()
     const unread = requests.filter(({ txHash, blockNum }) => {
       const known = settled.get(txHash)
@@ -305,15 +345,23 @@ export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL
     if (unread.length === 0) return fees
     // Before the read, because the head can move on during it, and a fee read before a reorg isn't final just because the reorg is over.
     const newest = tip()
+    const startedAt = rewinds
     const found = await read(unread)
     for (const { txHash, blockNum } of unread) {
       const fee = found.get(txHash)
       if (fee === undefined) continue
       fees.set(txHash, fee)
-      if (newest !== null && blockNum <= settledThrough(newest)) settled.set(txHash, { blockNum, fee })
+      if (newest !== null && startedAt === rewinds && isFinal(blockNum, newest, reorgs)) settled.set(txHash, { blockNum, fee })
     }
     return fees
   }
+  return Object.assign(readFees, {
+    rewind(block: number, oldTip: number) {
+      rewinds += 1
+      reorgs.push({ from: block, oldTip })
+      for (const [txHash, { blockNum }] of settled) if (blockNum >= block) settled.delete(txHash)
+    },
+  })
 }
 
 /**

@@ -6,9 +6,10 @@ import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
-import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type ReadL1Fees, type Source } from "@pricetag/sdk/internal"
+import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type ReadL1Fees, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
 import { resolvingSource, settledL1Fees, sharedReads } from "../server/source.ts"
 import { ETH_ADDRESS, encodeNote } from "@pricetag/sdk/core"
+import type { WalletResponse } from "../src/core/api.ts"
 
 /** Sends the path exactly as written, which fetch wouldn't. */
 function get(server: Server, path: string): Promise<{ status: number; body: string }> {
@@ -199,6 +200,13 @@ describe("what a dataset adds to a wallet's rows", () => {
     assert.match(queries[0]!, new RegExp(`"from" = X'${ME}' AND "to" = X'${ME}' AND status AND value = '0'`))
   })
 })
+
+/** The first block whose settled part reaches `tip`. */
+const settledBackTo = (tip: number) => {
+  let block = tip
+  while (settledThrough(block) < tip) block += 1
+  return block
+}
 
 describe("reading a wallet by two pricing rules", () => {
   const config = { baseDataset: "base", dataset: "ds", startBlock: 1, network: "base_mainnet" }
@@ -447,6 +455,198 @@ describe("reading a wallet by two pricing rules", () => {
       assert.equal(await answers(), 1, "it wasn't past any reorg when that read started, so it's read again")
       assert.equal(await answers(), 0, "and that one's kept")
     }
+  })
+
+  describe("a reorg further back than what's re-read anyway", () => {
+    const blocksOf = (rows: readonly { block_num: number }[]) => rows.map((r) => r.block_num).sort((a, b) => a - b)
+    const amounts = (rows: readonly { block_num: number; amount: string }[]) => Object.fromEntries(rows.map((r) => [r.block_num, r.amount]))
+
+    it("replaces what it changed, and keeps what's before it", async () => {
+      let amount = "7"
+      const { query } = chain([5, 100, 190], () => amount)
+      const shared = sharedReads(query, config)
+      await shared.readLegs(`0x${ME}`, 1, 200)
+      amount = "9"
+      await shared.rewind(90, 200)
+      assert.deepEqual(amounts((await shared.readLegs(`0x${ME}`, 1, 200)).rows), { 5: "7", 100: "9", 190: "9" })
+    })
+
+    it("goes back to it on every read until the tables are past it, then stops", async () => {
+      const { query, reads } = chain([100])
+      const shared = sharedReads(query, config)
+      await shared.readLegs(`0x${ME}`, 1, 200)
+      await shared.rewind(90, 200)
+      await shared.readLegs(`0x${ME}`, 1, 195)
+      await shared.readLegs(`0x${ME}`, 1, 210)
+      assert.match(reads('"ds".legs').at(-1)!, /BETWEEN 90 AND 210/, "210 isn't far enough past where the old chain reached")
+      await shared.readLegs(`0x${ME}`, 1, settledBackTo(200))
+      assert.match(reads('"ds".legs').at(-1)!, new RegExp(`BETWEEN 90 AND ${settledBackTo(200)}`), "the read that gets there still goes back")
+      await shared.readLegs(`0x${ME}`, 1, settledBackTo(200) + 1)
+      assert.match(reads('"ds".legs').at(-1)!, new RegExp(`BETWEEN ${settledThrough(settledBackTo(200)) + 1} AND ${settledBackTo(200) + 1}`))
+    })
+
+    it("starts over when it reaches the first block held", async () => {
+      const { query } = chain([5, 150])
+      const shared = sharedReads(query, config)
+      await shared.readLegs(`0x${ME}`, 100, 200)
+      await shared.rewind(100, 200)
+      assert.deepEqual(blocksOf((await shared.readLegs(`0x${ME}`, 1, 200)).rows), [5, 150])
+    })
+
+    it("drops what a read that was already running found", async () => {
+      let amount = "7"
+      const { query } = chain([100], () => amount)
+      let release = () => {}
+      let holding = false
+      const gated = async <T>(sql: string) => {
+        if (holding && sql.includes(".unlisted_legs")) await new Promise<void>((resolve) => (release = resolve))
+        return query<T>(sql)
+      }
+      const shared = sharedReads(gated, config)
+      await shared.readLegs(`0x${ME}`, 1, 150)
+      amount = "8"
+      holding = true
+      const running = shared.readLegs(`0x${ME}`, 1, 200)
+      await new Promise((resolve) => setImmediate(resolve))
+      const rewinding = shared.rewind(90, 200)
+      amount = "9"
+      holding = false
+      release()
+      await Promise.all([running, rewinding])
+      assert.deepEqual(amounts((await shared.readLegs(`0x${ME}`, 1, 200)).rows), { 100: "9" })
+    })
+
+    it("reads notes and ETH balances again, and only keeps them once the tables are past it", async () => {
+      const balance = `${"00".repeat(31)}05`
+      const { query, queries } = chain([])
+      const answering = async <T>(sql: string) => {
+        if (!sql.includes(".transactions") && !sql.includes("eth_call")) return query<T>(sql)
+        queries.push(sql)
+        return (sql.includes("eth_call") ? [{ block_num: 100, r: { data: balance } }] : []) as T[]
+      }
+      const shared = sharedReads(answering, config)
+      const reads = () => queries.filter((sql) => sql.includes(".transactions") || sql.includes("eth_call")).length
+      const both = async () => {
+        queries.length = 0
+        await shared.readNotes(`0x${ME}`, [100])
+        await shared.readEthBalances(`0x${ME}`, [100])
+        return reads()
+      }
+      await shared.readLegs(`0x${ME}`, 1, 200)
+      assert.equal(await both(), 2)
+      assert.equal(await both(), 0, "held")
+      await shared.rewind(90, 200)
+      await shared.readLegs(`0x${ME}`, 1, 210)
+      assert.equal(await both(), 2, "forgotten")
+      assert.equal(await both(), 2, "the tables may not have rewritten it yet")
+      await shared.readLegs(`0x${ME}`, 1, settledBackTo(200))
+      assert.equal(await both(), 2)
+      assert.equal(await both(), 0, "held again")
+    })
+
+    it("forgets L1 fees from then on, keeps older ones, and keeps none it can't be sure of", async () => {
+      let head = 200
+      const asked: string[][] = []
+      const read: ReadL1Fees = async (requests) => (asked.push(requests.map((r) => r.txHash)), new Map(requests.map((r) => [r.txHash, "1"])))
+      const fees = settledL1Fees(read, () => head)
+      const [old, replaced] = [{ txHash: "0xold", blockNum: 50 }, { txHash: "0xnew", blockNum: 100 }]
+      await fees([old, replaced])
+      fees.rewind(90, 200)
+      await fees([old, replaced])
+      assert.deepEqual(asked.at(-1), ["0xnew"], "only what the reorg reached")
+      asked.length = 0
+      await fees([old, replaced])
+      assert.deepEqual(asked, [["0xnew"]], "read after the reorg, but before the tables got past it")
+      head = settledBackTo(200)
+      await fees([old, replaced])
+      asked.length = 0
+      await fees([old, replaced])
+      assert.deepEqual(asked, [], "past it now")
+    })
+
+    it("doesn't keep an L1 fee whose read crossed it", async () => {
+      let release = () => {}
+      let reads = 0
+      const read: ReadL1Fees = async (requests) => {
+        reads += 1
+        await new Promise<void>((resolve) => (release = resolve))
+        return new Map(requests.map((r) => [r.txHash, "24"]))
+      }
+      const fees = settledL1Fees(read, () => 1000)
+      const running = fees([{ txHash: "0xa", blockNum: 100 }])
+      await new Promise((resolve) => setImmediate(resolve))
+      fees.rewind(900, 1000)
+      release()
+      assert.equal((await running).get("0xa"), "24")
+      const again = fees([{ txHash: "0xa", blockNum: 100 }])
+      await new Promise((resolve) => setImmediate(resolve))
+      release()
+      await again
+      assert.equal(reads, 2)
+    })
+
+    it("reaches them all from the server, so a wallet read after it has the new chain", async () => {
+      const GAS = { block_num: 100, timestamp: 1_800_000_000_000, tx_hash: "ab", tx_index: 1, log_index: 0, token: ETH_ADDRESS.slice(2), account: ME, side: "debit", amount: "1000", kind: "gas" }
+      let state = { amount: "1000", fee: 24 }
+      const rpc = createServer((req, res) => {
+        let body = ""
+        req.on("data", (chunk) => (body += chunk))
+        req.on("end", () => {
+          const calls = JSON.parse(body) as { id: number }[]
+          res.setHeader("content-type", "application/json")
+          res.end(JSON.stringify(calls.map(({ id }) => ({ id, result: { blockNumber: "0x64", l1Fee: `0x${state.fee.toString(16)}` } }))))
+        })
+      })
+      await new Promise<void>((resolve) => rpc.listen(0, "127.0.0.1", resolve))
+      const query = async <T>(sql: string) => {
+        if (/ORDER BY block_num DESC LIMIT 1/.test(sql)) return [{ block_num: 200, timestamp: 1_800_000_000_000, hash: "00" }] as T[]
+        if (sql.includes(".legs")) return (inRange(sql, 100) ? [{ ...GAS, amount: state.amount }] : []) as T[]
+        return [] as T[]
+      }
+      const cfg = { baseDataset: "base", dataset: "ds", startBlock: 50, network: "base_mainnet" }
+      const shared = sharedReads(query, cfg)
+      const hand = { send: (_: StreamRange) => {} }
+      const queued: StreamRange[] = []
+      const stream: StreamRanges = async function* (_sql, _resume, signal) {
+        while (!signal.aborted) {
+          const next = queued.shift()
+          if (next) yield next
+          else await new Promise<void>((resolve) => {
+            hand.send = (range) => {
+              queued.push(range)
+              resolve()
+            }
+            signal.addEventListener("abort", () => resolve())
+          })
+        }
+      }
+      const api = createApi({ BASE_RPC_URL: `http://127.0.0.1:${(rpc.address() as { port: number }).port}` }, {
+        source: resolvingSource(query, cfg, shared),
+        readRates: async () => ({ byBlock: {}, latest: null }),
+        proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+        follow: { stream, sql: "SELECT 1", readMark: async () => ({ blockNum: 200, hash: "0x200" }), logger: { warn() {} }, pollMs: 1, tickMs: 0 },
+        shared,
+      })
+      const server = createServer((req, res) => void api(req, res))
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+      const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+      const paid = async () => ((await (await fetch(`${base}/api/wallet/0x${ME}`)).json()) as WalletResponse).legs.find((leg) => leg.kind === "gas")?.delta
+      const stop = new AbortController()
+      try {
+        assert.equal(await paid(), "-1024")
+        const events = (await fetch(`${base}/api/events`, { signal: stop.signal })).body!.getReader()
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        state = { amount: "2000", fee: 34 }
+        hand.send({ start: 100, end: 200, hash: "0xnew", complete: true })
+        for (let seen = ""; !seen.includes("event: head"); ) seen += new TextDecoder().decode((await events.read()).value)
+        assert.equal(await paid(), "-2034")
+      } finally {
+        stop.abort()
+        server.closeAllConnections()
+        server.close()
+        rpc.close()
+      }
+    })
   })
 
   it("both rules' wallets end up with the same rows, from one read of the history", async () => {
