@@ -174,7 +174,7 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
   return (
     <dialog ref={dialog} className="resolve" aria-label="Who's this?" onCancel={(e) => (e.preventDefault(), onClose())}>
       <header className="panel-head">
-        <h2>{current ? (takingCost ? "What did this cost?" : "Who's this?") : balanced ? "Books balanced" : "That's all for now"}</h2>
+        <h2>{current ? (takingCost ? "What did this cost?" : "Who's this?") : balanced ? "All answered" : "That's all for now"}</h2>
         {fold.meter.open > 0 ? <span className="muted small">{fold.meter.open} left</span> : null}
       </header>
       <div className="meter" role="progressbar" aria-label="Questions left" aria-valuenow={Math.round(progress * 100)}>

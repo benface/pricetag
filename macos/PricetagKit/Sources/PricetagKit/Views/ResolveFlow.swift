@@ -120,7 +120,7 @@ public struct ResolveFlow: View {
     }
 
     private var headline: String {
-        guard let question = model.current else { return model.isBalanced ? "Books balanced" : "That's all for now" }
+        guard let question = model.current else { return model.isBalanced ? "All answered" : "That's all for now" }
         if isTakingCost(question) { return "What did this cost?" }
         return "Who's this?"
     }
