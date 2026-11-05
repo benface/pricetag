@@ -1,5 +1,6 @@
 import Foundation
 @testable import KeyVault
+import OSLog
 import PricetagKit
 import Testing
 @testable import HotWalletKit
@@ -359,14 +360,119 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         #expect(rig.wallet.records.first?.status == .dropped)
     }
 
+    /// Saying nothing went out could get it sent twice. Only the node saying no is certain.
     @Test func aBroadcastThatMayHaveGotThroughStillGivesItsHash() async throws {
+        for failure in [ChainError.unreachable, .unreadable] {
+            let rig = SiteRig()
+            await rig.connect()
+            let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+            await rig.chain.setSendFailure(failure)
+            await rig.bridge.approve(approval.id)
+            #expect(try await task.value.get() == .string(rig.wallet.records.first!.hash))
+            #expect(rig.wallet.records.first?.status == .pending)
+            #expect(rig.bridge.failure == nil, "\(failure)")
+            #expect(rig.bridge.windowID == nil)
+        }
+    }
+
+    @Test func aSweepOrSendWithAnUncertainBroadcastStaysOnItsWayToo() async throws {
+        let rig = await Rig(snapshot(eth: oneEth))
+        await rig.chain.setSendFailure(.unreadable)
+        await rig.wallet.tick()
+        #expect(rig.wallet.records.count == 1)
+        #expect(rig.wallet.records.first?.status == .pending)
+    }
+
+    /// A transaction waiting on the node while the next approval comes up and finishes first.
+    @Test func anotherApprovalDoesntHideAFailure() async throws {
         let rig = SiteRig()
         await rig.connect()
-        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
-        await rig.chain.setSendFailure(.unreachable)
-        await rig.bridge.approve(approval.id)
-        #expect(try await task.value.get() == .string(rig.wallet.records.first!.hash))
-        #expect(rig.wallet.records.first?.status == .pending)
+        let (first, firstApproval) = await rig.start("eth_sendTransaction", rig.sendParameters(), id: "first")
+        await rig.chain.hold(snapshots: true)
+        await rig.bridge.approve(firstApproval.id)
+        await waitForHeldCall(rig)
+
+        let (second, secondApproval) = await rig.start("personal_sign", .array([.string("hello"), .string(hot)]), id: "second")
+        await rig.bridge.approve(secondApproval.id)
+        _ = try await second.value.get()
+        #expect(rig.bridge.working?.isTransaction == true, "the first is still on its way")
+        #expect(rig.bridge.windowID == rig.bridge.working?.id)
+
+        await rig.chain.failSnapshots(1, with: .rejected("nope"))
+        await rig.chain.release()
+        _ = await first.value
+        #expect(rig.bridge.working == nil)
+        #expect(rig.bridge.failure?.reason == "nope")
+    }
+
+    @Test func everyFailureGetsSeen() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let (first, firstApproval) = await rig.start("eth_sendTransaction", rig.sendParameters(), id: "first")
+        let (second, secondApproval) = await rig.start("eth_sendTransaction", rig.sendParameters(value: "0x20"), id: "second")
+        await rig.chain.failSnapshots(99, with: .rejected("nope"))
+        await rig.bridge.approve(firstApproval.id)
+        _ = await first.value
+        await rig.bridge.approve(secondApproval.id)
+        _ = await second.value
+
+        let firstShown = try #require(rig.bridge.failure)
+        #expect(rig.bridge.windowID == firstShown.id)
+        rig.bridge.dismissFailure()
+        let secondShown = try #require(rig.bridge.failure)
+        #expect(secondShown.id != firstShown.id)
+        #expect(rig.bridge.windowID == secondShown.id)
+        rig.bridge.dismissFailure()
+        #expect(rig.bridge.windowID == nil)
+    }
+
+    /// One request's answer doesn't finish another's work, whatever IDs a page chooses.
+    @Test func workBelongsToItsOwnApproval() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let (first, firstApproval) = await rig.start("eth_sendTransaction", rig.sendParameters(), id: "same")
+        await rig.chain.hold(snapshots: true)
+        await rig.bridge.approve(firstApproval.id)
+        await waitForHeldCall(rig)
+        #expect(code(await rig.ask("personal_sign", .array([.string("hello"), .string(coldAddress.lowercased)]))) == 4100)
+        #expect(rig.bridge.working != nil)
+        await rig.chain.release()
+        _ = await first.value
+    }
+
+    /// Only the app's own sentences go in the log whole. A node's can repeat what it was sent.
+    @Test func aNodesOwnWordsStayOutOfTheLog() async throws {
+        let payload = "0x72657669657765722d3333362d70726976616379"
+        let cases: [(String, String)] = [
+            ("execution reverted: secret \(payload)", "the node said \"execution reverted\""),
+            (HotWalletWording.wouldFail + "execution reverted: secret \(payload)", "would fail, the node said \"execution reverted\""),
+            ("NONCE TOO LOW \(payload)", "the node said \"nonce too low\""),
+            ("something new \(payload)", "no details logged"),
+            (HotWalletWording.networkBusy, HotWalletWording.networkBusy),
+            ("This wallet couldn't sign this: \(payload).", "couldn't sign"),
+        ]
+        for (message, expected) in cases {
+            #expect(SiteBridge.loggableReason(SiteError(code: -32000, message: message)) == expected)
+        }
+
+        // And what really gets written, read back.
+        let rig = SiteRig()
+        let origin = "https://log-\(UUID().uuidString.prefix(8).lowercased()).example.com"
+        await rig.connect(origin: origin)
+        await rig.chain.setEstimateFailure(.rejected("execution reverted: secret \(payload)"))
+        let answer = await rig.ask("eth_sendTransaction", rig.sendParameters(data: payload), origin: origin)
+        #expect(code(answer) == -32000)
+        let store = try OSLogStore(scope: .currentProcessIdentifier)
+        var written: [String] = []
+        for _ in 0..<200 where written.isEmpty {
+            written = try store.getEntries().compactMap { $0 as? OSLogEntryLog }.filter { $0.subsystem == "com.benface.pricetag" && $0.composedMessage.contains(origin) && $0.composedMessage.contains("failed") }.map(\.composedMessage)
+            if written.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        let line = try #require(written.first)
+        #expect(line.contains("before approval"))
+        #expect(line.contains("-32000"))
+        #expect(!line.contains(payload))
+        #expect(!line.contains("secret"))
     }
 
     @Test func feesThatJumpAfterApprovalStopIt() async {

@@ -204,7 +204,12 @@ public struct RPCChainClient: ChainClient {
     }
 
     public func send(_ transaction: SignedTransaction) async throws {
-        _ = try await single("eth_sendRawTransaction", [transaction.rawHex])
+        do {
+            _ = try await single("eth_sendRawTransaction", [transaction.rawHex])
+        } catch ChainError.unreadable {
+            // It answered, but not about this. That says nothing about whether it took the transaction.
+            throw ChainError.unreachable
+        }
     }
 
     public func receipt(of hash: String) async throws -> Receipt? {

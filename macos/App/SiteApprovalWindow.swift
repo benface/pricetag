@@ -24,9 +24,13 @@ struct SiteApprovalWindow: View {
             }
         }
         .frame(width: 480)
+        // Closing it answers what's on show. If that was a failure, what's waiting behind it comes up next, because nobody has seen it yet.
         .onDisappear {
-            bridge.rejectAll()
-            bridge.dismissFailure()
+            if bridge.failure != nil {
+                bridge.dismissFailure()
+            } else {
+                bridge.rejectAll()
+            }
         }
     }
 }

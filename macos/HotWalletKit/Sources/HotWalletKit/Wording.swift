@@ -76,6 +76,8 @@ public enum HotWalletWording {
     public static let lastOneStillShowingUp = "The last transaction is still showing up. Try again in a moment."
     public static let lastOneOnItsWay = "The last transaction is still on its way. Try again in a moment."
     public static let networkBusy = "The network is limiting how often this app can ask it things. Try again in a moment, or set a dedicated network address in Settings."
+    static let wouldFail = "This transaction would fail: "
+    public static let feesRoseAfterApproval = "Fees rose a lot since you approved this, so nothing was signed. Try again."
     public static let unreadableAnswer = "The network sent an answer this app can't read, so nothing was signed. Try again in a moment."
     public static let changedWhileWaiting = "This wallet changed while that was waiting, so nothing was signed."
 

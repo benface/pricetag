@@ -54,6 +54,7 @@ private final class LiveRequest {
     let request: SiteRequest
     let requester: Requester
     var task: Task<RPCAnswer, Never>?
+    var approvalID: UUID?
     private(set) var isCancelled = false
 
     var origin: String { request.origin }
@@ -76,7 +77,7 @@ public struct SiteWork: Identifiable, Equatable, Sendable {
     public let id = UUID()
     public let origin: String
     public let isTransaction: Bool
-    fileprivate let requester: Requester
+    fileprivate let approvalID: UUID
 }
 
 /// Why something approved didn't happen. A site's own message about it can say anything, so the app says what really went wrong.
@@ -108,18 +109,23 @@ public struct SiteRequest: Sendable {
 @Observable
 public final class SiteBridge {
     public private(set) var pending: [SiteApproval] = []
-    public private(set) var working: SiteWork?
-    public private(set) var failure: SiteFailure?
+    /// Several can be on their way at once, because the window offers the next approval as soon as one is answered.
+    private var allWork: [SiteWork] = []
+    /// Each stays until it's been seen, since something approved that didn't happen has to be told.
+    private var failures: [SiteFailure] = []
     /// Tells every tab on an origin something changed: `accountsChanged` with its accounts.
     @ObservationIgnored public var onAccountsChanged: ((_ origin: String, _ accounts: [String]) -> Void)?
     @ObservationIgnored public var onTopUp: (() -> Void)?
 
     public var current: SiteApproval? { pending.first }
+    public var working: SiteWork? { allWork.first }
+    public var failure: SiteFailure? { failures.first }
 
     /// What the window is showing, or nil when there's no reason for it to be open.
     public var windowID: UUID? { failure?.id ?? current?.id ?? working?.id }
 
-    /// Only for what went wrong, never what was being sent: no calldata, no message and no key. Read it with
+    /// Only for what went wrong, never what was being sent: no calldata, no message and no key, and none of a node's own words, which can
+    /// repeat what it was sent. Read it with
     /// `log show --predicate 'subsystem == "com.benface.pricetag" AND category == "sites"' --info`.
     nonisolated private static let log = Logger(subsystem: "com.benface.pricetag", category: "sites")
 
@@ -227,13 +233,14 @@ public final class SiteBridge {
         guard pending.contains(where: { $0.id == id }) else { return }
         // Before it's taken off the list, so the window has something to show the whole way through.
         if approval.presenceReason != nil {
-            working = SiteWork(origin: approval.origin, isTransaction: approval.isTransaction, requester: approval.requester)
+            allWork.append(SiteWork(origin: approval.origin, isTransaction: approval.isTransaction, approvalID: approval.id))
         }
         finish(id, approved: true)
     }
 
+    /// The one on show. If there's another, it's next.
     public func dismissFailure() {
-        failure = nil
+        if !failures.isEmpty { failures.removeFirst() }
     }
 
     /// In the main currency when that isn't USD, like the rest of the wallet.
@@ -409,27 +416,49 @@ public final class SiteBridge {
         case ChainError.rateLimited: SiteError(code: -32005, message: HotWalletWording.networkBusy)
         case ChainError.unreachable: SiteError(code: 4900, message: HotWalletWording.cantReachChain)
         case ChainError.unreadable: SiteError(code: 4900, message: HotWalletWording.unreadableAnswer)
-        default: SiteError(code: -32603, message: "This wallet couldn't sign this: \(error).")
+        default: SiteError(code: -32603, message: "\(couldntSign): \(error).")
         }
     }
 
     /// Anything a site asked to send or sign that didn't happen goes in the log, and in the window if the user had approved it.
     private func finishWork(for request: LiveRequest, with answer: RPCAnswer) {
-        let wasApproved = working?.requester == request.requester
-        let work = wasApproved ? working : nil
-        if wasApproved { working = nil }
+        let index = allWork.firstIndex { $0.approvalID == request.approvalID }
+        let work = index.map { allWork.remove(at: $0) }
         guard Self.signingMethods.contains(request.method) else { return }
         switch answer {
         case .success:
             Self.log.notice("\(request.method, privacy: .public) for \(request.origin, privacy: .public) went through")
         case .failure(let error):
-            let stage = wasApproved ? "after approval" : "before approval"
-            Self.log.error("\(request.method, privacy: .public) for \(request.origin, privacy: .public) failed \(stage, privacy: .public): \(error.code, privacy: .public) \(String(error.message.prefix(300)), privacy: .public)")
+            let stage = work == nil ? "before approval" : "after approval"
+            Self.log.error("\(request.method, privacy: .public) for \(request.origin, privacy: .public) failed \(stage, privacy: .public): \(error.code, privacy: .public) \(Self.loggableReason(error), privacy: .public)")
             if let work, !request.isCancelled {
-                failure = SiteFailure(origin: work.origin, isTransaction: work.isTransaction, reason: error.message)
+                failures.append(SiteFailure(origin: work.origin, isTransaction: work.isTransaction, reason: error.message))
             }
         }
     }
+
+    /// What can go in a log that anyone on this Mac can read. This app's own sentences can, and of what a node said, only which of the
+    /// usual refusals it was. A node can repeat a transaction's data in its refusal, or a contract's revert text.
+    static func loggableReason(_ error: SiteError) -> String {
+        if ownSentences.contains(error.message) { return error.message }
+        if error.message.hasPrefix(couldntSign) { return "couldn't sign" }
+        let text = error.message.lowercased()
+        let prefix = error.message.hasPrefix(HotWalletWording.wouldFail) ? "would fail, " : ""
+        if let refusal = usualRefusals.first(where: text.contains) { return "\(prefix)the node said \"\(refusal)\"" }
+        return "\(prefix)no details logged"
+    }
+
+    private static let couldntSign = "This wallet couldn't sign this"
+
+    private static let ownSentences: Set<String> = [
+        HotWalletWording.wrongChain, HotWalletWording.feesLookWrong, HotWalletWording.feesRoseAfterApproval, HotWalletWording.cantReachChain,
+        HotWalletWording.unreadableAnswer, HotWalletWording.networkBusy, HotWalletWording.changedWhileWaiting, HotWalletWording.lastOneStillShowingUp,
+        HotWalletWording.keyMissing, SiteError.rejected.message, SiteError.notConnected.message, SiteError.wrongChain.message,
+    ]
+
+    private static let usualRefusals = [
+        "execution reverted", "nonce too low", "nonce too high", "insufficient funds", "underpriced", "already known", "intrinsic gas", "gas limit", "max fee per gas",
+    ]
 
     private func walletProblem(for origin: String) -> SiteError? {
         wallet.siteProblem ?? (wallet.isConnected(origin) ? nil : .notConnected)
@@ -445,6 +474,7 @@ public final class SiteBridge {
         if action == .connect, fromThisOrigin.contains(where: { $0.action == .connect }) { return .failure(.tooManyRequests) }
 
         let approval = SiteApproval(id: UUID(), origin: request.origin, action: action, requester: request.requester)
+        request.approvalID = approval.id
         pending.append(approval)
         let approved = await withCheckedContinuation { waiting[approval.id] = $0 }
         return approved && !request.isCancelled ? .success(.null) : .failure(.rejected)

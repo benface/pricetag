@@ -700,7 +700,7 @@ public final class HotWallet {
             estimate = try await chain.estimateGas(from: address, to: transaction.to, value: transaction.value, data: transaction.data)
         } catch ChainError.rejected(let message) {
             // The node worked out what it would do, and it fails. Nothing good comes of signing that.
-            throw ChainError.rejected("This transaction would fail: \(message)")
+            throw ChainError.rejected(HotWalletWording.wouldFail + message)
         }
         // A plain send to a plain address uses exactly what it's quoted.
         let gasLimit = transaction.data.isEmpty && estimate == 21000 ? estimate : estimate + estimate / 4
@@ -746,12 +746,12 @@ public final class HotWallet {
         let snapshot = try await patientSnapshot(of: address)
         self.snapshot = snapshot
         guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
-        guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected("The last transaction is still showing up. Try again in a moment.") }
+        guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected(HotWalletWording.lastOneStillShowingUp) }
         guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
         // What was approved is a limit, so a rise doesn't change what's signed. It has room to land anyway, since a quote allows twice the
         // base fee. Only the base fee can stop it landing: the tip is whatever the node suggests just now, and it gets what's left.
         let baseFee = (snapshot.fees.maxFeePerGas - min(snapshot.fees.maxPriorityFeePerGas, snapshot.fees.maxFeePerGas)) / 2
-        guard baseFee < quote.maxFeePerGas else { throw ChainError.rejected("Fees rose a lot since you approved this, so nothing was signed. Try again.") }
+        guard baseFee < quote.maxFeePerGas else { throw ChainError.rejected(HotWalletWording.feesRoseAfterApproval) }
         let maxFeePerGas = min(snapshot.fees.maxFeePerGas, quote.maxFeePerGas)
         let nonce = AlarmCheck.nextNonce(records: state.records[address] ?? [], onchainNonce: snapshot.nonce)
         let unsigned = UnsignedTransaction(
@@ -946,8 +946,9 @@ public final class HotWallet {
             updateRecord(hash: signed.hash, address: address) { $0.status = .dropped }
             try persist()
             throw ChainError.rateLimited
-        } catch ChainError.unreachable {
-            // It may have got through, so it stays pending. The receipt check settles it.
+        } catch {
+            // It's only certain nothing happened when the node says so. Anything else may have got through, so it stays pending, and
+            // the receipt check settles it. Sending it again by a new signature could send the money twice.
             throw ChainError.unreachable
         }
     }

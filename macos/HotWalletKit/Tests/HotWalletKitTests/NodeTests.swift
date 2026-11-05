@@ -144,6 +144,18 @@ private func client(retries: [Duration] = [.zero, .zero, .zero], pacer: NodePace
         #expect(StubNode.asked[0][0]["params"] as? [String] == StubNode.asked[1][0]["params"] as? [String])
     }
 
+    /// The node answered, but not about this transaction, so it may well have taken it.
+    @Test func aBroadcastWithNoAnswerForItIsUncertain() async {
+        let answers: [Any] = [[Any](), [["jsonrpc": "2.0", "id": 99, "result": "0xabc"]]]
+        for answer in answers {
+            StubNode.script { _, _ in json(answer) }
+            await #expect(throws: ChainError.unreachable) { try await client().send(SignedTransaction(raw: [1, 2, 3])) }
+            #expect(StubNode.asked.count == 1, "not sent again")
+        }
+        StubNode.script { _, _ in StubNode.Reply(status: 200, body: Data("<html>".utf8)) }
+        await #expect(throws: ChainError.unreachable) { try await client().send(SignedTransaction(raw: [1, 2, 3])) }
+    }
+
     @Test func aSiteReadIsAskedAgainAndKeepsTheNodesOwnAnswers() async throws {
         StubNode.script { _, count in
             switch count {
