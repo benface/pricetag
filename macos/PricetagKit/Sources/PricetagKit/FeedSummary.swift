@@ -11,7 +11,8 @@ public struct FeedSummary: Equatable, Sendable {
     public init(feed: FeedState, portfolio: Portfolio?) {
         switch feed {
         case .noWallet: (text, isWarning) = ("", false)
-        case .reading: (text, isWarning) = ("Reading…", false)
+        // With numbers in the window, they're the last answer until the new one arrives.
+        case .reading: (text, isWarning) = (portfolio == nil ? "Reading…" : "Updating…", false)
         case .behind: (text, isWarning) = ("Behind", true)
         case .catchingUp: (text, isWarning) = ("Catching up", true)
         case .serverUnreachable: (text, isWarning) = ("Offline", true)
