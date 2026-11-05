@@ -144,19 +144,26 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
   })
 }
 
+/** Where an asset's legs stop adding up to its balance. */
+export type HistoryGap = {
+  /** The last block they're known to add up at, which is -Infinity when there's no such block. */
+  through: number
+  /** They were compared with a balance and don't match, rather than having nothing to compare with yet. */
+  mismatch: boolean
+}
+
 /**
- * For each asset whose legs don't currently add up to its balance, the last block they're known to have, which is -Infinity
- * when there's no such block. An asset that isn't here adds up.
+ * Each asset whose legs don't currently add up to its balance. An asset that isn't here adds up.
  *
  * A read that failed says nothing about the history, so it falls back on the last one that worked, as of that block. That
  * way a failed read can't turn a known cost unknown and back, and can't bring back one a mismatch already ruled out. A wallet
  * with no read to go on stays unconfirmed until it has one, which only ever goes one way.
  */
-export function vouchedThrough(legs: readonly PricedLeg[], method: Method, onchain: Onchain): Map<string, number> {
-  const through = new Map<string, number>()
+export function historyGaps(legs: readonly PricedLeg[], method: Method, onchain: Onchain): Map<string, HistoryGap> {
+  const gaps = new Map<string, HistoryGap>()
   for (const { asset, reconciliation } of foldPositions(legs, method, {}, onchain)) {
     if (reconciliation === null || reconciliation.status === "reconciled") continue
-    through.set(asset, Number.NEGATIVE_INFINITY)
+    gaps.set(asset, { through: Number.NEGATIVE_INFINITY, mismatch: reconciliation.status === "incomplete" })
     // A mismatch is a mismatch, and without the starting balance there are no legs to compare, whatever a read says.
     if (reconciliation.status === "incomplete" || onchain.openingUnread?.includes(asset)) continue
     const last = asset === "ETH" && onchain.l1FeeUnknownTxs.length > 0 ? onchain.lastCheckableEth : onchain.lastBalances?.[asset]
@@ -164,9 +171,9 @@ export function vouchedThrough(legs: readonly PricedLeg[], method: Method, oncha
     const then = legs.filter((leg) => leg.asset === asset && leg.blockNum <= last.blockNum)
     const [position] = foldPositions(then, method, {}, { balances: { blockNum: last.blockNum, amounts: { [asset]: last.amount } }, l1FeeUnknownTxs: [] })
     // With nothing moved by then and nothing held, there's no position, and nothing to disagree with.
-    if (!position || position.reconciliation?.status === "reconciled") through.set(asset, last.blockNum)
+    gaps.set(asset, !position || position.reconciliation?.status === "reconciled" ? { through: last.blockNum, mismatch: false } : { through: Number.NEGATIVE_INFINITY, mismatch: true })
   }
-  return through
+  return gaps
 }
 
 /** Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong. */
