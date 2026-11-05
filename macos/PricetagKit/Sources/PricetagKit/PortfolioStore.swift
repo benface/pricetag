@@ -1,4 +1,5 @@
-// The live feed: polls the server, remembers the wallet, and knows whether what it holds is still true.
+// The live feed: reads when the server says there's a new block, polls when it can't say, remembers the wallet, and knows
+// whether what it holds is still true.
 
 import Foundation
 import Observation
@@ -74,20 +75,30 @@ public final class PortfolioStore {
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let reachableDelay: Duration
     @ObservationIgnored private let unreachableDelay: Duration
+    @ObservationIgnored private let pushedDelay: Duration
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private var eventsTask: Task<Void, Never>?
+    /// The server is telling this store about new blocks, so a read only needs to happen on a timer in case that stops working.
+    @ObservationIgnored private var isPushed = false
+    /// What the next read is waiting on, which a new block cuts short.
+    @ObservationIgnored private var sleeper: Task<Void, Never>?
+    /// A block arrived during a read, which may have missed it.
+    @ObservationIgnored private var wakePending = false
 
     public init(
         defaults: UserDefaults = .standard,
         makeSource: @escaping @Sendable (URL) -> any PortfolioSource = { PricetagClient(serverURL: $0) },
         now: @escaping @Sendable () -> Date = { Date() },
         reachableDelay: Duration = .seconds(2),
-        unreachableDelay: Duration = .seconds(5)
+        unreachableDelay: Duration = .seconds(5),
+        pushedDelay: Duration = .seconds(15)
     ) {
         self.defaults = defaults
         self.makeSource = makeSource
         self.now = now
         self.reachableDelay = reachableDelay
         self.unreachableDelay = unreachableDelay
+        self.pushedDelay = pushedDelay
         let address = defaults.string(forKey: Keys.wallet)
         let serverURL = defaults.string(forKey: Keys.server).flatMap(URL.init(string:)) ?? Self.defaultServerURL
         self.address = address
@@ -100,15 +111,16 @@ public final class PortfolioStore {
         self.source = makeSource(serverURL)
     }
 
-    /// Starts polling, or starts over, say after a change or when asked to refresh.
+    /// Starts following, or starts over, say after a change or when asked to refresh.
     public func start() {
-        pollTask?.cancel()
+        stop()
         Task { await refreshRules() }
         guard address != nil else { return }
+        eventsTask = Task { [weak self] in await self?.followEvents() }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let delay = await self?.poll() else { return }
-                try? await Task.sleep(for: delay)
+                await self?.wait(delay)
             }
         }
     }
@@ -116,6 +128,46 @@ public final class PortfolioStore {
     public func stop() {
         pollTask?.cancel()
         pollTask = nil
+        eventsTask?.cancel()
+        eventsTask = nil
+        isPushed = false
+        wakePending = false
+    }
+
+    /// Wakes a read for each new block the server reports, for as long as it can, and tries again when it stops.
+    private func followEvents() async {
+        while !Task.isCancelled {
+            guard let events = source.headEvents() else { return }
+            do {
+                for try await _ in events {
+                    guard !Task.isCancelled else { return }
+                    isPushed = true
+                    wake()
+                }
+            } catch {}
+            guard !Task.isCancelled else { return }
+            // Back to polling straight away, not after the long wait that being told about blocks allowed.
+            isPushed = false
+            wake()
+            try? await Task.sleep(for: unreachableDelay)
+        }
+    }
+
+    private func wake() {
+        if let sleeper { sleeper.cancel() } else { wakePending = true }
+    }
+
+    /// Waits for the next read, which a new block ends early. The usual delay only applies while the server isn't reporting blocks, or a read just failed.
+    private func wait(_ delay: Duration) async {
+        if wakePending {
+            wakePending = false
+            return
+        }
+        let duration = isPushed && delay == reachableDelay && !feed.isStale ? pushedDelay : delay
+        let sleeping = Task { _ = try? await Task.sleep(for: duration) }
+        sleeper = sleeping
+        await withTaskCancellationHandler { await sleeping.value } onCancel: { sleeping.cancel() }
+        if sleeper == sleeping { sleeper = nil }
     }
 
     /// `address` is 0x… or `WalletAddress.demo`, or nil to forget the wallet.

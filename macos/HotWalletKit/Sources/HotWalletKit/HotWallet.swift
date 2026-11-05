@@ -60,12 +60,15 @@ public final class HotWallet {
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let tickDelay: Duration
     @ObservationIgnored private let readDelay: Duration
+    @ObservationIgnored private let receiptDelay: Duration
     @ObservationIgnored private var chain: any ChainClient
     @ObservationIgnored private var tickTask: Task<Void, Never>?
     @ObservationIgnored private var readTask: Task<Void, Never>?
+    @ObservationIgnored private var receiptTask: Task<Void, Never>?
     @ObservationIgnored private var missedReceipts: [String: Int] = [:]
     @ObservationIgnored private var nonceAheadTicks = 0
     @ObservationIgnored private var emptyReads = 0
+    @ObservationIgnored private var catchUpReads = 0
     @ObservationIgnored private var pausedUntil: Date?
     @ObservationIgnored private var lastInLine: Task<Void, Never>?
     /// When the old key first read as empty in a rotation. History has to reach that block before it can say there's nothing else.
@@ -81,6 +84,8 @@ public final class HotWallet {
     static let historyGrace: TimeInterval = 180
     /// Nodes behind a load balancer can disagree for a moment, so these have to hold for a few reads before they count.
     static let readsBeforeAlarm = 3
+    /// A receipt can come back a second or so before a node's latest block includes it. A node further behind than this can wait for the next tick.
+    static let readsToCatchUp = 5
 
     public init(
         signer: any Signer = KeyVault(),
@@ -93,7 +98,8 @@ public final class HotWallet {
         makeChain: @escaping @Sendable (URL) -> any ChainClient = { RPCChainClient(url: $0) },
         now: @escaping @Sendable () -> Date = { Date() },
         tickDelay: Duration = .seconds(15),
-        readDelay: Duration = .seconds(20)
+        readDelay: Duration = .seconds(20),
+        receiptDelay: Duration = .seconds(1)
     ) {
         self.signer = signer
         self.settingsStore = settingsStore
@@ -106,6 +112,7 @@ public final class HotWallet {
         self.now = now
         self.tickDelay = tickDelay
         self.readDelay = readDelay
+        self.receiptDelay = receiptDelay
         let settings = settingsStore.load()
         self.settings = settings
         self.chain = makeChain(settings.rpcURL)
@@ -125,6 +132,7 @@ public final class HotWallet {
         publishLinkedWallets()
         tickTask?.cancel()
         readTask?.cancel()
+        receiptTask?.cancel()
         tickTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.tick()
@@ -139,11 +147,18 @@ public final class HotWallet {
                 try? await Task.sleep(for: delay)
             }
         }
+        receiptTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let delay = self?.receiptDelay, (try? await Task.sleep(for: delay)) != nil else { return }
+                await self?.lookBetweenTicks()
+            }
+        }
     }
 
     public func stop() {
         tickTask?.cancel()
         readTask?.cancel()
+        receiptTask?.cancel()
     }
 
     /// Runs after everything that's already waiting. Whatever signs goes through here, because two at once would use the same nonce.
@@ -186,6 +201,42 @@ public final class HotWallet {
             availability = .notProvisioned
         } catch {
             sweepProblem = error.localizedDescription
+        }
+    }
+
+    /// Whether there's a landing to look for. A tick that couldn't read the chain, or read the wrong one, has to clear that first.
+    private var isWaitingToLand: Bool {
+        guard availability == .ready, chainProblem == nil, let address, let snapshot, snapshot.chainID == Base.chainID else { return false }
+        return catchUpReads > 0 && snapshot.blockNumber < state.settledThroughBlock ?? 0 || (state.records[address] ?? []).contains { $0.status == .pending }
+    }
+
+    /// Shows a transaction landing soon after it does, and reads nothing unless one is on its way. This only ever settles a receipt and
+    /// updates what's shown. Signing, giving up on a transaction and the counts behind alarms and deleting a key all assume a tick's pace, so they wait for one.
+    func lookBetweenTicks() async {
+        guard isWaitingToLand else { return }
+        await inTurn { [self] in
+            guard isWaitingToLand, let address else { return }
+            do {
+                let records = state.records[address] ?? []
+                for record in records where record.status == .pending {
+                    // An earlier one in this loop landed with the same nonce, so this one can't.
+                    guard state.records[address]?.first(where: { $0.hash == record.hash })?.status == .pending else { continue }
+                    if let receipt = try await chain.receipt(of: record.hash) {
+                        try settle(record, with: receipt, among: records, address: address)
+                    }
+                }
+                guard catchUpReads > 0, let snapshot, snapshot.blockNumber < state.settledThroughBlock ?? 0 else { return }
+                catchUpReads -= 1
+                let newer = try await chain.snapshot(of: address)
+                self.snapshot = newer
+                guard newer.chainID == Base.chainID else { return }
+                refreshPlan(snapshot: newer, address: address)
+            } catch is CancellationError {
+            } catch is ChainError {
+                // The next tick says so if it's more than a moment.
+            } catch {
+                sweepProblem = error.localizedDescription
+            }
         }
     }
 
@@ -545,6 +596,7 @@ public final class HotWallet {
         sweepProblem = nil
         pausedUntil = nil
         nonceAheadTicks = 0
+        catchUpReads = 0
         missedReceipts = [:]
         resetEmptyReads()
     }
@@ -742,26 +794,7 @@ public final class HotWallet {
             // An earlier one in this loop landed with the same nonce, so this one can't.
             guard state.records[address]?.first(where: { $0.hash == record.hash })?.status == record.status else { continue }
             if let receipt = try await chain.receipt(of: record.hash) {
-                for other in records where other.nonce == record.nonce && other.hash != record.hash {
-                    updateRecord(hash: other.hash, address: address) { $0.status = .dropped }
-                }
-                updateRecord(hash: record.hash, address: address) { $0.status = receipt.succeeded ? .confirmed : .failed }
-                missedReceipts[record.hash] = nil
-                state.settledThroughBlock = max(state.settledThroughBlock ?? 0, receipt.blockNumber)
-                if receipt.succeeded, let gain = UInt128(record.gainUsdMicros), gain > 0 {
-                    let swept = state.sweptGains[address].flatMap { UInt128($0) } ?? 0
-                    state.sweptGains[address] = String(swept + gain)
-                }
-                if !receipt.succeeded {
-                    switch record.reason {
-                    case .aboveCap, .manual, .rotation:
-                        sweepProblem = "A sweep of \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
-                        pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
-                    case .sent, .note:
-                        sweepProblem = HotWalletWording.failedOnchain(record)
-                    }
-                }
-                try persist()
+                try settle(record, with: receipt, among: records, address: address)
             } else if record.status == .dropped {
                 continue
             } else if snapshot.nonce > record.nonce {
@@ -778,6 +811,30 @@ public final class HotWallet {
                 try persist()
             }
         }
+    }
+
+    private func settle(_ record: SignedRecord, with receipt: Receipt, among records: [SignedRecord], address: EthereumAddress) throws {
+        for other in records where other.nonce == record.nonce && other.hash != record.hash {
+            updateRecord(hash: other.hash, address: address) { $0.status = .dropped }
+        }
+        updateRecord(hash: record.hash, address: address) { $0.status = receipt.succeeded ? .confirmed : .failed }
+        missedReceipts[record.hash] = nil
+        state.settledThroughBlock = max(state.settledThroughBlock ?? 0, receipt.blockNumber)
+        catchUpReads = Self.readsToCatchUp
+        if receipt.succeeded, let gain = UInt128(record.gainUsdMicros), gain > 0 {
+            let swept = state.sweptGains[address].flatMap { UInt128($0) } ?? 0
+            state.sweptGains[address] = String(swept + gain)
+        }
+        if !receipt.succeeded {
+            switch record.reason {
+            case .aboveCap, .manual, .rotation:
+                sweepProblem = "A sweep of \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
+                pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
+            case .sent, .note:
+                sweepProblem = HotWalletWording.failedOnchain(record)
+            }
+        }
+        try persist()
     }
 
     /// Given up on, but something has used its nonce, and nothing this app signed is known to be what did. It may have landed late,

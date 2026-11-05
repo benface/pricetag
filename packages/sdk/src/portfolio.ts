@@ -3,6 +3,7 @@
 import { applyLeg, emptyPosition, worth, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
 import type { RateRound } from "./currency.ts"
 import { answerToMicros, isSanePrice, type PricedLeg, type Reference } from "./legs.ts"
+import type { MarketMarks } from "./market.ts"
 import { decimalsOf, estimateHeld, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
 import { TOKENS, TOKEN_FEEDS } from "./tokens.ts"
 
@@ -40,7 +41,7 @@ export type Position = {
   estimates: Estimates
 }
 
-export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "incomplete history" | "doesn't match its actual balance" | "not checked against its actual balance" | "balance couldn't be read" }
+export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "sold or spent at an unknown price" | "incomplete history" | "doesn't match its actual balance" | "not checked against its actual balance" | "balance couldn't be read" }
 
 /** What a sum is made of. A sum with something missing and nothing known has no answer, which isn't the same as $0. */
 export type Coverage = { known: number; missing: number }
@@ -144,6 +145,31 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
   })
 }
 
+/**
+ * For each asset whose legs don't currently add up to its balance, the last block they're known to have, which is -Infinity
+ * when there's no such block. An asset that isn't here adds up.
+ *
+ * A read that failed says nothing about the history, so it falls back on the last one that worked, as of that block. That
+ * way a failed read can't turn a known cost unknown and back, and can't bring back one a mismatch already ruled out. A wallet
+ * with no read to go on stays unconfirmed until it has one, which only ever goes one way.
+ */
+export function vouchedThrough(legs: readonly PricedLeg[], method: Method, onchain: Onchain): Map<string, number> {
+  const through = new Map<string, number>()
+  for (const { asset, reconciliation } of foldPositions(legs, method, {}, onchain)) {
+    if (reconciliation === null || reconciliation.status === "reconciled") continue
+    through.set(asset, Number.NEGATIVE_INFINITY)
+    // A mismatch is a mismatch, and without the starting balance there are no legs to compare, whatever a read says.
+    if (reconciliation.status === "incomplete" || onchain.openingUnread?.includes(asset)) continue
+    const last = asset === "ETH" && onchain.l1FeeUnknownTxs.length > 0 ? onchain.lastCheckableEth : onchain.lastBalances?.[asset]
+    if (!last) continue
+    const then = legs.filter((leg) => leg.asset === asset && leg.blockNum <= last.blockNum)
+    const [position] = foldPositions(then, method, {}, { balances: { blockNum: last.blockNum, amounts: { [asset]: last.amount } }, l1FeeUnknownTxs: [] })
+    // With nothing moved by then and nothing held, there's no position, and nothing to disagree with.
+    if (!position || position.reconciliation?.status === "reconciled") through.set(asset, last.blockNum)
+  }
+  return through
+}
+
 /** Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong. */
 export function latestPrices(reference: Reference | null): LatestPrices {
   const prices: LatestPrices = {}
@@ -244,7 +270,8 @@ export function sumTotals(positions: readonly Position[], unread: readonly strin
       realized += BigInt(values.realizedMicros)
     } else {
       coverage.realized.missing++
-      excluded.push({ asset, reason: "sold at an unknown cost" })
+      if (BigInt(state.unknownCostDisposedQty) > 0n) excluded.push({ asset, reason: "sold at an unknown cost" })
+      if (BigInt(state.unknownProceedsQty) > 0n) excluded.push({ asset, reason: "sold or spent at an unknown price" })
     }
     // Only what the sum actually includes counts as known. A position with an unresolved sale is left out whole.
     if (values.realizedMicros !== null && BigInt(state.resolvedDisposedQty) > 0n) coverage.realized.known++
@@ -282,14 +309,14 @@ export function sumTotals(positions: readonly Position[], unread: readonly strin
 /** A token's price at a block, in the currency being folded, for marking what's held at that moment. */
 export type MarkPrice = (blockNum: number, asset: string) => string | null
 
-/** Each block's oracle prices, in USD, from the oracle reads that come with a wallet's legs. */
-export function referenceMarks(references: readonly Reference[]): MarkPrice {
+/** Each block's prices, in USD, from the oracle reads that come with a wallet's legs, and what other tokens traded at, if that's known. */
+export function referenceMarks(references: readonly Reference[], market: MarketMarks = {}): MarkPrice {
   const refs = new Map(references.map((r) => [r.blockNum, r]))
   return (blockNum, asset) => {
     const ref = refs.get(blockNum)
     if (asset === "ETH") return answerToMicros(ref?.ethUsd)
     if (asset === "USDC") return answerToMicros(ref?.usdcUsd)
-    return null
+    return market[blockNum]?.[asset] ?? null
   }
 }
 export type Portfolio = { method: Method; positions: Position[]; totals: Totals }
@@ -323,8 +350,8 @@ export type PnlPoint = {
 
 /**
  * Total PnL after each transaction, plus a last point at `latest` and current prices, matching the headline.
- * Oracle tokens are marked to that block's oracle price. Others have no price between their own trades, so like
- * in the headline, they add no unrealized PnL and count in `excludedCount`. This way a trade can't make a spike.
+ * Tokens are marked to that block's oracle or market price, and never to a trade's own price, so a trade can't make a
+ * spike. Without one, like in the headline, a token adds no unrealized PnL and counts in `excludedCount`.
  */
 export function pnlOverTime(
   legs: readonly PricedLeg[],

@@ -7,7 +7,7 @@ import { emptyBook, linkedWallets, type Book } from "../src/core/book.ts"
 import { describeConversion, describeEffect, describeNetting, explainTarget, missingRatesLine, rateSource, type ExplainContext, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
 import { foldBook, missingWallets, type Question } from "../src/core/resolve.ts"
 import { differenceOf, whySentence, type PricingRule, type RuleComparison, type RuleRow, type RuleTransaction } from "../src/core/rules.ts"
-import { ETH_NOTE, UNPRICED_FEES, estimatedSentence, excludedSentence, feesUnknownSentence, networkFeeUnknownSentence } from "../src/core/wording.ts"
+import { ETH_NOTE, UNPRICED_FEES, estimatedSentence, excludedSentence, feesUnknownSentence, networkFeeUnknownSentence, withheldSentence } from "../src/core/wording.ts"
 
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS = 200
@@ -49,7 +49,7 @@ function outgoingTxsOf(wallet: WalletResponse): string[] {
 const linkingTo = (others: readonly WalletResponse[]): Book => ({ ...emptyBook(), linked: others.map((other) => other.address.toLowerCase()) })
 
 export function portfolioOf(wallet: WalletResponse, method: Method, others: readonly WalletResponse[] = [], book: Book = linkingTo(others), failed: readonly string[] = []): PortfolioResponse {
-  const { view, positions, unread, totals, pnlStatus, points, questions, meter } = foldBook(wallet, others, method, book)
+  const { view, positions, unread, totals, pnlStatus, points, questions, meter, withheld } = foldBook(wallet, others, method, book)
   const missing = missingWallets(book, wallet, others)
   const linkedFailed = linkedWallets(book).filter((address) => failed.includes(address))
   return {
@@ -79,6 +79,7 @@ export function portfolioOf(wallet: WalletResponse, method: Method, others: read
     meter: { ...meter, waiting: new Set([...missing, ...linkedFailed]).size },
     linkedReading: missing.filter((address) => !linkedFailed.includes(address)),
     linkedFailed,
+    withheld,
     marketChecked: wallet.marketChecked,
   }
 }
@@ -181,13 +182,14 @@ function changedAmounts(a: readonly PricedLeg[], b: readonly PricedLeg[]): RuleT
 }
 
 /** What a portfolio's numbers leave out or can't vouch for, as the main screen says it. */
-function warningsOf({ totals, currency, exchange, gasUnknownTxs, l1FeeUnknownTxs }: PortfolioResponse): string[] {
+function warningsOf({ totals, currency, exchange, gasUnknownTxs, l1FeeUnknownTxs, withheld }: PortfolioResponse): string[] {
   return [
     estimatedSentence(totals.estimatedMicros, currency),
     excludedSentence(totals.excluded),
     totals.unpricedGas ? UNPRICED_FEES : null,
     gasUnknownTxs.length > 0 ? feesUnknownSentence(gasUnknownTxs.length) : null,
     l1FeeUnknownTxs.length > 0 ? networkFeeUnknownSentence(l1FeeUnknownTxs.length) : null,
+    ...withheld.map(({ wallet, asset }) => withheldSentence(wallet, asset)),
     exchange && exchange.missingRateTxs.length > 0 ? missingRatesLine(exchange.missingRateTxs.length, currency) : null,
     exchange && exchange.latestRateMicros === null ? `There's no current USD to ${currency} rate, so what's held has no current value.` : null,
   ].filter((warning) => warning !== null)

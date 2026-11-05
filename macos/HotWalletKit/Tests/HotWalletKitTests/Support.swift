@@ -35,7 +35,10 @@ actor FakeChain: ChainClient {
     var estimate: UInt64 = 60000
     var sendFailure: ChainError?
     var estimateFailure: ChainError?
+    var readFailure: ChainError?
     private(set) var sent: [SignedTransaction] = []
+    private(set) var snapshotReads = 0
+    private(set) var receiptReads = 0
     /// Set after each send, to read what was on disk at that moment.
     var onSend: (@Sendable (SignedTransaction) -> Void)?
 
@@ -54,9 +57,14 @@ actor FakeChain: ChainClient {
     func confirmAll() { for transaction in sent { setReceipt(transaction.hash, succeeded: true) } }
     func setSendFailure(_ failure: ChainError?) { sendFailure = failure }
     func setEstimateFailure(_ failure: ChainError?) { estimateFailure = failure }
+    func setReadFailure(_ failure: ChainError?) { readFailure = failure }
     func setOnSend(_ body: @escaping @Sendable (SignedTransaction) -> Void) { onSend = body }
 
-    func snapshot(of address: EthereumAddress) throws -> ChainSnapshot { current }
+    func snapshot(of address: EthereumAddress) throws -> ChainSnapshot {
+        snapshotReads += 1
+        if let readFailure { throw readFailure }
+        return current
+    }
 
     func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) throws -> UInt64 {
         if let estimateFailure { throw estimateFailure }
@@ -69,7 +77,11 @@ actor FakeChain: ChainClient {
         onSend?(transaction)
     }
 
-    func receipt(of hash: String) -> Receipt? { receipts[hash] }
+    func receipt(of hash: String) throws -> Receipt? {
+        receiptReads += 1
+        if let readFailure { throw readFailure }
+        return receipts[hash]
+    }
 }
 
 /// Remembers what it was asked to sign. It holds no key at all: the real vault has its own tests.
@@ -187,7 +199,7 @@ func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, ou
         "unresolvedMicros": "0", "estimatedMicros": "0", "estimated": { "value": false, "realized": \(estimatedRealized), "unrealized": false }, "noMarket": []
       },
       "pnlStatus": "complete", "points": [],
-      "questions": [], "meter": { "open": 0, "answered": 0, "waiting": 0 }, "linkedReading": [], "linkedFailed": [\(linkedFailed.map { "\"\($0)\"" }.joined(separator: ","))], "marketChecked": true
+      "questions": [], "meter": { "open": 0, "answered": 0, "waiting": 0 }, "linkedReading": [], "linkedFailed": [\(linkedFailed.map { "\"\($0)\"" }.joined(separator: ","))], "withheld": [], "marketChecked": true
     }
     """
     return try! JSONDecoder().decode(Portfolio.self, from: Data(json.utf8))
@@ -212,7 +224,7 @@ struct Rig {
     let portfolios: ScriptedPortfolios
 
     /// A wallet that exists already, with a cold wallet to sweep to unless told otherwise.
-    init(_ snapshot: ChainSnapshot = HotWalletKitTests.snapshot(), withCold: Bool = true, presence: Bool = true, portfolio read: Result<Portfolio, FetchError> = .success(portfolio()), mainCurrency: @escaping @MainActor () -> CurrencyCode = { .USD }, now: @escaping @Sendable () -> Date = { Date() }) async {
+    init(_ snapshot: ChainSnapshot = HotWalletKitTests.snapshot(), withCold: Bool = true, presence: Bool = true, portfolio read: Result<Portfolio, FetchError> = .success(portfolio()), mainCurrency: @escaping @MainActor () -> CurrencyCode = { .USD }, now: @escaping @Sendable () -> Date = { Date() }, tickDelay: Duration = .seconds(15), receiptDelay: Duration = .seconds(1)) async {
         let chain = FakeChain(snapshot)
         let signer = FakeSigner(keys: [hotAddress], next: [nextAddress])
         let stateStore = MemoryStateStore()
@@ -228,6 +240,6 @@ struct Rig {
         self.signer = signer
         self.stateStore = stateStore
         self.portfolios = portfolios
-        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: FakePresence(allows: presence), portfolioSource: { portfolios }, mainCurrency: mainCurrency, makeChain: { _ in chain }, now: now)
+        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: FakePresence(allows: presence), portfolioSource: { portfolios }, mainCurrency: mainCurrency, makeChain: { _ in chain }, now: now, tickDelay: tickDelay, receiptDelay: receiptDelay)
     }
 }

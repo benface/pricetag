@@ -49,6 +49,8 @@ export type CostPiece = {
   reported?: true
   /** The part of `costMicros` that's a market price for what the user said came from someone else, wherever it's moved since. Missing means none. */
   givenCostMicros?: string
+  /** No cost because of these wallets, whose history of it can't be confirmed, wherever it's moved since. Missing means none. */
+  unconfirmedBy?: string[]
   acquiredBlock?: number
   acquiredAt?: string
 }
@@ -65,6 +67,8 @@ export type Lot = {
   reported?: true
   /** The part of `costMicros` that's a market price for what the user said came from someone else. Missing means none. */
   givenCostMicros?: string
+  /** No cost because of these wallets, whose history of it can't be confirmed. Missing means none. */
+  unconfirmedBy?: string[]
   /** When these units were first acquired, which an inherited lot keeps from the wallet that sent it. */
   acquiredBlock?: number
   acquiredAt?: string
@@ -81,6 +85,10 @@ export type PositionState = {
   resolvedDisposedQty: string
   /** Units disposed of with an unknown cost or unknown proceeds. Realized PnL is unavailable while this is above 0. */
   unresolvedDisposedQty: string
+  /** The units in `unresolvedDisposedQty` with an unknown cost. A unit can have both unknowns. */
+  unknownCostDisposedQty: string
+  /** The units in `unresolvedDisposedQty` with unknown proceeds. */
+  unknownProceedsQty: string
   gasMicros: string
   /** Units spent on gas with no price at that block, so their value isn't in `gasMicros`. */
   unpricedGasQty: string
@@ -104,6 +112,8 @@ export function emptyPosition(method: Method, decimals: number): PositionState {
     realizedMicros: "0",
     resolvedDisposedQty: "0",
     unresolvedDisposedQty: "0",
+    unknownCostDisposedQty: "0",
+    unknownProceedsQty: "0",
     gasMicros: "0",
     unpricedGasQty: "0",
     shortfallQty: "0",
@@ -126,6 +136,12 @@ const costSource = (reported: boolean | undefined, given: bigint): Pick<CostPiec
 
 const givenOf = (lot: Pick<Lot, "givenCostMicros">) => BigInt(lot.givenCostMicros ?? "0")
 
+/** Only what's there, so a lot with none looks the way it always has. */
+const unconfirmed = (...wallets: readonly (readonly string[] | undefined)[]): Pick<CostPiece, "unconfirmedBy"> => {
+  const all = [...new Set(wallets.flatMap((list) => list ?? []))]
+  return all.length > 0 ? { unconfirmedBy: all } : {}
+}
+
 function lotOf(piece: CostPiece, legId: string): Lot {
   const known = piece.label !== "unknown" && piece.costMicros !== null
   const estimated = known ? BigInt(piece.estimatedCostMicros) : 0n
@@ -136,6 +152,7 @@ function lotOf(piece: CostPiece, legId: string): Lot {
     legId,
     ...(estimated > 0n ? { estimatedCostMicros: estimated.toString() } : {}),
     ...costSource(known && (piece.reported || piece.label === "self-reported"), known ? givenOf(piece) : 0n),
+    ...unconfirmed(known ? [] : piece.unconfirmedBy),
     ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }),
   }
 }
@@ -162,6 +179,7 @@ function addLot(method: Method, lots: readonly Lot[], lot: Lot): Lot[] {
     legId: pool.legId,
     ...(estimated > 0n ? { estimatedCostMicros: estimated.toString() } : {}),
     ...costSource(pool.reported || lot.reported, givenOf(pool) + givenOf(lot)),
+    ...unconfirmed(pool.unconfirmedBy, lot.unconfirmedBy),
     ...(acquired.acquiredBlock === undefined ? {} : { acquiredBlock: acquired.acquiredBlock, acquiredAt: acquired.acquiredAt as string }),
   }
   return lots.map((l) => (l === pool ? merged : l))
@@ -229,6 +247,7 @@ function take(state: PositionState, qty: bigint): Taken {
       label: lot.costMicros === null ? "unknown" : lot.label === "mixed" ? "inherited" : lot.label,
       estimatedCostMicros: estimated.toString(),
       ...costSource(lot.costMicros !== null && lot.reported, given),
+      ...unconfirmed(lot.unconfirmedBy),
       ...(lot.acquiredBlock === undefined ? {} : { acquiredBlock: lot.acquiredBlock, acquiredAt: lot.acquiredAt as string }),
     })
   })
@@ -264,9 +283,13 @@ export function applyLegTaking(state: PositionState, leg: FoldLeg): { state: Pos
   else proceeds = leg.proceedsMicros === null ? null : (BigInt(leg.proceedsMicros) * taken.knownQty) / qty
 
   // What left with no cost we can see: its PnL can't be known, whatever it sold for.
-  let unresolved = taken.unknownQty + taken.shortfall
-  if (proceeds === null) unresolved += taken.knownQty
-  else {
+  const unknownCost = taken.unknownQty + taken.shortfall
+  let unresolved = unknownCost
+  next.unknownCostDisposedQty = (BigInt(state.unknownCostDisposedQty) + unknownCost).toString()
+  if (proceeds === null) {
+    unresolved += taken.knownQty
+    next.unknownProceedsQty = (BigInt(state.unknownProceedsQty) + qty).toString()
+  } else {
     next.realizedMicros = (BigInt(state.realizedMicros) + proceeds - taken.knownCost).toString()
     next.resolvedDisposedQty = (BigInt(state.resolvedDisposedQty) + taken.knownQty).toString()
     const estimated = taken.estimatedCost + (leg.estimated ? proceeds : 0n)
