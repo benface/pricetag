@@ -192,7 +192,7 @@ struct PurchaseRow: View {
                     .font(.caption)
                     .foregroundStyle(PurchaseWording.isWarning(phase) ? Tone.warning.style : AnyShapeStyle(.secondary))
                     .contentTransition(.opacity)
-                    .animation(Motion.state, value: PurchaseWording.status(phase))
+                    .animation(Motion.state, value: phase)
             }
             Spacer()
             if !phase.isFinished, !phase.isUpToThem {
