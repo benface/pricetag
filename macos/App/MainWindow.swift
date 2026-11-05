@@ -76,6 +76,7 @@ struct MainWindow: View {
             .onChange(of: store.address) {
                 navigation.target = nil
                 navigation.isExportingTaxReport = false
+                navigation.isResolving = false
             }
     }
 

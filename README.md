@@ -43,7 +43,7 @@ The numbers move on their own: `GET /api/events` says when there's a new block, 
 
 ### Spending money and savings
 
-The Mac app has a capped hot wallet, this Mac's "spending money", for everyday use with no recovery phrase. Anything above the cap goes to a hardware wallet, your "savings", by itself while the app runs. Open it from the popover or with ⇧⌘M, or create it from the first screen, which then shows it. It's an unreviewed hackathon build, for small funds only. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what it protects against and what it doesn't.
+The Mac app has a capped hot wallet, this Mac's "spending money", for everyday use with no recovery phrase. Anything above the cap goes to a hardware wallet, your "savings", by itself while the app runs. Open it from the popover or with ⇧⌘M, or create it from the first screen, which then shows it. If it's showing, the window moves to the new address when its key is replaced, and back to the first screen when it's deleted. It's an unreviewed hackathon build, for small funds only. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what it protects against and what it doesn't.
 
 - **The key** comes from `SecRandomCopyBytes`, is wrapped by the Secure Enclave, and stays in a device-only Keychain item. It can't be restored or exported: lose the Mac and you lose what's on it, up to the cap.
 - **The cap** is yours to set, $50 by default and $100 at most, or $25 at most until you add a savings wallet. A plain address can't enforce a cap, so it's what triggers a sweep and not a hard limit. It's in USD whatever the main currency is, so with another main currency, this wallet's amounts say `US$`.
