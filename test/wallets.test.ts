@@ -3,7 +3,7 @@ import { describe, it } from "node:test"
 import { portfolioOf } from "../server/portfolio.ts"
 import { USD_CONTEXT, explainMetric } from "../src/core/explain.ts"
 import { createWallets, sharedMarket, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
-import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, USDC_ADDRESS, foldWallet, msBetweenBlocks, shortHash, type FeedRound, type LegRow, type Reference } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, USDC_ADDRESS, foldWallet, msBetweenBlocks, pnlOverTime, shortHash, usdView, type FeedRound, type LegRow, type Reference } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 
@@ -700,7 +700,7 @@ describe("current prices from the token feeds", () => {
     const { source, reads, marketReads } = feedFake([held(950, AERO)], { AERO: round("63000000") })
     const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
     assert.deepEqual(wallet.prices.AERO, { micros: "630000", source: "oracle", blockNum: 990 })
-    assert.deepEqual(reads, [[["AERO"], 990]], "only what's held, at the head's bucket")
+    assert.deepEqual(reads, [[["AERO"], 990], [["AERO"], 900]], "only what's held, at the head's bucket and then for the chart")
     assert.equal(wallet.marketChecked, true)
     assert.ok(marketReads.every((asset) => asset === "AERO"))
     assert.equal(wallet.legs[0]?.priceSource, "market", "a past leg's price isn't what this changes")
@@ -767,7 +767,7 @@ describe("current prices from the token feeds", () => {
     const wallets = createWallets(source, headAt(1000), noFees)
     await wallets.get(ME)
     await wallets.get(OTHER)
-    assert.equal(reads.length, 1)
+    assert.equal(reads.length, 2, "the head's bucket, and the one both wallets' charts are in")
   })
 
   it("gives both rules the same answer, each with its own ETH price", async () => {
@@ -793,7 +793,7 @@ describe("current prices from the token feeds", () => {
     const wallets = createWallets(source, headAt(1000), noFees)
     await wallets.get(ME)
     const facts = (await wallets.factsAt(ME, 985, { withBalances: false }))!
-    assert.deepEqual(reads, [[["AERO"], 990], [["AERO"], 960]], "the bucket at or before 985")
+    assert.deepEqual(reads, [[["AERO"], 990], [["AERO"], 900], [["AERO"], 960]], "the bucket at or before 985")
     assert.deepEqual(wallets.pricedOn(ME, facts, {}, await wallets.marketOn(ME, facts, {}))!.prices.AERO, { micros: "630000", source: "oracle", blockNum: 960 })
   })
 
@@ -853,7 +853,7 @@ describe("current prices from the token feeds", () => {
     head = 1030
     updatedAt = NOW - 26 * 3600 - 1
     const later = await wallets.get(ME)
-    assert.deepEqual(reads.map(([, block]) => block), [990, 1020])
+    assert.deepEqual(reads.map(([, block]) => block), [990, 900, 1020], "and the chart's once")
     assert.equal(later.prices.AERO, undefined, "the feed itself has gone quiet")
     assert.equal(later.marketChecked, false)
   })
@@ -866,8 +866,357 @@ describe("current prices from the token feeds", () => {
       },
     })
     const wallet = await createWallets(source, headAt(1000), noFees).get(ME, { to: 955 })
-    assert.deepEqual(reads, [[["AERO"], 930]])
+    assert.deepEqual(reads, [[["AERO"], 930], [["AERO"], 900]])
     assert.equal(wallet.prices.AERO?.blockNum, 930)
+  })
+})
+
+describe("marking the chart from the token feeds", () => {
+  const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
+  const DAI = "0x50c5725949a6f0c72e6c4a641f24049a917db0cb"
+  const WSTETH = "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452"
+  const NOW = Date.parse("2026-11-04T00:00:00.000Z") / 1000
+  const TOO_OLD = NOW - 26 * 3600 - 1
+  const holding = (block: number, token = AERO): LegRow => ({ ...row(block), token, kind: "erc20", amount: (10n ** 18n).toString() })
+  const round = (answer: string, block: number, updatedAt = NOW - 60): FeedRound => ({ answer, updatedAt, blockNum: block, timestamp: "2026-11-04T00:00:00.000Z" })
+  const chainOf = (rows: LegRow[]) => {
+    const chain = new Map<number, LegRow[]>()
+    for (const r of rows) chain.set(r.block_num, [...(chain.get(r.block_num) ?? []), r])
+    return chain
+  }
+
+  /** Too little trading to pass the market's guards, unless a test says otherwise. Each feed answers 0.60 plus a cent per 100 blocks of its bucket. */
+  function thin(rows: LegRow[], changes: Partial<Source> = {}, latest: () => Reference | null = () => reference(1000)) {
+    const feedReads: [readonly string[], number][] = []
+    const marketReads: [string, number][] = []
+    const { source } = fake(chainOf(rows), latest)
+    const withFeeds: Source = {
+      ...source,
+      historyFrom: (head) => head - 500,
+      marketReady: async () => true,
+      async readMarketTrades(asset, _, to) {
+        marketReads.push([asset, to])
+        return []
+      },
+      async readFeedRounds(assets, block) {
+        feedReads.push([assets, block])
+        return Object.fromEntries(assets.map((asset) => [asset, round(String(60_000_000 + block * 10_000), block)]))
+      },
+      ...changes,
+    }
+    return { source: withFeeds, feedReads, marketReads }
+  }
+
+  it("marks a token too thin for the market at each point, so the line doesn't wait for the last one", async () => {
+    const paid: LegRow = { ...row(750, (10n ** 15n).toString()), side: "debit" }
+    const { source, marketReads } = thin([paid, holding(750), row(950)])
+    const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.deepEqual(wallet.marketMarks, { 750: { AERO: "675000" }, 950: { AERO: "690000" } }, "each at its own bucket's answer, not the latest")
+    assert.equal(wallet.prices.AERO?.micros, "699000", "what's held now is still its head bucket's")
+    assert.deepEqual(marketReads.filter(([, to]) => to === 750 || to === 900), [], "a market read a feed made unnecessary is a query saved")
+    const points = pnlOverTime(wallet.legs, "average", wallet.prices, usdView(wallet).markPrice, wallet.latest)
+    const [atBuy, later, last] = points.map((point) => BigInt(point.pnlMicros!))
+    assert.deepEqual([later! - atBuy!, last! - later!], [15_000n, 9_000n], "the line only moves by what the feed did")
+  })
+
+  it("uses the feed ahead of the market, where both have a price", async () => {
+    const { source } = thin([holding(950)], { readMarketTrades: async (asset, _, to) => [1, 2, 3].map((n) => ({ blockNum: to - n, txHash: `0x${n}`, asset, usdMicros: "1300000", notionalUsdMicros: "500000000" })) })
+    const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.equal(wallet.marketMarks[950]?.AERO, "690000")
+    assert.equal(wallet.legs[0]?.priceMicros, "1300000", "the leg keeps its market price")
+  })
+
+  it("falls back to the market when the answer is too old, in the future, implausible or missing", async () => {
+    const answers: (Record<string, FeedRound> | ((block: number) => Record<string, FeedRound>))[] = [
+      (block) => ({ AERO: round("63000000", block, TOO_OLD) }),
+      (block) => ({ AERO: round("63000000", block, NOW + 1) }),
+      (block) => ({ AERO: round("1", block) }),
+      {},
+    ]
+    for (const answer of answers) {
+      const { source, marketReads } = thin([holding(950)], {
+        async readMarketTrades(asset, _, to) {
+          marketReads.push([asset, to])
+          return [1, 2, 3].map((n) => ({ blockNum: to - n, txHash: `0x${n}`, asset, usdMicros: "1300000", notionalUsdMicros: "500000000" }))
+        },
+        readFeedRounds: async (_, block) => (typeof answer === "function" ? answer(block) : answer),
+      })
+      const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+      assert.equal(wallet.marketMarks[950]?.AERO, "1300000", String(answer))
+    }
+  })
+
+  it("leaves a point out when neither has a price there", async () => {
+    const { source } = thin([holding(950)], { readFeedRounds: async (_, block) => ({ AERO: round("63000000", block, TOO_OLD) }) })
+    assert.deepEqual((await createWallets(source, headAt(1000), noFees).get(ME)).marketMarks, {})
+  })
+
+  it("prices an answer in ETH with ETH at that point, and needs it", async () => {
+    const eth = (block: number) => (block === 750 ? "200000000000" : "240000000000")
+    const answers: Partial<Source> = {
+      readFeedRounds: async (assets, block) => Object.fromEntries(assets.map((asset) => [asset, round("1250000000000000000", block)])),
+      readReferences: async (blocks) => blocks.flatMap((block) => (block === 850 ? [] : [{ ...reference(block), ethUsd: eth(block) }])),
+    }
+    const { source } = thin([holding(750, WSTETH), holding(850, WSTETH), holding(950, WSTETH)], answers)
+    const { marketMarks } = await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.equal(marketMarks[750]?.wstETH, "2500000000")
+    assert.equal(marketMarks[850], undefined, "no ETH price at that point, so no price for this")
+    assert.equal(marketMarks[950]?.wstETH, "3000000000")
+  })
+
+  it("asks once per bucket, however many tokens are held", async () => {
+    const { source, feedReads } = thin([holding(950), holding(951, DAI), holding(960, WSTETH)])
+    await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.deepEqual(feedReads.filter(([, block]) => block === 900).map(([assets]) => [...assets].sort()), [["AERO", "DAI", "wstETH"]])
+  })
+
+  describe("where a feed gave no answer", () => {
+    /** 2 s blocks, so 30 blocks is a minute. Answers nothing at bucket 900 until `answering`. */
+    function silent() {
+      const state = { head: 1000, answering: false }
+      const { source, feedReads } = thin([holding(950)], {
+        async readFeedRounds(assets, block) {
+          feedReads.push([assets, block])
+          return block === 900 && !state.answering ? {} : Object.fromEntries(assets.map((asset) => [asset, round("63000000", block)]))
+        },
+      })
+      const asked = () => feedReads.filter(([, block]) => block === 900).length
+      return { state, source, asked, wallets: createWallets(source, async () => headAt(state.head)(), noFees) }
+    }
+
+    it("recovers once the feed answers, without a restart", async () => {
+      const { state, wallets, asked } = silent()
+      assert.deepEqual((await wallets.get(ME)).marketMarks, {})
+      state.head = 1001
+      assert.deepEqual((await wallets.get(ME)).marketMarks, {})
+      assert.equal(asked(), 1, "not asked again straight away")
+      state.answering = true
+      state.head = 1030
+      assert.equal((await wallets.get(ME)).marketMarks[950]?.AERO, "630000")
+      state.head = 2000
+      await wallets.get(ME)
+      assert.equal(asked(), 2, "and an answer isn't asked for again")
+    })
+
+    it("waits twice as long each time, then stops asking", async () => {
+      const { state, wallets, asked } = silent()
+      const askedAt = async (head: number) => {
+        state.head = head
+        await wallets.get(ME)
+        return asked()
+      }
+      assert.deepEqual([await askedAt(1000), await askedAt(1029), await askedAt(1030), await askedAt(1089), await askedAt(1090)], [1, 1, 2, 2, 3], "1 minute, then 2")
+      assert.deepEqual([await askedAt(1209), await askedAt(1210), await askedAt(1450), await askedAt(1930)], [3, 4, 5, 6], "then 4, 8 and 16")
+      assert.equal(await askedAt(100_000), 6)
+    })
+
+    it("uses the market in the meantime, and the feed once it answers", async () => {
+      const state = { head: 1000, answering: false }
+      const { source } = thin([holding(950)], {
+        readMarketTrades: async (asset, _, to) => [1, 2, 3].map((n) => ({ blockNum: to - n, txHash: `0x${n}`, asset, usdMicros: "1300000", notionalUsdMicros: "500000000" })),
+        readFeedRounds: async (assets, block) => (block === 900 && !state.answering ? {} : Object.fromEntries(assets.map((asset) => [asset, round("63000000", block)]))),
+      })
+      const wallets = createWallets(source, async () => headAt(state.head)(), noFees)
+      assert.equal((await wallets.get(ME)).marketMarks[950]?.AERO, "1300000")
+      state.answering = true
+      state.head = 1030
+      assert.equal((await wallets.get(ME)).marketMarks[950]?.AERO, "630000")
+    })
+
+    it("asks only the feed that didn't answer again", async () => {
+      const { source, feedReads } = thin([holding(950), holding(951, DAI)], {
+        async readFeedRounds(assets, block) {
+          feedReads.push([assets, block])
+          return Object.fromEntries(assets.flatMap((asset) => (block === 900 && asset === "AERO" ? [] : [[asset, round("100000000", block)]])))
+        },
+      })
+      let head = 1000
+      const wallets = createWallets(source, async () => headAt(head)(), noFees)
+      await wallets.get(ME)
+      head = 1030
+      const wallet = await wallets.get(ME)
+      assert.deepEqual(feedReads.filter(([, block]) => block === 900).map(([assets]) => [...assets].sort()), [["AERO", "DAI"], ["AERO"]])
+      assert.equal(wallet.marketMarks[950], undefined, "AERO's still missing, and 950 is before DAI arrives")
+      assert.equal(wallet.marketMarks[951]?.DAI, "1000000")
+    })
+
+    it("asks every bucket once before asking any again", async () => {
+      const rows = [holding(150), ...Array.from({ length: 40 }, (_, i) => row(300 + i * 150))]
+      const { source, feedReads } = thin(rows, {
+        historyFrom: () => 0,
+        async readFeedRounds(assets, block) {
+          feedReads.push([assets, block])
+          return block < 6000 ? {} : Object.fromEntries(assets.map((asset) => [asset, round("63000000", block)]))
+        },
+      })
+      const NEXT_HEAD = 300 + 39 * 150 + 30
+      let head = NEXT_HEAD
+      const wallets = createWallets(source, async () => headAt(head)(), noFees)
+      const chartReads = () => feedReads.map(([, block]) => block).filter((block) => block < NEXT_HEAD)
+      await wallets.get(ME)
+      for (head = NEXT_HEAD + 30; new Set(chartReads()).size < 41; head += 30) {
+        await wallets.get(ME)
+        assert.ok(head < NEXT_HEAD + 3000, "it never got to the oldest")
+        if (new Set(chartReads()).size < 41) assert.equal(new Set(chartReads()).size, chartReads().length, "nothing asked twice while something's still unasked")
+      }
+    })
+
+    it("forgets that in a reorg of that block, so what replaced it is asked straight away", async () => {
+      const { wallets, asked } = silent()
+      await wallets.get(ME)
+      await wallets.rewind(900, 1000)
+      await wallets.get(ME)
+      assert.equal(asked(), 2)
+    })
+  })
+
+  it("tries a failed read again, without calling what prices the wallet unchecked", async () => {
+    let fail = true
+    let head = 1000
+    const answer: Source["readFeedRounds"] = async (assets, block) => {
+      if (fail && block === 900) throw new Error("boom")
+      return Object.fromEntries(assets.map((asset) => [asset, round("63000000", block)]))
+    }
+    const { source } = thin([holding(950)], { readFeedRounds: answer })
+    const wallets = createWallets(source, async () => headAt(head)(), noFees, { ...console, warn: () => {} })
+    const failed = await wallets.get(ME)
+    assert.deepEqual([failed.marketMarks, failed.marketChecked], [{}, true])
+    fail = false
+    head = 1001
+    assert.equal((await wallets.get(ME)).marketMarks[950]?.AERO, "630000")
+  })
+
+  it("still marks from the market while feed reads keep failing, and from the feeds while market reads do", async () => {
+    const quiet = { ...console, warn: () => {} }
+    const market = thin([holding(950)], {
+      readMarketTrades: async (asset, _, to) => [1, 2, 3].map((n) => ({ blockNum: to - n, txHash: `0x${n}`, asset, usdMicros: "1300000", notionalUsdMicros: "500000000" })),
+      readFeedRounds: async () => {
+        throw new Error("boom")
+      },
+    })
+    assert.equal((await createWallets(market.source, headAt(1000), noFees, quiet).get(ME)).marketMarks[950]?.AERO, "1300000")
+    const feed = thin([holding(950)], {
+      readMarketTrades: async () => {
+        throw new Error("boom")
+      },
+    })
+    const wallet = await createWallets(feed.source, headAt(1000), noFees, quiet).get(ME)
+    assert.deepEqual([wallet.marketMarks[950]?.AERO, wallet.marketChecked], ["690000", false])
+  })
+
+  it("forgets answers from a reorg's blocks, and keeps the ones before it", async () => {
+    const { source, feedReads } = thin([holding(750), row(950)])
+    const wallets = createWallets(source, headAt(1000), noFees)
+    await wallets.get(ME)
+    await wallets.rewind(900, 1000)
+    feedReads.length = 0
+    await wallets.get(ME)
+    assert.deepEqual(feedReads.map(([, block]) => block).filter((block) => block < 990), [900], "not 750's")
+  })
+
+  it("doesn't keep an answer read across a reorg", async () => {
+    let wallets: ReturnType<typeof createWallets>
+    let rewinding: Promise<void> | undefined
+    const { source } = thin([holding(950)], {
+      async readFeedRounds(assets, block) {
+        if (block === 900 && !rewinding) rewinding = wallets.rewind(900, 1000)
+        return Object.fromEntries(assets.map((asset) => [asset, round("63000000", block)]))
+      },
+    })
+    wallets = createWallets(source, headAt(1000), noFees)
+    const wallet = await wallets.get(ME)
+    await rewinding
+    assert.deepEqual(wallet.marketMarks, {})
+  })
+
+  it("marks without a dataset that can be read for market prices", async () => {
+    const { source, marketReads } = thin([holding(950)], { marketReady: async () => false })
+    const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.equal(wallet.marketMarks[950]?.AERO, "690000")
+    assert.deepEqual([marketReads, wallet.marketChecked], [[], false])
+  })
+
+  it("marks both rules from the same answers in a comparison, each with its own ETH", async () => {
+    const ethAt = (usd: string): Partial<Source> => ({ readReferences: async (blocks) => blocks.map((block) => ({ ...reference(block), ethUsd: usd })) })
+    const answer = { readFeedRounds: async (assets: readonly string[], block: number) => Object.fromEntries(assets.map((asset) => [asset, round("1250000000000000000", block)])) }
+    const a = createWallets(thin([holding(950, WSTETH)], { ...answer, ...ethAt("240000000000") }).source, headAt(1000), noFees)
+    const b = createWallets(thin([holding(950, WSTETH)], { ...ethAt("200000000000"), readFeedRounds: async () => { throw new Error("boom") } }).source, headAt(1000), noFees, { ...console, warn: () => {} })
+    await a.get(ME)
+    await b.get(ME)
+    const facts = (await a.factsAt(ME, 995, { withBalances: false }))!
+    const [byA, byB] = [a.pricedOn(ME, facts, {}, await a.marketOn(ME, facts, {}))!, b.pricedOn(ME, facts, {}, await b.marketOn(ME, facts, {}))!]
+    assert.equal(byA.marketMarks[950]?.wstETH, "3000000000")
+    assert.equal(byB.marketMarks[950]?.wstETH, "2500000000", "the other rule's read failed, and the facts still say this")
+  })
+
+  describe("on a busy wallet", () => {
+    const rows = [holding(150), ...Array.from({ length: 40 }, (_, i) => row(300 + i * 150))]
+    const HEAD = 300 + 39 * 150
+    // A head in a bucket of its own, so the head's feed read can't pass for one of the chart's.
+    const NEXT_HEAD = HEAD + 30
+    const chartFeedReads = (reads: [readonly string[], number][]) => reads.filter(([, block]) => block < NEXT_HEAD)
+
+    it("shares the chart's read limit, newest first", async () => {
+      const { source, feedReads, marketReads } = thin(rows, { historyFrom: () => 0 })
+      let head = NEXT_HEAD
+      const wallets = createWallets(source, async () => headAt(head)(), noFees)
+      const first = await wallets.get(ME)
+      assert.deepEqual([chartFeedReads(feedReads).length, marketReads.length], [19, 1], "the market read that prices the leg comes first, and a feed's read costs the same")
+      assert.equal(first.marketChecked, true, "all that's waiting is chart points")
+      assert.ok(first.marketMarks[HEAD]?.AERO)
+      assert.equal(first.marketMarks[300], undefined, "the oldest waits")
+      head += 1
+      const second = await wallets.get(ME)
+      assert.equal(chartFeedReads(feedReads).length, 39, "the next 20")
+      head += 1
+      const third = await wallets.get(ME)
+      assert.equal(chartFeedReads(feedReads).length, 41, "only what's left")
+      assert.ok(Object.keys(second.marketMarks).length > Object.keys(first.marketMarks).length)
+      assert.equal(third.marketMarks[300]?.AERO, "630000")
+    })
+
+    it("leaves a chart's feeds waiting while what prices the wallet takes the limit", async () => {
+      const { source, feedReads, marketReads } = thin(Array.from({ length: 30 }, (_, i) => holding(300 + i * 150)), { historyFrom: () => 0 })
+      await createWallets(source, headAt(NEXT_HEAD), noFees).get(ME)
+      assert.deepEqual([marketReads.length, chartFeedReads(feedReads).length], [20, 0])
+    })
+
+    describe("read as of a fixed block, which has no new block coming", () => {
+      const RANGE = { from: 1, to: HEAD }
+      const settled = async () => headAt(HEAD + 1000)()
+      const readBalances: Source["readBalances"] = async (_, block) => ({ blockNum: block, amounts: Object.fromEntries(ASSETS.map((asset) => [asset, "0"])) })
+      const marked = (wallet: { marketMarks: Record<string, unknown> }) => Object.keys(wallet.marketMarks).length
+
+      it("keeps reading what the limit left, then stops", async () => {
+        const { source, feedReads } = thin(rows, { readBalances })
+        const wallets = createWallets(source, settled, noFees)
+        const read = async () => [marked(await wallets.get(ME, RANGE)), feedReads.length]
+        const [first, second, third] = [await read(), await read(), await read()]
+        assert.deepEqual([first[0], second[0], third[0]], [19, 39, 41], "the first refresh's limit also pays for the market read that prices the leg")
+        assert.deepEqual(await read(), third, "there's nothing left to read")
+      })
+
+      it("stops at a feed that never answers, and only reads again when it's time to ask", async () => {
+        const { source, feedReads, marketReads } = thin([holding(150), row(300)], { readBalances, readFeedRounds: async (assets, block) => (feedReads.push([assets, block]), {}) })
+        const asked = () => feedReads.filter(([, block]) => block === 300).length
+        let head = HEAD + 1000
+        const wallets = createWallets(source, async () => headAt(head)(), noFees)
+        const range = { from: 1, to: 340 }
+        await wallets.get(ME, range)
+        const reads = feedReads.length + marketReads.length
+        await wallets.get(ME, range)
+        assert.equal(feedReads.length + marketReads.length, reads, "with no new head, nothing's due")
+        for (let i = 0; i < 8; i += 1) {
+          head += 100_000
+          await wallets.get(ME, range)
+        }
+        assert.equal(asked(), 6)
+        const allReads = feedReads.length + marketReads.length
+        head += 100_000
+        await wallets.get(ME, range)
+        assert.equal(feedReads.length + marketReads.length, allReads, "nothing's left to ask")
+      })
+    })
   })
 })
 
