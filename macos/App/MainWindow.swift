@@ -557,11 +557,13 @@ private struct HoldingsTable: View {
                     let unrealized = position.values.unrealizedMicros
                     HStack(spacing: 6) {
                         if position.resolvable {
-                            Button("Fill In") { onResolve(position.asset) }
+                            // The column has room for the number beside a symbol, not a name. The name's in its tooltip and for VoiceOver.
+                            Button(questionsTitle(position.asset), systemImage: "questionmark.bubble") { onResolve(position.asset) }
+                                .labelStyle(.iconOnly)
                                 .buttonStyle(.bordered)
                                 .controlSize(.mini)
-                                .accessibilityLabel("Fill in \(position.asset)'s cost")
-                                .help("Answer what the app can't work out about \(position.asset)")
+                                .accessibilityLabel("\(questionsTitle(position.asset)) about \(position.asset)")
+                                .help("\(questionsTitle(position.asset)) about \(position.asset), so what you paid is known")
                         }
                         number(position, .unrealized, unrealized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.unrealized) } ?? Wording.unknown, tone: unrealized == nil ? .secondary : Tone(signed: unrealized))
                     }
@@ -596,6 +598,11 @@ private struct HoldingsTable: View {
 
     private var targetAsset: String? {
         if case .asset(let asset, _) = target { asset } else { nil }
+    }
+
+    /// Counts this holding's own questions, which are the ones that come first.
+    private func questionsTitle(_ asset: String) -> String {
+        Wording.answerQuestions(max(1, portfolio.questions.count { $0.arrivals.contains { $0.asset == asset } }))
     }
 
     private var dash: some View {

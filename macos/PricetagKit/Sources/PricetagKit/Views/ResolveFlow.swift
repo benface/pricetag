@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// "Who's this?": one card at a time, with swipes, keys or taps. Each answer shows what it does before you pick it, and Undo is
+/// Answering questions: one card at a time, with swipes, keys or taps. Each answer shows what it does before you pick it, and Undo is
 /// always there. Skipping is always allowed, and what's skipped stays flagged.
 public struct ResolveFlow: View {
     let store: PortfolioStore
@@ -108,6 +108,9 @@ public struct ResolveFlow: View {
                     Text("\(meter.open) left").font(.callout).foregroundStyle(.secondary).monospacedDigit().contentTransition(.numericText()).animation(.snappy, value: meter.open)
                 }
             }
+            if let why {
+                Text(why).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             ProgressView(value: model.meter?.progress ?? 0)
                 .tint(model.isBalanced ? Tone.gain.color : .accentColor)
                 .animation(reduceMotion ? nil : .snappy, value: model.meter)
@@ -123,9 +126,15 @@ public struct ResolveFlow: View {
     }
 
     private var headline: String {
-        guard let question = model.current else { return model.isBalanced ? "All answered" : "That's all for now" }
-        if isTakingCost(question) { return "What did this cost?" }
-        return "Who's this?"
+        guard let question = model.current else { return model.isBalanced ? Wording.allAnswered : Wording.nothingLeft }
+        return isTakingCost(question) ? Wording.costQuestion : Wording.senderQuestion
+    }
+
+    /// Why it's asking, right under the question, so nobody has to guess what an answer is for.
+    private var why: String? {
+        guard let question = model.current else { return store.hasAnswers ? Wording.answersPlace : nil }
+        guard isTakingCost(question) else { return Wording.senderWhy }
+        return question.sender == nil ? Wording.costWhy : Wording.exchangeCostWhy
     }
 
     private func nowText(_ portfolio: Portfolio) -> String {

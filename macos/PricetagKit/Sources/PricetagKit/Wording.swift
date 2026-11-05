@@ -224,10 +224,22 @@ public enum Wording {
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
-    /// What answering takes, on the button that starts it.
+    /// Fixing an unknown cost is answering questions, wherever it's offered, so it has one name. A count always says what it counts.
+    public static let answerQuestions = "Answer Questions"
     public static func answerQuestions(_ count: Int) -> String {
         count == 1 ? "Answer 1 Question" : "Answer \(Format.block(count)) Questions"
     }
+    /// When there's nothing to answer, but something's still left out.
+    public static let showMissing = "Show What's Missing"
+    public static let senderQuestion = "Who sent you this?"
+    public static let senderWhy = "What you paid for it is unknown until you say where it came from, so PnL leaves it out."
+    public static let costQuestion = "What did you pay for this?"
+    public static let costWhy = "Nothing shows what this cost, so PnL leaves it out until you say."
+    public static let exchangeCostWhy = "You said it came from your exchange account, which knows what you paid. Until you say, PnL leaves it out."
+    public static let allAnswered = "All answered"
+    public static let nothingLeft = "That's all for now"
+    /// Where earlier answers are, so none is stuck once it's given.
+    public static let answersPlace = "You can change any answer in Settings, under Answers."
 
     /// Why a value is partial, for its tooltip. Names the holdings, because they may not be on screen. With no cause known, it only says what's sure.
     public static func partialValue(noPrice: [String], unread: [String], unchecked: [String], incompleteHistory: [String]) -> String {
