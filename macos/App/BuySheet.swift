@@ -176,12 +176,14 @@ struct BuySheet: View {
     }
 }
 
-/// One purchase, and where it's got to.
+/// One purchase, and where it's got to. Like a send, it only gets its check once the chain shows it arrived, and its cost lights up as it becomes known.
 struct PurchaseRow: View {
     let purchase: TrackedPurchase
     let phase: PurchasePhase
     let main: CurrencyCode
     let dismiss: () -> Void
+    /// Only when it arrives while the row's on screen. One that arrived earlier is just there.
+    @State private var justArrived = false
 
     var body: some View {
         HStack {
@@ -190,25 +192,46 @@ struct PurchaseRow: View {
                     .monospacedDigit()
                 Text(PurchaseWording.status(phase, beside: main))
                     .font(.caption)
+                    .monospacedDigit()
                     .foregroundStyle(PurchaseWording.isWarning(phase) ? Tone.warning.style : AnyShapeStyle(.secondary))
                     .contentTransition(.opacity)
-                    .animation(Motion.state, value: phase)
+                    .justKnown(justArrived)
             }
             Spacer()
-            if !phase.isFinished, !phase.isUpToThem {
-                ProgressView().controlSize(.small)
+            Group {
+                if !phase.isFinished, !phase.isUpToThem {
+                    ProgressView().controlSize(.small)
+                } else if isArrived {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Tone.gain.style)
+                        .transition(.symbolEffect(.drawOn))
+                        .accessibilityLabel("Arrived")
+                }
             }
+            .frame(width: 18)
             if phase.isFinished || phase.isUpToThem {
                 Button(phase.isUpToThem ? "I Didn't Buy It" : "Dismiss", systemImage: "xmark.circle") { dismiss() }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
                     .help(phase.isUpToThem ? "Stop waiting for this one" : "Dismiss")
             }
-            if let hash = purchase.order?.txHash, let url = URL(string: "https://basescan.org/tx/\(hash)") {
+            if let hash = purchase.order?.txHash, let url = Basescan.transaction(hash) {
                 Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                     .foregroundStyle(.secondary)
                     .help("Open this transaction")
             }
         }
+        .animation(Motion.state, value: phase)
+        .onChange(of: isArrived) { _, arrived in justArrived = arrived }
+        .task(id: justArrived) {
+            guard justArrived else { return }
+            try? await Task.sleep(for: Motion.highlight)
+            if !Task.isCancelled { justArrived = false }
+        }
+    }
+
+    /// Seen on the chain, with what it cost. Anything short of that isn't checked off.
+    private var isArrived: Bool {
+        if case .recorded = phase { true } else { false }
     }
 }

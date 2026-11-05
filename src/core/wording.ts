@@ -17,6 +17,7 @@ export const STARTING_BALANCE = "Starting balance"
 export const PNL_HELP = "PnL is profit and loss: what you've gained or lost so far."
 export const REALIZED_HELP = "Gain or loss on what you've sold or spent."
 export const UNREALIZED_HELP = "Gain or loss on what you still hold, at the current price."
+export const RETURN_HELP = "Unrealized PnL as a share of what you paid for what you still hold."
 
 export const HOLD_TITLE = "Compared with holding ETH"
 export const HOLD_WALLET = "This wallet, after network fees"

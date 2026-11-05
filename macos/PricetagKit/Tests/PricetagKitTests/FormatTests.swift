@@ -62,9 +62,19 @@ struct FormatVectors: Decodable {
     let plainAmount: [PlainAmount]
     let typed: [Typed]
     let presetFiat: [CurrencyCode]
+    struct Return: Decodable { let bps, text: String }
+    let returns: [Return]
 }
 
 @Suite struct FormatTests {
+    @Test func elapsedTimeTicksBySeconds() {
+        #expect(Format.elapsed(seconds: 0) == "0 s")
+        #expect(Format.elapsed(seconds: 42) == "42 s")
+        #expect(Format.elapsed(seconds: 60) == "1 min")
+        #expect(Format.elapsed(seconds: 72) == "1 min 12 s")
+        #expect(Format.elapsed(seconds: 3720) == "1 h 2 min")
+    }
+
     let vectors: FormatVectors
 
     init() throws {
@@ -94,6 +104,13 @@ struct FormatVectors: Decodable {
 
     @Test func theBuySheetKnowsWhatCoinbaseCanStartFrom() {
         #expect(PurchaseWording.startsFromAmountIn == Set(vectors.presetFiat), "PRESET_FIAT in server/coinbase.ts")
+    }
+
+    @Test func returnsMatchTheWebApp() {
+        #expect(vectors.returns.contains { $0.bps == "1234" && $0.text == "+12.3%" })
+        for vector in vectors.returns {
+            #expect(Format.percent(bps: vector.bps) == vector.text, "\(vector.bps)")
+        }
     }
 
     @Test func plainAmountMatchesTheWebApp() {
@@ -250,5 +267,47 @@ struct CostArrivalTests {
             $0["address"] = "0x00000000000000000000000000000000000de999"
         }.costWatch
         #expect(other.arrivals(since: before).isEmpty)
+    }
+}
+
+@Suite struct NewRowMarkTests {
+    @Test func aRowThatArrivesInViewIsMarkedAtOnce() {
+        var marks = NewRowMarks()
+        marks.rowsChanged(from: ["a"], to: ["b", "a"], isCovered: false)
+        #expect(marks.lit == ["b"])
+        marks.fade()
+        #expect(marks.lit.isEmpty)
+    }
+
+    @Test func aSendWaitingForItsReceiptIsMarkedOnlyOnceItsSheetCloses() {
+        var marks = NewRowMarks()
+        // Signed under the sheet, which stays until the receipt, then a moment more.
+        marks.rowsChanged(from: [], to: ["sent"], isCovered: true)
+        #expect(marks.lit.isEmpty)
+        // Fading while it's covered has nothing to fade.
+        marks.fade()
+        // The receipt only changes the row's status, so nothing about the rows changes here.
+        marks.rowsChanged(from: ["sent"], to: ["sent"], isCovered: true)
+        marks.uncovered()
+        #expect(marks.lit == ["sent"])
+        // And only once.
+        marks.fade()
+        marks.uncovered()
+        #expect(marks.lit.isEmpty)
+    }
+
+    @Test func closingTheSheetBeforeTheReceiptStillMarksIt() {
+        var marks = NewRowMarks()
+        marks.rowsChanged(from: [], to: ["sent"], isCovered: true)
+        marks.uncovered()
+        #expect(marks.lit == ["sent"])
+    }
+
+    @Test func aSweepOfSeveralIsMarkedTogether() {
+        var marks = NewRowMarks()
+        marks.rowsChanged(from: ["old"], to: ["old", "eth"], isCovered: true)
+        marks.rowsChanged(from: ["old", "eth"], to: ["old", "eth", "usdc"], isCovered: true)
+        marks.uncovered()
+        #expect(marks.lit == ["eth", "usdc"])
     }
 }

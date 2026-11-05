@@ -91,6 +91,24 @@ public enum Format {
     }
 
     /// An estimate has to look different from an exact value, wherever it's shown.
+    /// A return in basis points as a signed percentage, to a tenth, or whole once it's 1,000% or more. A return that rounds to nothing has no sign.
+    public static func percent(bps: String) -> String {
+        let value = Decimal(string: bps) ?? 0
+        let size = abs(value)
+        let big = size >= 100_000
+        var steps = size / (big ? 100 : 10)
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &steps, 0, .plain)
+        if rounded == 0 { return big ? "0%" : "0.0%" }
+        let sign = value < 0 ? "-" : "+"
+        let grouped = { (whole: Decimal) in whole.formatted(.number.locale(locale).grouping(.automatic).precision(.fractionLength(0))) }
+        if big { return "\(sign)\(grouped(rounded))%" }
+        var tens = rounded / 10
+        var whole = Decimal()
+        NSDecimalRound(&whole, &tens, 0, .down)
+        return "\(sign)\(grouped(whole)).\(NSDecimalNumber(decimal: rounded - whole * 10).intValue)%"
+    }
+
     public static func estimate(_ text: String, _ isEstimate: Bool) -> String {
         isEstimate ? "≈\(text)" : text
     }
@@ -168,6 +186,14 @@ public enum Format {
 
     public static func time(_ date: Date) -> String {
         date.formatted(.dateTime.month(.abbreviated).day().hour().minute().locale(locale))
+    }
+
+    /// How long something's been going, to the second, for a count that ticks.
+    public static func elapsed(seconds: Int) -> String {
+        let seconds = max(0, seconds)
+        if seconds < 60 { return "\(seconds) s" }
+        if seconds < 3600 { return seconds % 60 == 0 ? "\(seconds / 60) min" : "\(seconds / 60) min \(seconds % 60) s" }
+        return "\(seconds / 3600) h \(seconds % 3600 / 60) min"
     }
 
     public static func duration(ms: Int) -> String {
