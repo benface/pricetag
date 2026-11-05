@@ -7,6 +7,7 @@ struct SettingsView: View {
 
     let store: PortfolioStore
     let hotWallet: HotWallet
+    let notifications: MoneyNotifications
     @Binding var tab: Pane
     @State var server = ""
     @State var serverError: String?
@@ -46,6 +47,9 @@ struct SettingsView: View {
             if rpcError == nil { rpc = hotWallet.settings.rpcURL.absoluteString }
         }
         .task { await store.refreshRules() }
+        // The person may have just changed it in System Settings.
+        .task { await notifications.refreshAuthorization() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await notifications.refreshAuthorization() } }
         .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
         // It read one wallet's numbers once, and replacing a key can change the wallet behind it.
         .onChange(of: store.address) { isComparing = false }
@@ -99,6 +103,23 @@ struct SettingsView: View {
                     Button("Compare Side by Side…") { isComparing = true }
                         .disabled(store.address == nil || store.address == WalletAddress.demo)
                 }
+            }
+            Section {
+                Toggle("Notify me when money moves", isOn: Binding(get: { notifications.isOn }, set: { notifications.setOn($0) }))
+                if notifications.isOn, notifications.authorization == .denied {
+                    LabeledContent {
+                        Button("Open System Settings…") { notifications.openSystemSettings() }
+                            .controlSize(.small)
+                    } label: {
+                        WarningText("They're turned off for \(AppName.current) in System Settings.")
+                    }
+                }
+            } header: {
+                Text("Notifications")
+            } footer: {
+                Text("Sweeps, purchases, and sends that didn't go through. Never prices.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section {
                 LabeledContent("Who sent what") {
