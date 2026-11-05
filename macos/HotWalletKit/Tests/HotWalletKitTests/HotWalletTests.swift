@@ -287,6 +287,173 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 }
 
 @MainActor
+@Suite struct BetweenTicksTests {
+    private let oneToSweep = snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)])
+
+    /// Waits for something the running wallet does by itself.
+    private func eventually(_ condition: @MainActor () async -> Bool) async throws {
+        for _ in 0..<500 {
+            if await condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("It never happened.")
+    }
+
+    @Test func aSendShowsAsLandedWellBeforeTheNextTick() async throws {
+        let rig = await Rig(oneToSweep, tickDelay: .seconds(3600), receiptDelay: .milliseconds(10))
+        rig.wallet.start()
+        defer { rig.wallet.stop() }
+        try await eventually { await rig.chain.sent.count == 1 }
+        await rig.chain.confirmAll()
+        try await eventually { rig.wallet.records.first?.status == .confirmed }
+        #expect(rig.stateStore.saved.settledThroughBlock == 1001)
+    }
+
+    @Test func aManualSendIsWatchedToo() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(10)]), tickDelay: .seconds(3600), receiptDelay: .milliseconds(10))
+        rig.wallet.start()
+        defer { rig.wallet.stop() }
+        try await eventually { rig.wallet.snapshot != nil }
+        await rig.wallet.sweepEverything()
+        let sent = await rig.chain.sent
+        #expect(!sent.isEmpty)
+        await rig.chain.confirmAll()
+        try await eventually { rig.wallet.records.allSatisfy { $0.status == .confirmed } }
+    }
+
+    @Test func aWalletWithNothingPendingMakesNoExtraCalls() async throws {
+        let rig = await Rig(tickDelay: .seconds(3600), receiptDelay: .milliseconds(1))
+        rig.wallet.start()
+        defer { rig.wallet.stop() }
+        try await eventually { rig.wallet.snapshot != nil }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await rig.chain.snapshotReads == 1)
+        #expect(await rig.chain.receiptReads == 0)
+    }
+
+    @Test func goesQuietAgainOnceItSettles() async throws {
+        let rig = await Rig(oneToSweep)
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.wallet.lookBetweenTicks()
+        await rig.chain.set(snapshot(tokens: [usdc: usdcUnits(10)], nonce: 1))
+        await rig.wallet.lookBetweenTicks()
+        let snapshots = await rig.chain.snapshotReads, receipts = await rig.chain.receiptReads
+        for _ in 0..<5 { await rig.wallet.lookBetweenTicks() }
+        #expect(await rig.chain.snapshotReads == snapshots)
+        #expect(await rig.chain.receiptReads == receipts)
+    }
+
+    @Test func whilePendingItReadsOnlyTheReceipt() async throws {
+        let rig = await Rig(oneToSweep)
+        await rig.wallet.tick()
+        let snapshots = await rig.chain.snapshotReads, receipts = await rig.chain.receiptReads
+        for _ in 0..<3 { await rig.wallet.lookBetweenTicks() }
+        #expect(await rig.chain.snapshotReads == snapshots)
+        #expect(await rig.chain.receiptReads == receipts + 3)
+        #expect(rig.wallet.records.first?.status == .pending)
+    }
+
+    @Test func noReceiptBetweenTicksCountsTowardAnAlarm() async throws {
+        let clock = Clock()
+        let rig = await Rig(oneToSweep, now: { clock.now })
+        await rig.wallet.tick()
+        // Its nonce is used and it's been too long, which only a tick is allowed to act on.
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1))
+        await rig.wallet.tick()
+        clock.advance(HotWallet.pendingTimeout + 1)
+        for _ in 0..<(HotWallet.readsBeforeAlarm * 5) { await rig.wallet.lookBetweenTicks() }
+        #expect(rig.wallet.alarm == nil)
+        #expect(rig.wallet.records.first?.status == .pending)
+    }
+
+    @Test func balancesCatchUpWithAReceiptAheadOfTheLatestBlock() async throws {
+        let rig = await Rig(oneToSweep)
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.wallet.lookBetweenTicks()
+        #expect(rig.wallet.records.first?.status == .confirmed)
+        #expect(rig.wallet.snapshot?.balances[usdc] == usdcUnits(60), "the node's latest block doesn't include it yet")
+
+        await rig.chain.set(snapshot(tokens: [usdc: usdcUnits(10)], nonce: 1))
+        await rig.wallet.lookBetweenTicks()
+        #expect(rig.wallet.snapshot?.balances[usdc] == usdcUnits(10))
+        #expect(rig.wallet.plan?.transfers.isEmpty == true)
+    }
+
+    @Test func aNodeThatStaysBehindIsLeftToTheNextTick() async throws {
+        let rig = await Rig(oneToSweep)
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        let before = await rig.chain.snapshotReads
+        for _ in 0..<(HotWallet.readsToCatchUp * 3) { await rig.wallet.lookBetweenTicks() }
+        #expect(await rig.chain.snapshotReads == before + HotWallet.readsToCatchUp)
+    }
+
+    @Test func onlyATickSignsTheNextSweep() async throws {
+        let rig = await Rig(oneToSweep)
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.wallet.lookBetweenTicks()
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1))
+        for _ in 0..<3 { await rig.wallet.lookBetweenTicks() }
+        #expect(await rig.chain.sent.count == 1)
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.count == 2)
+    }
+
+    @Test func aReceiptThatRevertedPausesLikeItDoesOnATick() async throws {
+        let rig = await Rig(oneToSweep)
+        await rig.wallet.tick()
+        let hash = try #require(rig.wallet.records.first?.hash)
+        await rig.chain.setReceipt(hash, succeeded: false)
+        await rig.wallet.lookBetweenTicks()
+        #expect(rig.wallet.records.first?.status == .failed)
+        #expect(rig.wallet.sweepProblem?.hasPrefix("A sweep of USDC") == true)
+
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1))
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.count == 1, "and waits before trying again")
+    }
+
+    @Test func aMissedCheckIsntAProblemToReportButAFailedTickStopsTheChecks() async throws {
+        let rig = await Rig(oneToSweep)
+        await rig.wallet.tick()
+        await rig.chain.setReadFailure(.unreachable)
+        await rig.wallet.lookBetweenTicks()
+        #expect(rig.wallet.chainProblem == nil)
+        #expect(rig.wallet.sweepProblem == nil)
+
+        await rig.wallet.tick()
+        #expect(rig.wallet.chainProblem == .unreachable)
+        let receipts = await rig.chain.receiptReads
+        await rig.wallet.lookBetweenTicks()
+        #expect(await rig.chain.receiptReads == receipts)
+
+        await rig.chain.setReadFailure(nil)
+        await rig.wallet.tick()
+        await rig.wallet.lookBetweenTicks()
+        #expect(await rig.chain.receiptReads > receipts, "and a good one starts them again")
+    }
+
+    @Test func staysOffAChainItCantReadOrShouldntTrust() async throws {
+        let rig = await Rig(oneToSweep)
+        await rig.wallet.tick()
+        let receipts = await rig.chain.receiptReads
+
+        rig.wallet.setRPC(URL(string: "https://example.com")!)
+        await rig.wallet.lookBetweenTicks()
+        #expect(await rig.chain.receiptReads == receipts, "a node no tick has read yet")
+
+        await rig.chain.set(snapshot(chainID: 1))
+        await rig.wallet.tick()
+        let onTheWrongChain = await rig.chain.receiptReads
+        await rig.wallet.lookBetweenTicks()
+        #expect(await rig.chain.receiptReads == onTheWrongChain, "another chain")
+    }
+}
+
+@MainActor
 @Suite struct GainTests {
     private let underCap = snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(30)])
 
