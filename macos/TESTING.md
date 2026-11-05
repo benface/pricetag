@@ -32,6 +32,8 @@ macos/shot.sh rule-comparison out.png --live http://127.0.0.1:8749 0x… --settl
 
 Any scene that reads the wallet, in place of its fixtures, from a real server and the real node. A scene's state is whatever that wallet's is, so `main-reading` or `hot-wallet-over-cap` shows nothing special here. Only the scene's currency and sections still apply. It's read-only: the wallet in the scene is the address you gave, with no key behind it, and it reads the node but can't send. A wallet's first read can take minutes, and what a scene loads after it appears has `--settle` seconds, 6 by default.
 
+A scene with a hot wallet makes the address you gave its Spending Money, so `main-watching` or `wallet-switcher` shows that address as yours. To see it only being watched, use a scene without one, like `main`, `main-small` or `popover`.
+
 Never run a release build to look at something: it starts the real hot wallet, which can sweep by itself, and reads the real settings. Check one with `strings` and `nm` instead.
 
 ## 2. Capture a real window

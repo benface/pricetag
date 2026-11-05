@@ -83,7 +83,7 @@ struct PopoverView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                walletMenu
+                walletHeader
                 Spacer(minLength: 8)
                 if showsBadge {
                     FeedBadge(feed: store.feed, portfolio: portfolio)
@@ -133,6 +133,18 @@ struct PopoverView: View {
     }
 
     /// The same wallets as the window's toolbar, as a menu. Adding or naming one happens there, with room to do it.
+    /// With no wallets, there's nothing for a menu to offer that the button below doesn't.
+    @ViewBuilder
+    private var walletHeader: some View {
+        if store.walletList(hotWallet: hotWallet).all.isEmpty {
+            Text(AppName.current)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else {
+            walletMenu
+        }
+    }
+
     private var walletMenu: some View {
         let list = store.walletList(hotWallet: hotWallet)
         let current = list.entry(for: store.address)
