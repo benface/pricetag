@@ -3,6 +3,10 @@
 
 import { isAddress, isCurrencyCode, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
 
+export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
+/** The demo's other wallet. Nothing links them until someone answers that it's theirs. */
+export const DEMO_SAVINGS_ADDRESS = "0x00000000000000000000000000000000000de301"
+
 /** An amount someone entered or imported, in the currency it was in, because that's what it stays true in. */
 export type Money = { micros: string; currency: CurrencyCode }
 
@@ -42,14 +46,16 @@ export const costKey = (wallet: string, legId: string) => `${normalizeAddress(wa
 
 /**
  * Answering for a sender. Saying it's yours says the wallet you're looking at is yours too. Saying someone else sent what
- * arrived from a wallet that's already yours is about the wallet you're looking at, and yours stays yours.
+ * arrived from a wallet that's already yours is about the wallet you're looking at, and yours stays yours. With no `focus`,
+ * it's only about the sender.
  */
-export function answerSender(book: Book, focus: string, sender: string, answer: SenderAnswer): Book {
-  if (answer.kind === "someone-else" && book.senders[normalizeAddress(sender)]?.kind === "mine" && isAddress(focus) && book.senders[normalizeAddress(focus)]?.kind !== "mine") {
+export function answerSender(book: Book, focus: string | null, sender: string, answer: SenderAnswer): Book {
+  const focused = focus !== null && isAddress(focus)
+  if (answer.kind === "someone-else" && book.senders[normalizeAddress(sender)]?.kind === "mine" && focused && book.senders[normalizeAddress(focus)]?.kind !== "mine") {
     return { ...book, senders: { ...book.senders, [normalizeAddress(focus)]: answer } }
   }
   const senders: Book["senders"] = { ...book.senders, [normalizeAddress(sender)]: answer }
-  if (answer.kind === "mine" && isAddress(focus)) senders[normalizeAddress(focus)] = { kind: "mine" }
+  if (answer.kind === "mine" && focused) senders[normalizeAddress(focus)] = { kind: "mine" }
   return { ...book, senders }
 }
 
@@ -151,6 +157,16 @@ export function parseBook(value: unknown): Book | null {
     parsed.withdrawals.push(withdrawal)
   }
   return parsed
+}
+
+/**
+ * Which wallet a signature links `address` to: the one showing if that's the user's, or another of theirs. With none yet, it
+ * speaks for itself. A wallet that's only being looked at never comes into it, because one wallet's signature says nothing about
+ * another, and neither does the demo, whose wallets nobody owns even after answering for them.
+ */
+export function proofOwner(book: Book, address: string, current: string): string {
+  const others = linkedWallets(book).filter((wallet) => wallet !== normalizeAddress(address) && wallet !== DEMO_ADDRESS && wallet !== DEMO_SAVINGS_ADDRESS)
+  return others.find((wallet) => wallet === normalizeAddress(current)) ?? others[0] ?? normalizeAddress(address)
 }
 
 /** What a wallet signs to prove it's yours. It says what it does, and it can't move anything. */
