@@ -155,13 +155,50 @@ describe("the cost of an incoming leg", () => {
         assert.deepEqual(foldBook(mismatched(), [wallet(B, rows)], "average", book({ [B]: { kind: "mine" } })).withheld, [])
         const other = [...send(30, "0x3", A, C, 5n * E6), ...buy(5, "0x0", A, 5n)]
         const elsewhere = wallet(A, other, { balances: { blockNum: 100, amounts: { USDC: "1", ETH: "0" } } })
-        const seen = foldBook(wallet(B, buy(40, "0x5", B, 5n)), [elsewhere, wallet(C, other)], "average", book({ [A]: { kind: "mine" }, [C]: { kind: "mine" } }))
-        assert.deepEqual(seen.withheld, [])
+        const links = book({ [A]: { kind: "mine" }, [C]: { kind: "mine" } })
+        const paid = foldBook(wallet(B, buy(40, "0x5", B, 5n)), [elsewhere, wallet(C, other)], "average", links)
+        assert.deepEqual(paid.withheld, [])
+        const fromStranger = send(40, "0x5", STRANGER, B, 10n * E6)
+        const unrelated = foldBook(wallet(B, fromStranger), [elsewhere, wallet(C, other)], "average", links)
+        assert.equal(unrelated.positions[0]?.values.costMicros, null, "it has an unknown cost of its own")
+        assert.deepEqual(unrelated.withheld, [])
+        assert.deepEqual(foldBook(wallet(C, other), [elsewhere], "average", book({ [A]: { kind: "mine" } })).withheld, [{ wallet: A, asset: "USDC" }], "the wallet it did reach still says so")
+      })
+
+      describe("through another wallet", () => {
+        const links = book({ [A]: { kind: "mine" }, [B]: { kind: "mine" } })
+        const stranger = send(5, "0x0", STRANGER, B, 1000n * E6)
+        // B holds what a stranger sent first, then what A sent, and passes on only the first 1,000.
+        const moved = [...rows, ...stranger, ...send(30, "0x3", B, C, 1000n * E6)]
+        const from = wallet(A, moved, { balances: { blockNum: 100, amounts: { USDC: amount, ETH: "0" } } })
+
+        it("follows the units that actually moved, oldest first", () => {
+          assert.deepEqual(foldBook(wallet(C, moved), [from, wallet(B, moved)], "fifo", links).withheld, [])
+          assert.deepEqual(foldBook(wallet(B, moved), [from, wallet(C, moved)], "fifo", links).withheld, [{ wallet: A, asset: "USDC" }], "B did receive it")
+          const after = [...stranger, ...rows, ...send(30, "0x3", B, C, 1500n * E6)]
+          assert.deepEqual(foldBook(wallet(C, after), [wallet(A, after, { balances: { blockNum: 100, amounts: { USDC: amount, ETH: "0" } } }), wallet(B, after)], "fifo", links).withheld, [{ wallet: A, asset: "USDC" }], "and past the first 1,000, some of what moved is A's")
+        })
+
+        it("goes along with an average, where every unit shares what's unknown", () => {
+          assert.deepEqual(foldBook(wallet(C, moved), [from, wallet(B, moved)], "average", links).withheld, [{ wallet: A, asset: "USDC" }])
+        })
+
+        it("names everyone behind an average, and only them", () => {
+          const D = addr(0xe1)
+          const two = [...rows, ...buy(12, "0x6", D, 1000n), ...send(22, "0x7", D, B, 1000n * E6), ...send(30, "0x3", B, C, 500n * E6)]
+          const off = (address: string) => wallet(address, two, { balances: { blockNum: 100, amounts: { USDC: amount, ETH: "0" } } })
+          const three = book({ [A]: { kind: "mine" }, [B]: { kind: "mine" }, [D]: { kind: "mine" } })
+          assert.deepEqual(foldBook(wallet(C, two), [off(A), off(D), wallet(B, two)], "average", three).withheld, [{ wallet: A, asset: "USDC" }, { wallet: D, asset: "USDC" }])
+          const fine = wallet(D, two)
+          assert.deepEqual(foldBook(wallet(C, two), [off(A), fine, wallet(B, two)], "average", three).withheld, [{ wallet: A, asset: "USDC" }])
+        })
       })
 
       it("keeps a cost the user entered for it", () => {
         const answered: Book = { ...linked, costs: { [costKey(B, wallet(B, rows).legs[0]?.id as string)]: usd("900000000") } }
-        assert.equal(foldBook(wallet(B, rows), [mismatched()], "average", answered).positions[0]?.values.costMicros, "900000000")
+        const result = foldBook(wallet(B, rows), [mismatched()], "average", answered)
+        assert.equal(result.positions[0]?.values.costMicros, "900000000")
+        assert.deepEqual(result.withheld, [], "so there's nothing to warn about")
       })
 
       it("isn't balanced while a cost is withheld, though nothing's left to ask", () => {

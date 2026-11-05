@@ -16,8 +16,18 @@ type OpenItem = { wallet: string; leg: PricedLeg; sender: string | null; units: 
 export type Resolved = {
   legs: Map<string, PricedLeg[]>
   open: OpenItem[]
-  /** What couldn't carry over, because the wallet's history of that asset can't be confirmed. It arrived with its cost left unknown. */
-  withheld: { wallet: string; asset: string }[]
+}
+
+/** A wallet whose history of an asset can't be confirmed, so what it sent arrived with its cost unknown. */
+export type Withheld = { wallet: string; asset: string }
+
+/** Who's behind what's unknown in these legs, which only says what actually arrived in them, however many wallets it came through. */
+export function withheldIn(legs: readonly PricedLeg[]): Withheld[] {
+  const withheld = new Map<string, Withheld>()
+  for (const { asset, pieces } of legs) {
+    for (const wallet of (pieces ?? []).flatMap((piece) => piece.unconfirmedBy ?? [])) withheld.set(`${wallet}:${asset}`, { wallet, asset })
+  }
+  return [...withheld.values()]
 }
 
 type Source = { address: string; units: bigint }
@@ -168,7 +178,6 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     vouched.set(sender, through)
     return blockNum <= (through.get(asset) ?? Number.POSITIVE_INFINITY)
   }
-  const withheld = new Map<string, { wallet: string; asset: string }>()
 
   // Everything that could be an exchange withdrawal, across every wallet read, so one withdrawal can't explain two of them.
   const arrivals: ExchangeArrival[] = sides.flatMap(({ wallet, view }) =>
@@ -214,10 +223,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
       const answer = book.senders[sender]
       if (answer?.kind === "mine" || linked.has(sender) || sender === address) {
         if (!read.has(sender)) return [unknown]
-        if (sender !== address && !confirmed(sender, leg)) {
-          withheld.set(`${sender}:${leg.asset}`, { wallet: sender, asset: leg.asset })
-          return [unknown]
-        }
+        if (sender !== address && !confirmed(sender, leg)) return [{ ...unknown, unconfirmedBy: [sender] }]
         return pull(leg, sender, address, part)
       }
       if (answer?.kind === "my-exchange") {
@@ -259,7 +265,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const recipients = next.kind === "transfer" && taken.length > 0 ? recipientsOf(next) : null
     for (const [recipient, pieces] of allocateTaken(taken, recipients ?? [], method)) carried.set(`${next.txHash}:${address}:${next.asset}:${recipient}`, pieces)
   }
-  return { legs: output, open, withheld: [...withheld.values()] }
+  return { legs: output, open }
 }
 
 export type Arrival = { asset: string; decimals: number; units: string }
@@ -377,8 +383,8 @@ export type BookFold = {
   points: PnlPoint[]
   questions: Question[]
   meter: Meter
-  /** Other wallets' history that can't be confirmed, and that's why some of what's in this wallet has an unknown cost. */
-  withheld: Resolved["withheld"]
+  /** Other wallets' history that can't be confirmed, and that's why some of what arrived in this wallet has an unknown cost. */
+  withheld: Withheld[]
 }
 
 /**
@@ -391,7 +397,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
   const sideOf = (wallet: WalletResponse): Side => ({ wallet, view: usd ? usdView(wallet) : viewWallet(wallet) })
   const sides = [focus, ...others.filter((w) => normalizeAddress(w.address) !== address && linked.has(normalizeAddress(w.address)) && sameRead(w, focus))].map(sideOf)
   const view = (sides[0] as Side).view
-  const { legs: resolved, open, withheld } = resolveLegs(sides, method, book)
+  const { legs: resolved, open } = resolveLegs(sides, method, book)
   const legs = resolved.get(address) as PricedLeg[]
   const { positions, unreadAssets: unread, totals, pnlStatus, points } = foldWallet(focus, method, { ...view, legs })
   const questions = questionsOf(open, sides, book)
@@ -405,7 +411,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
     points,
     questions,
     meter: meterOf(questions, book, address, missingWallets(book, focus, others).length),
-    withheld: withheld.filter(({ wallet, asset }) => wallet !== address && positions.some((position) => position.asset === asset && position.effects.some(({ leg }) => leg.pieces?.some((piece) => piece.costMicros === null)))),
+    withheld: withheldIn(legs).filter(({ wallet }) => wallet !== address),
   }
 }
 

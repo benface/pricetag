@@ -656,6 +656,19 @@ describe("the user's answers in a report", () => {
       const first = arrived(hop, A, B)
       const [row] = eventsOf(taxReportOf([walletOf(B, [first, sell(30, 1n, 2500)])], US, { book: { ...mine, costs: { [costKey(B, first.id)]: { micros: usd(900), currency: "USD" } } }, costsFrom: [mismatched()] }))
       assert.deepEqual([row?.Cost, row?.Status], ["900.000000", "SELF-REPORTED"])
+      const answered = taxReportOf([walletOf(B, [first, sell(30, 1n, 2500)])], US, { book: { ...mine, costs: { [costKey(B, first.id)]: { micros: usd(900), currency: "USD" } } }, costsFrom: [mismatched()] })
+      assert.ok(!answered.warnings.some((warning) => /history can't be confirmed/.test(warning)), "so there's nothing to warn about")
+    })
+
+    it("doesn't blame a wallet for an unknown cost that didn't come from it", () => {
+      const C = `0x${"c".repeat(40)}`
+      const elsewhere = () => walletOf(A, [buy(10, 1n, 1000), sent(hop, C)], { balances: { blockNum: 1000, amounts: { ETH: E18.toString() } } })
+      const book = answering({ [A]: { kind: "mine" }, [C]: { kind: "mine" } })
+      const unrelated = taxReportOf([walletOf(B, [arrived(hop, SELLER, B), sell(30, 1n, 2500)])], US, { book, costsFrom: [elsewhere(), walletOf(C, [arrived(hop, A, C)])] })
+      assert.equal(eventsOf(unrelated)[0]?.Status, "UNRESOLVED", "it has an unknown cost of its own")
+      assert.ok(!unrelated.warnings.some((warning) => /history can't be confirmed/.test(warning)))
+      const reached = taxReportOf([walletOf(C, [arrived(hop, A, C)])], US, { book, costsFrom: [elsewhere()] })
+      assert.ok(reached.warnings.some((warning) => /ETH history can't be confirmed/.test(warning)), "the wallet it did reach still says so")
     })
 
     it("doesn't change what a wallet's own history says about itself", () => {
