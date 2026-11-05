@@ -506,7 +506,13 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const given = rows.filter((row) => row.givenCost).length
   const counted = rows.filter((row) => row.gainMicros !== null)
   const events = [...eventsOf(rows).values()]
-  const unknownIn = new Set(events.filter((event) => event.unknown).map((event) => event.wallet.toLowerCase()))
+  // Where to fix what's unknown: the wallets whose sales say so, and any wallet holding an asset with an unknown gain
+  // that arrived with no known cost. Across wallets, that cost is part of another wallet's sale, which has no question.
+  const unknownAssets = new Set(rows.filter((row) => row.gainMicros === null).map((row) => row.asset))
+  const unknownIn = new Set([
+    ...events.filter((event) => event.unknown).map((event) => event.wallet.toLowerCase()),
+    ...sources.filter(({ view }) => view.legs.some((leg) => unknownAssets.has(leg.asset) && BigInt(leg.delta) > 0n && leg.costMicros === null)).map(({ wallet }) => wallet.address.toLowerCase()),
+  ])
 
   const warnings: string[] = partialYear === null ? [] : [partialYear]
   if (unresolved > 0) warnings.push(`${plural(unresolved, "row")} of ${rows.length.toLocaleString("en-US")} ${unresolved === 1 ? "is" : "are"} unresolved. What can't be worked out says "unknown". It's never counted as 0, and it isn't in the gain total.`)

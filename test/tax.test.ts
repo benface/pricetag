@@ -471,6 +471,18 @@ describe("taxReportOf", () => {
     assert.deepEqual(taxReportOf([known], { country: "US", method: "fifo", scope: "per-wallet" }).unknownWallets, [])
   })
 
+  it("names a wallet whose unknown cost is part of another wallet's sale", () => {
+    // Pooled: B's ETH, of unknown cost, averages into what A's sale cost, and only B has a question about it.
+    const a = walletOf(A, [buy(10, 1n, 1000), sell(30, 1n, 2000)])
+    const b = walletOf(B, [leg(20, E18)])
+    const ca = { country: "CA", method: "average", scope: "pooled" } as const
+    const report = taxReportOf([a, b], ca)
+    assert.deepEqual([report.unknownCount, report.unknownWallets], [1, [A, B]])
+    const book: Book = { ...emptyBook(), costs: { [costKey(B, `${hash(20)}:ETH`)]: { micros: usd(1500), currency: "USD" } } }
+    const answered = taxReportOf([a, b], ca, { book })
+    assert.deepEqual([answered.unknownCount, answered.unknownWallets, answered.gainMicros], [0, [], usd(750)])
+  })
+
   it("previews the file's first rows", () => {
     const report = taxReportOf([DEMO_WALLET], { country: "US", method: "fifo", scope: "per-wallet" })
     assert.equal(report.preview.length, Math.min(5, report.rowCount))
