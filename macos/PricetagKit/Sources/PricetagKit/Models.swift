@@ -125,8 +125,8 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public var explainableMetrics: [AssetMetric] {
         AssetMetric.tableOrder.filter { metric in
             switch metric {
-            case .amount, .realized: true
-            case .price: price != nil
+            // A missing price has its reason in the details too.
+            case .amount, .realized, .price: true
             case .average, .value, .unrealized, .return: isHeld
             case .onchain: reconciliation != nil || hasShortfall
             }

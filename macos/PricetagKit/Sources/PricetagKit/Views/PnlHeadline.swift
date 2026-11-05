@@ -262,8 +262,31 @@ extension Portfolio {
     }
 
     /// `attention` in a few words. The full version belongs in a tooltip beside this, and in the window.
+    /// What the value leaves out comes first, because the value is the biggest number beside it. An unknown cost says the PnL
+    /// is incomplete, so what else the PnL leaves out only comes before an estimate.
+    public var shortAttention: String? {
         guard attention != nil else { return nil }
+        if isValuePartial { return Wording.valueLeavesOut(valueLeftOut) }
+        if isPositive(totals.unresolvedMicros) { return Wording.shortLeavesOut(totals, currency) }
+        if pnlStatus == .partial, !pnlLeftOut.isEmpty { return Wording.pnlLeavesOut(pnlLeftOut, also: false) }
         return Wording.shortLeavesOut(totals, currency) ?? "Some numbers are incomplete"
+    }
+
+    /// The holdings a partial value leaves out, as the SDK counts them.
+    private var valueLeftOut: [String] {
+        let reasons: Set = ["no current price", "incomplete history", "balance couldn't be read", "not checked against its actual balance"]
+        return unique(totals.excluded.filter { reasons.contains($0.reason) }.map(\.asset) + unreadAssets)
+    }
+
+    /// What a partial PnL leaves out that "has an unknown cost" doesn't already say, when the headline's line says that.
+    private var pnlLeftOut: [String] {
+        let saysUnknownCost = isPositive(totals.unresolvedMicros)
+        return unique(totals.excluded.filter { !saysUnknownCost || $0.reason != "unknown cost" }.map(\.asset))
+    }
+
+    private func unique(_ assets: [String]) -> [String] {
+        var seen = Set<String>()
+        return assets.filter { seen.insert($0).inserted }
     }
 
     /// The sums beside the headline, in reading order.
@@ -295,13 +318,19 @@ extension Portfolio {
         if !l1FeeUnknownTxs.isEmpty { lines.append(Wording.networkFeeUnknown(l1FeeUnknownTxs.count)) }
         lines += withheld.map { Wording.withheld(wallet: $0.wallet, asset: $0.asset) }
         lines += Wording.missingRates(self)
-        // What's left out of the value is in the list below, unless nothing named it.
-        if isValuePartial, totals.excluded.isEmpty, let reason = partialValueReason { lines.append(reason) }
         // The sentence about estimates only counts what's in the PnL. A value from a market price is an estimate too.
         let estimates = totals.estimated
         if !isPositive(totals.estimatedMicros), estimates.value || estimates.realized || estimates.unrealized { lines.append(Wording.marketEstimates) }
         let excludedList = Wording.excluded(totals.excluded)
-        if let title = Wording.leavesOut(totals, currency) { return Attention(title: title, details: lines, fullList: excludedList) }
+        if let title = Wording.leavesOut(totals, currency) {
+            // That says how much is unknown or estimated, not which totals leave something out, and the numbers above don't say either.
+            var omissions: [String] = []
+            if isValuePartial { omissions.append(Wording.valueLeavesOut(valueLeftOut) + ".") }
+            if pnlStatus == .partial, !pnlLeftOut.isEmpty { omissions.append(Wording.pnlLeavesOut(pnlLeftOut, also: isPositive(totals.unresolvedMicros)) + ".") }
+            return Attention(title: title, details: omissions + lines, fullList: excludedList)
+        }
+        // A value with nothing in the list to say why still says so.
+        if excludedList == nil, isValuePartial { lines.insert(Wording.valueLeavesOut(valueLeftOut) + ".", at: 0) }
         if let excludedList { return Attention(title: excludedList, details: lines, fullList: nil) }
         guard let first = lines.first else { return nil }
         return Attention(title: first, details: Array(lines.dropFirst()), fullList: nil)

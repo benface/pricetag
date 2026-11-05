@@ -14,6 +14,16 @@ public enum Wording {
     public static let realizedHelp = "Gain or loss on what you've sold or spent."
     public static let unrealizedHelp = "Gain or loss on what you still hold, at the current price."
     public static let marketEstimates = "Some prices are estimates, from the market."
+
+    /// What a partial value leaves out, without a period, so it also fits on one short line.
+    public static func valueLeavesOut(_ assets: [String]) -> String {
+        assets.isEmpty ? "The value isn't complete" : "The value leaves out \(assets.formatted(.list(type: .and).locale(Locale(identifier: "en_US"))))"
+    }
+
+    /// What a partial PnL leaves out, without a period. `also` when something before it already says part of it.
+    public static func pnlLeavesOut(_ assets: [String], also: Bool) -> String {
+        "PnL \(also ? "also " : "")leaves out \(assets.formatted(.list(type: .and).locale(Locale(identifier: "en_US"))))"
+    }
     public static let returnHelp = "Unrealized PnL as a share of what you paid for what you still hold."
 
     public static let holdTitle = "Compared with holding ETH"

@@ -203,7 +203,8 @@ struct HoldComparisonTests {
         #expect(attention.title.hasPrefix("$3,603.42 has an unknown cost, so it isn't in the PnL."))
         #expect(attention.title.hasSuffix("$899.98 is estimated."))
         #expect(attention.fullList == Wording.excluded(portfolio.totals.excluded))
-        #expect(attention.details.isEmpty)
+        // What "has an unknown cost" doesn't cover, said where it's seen rather than only in a tooltip.
+        #expect(attention.details == ["PnL also leaves out USDC, ETH, and cbBTC."])
     }
 
     @Test func seeWhyOpensTheBalanceThatDoesntMatch() throws {

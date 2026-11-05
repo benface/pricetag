@@ -29,6 +29,20 @@ import Testing
         #expect(usdc.explainableMetrics.map(\.title) == ["Balance check", "Amount", "Price", "Average price paid", "Value", "Realized PnL", "Unrealized PnL", "Return"])
     }
 
+    /// The details say why there's no price, so a holding without one can still open it.
+    @Test func aMissingPriceCanStillBeOpened() throws {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
+        var positions = object["positions"] as! [[String: Any]]
+        let index = try #require(positions.firstIndex { $0["asset"] as? String == "AERO" })
+        positions[index]["price"] = NSNull()
+        object["positions"] = positions
+        let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        let aero = try #require(portfolio.listedPositions.first { $0.asset == "AERO" })
+        #expect(aero.price == nil)
+        #expect(aero.explainableMetrics.contains(.price))
+        #expect(portfolio.listedPositions.allSatisfy { $0.explainableMetrics.contains(.price) })
+    }
+
     @Test func keepsUnknownPointsUnknown() throws {
         let portfolio = try demoPortfolio()
         #expect(portfolio.points.first?.pnlMicros == nil)
