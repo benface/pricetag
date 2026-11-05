@@ -38,6 +38,25 @@ public enum HotWalletWording {
             : "\(usd(excess, beside: main)) over the cap, with nowhere to sweep it. Add a savings wallet."
     }
 
+    public static func shortOverCap(by excess: UInt128, beside main: CurrencyCode) -> String {
+        "\(usd(excess, beside: main)) over the cap"
+    }
+
+    public static func shortNoPrice(_ symbols: [String]) -> String {
+        "No price for \(symbols.joined(separator: ", "))"
+    }
+
+    public static let shortKeyMissing = "Key missing"
+    public static let shortOldKeyHolds = "Old key still holds tokens"
+    public static let shortOldKeyUnchecked = "Can't check the old key"
+    public static let shortNetworkBusy = "Network busy"
+    public static let shortCantReachChain = "Can't reach the network"
+    public static let shortWrongChain = "Wrong network"
+    public static let shortLastActionFailed = "Last action failed"
+    public static let shortNoGas = "Needs ETH for gas"
+    public static let shortNoEthPrice = "No ETH price"
+    public static let shortNoSavings = "No savings wallet"
+
     public static let noGas = "This wallet can't pay for a sweep, because it doesn't have enough ETH. Send it a little ETH so it can move its tokens."
     public static let excessIsDust = "A little over the cap, by less than it makes sense to spend gas on."
 
@@ -104,6 +123,8 @@ public enum HotWalletWording {
         }.joined(separator: " ")
     }
 
+    /// For places with room for only a few words, like the menu bar.
+    public static let alarmShort = "Key may be stolen"
     public static let alarmHeadline = "This wallet's key may be stolen"
     public static let alarmAdvice = "Top-ups and sends are stopped. Move what's left and replace the key now. Anything sent here can be taken."
 }

@@ -410,6 +410,125 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(!summary.text.contains("$"))
     }
 
+    @Test func aProblemFitsInAFewWords() throws {
+        let portfolio = try demoPortfolio()
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x")]
+        for state in states {
+            let problem = try #require(state.shortProblem(portfolio: portfolio))
+            #expect(problem.count <= 26, "\(state)")
+            #expect(!problem.contains("."), "\(state)")
+        }
+        #expect(FeedState.behind(seconds: 600).shortProblem(portfolio: portfolio) == "Data is 10 min old")
+    }
+
+    @Test func nothingWrongHasNoProblem() throws {
+        let portfolio = try demoPortfolio()
+        for state in [FeedState.noWallet, .reading, .live] { #expect(state.shortProblem(portfolio: portfolio) == nil) }
+    }
+
+    @Test func theGlanceListsWhatsHeldLargestFirst() throws {
+        let portfolio = try demoPortfolio()
+        let top = portfolio.largestHoldings(3)
+        #expect(top.map(\.asset) == ["USDC", "cbBTC", "ETH"])
+        #expect(portfolio.largestHoldings(100).allSatisfy { $0.isHeld })
+    }
+
+    @Test func aPositionWithNoPriceRanksLastInsteadOfAsNothing() throws {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
+        var positions = object["positions"] as! [[String: Any]]
+        let index = try #require(positions.firstIndex { $0["asset"] as? String == "USDC" })
+        var values = positions[index]["values"] as! [String: Any]
+        values["valueMicros"] = NSNull()
+        positions[index]["values"] = values
+        object["positions"] = positions
+        let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        let all = portfolio.largestHoldings(100)
+        #expect(all.last?.asset == "USDC")
+        #expect(all.first?.asset == "cbBTC")
+    }
+
+    /// The demo, changed, with its value counted as partial the way the SDK counts it.
+    private func partialPortfolio(valueCoverage: [String: Int] = ["known": 6, "missing": 1], _ change: (inout [String: Any]) -> Void) throws -> Portfolio {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
+        var totals = object["totals"] as! [String: Any]
+        var coverage = totals["coverage"] as! [String: Any]
+        coverage["value"] = valueCoverage
+        totals["coverage"] = coverage
+        object["totals"] = totals
+        change(&object)
+        return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func changing(_ asset: String, in object: inout [String: Any], _ change: (inout [String: Any]) -> Void) {
+        var positions = object["positions"] as! [[String: Any]]
+        for index in positions.indices where positions[index]["asset"] as? String == asset { change(&positions[index]) }
+        object["positions"] = positions
+    }
+
+    private func removingPrice(of asset: String, in object: inout [String: Any]) {
+        changing(asset, in: &object) { position in
+            var values = position["values"] as! [String: Any]
+            values["valueMicros"] = NSNull()
+            position["values"] = values
+        }
+    }
+
+    @Test func aValueMissingAHoldingSaysSoEvenWhenThatHoldingIsntListed() throws {
+        let portfolio = try partialPortfolio { removingPrice(of: "USDC", in: &$0) }
+        #expect(!portfolio.largestHoldings(5).map(\.asset).contains("USDC"))
+        #expect(portfolio.isValuePartial)
+        #expect(portfolio.partialValueReason == "USDC has no price right now.")
+    }
+
+    @Test func anUnreadBalanceIsntCalledAMissingPrice() throws {
+        let portfolio = try partialPortfolio(valueCoverage: ["known": 7, "missing": 1]) { $0["unreadAssets"] = ["wstETH"] }
+        #expect(portfolio.partialValueReason == "Couldn't read the balance of wstETH.")
+    }
+
+    @Test func anUncheckedBalanceSaysSoUnlessItsStillCurrent() throws {
+        let unchecked: (Bool) throws -> Portfolio = { isCurrent in
+            try self.partialPortfolio { object in
+                self.changing("AERO", in: &object) { $0["reconciliation"] = ["status": "unchecked", "heldIsCurrent": isCurrent] }
+            }
+        }
+        #expect(try unchecked(false).partialValueReason == "Couldn't check the balance of AERO.")
+        #expect(try unchecked(true).partialValueReason == "This value isn't complete.")
+    }
+
+    @Test func incompleteHistorySaysSo() throws {
+        let portfolio = try partialPortfolio { object in
+            changing("AERO", in: &object) { $0["shortfallQty"] = "5" }
+        }
+        #expect(portfolio.partialValueReason == "Incomplete history for AERO.")
+    }
+
+    @Test func aValueWithSeveralCausesNamesEach() throws {
+        let portfolio = try partialPortfolio(valueCoverage: ["known": 5, "missing": 3]) { object in
+            removingPrice(of: "USDC", in: &object)
+            removingPrice(of: "DAI", in: &object)
+            object["unreadAssets"] = ["wstETH"]
+        }
+        let reason = try #require(portfolio.partialValueReason)
+        #expect(reason.contains("have no price right now."))
+        #expect(reason.contains("USDC") && reason.contains("DAI"))
+        #expect(reason.contains("Couldn't read the balance of wstETH."))
+    }
+
+    @Test func noKnownCauseDoesntGuessOne() throws {
+        #expect(try partialPortfolio { _ in }.partialValueReason == "This value isn't complete.")
+    }
+
+    @Test func aWholeValueIsntPartial() throws {
+        let portfolio = try demoPortfolio()
+        #expect(!portfolio.isValuePartial)
+        #expect(portfolio.partialValueReason == nil)
+    }
+
+    @Test func attentionFitsInAFewWords() throws {
+        #expect(try demoPortfolio().shortAttention == "$3,603.42 has an unknown cost")
+        #expect(try realPortfolio(at: Date(), status: .complete).shortAttention?.contains("\n") != true)
+    }
+
     @Test func aCompleteTotalDoesntWarn() throws {
         let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .complete))
         #expect(!summary.isWarning)

@@ -40,6 +40,10 @@ What macOS allows, found by trying it on macOS 27.2:
 
 Not tried, because it would have interrupted: running this while a full-screen app or another Space is in front.
 
+The `route-*` scenes check more than looks: they press what the menu bar's buttons press, with the window closed and with it open on another section, and fail unless they get where they promise and stay there.
+
+Scenes for the main window and Settings always use a real window, because their sidebar, toolbar and tabs are drawn by the window server. A window can't be larger than the display, so `main-huge` shows as much as this display allows. A test window's toolbar has no room for Settings' tabs, which show properly in the real one. Sheets, including the details in a narrow window, don't appear in a capture.
+
 ## 3. Test behavior with logic tests
 
 Don't drive the UI. Anything that decides what happens belongs in `PricetagKit` or another package, with a test next to `FeedTests.swift`. Scenes set up the state you want to see, so you don't need to click your way to it.
@@ -48,6 +52,8 @@ Don't drive the UI. Anything that decides what happens belongs in `PricetagKit` 
 
 Don't do it yourself. Finish, and put a short checklist for benface in your hand-off comment, with what to do and what they should see. For example:
 
+- The green button enters full screen: at launch, after opening from the menu bar, and after closing the window and reopening it. Closing the last window still takes away the Dock icon.
+- Dragging the window down to its smallest size and back, with the details open.
 - The menu bar item's text, including its warning.
 - The real popover under the menu bar, and that clicking outside it closes it.
 - Opening the window from the popover brings it to the front, and adds the Dock icon and menus. Closing it takes them away.

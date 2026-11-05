@@ -194,3 +194,52 @@ struct HoldComparisonTests {
         }
     }
 }
+
+@Suite struct AttentionTests {
+    @Test func saysWhatTheNumbersLeaveOutOnce() throws {
+        let portfolio = try demoPortfolio()
+        let attention = try #require(portfolio.attention)
+        #expect(attention.title.hasPrefix("$3,603.42 has an unknown cost, so it isn't in your PnL."))
+        #expect(attention.title.hasSuffix("$899.98 is estimated."))
+        #expect(attention.fullList == Wording.excluded(portfolio.totals.excluded))
+        #expect(attention.details.isEmpty)
+    }
+
+    @Test func seeWhyOpensTheBalanceThatDoesntMatch() throws {
+        #expect(try demoPortfolio().attentionTarget == .asset("cbBTC", .onchain))
+    }
+
+    @Test func answeringCountsItsQuestions() {
+        #expect(Wording.answerQuestions(1) == "Answer 1 Question")
+        #expect(Wording.answerQuestions(5) == "Answer 5 Questions")
+    }
+
+    private func changing(_ change: (inout [String: Any]) -> Void) throws -> Portfolio {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
+        change(&object)
+        return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    /// One position that matches, and another with no row at all because it couldn't be read.
+    private func onlyReconciledPlusUnread() throws -> Portfolio {
+        try changing { object in
+            let positions = object["positions"] as! [[String: Any]]
+            object["positions"] = positions.filter { ($0["reconciliation"] as? [String: Any])?["status"] as? String == "reconciled" && $0["noMarket"] as? Bool == false }
+            object["unreadAssets"] = ["USDC"]
+        }
+    }
+
+    @Test func aBalanceThatCouldntBeReadStopsTheAssurance() throws {
+        #expect(Wording.allBalancesMatch(try onlyReconciledPlusUnread()) == nil)
+    }
+
+    @Test func aBalanceWithNoRowStaysOnScreen() throws {
+        let attention = try #require(try onlyReconciledPlusUnread().attention)
+        #expect(attention.details.contains("Couldn't read your USDC balance."))
+    }
+
+    @Test func onlySaysBalancesMatchWhenTheyAllDo() throws {
+        // The demo has one that doesn't.
+        #expect(Wording.allBalancesMatch(try demoPortfolio()) == nil)
+    }
+}
