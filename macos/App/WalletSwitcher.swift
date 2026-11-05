@@ -152,19 +152,22 @@ struct WalletSwitcher: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    section("Yours", list.yours)
-                    section("Watching", list.watching)
-                    section("Recent", list.recent)
-                    section(nil, list.demo.map { [$0] } ?? [])
+            // With nothing to list, there's nothing for the rest to sit below.
+            if !list.all.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        section("Yours", list.yours)
+                        section("Watching", list.watching)
+                        section("Recent", list.recent)
+                        section(nil, list.demo.map { [$0] } ?? [])
+                    }
+                    .padding(6)
+                    .id(Self.top)
                 }
-                .padding(6)
-                .id(Self.top)
+                .frame(maxHeight: 440)
+                .fixedSize(horizontal: false, vertical: true)
+                Divider()
             }
-            .frame(maxHeight: 440)
-            .fixedSize(horizontal: false, vertical: true)
-            Divider()
             VStack(alignment: .leading, spacing: 0) {
                 if offersSpendingMoney { createSpendingMoney }
                 addRow
@@ -283,6 +286,8 @@ struct WalletSwitcher: View {
                     focus = .add
                 }
         }
+        // As tall as the row it replaces, so the list doesn't jump.
+        .frame(minHeight: 30)
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
     }
