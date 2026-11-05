@@ -4,11 +4,28 @@ import type { DevicePrompt } from "./cold.ts"
 
 export const REFUSED_ON_DEVICE = "Refused on the device, so nothing happened."
 export const LEDGER_LOCKED = "Unlock your Ledger, then try again."
-export const LEDGER_NO_APP = "Open the Ethereum app on your Ledger, then try again. If it isn't there, install it from Ledger Wallet."
+export const LEDGER_NO_APP = "Open the Ethereum app on your Ledger, then try again. If it isn't there, install it from My Ledger in Ledger Wallet, then quit Ledger Wallet."
+export const LEDGER_NOT_CHOSEN = "No Ledger was chosen. If it wasn't in the list, check it's unlocked and Ledger Wallet is closed, then unplug it and plug it back in."
 export const LEDGER_BLIND_SIGNING = "Your Ledger can't show this transaction's contents. To sign it, turn on Blind signing in the Ethereum app's settings on the device, then try again. Turn it back off after."
 export const LEDGER_BUSY = "Couldn't talk to your Ledger. Close Ledger Wallet if it's open, unplug the device and plug it back in, then try again."
 export const KEYSTONE_WRONG_CODE = "That's not the code this was waiting for. Nothing was sent."
 export const KEYSTONE_NOT_STANDARD = "That code doesn't include the account this page uses. On your Keystone, choose MetaMask under Connect Software Wallet, and use its standard accounts."
+
+/** What a Ledger needs before a browser can reach it. The Mac app's steps say the same: see `AddSavingsWording`. */
+export const LEDGER_READY = [
+  "Plug it in with its USB cable, and enter your PIN.",
+  "Open the Ethereum app on it. Base uses this app too. If it isn't there, install it from My Ledger in Ledger Wallet.",
+  "Quit Ledger Wallet. Only one app can talk to your Ledger at a time.",
+] as const
+export const LEDGER_NEEDS_CHROMIUM = "Needs Chrome, Brave, Edge or another Chromium browser"
+/** What the Ethereum app says for chain 8453. An older version leaves out the network's name. */
+export const LEDGER_VERIFY = "Your Ledger should say Verify Base address, then show this. Compare every group, then choose Confirm there."
+export const LEDGER_HAND_OFF = "Your Ledger should say Verify Base address, then show this. Compare it with the Mac app, then choose Confirm on your Ledger. If it doesn't match, choose Reject."
+export const LEDGER_HANDED_OFF = "✓ Confirmed on your Ledger. Finish in the Mac app, then you can close this page."
+export const KEYSTONE_CONNECT = "On your Keystone, open Connect Software Wallet, choose MetaMask, and hold its screen up to your webcam."
+/** A Keystone's receive screen says ETH, and Base uses that same address. */
+export const KEYSTONE_LOOK = "This page can't reach your Keystone. On its home screen, tap ETH, and find this address under Receive ETH. Use Switch Account if it shows another one. Base uses this same address."
+export const LOOK_HANDED_OFF = "Compare it with the Mac app, and finish there."
 
 export const NEVER_ASKED = "This page never asks for your recovery phrase, and nothing should. If anything does, stop."
 

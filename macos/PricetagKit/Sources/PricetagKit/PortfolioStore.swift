@@ -48,6 +48,8 @@ public final class PortfolioStore {
     public static let defaultServerURL = URL(string: "http://127.0.0.1:8787")!
     /// Past this, the newest block is too old to call live.
     static let behindAfterSeconds = 120
+    /// As long as a read of a wallet the server hasn't read yet can take.
+    static let firstReadTimeout: Duration = .seconds(180)
 
     /// What the store holds, which may not be current: read `feed` before calling it live. While a new method's, currency's
     /// or rule's numbers are on their way, the feed is `.reading` and this still holds the old ones, so the screen doesn't jump.
@@ -383,9 +385,12 @@ public final class PortfolioStore {
         let isOtherRule = rule != nil && portfolio?.rule != rule
         // The first read in a currency also reads its rate at each of this wallet's transactions, and the first by a rule
         // reads the wallet again, so they get as long as a first read.
-        let timeout: Duration = portfolio?.currency == currency && !isOtherRule ? .seconds(15) : .seconds(180)
+        let timeout: Duration = portfolio?.currency == currency && !isOtherRule ? .seconds(15) : Self.firstReadTimeout
+        let read = { [self] (timeout: Duration) in
+            try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address), timeout: timeout)
+        }
         do {
-            let next = try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address), timeout: timeout)
+            let next = try await patiently(read, timeout: timeout, isCurrent: isCurrent)
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
@@ -397,6 +402,32 @@ public final class PortfolioStore {
             if portfolio?.method != method || portfolio?.currency != currency || isOtherRule { portfolio = nil }
             feed = state(of: error)
             return feed == .serverUnreachable ? unreachableDelay : reachableDelay
+        }
+    }
+
+    /// A read that runs out of time says nothing about the server, which may only be slow to catch up on this wallet, say when a Mac wakes up.
+    /// If it's still answering, the read gets as long as a first read, with the numbers on screen marked as on their way.
+    private func patiently(_ read: (Duration) async throws -> Portfolio, timeout: Duration, isCurrent: () -> Bool) async throws -> Portfolio {
+        do {
+            return try await read(timeout)
+        } catch FetchError.timedOut {
+            guard await serverAnswers() else { throw FetchError.unreachable }
+            guard timeout < Self.firstReadTimeout else { throw FetchError.ampUnavailable(Wording.readTooSlow) }
+            guard isCurrent() else { throw CancellationError() }
+            feed = .reading
+            return try await patiently(read, timeout: Self.firstReadTimeout, isCurrent: isCurrent)
+        }
+    }
+
+    /// Whether anything's there, even to say no. The rules don't depend on Amp, so they come straight back.
+    private func serverAnswers() async -> Bool {
+        do {
+            _ = try await source.rules()
+            return true
+        } catch let error as FetchError {
+            return error != .unreachable && error != .timedOut
+        } catch {
+            return false
         }
     }
 
@@ -412,7 +443,7 @@ public final class PortfolioStore {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
         case .rejected(let message): .rejected(message)
-        case .unreachable, nil: .serverUnreachable
+        case .unreachable, .timedOut, nil: .serverUnreachable
         }
     }
 

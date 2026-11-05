@@ -103,8 +103,9 @@ private struct HotWalletDetails: View {
     let navigation: Navigation
     @State private var isAddingCold = false
     @State private var isToppingUp = false
-    @State private var addingFromDevice: AddSavingsLink?
     @State private var isSending = false
+    /// A new savings wallet to send a little to, once its sheet has gone.
+    @State private var testingSavings: EthereumAddress?
     @State private var isSweeping = false
     @State private var isConfirmingRotation = false
     @State private var isConfirmingAbandon = false
@@ -130,13 +131,13 @@ private struct HotWalletDetails: View {
             if !wallet.records.isEmpty { activity }
         }
         .formStyle(.grouped)
-        .sheet(isPresented: $isAddingCold) { AddColdWalletSheet(wallet: wallet) }
-        .sheet(item: $addingFromDevice) { AddColdWalletSheet(wallet: wallet, link: $0) }
+        .sheet(isPresented: $isAddingCold, onDismiss: { if testingSavings != nil { isSending = true } }) {
+            AddColdWalletSheet(wallet: wallet, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
+        }
         .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet, server: store.serverURL) }
         .onChange(of: navigation.addingSavings, initial: true) { _, link in
-            guard let link else { return }
-            navigation.addingSavings = nil
-            addingFromDevice = link
+            // The sheet takes it from there, and it may already be open, waiting for this.
+            if link != nil { isAddingCold = true }
         }
         .onChange(of: navigation.wantsTopUp, initial: true) { _, wants in
             guard wants else { return }
@@ -148,7 +149,13 @@ private struct HotWalletDetails: View {
             navigation.wantsSend = false
             if wallet.canSend { isSending = true }
         }
-        .sheet(isPresented: $isSending) { SendSheet(model: SendModel(wallet: wallet, store: store)) }
+        .sheet(isPresented: $isSending, onDismiss: { testingSavings = nil }) {
+            SendSheet(model: {
+                let model = SendModel(wallet: wallet, store: store)
+                model.addressText = testingSavings?.checksummed ?? ""
+                return model
+            }())
+        }
         .sheet(isPresented: $isSweeping) { SweepSheet(wallet: wallet) }
     }
 
@@ -474,127 +481,6 @@ private struct HotWalletDetails: View {
         case .confirmed: "Done"
         case .failed: "Failed"
         case .dropped: "Never landed"
-        }
-    }
-}
-
-/// The Mac app has no device code, so the user is the one who checks the address against the device. That includes one the web app
-/// sent over, and any other accounts it names, since anyone can make that link.
-struct AddColdWalletSheet: View {
-    let wallet: HotWallet
-    private let link: AddSavingsLink?
-    @State private var acceptedAccounts: Set<String> = []
-    @Environment(\.dismiss) private var dismiss
-    @State private var name: String
-    @State private var address: String
-    @State private var matches = false
-    @State private var problem: String?
-
-    init(wallet: HotWallet, address: String = "") {
-        self.wallet = wallet
-        link = nil
-        _name = State(initialValue: "")
-        _address = State(initialValue: address)
-    }
-
-    init(wallet: HotWallet, link: AddSavingsLink) {
-        self.wallet = wallet
-        self.link = link
-        _name = State(initialValue: link.name)
-        _address = State(initialValue: link.address)
-    }
-
-    private var parsed: EthereumAddress? {
-        EthereumAddress(address.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Add a Savings Wallet")
-                .font(.title2.bold())
-            Text("On your hardware wallet, open its receive screen for Base, and copy that address here.")
-                .fixedSize(horizontal: false, vertical: true)
-            TextField("Name", text: $name, prompt: Text("Ledger"))
-            TextField("Address", text: $address, prompt: Text("0x…"))
-                .font(.body.monospaced())
-                .onChange(of: address) {
-                    matches = false
-                    problem = nil
-                    acceptedAccounts = []
-                }
-            if let parsed {
-                // In groups, because nobody really compares 40 characters in one run.
-                Text(AddressText.grouped(parsed.checksummed))
-                    .font(.title3.monospaced())
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                Toggle("Every character matches what my device's screen shows", isOn: $matches)
-            } else if !address.isEmpty {
-                WarningText("That isn't a valid address.").font(.callout)
-            }
-            Text("Sweeps send real money here, and a compromised computer could show you the wrong address. The device's screen is the only one to trust.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if !suggestedAccounts.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("This link also names other accounts. Tick the ones you know are yours.")
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                    ForEach(suggestedAccounts, id: \.self) { account in
-                        Toggle(isOn: accepted(account)) {
-                            Text(EthereumAddress(account).map { AddressText.grouped($0.checksummed) } ?? account)
-                                .font(.caption.monospaced())
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    Text("Costs will follow what moves to and from the ones you tick, and no money is sent there. Leave out any you don't recognize.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            if let problem {
-                WarningText(problem).font(.callout)
-            }
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("Add Wallet") { add() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(parsed == nil || !matches)
-            }
-        }
-        .padding(20)
-        .frame(width: 460)
-    }
-
-    /// Only while this is the wallet the link named, which is all it can be said to know about.
-    private var suggestedAccounts: [String] {
-        guard let link, address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == link.address.lowercased() else { return [] }
-        return link.linked
-    }
-
-    private func accepted(_ account: String) -> Binding<Bool> {
-        Binding {
-            acceptedAccounts.contains(account)
-        } set: { isAccepted in
-            if isAccepted { acceptedAccounts.insert(account) } else { acceptedAccounts.remove(account) }
-        }
-    }
-
-    private func add() {
-        do {
-            try wallet.addColdWallet(address: address, name: name)
-            wallet.linkDeviceAccounts(link?.accountsToLink(accepted: acceptedAccounts, adding: address) ?? [])
-            dismiss()
-        } catch {
-            switch error {
-            case .notAnAddress, .isZero: problem = "That isn't a wallet anyone can use."
-            case .isThisHotWallet: problem = "That's this Mac's spending money, not a savings wallet."
-            case .isARetiredKey: problem = "That's an old key from this Mac, whose private key is gone."
-            }
         }
     }
 }

@@ -7,7 +7,7 @@ import { serializeTransaction, type Hex } from "viem"
 import { HDKey } from "viem/accounts"
 import { CSP } from "../server/http.ts"
 import { amountForUsd, parseAmount } from "../src/core/device-read.ts"
-import { LEDGER_BLIND_SIGNING, LEDGER_LOCKED, REFUSED_ON_DEVICE, groupAddress, ledgerMessage } from "../src/core/device-wording.ts"
+import { KEYSTONE_LOOK, LEDGER_BLIND_SIGNING, LEDGER_LOCKED, LEDGER_READY, REFUSED_ON_DEVICE, groupAddress, ledgerMessage } from "../src/core/device-wording.ts"
 import { addressOfPublicKey, childPublicKey, keystoneAccounts, standardKey } from "../src/core/keystone-accounts.ts"
 import { connectKeystone, type ScannedCode } from "../src/ui/devices/keystone.ts"
 import { findBrowserWallets } from "../src/ui/devices/browser.ts"
@@ -170,5 +170,18 @@ describe("what the page can reach", () => {
   test("device code stays out of the page that only looks at wallets", () => {
     const app = readFileSync(new URL("../src/ui/App.tsx", import.meta.url), "utf8")
     assert.doesNotMatch(app, /from "\.\/DevicePanel|from "\.\/devices|from "\.\.\/core\/cold/)
+  })
+})
+
+describe("what the flow tells someone to do", () => {
+  test("a Ledger's first step names everything it needs", () => {
+    const steps = LEDGER_READY.join(" ")
+    for (const needed of ["USB cable", "PIN", "Ethereum app", "My Ledger", "Quit Ledger Wallet"]) assert.ok(steps.includes(needed), needed)
+  })
+
+  test("a Keystone's address is under the words on its screen", () => {
+    assert.ok(KEYSTONE_LOOK.includes("tap ETH"))
+    assert.ok(KEYSTONE_LOOK.includes("Receive ETH"))
+    assert.ok(!KEYSTONE_LOOK.includes("receive screen for Ethereum"))
   })
 })

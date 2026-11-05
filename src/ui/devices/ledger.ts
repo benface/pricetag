@@ -8,7 +8,7 @@ import { webHidTransportFactory } from "@ledgerhq/device-transport-kit-web-hid"
 import { firstValueFrom, type Observable } from "rxjs"
 import { normalizeAddress } from "@pricetag/sdk/core"
 import { BASE_CHAIN_ID, yParityOf, type ColdAccount, type DeviceSigner, type DevicePrompt } from "../../core/cold.ts"
-import { LEDGER_BUSY, REFUSED_ON_DEVICE, ledgerMessage } from "../../core/device-wording.ts"
+import { LEDGER_BUSY, LEDGER_NOT_CHOSEN, REFUSED_ON_DEVICE, ledgerMessage } from "../../core/device-wording.ts"
 
 /** Where Ledger's own app keeps accounts, so these are the ones someone already has there. */
 const pathOf = (index: number) => `44'/60'/${index}'/0/0`
@@ -64,7 +64,7 @@ export async function connectLedger(): Promise<DeviceSigner> {
     sessionId = await dmk.connect({ device })
   } catch (error) {
     dmk.close()
-    throw new Error((error as { _tag?: string })?._tag === "NoAccessibleDeviceError" ? "No Ledger was chosen." : ledgerMessage(error))
+    throw new Error((error as { _tag?: string })?._tag === "NoAccessibleDeviceError" ? LEDGER_NOT_CHOSEN : ledgerMessage(error))
   }
   const eth = buildSigner(dmk, sessionId)
   const address = async (path: string, options: { checkOnDevice: boolean; skipOpenApp?: boolean }, onPrompt: (prompt: DevicePrompt) => void) => {

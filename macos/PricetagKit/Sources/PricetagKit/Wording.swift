@@ -311,6 +311,8 @@ public enum Wording {
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
     public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet. The first read can take a minute."
+    public static let readTooSlow = "The server is answering, but this wallet is taking too long to read."
+    public static let serverTooSlow = "The server took too long to answer."
     public static let notAnAddress = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 }
 
