@@ -3,8 +3,8 @@
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ERC20_ADDRESSES, ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, marketTrades, parseNote, type CostNote, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
-import { asIso, asNumber, blockFilters, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, type Query, type Row, type Source } from "@pricetag/sdk/internal"
+import { ERC20_ADDRESSES, ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, marketTrades, parseNote, type CostNote, type LegRow, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
+import { REORG_BLOCKS, asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRound, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
 
 /** A feed's answer at each block, leaving out blocks where the read failed. */
@@ -169,34 +169,143 @@ const isMissingTable = (error: unknown) => /table .*not found|not found.*table|d
 /** Enough for the guards in market.ts, which only read the latest few. A busy pool repeats each trade per account. */
 const MARKET_ROWS = 300
 
-/** The SDK's `datasetSource`, plus what only working out a cost needs: who was on the other side, notes, and market prices. */
-export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string }): Source {
-  const reader = datasetSource(query, config)
+/** As many as `createWallets` keeps, so a wallet it still holds is here too. */
+const MAX_SHARED_WALLETS = 20
+
+/** What's been read of a wallet: its rows from `from` to `to`, and the answers for blocks that were past any reorg by then. */
+type SharedWallet = Pick<WindowRows, "rows" | "gasUnknown"> & { from: number; to: number; notes: Map<number, CostNote[]>; ethBalances: Map<number, string> }
+
+/**
+ * The reads of a wallet that no pricing rule changes, each done once however many rules ask. Rules read one after the
+ * other, so the second usually wants a few blocks more than the first. Blocks a reorg could still reach are always read
+ * again, and everything older comes from what's held.
+ */
+export function sharedReads(query: Query, config: { baseDataset: string; dataset: string; network: string }) {
+  const reader = datasetReader(query, config)
+  const base = `"${config.baseDataset}"`
+  const wallets = new Map<string, SharedWallet>()
+  const turns = new Map<string, Promise<void>>()
+
+  // One at a time per wallet, so a read that starts while another is running can use what that one found.
+  function inTurn<T>(address: string, read: () => Promise<T>): Promise<T> {
+    const turn = (turns.get(address) ?? Promise.resolve()).then(read)
+    turns.set(address, turn.then(() => {}, () => {}))
+    return turn
+  }
+
+  /** The rows in a range, with who was on the other side. `legs` doesn't say, so that comes from the raw tables, for only the blocks that matter. */
+  async function readRows(address: string, from: number, to: number): Promise<Pick<WindowRows, "rows" | "gasUnknown">> {
+    const window = await reader.readLegs(address, from, to)
+    const me = hexOf(address)
+    const topic = `X'${me.padStart(64, "0")}'`
+    const allowlist = ERC20_ADDRESSES.map((a) => `X'${hexOf(a)}'`).join(", ")
+    const logs: Pick<RawLog, "tx_hash" | "log_index" | "topic1" | "topic2">[] = []
+    const txs: Pick<RawTx, "tx_hash" | "from" | "to">[] = []
+    for (const { filter } of blockFilters(counterpartyBlocks(window.rows, "erc20"))) {
+      const logRows = await query<Row>(`SELECT tx_hash, log_index, topic1, topic2 FROM ${base}.logs WHERE ${filter} AND topic0 = X'${TRANSFER_TOPIC}' AND address IN (${allowlist}) AND (topic1 = ${topic} OR topic2 = ${topic})`)
+      logs.push(...logRows.map((l) => ({ tx_hash: prefixed(String(l.tx_hash)), log_index: asNumber(l.log_index), topic1: String(l.topic1), topic2: String(l.topic2) })))
+    }
+    for (const { filter } of blockFilters(counterpartyBlocks(window.rows, "eth"))) {
+      const txRows = await query<Row>(`SELECT tx_hash, "from", "to" FROM ${base}.transactions WHERE ${filter} AND ("from" = X'${me}' OR "to" = X'${me}') AND value <> '0'`)
+      txs.push(...txRows.map((t) => ({ tx_hash: prefixed(String(t.tx_hash)), from: String(t.from), to: t.to == null ? null : String(t.to) })))
+    }
+    return { ...window, rows: withCounterparties(window.rows, logs, txs) }
+  }
+
+  return {
+    readLegs: (address: string, from: number, to: number) =>
+      inTurn(address, async () => {
+        const held = wallets.get(address)
+        const extended = held && held.from <= from && from <= held.to + 1 ? held : null
+        const readFrom = extended ? Math.max(extended.from, extended.to - REORG_BLOCKS + 1) : from
+        const read = readFrom <= to ? await readRows(address, readFrom, to) : { rows: [], gasUnknown: [] }
+        const unread = ({ block_num }: { block_num: number }) => block_num < readFrom || block_num > to
+        const next: SharedWallet = {
+          from: extended?.from ?? from,
+          to: Math.max(extended?.to ?? to, to),
+          rows: [...(extended?.rows.filter(unread) ?? []), ...read.rows],
+          gasUnknown: [...(extended?.gasUnknown.filter(unread) ?? []), ...read.gasUnknown],
+          notes: held?.notes ?? new Map(),
+          ethBalances: held?.ethBalances ?? new Map(),
+        }
+        wallets.delete(address)
+        wallets.set(address, next)
+        if (wallets.size > MAX_SHARED_WALLETS) wallets.delete(wallets.keys().next().value as string)
+        const asked = ({ block_num }: { block_num: number }) => block_num >= from && block_num <= to
+        return { rows: next.rows.filter(asked), gasUnknown: next.gasUnknown.filter(asked) }
+      }),
+
+    readNotes: (address: string, blocks: readonly number[]) =>
+      inTurn(address, async () => {
+        const held = wallets.get(address)
+        const unread = blocks.filter((block) => !held?.notes.has(block))
+        const read = await readNotesAt(query, config.baseDataset, address, unread)
+        const known = blocks.flatMap((block) => held?.notes.get(block) ?? [])
+        // Most blocks have none, and that's the answer that's worth keeping.
+        if (held) for (const block of unread) if (block <= held.to - REORG_BLOCKS) held.notes.set(block, read.filter((note) => note.blockNum === block))
+        return [...known, ...read].sort((a, b) => a.blockNum - b.blockNum)
+      }),
+
+    readEthBalances: (address: string, blocks: readonly number[]) =>
+      inTurn(address, async () => {
+        const held = wallets.get(address)
+        const balances = new Map(blocks.flatMap((block) => {
+          const balance = held?.ethBalances.get(block)
+          return balance === undefined ? [] : [[block, balance] as const]
+        }))
+        const read = await readEthBalancesAt(query, config.network, config.baseDataset, address, blocks.filter((block) => !balances.has(block)))
+        for (const [block, balance] of read) {
+          balances.set(block, balance)
+          if (held && block <= held.to - REORG_BLOCKS) held.ethBalances.set(block, balance)
+        }
+        return balances
+      }),
+  }
+}
+
+/**
+ * L1 fees, read once for good when their block is past any reorg, so a second pricing rule reading the same wallet only
+ * pays for what the first hasn't read. `tip` is the newest block known, or null when none is.
+ */
+export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL1Fees {
+  const settled = new Map<string, { blockNum: number; fee: string }>()
+  return async (requests) => {
+    const fees = new Map<string, string>()
+    const unread = requests.filter(({ txHash, blockNum }) => {
+      const known = settled.get(txHash)
+      if (known?.blockNum !== blockNum) return true
+      fees.set(txHash, known.fee)
+      return false
+    })
+    if (unread.length === 0) return fees
+    const found = await read(unread)
+    const newest = tip()
+    for (const { txHash, blockNum } of unread) {
+      const fee = found.get(txHash)
+      if (fee === undefined) continue
+      fees.set(txHash, fee)
+      if (newest !== null && blockNum <= newest - REORG_BLOCKS) settled.set(txHash, { blockNum, fee })
+    }
+    return fees
+  }
+}
+
+/**
+ * The SDK's `datasetSource`, plus what only working out a cost needs: who was on the other side, notes, and market prices.
+ * Pricing rules of one wallet history pass the same `shared`, so only what a rule changes is read for each.
+ */
+export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string }, shared = sharedReads(query, config)): Source {
+  const { readPriced } = datasetReader(query, config)
   const ds = `"${config.dataset}"`
   // What a fork of the pricing rule changes, so its market prices come from its own trades.
   const prices = `"${config.priceDataset ?? config.dataset}"`
-  const base = `"${config.baseDataset}"`
   return {
-    ...reader,
-    readNotes: (address, blocks) => readNotesAt(query, config.baseDataset, address, blocks),
+    ...datasetSource(query, config),
+    readNotes: shared.readNotes,
+    readEthBalances: shared.readEthBalances,
 
     async readWindow(address, from, to) {
-      const window = await reader.readWindow(address, from, to)
-      // `legs` doesn't say who was on the other side, so that comes from the raw tables, for only the blocks that matter.
-      const me = hexOf(address)
-      const topic = `X'${me.padStart(64, "0")}'`
-      const allowlist = ERC20_ADDRESSES.map((a) => `X'${hexOf(a)}'`).join(", ")
-      const logs: Pick<RawLog, "tx_hash" | "log_index" | "topic1" | "topic2">[] = []
-      const txs: Pick<RawTx, "tx_hash" | "from" | "to">[] = []
-      for (const { filter } of blockFilters(counterpartyBlocks(window.rows, "erc20"))) {
-        const logRows = await query<Row>(`SELECT tx_hash, log_index, topic1, topic2 FROM ${base}.logs WHERE ${filter} AND topic0 = X'${TRANSFER_TOPIC}' AND address IN (${allowlist}) AND (topic1 = ${topic} OR topic2 = ${topic})`)
-        logs.push(...logRows.map((l) => ({ tx_hash: prefixed(String(l.tx_hash)), log_index: asNumber(l.log_index), topic1: String(l.topic1), topic2: String(l.topic2) })))
-      }
-      for (const { filter } of blockFilters(counterpartyBlocks(window.rows, "eth"))) {
-        const txRows = await query<Row>(`SELECT tx_hash, "from", "to" FROM ${base}.transactions WHERE ${filter} AND ("from" = X'${me}' OR "to" = X'${me}') AND value <> '0'`)
-        txs.push(...txRows.map((t) => ({ tx_hash: prefixed(String(t.tx_hash)), from: String(t.from), to: t.to == null ? null : String(t.to) })))
-      }
-      return { ...window, rows: withCounterparties(window.rows, logs, txs) }
+      return { ...(await shared.readLegs(address, from, to)), priced: await readPriced(address, from, to) }
     },
 
     async marketReady() {

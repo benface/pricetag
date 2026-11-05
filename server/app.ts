@@ -17,7 +17,7 @@ import { createRates } from "./rates.ts"
 import { createDepositReader } from "./block.ts"
 import { warnOfNewAggregators } from "./feeds.ts"
 import { createManifestReader, createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
-import { feedRounds, rawSource, resolvingSource } from "./source.ts"
+import { feedRounds, rawSource, resolvingSource, settledL1Fees, sharedReads } from "./source.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 
 type Env = Record<string, string | undefined>
@@ -73,9 +73,10 @@ function createSource(env: Env): { source: Source; rules?: RuleSource[]; readRat
       // The same SQL for both. The header alone says which prices it reads, and the transactions always come from the
       // first, so they can't differ.
       const dataset = pinned(env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH)
+      const shared = sharedReads(query.aliased({ pricetag: dataset }), { baseDataset, dataset: "pricetag", network })
       const ruleSource = (id: string, name: string, hash: string | undefined, priceDataset: string): RuleSource => ({
         rule: { id, ...RULE_TEXT[id]!, dataset: name, hash: hash as string },
-        source: resolvingSource(query.aliased({ pricetag: dataset, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", startBlock, network }),
+        source: resolvingSource(query.aliased({ pricetag: dataset, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", startBlock, network }, shared),
       })
       const rules = [
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, dataset),
@@ -186,9 +187,9 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
     polling = false
   }
 
-  const readL1Fees = createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL)
+  const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL), () => head?.blockNum ?? null)
   const wallets = source ? createWallets(source, pollHead, readL1Fees) : null
-  // Each rule keeps its own, so a rule nobody's looking at costs nothing. The first rule is the same as having none.
+  // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
   const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, pollHead, readL1Fees) }))
 
   /**
