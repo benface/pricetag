@@ -10,6 +10,7 @@ import UserNotifications
 final class MoneyNotifications: NSObject, UNUserNotificationCenterDelegate {
     private static let category = "money-moved"
     private static let key = "notifiesWhenMoneyMoves"
+    private static let toldKey = "purchaseNewsTold"
     /// Long enough for a sweep's ETH and USDC to land as one notification, and short enough to still be news.
     private static let gathering = Duration.seconds(3)
 
@@ -47,10 +48,11 @@ final class MoneyNotifications: NSObject, UNUserNotificationCenterDelegate {
         Task { await refreshAuthorization() }
         hotWallet.onNews = { [weak self] in self?.hear($0, from: hotWallet) }
         watching = [
-            watch({ Self.phases(purchases) }) { [weak self] earlier, now in self?.purchasesChanged(from: earlier, to: now, purchases, display: hotWallet.display.main) },
+            // Every value, the first included, which is how a purchase from before this kept track is taken note of without a word.
+            watch({ Self.phases(purchases) }, from: true) { [weak self] _, _ in self?.purchasesChanged(purchases, display: hotWallet.display.main) },
             // The first send, sweep or purchase is when this is first useful, so that's when the system asks. Never at launch.
             watch({ hotWallet.records.count + purchases.purchases.count }) { [weak self] earlier, now in
-                if now > earlier { self?.askIfNeverAsked() }
+                if now > earlier ?? now { self?.askIfNeverAsked() }
             },
         ]
     }
@@ -103,11 +105,13 @@ final class MoneyNotifications: NSObject, UNUserNotificationCenterDelegate {
         Dictionary(purchases.purchases.map { ($0.ref, purchases.phase(of: $0)) }, uniquingKeysWith: { _, last in last })
     }
 
-    private func purchasesChanged(from earlier: [String: PurchasePhase], to now: [String: PurchasePhase], _ purchases: PurchaseTracker, display main: CurrencyCode) {
-        for purchase in purchases.purchases {
-            guard let phase = now[purchase.ref], let notice = PurchaseWording.notice(for: purchase, from: earlier[purchase.ref], to: phase, beside: main) else { continue }
-            post(notice)
-        }
+    /// A phase can step back while a wallet's numbers reload, or another wallet is chosen, so what's been told is kept, across launches too, and only what's further is said.
+    private func purchasesChanged(_ purchases: PurchaseTracker, display main: CurrencyCode) {
+        var news = defaults.data(forKey: Self.toldKey).flatMap { try? JSONDecoder().decode(PurchaseNews.self, from: $0) } ?? PurchaseNews()
+        let before = news
+        let notices = news.update(purchases.purchases.map { ($0, purchases.phase(of: $0)) }, beside: main)
+        if news != before { defaults.set(try? JSONEncoder().encode(news), forKey: Self.toldKey) }
+        notices.forEach(post)
     }
 
     private func post(_ notice: MoneyNotice) {
@@ -123,12 +127,12 @@ final class MoneyNotifications: NSObject, UNUserNotificationCenterDelegate {
         center.add(UNNotificationRequest(identifier: notice.id, content: content, trigger: nil))
     }
 
-    /// Calls `changed` with what something was and is, each time it changes, starting from what it is now.
-    private func watch<Value: Equatable & Sendable>(_ value: @escaping @MainActor @Sendable () -> Value, changed: @escaping (Value, Value) -> Void) -> Task<Void, Never> {
+    /// Calls `changed` with what something was and is, each time it changes, starting from what it is now. `from` also calls it with what it is to begin with.
+    private func watch<Value: Equatable & Sendable>(_ value: @escaping @MainActor @Sendable () -> Value, from first: Bool = false, changed: @escaping (Value?, Value) -> Void) -> Task<Void, Never> {
         Task {
             var last: Value?
             for await next in Observations(value) {
-                if let last, last != next { changed(last, next) }
+                if let last { if last != next { changed(last, next) } } else if first { changed(nil, next) }
                 last = next
             }
         }
