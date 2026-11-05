@@ -148,9 +148,9 @@ private struct HotWalletDetails: View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
-                    LiveNumber(wallet.plan.map { HotWalletWording.usd($0.valueUsdMicros) } ?? "—", tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
+                    LiveNumber(wallet.plan.map { wallet.usd($0.valueUsdMicros) } ?? "—", tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
                         .font(.system(size: 34, weight: .semibold))
-                    Text("of \(HotWalletWording.usd(wallet.settings.capUsdMicros))")
+                    Text("of \(wallet.usd(wallet.settings.capUsdMicros))")
                         .foregroundStyle(.secondary)
                     Spacer()
                     Text(HotWalletWording.label)
@@ -208,14 +208,14 @@ private struct HotWalletDetails: View {
                         Text(Format.amount(String(holding.balance), decimals: holding.token.decimals))
                             .monospacedDigit()
                         if let value = holding.valueUsdMicros {
-                            Text(HotWalletWording.usd(value))
+                            Text(wallet.usd(value))
                                 .monospacedDigit()
                                 .foregroundStyle(.secondary)
-                                .frame(minWidth: 64, alignment: .trailing)
+                                .frame(minWidth: 72, alignment: .trailing)
                         } else {
                             WarningText("No price")
                                 .font(.caption)
-                                .frame(minWidth: 64, alignment: .trailing)
+                                .frame(minWidth: 72, alignment: .trailing)
                         }
                     }
                 }
@@ -476,24 +476,24 @@ struct TopUpSheet: View {
             Text("Top Up from Savings")
                 .font(.title2.bold())
             if room < 1 {
-                Notice(.info, "This wallet is already at its cap of \(HotWalletWording.usd(wallet.settings.capUsdMicros)). Anything more would be swept straight back.")
+                Notice(.info, "This wallet is already at its cap of \(wallet.usd(wallet.settings.capUsdMicros)). Anything more would be swept straight back.")
             } else {
                 LabeledContent("Amount") {
                     HStack {
                         Slider(value: $dollars, in: 1...Double(max(room, 2)), step: 1)
-                        Text("$\(Int(dollars))")
+                        Text(wallet.usd(dollars: Int(dollars)))
                             .monospacedDigit()
-                            .frame(width: 44, alignment: .trailing)
+                            .frame(width: 56, alignment: .trailing)
                     }
                 }
-                Text("There's room for \(HotWalletWording.usd(wallet.topUpRoom)) under your cap. Anything above that gets swept back to your savings.")
+                Text("There's room for \(wallet.usd(wallet.topUpRoom)) under your cap. Anything above that gets swept back to your savings.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 8) {
                     Text("On your hardware wallet:").bold()
                     Label("Choose Send, on Base", systemImage: "1.circle")
-                    Label("Enter about $\(Int(dollars)) of ETH or USDC\(ethHint)", systemImage: "2.circle")
+                    Label("Enter about \(wallet.usd(dollars: Int(dollars))) of ETH or USDC\(ethHint)", systemImage: "2.circle")
                     Label("Send it to this address", systemImage: "3.circle")
                     if let address = wallet.address {
                         Text(address.checksummed)

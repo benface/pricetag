@@ -212,7 +212,7 @@ struct Rig {
     let portfolios: ScriptedPortfolios
 
     /// A wallet that exists already, with a cold wallet to sweep to unless told otherwise.
-    init(_ snapshot: ChainSnapshot = HotWalletKitTests.snapshot(), withCold: Bool = true, presence: Bool = true, portfolio read: Result<Portfolio, FetchError> = .success(portfolio()), now: @escaping @Sendable () -> Date = { Date() }) async {
+    init(_ snapshot: ChainSnapshot = HotWalletKitTests.snapshot(), withCold: Bool = true, presence: Bool = true, portfolio read: Result<Portfolio, FetchError> = .success(portfolio()), mainCurrency: @escaping @MainActor () -> CurrencyCode = { .USD }, now: @escaping @Sendable () -> Date = { Date() }) async {
         let chain = FakeChain(snapshot)
         let signer = FakeSigner(keys: [hotAddress], next: [nextAddress])
         let stateStore = MemoryStateStore()
@@ -228,6 +228,6 @@ struct Rig {
         self.signer = signer
         self.stateStore = stateStore
         self.portfolios = portfolios
-        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: FakePresence(allows: presence), portfolioSource: { portfolios }, makeChain: { _ in chain }, now: now)
+        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: FakePresence(allows: presence), portfolioSource: { portfolios }, mainCurrency: mainCurrency, makeChain: { _ in chain }, now: now)
     }
 }
