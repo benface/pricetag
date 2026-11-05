@@ -4,7 +4,7 @@
 // The rest come from here, and the fold then runs on the result. An unanswered sender stays unknown: it could be the user's
 // own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, emptyPosition, foldWallet, formatAmount, historyGaps, lessPaidAt, normalizeAddress, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, emptyPosition, foldWallet, formatAmount, historyGaps, lessPaidAt, normalizeAddress, orderMatters, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "./api.ts"
 import { costKey, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Receipt, type SenderAnswer } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
@@ -217,8 +217,12 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
   }
 
   const resolve = (side: Side, leg: PricedLeg): PricedLeg => {
-    // Nothing can be answered about one whose cost depends on an order nothing says.
-    if (!isOpenCredit(leg) || leg.orderUnknown) return leg
+    // Nothing can be answered about one whose cost depends on an order nothing says, and what it paid doesn't settle that.
+    if (BigInt(leg.delta) > 0n && orderMatters(leg, method)) {
+      const { estimated: _, ...rest } = leg
+      return { ...rest, costLabel: "unknown", costMicros: null }
+    }
+    if (!isOpenCredit(leg)) return leg
     const { wallet } = side
     const address = normalizeAddress(wallet.address)
     const units = BigInt(leg.delta)

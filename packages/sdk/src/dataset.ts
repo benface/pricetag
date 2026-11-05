@@ -258,12 +258,11 @@ export async function readPayoutTxsAt(query: Query, baseDataset: string, address
   const me = hexOf(address)
   const txs: PayoutTx[] = []
   for (const { filter } of blockFilters(blocks)) {
-    const rows = await query<Row>(`SELECT block_num, tx_hash, tx_index, "from", "to", input FROM "${baseDataset}".transactions WHERE ${filter} AND status AND ("from" = X'${me}' OR strpos(encode(input, 'hex'), '${me}') > 0)`)
+    const rows = await query<Row>(`SELECT block_num, tx_hash, "from", "to", input FROM "${baseDataset}".transactions WHERE ${filter} AND status AND ("from" = X'${me}' OR strpos(encode(input, 'hex'), '${me}') > 0)`)
     for (const row of rows) {
       txs.push({
         blockNum: asNumber(row.block_num),
         txHash: prefixed(String(row.tx_hash)),
-        txIndex: asNumber(row.tx_index),
         from: prefixed(String(row.from)),
         to: row.to == null ? null : prefixed(String(row.to)),
         input: String(row.input ?? ""),

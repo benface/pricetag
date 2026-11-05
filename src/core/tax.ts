@@ -21,7 +21,7 @@
 // elsewhere, and CRA's crypto guide doesn't count moving between your own wallets as a disposition, so that keeps what they
 // first paid, which we can't see. Those stay estimates in every country, and the report says why.
 
-import { foldPositions, formatDuration, isAddress, msBetweenBlocks, normalizeAddress, shortHash, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
+import { foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { rateSource } from "./explain.ts"
@@ -168,8 +168,10 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
   const qty = -delta
   const knownBefore = knownOf(before)
   const knownAfter = knownOf(after)
-  const knownCost = knownBefore.cost - knownAfter.cost
-  const unknownQty = qty - (knownBefore.qty - knownAfter.qty)
+  // What it took has no known cost, whatever its lots say, when that depends on an order nothing says.
+  const orderless = orderMatters(leg, before.method)
+  const knownCost = orderless ? 0n : knownBefore.cost - knownAfter.cost
+  const unknownQty = orderless ? qty : qty - (knownBefore.qty - knownAfter.qty)
   const row = (fields: Pick<TaxRow, "amount" | "proceedsMicros" | "costMicros" | "gainMicros" | "status" | "reason"> & { givenCost?: boolean }): TaxRow => ({
     givenCost: false,
     blockNum: leg.blockNum,
@@ -302,8 +304,10 @@ function poolLegs(sources: readonly Source[], moves: ReadonlySet<string>): { leg
   const walletOf = new Map<PricedLeg, string>()
   for (const { wallet, view } of sources) for (const leg of view.legs) if (!isMove(leg, moves)) walletOf.set(leg, wallet.address)
   // Each wallet's legs are already in order, and this sort is stable, so that order holds inside a transaction.
-  const legs = [...walletOf.keys()].sort((a, b) => a.blockNum - b.blockNum || a.txIndex - b.txIndex)
-  return { legs, walletOf }
+  const sorted = [...walletOf.keys()].sort((a, b) => a.blockNum - b.blockNum || a.txIndex - b.txIndex)
+  // One wallet can't see what another's unseen ETH does to their shared order.
+  const legs = markUnknownOrder(sorted)
+  return { legs, walletOf: new Map(legs.map((leg, i) => [leg, walletOf.get(sorted[i] as PricedLeg) as string])) }
 }
 
 export type TaxSettings = { country: TaxCountryCode; method: Method; scope: TaxScope }

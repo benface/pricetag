@@ -1,6 +1,6 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
 import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unseenEthCause } from "./wording.ts"
 
@@ -88,8 +88,11 @@ export function missingRatesLine(count: number, currency: CurrencyCode): string 
   return `${count === 1 ? "1 transaction has" : `${count.toLocaleString("en-US")} transactions have`} no USD to ${currency} rate, so what depends on ${count === 1 ? "it" : "them"} is unavailable in ${currency}.`
 }
 
-/** Why ETH that arrived or left beside ETH nothing shows has an unknown cost. */
-const ORDER_UNKNOWN = "ETH both arrived and left in this block, and nothing says which came first, so what each one cost can't be worked out"
+/** Why ETH that moved beside ETH nothing shows has an unknown cost. */
+const ORDER_UNKNOWN = {
+  always: "ETH both arrived and left in this block, and nothing says which came first, so what each one cost can't be worked out",
+  fifo: "ETH arrived more than once in this block, and nothing says which came first, so oldest first can't say what each one cost",
+}
 
 /** What a leg did to its position, in words. */
 export function describeEffect({ leg, before, after }: LegEffect, currency: CurrencyCode): string {
@@ -105,7 +108,7 @@ export function describeEffect({ leg, before, after }: LegEffect, currency: Curr
     } else if (leg.costLabel === "unknown") parts.push(`Adds ${amount} at an unknown cost`)
     else parts.push(`Adds ${amount} for ${leg.estimated ? "about " : ""}${money(leg.costMicros as string)}${leg.costLabel === "paid" ? "" : `, from ${COST_WORDS[leg.costLabel]}`}`)
     if (leg.parts.some((p) => p.kind === "unseen_eth")) parts.push("Nothing onchain records this amount directly, so it's how far this wallet's balance rose in this block")
-    if (leg.orderUnknown) parts.push(ORDER_UNKNOWN)
+    if (leg.orderUnknown && orderMatters(leg, before.method)) parts.push(ORDER_UNKNOWN[leg.orderUnknown])
     return parts.join(". ")
   }
   const realized = diff(after.realizedMicros, before.realizedMicros)
@@ -122,7 +125,7 @@ export function describeEffect({ leg, before, after }: LegEffect, currency: Curr
     if (unresolved > 0n) parts.push(`PnL unavailable on ${formatAmount(unresolved, leg.decimals)} ${leg.asset}`)
   }
   if (shortfall > 0n) parts.push(`${formatAmount(shortfall, leg.decimals)} ${leg.asset} more than we saw arrive`)
-  if (leg.orderUnknown) return `${parts.join(", ")}. ${ORDER_UNKNOWN}`
+  if (leg.orderUnknown && orderMatters(leg, before.method)) return `${parts.join(", ")}. ${ORDER_UNKNOWN[leg.orderUnknown]}`
   return parts.join(", ")
 }
 

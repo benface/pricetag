@@ -77,10 +77,10 @@ export const isUnwrapClaim = (row: LegRow) => row.kind === "unwrap" && row.side 
 export type UnseenEth = { blockNum: number; amount: string; txHashes: string[] }
 
 /** A successful transaction in a block where ETH arrived with no row: one that names the wallet in its calldata, or that it sent. */
-export type PayoutTx = { blockNum: number; txHash: string; txIndex: number; from: string; to: string | null; input: string }
+export type PayoutTx = { blockNum: number; txHash: string; from: string; to: string | null; input: string }
 
 /** Who to ask about ETH that arrived with no row. A null sender means there's nobody to name, only what it cost. */
-export type EthPayer = { txHash: string; txIndex: number; sender: string | null }
+export type EthPayer = { txHash: string; sender: string | null }
 
 /** A transaction whose gas couldn't be worked out, and the block it's in. It can have no rows at all. */
 export type GasUnknownTx = Pick<LegRow, "tx_hash" | "block_num">
@@ -475,8 +475,8 @@ function couldBringEth(txRows: readonly LegRow[]): boolean {
  * amount is the balance's, so it can't be ETH the wallet didn't receive, and it's left out whenever something else could
  * explain the change: a claim that stands, or a fee that isn't known. Each credit is a movement of its own, because a
  * balance can't say which transaction it came from. So it never changes what a trade traded, and a trade in the same block
- * isn't valued at all, since this could be part of what it got. Nothing says where in its block it came either, even with a
- * transaction named, which is only the likeliest, so `markUnknownOrder` keeps that from deciding what anything cost.
+ * isn't valued at all, since this could be part of what it got. Nothing says where in its block it came either, and a
+ * named transaction is only the likeliest, so that never places it: `markUnknownOrder` says what that leaves unknown.
  */
 export function creditUnseenEth({ rows, ethBalances, feeUnknownTxs, gasUnknownBlocks, account, fromBlock, through, payers, timestampOf }: Pick<SettleInput, "rows" | "ethBalances" | "feeUnknownTxs" | "gasUnknownBlocks"> & {
   account: string
@@ -507,8 +507,8 @@ export function creditUnseenEth({ rows, ethBalances, feeUnknownTxs, gasUnknownBl
       block_num: block,
       timestamp: timestampOf(block),
       tx_hash: payer?.txHash ?? "",
-      // With no transaction to say where it goes, it goes first, so ETH spent in the same block has something to come from.
-      tx_index: payer?.txIndex ?? -1,
+      // Always first in its block, whichever transaction is named, so ETH spent there has something to come from.
+      tx_index: -1,
       log_index: 0,
       token: ETH_ADDRESS,
       account,
@@ -534,20 +534,28 @@ export function payerOf(candidates: readonly PayoutTx[], account: string, amount
   const tx = exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : undefined
   if (!tx) return null
   const sender = tx.to === null ? null : normalizeAddress(tx.to)
-  return { txHash: tx.txHash, txIndex: tx.txIndex, sender: sender === normalizeAddress(account) ? null : sender }
+  return { txHash: tx.txHash, sender: sender === normalizeAddress(account) ? null : sender }
 }
 
 /**
- * Sets apart ETH that arrived unseen in a block where ETH also left, because each one's cost depends on which came first,
- * and nothing says. Network fees don't count: they're far too small to move a cost by more than a fraction of themselves,
- * and counting them would leave ETH that a wallet's own transaction claimed with a cost that could never be answered.
- * Neither do other arrivals, since those come to the same average, and either order is oldest first.
+ * Sets apart ETH that arrived unseen, and whatever else moved ETH in its block, because a balance can't say which came
+ * first, and what each one cost can depend on it. That includes a network fee: however small, it's a cost nobody knows.
+ * It takes every wallet being folded together, so a pool has to ask again. See `FoldLeg["orderUnknown"]`.
  */
-function markUnknownOrder(legs: readonly PricedLeg[]): PricedLeg[] {
-  const leftIn = new Set(legs.filter((leg) => leg.asset === "ETH" && leg.kind !== "gas" && BigInt(leg.delta) < 0n).map((leg) => leg.blockNum))
-  const unseenIn = new Set(legs.filter((leg) => leg.parts.some((part) => part.kind === "unseen_eth") && leftIn.has(leg.blockNum)).map((leg) => leg.blockNum))
-  if (unseenIn.size === 0) return [...legs]
-  return legs.map((leg) => (leg.asset === "ETH" && leg.kind !== "gas" && unseenIn.has(leg.blockNum) ? { ...leg, orderUnknown: true } : leg))
+export function markUnknownOrder(legs: readonly PricedLeg[]): PricedLeg[] {
+  const moved = new Map<number, PricedLeg[]>()
+  for (const leg of legs) {
+    if (leg.asset === "ETH" && !leg.opening) moved.set(leg.blockNum, [...(moved.get(leg.blockNum) ?? []), leg])
+  }
+  const orders = new Map<number, NonNullable<PricedLeg["orderUnknown"]>>()
+  for (const [block, blockLegs] of moved) {
+    if (blockLegs.length < 2 || !blockLegs.some((leg) => leg.parts.some((part) => part.kind === "unseen_eth"))) continue
+    orders.set(block, blockLegs.some((leg) => BigInt(leg.delta) < 0n) ? "always" : "fifo")
+  }
+  return legs.map((leg) => {
+    const order = leg.asset === "ETH" && !leg.opening && leg.orderUnknown !== "always" ? orders.get(leg.blockNum) : undefined
+    return order ? { ...leg, orderUnknown: order } : leg
+  })
 }
 
 export const answerToMicros = (answer: string | undefined): string | null =>

@@ -35,10 +35,11 @@ export type FoldLeg = {
   /** Its cost or proceeds rest on an estimate, so whatever comes from them does too. */
   estimated?: boolean
   /**
-   * ETH arrived and left in this block, and nothing says which came first, which changes what each cost. A credit like
-   * this takes no cost, and what a debit like this took has none.
+   * Nothing says where this comes in its block, among other movements that depend on it, and the method it matters to:
+   * `always` when something left, and `fifo` when things only arrived, since those come to the same average either way.
+   * Where it matters, a credit takes no cost, and what a debit took has none.
    */
-  orderUnknown?: boolean
+  orderUnknown?: "always" | "fifo"
   blockNum?: number
   timestamp?: string
 }
@@ -247,8 +248,12 @@ function addLot({ method, tracksPaidAt }: PositionState, lots: readonly Lot[], l
   return lots.map((l) => (l === pool ? merged : l))
 }
 
+/** Whether this method's answer for this leg depends on an order nothing says. */
+export const orderMatters = ({ orderUnknown }: Pick<FoldLeg, "orderUnknown">, method: Method) => orderUnknown === "always" || (orderUnknown === "fifo" && method === "fifo")
+
 function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
   const dated = leg.blockNum === undefined ? {} : { acquiredBlock: leg.blockNum, acquiredAt: leg.timestamp as string }
+  if (orderMatters(leg, state.method)) return addLot(state, state.lots, lotOf({ qty: qty.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", ...dated }, leg.id))
   const estimated = (leg.estimated || leg.costLabel === "received at market") && leg.costMicros !== null ? leg.costMicros : "0"
   // A piece with its own date got it from the wallet that first acquired it. Any other was acquired here and now.
   const pieces = leg.pieces?.map((piece) => ({ ...dated, ...piece })) ?? [{ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...dated }]
@@ -340,7 +345,7 @@ export function applyLegTaking(state: PositionState, leg: FoldLeg): { state: Pos
   if (delta > 0n) return { state: { ...state, lots: credit(state, leg, delta) }, taken: [] }
 
   const qty = -delta
-  const taken = leg.orderUnknown ? withoutCosts(take(state, qty)) : take(state, qty)
+  const taken = orderMatters(leg, state.method) ? withoutCosts(take(state, qty)) : take(state, qty)
   const next: PositionState = {
     ...state,
     lots: taken.lots,
