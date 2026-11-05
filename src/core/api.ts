@@ -43,6 +43,8 @@ export type PortfolioPosition = {
   values: PositionValues
   /** Realized plus unrealized. null when either is unknown on what's still held, or units left that we never saw arrive. */
   pnlMicros: string | null
+  /** Unrealized over the cost of what's held, in basis points. null when either is unknown, or it cost nothing. Never 0 for unknown. */
+  returnBps: string | null
   shortfallQty: string
   legCount: number
   reconciliation: Reconciliation | null
