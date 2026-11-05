@@ -102,6 +102,17 @@ import Testing
     #expect(leg.transactionURL == nil)
 }
 
+/// The Mac app's screenshot scenes read these, and one the models can't decode stops every scene that uses it.
+@Test func theAppsFixturesStillDecode() throws {
+    let folder = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../App/TestMode").standardized
+    let names = try FileManager.default.contentsOfDirectory(atPath: folder.path()).filter { $0.hasSuffix(".json") }
+    let portfolios = names.filter { $0.hasPrefix("demo-portfolio") }
+    let explanations = names.filter { $0.hasPrefix("demo-explanation") }
+    #expect(portfolios.count >= 2 && explanations.count >= 2)
+    for name in portfolios { _ = try JSONDecoder().decode(Portfolio.self, from: Data(contentsOf: folder.appending(path: name))) }
+    for name in explanations { _ = try JSONDecoder().decode(Explanation.self, from: Data(contentsOf: folder.appending(path: name))) }
+}
+
 @Test func anUnreadBalanceIsNotAnEmptyWallet() throws {
     let url = try #require(Bundle.module.url(forResource: "demo-portfolio", withExtension: "json", subdirectory: "Resources"))
     var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])

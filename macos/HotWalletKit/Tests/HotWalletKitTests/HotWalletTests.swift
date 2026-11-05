@@ -1093,10 +1093,35 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(!rig.wallet.needsAttention)
     }
 
+    @Test func usdSaysSoOnlyBesideAnotherCurrency() {
+        #expect(HotWalletWording.usd(50 * Money.dollar, beside: .USD) == "$50.00")
+        #expect(HotWalletWording.usd(50 * Money.dollar, beside: .CAD) == "US$50.00")
+        #expect(HotWalletWording.usd(4000, beside: .CAD) == "US$0.004")
+        #expect(HotWalletWording.usd(dollars: 25, beside: .USD) == "$25")
+        #expect(HotWalletWording.usd(dollars: 25, beside: .CAD) == "US$25")
+    }
+
+    @Test func noticesFollowTheMainCurrency() async throws {
+        var main = CurrencyCode.CAD
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei), withCold: false, mainCurrency: { main })
+        await rig.wallet.tick()
+        #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .CAD)])
+        #expect(texts(rig.wallet).first?.contains("US$25") == true)
+        #expect(rig.wallet.usd(dollars: 25) == "US$25")
+        main = .USD
+        #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .USD)])
+        #expect(rig.wallet.usd(dollars: 25) == "$25")
+    }
+
+    @Test func overTheCapSaysWhichDollars() {
+        #expect(HotWalletWording.overCap(by: 10 * Money.dollar, hasDestination: true, beside: .CAD).hasPrefix("US$10.00 over the cap."))
+        #expect(HotWalletWording.overCap(by: 10 * Money.dollar, hasDestination: false, beside: .USD).hasPrefix("$10.00 over the cap,"))
+    }
+
     @Test func noColdWalletSaysToAddOne() async throws {
         let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei), withCold: false)
         await rig.wallet.tick()
-        #expect(texts(rig.wallet) == [HotWalletWording.addSavings])
+        #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .USD)])
         #expect(rig.wallet.needsAttention)
     }
 
