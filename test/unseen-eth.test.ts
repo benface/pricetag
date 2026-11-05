@@ -93,6 +93,14 @@ describe("the batched payout WORK-424 found", () => {
     assert.ok(questions[0]!.evidence.some((line) => line.includes("no transaction showing it")))
   })
 
+  it("says the payout came from a Coinbase address, and whose it was stays a question", async () => {
+    const wallet = await chain().wallets.get(ME)
+    const { questions, positions } = foldBook(wallet as WalletResponse, [], "average", emptyBook())
+    assert.equal(questions[0]!.known?.kind, "exchange")
+    assert.ok(questions[0]!.evidence.includes("From a Coinbase address"))
+    assert.equal(positions.find((p) => p.asset === "ETH")!.effects.find(({ leg }) => leg.id === `unseen:${PAYOUT_BLOCK}:ETH`)!.leg.costLabel, "unknown")
+  })
+
   it("is valued at its block's price once it's said to be from someone else", async () => {
     const wallet = await chain().wallets.get(ME)
     const book = { ...emptyBook(), senders: { [PAYOUT_CONTRACT]: { kind: "someone-else" as const } } }
