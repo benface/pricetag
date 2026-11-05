@@ -56,6 +56,8 @@ public final class HotWallet {
     public var onLinkedWalletsChange: (([String]) -> Void)?
     /// A key is gone, and this one took over from it, if any did. A rotation can finish with nothing open, so this isn't left to a view.
     public var onKeyRetired: ((EthereumAddress, EthereumAddress?) -> Void)?
+    /// What this wallet did, as it happens, for telling someone who isn't looking. Here and not in a view, because it happens with nothing open.
+    public var onNews: ((HotWalletNews) -> Void)?
 
     public var address: EthereumAddress? { state.active }
     public var alarm: StolenKeyAlarm? { state.alarm }
@@ -93,7 +95,7 @@ public final class HotWallet {
     /// How long a sweep that didn't work waits before trying again.
     static let pauseAfterFailure: TimeInterval = 300
     /// How long a transaction can go unseen before its nonce counts as free again.
-    static let pendingTimeout: TimeInterval = 180
+    nonisolated static let pendingTimeout: TimeInterval = 180
     /// History from further back than this says nothing about what the key holds now.
     static let historyFreshnessMs = 60_000
     /// How long a rotation can wait for current history before it says so. A first read can take this long.
@@ -1059,7 +1061,7 @@ public final class HotWallet {
 
     private func execute(_ plan: SweepPlan, from address: EthereumAddress, to destination: EthereumAddress, reason: SignedRecord.Reason, snapshot: ChainSnapshot) async throws {
         guard snapshot.fees.isPlausible else {
-            sweepProblem = HotWalletWording.feesLookWrong
+            sweptOnItsOwnFailed(HotWalletWording.feesLookWrong, reason: reason)
             pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
             return
         }
@@ -1090,11 +1092,17 @@ public final class HotWallet {
                 nonce += 1
                 sweepProblem = nil
             } catch let ChainError.rejected(message) {
-                sweepProblem = "A sweep of \(transfer.token.symbol) didn't go out: \(message)"
+                sweptOnItsOwnFailed("A sweep of \(transfer.token.symbol) didn't go out: \(message)", reason: reason)
                 pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
                 return
             }
         }
+    }
+
+    /// Says so once, and not again each time it tries and fails the same way. One by hand is said in front of the person.
+    private func sweptOnItsOwnFailed(_ problem: String, reason: SignedRecord.Reason) {
+        if reason != .manual, problem != sweepProblem { onNews?(.sweepDidntGoOut(problem)) }
+        sweepProblem = problem
     }
 
     /// On disk before it leaves, so a crash in between can't make this look like someone else's transaction.
@@ -1145,6 +1153,7 @@ public final class HotWallet {
             } else if now().timeIntervalSince(record.createdAt) > Self.pendingTimeout {
                 updateRecord(hash: record.hash, address: address) { $0.status = .dropped }
                 try persist()
+                if let dropped = state.records[address]?.first(where: { $0.hash == record.hash }) { onNews?(.unconfirmed(dropped)) }
             }
         }
     }
@@ -1174,6 +1183,10 @@ public final class HotWallet {
             }
         }
         try persist()
+        if let settled = state.records[address]?.first(where: { $0.hash == record.hash }) {
+            // Given up on, and it landed after all. A failure is a failure either way.
+            onNews?(record.status == .dropped && receipt.succeeded ? .landedLate(settled) : .settled(settled))
+        }
     }
 
     /// Given up on, but something has used its nonce, and nothing this app signed is known to be what did. It may have landed late,
