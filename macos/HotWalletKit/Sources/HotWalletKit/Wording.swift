@@ -12,6 +12,14 @@ public enum HotWalletWording {
         "Add a savings wallet. Without one, this is all you have, so the cap stays at \(display.whole(WalletSettings.capCeilingWithoutCold)) and nothing can be swept."
     }
 
+    /// Why removing a savings wallet is more than a list entry: where sweeps go next, and what's kept.
+    public static func removingFromSavings(sweepsNowGoTo next: String?, wasDestination: Bool, cap: String) -> String {
+        let kept = "It stays in Yours, with what's on it."
+        guard wasDestination else { return kept }
+        if let next { return "Sweeps go to \(next) from now on. \(kept)" }
+        return "Sweeps stop, and the cap can't be more than \(cap) until you add another. \(kept)"
+    }
+
     public static let addSavingsButton = "Add a Savings Wallet…"
 
     /// Without a savings wallet, the money can still come from a hardware wallet that hasn't been added, but nothing goes back to it.
