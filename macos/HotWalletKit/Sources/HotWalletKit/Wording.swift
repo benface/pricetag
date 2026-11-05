@@ -93,6 +93,11 @@ public enum HotWalletWording {
         "That would use the \(Format.amount(String(reserve), decimals: 18)) ETH this wallet keeps for gas."
     }
 
+    /// Why the total against the cap is less than the holdings add up to.
+    public static func keptOutOfCap(_ reserve: UInt128) -> String {
+        "\(Format.amount(String(reserve), decimals: 18)) ETH is kept for gas, and doesn't count toward the cap."
+    }
+
     public static let noGasToSend = "This wallet doesn't have enough ETH to pay the network fee."
     public static let sendingToItself = "That's this wallet."
     public static let sendingToARetiredKey = "That's an old key from this Mac, whose private key is gone. Nothing could ever move what's sent there."
