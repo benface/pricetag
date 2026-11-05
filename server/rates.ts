@@ -2,7 +2,8 @@
 // USD stays the data's base, so this adds nothing to what's read for a wallet shown in USD.
 
 import type { WalletResponse } from "../src/core/api.ts"
-import { CURRENCIES, type CurrencyCode, type Rates, type RateRound } from "@pricetag/sdk/core"
+import type { Book } from "../src/core/book.ts"
+import { CURRENCIES, normalizeAddress, type CurrencyCode, type PaidRates, type Rates, type RateRound } from "@pricetag/sdk/core"
 import { settledThrough } from "@pricetag/sdk/internal"
 import type { RoundReader } from "./source.ts"
 
@@ -51,4 +52,22 @@ export function createRates(readRounds: RoundReader): RatesReader {
       for (const [currency, latest] of newest) if (latest.blockNum >= block) newest.delete(currency)
     },
   })
+}
+
+/**
+ * The rates to read a wallet's purchases in `shown` when they were paid in something else. Only at the blocks they could have
+ * arrived in, because that's all that's needed. Undefined when none need one, so a wallet with no such purchase reads nothing more.
+ */
+export async function readPaidRates(readRates: ReadRates, wallet: Pick<WalletResponse, "address" | "legs" | "latest">, shown: CurrencyCode, books: readonly Book[]): Promise<PaidRates | undefined> {
+  const address = normalizeAddress(wallet.address)
+  const purchases = books.flatMap((book) => book.purchases ?? []).filter(({ wallet, cost }) => wallet === address && cost.currency !== shown && cost.currency !== "USD")
+  const paidRates: PaidRates = {}
+  for (const currency of new Set(purchases.map(({ cost }) => cost.currency))) {
+    const mine = purchases.filter(({ cost }) => cost.currency === currency)
+    const legs = wallet.legs.filter((leg) => mine.some(({ txHash, blockNum }) => leg.txHash.toLowerCase() === txHash || leg.blockNum === blockNum))
+    if (legs.length === 0) continue
+    const rates = await readRates(currency, { legs, latest: wallet.latest })
+    if (rates) paidRates[currency] = rates.byBlock
+  }
+  return Object.keys(paidRates).length > 0 ? paidRates : undefined
 }

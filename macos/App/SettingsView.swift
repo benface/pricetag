@@ -42,7 +42,7 @@ struct SettingsView: View {
         pane(height: store.rules.count > 1 ? 400 : 220) {
             Section {
                 Picker("Main currency", selection: Binding(get: { store.currency }, set: { store.setCurrency($0) })) {
-                    ForEach(CurrencyCode.allCases) { Text("\($0.rawValue) · \($0.name)").tag($0) }
+                    ForEach(CurrencyCode.mainChoices) { Text("\($0.rawValue) · \($0.name)").tag($0) }
                 }
                 .help("Costs use the rate when each transaction happened, and values use the current rate.")
                 Picker("Cost method", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {

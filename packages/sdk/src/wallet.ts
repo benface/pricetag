@@ -1,7 +1,7 @@
 // What's read about a wallet, and the one way it becomes numbers, so the browser, the app's server and the SDK can't disagree.
 // Pure, like the rest of core. `wallets.ts` is what reads it, through Amp.
 
-import { viewWallet, type CurrencyCode, type Rates, type WalletView } from "./currency.ts"
+import { viewWallet, type CurrencyCode, type PaidRates, type Rates, type WalletView } from "./currency.ts"
 import type { Method } from "./fold.ts"
 import { compareWithHoldingEth, type HoldComparison } from "./hold.ts"
 import type { PricedLeg, Reference, UnseenEth } from "./legs.ts"
@@ -41,6 +41,8 @@ export type WalletData = {
   currency: CurrencyCode
   /** Null for USD. */
   rates: Rates | null
+  /** Only when a request's purchases were paid in a currency other than this one and USD. */
+  paidRates?: PaidRates
   /** Transactions this wallet sent whose L1 fee couldn't be read yet. */
   l1FeeUnknownTxs: string[]
   /** Onchain balances at `coverage.toBlock`, as read. An asset missing from them is in `unreadBalances`. Null when the whole read failed. */

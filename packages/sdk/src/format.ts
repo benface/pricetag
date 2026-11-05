@@ -39,6 +39,11 @@ export function labelUsd(text: string, main: CurrencyCode): string {
   return main === "USD" ? text : text.replace("$", "US$")
 }
 
+/** What was paid, beside amounts in another currency, so no kind of dollar is left bare. This locale says US$, CA$, €, £ and CHF. */
+export function formatPaid(micros: string, currency: CurrencyCode): string {
+  return new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(Number(micros) / 1e6)
+}
+
 /** What one USD buys, to four decimals, which is how far exchange rates are usually quoted. */
 export function formatRate(rateMicros: string, currency: CurrencyCode): string {
   const { locale, symbol } = CURRENCIES[currency]
