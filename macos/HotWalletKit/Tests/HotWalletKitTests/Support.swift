@@ -37,6 +37,14 @@ actor FakeChain: ChainClient {
     var estimateFailure: ChainError?
     var readFailure: ChainError?
     private(set) var sent: [SignedTransaction] = []
+    private(set) var reads: [String] = []
+    private(set) var l1FeePayloads: [[UInt8]] = []
+    /// How many calls `hold` is keeping waiting, like a slow node.
+    private(set) var heldCalls = 0
+    private var snapshotFailures: [ChainError] = []
+    private var holdsEstimates = false
+    private var holdsSnapshots = false
+    private var held: [CheckedContinuation<Void, Never>] = []
     private(set) var snapshotReads = 0
     private(set) var receiptReads = 0
     /// Set after each send, to read what was on disk at that moment.
@@ -58,15 +66,37 @@ actor FakeChain: ChainClient {
     func setSendFailure(_ failure: ChainError?) { sendFailure = failure }
     func setEstimateFailure(_ failure: ChainError?) { estimateFailure = failure }
     func setReadFailure(_ failure: ChainError?) { readFailure = failure }
+    func failSnapshots(_ times: Int, with failure: ChainError) { snapshotFailures = Array(repeating: failure, count: times) }
     func setOnSend(_ body: @escaping @Sendable (SignedTransaction) -> Void) { onSend = body }
 
-    func snapshot(of address: EthereumAddress) throws -> ChainSnapshot {
+    func hold(estimates: Bool = false, snapshots: Bool = false) {
+        holdsEstimates = estimates
+        holdsSnapshots = snapshots
+    }
+
+    func release() {
+        holdsEstimates = false
+        holdsSnapshots = false
+        for call in held { call.resume() }
+        held = []
+        heldCalls = 0
+    }
+
+    private func wait() async {
+        heldCalls += 1
+        await withCheckedContinuation { held.append($0) }
+    }
+
+    func snapshot(of address: EthereumAddress) async throws -> ChainSnapshot {
         snapshotReads += 1
+        if holdsSnapshots { await wait() }
+        if !snapshotFailures.isEmpty { throw snapshotFailures.removeFirst() }
         if let readFailure { throw readFailure }
         return current
     }
 
-    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) throws -> UInt64 {
+    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64 {
+        if holdsEstimates { await wait() }
         if let estimateFailure { throw estimateFailure }
         return data.isEmpty ? 21000 : estimate
     }
@@ -82,11 +112,24 @@ actor FakeChain: ChainClient {
         if let readFailure { throw readFailure }
         return receipts[hash]
     }
+
+    func read(_ method: String, _ parameters: JSONValue) -> RPCAnswer {
+        reads.append(method)
+        return .success(.string("0xread"))
+    }
+
+    /// By size, like the real one, so a bigger transaction costs more.
+    func l1Fee(ofPayload payload: [UInt8]) -> UInt128 {
+        l1FeePayloads.append(payload)
+        return UInt128(payload.count) * 1_000_000_000
+    }
 }
 
 /// Remembers what it was asked to sign. It holds no key at all: the real vault has its own tests.
 actor FakeSigner: Signer {
     private(set) var signed: [UnsignedTransaction] = []
+    private(set) var signedMessages: [SignableMessage] = []
+    private var signFailure: (any Error)?
     private var keys: [EthereumAddress]
     private var unused: [EthereumAddress]
 
@@ -101,11 +144,21 @@ actor FakeSigner: Signer {
         return key
     }
 
+    func setSignFailure(_ failure: (any Error)?) { signFailure = failure }
+
     func sign(_ transaction: UnsignedTransaction, from address: EthereumAddress) throws -> SignedTransaction {
         guard keys.contains(address) else { throw KeyVault.Failure.noSuchKey }
+        if let signFailure { throw signFailure }
         signed.append(transaction)
         // Unique bytes for a unique hash. A node would reject this: the anvil test covers real signatures.
         return SignedTransaction(raw: transaction.signingPayload)
+    }
+
+    func sign(_ message: SignableMessage, from address: EthereumAddress) throws -> MessageSignature {
+        guard keys.contains(address) else { throw KeyVault.Failure.noSuchKey }
+        if let signFailure { throw signFailure }
+        signedMessages.append(message)
+        return MessageSignature(r: [UInt8](repeating: 1, count: 32), s: [UInt8](repeating: 2, count: 32), v: 27)
     }
 
     func hasKey(_ address: EthereumAddress) -> Bool { keys.contains(address) }

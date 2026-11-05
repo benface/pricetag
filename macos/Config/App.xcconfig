@@ -3,10 +3,10 @@ APP_NAME = Patina
 
 PRODUCT_NAME = $(APP_NAME)
 PRODUCT_MODULE_NAME = MacApp
-// Not .mac, whose container belongs to builds signed by another team: macOS holds up the launch to ask about that.
-PRODUCT_BUNDLE_IDENTIFIER = com.benface.pricetag.mac.wallet
+// Not .mac, which our personal team registered, so no other team can have it. A bundle ID belongs to one team for good.
+PRODUCT_BUNDLE_IDENTIFIER = com.benface.pricetag.macos.wallet
 // A debug build gets its own settings and records, so trying things can't touch the real wallet.
-PRODUCT_BUNDLE_IDENTIFIER[config=Debug] = com.benface.pricetag.mac.debug
+PRODUCT_BUNDLE_IDENTIFIER[config=Debug] = com.benface.pricetag.macos.debug
 MARKETING_VERSION = 0.1.0
 CURRENT_PROJECT_VERSION = 1
 

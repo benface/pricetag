@@ -279,10 +279,10 @@ enum TestScene: String, CaseIterable {
         case .settings, .settingsHotWallet, .settingsCAD, .settingsHotWalletCAD:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
-            return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store)), size: CGSize(width: 560, height: 720), isReady: isReady)
+            return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 720), isReady: isReady)
         case .hotWallet, .hotWalletCAD, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck:
             // Taller than it opens, because a screenshot can't scroll to the actions and the activity at the bottom.
-            return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store)), size: CGSize(width: 560, height: 1200), isReady: isReady)
+            return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 1200), isReady: isReady)
         case .hotWalletAddSavings:
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet)), isReady: isReady)
         case .hotWalletAddSavingsFilled:

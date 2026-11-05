@@ -23,6 +23,7 @@ pnpm mac:build   # only builds it, to macos/build/
 pnpm check:mac   # the Swift tests, the app's build, and the shared packages' builds for iOS
 pnpm check:keychain  # the real Secure Enclave and Keychain, with a throwaway key, from a signed debug build
 pnpm check:anvil     # real signing and sweeps against a local fork of Base, with no real funds. It needs Foundry
+pnpm check:extension # the browser extension on a real site, through to a local fork, with no real funds. It needs Foundry and a Chromium that can load extensions
 pnpm mac:shot    # screenshots from fixtures that never open a window you'd see or take focus. See macos/TESTING.md
 ```
 
@@ -52,6 +53,16 @@ The Mac app has a capped hot wallet, this Mac's "spending money", for everyday u
 - **The alarm** compares what Amp and the chain say this wallet did with what the app signed. If they differ, it alerts loudly, stops top-ups, and offers to sweep what's left and replace the key.
 
 Holding a key needs a provisioned build, which `pnpm mac` makes when the team pinned in `macos/run.sh` is signed in to Xcode. Without that, the app says it can't hold a key, and everything else works. It reads balances from `https://mainnet.base.org` directly, set in Settings, so sweeps don't depend on the server. Debug builds have their own wallet.
+
+### Using it on websites
+
+`extension/` is a Chromium extension that lets websites use this Mac's spending money, like any browser wallet. The key stays in the app, and every approval happens in the app's own window, showing the site and what's being signed. Sites can only connect to spending money, on Base. Savings can't be reached from here at all.
+
+1. Run `pnpm mac` once, which tells your browsers (Chrome, Brave, Edge, Arc, Dia) where the app is.
+2. In `chrome://extensions`, turn on Developer mode, choose **Load unpacked**, and pick the `extension/` folder. It runs exactly as it is, with no build step.
+3. Pick **Patina** on the site. The app has to be open.
+
+The extension's button shows what's there and has a **Top up** button, which opens the app's top-up flow. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what this protects against and what it doesn't. Pages talk to the extension, which talks to a small host program inside the app bundle (`macos/BridgeHost`), which relays to a socket in the app (`macos/HotWalletKit/Sources/HotWalletKit/Sites`).
 
 ## Where the data comes from
 

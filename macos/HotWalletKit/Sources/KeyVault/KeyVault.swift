@@ -5,6 +5,7 @@ import Foundation
 public protocol Signer: Sendable {
     func createKey() async throws -> EthereumAddress
     func sign(_ transaction: UnsignedTransaction, from address: EthereumAddress) async throws -> SignedTransaction
+    func sign(_ message: SignableMessage, from address: EthereumAddress) async throws -> MessageSignature
     func hasKey(_ address: EthereumAddress) async throws -> Bool
     func deleteKey(_ address: EthereumAddress) async throws
     func addresses() async throws -> [EthereumAddress]
@@ -16,6 +17,7 @@ public actor KeyVault: Signer {
         case secureEnclaveUnavailable
         /// A signature that doesn't recover to the wallet's address, or a blob that opens to another wallet's key.
         case wrongKey
+        case notAMessage
     }
 
     private let store: any SealedKeyStore
@@ -52,7 +54,17 @@ public actor KeyVault: Signer {
     }
 
     public func sign(_ transaction: UnsignedTransaction, from address: EthereumAddress) throws -> SignedTransaction {
-        let digest = keccak256(transaction.signingPayload)
+        let signature = try sign(digest: keccak256(transaction.signingPayload), from: address)
+        return SignedTransaction(raw: transaction.signed(yParity: signature.yParity, r: signature.r, s: signature.s))
+    }
+
+    public func sign(_ message: SignableMessage, from address: EthereumAddress) throws -> MessageSignature {
+        guard let digest = message.digest else { throw Failure.notAMessage }
+        let signature = try sign(digest: digest, from: address)
+        return MessageSignature(r: signature.r, s: signature.s, v: 27 + signature.yParity)
+    }
+
+    private func sign(digest: [UInt8], from address: EthereumAddress) throws -> Secp256k1.RecoverableSignature {
         let signature = try {
             let key = try openKey(for: address)
             return try Secp256k1.sign(digest: digest, with: key)
@@ -60,7 +72,7 @@ public actor KeyVault: Signer {
         }()
         // Checked before anything's broadcast. A wrong signature would otherwise spend from someone else's address, or fail.
         guard try EthereumAddress(uncompressedPublicKey: Secp256k1.recover(digest: digest, signature: signature)) == address else { throw Failure.wrongKey }
-        return SignedTransaction(raw: transaction.signed(yParity: signature.yParity, r: signature.r, s: signature.s))
+        return signature
     }
 
     public func hasKey(_ address: EthereumAddress) throws -> Bool {

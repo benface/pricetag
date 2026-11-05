@@ -55,6 +55,50 @@ struct LiveBaseTests {
         print("Live Base: maxFee \(snapshot.fees.maxFeePerGas) wei, tip \(snapshot.fees.maxPriorityFeePerGas) wei, L1 fee \(snapshot.fees.l1FeeWei) wei, reserve \(reserve) wei, ETH \(snapshot.ethUsdMicros ?? 0), USDC \(snapshot.usdcUsdMicros ?? 0)")
         #expect(reserve == SweepPlanner.minimumGasReserveWei, "fees on Base should be nowhere near the minimum reserve")
     }
+
+    /// What failed a real $1 swap: a site's reads on top of the wallet's own, which go over the public node's 25 a second. It says so
+    /// for some of the calls in a batch, inside an HTTP 200.
+    @Test func aRealReadSurvivesASitesReads() async throws {
+        let client = RPCChainClient(url: liveRPC!)
+        let address = EthereumAddress("0x4200000000000000000000000000000000000006")!
+        let reads = Task {
+            while !Task.isCancelled {
+                for _ in 0..<SiteBridge.readsPerSecond {
+                    Task { _ = try? await client.read("eth_blockNumber", .array([])) }
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+        defer { reads.cancel() }
+        for _ in 0..<4 {
+            let snapshot = try await client.snapshot(of: address)
+            #expect(snapshot.chainID == Base.chainID)
+        }
+    }
+
+    @Test func aRealL1FeeGoesBySize() async throws {
+        let client = RPCChainClient(url: liveRPC!)
+        // Hashes, since the chain compresses this before pricing it, and a repeating pattern would hardly cost more.
+        let payload = { (count: Int) in
+            var bytes: [UInt8] = []
+            var block = keccak256([1])
+            while bytes.count < count {
+                bytes += block
+                block = keccak256(block)
+            }
+            return Array(bytes.prefix(count))
+        }
+        var small: UInt128?
+        var big: UInt128?
+        // Past the public node's rate limit, like the snapshot above.
+        for _ in 0..<5 where small == nil || big == nil {
+            small = try? await client.l1Fee(ofPayload: payload(180))
+            big = try? await client.l1Fee(ofPayload: payload(9000))
+            if small == nil || big == nil { try await Task.sleep(for: .seconds(3)) }
+        }
+        #expect(try #require(small) > 0)
+        #expect(try #require(big) > 10 * (try #require(small)))
+    }
 }
 
 /// Everything real but the Keychain: a fresh key from the vault, wrapped by the Secure Enclave, signing for a local fork of Base,
