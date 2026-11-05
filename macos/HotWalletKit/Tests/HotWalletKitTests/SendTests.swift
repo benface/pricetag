@@ -146,6 +146,29 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         return (model, store, rig)
     }
 
+    // MARK: Picking a saved wallet
+
+    @Test func offersOnlyWhereThisCanSend() async throws {
+        let (model, _, rig) = try await model()
+        let entry = { WalletEntry(address: $0, name: nil, kind: .watching) }
+        #expect(model.canSend(to: entry(friend.lowercased)))
+        #expect(!model.canSend(to: entry(try #require(rig.wallet.address).lowercased)))
+        #expect(!model.canSend(to: entry(EthereumAddress.zero.lowercased)))
+        #expect(!model.canSend(to: entry(try #require(usdc.contract).lowercased)))
+        #expect(!model.canSend(to: entry(WalletAddress.demo)))
+    }
+
+    /// The name's for finding it. The address is still what's on the confirmation, and a name can't stand in for a changed one.
+    @Test func aSavedNameComesWithTheAddressItBelongsTo() async throws {
+        let (model, store, _) = try await model()
+        #expect(model.recipientName == nil)
+        store.renameWallet(friend.lowercased, to: "Treasury")
+        #expect(model.recipientName == "Treasury")
+        #expect(model.recipient == friend)
+        model.addressText = "0x4444444444444444444444444444444444444444"
+        #expect(model.recipientName == nil)
+    }
+
     @Test func onlyWhatCanBeSentGetsAsFarAsConfirming() async throws {
         let (model, store, _) = try await model()
         defer { store.stop() }

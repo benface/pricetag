@@ -7,12 +7,14 @@ import SwiftUI
 /// Pressing Send goes straight to Touch ID, with what's being sent on screen.
 struct SendSheet: View {
     @State var model: SendModel
+    /// Every saved wallet. The form offers the ones this send permits.
+    var wallets: [WalletEntry] = []
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Group {
             if model.stage == .composing {
-                SendForm(model: model, dismiss: { dismiss() })
+                SendForm(model: model, wallets: wallets.filter(model.canSend(to:)), dismiss: { dismiss() })
             } else {
                 SendConfirmation(model: model, gate: SendConfirmation.gate(for: model)) { dismiss() }
             }
@@ -25,6 +27,7 @@ struct SendSheet: View {
 
 private struct SendForm: View {
     let model: SendModel
+    let wallets: [WalletEntry]
     let dismiss: () -> Void
 
     private enum Field { case amount, address }
@@ -57,14 +60,9 @@ private struct SendForm: View {
                 worth
             }
             VStack(alignment: .leading, spacing: 8) {
-                TextField("To", text: $model.addressText, prompt: Text("To: 0x…"))
-                    .labelsHidden()
+                AddressField("To", prompt: wallets.isEmpty ? "To: 0x…" : "To: 0x…, or a wallet's name", text: $model.addressText, wallets: wallets, read: AddressText.read, focus: $focus, equals: .address, onSubmit: next)
                     .textFieldStyle(.roundedBorder)
                     .controlSize(.large)
-                    .font(.body.monospaced())
-                    .autocorrectionDisabled()
-                    .focused($focus, equals: .address)
-                    .onSubmit(next)
                 recipient
             }
             if let failure = model.failure {
@@ -112,7 +110,10 @@ private struct SendForm: View {
     @ViewBuilder
     private var recipient: some View {
         if let address = model.recipient {
-            // In groups, because nobody really compares 40 characters in one run.
+            if let name = model.recipientName {
+                Text(name).fontWeight(.medium)
+            }
+            // In groups, and however it got here, because a saved name doesn't say the address behind it is still the right one.
             Text(AddressText.grouped(address.checksummed))
                 .font(.callout.monospaced())
                 .textSelection(.enabled)
@@ -126,8 +127,6 @@ private struct SendForm: View {
             } else if model.asksIfItsYours {
                 isThisYours
             }
-        } else if !model.addressText.isEmpty {
-            WarningText("That isn't a valid address.").font(.callout)
         }
     }
 
@@ -251,6 +250,16 @@ struct SweepSheet: View {
 }
 
 enum AddressText {
+    /// For a place that moves money, where only an address will do. A payment request also names one, but that's usually a token's contract.
+    static func read(_ text: String) -> String? {
+        if case .address(let address) = ScannedAddress(text: text) { address.checksummed } else { nil }
+    }
+
+    /// For a place that only looks, where one address anywhere in what's pasted is clear enough, like in a link to an explorer's page.
+    static func readAnywhere(_ text: String) -> String? {
+        WalletAddress.pasted(in: text).flatMap { EthereumAddress($0)?.lowercased }
+    }
+
     static func grouped(_ address: String) -> String {
         let digits = Array(address.dropFirst(2))
         let groups = stride(from: 0, to: digits.count, by: 4).map { String(digits[$0..<min($0 + 4, digits.count)]) }
