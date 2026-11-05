@@ -68,9 +68,14 @@ WORK-452 rewrites the steps for whatever has merged by Thursday at 13:45.
 |---|---|---|
 | **Before funding** | Add your savings wallet if you can, then check the cap | Cap is $50 by default with savings, and at most $25 without. Without savings, cut every amount below to about half |
 | **Thu by 9:30** | Withdraw **$40 of ETH from Coinbase** on Base. Write down the total you paid for both withdrawals, this one and Wednesday's | This is what makes WORK-424 visible, see below. Earlier is better: the chart's one-day change needs a known point from before the range starts, so this has to be at least 24 h before the demo |
-| **Once it shows in the app** | With the extension on `app.uniswap.org`, swap **$12 of ETH to cbBTC**, then **$12 of ETH to AERO**. Don't answer the Coinbase question | Costs that are really paid, and prices that move. Waiting avoids landing in the payout's block, which would leave costs unknown. Each row should show a dollar cost. If one says unknown, the route moved another token, so swap again with a different amount |
+| **Once it shows in the app** | With the extension on `app.uniswap.org`, swap **$12 of ETH to cbBTC**, then **$12 of ETH to AERO**. Don't answer the Coinbase question | Costs that are really paid, and prices that move. Waiting avoids landing in the payout's block, which would leave costs unknown. Each row should show a dollar cost. If one says unknown, see below |
 | **Thu after 14:00** | In Settings, turn off **Sweep realized gains to savings**. Then swap **half the AERO to USDC** | Gives Realized a number, adds a transaction after the block switch, and won't sweep on stage. Sell into USDC rather than ETH, because ETH paid out through a contract is the hardest case |
-| **Fri morning** | Settings > **Forget All My Answers**, if the rehearsal answered it | Puts steps 5 and 6 back on stage |
+| **Fri morning** | **Undo Last Answer** if Coinbase was the last thing you answered. Otherwise Settings > **Forget All My Answers**, then re-enter any other answers | Puts steps 5 and 6 back on stage |
+
+**If a swap's cost says unknown, don't buy again.** A later purchase doesn't repair the earlier one, and answering Coinbase doesn't either. Click the row and read its reason, then:
+- **It says a contract's ETH couldn't be confirmed:** wait a few minutes, because this can clear by itself.
+- **It asks "What did this cost?":** answer it. That fixes the token's cost, and selling it later gets a Realized number.
+- **It says another token moved in that transaction:** the ETH you paid stays "sold or spent at an unknown price", and no answer clears that (*reproduced*). So PnL stays partial on this wallet for good, and a recording would show the same. Put the transaction's hash on WORK-448. Then change step 6 to "what it can't price stays flagged", and don't promise a complete number.
 
 **Cost:** $40 of new money, which stays yours and moves with the market. Fees should be under $0.50 in total. The $1 swap's network fee was $0.0023 (*measured*), and Coinbase's withdrawal fee and Uniswap's fees are on top. Keep the wallet under the cap, or a sweep can start by itself.
 
@@ -112,6 +117,7 @@ If this withdrawal pays from a different contract, the app can't name it (WORK-4
 **Morning**
 - [ ] Read the 8:00 health check on this issue.
 - [ ] Fund and buy, as above.
+- [ ] Right after the buys, answer the Coinbase card. There should be no other question and PnL shouldn't say partial. If it does, read what it leaves out, and see above. Then **Undo Last Answer**.
 - [ ] Review WORK-426, then 431 and 432. Merging 426 starts WORK-449's test on real data, so read its results if they're in by 14:00.
 - [ ] Say on WORK-448 what time the demo is.
 
@@ -128,7 +134,7 @@ If this withdrawal pays from a different contract, the app can't name it (WORK-4
 - [ ] Stop the server and bring it back. Switch to the hotspot. Try the PublicNode fallback.
 - [ ] Go through the device checklist once, with a few dollars. Decide whether a device goes on stage.
 - [ ] Record the backup.
-- [ ] Forget all answers, and freeze `main`. After that, merge only what the demo needs, then run the steps again.
+- [ ] Check again that PnL isn't partial with Coinbase answered, now that the sale's in. Then undo that answer, and freeze `main`. After that, merge only what the demo needs, then run the steps again.
 
 **Skip until after the demo**
 - Everything Low in Backlog, and WORK-439, WORK-446 and WORK-447.
