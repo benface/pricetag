@@ -12,7 +12,7 @@ export const METHOD_HELP = "Average spreads what you paid across all you hold. O
 export const AVERAGE_PRICE_PAID = "Average price paid"
 export const NETWORK_FEES = "Network fees"
 export const BALANCE_CHECK = "Balance check"
-export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Incomplete", unchecked: "Not checked" }
+export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Doesn't match", unchecked: "Not checked" }
 export const STARTING_BALANCE = "Starting balance"
 export const PNL_HELP = "PnL is profit and loss: what you've gained or lost so far."
 export const REALIZED_HELP = "Gain or loss on what you've sold or spent."
@@ -30,11 +30,11 @@ export const pnlHelp = (text: string): string | undefined => (text.includes("PnL
 export const tokenLabel = (symbol: string) => (symbol === "WETH" ? "wrapped ETH" : symbol)
 
 export const ETH_NOTE = "incl. wrapped ETH"
-export const DEMO_NOTICE = "Demo data, not a real wallet. Every case the app has to get right is in here."
+export const DEMO_NOTICE = "Demo data, not a real wallet."
 export const PNL_UNAVAILABLE = "PnL unavailable"
 export const NOTHING_TO_CHART = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
 export const UNPRICED_FEES = "Some network fees had no price at the time, and aren't in this total."
-export const READING = "Reading this wallet's history. The first read can take a minute, then only new activity is read."
+export const READING = "Reading this wallet. The first read can take a minute."
 export const NOT_AN_ADDRESS = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 
 export const RULES_TITLE = "Pricing rule"
@@ -127,7 +127,7 @@ export function networkFeeUnknownSentence(count: number): string {
 }
 
 export function linkedFailedSentence(count: number): string {
-  return count === 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : `Couldn't read ${count} of your other wallets, so what came from them may show as unresolved.`
+  return count === 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : `Couldn't read ${count} of your other wallets, so what came from them may show an unknown cost.`
 }
 
 /** A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent. */
@@ -139,7 +139,7 @@ export function feesUnknownSentence(count: number): string {
   return `Network fees couldn't be worked out for ${count} ${count === 1 ? "transaction" : "transactions"}, so the network fees shown are too low.`
 }
 
-export const NOT_STARTED = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."
+export const NOT_STARTED = "Numbers appear once the data reaches this wallet."
 
 export function behindSentence(ms: number): string {
   // Under half a minute would round to "0 min", which reads as not behind at all.

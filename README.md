@@ -43,7 +43,7 @@ The numbers move on their own: `GET /api/events` says when there's a new block, 
 
 ### Spending money and savings
 
-The Mac app has a capped hot wallet, this Mac's "spending money", for everyday use with no recovery phrase. Anything above the cap goes to a hardware wallet, your "savings", by itself while the app runs. Open it from the popover or with ⇧⌘M, or create it from the first screen, which then shows it. If it's showing, the window moves to the new address when its key is replaced, and back to the first screen when it's deleted. It's an unreviewed hackathon build, for small funds only. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what it protects against and what it doesn't.
+The Mac app has a capped hot wallet, this Mac's "spending money", for everyday use with no recovery phrase. Anything above the cap goes to a hardware wallet, your "savings", by itself while the app runs. Open it from the popover or with ⌘3, or create it from the first screen, which then shows it. If it's showing, the window moves to the new address when its key is replaced, and back to the first screen when it's deleted. It's an unreviewed hackathon build, for small funds only. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what it protects against and what it doesn't.
 
 - **The key** comes from `SecRandomCopyBytes`, is wrapped by the Secure Enclave, and stays in a device-only Keychain item. It can't be restored or exported: lose the Mac and you lose what's on it, up to the cap.
 - **Adding a savings wallet** is guided, with steps for a Ledger or a Keystone, and pasting for anything else. A Ledger goes through your browser and a Keystone through the Mac's camera. See [the hardware wallet notes](HARDWARE-WALLETS.md).
@@ -216,7 +216,7 @@ To add a country, add it to `TAX_COUNTRIES` in `src/core/tax.ts` and a case to `
 Each position's legs are compared with its onchain balance at the last block they cover, to the smallest unit. ETH is compared with ETH plus WETH.
 
 - **Reconciled** gets a check mark.
-- **Incomplete** shows the computed balance, the actual balance and the difference. Its amount and value come from the chain, because those are facts, and its PnL shows as unavailable. Without traces, this is what catches rebasing tokens and internal ETH transfers, and ETH that arrived this way then gets found and counted (see Known gaps).
+- **Doesn't match** shows the computed balance, the actual balance and the difference. Its amount and value come from the chain, because those are facts, and its PnL shows as unavailable. Without traces, this is what catches rebasing tokens and internal ETH transfers, and ETH that arrived this way then gets found and counted (see Known gaps).
 - **Not checked** means a read failed or an L1 fee isn't in yet. It clears on its own. Its PnL shows as unavailable until then, so PnL only ever shows for a position that matches. Otherwise a failed read would bring back a number already known to be wrong. Its amount comes from the chain if that read worked, and otherwise from the last read plus what's moved since.
 
 Whether something is held is a separate question from whether it can be checked. A failed read never makes a holding disappear, and an asset with no balance read and no other evidence is listed as missing from the totals and the chart. It's never counted as zero.

@@ -418,29 +418,29 @@ public final class HotWallet {
     public var notices: [Notice] {
         guard address != nil, availability == .ready else { return [] }
         var notices: [Notice] = []
-        if isKeyMissing { notices.append(.init(.warning, HotWalletWording.keyMissing)) }
+        if isKeyMissing { notices.append(.init(.warning, HotWalletWording.keyMissing, short: HotWalletWording.shortKeyMissing)) }
         switch rotationHold {
-        case .otherTokens(let count): notices.append(.init(.warning, HotWalletWording.rotationHeldByOtherTokens(count)))
-        case .cantCheckOtherTokens: notices.append(.init(.warning, HotWalletWording.rotationCantCheck))
-        case .notWorthTheGas(let symbols): notices.append(.init(.warning, HotWalletWording.rotationHeldByGas(symbols)))
+        case .otherTokens(let count): notices.append(.init(.warning, HotWalletWording.rotationHeldByOtherTokens(count), short: HotWalletWording.shortOldKeyHolds))
+        case .cantCheckOtherTokens: notices.append(.init(.warning, HotWalletWording.rotationCantCheck, short: HotWalletWording.shortOldKeyUnchecked))
+        case .notWorthTheGas(let symbols): notices.append(.init(.warning, HotWalletWording.rotationHeldByGas(symbols), short: HotWalletWording.shortOldKeyHolds))
         case .notEnoughGas, nil:
             if rotation != nil, !isKeyMissing { notices.append(.init(.info, HotWalletWording.rotating)) }
         }
-        if let chainProblem { notices.append(.init(.warning, chainProblem == .rateLimited ? HotWalletWording.networkBusy : HotWalletWording.cantReachChain)) }
-        if let snapshot, snapshot.chainID != Base.chainID { notices.append(.init(.warning, HotWalletWording.wrongChain)) }
-        if let sweepProblem { notices.append(.init(.warning, sweepProblem)) }
+        if let chainProblem { notices.append(.init(.warning, chainProblem == .rateLimited ? HotWalletWording.networkBusy : HotWalletWording.cantReachChain, short: chainProblem == .rateLimited ? HotWalletWording.shortNetworkBusy : HotWalletWording.shortCantReachChain)) }
+        if let snapshot, snapshot.chainID != Base.chainID { notices.append(.init(.warning, HotWalletWording.wrongChain, short: HotWalletWording.shortWrongChain)) }
+        if let sweepProblem { notices.append(.init(.warning, sweepProblem, short: HotWalletWording.shortLastActionFailed)) }
         if let plan {
-            if plan.blockers.contains(.notEnoughGas) || rotationHold == .notEnoughGas { notices.append(.init(.warning, HotWalletWording.noGas)) }
+            if plan.blockers.contains(.notEnoughGas) || rotationHold == .notEnoughGas { notices.append(.init(.warning, HotWalletWording.noGas, short: HotWalletWording.shortNoGas)) }
             if plan.excessUsdMicros > 0, !plan.excessIsDust || plan.blockers.contains(.noDestination) {
-                notices.append(.init(.warning, HotWalletWording.overCap(by: plan.excessUsdMicros, hasDestination: settings.sweepDestination != nil, beside: mainCurrency())))
+                notices.append(.init(.warning, HotWalletWording.overCap(by: plan.excessUsdMicros, hasDestination: settings.sweepDestination != nil, beside: mainCurrency()), short: HotWalletWording.shortOverCap(by: plan.excessUsdMicros, beside: mainCurrency())))
             } else if plan.excessIsDust {
                 notices.append(.init(.info, HotWalletWording.excessIsDust))
             }
         }
-        if snapshot != nil, snapshot?.ethUsdMicros == nil { notices.append(.init(.warning, HotWalletWording.noEthPrice)) }
-        if !unpricedSymbols.isEmpty { notices.append(.init(.warning, HotWalletWording.noPrice(unpricedSymbols))) }
+        if snapshot != nil, snapshot?.ethUsdMicros == nil { notices.append(.init(.warning, HotWalletWording.noEthPrice, short: HotWalletWording.shortNoEthPrice)) }
+        if !unpricedSymbols.isEmpty { notices.append(.init(.warning, HotWalletWording.noPrice(unpricedSymbols), short: HotWalletWording.shortNoPrice(unpricedSymbols))) }
         // Being over the cap with nowhere to sweep already says to add one.
-        if settings.coldWallets.isEmpty, plan?.excessUsdMicros ?? 0 == 0 { notices.append(.init(.warning, HotWalletWording.addSavings(beside: mainCurrency()))) }
+        if settings.coldWallets.isEmpty, plan?.excessUsdMicros ?? 0 == 0 { notices.append(.init(.warning, HotWalletWording.addSavings(beside: mainCurrency()), short: HotWalletWording.shortNoSavings)) }
         if ampProblem { notices.append(.init(.info, HotWalletWording.cantCheckAmp)) }
         return notices
     }
@@ -466,11 +466,14 @@ public final class HotWallet {
 
         public let kind: Kind
         public let text: String
+        /// A warning in a few words, for places with room for only that.
+        public let short: String?
         public var id: String { text }
 
-        init(_ kind: Kind, _ text: String) {
+        init(_ kind: Kind, _ text: String, short: String? = nil) {
             self.kind = kind
             self.text = text
+            self.short = short
         }
     }
 

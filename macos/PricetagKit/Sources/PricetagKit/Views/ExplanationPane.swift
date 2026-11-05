@@ -30,6 +30,11 @@ public struct ExplanationPane: View {
         }
     }
 
+    /// It has no single number to be missing: its lines are the answer.
+    private var isBalanceCheck: Bool {
+        if case .asset(_, .onchain) = target { true } else { false }
+    }
+
     private func content(_ explanation: Explanation) -> some View {
         List {
             Section {
@@ -37,7 +42,7 @@ public struct ExplanationPane: View {
                     Text(explanation.title).font(.headline).help(Wording.pnlHelp(for: explanation.title) ?? "")
                     if let value = explanation.value {
                         LiveNumber(value).font(.title2.weight(.semibold))
-                    } else {
+                    } else if !isBalanceCheck {
                         WarningText("Unavailable").font(.title3.weight(.semibold))
                     }
                     if let sourceValue = explanation.sourceValue {
@@ -130,8 +135,8 @@ public struct LegRow: View {
         // Price and cost stay apart: one is a shared fact with a source, the other is this wallet's.
         // Plain words take more room, so they stack when the inspector is too narrow for one line.
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 4) { tagList }
-            VStack(alignment: .leading, spacing: 4) { tagList }
+            HStack(spacing: 8) { tagList }
+            VStack(alignment: .leading, spacing: 3) { tagList }
         }
     }
 
@@ -139,12 +144,14 @@ public struct LegRow: View {
     private var tagList: some View {
         Tag(leg.opening ? Wording.startingBalance : Wording.action(kind: leg.kind, isIncoming: leg.isIncoming))
         if let price = leg.priceMicros, let source = leg.priceSource {
-            Button {
+            Button("\(Format.price(price, currency)) · \(Wording.priceSource(source))") {
                 showsProof.toggle()
-            } label: {
-                Tag("\(Format.price(price, currency)) · \(Wording.priceSource(source))")
             }
+            .font(.caption.weight(.medium))
+            .monospacedDigit()
+            .lineLimit(1)
             .buttonStyle(.plain)
+            .foregroundStyle(.tint)
             .disabled(!leg.hasTransaction)
             .help(leg.hasTransaction ? "See where this price comes from" : "")
         } else {
@@ -158,6 +165,7 @@ public struct LegRow: View {
     }
 }
 
+/// A fact about a movement. It's plain text, or a warning's color when it's unknown, because only a price can be clicked.
 struct Tag: View {
     let text: String
     let isWarning: Bool
@@ -169,12 +177,9 @@ struct Tag: View {
 
     var body: some View {
         Text(text)
-            .font(.caption2.weight(.medium))
+            .font(.caption.weight(.medium))
             .monospacedDigit()
             .lineLimit(1)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
             .foregroundStyle(isWarning ? Tone.warning.style : AnyShapeStyle(.secondary))
-            .background(isWarning ? AnyShapeStyle(Color.orange.opacity(0.16)) : AnyShapeStyle(.quaternary.opacity(0.7)), in: Capsule())
     }
 }

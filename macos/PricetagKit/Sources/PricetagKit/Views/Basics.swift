@@ -16,10 +16,18 @@ public enum Tone {
         switch self {
         case .neutral: AnyShapeStyle(.primary)
         case .secondary: AnyShapeStyle(.secondary)
+        case .gain, .loss, .warning: AnyShapeStyle(color)
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .neutral: .primary
+        case .secondary: .secondary
         // Mixed with the text color, so they hold enough contrast in both light and dark.
-        case .gain: AnyShapeStyle(Color.green.mix(with: .primary, by: 0.2))
-        case .loss: AnyShapeStyle(Color.red.mix(with: .primary, by: 0.1))
-        case .warning: AnyShapeStyle(Color.orange.mix(with: .primary, by: 0.15))
+        case .gain: Color.green.mix(with: .primary, by: 0.2)
+        case .loss: Color.red.mix(with: .primary, by: 0.1)
+        case .warning: Color.orange.mix(with: .primary, by: 0.15)
         }
     }
 }

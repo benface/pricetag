@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// A position in a compact list: what you hold on the left, what it cost and made on the right.
-/// Every line is one line tall whatever it says, so nothing moves when a value changes.
+/// A position at a glance, on one line: what it is, what it's worth, and what it's made. What's unknown says so, and never shows $0.
 public struct HoldingRow: View {
     let position: Position
     let currency: CurrencyCode
@@ -13,18 +12,9 @@ public struct HoldingRow: View {
         self.isLive = isLive
     }
 
-    private var amount: String {
-        Format.amount(position.values.qty, decimals: position.decimals)
-    }
-
-    private var cost: String {
-        if !position.isHeld { return "None left" }
-        if let average = position.values.averageCostMicros { return "Average paid \(Format.estimate(Format.price(average, currency), position.estimates.cost))" }
-        return "Cost unknown"
-    }
-
     private var pnlText: String {
-        position.pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized || position.estimates.unrealized) } ?? Wording.pnlUnavailable
+        if let pnl = position.pnlMicros { return Format.estimate(Format.signedMoney(pnl, currency), position.estimates.realized || position.estimates.unrealized) }
+        return position.isHeld && position.values.averageCostMicros == nil ? "Cost unknown" : Wording.pnlUnavailable
     }
 
     private var valueText: String {
@@ -33,28 +23,18 @@ public struct HoldingRow: View {
     }
 
     public var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
-                    Text(position.asset).fontWeight(.medium)
-                    OnchainCheck(position: position, showsLabel: false)
-                }
-                LiveNumber(amount, tone: .secondary)
-                    .font(.caption)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(spacing: 4) {
+                Text(position.asset).fontWeight(.medium)
+                OnchainCheck(position: position)
             }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 1) {
-                LiveNumber(valueText, tone: position.isHeld && position.values.valueMicros == nil ? .warning : .neutral)
-                Text(cost)
-                    .monospacedDigit()
-                    .font(.caption)
-                    .foregroundStyle(position.isHeld && position.hasUnknownCost ? Tone.warning.style : AnyShapeStyle(.secondary))
-            }
-            LiveNumber(pnlText, tone: Tone(signed: position.pnlMicros))
-                .font(position.pnlMicros == nil ? .caption : .body)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(width: 104, alignment: .trailing)
+            Spacer(minLength: 0)
+            LiveNumber(valueText, tone: position.isHeld && position.values.valueMicros == nil ? .secondary : .neutral)
+            LiveNumber(pnlText, tone: position.pnlMicros == nil ? .secondary : Tone(signed: position.pnlMicros))
+                .font(.callout)
+                // At least this wide so the columns line up, and wider rather than cutting off a number.
+                .frame(minWidth: 88, alignment: .trailing)
+                .fixedSize()
         }
         .lineLimit(1)
         .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
@@ -63,18 +43,17 @@ public struct HoldingRow: View {
     }
 }
 
-/// Whether a position matches the chain: a check mark when it does, and a warning when it doesn't or we can't tell.
+/// Says when a position doesn't match the chain or can't be checked, or has a number nobody can work out yet. A row with nothing to flag shows nothing.
 public struct OnchainCheck: View {
     let position: Position
-    let showsLabel: Bool
+    @Environment(\.backgroundProminence) private var prominence
 
-    public init(position: Position, showsLabel: Bool) {
+    public init(position: Position) {
         self.position = position
-        self.showsLabel = showsLabel
     }
 
     private var label: String? {
-        if let status = position.reconciliation?.status { return Wording.checkLabel(status) }
+        if let status = position.reconciliation?.status, status != .reconciled { return Wording.checkLabel(status) }
         return position.hasShortfall ? Wording.checkLabel(.incomplete) : nil
     }
 
@@ -84,18 +63,12 @@ public struct OnchainCheck: View {
 
     public var body: some View {
         if let label {
-            let tone: Tone = position.isReconciled ? .gain : .warning
-            HStack(spacing: 4) {
-                Image(systemName: position.isReconciled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(tone.style)
-                if showsLabel {
-                    Text(label).foregroundStyle(tone.style)
-                }
-            }
-            .help(help)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(position.asset): \(label)")
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundStyle(prominence == .increased ? Tone.neutral.style : Tone.warning.style)
+                .help(help)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(position.asset): \(label)")
         }
     }
 }
