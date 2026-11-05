@@ -37,6 +37,7 @@ struct MainWindow: View {
     /// How small the window can get, with the sidebar closed. It closes by itself below `sidebarWidth`.
     static let minimumSize = CGSize(width: 480, height: 400)
     private static let sidebarWidth: CGFloat = 640
+    private static let titleWidth: CGFloat = 560
     /// Below this the details open over the window, because there's no room beside the section.
     private static let inspectorWidth: CGFloat = 900
 
@@ -51,6 +52,8 @@ struct MainWindow: View {
             page
                 .frame(minWidth: 320, minHeight: 320)
                 .navigationTitle(navigation.section.title)
+                // The wallet comes first when there's only room for one of them.
+                .toolbar(removing: width < Self.titleWidth ? .title : nil)
                 .toolbar { toolbar }
                 .inspector(isPresented: inspectorBinding) { inspector }
         }
@@ -92,10 +95,6 @@ struct MainWindow: View {
         }
         // What's open belongs to the wallet it was opened on.
         .onChange(of: store.address) {
-            navigation.target = nil
-        }
-        // Details belong to the section they were opened from.
-        .onChange(of: navigation.section) {
             navigation.target = nil
         }
     }
@@ -142,10 +141,11 @@ struct MainWindow: View {
             }
             .help("Look at another wallet (⌘L)")
         }
-        if navigation.section == .overview || navigation.section == .transactions {
+        // With no title in a small window, nothing else would hold the rest at the far end.
+        ToolbarSpacer(.flexible)
+        if store.address != nil, navigation.section == .overview || navigation.section == .transactions {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh", systemImage: "arrow.clockwise") { store.start() }
-                    .disabled(store.address == nil)
                     .help("Refresh (⌘R)")
             }
         }
@@ -269,7 +269,7 @@ struct MainWindow: View {
     }
 
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
-        let rest = 300 + CGFloat(rows) * HoldingsTable.rowHeight
+        let rest = 430 + CGFloat(rows) * HoldingsTable.rowHeight
         return min(max(pageHeight - rest, 200), 460)
     }
 
@@ -693,7 +693,7 @@ private struct Welcome: View {
                 .help(Wording.pnlHelp)
         } actions: {
             WalletForm(store: store, onDone: {})
-                .frame(maxWidth: 420)
+                .frame(width: 340)
         }
     }
 }
@@ -743,7 +743,7 @@ struct WalletForm: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack {
-                TextField("Paste any Base address, 0x…", text: $input)
+                TextField("Paste a Base address, 0x…", text: $input)
                     .textFieldStyle(.roundedBorder)
                     // Only what's typed: a prompt in a code font reads as a command.
                     .font(input.isEmpty ? .body : .body.monospaced())

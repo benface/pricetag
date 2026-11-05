@@ -29,7 +29,10 @@ enum AppSection: String, CaseIterable, Identifiable {
 /// What the main window shows, set from the popover and the menus too.
 @Observable
 final class Navigation {
-    var section: AppSection = .overview
+    /// Details belong to the section they were opened from, so set this first when opening both.
+    var section: AppSection = .overview {
+        didSet { if section != oldValue { target = nil } }
+    }
     var chartRange: ChartRange = .all
     /// The number being explained in the details.
     var target: ExplainTarget?
