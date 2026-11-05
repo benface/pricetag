@@ -35,7 +35,7 @@ function parseScope(value: string | null): TaxScope | null {
   return value === "pooled" || value === "per-wallet" ? value : null
 }
 
-/** How many other wallets a report can add. Each is a full read. */
+/** How many other wallets a report, or any other request, can add. Each is a full read. */
 const MAX_OTHER_WALLETS = 20
 
 function parseCurrency(value: string | null): CurrencyCode | null {
@@ -392,6 +392,13 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const candidates = action === "preview" ? (Array.isArray(body.candidates) ? body.candidates.map(parseBook) : null) : []
     if (!candidates || candidates.includes(null) || candidates.length > 8) return sendJson(res, 400, { error: "Those answers can't be read." })
     const books = action === "preview" ? (candidates as Book[]) : [book]
+
+    // Every wallet this request could read, before any read starts: a shared server's reads queue for everyone.
+    const sent: unknown[] = Array.isArray(body.linked) ? body.linked : []
+    if (!sent.every((address) => typeof address === "string" && isAddress(address))) return sendJson(res, 400, { error: "Linked wallets are a list of Base addresses." })
+    const named = new Set([...(sent as string[]).map((address) => address.toLowerCase()), ...books.flatMap(linkedWallets)])
+    named.delete((match[1] as string).toLowerCase())
+    if (named.size > MAX_OTHER_WALLETS) return sendJson(res, 400, { error: `A request can add up to ${MAX_OTHER_WALLETS} other wallets.` })
 
     if (action === "compare") {
       const known = Array.isArray(body.linked) ? body.linked : []

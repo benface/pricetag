@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import { createServer, request, type IncomingMessage, type Server } from "node:http"
 import { after, before, describe, it } from "node:test"
+import { ASSETS } from "@pricetag/sdk/core"
+import type { Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
 import { clientIpOf, createCounter, gate, hashOf, hostingOf, parseInvites, redact, useStructuredLogs } from "../server/hosting.ts"
 import { createHandler } from "../server/http.ts"
@@ -118,6 +120,25 @@ describe("hosted logs", () => {
     assert.equal(line, "Amp query failed: SELECT * FROM legs WHERE account = '[address]' AND tx = '[hash]' at [url] (Bearer [secret]) [secret]")
   })
 
+  it("leave out addresses and hashes the way the SQL spells them", () => {
+    const me = ME.slice(2)
+    // As `readLegs`, `readWindow` and the calldata search write them.
+    const sql = [
+      `SELECT * FROM p.legs WHERE account = X'${me}'`,
+      `AND (topic1 = X'${me.padStart(64, "0")}' OR topic2 = x'${me.padStart(64, "0")}')`,
+      `AND tx_hash = X'${"ab".repeat(32)}'`,
+      `eth_call(NULL, evm_encode_hex('0xca11bde05977b3631167028862be2a173976ca11'), X'70a08231${me.padStart(64, "0")}', 5)`,
+      `OR strpos(encode(input, 'hex'), '${me}') > 0)`,
+      `account ${ME.toUpperCase().replace("0X", "0x")}`,
+    ].join(" ")
+    const line = redact(`Amp query failed: ${sql}`, [])
+    assert.ok(!line.toLowerCase().includes(me), line)
+    assert.ok(!line.includes("ab".repeat(32)), line)
+    assert.match(line, /account = X'\[hex\]'/)
+    assert.match(line, /strpos\(encode\(input, 'hex'\), '\[hex\]'\)/)
+    assert.equal(redact("block 12345 in 0.25 s, feed ETH/USD", []), "block 12345 in 0.25 s, feed ETH/USD", "Numbers that aren't hex stay readable")
+  })
+
   it("write every console line as JSON, redacted, including the SDK's", () => {
     const saved = { log: console.log, info: console.info, warn: console.warn, error: console.error, debug: console.debug }
     const lines: string[] = []
@@ -131,5 +152,56 @@ describe("hosted logs", () => {
     const [first, second] = lines.map((line) => JSON.parse(line) as { level: string; message: string })
     assert.deepEqual([first?.level, first?.message], ["error", "Linked wallet read failed: no rows for [address] with [secret]"])
     assert.deepEqual([second?.level, second?.message], ["info", "plain 3"])
+  })
+})
+
+describe("one request's reads", () => {
+  let server: Server
+  let reads = 0
+  const source: Source = {
+    mode: "raw",
+    startBlock: 1,
+    historyFrom: null,
+    head: async () => ({ blockNum: 20, timestamp: "2026-11-04T00:00:00.000Z" }),
+    processedThrough: async (_, head) => head,
+    readWindow: async () => {
+      reads += 1
+      return { rows: [], priced: null, gasUnknown: [] }
+    },
+    readReferences: async (blocks) => blocks.map((blockNum) => ({ blockNum, ethUsd: "300000000000", usdcUsd: "100000000" })),
+    readLatestReference: async () => ({ blockNum: 20, ethUsd: "300000000000", usdcUsd: "100000000" }),
+    readEthBalances: async () => new Map(),
+    readBalances: async (_, block) => ({ blockNum: block, amounts: Object.fromEntries(ASSETS.map((asset) => [asset, "0"])) }),
+  }
+  const wallet = (i: number) => `0x${i.toString(16).padStart(40, "0")}`
+  const post = (path: string, body: unknown) => call(server, path, { method: "POST", body: JSON.stringify(body) })
+
+  before(async () => {
+    server = createServer(createHandler(createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }), null))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  })
+  after(() => server.close())
+
+  it("are bounded before any starts, however the wallets are named", async () => {
+    reads = 0
+    const many = Array.from({ length: 300 }, (_, i) => wallet(i + 1))
+    const mine = (from: number) => ({ senders: Object.fromEntries(Array.from({ length: 3 }, (_, i) => [wallet(from + i), { kind: "mine" }])), costs: {}, withdrawals: [] })
+    const refused = [
+      await post(`/api/portfolio/${ME}`, { method: "average", linked: many }),
+      await post(`/api/portfolio/${ME}/compare`, { method: "average", linked: many }),
+      await post(`/api/portfolio/${ME}`, { method: "average", book: { ...mine(1000), senders: Object.fromEntries(many.map((address) => [address, { kind: "mine" }])) } }),
+      // Eight candidates of three wallets each are 24 in all.
+      await post(`/api/portfolio/${ME}/preview`, { method: "average", candidates: Array.from({ length: 8 }, (_, i) => mine(2000 + i * 3)) }),
+    ]
+    assert.deepEqual(refused.map(({ status }) => status), [400, 400, 400, 400])
+    assert.match(refused[0]!.body, /up to 20 other wallets/)
+    assert.equal(reads, 0, "Nothing was read for them")
+  })
+
+  it("still reads a request within the bound", async () => {
+    reads = 0
+    const { status } = await post(`/api/portfolio/${ME}`, { method: "average", linked: [wallet(1), wallet(2)] })
+    assert.equal(status, 200)
+    assert.ok(reads >= 1)
   })
 })

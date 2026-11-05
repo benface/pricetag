@@ -202,17 +202,21 @@ export function gate(handle: Handle, hosting: Hosting, health: () => Record<stri
 
 const ADDRESS = /0x[0-9a-fA-F]{40}(?![0-9a-fA-F])/g
 const HASH = /0x[0-9a-fA-F]{64}(?![0-9a-fA-F])/g
+/** How the SQL spells bytes: an address, a padded topic, a hash or calldata with an address in it, all as `X'…'`. */
+const SQL_BYTES = /\b[xX]'[0-9a-fA-F]*'/g
+/** What's left: any long run of hex, with or without `0x`, like an address searched for in calldata. */
+const LONG_HEX = /(?<![0-9a-zA-Z])(?:0x)?[0-9a-fA-F]{40,}(?![0-9a-zA-Z])/g
 const URL_TEXT = /\bhttps?:\/\/[^\s"'<>)]+/g
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi
 
 /**
- * A line without what could say whose it is or unlock anything: addresses and transaction hashes, which point at a wallet,
- * URLs, which can carry a key, bearer tokens, and the exact values of the secrets this server was given.
+ * A line without what could say whose it is or unlock anything: addresses and transaction hashes, however they're spelled,
+ * which point at a wallet, URLs, which can carry a key, bearer tokens, and the exact values of the secrets this server was given.
  */
 export function redact(text: string, secrets: readonly string[]): string {
   let out = text
   for (const secret of secrets) if (secret.length >= 8) out = out.replaceAll(secret, "[secret]")
-  return out.replace(BEARER, "Bearer [secret]").replace(URL_TEXT, "[url]").replace(HASH, "[hash]").replace(ADDRESS, "[address]")
+  return out.replace(BEARER, "Bearer [secret]").replace(URL_TEXT, "[url]").replace(SQL_BYTES, "X'[hex]'").replace(HASH, "[hash]").replace(ADDRESS, "[address]").replace(LONG_HEX, "[hex]")
 }
 
 /** The env's secrets, by name, so a new one only has to be added here. */
