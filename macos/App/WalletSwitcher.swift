@@ -145,6 +145,7 @@ struct WalletSwitcher: View {
     @State private var pointerAtLastKey: CGPoint?
     @FocusState private var focus: Field?
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum Field: Hashable {
         case add, rename
@@ -206,7 +207,7 @@ struct WalletSwitcher: View {
             VStack(alignment: .leading, spacing: 0) {
                 if offersSpendingMoney || cantOpenSpendingMoney { createSpendingMoney }
                 addRow
-                if let note { noteRow(note) }
+                if let note { noteRow(note).arrives() }
             }
             .padding(6)
         }
@@ -364,9 +365,9 @@ struct WalletSwitcher: View {
         }
         if let arranged = [list.yours, list.watching].first(where: { $0.contains(entry) && $0.count > 1 }), let index = arranged.firstIndex(of: entry) {
             // For the keyboard and VoiceOver, which can't drag.
-            Button("Move Up") { store.moveWallets(in: arranged.map(\.address), from: [index], to: index - 1) }
+            Button("Move Up") { withAnimation(reduceMotion ? nil : Motion.state) { store.moveWallets(in: arranged.map(\.address), from: [index], to: index - 1) } }
                 .disabled(index == 0)
-            Button("Move Down") { store.moveWallets(in: arranged.map(\.address), from: [index], to: index + 2) }
+            Button("Move Down") { withAnimation(reduceMotion ? nil : Motion.state) { store.moveWallets(in: arranged.map(\.address), from: [index], to: index + 2) } }
                 .disabled(index == arranged.count - 1)
         }
         if entry.canKeep {
@@ -410,12 +411,18 @@ struct WalletSwitcher: View {
     }
 
     /// Does it, and says what changed right away, because the numbers change with it. An account from a device comes back with Undo too.
+    /// The rows slide to where they now are, and so does Undo.
     private func change(_ entry: WalletEntry, to text: String, _ action: () -> Void) {
         let account = hotWallet?.settings.deviceAccounts.first { $0.lowercased == entry.address }
-        let before = store.changeWallet(entry.address, action)
-        note = WalletListNote(text: text) { [store, hotWallet] in
-            if let account { hotWallet?.linkDeviceAccounts([account.lowercased]) }
-            store.restore(before)
+        let animation = reduceMotion ? nil : Motion.state
+        withAnimation(animation) {
+            let before = store.changeWallet(entry.address, action)
+            note = WalletListNote(text: text) { [store, hotWallet] in
+                withAnimation(animation) {
+                    if let account { hotWallet?.linkDeviceAccounts([account.lowercased]) }
+                    store.restore(before)
+                }
+            }
         }
     }
 

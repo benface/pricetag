@@ -142,6 +142,8 @@ struct HotWalletDetails<Overview: View>: View {
     @State private var isConfirmingRotation = false
     @State private var isConfirmingAbandon = false
     @State private var isChangingCap = false
+    /// What this Mac signed while the page was open, marked for a moment so it's found once its sheet has closed.
+    @State private var justSigned: Set<String> = []
 
     private var address: EthereumAddress? { wallet.address }
 
@@ -161,6 +163,15 @@ struct HotWalletDetails<Overview: View>: View {
             if !wallet.records.isEmpty { activity }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onChange(of: wallet.records.map(\.hash)) { old, new in
+            let added = Set(new).subtracting(old)
+            if !added.isEmpty { justSigned.formUnion(added) }
+        }
+        .task(id: justSigned) {
+            guard !justSigned.isEmpty else { return }
+            try? await Task.sleep(for: Motion.highlight)
+            if !Task.isCancelled { justSigned = [] }
+        }
         .sheet(isPresented: $isAddingCold, onDismiss: { if testingSavings != nil { isSending = true } }) {
             AddColdWalletSheet(wallet: wallet, wallets: store.walletList(hotWallet: wallet).pickable, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
         }
@@ -303,8 +314,11 @@ struct HotWalletDetails<Overview: View>: View {
             }
             ForEach(shownPurchases) { purchase in
                 PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), main: wallet.display.main) { purchases.dismiss(purchase) }
+                    .arrives()
             }
         }
+        // One started or dismissed, without the rest jumping.
+        .motion(Motion.state, value: shownPurchases.map(\.id))
     }
 
     private var holdings: some View {
@@ -336,8 +350,8 @@ struct HotWalletDetails<Overview: View>: View {
     private var untouched: some View {
         DetailsSection("Other Tokens", footer: "Not tracked, and never touched. They can be malicious, so don't go looking for what they're worth.") {
             ForEach(wallet.unlisted) { token in
-                Text(token.token)
-                    .font(.caption.monospaced())
+                AddressLine(EthereumAddress(token.token)?.checksummed ?? token.token)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
@@ -496,8 +510,11 @@ struct HotWalletDetails<Overview: View>: View {
                             .help("Open this transaction")
                     }
                 }
+                .justAdded(justSigned.contains(record.hash))
+                .arrives()
             }
         }
+        .motion(Motion.state, value: wallet.records.map(\.hash))
     }
 
     private func reasonText(_ record: SignedRecord) -> String {

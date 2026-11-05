@@ -55,7 +55,7 @@ struct SettingsView: View {
             if shownHeight == nil || reduceMotion {
                 shownHeight = height
             } else {
-                withAnimation(.easeInOut(duration: 0.25)) { shownHeight = height }
+                withAnimation(Motion.panel) { shownHeight = height }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeScreenNotification)) { _ in room = Self.roomOnDisplay }
