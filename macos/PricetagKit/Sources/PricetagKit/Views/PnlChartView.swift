@@ -17,10 +17,10 @@ public struct PnlChartView: View {
         self.onSelect = onSelect
     }
 
-    private var lineStyle: AnyShapeStyle {
+    /// A Color, because a chart reads plain styles like `.secondary` as shades of its accent.
+    private var lineColor: Color {
         let tone = Tone(signed: points.last { $0.pnlMicros != nil }?.pnlMicros)
-        // A Color, because a chart reads plain styles like `.secondary` as shades of its accent.
-        return isLive && tone != .neutral ? tone.style : AnyShapeStyle(Color.secondary)
+        return isLive && tone != .neutral ? tone.color : .secondary
     }
 
     public var body: some View {
@@ -28,33 +28,37 @@ public struct PnlChartView: View {
         Chart {
             ForEach(Array(series.gaps.enumerated()), id: \.offset) { _, gap in
                 RectangleMark(xStart: .value("Unknown from", gap.lowerBound), xEnd: .value("Unknown to", gap.upperBound))
-                    .foregroundStyle(Color.orange.opacity(0.1))
+                    .foregroundStyle(Color.secondary.opacity(0.1))
             }
             RuleMark(y: .value("Zero", 0))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
                 .foregroundStyle(.tertiary)
             ForEach(Array(series.segments.enumerated()), id: \.offset) { index, segment in
                 ForEach(segment) { step in
+                    AreaMark(x: .value("Time", step.date), yStart: .value("Zero", 0), yEnd: .value("PnL", step.value), series: .value("Segment", index))
+                        .interpolationMethod(.stepEnd)
+                        .foregroundStyle(LinearGradient(colors: [lineColor.opacity(0.18), lineColor.opacity(0.02)], startPoint: .top, endPoint: .bottom))
                     LineMark(x: .value("Time", step.date), y: .value("PnL", step.value), series: .value("Segment", index))
                         .interpolationMethod(.stepEnd)
-                        .foregroundStyle(lineStyle)
+                        .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                        .foregroundStyle(lineColor)
                 }
             }
             if let hovered {
                 RuleMark(x: .value("Time", hovered.date)).foregroundStyle(.tertiary)
                 PointMark(x: .value("Time", hovered.date), y: .value("PnL", hovered.value ?? 0))
                     // Only there to carry the tooltip when the value is unknown, not to mark a place on the axis.
-                    .foregroundStyle(hovered.value == nil ? AnyShapeStyle(Color.clear) : lineStyle)
+                    .foregroundStyle(hovered.value == nil ? Color.clear : lineColor)
                     .annotation(position: .top, spacing: 6, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
                         VStack(spacing: 1) {
                             if let pnl = hovered.point.pnlMicros {
                                 Text(Format.signedMoney(pnl, currency)).monospacedDigit().fontWeight(.medium)
                             } else {
-                                WarningText("Unavailable").fontWeight(.medium)
+                                Text("Unavailable").foregroundStyle(.secondary).fontWeight(.medium)
                             }
                             Text(Format.time(hovered.date)).foregroundStyle(.secondary)
                             if hovered.point.excludedCount > 0 {
-                                Text("Leaves out \(hovered.point.excludedCount) unknown").foregroundStyle(Tone.warning.style)
+                                Text("Leaves out \(hovered.point.excludedCount) unknown").foregroundStyle(.secondary)
                             }
                         }
                         .font(.caption)

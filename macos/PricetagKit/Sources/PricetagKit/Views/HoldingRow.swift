@@ -37,20 +37,20 @@ public struct HoldingRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(position.asset).fontWeight(.medium)
-                    OnchainCheck(position: position, showsLabel: false)
+                    OnchainCheck(position: position)
                 }
                 LiveNumber(amount, tone: .secondary)
                     .font(.caption)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
-                LiveNumber(valueText, tone: position.isHeld && position.values.valueMicros == nil ? .warning : .neutral)
+                LiveNumber(valueText, tone: position.isHeld && position.values.valueMicros == nil ? .secondary : .neutral)
                 Text(cost)
                     .monospacedDigit()
                     .font(.caption)
-                    .foregroundStyle(position.isHeld && position.hasUnknownCost ? Tone.warning.style : AnyShapeStyle(.secondary))
+                    .foregroundStyle(.secondary)
             }
-            LiveNumber(pnlText, tone: Tone(signed: position.pnlMicros))
+            LiveNumber(pnlText, tone: position.pnlMicros == nil ? .secondary : Tone(signed: position.pnlMicros))
                 .font(position.pnlMicros == nil ? .caption : .body)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -63,18 +63,17 @@ public struct HoldingRow: View {
     }
 }
 
-/// Whether a position matches the chain: a check mark when it does, and a warning when it doesn't or we can't tell.
+/// Says when a position doesn't match the chain or can't be checked, or has a number nobody can work out yet. A row with nothing to flag shows nothing.
 public struct OnchainCheck: View {
     let position: Position
-    let showsLabel: Bool
+    @Environment(\.backgroundProminence) private var prominence
 
-    public init(position: Position, showsLabel: Bool) {
+    public init(position: Position) {
         self.position = position
-        self.showsLabel = showsLabel
     }
 
     private var label: String? {
-        if let status = position.reconciliation?.status { return Wording.checkLabel(status) }
+        if let status = position.reconciliation?.status, status != .reconciled { return Wording.checkLabel(status) }
         return position.hasShortfall ? Wording.checkLabel(.incomplete) : nil
     }
 
@@ -84,18 +83,12 @@ public struct OnchainCheck: View {
 
     public var body: some View {
         if let label {
-            let tone: Tone = position.isReconciled ? .gain : .warning
-            HStack(spacing: 4) {
-                Image(systemName: position.isReconciled ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(tone.style)
-                if showsLabel {
-                    Text(label).foregroundStyle(tone.style)
-                }
-            }
-            .help(help)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(position.asset): \(label)")
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundStyle(prominence == .increased ? Tone.neutral.style : Tone.warning.style)
+                .help(help)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(position.asset): \(label)")
         }
     }
 }

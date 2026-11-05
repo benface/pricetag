@@ -62,16 +62,11 @@ struct PopoverView: View {
             case (_, let portfolio?) where portfolio.isEmpty:
                 Text("No activity for this wallet in this time.").foregroundStyle(.secondary)
             case (_, let portfolio?):
-                PnlHeadline(portfolio: portfolio, isLive: isLive, size: 30, onOpen: { open(.total(.pnl)) }, onResolve: {
+                PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 30) { open(.total($0)) }
+                PortfolioAttention(portfolio: portfolio, isCompact: true, onOpen: { open($0) }, onResolve: {
                     navigation.resolve()
                     open(nil)
                 })
-                // Two by two, because four across would cut off anything over $9,999.
-                LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 8) {
-                    ForEach(portfolio.totalStats, id: \.metric) { stat in
-                        TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { open(.total(stat.metric)) }
-                    }
-                }
             case (.reading, nil):
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -162,14 +157,7 @@ struct PopoverView: View {
 
     private var footerControls: some View {
         HStack {
-            Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
-                ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-            .fixedSize()
-            .help(Wording.methodHelp)
+            CostMethodMenu(store: store)
             Spacer()
             Button("Open \(AppName.current)") { open(nil) }
                 .keyboardShortcut("o", modifiers: .command)

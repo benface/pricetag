@@ -118,6 +118,17 @@ public enum Wording {
         return "Covers about \(Format.duration(ms: BlockTime.msBetween(span.fromBlock, span.toBlock))) of history and \(trackedTokens) tokens plus ETH. \(opening) Other tokens aren't counted."
     }
 
+    /// What the rows no longer say one by one. nil unless every listed balance was checked and matches.
+    public static func allBalancesMatch(_ portfolio: Portfolio) -> String? {
+        let listed = portfolio.listedPositions
+        return !listed.isEmpty && listed.allSatisfy(\.isReconciled) ? "Every balance matches the chain." : nil
+    }
+
+    /// What there is instead of a chart, so what's short isn't mistaken for nothing.
+    public static func transactionsSoFar(_ count: Int) -> String {
+        count == 1 ? "1 transaction so far." : "\(Format.block(count)) transactions so far."
+    }
+
     public static func feesUnknown(_ count: Int) -> String {
         "Network fees couldn't be worked out for \(count) \(count == 1 ? "transaction" : "transactions"), so the network fees shown are too low."
     }
@@ -129,7 +140,7 @@ public enum Wording {
     public static func checkLabel(_ status: Reconciliation.Status) -> String {
         switch status {
         case .reconciled: "Matches"
-        case .incomplete: "Incomplete"
+        case .incomplete: "Doesn't match"
         case .unchecked: "Not checked"
         }
     }
@@ -183,9 +194,22 @@ public enum Wording {
     /// What sits right next to a total, so it never appears bare. nil when it's exact and whole.
     public static func headlineCaveat(_ totals: Totals, _ currency: CurrencyCode) -> String? {
         var parts: [String] = []
-        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) unresolved") }
+        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) cost unknown") }
         if isPositive(totals.estimatedMicros) { parts.append("\(Format.money(totals.estimatedMicros, currency)) estimated") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// The same, as a sentence for when there's room to say what it means. nil when it's exact and whole.
+    public static func leavesOut(_ totals: Totals, _ currency: CurrencyCode) -> String? {
+        var parts: [String] = []
+        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) of what you hold has an unknown cost, so it isn't in your PnL.") }
+        if isPositive(totals.estimatedMicros) { parts.append("\(Format.money(totals.estimatedMicros, currency)) is estimated.") }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// What answering takes, on the button that starts it.
+    public static func answerQuestions(_ count: Int) -> String {
+        count == 1 ? "Answer 1 Question" : "Answer \(Format.block(count)) Questions"
     }
 
     /// What isn't listed with the holdings, and why it doesn't matter to the numbers. nil when there's nothing.
@@ -203,7 +227,7 @@ public enum Wording {
     }
 
     public static func linkedFailed(_ count: Int) -> String {
-        count == 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : "Couldn't read \(count) of your other wallets, so what came from them may show as unresolved."
+        count == 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : "Couldn't read \(count) of your other wallets, so what came from them may show an unknown cost."
     }
 
     /// A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent.
@@ -217,7 +241,7 @@ public enum Wording {
         if preview.pending { return "Reading that wallet…" }
         guard let pnl = preview.pnlMicros else { return "PnL still unavailable" }
         let number = Format.estimate(Format.signedMoney(pnl, currency), isPositive(preview.estimatedMicros))
-        return isPositive(preview.unresolvedMicros) ? "\(number) · \(Format.money(preview.unresolvedMicros, currency)) unresolved" : number
+        return isPositive(preview.unresolvedMicros) ? "\(number) · \(Format.money(preview.unresolvedMicros, currency)) cost unknown" : number
     }
 
     public static let notStarted = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."
@@ -240,7 +264,9 @@ public enum Wording {
 
     public static let demo = "Demo data, not a real wallet. Every case the app has to get right is in here."
     public static let pnlUnavailable = "PnL unavailable"
+    public static let unknown = "Unknown"
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
+    public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet's history. The first read can take a minute, then only new activity is read."
     public static let notAnAddress = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 }

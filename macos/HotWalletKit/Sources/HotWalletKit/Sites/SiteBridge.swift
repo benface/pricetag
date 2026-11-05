@@ -504,3 +504,22 @@ public final class SiteBridge {
         chain.lowercased() == baseChainHex
     }
 }
+
+#if DEBUG
+extension SiteApproval {
+    /// For `macos/shot.sh`. Nothing answers these: the scene's buttons do nothing, and they never reach the bridge or a key.
+    public static func sceneConnect(origin: String) -> SiteApproval {
+        SiteApproval(id: UUID(), origin: origin, action: .connect, requester: Requester(connection: UUID(), id: "scene"))
+    }
+
+    public static func sceneUnlimitedApproval(origin: String, token: EthereumAddress, spender: EthereumAddress) -> SiteApproval {
+        let review = TransactionReview(
+            headline: "Lets \(SiteWording.address(spender)) spend your USDC, with no limit",
+            to: token, toName: "USDC", value: 0, valueUsdMicros: 0, data: [0x09, 0x5e, 0xa7, 0xb3], feeWei: 3_000_000_000_000, feeUsdMicros: 8_000,
+            warnings: [SiteWarning(SiteWording.unlimited(spender: SiteWording.address(spender), asset: "USDC"), isStrong: true)],
+            symbol: "USDC", decimals: 6, amount: "0", usdMicros: nil
+        )
+        return SiteApproval(id: UUID(), origin: origin, action: .transaction(review), requester: Requester(connection: UUID(), id: "scene"))
+    }
+}
+#endif

@@ -116,7 +116,7 @@ public struct TaxReportView: View {
     private func content(_ report: TaxReport) -> some View {
         Section {
             LabeledContent("Rows") { Text(Format.block(report.rowCount)).monospacedDigit() }
-            LabeledContent("Unresolved") {
+            LabeledContent("Unknown gain") {
                 if report.unresolvedCount > 0 {
                     WarningText(Format.block(report.unresolvedCount)).monospacedDigit()
                 } else {

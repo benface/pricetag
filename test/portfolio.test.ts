@@ -80,7 +80,7 @@ describe("portfolioOf", () => {
 
   it("explains the check, and marks an opening balance so it isn't linked as a transaction", () => {
     const check = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "cbBTC", metric: "onchain" })!
-    assert.equal(check.value, "⚠ Incomplete")
+    assert.equal(check.value, "⚠ Doesn't match")
     assert.match(check.lines.join(" "), /Difference/)
     const dai = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "DAI", metric: "amount" })!
     assert.deepEqual(dai.legs.map((l) => [l.opening, l.txHash]), [[true, ""]])

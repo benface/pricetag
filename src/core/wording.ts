@@ -12,7 +12,7 @@ export const METHOD_HELP = "Average spreads what you paid across all you hold. O
 export const AVERAGE_PRICE_PAID = "Average price paid"
 export const NETWORK_FEES = "Network fees"
 export const BALANCE_CHECK = "Balance check"
-export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Incomplete", unchecked: "Not checked" }
+export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Doesn't match", unchecked: "Not checked" }
 export const STARTING_BALANCE = "Starting balance"
 export const PNL_HELP = "PnL is profit and loss: what you've gained or lost so far."
 export const REALIZED_HELP = "Gain or loss on what you've sold or spent."
@@ -127,7 +127,7 @@ export function networkFeeUnknownSentence(count: number): string {
 }
 
 export function linkedFailedSentence(count: number): string {
-  return count === 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : `Couldn't read ${count} of your other wallets, so what came from them may show as unresolved.`
+  return count === 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : `Couldn't read ${count} of your other wallets, so what came from them may show an unknown cost.`
 }
 
 /** A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent. */
