@@ -134,6 +134,7 @@ enum TestScene: String, CaseIterable {
     case settingsNoWallet = "settings-no-wallet"
     case settingsCAD = "settings-cad"
     case settingsHotWalletCAD = "settings-hot-wallet-cad"
+    case settingsReplacingKey = "settings-replacing-key"
     case hotWalletSetup = "hot-wallet-setup"
     case hotWalletNotProvisioned = "hot-wallet-not-provisioned"
     case hotWalletUnreadable = "hot-wallet-unreadable"
@@ -149,6 +150,7 @@ enum TestScene: String, CaseIterable {
     case hotWalletAlarm = "hot-wallet-alarm"
     case hotWalletReplacingKey = "hot-wallet-replacing-key"
     case hotWalletReplacingKeyStuck = "hot-wallet-replacing-key-stuck"
+    case hotWalletReplacingKeyMissing = "hot-wallet-replacing-key-missing"
     case hotWalletAddSavings = "hot-wallet-add-savings"
     case hotWalletAddSavingsFilled = "hot-wallet-add-savings-filled"
     case hotWalletAddSavingsFromDevice = "hot-wallet-add-savings-from-device"
@@ -263,8 +265,9 @@ enum TestScene: String, CaseIterable {
         case .hotWalletOverCapNoSavings: .overCapNoSavings
         case .hotWalletKeyMissing: .keyMissing
         case .hotWalletAlarm, .popoverHotWalletAlarm: .alarm
-        case .hotWalletReplacingKey: .replacingKey
+        case .hotWalletReplacingKey, .settingsReplacingKey: .replacingKey
         case .hotWalletReplacingKeyStuck: .replacingKeyStuck
+        case .hotWalletReplacingKeyMissing: .replacingKeyMissing
         default: .none
         }
     }
@@ -331,11 +334,11 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
         case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
-        case .settings, .settingsHotWallet, .settingsShowingSpendingMoney, .settingsNoWallet, .settingsCAD, .settingsHotWalletCAD:
+        case .settings, .settingsHotWallet, .settingsShowingSpendingMoney, .settingsNoWallet, .settingsCAD, .settingsHotWalletCAD, .settingsReplacingKey:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 720), isReady: isReady)
-        case .hotWallet, .hotWalletCAD, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck:
+        case .hotWallet, .hotWalletCAD, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck, .hotWalletReplacingKeyMissing:
             // Taller than it opens, because a screenshot can't scroll to the actions and the activity at the bottom.
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 1200), isReady: isReady)
         case .hotWalletAddSavings:
