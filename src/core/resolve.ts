@@ -4,7 +4,7 @@
 // or from a provider's order that matches a movement exactly. The rest come from here, and the fold then runs on the result.
 // An unanswered sender stays unknown: it could be the user's own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, emptyPosition, foldWallet, formatAmount, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, emptyPosition, foldWallet, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
 import { costKey, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
@@ -210,8 +210,14 @@ function purchasedLegs(sides: readonly Side[], book: Book): Map<string, Purchase
   return purchased
 }
 
+/** What was paid, at its own feed's rate when it arrived, in the currency being folded. */
+function paidAtItsRate(side: Side, { micros, currency }: Money, leg: PricedLeg): string | null {
+  const answer = usableAnswer(side.wallet.paidRates?.[currency]?.[leg.blockNum], leg.timestamp)
+  return answer === null ? null : moneyIn(side, { micros: ((BigInt(micros) * answer) / E8).toString(), currency: "USD" }, leg)
+}
+
 /** What a purchase cost in the currency being folded. Null when that can't be said, which leaves it unknown. */
-const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: PricedLeg) => moneyIn(side, cost, leg) ?? (costUsdMicros === null ? null : moneyIn(side, { micros: costUsdMicros, currency: "USD" }, leg))
+const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: PricedLeg) => moneyIn(side, cost, leg) ?? paidAtItsRate(side, cost, leg) ?? (costUsdMicros === null ? null : moneyIn(side, { micros: costUsdMicros, currency: "USD" }, leg))
 
 export function resolveLegs(sides: readonly Side[], method: Method, book: Book): Resolved {
   const linked = new Set(linkedWallets(book))
@@ -271,7 +277,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     // What the provider says was paid for exactly this, which nothing anyone entered can know better.
     const purchase = purchased.get(costKey(address, leg.id))
     const bought = purchase ? purchaseCost(side, purchase, leg) : null
-    if (purchase && bought !== null) return { ...leg, costLabel: "paid", costMicros: bought, purchaseSource: purchaseSource(purchase.provider) }
+    if (purchase && bought !== null) return { ...leg, costLabel: "paid", costMicros: bought, purchaseSource: purchaseSource(purchase.provider, purchase.cost.currency === side.view.currency ? undefined : formatPaid(purchase.cost.micros, purchase.cost.currency)) }
     const latestNote = wallet.notes.filter((n) => n.txHash === leg.txHash && n.asset === leg.asset).at(-1)
     const note = latestNote && !noteIsAmbiguous(leg, side.view.legs) ? latestNote : undefined
     const sources = leg.kind === "transfer" && !leg.opening ? sourcesOf(leg) : null
