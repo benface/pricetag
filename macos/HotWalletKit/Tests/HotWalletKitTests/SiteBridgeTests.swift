@@ -1050,7 +1050,7 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
             ("0xa9059cbb" + spenderWord + limited, false, "Send 5 USDC"),
             ("0x87517c45" + word(String(usdcText.dropFirst(2))) + spenderWord + word("ffffffffffffffffffffffffffffffffffffffff") + word("1"), true, "all of your USDC"),
             ("0xd505accf" + word(String(hot.dropFirst(2))) + spenderWord + maxWord + maxWord + word("1b") + word("1") + word("2"), true, "spend your USDC"),
-            ("0x12345678", false, "contract call"),
+            ("0x12345678", false, "can't read"),
         ]
         for (data, isStrong, headline) in cases {
             let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters(to: usdcText, value: "0x0", data: data))

@@ -131,15 +131,37 @@ private struct SiteRequestSummary<Footer: View>: View {
                 footer
             }
         case .message(let review):
-            ConfirmationView(asker: .site(approval.site), hero: .words(review.headline), rows: review.contract.map { [ConfirmationRow(label: "Contract", value: AddressText.grouped($0.checksummed), isAddress: true)] } ?? [], warnings: approval.warnings, message: review.body) {
+            // A permit this app can read says what it allows, and what's signed is one click away. Anything else is shown as it is.
+            let contract = review.contract.map { [Self.contractRow($0)] } ?? []
+            ConfirmationView(asker: .site(approval.site), hero: .words(review.headline), rows: (review.permit.map(permitRows) ?? []) + contract, warnings: approval.warnings, message: review.permit == nil ? review.body : nil, data: review.permit == nil ? nil : review.body) {
                 footer
             }
         }
     }
 
+    /// Every address with its name above it when it's on the list, and plainly unknown when it isn't.
+    private static func contractRow(_ address: EthereumAddress) -> ConfirmationRow {
+        ConfirmationRow(label: "Contract", value: AddressText.grouped(address.checksummed), isAddress: true, name: KnownContracts.name(of: address) ?? SiteWording.unknownContract)
+    }
+
+    private static func spenderRow(_ address: EthereumAddress) -> ConfirmationRow {
+        ConfirmationRow(label: "Spender", value: AddressText.grouped(address.checksummed), isAddress: true, name: KnownContracts.name(of: address) ?? SiteWording.unknownAddress)
+    }
+
+    private func permitRows(_ permit: PermitSummary) -> [ConfirmationRow] {
+        var rows = [
+            ConfirmationRow(label: permit.kind == .permit2Transfer ? "Can take" : "Can spend", value: permit.amount),
+            ConfirmationRow(label: "Token", value: AddressText.grouped(permit.token.checksummed), isAddress: true, name: permit.tokenSymbol ?? "Unknown token"),
+            Self.spenderRow(permit.spender),
+        ]
+        if let allowedUntil = permit.allowedUntil { rows.append(ConfirmationRow(label: "Allowed until", value: allowedUntil)) }
+        rows.append(ConfirmationRow(label: "Must be used by", value: permit.mustBeUsedBy))
+        return rows
+    }
+
     /// A big number says that's the whole of it, which it isn't when something comes back. The preview's rows say what goes each way.
     private func hero(_ review: TransactionReview) -> ConfirmationHero {
-        guard review.preview == nil, let moved = review.moved else { return .words(review.headline) }
+        guard review.preview == nil, let moved = review.moved else { return .words(review.title) }
         return .amount(moved.text, symbol: moved.symbol)
     }
 
@@ -154,7 +176,7 @@ private struct SiteRequestSummary<Footer: View>: View {
             }
         }
         let allowances = preview.allowances.flatMap { allowance in
-            var rows = [ConfirmationRow(label: "You'd allow", value: AddressText.grouped(allowance.spender.checksummed), isAddress: true, name: "This address to spend \(allowance.words)")]
+            var rows = [ConfirmationRow(label: "You'd allow", value: AddressText.grouped(allowance.spender.checksummed), isAddress: true, name: "\(KnownContracts.name(of: allowance.spender) ?? "This address") to spend \(allowance.words)")]
             if let contract = allowance.unknownContract {
                 rows.append(ConfirmationRow(label: "For", value: AddressText.grouped(contract.checksummed), isAddress: true, name: allowance.isCollection ? "Unknown collection" : "Unknown token"))
             }
@@ -167,16 +189,17 @@ private struct SiteRequestSummary<Footer: View>: View {
 
     private func rows(_ review: TransactionReview) -> [ConfirmationRow] {
         var rows = review.preview.map(previewRows) ?? []
+        // Anyone can be sent to, so a recipient only gets a name when it's on the list.
         if let recipient = review.recipient {
-            rows.append(ConfirmationRow(label: "To", value: AddressText.grouped(recipient.checksummed), isAddress: true))
+            rows.append(ConfirmationRow(label: "To", value: AddressText.grouped(recipient.checksummed), isAddress: true, name: KnownContracts.name(of: recipient)))
         } else if let spender = review.spender {
-            rows.append(ConfirmationRow(label: "Spender", value: AddressText.grouped(spender.checksummed), isAddress: true))
+            rows.append(Self.spenderRow(spender))
         } else {
-            rows.append(ConfirmationRow(label: "Contract", value: AddressText.grouped(review.to.checksummed), isAddress: true))
+            rows.append(Self.contractRow(review.to))
         }
         // A token this app doesn't know is only as good as its contract, so that's never tucked away.
         if review.toName == nil, review.recipient != review.to, review.recipient != nil || review.spender != nil {
-            rows.append(ConfirmationRow(label: "Contract", value: AddressText.grouped(review.to.checksummed), isAddress: true))
+            rows.append(Self.contractRow(review.to))
         }
         if review.alsoSendsEth {
             rows.append(ConfirmationRow(label: "Also sends", value: amount(Money.text(ofUnits: review.value, decimals: 18), usdMicros: review.valueUsdMicros)))

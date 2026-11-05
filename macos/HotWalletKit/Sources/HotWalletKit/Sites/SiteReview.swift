@@ -24,6 +24,18 @@ public enum SiteWording {
         return "\(text.prefix(6))…\(text.suffix(4))"
     }
 
+    /// An address in a sentence, with its name beside it when it's one this app knows, and never in place of it.
+    static func who(_ address: EthereumAddress) -> String {
+        KnownContracts.name(of: address).map { "\($0) (\(Self.address(address)))" } ?? Self.address(address)
+    }
+
+    /// What a contract row says above the address when it isn't on the list.
+    public static let unknownContract = "Unknown contract"
+    /// The same for a spender, which could be anyone.
+    public static let unknownAddress = "Unknown address"
+    /// When neither the call nor its estimate says clearly what it does.
+    static let unclear = "It's not clear what this does"
+
     static func unlimited(spender: String, asset: String) -> String {
         "This lets \(spender) take all of your \(asset), now or at any time later, without asking again. Scams rely on this. Only approve it if you trust this site and meant to do this."
     }
@@ -39,9 +51,9 @@ public enum SiteWording {
 
     static let unreadableMessage = "This can't be read as text, so there's no way to know what it would be used for. Scams rely on this."
     static let anyChain = "This signature isn't tied to a network, so it could be used anywhere, not just on Base."
-    static let burn = "This sends to the zero address, where nothing can ever be recovered."
-    static let unreadableCall = "This app can't read what this contract call does. All it can tell you is the ETH it sends."
-    static let previewIsAnEstimate = "This is only an estimate of what would happen if it ran right now. The contract can do something else when it really runs."
+    static let burn = "This sends to an address nobody controls, where nothing can ever be recovered."
+    static let unreadableCall = "This app can't tell what this does. All it can tell you is the ETH it sends."
+    static let previewIsAnEstimate = "This is only an estimate of what would happen if it ran right now. It can do something else when it really runs."
     static let previewHasUnknownToken = "This moves a token this app doesn't know, so there's no telling how much of it, or what it's worth."
     static let notEnoughEth = "This wallet doesn't hold enough ETH for this and its fee, so it will probably fail. Top up first."
 
@@ -142,6 +154,13 @@ public struct TransactionReview: Equatable, Sendable {
     /// Whether all there is to say about this is what the node can work out.
     var isUnreadableCall: Bool { preview != nil || warnings.contains(SiteWarning(SiteWording.unreadableCall)) }
 
+    /// What the window says this does. For a call this app can't read, that's the estimate's words when it's clear, and plainly
+    /// that it isn't otherwise. Touch ID only ever gets `headline`, which says nothing an estimate came up with.
+    public var title: String {
+        guard isUnreadableCall else { return headline }
+        return preview?.title ?? SiteWording.unclear
+    }
+
     /// Any ETH that goes along with what `moved` or the headline already says.
     public var alsoSendsEth: Bool { value > 0 && moved?.symbol != "ETH" }
 
@@ -212,7 +231,7 @@ extension TransactionReview {
         switch selector {
         case Selectors.transfer:
             if let to = arguments.address(0), let amount = arguments.amount(1) {
-                headline = "Send \(amountText(amount, token)) to \(SiteWording.address(to))"
+                headline = "Send \(amountText(amount, token)) to \(SiteWording.who(to))"
                 recipient = to
                 if let token {
                     recorded = (token.symbol, token.decimals, amount)
@@ -222,7 +241,7 @@ extension TransactionReview {
         case Selectors.increaseAllowance:
             // This adds to whatever's already allowed, which nothing here has read. So it can't say what the total comes to, and adding nothing doesn't stop anything.
             spender = arguments.address(0)
-            if let spender = spender.map(SiteWording.address) {
+            if let spender = spender.map(SiteWording.who) {
                 let amount = arguments.amount(1)
                 if amount == 0 {
                     headline = "Add nothing to what \(spender) can spend of your \(asset(token))"
@@ -235,7 +254,7 @@ extension TransactionReview {
             }
         case Selectors.approve:
             spender = arguments.address(0)
-            if let spender = spender.map(SiteWording.address) {
+            if let spender = spender.map(SiteWording.who) {
                 let amount = arguments.amount(1)
                 if amount == 0 {
                     headline = "Stop \(spender) from spending your \(asset(token))"
@@ -248,7 +267,7 @@ extension TransactionReview {
             }
         case Selectors.permit2Approve:
             spender = arguments.address(1)
-            if let spender = spender.map(SiteWording.address) {
+            if let spender = spender.map(SiteWording.who) {
                 let approved = arguments.address(0).flatMap { address in Base.tokens.first { $0.contract == address } }
                 let amount = arguments.amount(2)
                 if amount == 0 {
@@ -262,7 +281,7 @@ extension TransactionReview {
             }
         case Selectors.setApprovalForAll:
             spender = arguments.address(0)
-            if let spender = spender.map(SiteWording.address), let flag = arguments.amount(1) {
+            if let spender = spender.map(SiteWording.who), let flag = arguments.amount(1) {
                 if flag == 0 {
                     headline = "Stop \(spender) from moving your items in this collection"
                 } else {
@@ -272,7 +291,7 @@ extension TransactionReview {
             }
         case Selectors.permit:
             spender = arguments.address(1)
-            if let spender = spender.map(SiteWording.address) {
+            if let spender = spender.map(SiteWording.who) {
                 headline = "Let \(spender) spend your \(asset(token))"
                 warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(token)), isStrong: true))
             }
@@ -281,13 +300,13 @@ extension TransactionReview {
         }
 
         if transaction.data.isEmpty {
-            headline = "Send \(Money.text(ofUnits: transaction.value, decimals: 18)) ETH to \(SiteWording.address(transaction.to))"
+            headline = "Send \(Money.text(ofUnits: transaction.value, decimals: 18)) ETH to \(SiteWording.who(transaction.to))"
             recipient = transaction.to
             moved = movedEth
         }
         if headline == nil {
             if transaction.value > 0 { moved = movedEth }
-            headline = transaction.value > 0 ? "Send \(Money.text(ofUnits: transaction.value, decimals: 18)) ETH in a contract call" : "Make a contract call"
+            headline = transaction.value > 0 ? "Send \(Money.text(ofUnits: transaction.value, decimals: 18)) ETH with a request this app can't read" : "Approve a request this app can't read"
             preview = quote.preview
             if let preview {
                 warnings.append(SiteWarning(SiteWording.previewIsAnEstimate))
@@ -296,7 +315,7 @@ extension TransactionReview {
                 if unlimited.count > 1 {
                     warnings.append(SiteWarning(SiteWording.unlimited(count: unlimited.count), isStrong: true))
                 } else if let allowance = unlimited.first {
-                    warnings.append(SiteWarning(SiteWording.unlimited(spender: SiteWording.address(allowance.spender), asset: allowance.asset), isStrong: true))
+                    warnings.append(SiteWarning(SiteWording.unlimited(spender: SiteWording.who(allowance.spender), asset: allowance.asset), isStrong: true))
                 }
             } else {
                 warnings.append(SiteWarning(SiteWording.unreadableCall))
@@ -338,6 +357,8 @@ public struct MessageReview: Equatable, Sendable {
     public let contract: EthereumAddress?
     public let warnings: [SiteWarning]
     let signable: SignableMessage
+    /// What a permit allows, when it's one this app can read. Then `body` is only there for anyone who wants to check it.
+    public var permit: PermitSummary?
 }
 
 extension MessageReview {
@@ -357,13 +378,18 @@ extension MessageReview {
         self.init(headline: "Sign this message", body: body, contract: nil, warnings: warnings, signable: .personal(bytes))
     }
 
-    init(typed data: TypedData) throws(TypedData.Failure) {
+    /// `formatDate` is only for tests, which can't depend on where they run.
+    init(typed data: TypedData, formatDate: (Date) -> String = { $0.formatted(date: .abbreviated, time: .shortened) }) throws(TypedData.Failure) {
         var warnings: [SiteWarning] = []
         let contract = data.domain["verifyingContract"]?.string.flatMap { EthereumAddress($0) }
-        if try data.chainID == nil { warnings.append(SiteWarning(SiteWording.anyChain, isStrong: true)) }
-        let spender = Self.firstValue(of: ["spender", "operator", "delegate", "taker"], in: data.message)?.string.flatMap { EthereumAddress($0) }.map(SiteWording.address)
+        let chain = try data.chainID
+        if chain == nil { warnings.append(SiteWarning(SiteWording.anyChain, isStrong: true)) }
+        let spender = Self.firstValue(of: ["spender", "operator", "delegate", "taker"], in: data.message)?.string.flatMap { EthereumAddress($0) }.map(SiteWording.who)
         if Self.looksLikeAPermit(data) { warnings.insert(SiteWarning(SiteWording.typedPermit(spender: spender), isStrong: true), at: 0) }
-        self.init(headline: "Sign \(data.domain["name"]?.string.map { "this for \($0)" } ?? "this data")", body: Self.pretty(data.message, indent: 0), contract: contract, warnings: warnings, signable: try data.signable())
+        // The token list is Base's, so a permit for anywhere else isn't read as one.
+        let permit = chain == Base.chainID ? PermitSummary(data, formatDate: formatDate) : nil
+        let headline = permit?.headline ?? "Sign \(data.domain["name"]?.string.map { "this for \($0)" } ?? "this message")"
+        self.init(headline: headline, body: Self.pretty(data.message, indent: 0), contract: contract, warnings: warnings, signable: try data.signable(), permit: permit)
     }
 
     /// Line breaks are fine. Direction overrides, zero-width characters and the like can make a message read as something it isn't.
