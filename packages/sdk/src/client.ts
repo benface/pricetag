@@ -358,6 +358,7 @@ function emptyWallet(address: string, from: number): WalletData {
     prices: {},
     latest: { blockNum: from - 1, timestamp: new Date(0).toISOString() },
     gasUnknownTxs: [],
+    gasUnknownBlocks: [],
     unlisted: [],
     l1FeeUnknownTxs: [],
     balances: null,

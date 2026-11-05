@@ -7,17 +7,30 @@ public enum HotWalletWording {
     public static let label = "Hackathon, small funds only"
     public static let cannotBeRestored = "This money lives only on this device. There's no recovery phrase and no backup: if this device is lost or erased, what's on it is gone."
     public static let newDevice = "Getting a new device? Sweep everything to your savings first."
-    public static let addSavings = "Add a savings wallet. Without one, this is all you have, so the cap stays at $25 and nothing can be swept."
-    public static let sweepsOnlyWhileOpen = "Sweeps only run while the app is open. If it's closed, whatever arrives stays here until it opens again."
-
-    public static func usd(_ micros: UInt128) -> String {
-        Format.money(String(micros), .USD)
+    public static func addSavings(beside main: CurrencyCode) -> String {
+        "Add a savings wallet. Without one, this is all you have, so the cap stays at \(usd(dollars: 25, beside: main)) and nothing can be swept."
     }
 
-    public static func overCap(by excess: UInt128, hasDestination: Bool) -> String {
+    public static let sweepsOnlyWhileOpen = "Sweeps only run while the app is open. If it's closed, whatever arrives stays here until it opens again."
+
+    /// The cap, and everything measured against it, stays in USD. Beside another main currency's "$", it has to say which dollars.
+    public static func usd(_ micros: UInt128, beside main: CurrencyCode) -> String {
+        labeled(Format.money(String(micros), .USD), beside: main)
+    }
+
+    /// For the whole dollars a slider moves in.
+    public static func usd(dollars: Int, beside main: CurrencyCode) -> String {
+        labeled("$\(dollars)", beside: main)
+    }
+
+    private static func labeled(_ text: String, beside main: CurrencyCode) -> String {
+        main == .USD ? text : "US\(text)"
+    }
+
+    public static func overCap(by excess: UInt128, hasDestination: Bool, beside main: CurrencyCode) -> String {
         hasDestination
-            ? "\(usd(excess)) over the cap. It's being moved to your savings."
-            : "\(usd(excess)) over the cap, with nowhere to sweep it. Add a savings wallet."
+            ? "\(usd(excess, beside: main)) over the cap. It's being moved to your savings."
+            : "\(usd(excess, beside: main)) over the cap, with nowhere to sweep it. Add a savings wallet."
     }
 
     public static let noGas = "This wallet can't pay for a sweep, because it doesn't have enough ETH. Send it a little ETH so it can move its tokens."

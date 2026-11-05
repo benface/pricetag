@@ -3,7 +3,7 @@
 
 import { describeError, type Logger } from "./amp.ts"
 import { LAST_2S_BLOCK, blockBefore, msBetweenBlocks, timestampOfBlock } from "./chain.ts"
-import { answerToMicros, buildPricedLegs, derivePricedRows, oneWaySendBalanceBlocks, settleUnwraps, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PricedRow, type Reference } from "./legs.ts"
+import { answerToMicros, buildPricedLegs, derivePricedRows, isUnwrapClaim, oneWaySendBalanceBlocks, settleUnwraps, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PricedRow, type Reference } from "./legs.ts"
 import { MARKET_MAX_AGE_MS, markNeeds, marketPrice, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
 import type { CostNote } from "./notes.ts"
 import { feedPrice, foldPositions, latestPrices, type FeedRound, type Head, type LatestPrices } from "./portfolio.ts"
@@ -81,7 +81,7 @@ type Cached = {
   closing: BalanceSnapshot | null
   /** Every asset's last successful read, because a failed read mustn't look like an empty wallet. */
   lastBalances: Record<string, { blockNum: number; amount: string }>
-  /** The last ETH balance read with every fee up to it known. */
+  /** The last ETH balance read with everything up to it known, every fee and claim. */
   lastCheckableEth: { blockNum: number; amount: string } | null
   /** L1 fees by transaction. See `isL1FeeSettled`. */
   l1Fees: Map<string, L1Fee>
@@ -495,6 +495,19 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     return eth?.reconciliation?.status === "incomplete" ? blocks : []
   }
 
+  /** A wallet's rows, with each claim settled wherever its balances and fees can say how much arrived. */
+  function settle(wallet: Pick<Cached, "rows" | "priced" | "references" | "ethBalances" | "gasUnknown" | "l1Fees" | "staleFeeTxs">) {
+    const l1 = l1FeeRows(wallet.rows, wallet.l1Fees)
+    return settleUnwraps({
+      rows: [...wallet.rows, ...l1.rows],
+      priced: wallet.priced,
+      references: [...wallet.references.values()],
+      ethBalances: wallet.ethBalances,
+      feeUnknownTxs: [...wallet.gasUnknown.keys(), ...l1.unknownTxs, ...wallet.staleFeeTxs],
+      gasUnknownBlocks: [...wallet.gasUnknown.values()],
+    })
+  }
+
   /** A failed read leaves what's unread as it was. The next refresh tries again. */
   async function readEthBalances(address: string, blocks: readonly number[], into: Map<number, string>) {
     if (blocks.length === 0) return
@@ -542,8 +555,10 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const known = new Map(cached?.references ?? [])
     const gasUnknown = new Map(cached?.gasUnknown ?? [])
     const ethBalances = new Map(cached?.ethBalances ?? [])
+    let replacedFrom = Number.POSITIVE_INFINITY
     if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo || reorgable)) {
       const readFrom = cached ? Math.max(fromBlock, Math.min(settledThrough(cached.coveredTo) + 1, unsettled ?? Infinity)) : fromBlock
+      replacedFrom = readFrom
       const window = await source.readWindow(address, readFrom, coveredTo)
       rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
       for (const block of known.keys()) if (block >= readFrom) known.delete(block)
@@ -598,7 +613,14 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       }
       if (closing?.blockNum !== coveredTo || !isComplete(closing) || reorgable) closing = await readBalances(address, coveredTo)
       for (const [asset, amount] of Object.entries(closing?.amounts ?? {})) lastBalances[asset] = { blockNum: coveredTo, amount }
-      if (closing?.amounts.ETH !== undefined && l1FeeRows(rows, l1Fees).unknownTxs.length === 0) lastCheckableEth = { blockNum: coveredTo, amount: closing.amounts.ETH }
+      if (closing?.amounts.ETH !== undefined && gasUnknown.size === 0 && l1FeeRows(rows, l1Fees).unknownTxs.length === 0 && !settle({ rows, priced, references: known, ethBalances, gasUnknown, l1Fees, staleFeeTxs }).rows.some(isUnwrapClaim)) {
+        lastCheckableEth = { blockNum: coveredTo, amount: closing.amounts.ETH }
+      } else if (lastCheckableEth && lastCheckableEth.blockNum >= replacedFrom) {
+        // Its block was just replaced, so what it said may be gone. A failed read leaves it as it was, and the next refresh tries again.
+        const { blockNum } = lastCheckableEth
+        const amount = (await readBalances(address, blockNum))?.amounts.ETH
+        if (amount !== undefined) lastCheckableEth = { blockNum, amount }
+      }
     }
 
     const prices = latestPrices(await source.readLatestReference(head.blockNum))
@@ -629,14 +651,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const references = [...wallet.references.values()]
     const l1 = l1FeeRows(wallet.rows, wallet.l1Fees)
     const { opening, closing } = wallet
-    const { rows, priced, unseenEth } = settleUnwraps({
-      rows: [...wallet.rows, ...l1.rows],
-      priced: wallet.priced,
-      references,
-      ethBalances: wallet.ethBalances,
-      feeUnknownTxs: [...wallet.gasUnknown.keys(), ...l1.unknownTxs, ...wallet.staleFeeTxs],
-      gasUnknownBlocks: [...wallet.gasUnknown.values()],
-    })
+    const { rows, priced, unseenEth } = settle(wallet)
     const marketAt = (asset: string, block: number) => {
       const key = `${asset}:${bucketOf(block)}`
       return use(key) ? (market.get(key)?.usdMicros ?? null) : null
@@ -657,6 +672,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       prices: wallet.prices,
       latest: wallet.latest,
       gasUnknownTxs: [...wallet.gasUnknown.keys()],
+      gasUnknownBlocks: [...wallet.gasUnknown.values()],
       unlisted: unlistedTokens(wallet.rows, address),
       currency: "USD",
       rates: null,

@@ -19,6 +19,7 @@ export function parseExplainTarget(params: URLSearchParams): ExplainTarget | nul
   const tx = params.get("tx")
   if (tx) return { kind: "tx", txHash: tx.toLowerCase() }
   const metric = params.get("metric") ?? ""
+  if (metric === "hold") return { kind: "hold" }
   const asset = params.get("asset")
   if (asset) return ASSET_METRICS.includes(metric) ? { kind: "asset", asset, metric: metric as Metric } : null
   return TOTAL_METRICS.includes(metric) ? { kind: "total", metric: metric as TotalMetric } : null
@@ -49,7 +50,7 @@ function outgoingTxsOf(wallet: WalletResponse): string[] {
 const linkingTo = (others: readonly WalletResponse[]): Book => ({ ...emptyBook(), linked: others.map((other) => other.address.toLowerCase()) })
 
 export function portfolioOf(wallet: WalletResponse, method: Method, others: readonly WalletResponse[] = [], book: Book = linkingTo(others), failed: readonly string[] = []): PortfolioResponse {
-  const { view, positions, unread, totals, pnlStatus, points, questions, meter, withheld } = foldBook(wallet, others, method, book)
+  const { view, positions, unread, totals, pnlStatus, points, holdComparison, questions, meter, withheld } = foldBook(wallet, others, method, book)
   const missing = missingWallets(book, wallet, others)
   const linkedFailed = linkedWallets(book).filter((address) => failed.includes(address))
   return {
@@ -74,6 +75,7 @@ export function portfolioOf(wallet: WalletResponse, method: Method, others: read
     totals,
     pnlStatus,
     points,
+    holdComparison,
     questions,
     // A wallet that fails on a later read leaves what it sent out of date, so nothing's balanced until it's back.
     meter: { ...meter, waiting: new Set([...missing, ...linkedFailed]).size },
@@ -88,8 +90,8 @@ export function portfolioOf(wallet: WalletResponse, method: Method, others: read
 export function bookContext(wallet: WalletResponse, others: readonly WalletResponse[], method: Method, book: Book, view: WalletView): ExplainContext {
   const ruleNote = wallet.ruleNote ?? null
   if (view.currency === "USD") return { view, source: null, ruleNote }
-  const { positions, totals, points } = foldBook(wallet, others, method, book, { usd: true })
-  return { view, ruleNote, source: { positions, totals, points } }
+  const { positions, totals, points, holdComparison } = foldBook(wallet, others, method, book, { usd: true })
+  return { view, ruleNote, source: { positions, totals, points, holdComparison } }
 }
 
 function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg {
@@ -118,8 +120,8 @@ function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg {
 
 /** The same explanation the web panel shows for a click on this number. null when the wallet has no such asset or transaction. */
 export function explainPortfolio(wallet: WalletResponse, method: Method, target: ExplainTarget, others: readonly WalletResponse[] = [], book: Book = linkingTo(others)): ExplanationResponse | null {
-  const { view, positions, totals, points } = foldBook(wallet, others, method, book)
-  const explanation = explainTarget(target, { positions, totals, points }, bookContext(wallet, others, method, book, view))
+  const { view, positions, totals, points, holdComparison } = foldBook(wallet, others, method, book)
+  const explanation = explainTarget(target, { positions, totals, points, holdComparison }, bookContext(wallet, others, method, book, view))
   if (!explanation) return null
   return {
     currency: explanation.currency,
