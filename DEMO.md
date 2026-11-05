@@ -91,7 +91,9 @@ If this withdrawal pays from a different contract, the app can't name it (WORK-4
 
 ### Buying on stage (WORK-462)
 
-**Optional, and only after a real purchase has worked in rehearsal.** In **Spending Money**, **Buy…**, choose $5–$10 of ETH, **Continue on Coinbase**, and pay. Back in the app, the purchase says "On its way", then "Delivered", then "Cost $X, fees included". Say: "No question this time. Coinbase's order says what I paid, and it matches what arrived exactly." The row in Transactions says "Cost: bought on coinbase".
+**Optional, and only after a real purchase has worked in rehearsal.** Press **Buy** in the toolbar, enter $5–$10 of ETH, **Continue on Coinbase**, and pay. It opens Spending Money, where the purchase says "On its way", then "Delivered", then "Cost $X, fees included". Say: "No question this time. Coinbase's order says what I paid, and it matches what arrived exactly." The row in Transactions says "Cost: Bought on Coinbase".
+
+**To show a larger amount:** type more than the room left, and the sheet says how much stays and that the rest goes to your savings. Don't buy more than you mean to: what lands above the cap sweeps by itself, with Patina open, and that needs a savings wallet you've checked on a device. Its row in the savings wallet says the same cost and source.
 
 A real card purchase on stage can fail, and a real delivery can take minutes, so don't let the demo depend on one:
 - **Best:** do a real purchase before you go on, and show its finished row and its cost in Transactions. Open with "I bought this an hour ago".

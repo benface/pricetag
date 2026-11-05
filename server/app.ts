@@ -13,7 +13,8 @@ import { foldBook, previewBook } from "../src/core/resolve.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule } from "../src/core/rules.ts"
 import { verifyLink } from "./links.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
-import { ONRAMP_ASSETS, OnrampError, createOnramp, type Onramp } from "./onramp.ts"
+import { createCoinbase } from "./coinbase.ts"
+import { ONRAMP_ASSETS, OnrampError, type Onramp } from "./onramp.ts"
 import { createRates } from "./rates.ts"
 import { createDepositReader } from "./block.ts"
 import { warnOfNewAggregators } from "./feeds.ts"
@@ -162,12 +163,12 @@ const pollingOnly = (source: Source): FollowConfig => ({
 
 type Created = Omit<NonNullable<ReturnType<typeof createSource>>, "follow"> & { follow?: FollowConfig | undefined }
 
-/** What a client on this machine's address is, which says nothing Coinbase could use. */
+/** What a client on this machine's address is, which says nothing a provider could use. */
 const isLocal = (ip: string) => ip === "::1" || ip === "::ffff:127.0.0.1" || ip.startsWith("127.")
 
 const NO_ONRAMP = "Buying isn't set up on this server."
 
-export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createOnramp(env)) {
+export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env)) {
   const source = created?.source ?? null
 
   let head: Head | null = null
@@ -299,7 +300,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     return read
   }
 
-  /** Coinbase's detail stays in the server's log, and the client gets a sentence it can show. */
+  /** The provider's detail stays in the server's log, and the client gets a sentence it can show. */
   async function onrampAnswer(res: ServerResponse, read: () => Promise<unknown>) {
     try {
       sendJson(res, 200, await read())
@@ -324,14 +325,14 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return sendJson(res, 200, { verified: await verifyLink(owner, address, signature) })
     }
 
-    if (path === "/api/onramp/session") {
+    if (path === "/api/onramp/checkout") {
       if (!onramp) return sendJson(res, 503, { error: NO_ONRAMP })
       const { address, asset, cryptoAmount } = body
       if (typeof address !== "string" || !isAddress(address)) return sendJson(res, 400, { error: "That needs a Base address." })
       if (typeof asset !== "string" || !ONRAMP_ASSETS.includes(asset)) return sendJson(res, 400, { error: "That token can't be bought here." })
       if (typeof cryptoAmount !== "string" || !/^\d{1,12}(\.\d{1,18})?$/.test(cryptoAmount) || !/[1-9]/.test(cryptoAmount)) return sendJson(res, 400, { error: "That isn't an amount." })
       const ip = req.socket.remoteAddress
-      return onrampAnswer(res, () => onramp.session({ address, asset, cryptoAmount, clientIp: ip && !isLocal(ip) ? ip : null }))
+      return onrampAnswer(res, () => onramp.checkout({ address, asset, cryptoAmount, clientIp: ip && !isLocal(ip) ? ip : null }))
     }
 
     const taxMatch = /^\/api\/tax-report\/([^/]+)$/.exec(path)
@@ -543,7 +544,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return true
     }
 
-    const orderMatch = /^\/api\/onramp\/orders\/((?:sandbox-)?[0-9a-f]{32})$/.exec(path)
+    const orderMatch = /^\/api\/onramp\/orders\/([A-Za-z0-9_-]{1,64})$/.exec(path)
     if (orderMatch) {
       if (onramp) await onrampAnswer(res, async () => ({ orders: await onramp.orders(orderMatch[1] as string) }))
       else sendJson(res, 503, { error: NO_ONRAMP })

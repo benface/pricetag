@@ -62,6 +62,8 @@ export type CostPiece = {
   givenCostMicros?: string
   /** Who says what was paid for it, wherever it's moved since. Missing means nobody but the chain. */
   purchaseSource?: string
+  /** That's only some of its cost, because an average mixed it with others. */
+  purchasePartly?: true
   /** No cost because of these wallets, whose history of it can't be confirmed, wherever it's moved since. Missing means none. */
   unconfirmedBy?: string[]
   acquiredBlock?: number
@@ -84,6 +86,8 @@ export type Lot = {
   givenCostMicros?: string
   /** Who says what was paid for some or all of it. An average lot stays this way, because every unit shares that cost. */
   purchaseSource?: string
+  /** That's only some of its cost, because an average mixed it with others. */
+  purchasePartly?: true
   /** No cost because of these wallets, whose history of it can't be confirmed. Missing means none. */
   unconfirmedBy?: string[]
   /** When these units were first acquired, which an inherited lot keeps from the wallet that sent it. */
@@ -218,7 +222,7 @@ function lotOf(piece: CostPiece, legId: string): Lot {
     legId,
     ...(estimated > 0n ? { estimatedCostMicros: estimated.toString() } : {}),
     ...costSource(known && (piece.reported || piece.label === "self-reported"), known ? givenOf(piece) : 0n),
-    ...(known && piece.purchaseSource ? { purchaseSource: piece.purchaseSource } : {}),
+    ...(known && piece.purchaseSource ? { purchaseSource: piece.purchaseSource, ...(piece.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
     ...unconfirmed(known ? [] : piece.unconfirmedBy),
     ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }),
     ...(known && piece.paidAt ? { paidAt: piece.paidAt } : {}),
@@ -248,7 +252,7 @@ function addLot({ method, tracksPaidAt }: PositionState, lots: readonly Lot[], l
     legId: pool.legId,
     ...(estimated > 0n ? { estimatedCostMicros: estimated.toString() } : {}),
     ...costSource(pool.reported || lot.reported, givenOf(pool) + givenOf(lot)),
-    ...(pool.purchaseSource || lot.purchaseSource ? { purchaseSource: (pool.purchaseSource ?? lot.purchaseSource) as string } : {}),
+    ...(pool.purchaseSource || lot.purchaseSource ? { purchaseSource: (pool.purchaseSource ?? lot.purchaseSource) as string, ...(pool.purchaseSource !== lot.purchaseSource || pool.purchasePartly || lot.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
     ...unconfirmed(pool.unconfirmedBy, lot.unconfirmedBy),
     ...(acquired.acquiredBlock === undefined ? {} : { acquiredBlock: acquired.acquiredBlock, acquiredAt: acquired.acquiredAt as string }),
     ...(paidAt ? { paidAt } : {}),
@@ -324,7 +328,7 @@ function take(state: PositionState, qty: bigint): Taken {
       label: lot.costMicros === null ? "unknown" : lot.label === "mixed" ? "inherited" : lot.label,
       estimatedCostMicros: estimated.toString(),
       ...costSource(lot.costMicros !== null && lot.reported, given),
-      ...(lot.costMicros !== null && lot.purchaseSource ? { purchaseSource: lot.purchaseSource } : {}),
+      ...(lot.costMicros !== null && lot.purchaseSource ? { purchaseSource: lot.purchaseSource, ...(lot.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
       ...unconfirmed(lot.unconfirmedBy),
       ...(lot.acquiredBlock === undefined ? {} : { acquiredBlock: lot.acquiredBlock, acquiredAt: lot.acquiredAt as string }),
       ...(paidAt ? { paidAt } : {}),

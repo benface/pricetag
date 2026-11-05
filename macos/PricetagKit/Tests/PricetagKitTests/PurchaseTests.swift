@@ -23,9 +23,9 @@ private actor Orders: PortfolioSource {
 
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
-    func onrampSession(address: String, asset: String, cryptoAmount: String) async throws -> OnrampSession {
+    func onrampCheckout(address: String, asset: String, cryptoAmount: String) async throws -> OnrampCheckout {
         if let failure { throw failure }
-        return OnrampSession(url: page, ref: "ref")
+        return OnrampCheckout(url: page, ref: "ref")
     }
     func onrampOrders(ref: String) async throws -> [OnrampOrder] {
         asked += 1

@@ -312,6 +312,12 @@ struct PopoverView: View {
             if hotWallet.canSend {
                 HStack(spacing: 8) {
                     Button {
+                        navigation.isBuying = true
+                        openHotWallet()
+                    } label: {
+                        Label("Buy", systemImage: "plus").frame(maxWidth: .infinity)
+                    }
+                    Button {
                         navigation.send()
                         openHotWallet()
                     } label: {

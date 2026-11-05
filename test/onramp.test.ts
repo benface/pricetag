@@ -5,7 +5,8 @@ import { after, before, describe, it } from "node:test"
 import { ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, type LegRow, type Reference } from "@pricetag/sdk/core"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
-import { createOnramp, orderOf, requestToken, unitsOf, type Onramp } from "../server/onramp.ts"
+import { createCoinbase as createOnramp, orderOf, requestToken } from "../server/coinbase.ts"
+import { unitsOf, type Onramp } from "../server/onramp.ts"
 import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
 import type { WalletResponse } from "../src/core/api.ts"
 import { costKey, emptyBook, parseBook, type Book, type Purchase } from "../src/core/book.ts"
@@ -197,6 +198,58 @@ describe("a purchase's cost", () => {
     assert.match(sold!.reason ?? "", /Bought on Coinbase, fees included/)
   })
 
+  describe("once it's swept to savings", () => {
+    const SWEEP = `0x${"99".repeat(32)}`
+    const sweep = (units: bigint) => [move(70, SWEEP, ME, "debit", units, SAVINGS), move(70, SWEEP, SAVINGS, "credit", units, ME)]
+    const linkedBook = (...purchases: Purchase[]) => ({ ...bookWith(...purchases), linked: [ME, SAVINGS] })
+
+    it("carries its cost and its source over, with nothing asked in either wallet", () => {
+      const rows = [delivered, ...sweep(25n * E6)]
+      const [hot, savings] = [wallet(ME, rows), wallet(SAVINGS, rows)]
+      const fold = foldBook(savings, [hot], "average", linkedBook(purchase()))
+      assert.deepEqual(fold.questions, [])
+      const leg = fold.legs[0]!
+      assert.deepEqual([leg.costLabel, leg.costMicros, leg.purchaseSource], ["inherited", "25800000", "Bought on Coinbase"])
+      assert.equal(fold.positions.find((p) => p.asset === "USDC")!.values.costMicros, "25800000")
+      assert.deepEqual(fold.purchases, [{ order: "order-1", state: "recorded" }], "and it reads the same from the savings wallet")
+      assert.equal(explainPortfolio(savings, "average", { kind: "asset", asset: "USDC", metric: "amount" }, [hot], linkedBook(purchase()))!.legs[0]!.costSource, "Bought on Coinbase")
+    })
+
+    it("splits it when only what's above the cap moves, and the two parts add up to what was paid", () => {
+      const rows = [delivered, ...sweep(15n * E6)]
+      const [hot, savings] = [wallet(ME, rows), wallet(SAVINGS, rows)]
+      const book = linkedBook(purchase())
+      const costOf = (focus: WalletResponse, other: WalletResponse) => foldBook(focus, [other], "average", book).positions.find((p) => p.asset === "USDC")!.values.costMicros
+      assert.equal(costOf(savings, hot), "15480000")
+      assert.equal(costOf(hot, savings), "10320000")
+    })
+
+    it("does the same for ETH that arrived in a batched payout", () => {
+      const rows = [move(BLOCK, "", ME, "credit", ETH_BOUGHT, null, ETH_ADDRESS, "unseen_eth"), move(70, SWEEP, ME, "debit", ETH_BOUGHT, SAVINGS, ETH_ADDRESS), move(70, SWEEP, SAVINGS, "credit", ETH_BOUGHT, ME, ETH_ADDRESS)]
+      const fold = foldBook(wallet(SAVINGS, rows), [wallet(ME, rows)], "average", linkedBook(purchase({ asset: "ETH", units: ETH_BOUGHT.toString() })))
+      assert.deepEqual(fold.questions, [])
+      assert.deepEqual([fold.legs[0]!.costMicros, fold.legs[0]!.purchaseSource], ["25800000", "Bought on Coinbase"])
+    })
+
+    it("doesn't claim the source for a cost an average mixed with another", () => {
+      const other = `0x${"77".repeat(32)}`
+      const rows = [delivered, move(60, other, ME, "credit", 25n * E6, COINBASE), ...sweep(50n * E6)]
+      const [hot, savings] = [wallet(ME, rows), wallet(SAVINGS, rows)]
+      const book = { ...linkedBook(purchase()), costs: { [costKey(ME, `${other}:USDC`)]: { micros: "25000000", currency: "USD" as const } } }
+      const leg = foldBook(savings, [hot], "average", book).legs[0]!
+      assert.equal(leg.costLabel, "inherited")
+      assert.notEqual(leg.costMicros, null, "all of it has a known cost, so this is about the mix")
+      assert.equal(leg.purchaseSource, undefined)
+    })
+
+    it("stays unknown where it arrived and where it went, when the order doesn't match", () => {
+      const rows = [delivered, ...sweep(25n * E6)]
+      const fold = foldBook(wallet(SAVINGS, rows), [wallet(ME, rows)], "average", linkedBook(purchase({ units: "1" })))
+      assert.equal(fold.legs[0]!.costMicros, null)
+      assert.equal(fold.legs[0]!.purchaseSource, undefined)
+    })
+  })
+
   it("is reported to clients for each purchase", () => {
     assert.deepEqual(portfolioOf(wallet(ME, [delivered]), "average", [], bookWith(purchase())).purchases, [{ order: "order-1", state: "recorded" }])
   })
@@ -234,6 +287,7 @@ describe("reading an order", () => {
     assert.equal(order.txHash, "0x31814ba2fef2a400a9816767370be09ca12d9e9753b972198fe330a0ecedcbf6")
     assert.equal(order.wallet, "0x3d7b51da8aa41270c6e052ee261db4514ba4d50a")
     assert.equal(order.status, "succeeded")
+    assert.equal(order.provider, "coinbase")
     assert.equal(orderOf({ ...raw, purchase_currency: "ETH", purchase_amount: { value: "0.00206183", currency: "ETH" } })!.units, ETH_BOUGHT.toString())
   })
 
@@ -358,7 +412,7 @@ describe("the routes", () => {
 
   it("say buying isn't set up without a key", async () => {
     const port = await serve(null)
-    const session = await call(port, "POST", "/api/onramp/session", SESSION)
+    const session = await call(port, "POST", "/api/onramp/checkout", SESSION)
     assert.deepEqual([session.status, session.json.error], [503, "Buying isn't set up on this server."])
     assert.equal((await call(port, "GET", `/api/onramp/orders/${REF}`)).status, 503)
   })
@@ -366,7 +420,7 @@ describe("the routes", () => {
   it("open a page for only that address, signed with the key, and hand back only the page and its order's reference", async () => {
     const { send, calls } = stub()
     const port = await serve(createOnramp(env, send))
-    const { status, json } = await call(port, "POST", "/api/onramp/session", SESSION)
+    const { status, json } = await call(port, "POST", "/api/onramp/checkout", SESSION)
     assert.equal(status, 200)
     assert.deepEqual(Object.keys(json).sort(), ["ref", "url"])
     const url = new URL(json.url as string)
@@ -381,7 +435,7 @@ describe("the routes", () => {
 
   it("ask for Coinbase's mocked mode when that's what's set up", async () => {
     const port = await serve(createOnramp({ ...env, COINBASE_ONRAMP_MOCK: "1" }, stub().send))
-    const { json } = await call(port, "POST", "/api/onramp/session", SESSION)
+    const { json } = await call(port, "POST", "/api/onramp/checkout", SESSION)
     assert.match(json.ref as string, /^sandbox-[0-9a-f]{32}$/)
     assert.equal(new URL(json.url as string).searchParams.get("partnerUserRef"), json.ref)
   })
@@ -390,7 +444,7 @@ describe("the routes", () => {
     const { send, calls } = stub()
     const port = await serve(createOnramp(env, send))
     for (const bad of [{ address: "me" }, { address: undefined }, { asset: "DOGE" }, { cryptoAmount: "0" }, { cryptoAmount: "1e3" }, { cryptoAmount: "-1" }, { cryptoAmount: 5 }]) {
-      assert.equal((await call(port, "POST", "/api/onramp/session", { ...SESSION, ...bad })).status, 400, JSON.stringify(bad))
+      assert.equal((await call(port, "POST", "/api/onramp/checkout", { ...SESSION, ...bad })).status, 400, JSON.stringify(bad))
     }
     assert.equal(calls.length, 0)
   })
@@ -399,9 +453,9 @@ describe("the routes", () => {
     const down = (async () => {
       throw new Error("connect ECONNREFUSED")
     }) as typeof fetch
-    const unreachable = await call(await serve(createOnramp(env, down)), "POST", "/api/onramp/session", SESSION)
+    const unreachable = await call(await serve(createOnramp(env, down)), "POST", "/api/onramp/checkout", SESSION)
     assert.deepEqual([unreachable.status, unreachable.json.error], [502, "Coinbase can't be reached right now."])
-    const refused = await call(await serve(createOnramp(env, stub({ token: () => new Response("internal detail", { status: 401 }) }).send)), "POST", "/api/onramp/session", SESSION)
+    const refused = await call(await serve(createOnramp(env, stub({ token: () => new Response("internal detail", { status: 401 }) }).send)), "POST", "/api/onramp/checkout", SESSION)
     assert.deepEqual([refused.status, refused.json.error], [502, "Coinbase said no (401)."])
     const orders = await call(await serve(createOnramp(env, stub({ orders: () => new Response("", { status: 500 }) }).send)), "GET", `/api/onramp/orders/${REF}`)
     assert.equal(orders.status, 502)
@@ -427,10 +481,10 @@ describe("the routes", () => {
     assert.equal(going.calls.length, 1)
   })
 
-  it("won't read an order by anything but a reference it could have made", async () => {
+  it("won't read an order by anything that could change what's asked of the provider", async () => {
     const { send, calls } = stub()
     const port = await serve(createOnramp(env, send))
-    for (const ref of ["me", `${REF}/../token`, `other-${REF}`]) assert.equal((await call(port, "GET", `/api/onramp/orders/${encodeURIComponent(ref)}`)).status, 404, ref)
+    for (const ref of ["a/b", `${REF}/../token`, "a".repeat(65)]) assert.equal((await call(port, "GET", `/api/onramp/orders/${encodeURIComponent(ref)}`)).status, 404, ref)
     assert.equal(calls.length, 0)
   })
 })

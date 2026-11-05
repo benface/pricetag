@@ -4,13 +4,13 @@
 import Foundation
 import Observation
 
-public struct OnrampSession: Codable, Sendable, Equatable {
+public struct OnrampCheckout: Codable, Sendable, Equatable {
     public let url: String
     public let ref: String
 
-    /// Only the provider's own page. Whatever a server says, this app won't send a purchase anywhere else.
+    /// Only a known provider's own page. Whatever a server says, this app won't send a purchase anywhere else.
     public var page: URL? {
-        guard let page = URL(string: url), page.scheme == "https", page.host() == "pay.coinbase.com" else { return nil }
+        guard let page = URL(string: url), page.scheme == "https", let host = page.host(), PurchaseWording.providerHosts.contains(host) else { return nil }
         return page
     }
 }
@@ -25,6 +25,7 @@ public struct OnrampOrder: Codable, Sendable, Equatable {
         case payment, delivery
     }
 
+    public let provider: String
     public let id: String
     public let status: Status
     public let failure: Failure?
@@ -37,7 +38,8 @@ public struct OnrampOrder: Codable, Sendable, Equatable {
     public let cost: Money?
     public let costUsdMicros: String?
 
-    public init(id: String, status: Status, failure: Failure? = nil, asset: String? = nil, units: String? = nil, wallet: String? = nil, network: String? = nil, txHash: String? = nil, blockNum: Int? = nil, cost: Money? = nil, costUsdMicros: String? = nil) {
+    public init(provider: String = "coinbase", id: String, status: Status, failure: Failure? = nil, asset: String? = nil, units: String? = nil, wallet: String? = nil, network: String? = nil, txHash: String? = nil, blockNum: Int? = nil, cost: Money? = nil, costUsdMicros: String? = nil) {
+        self.provider = provider
         self.id = id
         self.status = status
         self.failure = failure
@@ -55,7 +57,7 @@ public struct OnrampOrder: Codable, Sendable, Equatable {
     public var purchase: Purchase? {
         guard status == .succeeded, let asset, let units, let wallet, let txHash else { return nil }
         guard let paid = cost ?? costUsdMicros.map({ Money(micros: $0, currency: .USD) }) else { return nil }
-        return Purchase(provider: "coinbase", order: id, wallet: wallet, asset: asset, units: units, txHash: txHash, blockNum: blockNum, cost: paid, costUsdMicros: costUsdMicros)
+        return Purchase(provider: provider, order: id, wallet: wallet, asset: asset, units: units, txHash: txHash, blockNum: blockNum, cost: paid, costUsdMicros: costUsdMicros)
     }
 }
 
@@ -103,6 +105,10 @@ public enum PurchasePhase: Equatable, Sendable {
 }
 
 public enum PurchaseWording {
+    /// The one thing the flow says about who the provider is, along with where its page is.
+    public static let provider = "Coinbase"
+    static let providerHosts: Set<String> = ["pay.coinbase.com"]
+
     /// What the order says once it says, because the amount can be changed on the page. Until then, what was chosen.
     public static func title(_ purchase: TrackedPurchase, usd: (Int) -> String) -> String {
         if let units = purchase.order?.units, let asset = purchase.order?.asset, let decimals = ["ETH": 18, "USDC": 6][asset] {
@@ -113,13 +119,13 @@ public enum PurchaseWording {
 
     public static func status(_ phase: PurchasePhase) -> String {
         switch phase {
-        case .onProvidersPage: "Waiting for you on Coinbase"
+        case .onProvidersPage: "Waiting for you on \(provider)"
         case .onItsWay: "On its way"
         case .arriving: "Delivered. Waiting to see it arrive"
         case .recorded(let cost): "Cost \(Format.money(cost.micros, cost.currency)), fees included"
         case .costUnknown: "Arrived, cost unknown. It didn't match the order"
-        case .failed(.payment): "Coinbase couldn't take the payment"
-        case .failed(.delivery): "Coinbase couldn't deliver it"
+        case .failed(.payment): "\(provider) couldn't take the payment"
+        case .failed(.delivery): "\(provider) couldn't deliver it"
         case .nothingBought: "Nothing was bought"
         }
     }
@@ -195,9 +201,9 @@ public final class PurchaseTracker {
 
     /// Asks the server for a page, and starts following it. Throws when there's no page to open, with something to say about why.
     public func begin(wallet: String, asset: String, dollars: Int, cryptoAmount: String) async throws -> URL {
-        let session = try await store.currentSource.onrampSession(address: wallet, asset: asset, cryptoAmount: cryptoAmount)
-        guard let page = session.page else { throw FetchError.rejected("The server sent a page that isn't Coinbase's.") }
-        purchases.append(TrackedPurchase(ref: session.ref, wallet: wallet.lowercased(), asset: asset, dollars: dollars, startedAt: now()))
+        let checkout = try await store.currentSource.onrampCheckout(address: wallet, asset: asset, cryptoAmount: cryptoAmount)
+        guard let page = checkout.page else { throw FetchError.rejected("The server sent a page that isn't \(PurchaseWording.provider)'s.") }
+        purchases.append(TrackedPurchase(ref: checkout.ref, wallet: wallet.lowercased(), asset: asset, dollars: dollars, startedAt: now()))
         save()
         start()
         return page

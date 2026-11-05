@@ -165,6 +165,11 @@ private struct WalletCommands: View {
             navigation.switchWallet()
         }
         .keyboardShortcut("l", modifiers: .command)
+        Button("Buy…") {
+            openMainWindow()
+            navigation.isBuying = true
+        }
+        .disabled(hotWallet.availability != .ready)
         Divider()
         WalletPicker(store: store, list: store.walletList(hotWallet: hotWallet), navigation: navigation, onChoose: openMainWindow)
     }

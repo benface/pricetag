@@ -10,6 +10,7 @@ export { hasStarted }
 
 /** A provider's order, as it says. What it doesn't say, or says in a way that can't be read, is null. */
 export type OnrampOrder = {
+  provider: "coinbase"
   id: string
   status: "pending" | "succeeded" | "failed"
   failure: "payment" | "delivery" | null

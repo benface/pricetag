@@ -169,8 +169,11 @@ function withPieces(leg: PricedLeg, pieces: CostPiece[]): PricedLeg {
   const known = pieces.filter((p) => p.costMicros !== null)
   if (known.length === 0) return { ...leg, pieces }
   const inherited = known.some((p) => p.label === "inherited")
+  // Bought and then moved here, all of it, so who says what it cost still holds.
+  const source = known.length === pieces.length && known.every((p) => p.purchaseSource === known[0]?.purchaseSource && !p.purchasePartly) ? known[0]?.purchaseSource : undefined
   return {
     ...leg,
+    ...(source ? { purchaseSource: source } : {}),
     pieces,
     costLabel: inherited ? "inherited" : (known[0] as CostPiece).label,
     costMicros: known.length === pieces.length ? sum(known).toString() : null,

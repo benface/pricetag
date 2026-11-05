@@ -2,14 +2,16 @@ import HotWalletKit
 import PricetagKit
 import SwiftUI
 
-/// Picks what to buy, and sends it to Coinbase's page, which takes the payment. This never signs anything.
+/// Picks what to buy and sends it to the provider's page, which takes the payment. It all lands in spending money, and what's above the cap sweeps to savings. This never signs anything.
 struct BuySheet: View {
     let wallet: HotWallet
     let purchases: PurchaseTracker
+    let started: () -> Void
+    let addSavings: () -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var asset: Asset
-    @State private var dollars = 0.0
+    @State private var dollars: Int?
     @State private var isStarting = false
     @State private var failure: String?
 
@@ -19,91 +21,137 @@ struct BuySheet: View {
         var id: Self { self }
     }
 
-    /// Coinbase's own minimum is about this. Its page has the last word.
-    private static let minimum = 5
-
-    init(wallet: HotWallet, purchases: PurchaseTracker, failure: String? = nil) {
+    /// ETH first, because it also pays for what a sweep costs.
+    init(wallet: HotWallet, purchases: PurchaseTracker, dollars: Int? = nil, asset: Asset = .eth, failure: String? = nil, started: @escaping () -> Void, addSavings: @escaping () -> Void) {
         self.wallet = wallet
         self.purchases = purchases
+        self.started = started
+        self.addSavings = addSavings
+        _dollars = State(initialValue: dollars ?? max(BuyPlan.minimumDollars, min(Int(wallet.topUpRoom / Money.dollar), 20)))
+        _asset = State(initialValue: asset)
         _failure = State(initialValue: failure)
-        _asset = State(initialValue: .eth)
     }
 
-    private var room: Int { Int(wallet.topUpRoom / Money.dollar) }
+    private var chosen: Int { dollars ?? 0 }
+    private var hasSavings: Bool { wallet.settings.sweepDestination != nil }
 
-    /// The amount in the token, which is what a page in any currency can start from, and what keeps it under the cap. Nil with no price to work it out from.
+    private var plan: BuyPlan {
+        BuyPlan(dollars: chosen, isNative: asset == .eth, roomUsdMicros: wallet.topUpRoom, ethBalanceWei: wallet.holdings.first { $0.token.isNative }?.balance ?? 0, hasSavings: hasSavings)
+    }
+
+    /// What the savings wallet is called, because that's what someone knows it by.
+    private var savingsName: String {
+        wallet.settings.coldWallets.first { $0.address == wallet.settings.sweepDestination }?.name ?? "your savings"
+    }
+
+    /// The amount in the token, which is what a page in any currency can start from. Nil with no price to work it out from.
     private var cryptoAmount: String? {
         switch asset {
-        case .usdc: return String(Int(dollars))
+        case .usdc: return String(chosen)
         case .eth:
             guard let price = wallet.snapshot?.ethUsdMicros, price > 0 else { return nil }
-            return Self.decimal(Money.amount(ofUsdMicros: UInt128(dollars) * Money.dollar, priceMicros: price, decimals: 18), decimals: 18, keeping: 6)
+            return BuyPlan.decimal(Money.amount(ofUsdMicros: UInt128(chosen) * Money.dollar, priceMicros: price, decimals: 18), decimals: 18, keeping: 6)
         }
-    }
-
-    /// In plain digits for Coinbase, rounded down, so this never asks for more than was chosen.
-    static func decimal(_ units: UInt128, decimals: Int, keeping: Int) -> String {
-        let text = String(units)
-        let padded = String(repeating: "0", count: max(0, decimals + 1 - text.count)) + text
-        let whole = padded.dropLast(decimals)
-        let fraction = padded.suffix(decimals).prefix(keeping)
-        return "\(whole).\(fraction)"
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Buy")
                 .font(.title2.bold())
-            if room < Self.minimum {
-                Notice(.info, room < 1 ? "This wallet is already at its cap of \(wallet.usd(wallet.settings.capUsdMicros)). Anything more would be swept to your savings." : "There's only room for \(wallet.usd(wallet.topUpRoom)) under your cap, and Coinbase's minimum is about \(wallet.usd(dollars: Self.minimum)).")
+            if wallet.address == nil {
+                Notice(.info, "What you buy lands in Spending Money, so that comes first.")
+            } else if !hasSavings, wallet.topUpRoom < UInt128(BuyPlan.minimumDollars) * Money.dollar {
+                Notice(.info, "There's only room for \(wallet.usd(wallet.topUpRoom)) in Spending Money. To buy more, add a savings wallet for the rest to go to.")
             } else {
-                Picker("Token", selection: $asset) {
-                    ForEach(Asset.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                LabeledContent("Amount") {
-                    HStack {
-                        // A slider needs two ends, and with room for only the minimum, the other end is too much.
-                        Slider(value: $dollars, in: Double(Self.minimum)...Double(max(room, Self.minimum + 1)), step: 1)
-                            .disabled(room <= Self.minimum)
-                        Text(wallet.usd(dollars: Int(dollars)))
-                            .monospacedDigit()
-                            .frame(width: 56, alignment: .trailing)
-                    }
-                }
-                Text(caption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if asset == .usdc, wallet.holdings.first(where: { $0.token.isNative })?.balance ?? 0 < SweepPlanner.minimumGasReserveWei {
-                    Notice(.warning, "Buy some of it as ETH. This wallet needs a little to pay for its sweeps.")
-                }
+                form
             }
             if let failure {
                 WarningText(failure).font(.callout)
             }
-            HStack {
-                Spacer()
-                if isStarting { ProgressView().controlSize(.small) }
-                Button(room >= Self.minimum ? "Cancel" : "Done") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                if room >= Self.minimum {
-                    Button("Continue on Coinbase") { Task { await start() } }
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(cryptoAmount == nil || isStarting)
-                }
-            }
+            buttons
         }
         .padding(20)
         .frame(width: 460)
-        .onAppear { dollars = Double(max(Self.minimum, min(room, 20))) }
-        // A read can leave less room than there was when this opened. What's chosen stays if it still fits.
-        .onChange(of: room) { dollars = max(Double(Self.minimum), min(dollars, Double(room))) }
     }
 
-    private var caption: String {
-        let amount = cryptoAmount.map { "About \($0) \(asset.rawValue). " } ?? ""
-        return "\(amount)Coinbase adds its fees, and that total becomes its cost here."
+    @ViewBuilder
+    private var form: some View {
+        Picker("Token", selection: $asset) {
+            ForEach(Asset.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        LabeledContent("Amount") {
+            HStack(spacing: 4) {
+                Text(wallet.usd(dollars: 0).replacing("0", with: ""))
+                    .foregroundStyle(.secondary)
+                TextField("Amount", value: $dollars, format: .number.grouping(.never))
+                    .labelsHidden()
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 90)
+                    .monospacedDigit()
+            }
+        }
+        destination
+        Text("\(cryptoAmount.map { "About \($0) \(asset.rawValue). " } ?? "")You'll need a \(PurchaseWording.provider) account. Its fees are added, and that total becomes the cost here.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Where it ends up, or why it can't.
+    @ViewBuilder
+    private var destination: some View {
+        switch plan.problem {
+        case .belowMinimum:
+            Text("\(PurchaseWording.provider)'s minimum is about \(wallet.usd(dollars: BuyPlan.minimumDollars)).")
+                .foregroundStyle(.secondary)
+        case .needsSavings:
+            Notice(.info, "There's room for \(wallet.usd(wallet.topUpRoom)) in Spending Money. To buy more, add a savings wallet for the rest to go to.")
+        case .noGasToSweep:
+            Notice(.warning, "This wallet has no ETH to move USDC to \(savingsName), so it would get stuck here. Buy ETH this time.")
+        case nil:
+            VStack(alignment: .leading, spacing: 4) {
+                Text(whereItGoes)
+                if plan.sweeps > 0 {
+                    Text("Keep \(AppName.current) open until it lands. If it's closed, it moves the next time it opens.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var whereItGoes: String {
+        if plan.sweeps == 0 { return "It all stays in Spending Money." }
+        if plan.stays == 0 { return "Spending Money is full, so it all goes to \(savingsName)." }
+        return "\(wallet.usd(plan.stays)) stays in Spending Money, the rest goes to \(savingsName)."
+    }
+
+    private var buttons: some View {
+        HStack {
+            Spacer()
+            if isStarting { ProgressView().controlSize(.small) }
+            Button("Cancel") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+            if wallet.address == nil {
+                Button("Set Up Spending Money") {
+                    started()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            } else if !hasSavings, plan.problem == .needsSavings || wallet.topUpRoom < UInt128(BuyPlan.minimumDollars) * Money.dollar {
+                Button("Add a Savings Wallet…") {
+                    addSavings()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            } else {
+                Button("Continue on \(PurchaseWording.provider)") { Task { await start() } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(plan.problem != nil || cryptoAmount == nil || isStarting || !wallet.canTopUp)
+            }
+        }
     }
 
     private func start() async {
@@ -111,8 +159,9 @@ struct BuySheet: View {
         isStarting = true
         defer { isStarting = false }
         do {
-            let page = try await purchases.begin(wallet: address.lowercased, asset: asset.rawValue, dollars: Int(dollars), cryptoAmount: cryptoAmount)
+            let page = try await purchases.begin(wallet: address.lowercased, asset: asset.rawValue, dollars: chosen, cryptoAmount: cryptoAmount)
             openURL(page)
+            started()
             dismiss()
         } catch {
             failure = PurchaseTracker.message(for: error)

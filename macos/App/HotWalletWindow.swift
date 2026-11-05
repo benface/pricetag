@@ -105,7 +105,6 @@ private struct HotWalletDetails: View {
     let purchases: PurchaseTracker
     @State private var isAddingCold = false
     @State private var isToppingUp = false
-    @State private var isBuying = false
     @State private var isSending = false
     /// A new savings wallet to send a little to, once its sheet has gone.
     @State private var testingSavings: EthereumAddress?
@@ -139,7 +138,6 @@ private struct HotWalletDetails: View {
             AddColdWalletSheet(wallet: wallet, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
         }
         .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet, server: store.serverURL) }
-        .sheet(isPresented: $isBuying) { BuySheet(wallet: wallet, purchases: purchases) }
         // Coming back from Coinbase's page is when there's news.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await purchases.check() }
@@ -152,6 +150,11 @@ private struct HotWalletDetails: View {
             guard wants else { return }
             navigation.wantsTopUp = false
             if wallet.canTopUp { isToppingUp = true }
+        }
+        .onChange(of: navigation.wantsAddSavings, initial: true) { _, wants in
+            guard wants else { return }
+            navigation.wantsAddSavings = false
+            isAddingCold = true
         }
         .onChange(of: navigation.wantsSend, initial: true) { _, wants in
             guard wants else { return }
@@ -440,7 +443,7 @@ private struct HotWalletDetails: View {
     }
 
     private var buy: some View {
-        Button("Buy…") { isBuying = true }
+        Button("Buy…") { navigation.isBuying = true }
             .disabled(!wallet.canTopUp)
     }
 

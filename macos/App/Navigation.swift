@@ -51,6 +51,10 @@ final class Navigation {
     var wantsTopUp = false
     /// The menu bar's Send button was pressed. The hot wallet's section takes it from here.
     var wantsSend = false
+    /// Buy was pressed. It isn't tied to a section, so the window takes it from anywhere.
+    var isBuying = false
+    /// Buy needs a savings wallet first. The hot wallet's section takes it from here.
+    var wantsAddSavings = false
     /// The web app sent over an account from a device. The hot wallet's window asks the person to check it.
     var addingSavings: AddSavingsLink?
     var isResolving = false
@@ -89,6 +93,12 @@ final class Navigation {
     func topUp() {
         section = .spendingMoney
         wantsTopUp = true
+    }
+
+    /// Goes to spending money and adds a savings wallet, which appears once the section is on screen.
+    func addSavings() {
+        section = .spendingMoney
+        wantsAddSavings = true
     }
 
     func resolve(_ asset: String? = nil) {

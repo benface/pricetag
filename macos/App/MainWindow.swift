@@ -65,6 +65,9 @@ struct MainWindow: View {
             if wasWide != isWide { columns = isWide ? .all : .detailOnly }
         }
         .sheet(isPresented: detailsSheetBinding) { detailsSheet }
+        .sheet(isPresented: $navigation.isBuying) {
+            BuySheet(wallet: hotWallet, purchases: purchases) { navigation.section = .spendingMoney } addSavings: { navigation.addSavings() }
+        }
         .sheet(isPresented: $navigation.isResolving) {
             ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet) { AnyView(PublishFromDeviceButton(link: $0, browsers: .real)) }
         }
@@ -145,6 +148,12 @@ struct MainWindow: View {
         }
         // With no title in a small window, nothing else would hold the rest at the far end.
         ToolbarSpacer(.flexible)
+        if hotWallet.availability == .ready {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Buy", systemImage: "plus") { navigation.isBuying = true }
+                    .help("Buy crypto")
+            }
+        }
         if store.address != nil, navigation.section == .overview || navigation.section == .transactions {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh", systemImage: "arrow.clockwise") { store.start() }
