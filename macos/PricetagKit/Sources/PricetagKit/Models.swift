@@ -116,6 +116,17 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public var isHeld: Bool { isPositive(values.qty) }
     public var hasShortfall: Bool { isPositive(shortfallQty) }
     public var hasUnknownCost: Bool { isPositive(values.unknownCostQty) }
+
+    /// What can be opened for this position, in the holdings table's order.
+    public var explainableMetrics: [AssetMetric] {
+        AssetMetric.tableOrder.filter { metric in
+            switch metric {
+            case .amount, .realized: true
+            case .average, .value, .unrealized: isHeld
+            case .onchain: reconciliation != nil || hasShortfall
+            }
+        }
+    }
     public var isReconciled: Bool { reconciliation?.status == .reconciled }
     public var isIncomplete: Bool { reconciliation?.status == .incomplete }
 }
@@ -395,6 +406,8 @@ public enum TotalMetric: String, Sendable, Hashable, CaseIterable {
 
 public enum AssetMetric: String, Sendable, Hashable, CaseIterable {
     case amount, average, value, realized, unrealized, onchain
+
+    static let tableOrder: [AssetMetric] = [.onchain, .amount, .average, .value, .realized, .unrealized]
 }
 
 /// A number someone clicked, to read what's behind it.

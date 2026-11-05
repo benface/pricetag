@@ -20,6 +20,15 @@ import Testing
         #expect(usdc.values.averageCostMicros == nil)
     }
 
+    @Test func everyHoldingCanOpenItsAveragePrice() throws {
+        let portfolio = try demoPortfolio()
+        let held = portfolio.listedPositions.filter(\.isHeld)
+        #expect(!held.isEmpty)
+        #expect(held.allSatisfy { $0.explainableMetrics.contains(.average) })
+        let usdc = try #require(held.first { $0.asset == "USDC" })
+        #expect(usdc.explainableMetrics.map(\.title) == ["Balance check", "Amount", "Average price paid", "Value", "Realized PnL", "Unrealized PnL"])
+    }
+
     @Test func keepsUnknownPointsUnknown() throws {
         let portfolio = try demoPortfolio()
         #expect(portfolio.points.first?.pnlMicros == nil)
