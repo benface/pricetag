@@ -6,7 +6,7 @@ import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, 
 import type { Mode } from "./api.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
-export const METHOD_NAME = "How cost is worked out"
+export const METHOD_NAME = "Cost method"
 export const METHOD_HELP = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
 
 export const AVERAGE_PRICE_PAID = "Average price paid"

@@ -83,7 +83,7 @@ struct SettingsView: View {
                     ForEach(CurrencyCode.mainChoices) { Text("\($0.rawValue) · \($0.name)").tag($0) }
                 }
                 .help("Costs use the rate when each transaction happened, and values use the current rate.")
-                Picker("Cost method", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
+                Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
                     ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
                 }
                 .help(Wording.methodHelp)

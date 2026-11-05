@@ -189,7 +189,7 @@
   ],
   "withheld": "0x1234…5678's ETH history can't be confirmed, so what it sent has an unknown cost where it arrived.",
   "sentences": {
-    "methodName": "How cost is worked out",
+    "methodName": "Cost method",
     "methodHelp": "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest.",
     "averagePricePaid": "Average price paid",
     "networkFees": "Network fees",

@@ -108,9 +108,6 @@ struct MacApp: App {
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
                 }
                 Divider()
-                Picker("Cost", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
-                    ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
-                }
                 Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
             }
