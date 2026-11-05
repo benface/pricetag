@@ -366,7 +366,7 @@ private struct KeystoneScanStep: View {
 
     /// Holding it up to a camera only makes sense with one that's working.
     private var shown: AddSavingsWording.Page {
-        camera?.state == .denied || camera?.state == .noCamera || camera?.state == .failed ? page.titleOnly : page
+        camera?.state == .denied || camera?.state == .noCamera || camera?.state == .failed ? AddSavingsWording.Page(title: AddSavingsWording.noCamera, body: "") : page
     }
 
     var body: some View {
