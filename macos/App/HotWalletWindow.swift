@@ -15,9 +15,13 @@ struct HotWalletWindow: View {
             switch wallet.availability {
             case .notProvisioned:
                 ContentUnavailableView {
-                    Label("This Build Can't Hold a Key", systemImage: "lock.slash")
+                    Label("Spending Money Isn't Available", systemImage: "lock.slash")
                 } description: {
-                    Text("Keeping a key needs the device-only Keychain, which only a build signed with an Apple Development identity can reach. Sign in to Xcode with your Apple account and run `pnpm mac` again. Everything else in the app still works.")
+                    #if DEBUG
+                    Text("This build can't reach the device-only Keychain. Sign in to Xcode with your Apple account and run `pnpm mac` again.")
+                    #else
+                    Text("This copy of \(AppName.current) can't hold a key. Everything else still works.")
+                    #endif
                 }
             case .unavailable(let message):
                 ContentUnavailableView("Can't Open This Wallet", systemImage: "exclamationmark.triangle", description: Text(message))
@@ -29,8 +33,7 @@ struct HotWalletWindow: View {
                 }
             }
         }
-        .frame(minWidth: 500, minHeight: 480)
-        .navigationTitle(HotWalletWording.title)
+        .frame(minWidth: 320, minHeight: 320)
     }
 }
 
@@ -39,28 +42,43 @@ private struct HotWalletSetup: View {
     let wallet: HotWallet
     let store: PortfolioStore
     @State private var understands = false
+    @State private var showsHowItWorks = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Image(systemName: "banknote")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-            Text("This Mac's spending money")
-                .font(.title.bold())
-            Text("\(HotWalletWording.summary) Your savings stay on a hardware wallet, and anything here above the cap goes to them by itself.")
-                .fixedSize(horizontal: false, vertical: true)
-            Notice(.warning, HotWalletWording.cannotBeRestored)
-            VStack(alignment: .leading, spacing: 6) {
-                Label(HotWalletWording.sweepsOnlyWhileOpen, systemImage: "bolt.horizontal")
-                Label(HotWalletWording.newDevice, systemImage: "laptopcomputer.and.arrow.down")
-                Label(HotWalletWording.label, systemImage: "flask")
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            Toggle("I understand this money can't be restored if this Mac is lost", isOn: $understands)
-            HStack {
-                Spacer()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Image(systemName: "banknote")
+                    .font(.system(size: 30))
+                    .foregroundStyle(.secondary)
+                Text("Spending Money")
+                    .font(.title2.bold())
+                Text("A small balance on this Mac for everyday use. Anything above your cap moves to your savings.")
+                    .fixedSize(horizontal: false, vertical: true)
+                // What can't be undone stays in full, and on screen.
+                Notice(.warning, HotWalletWording.cannotBeRestored)
+                HStack {
+                    Text(HotWalletWording.label)
+                        .font(.caption)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(.quaternary, in: Capsule())
+                    Button("How It Works", systemImage: "info.circle") { showsHowItWorks.toggle() }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .help("How it works")
+                        .popover(isPresented: $showsHowItWorks, arrowEdge: .bottom) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(HotWalletWording.sweepsOnlyWhileOpen)
+                                Text(HotWalletWording.newDevice)
+                            }
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(14)
+                            .frame(width: 300)
+                        }
+                }
+                Toggle("I understand this money can't be restored if this Mac is lost", isOn: $understands)
+                    .fixedSize(horizontal: false, vertical: true)
                 Button("Create Spending Money") {
                     Task {
                         await wallet.createWallet()
@@ -69,13 +87,14 @@ private struct HotWalletSetup: View {
                 }
                     .buttonStyle(.borderedProminent)
                     .disabled(!understands || wallet.isWorking)
+                if let problem = wallet.sweepProblem {
+                    WarningText(problem).font(.callout)
+                }
             }
-            if let problem = wallet.sweepProblem {
-                WarningText(problem).font(.callout)
-            }
+            .padding(24)
+            .frame(maxWidth: 480, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -237,7 +256,7 @@ private struct HotWalletDetails: View {
                 }
             }
             if let plan = wallet.plan, plan.gasReserveWei > 0 {
-                Text("\(Format.amount(String(plan.gasReserveWei), decimals: 18)) ETH is kept for gas, and doesn't count toward the cap.")
+                Text("\(Format.amount(String(plan.gasReserveWei), decimals: 18)) ETH is kept for gas.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -255,7 +274,7 @@ private struct HotWalletDetails: View {
         } header: {
             Text("Other Tokens")
         } footer: {
-            Text("Tokens this app doesn't track, so they have no trusted price. Unknown tokens can be malicious, so it never interacts with them. Don't go looking for what they're worth.")
+            Text("Not tracked, and never touched. They can be malicious, so don't go looking for what they're worth.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -298,7 +317,7 @@ private struct HotWalletDetails: View {
         } header: {
             Text("Savings")
         } footer: {
-            Text("Your hardware wallets. Sweeps go to the checked one, and the cost of what's swept carries over with it.")
+            Text("Sweeps go to the checked one.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -315,7 +334,7 @@ private struct HotWalletDetails: View {
         } header: {
             Text("Connected Sites")
         } footer: {
-            Text("They can see this wallet's address and ask you to approve things. Disconnecting doesn't undo any token approvals you already gave them.")
+            Text("Disconnecting doesn't undo token approvals you already gave them.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -323,26 +342,34 @@ private struct HotWalletDetails: View {
 
     private var actions: some View {
         Section {
-            HStack {
-                Button("Send…") { isSending = true }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!wallet.canSend)
-                Button("Top Up from Savings…") { isToppingUp = true }
-                    .disabled(!wallet.canTopUp)
-                Button("Sweep Everything…") { isConfirmingSweep = true }
-                    .disabled(wallet.settings.sweepDestination == nil || wallet.isWorking || wallet.isKeyMissing)
-                    .help(wallet.settings.sweepDestination == nil ? "Add a savings wallet first" : "Move everything on this wallet to your savings")
-                Spacer()
-                Button("Replace Key…") { isConfirmingRotation = true }
-                    .disabled(wallet.rotation != nil || wallet.isWorking || wallet.isKeyMissing)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    send
+                    topUp
+                    sweep
+                    Spacer()
+                    replaceKey
+                }
+                VStack(alignment: .leading) {
+                    HStack {
+                        send
+                        topUp
+                    }
+                    HStack {
+                        sweep
+                        replaceKey
+                    }
+                }
+                VStack(alignment: .leading) {
+                    send
+                    topUp
+                    sweep
+                    replaceKey
+                }
             }
             if wallet.rotationHold != nil {
                 Button("Delete the Old Key and Leave What's on It…", role: .destructive) { isConfirmingAbandon = true }
             }
-        } footer: {
-            Text(HotWalletWording.newDevice)
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
         .confirmationDialog("Sweep everything to your savings?", isPresented: $isConfirmingSweep) {
             Button("Sweep Everything") { Task { await wallet.sweepEverything() } }
@@ -362,6 +389,28 @@ private struct HotWalletDetails: View {
         } message: {
             Text(abandonMessage)
         }
+    }
+
+    private var send: some View {
+        Button("Send…") { isSending = true }
+            .buttonStyle(.borderedProminent)
+            .disabled(!wallet.canSend)
+    }
+
+    private var topUp: some View {
+        Button("Top Up from Savings…") { isToppingUp = true }
+            .disabled(!wallet.canTopUp)
+    }
+
+    private var sweep: some View {
+        Button("Sweep Everything…") { isConfirmingSweep = true }
+            .disabled(wallet.settings.sweepDestination == nil || wallet.isWorking || wallet.isKeyMissing)
+            .help(wallet.settings.sweepDestination == nil ? "Add a savings wallet first" : "Move everything on this wallet to your savings. \(HotWalletWording.newDevice)")
+    }
+
+    private var replaceKey: some View {
+        Button("Replace Key…") { isConfirmingRotation = true }
+            .disabled(wallet.rotation != nil || wallet.isWorking || wallet.isKeyMissing)
     }
 
     private var abandonMessage: String {

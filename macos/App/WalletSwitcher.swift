@@ -11,8 +11,20 @@ extension PortfolioStore {
             savings: hotWallet?.settings.coldWallets.map { NamedWallet(address: $0.address.lowercased, name: $0.name) } ?? [],
             linked: book.linkedWallets,
             saved: savedWallets,
-            current: address
+            current: address,
+            offersDemo: WalletList.offersDemo
         )
+    }
+}
+
+extension WalletList {
+    /// For trying things while building the app. A fixture has no place in a release build, and scenes show what one looks like.
+    static var offersDemo: Bool {
+        #if DEBUG
+        !TestMode.isRunning
+        #else
+        false
+        #endif
     }
 }
 
@@ -71,7 +83,7 @@ struct WalletButton: View {
         .accessibilityLabel(current.map { [$0.title, $0.badge].compactMap(\.self).joined(separator: ", ") } ?? "Add Wallet")
         .accessibilityHint("Switches wallet")
         .popover(isPresented: $navigation.isSwitchingWallet, arrowEdge: .bottom) {
-            WalletSwitcher(store: store, hotWallet: hotWallet) { navigation.isSwitchingWallet = false }
+            WalletSwitcher(store: store, hotWallet: hotWallet, onOpenSpendingMoney: { navigation.section = .spendingMoney }) { navigation.isSwitchingWallet = false }
         }
     }
 }
@@ -80,13 +92,13 @@ struct WalletButton: View {
 struct WalletSwitcher: View {
     let store: PortfolioStore
     let hotWallet: HotWallet?
+    let onOpenSpendingMoney: () -> Void
     let onDone: () -> Void
     @State var renaming: String?
     @State var problem: String?
     @State private var newName = ""
     @State private var highlighted: String?
     @FocusState private var focus: Field?
-    @Environment(\.openWindow) private var openWindow
 
     private enum Field: Hashable {
         case add, rename
@@ -105,7 +117,7 @@ struct WalletSwitcher: View {
                     section("Yours", list.yours)
                     section("Watching", list.watching)
                     section("Recent", list.recent)
-                    section(nil, [list.demo])
+                    section(nil, list.demo.map { [$0] } ?? [])
                 }
                 .padding(6)
             }
@@ -234,8 +246,7 @@ struct WalletSwitcher: View {
         if entry.kind == .spendingMoney {
             Button("Open \(HotWalletWording.title)") {
                 onDone()
-                openWindow(id: WindowID.hotWallet)
-                DockPresence.bringForward()
+                onOpenSpendingMoney()
             }
         }
         if entry.canRename {
@@ -257,12 +268,11 @@ struct WalletSwitcher: View {
         }
     }
 
-    /// In the window, which says what this is and what can go wrong, and is the only place that makes a key.
+    /// In its own section, which says what this is and what can go wrong, and is the only place that makes a key.
     private var createSpendingMoney: some View {
         Button {
             onDone()
-            openWindow(id: WindowID.hotWallet)
-            DockPresence.bringForward()
+            onOpenSpendingMoney()
         } label: {
             HStack(spacing: 10) {
                 WalletIcon(kind: .spendingMoney)

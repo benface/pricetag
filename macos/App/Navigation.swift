@@ -1,21 +1,51 @@
 import Observation
 import PricetagKit
 
+/// The main window's sections.
+enum AppSection: String, CaseIterable, Identifiable {
+    case overview, transactions, spendingMoney, taxReport
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .overview: "Overview"
+        case .transactions: "Transactions"
+        case .spendingMoney: "Spending Money"
+        case .taxReport: "Tax Report"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .overview: "chart.line.uptrend.xyaxis"
+        case .transactions: "list.bullet"
+        case .spendingMoney: "banknote"
+        case .taxReport: "doc.text"
+        }
+    }
+}
+
 /// What the main window shows, set from the popover and the menus too.
 @Observable
 final class Navigation {
-    /// The number being explained in the inspector.
+    var section: AppSection = .overview
+    var chartRange: ChartRange = .all
+    /// The number being explained in the details.
     var target: ExplainTarget?
     var isSwitchingWallet = false
-    var isExportingTaxReport = false
-    /// The chart's transactions as a list, which is how to reach them from the keyboard or VoiceOver.
-    var showsTransactions = false
-    /// The extension's Top Up button was pressed. The hot wallet's window takes it from here.
+    /// The extension's Top Up button was pressed. The hot wallet's section takes it from here.
     var wantsTopUp = false
     var isResolving = false
-    /// Which holding Resolve was clicked on, so its questions come first.
+    /// Which holding Fill In was clicked on, so its questions come first.
     var resolvingAsset: String?
     var isExporting = false
+
+    /// Spending Money is always this Mac's, so the wallet button isn't there. Every other section shows the wallet chosen.
+    func switchWallet() {
+        if section == .spendingMoney { section = .overview }
+        isSwitchingWallet = true
+    }
 
     func resolve(_ asset: String? = nil) {
         resolvingAsset = asset

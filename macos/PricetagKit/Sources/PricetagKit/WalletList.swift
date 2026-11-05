@@ -102,10 +102,11 @@ public struct WalletList: Equatable, Sendable {
     public let yours: [WalletEntry]
     public let watching: [WalletEntry]
     public let recent: [WalletEntry]
-    public let demo: WalletEntry
+    /// Only where it's offered, or while it's the one showing.
+    public let demo: WalletEntry?
 
     /// `linked` is every wallet the user has said is theirs, which includes the spending money and savings ones.
-    public init(spending: NamedWallet?, savings: [NamedWallet], linked: [String], saved: [SavedWallet], current: String?) {
+    public init(spending: NamedWallet?, savings: [NamedWallet], linked: [String], saved: [SavedWallet], current: String?, offersDemo: Bool = true) {
         let savedNames = Dictionary(saved.compactMap { wallet in wallet.name.map { (wallet.address, $0) } }, uniquingKeysWith: { first, _ in first })
         var yours = spending.map { [WalletEntry(address: $0.address, name: $0.name, kind: .spendingMoney)] } ?? []
         yours += savings.filter { $0.address != spending?.address }.map { WalletEntry(address: $0.address, name: $0.name, kind: .savings) }
@@ -127,10 +128,10 @@ public struct WalletList: Equatable, Sendable {
             recent.insert(WalletEntry(address: current, name: nil, kind: .watching), at: 0)
         }
         self.recent = recent
-        demo = WalletEntry(address: WalletAddress.demo, name: nil, kind: .demo)
+        demo = offersDemo || current == WalletAddress.demo ? WalletEntry(address: WalletAddress.demo, name: nil, kind: .demo) : nil
     }
 
-    public var all: [WalletEntry] { yours + watching + recent + [demo] }
+    public var all: [WalletEntry] { yours + watching + recent + (demo.map { [$0] } ?? []) }
 
     public func entry(for address: String?) -> WalletEntry? {
         address.flatMap { address in all.first { $0.address == address } }

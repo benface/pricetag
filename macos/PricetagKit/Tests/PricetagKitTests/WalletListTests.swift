@@ -69,9 +69,15 @@ struct WalletListTests {
         let named = WalletList(spending: nil, savings: [], linked: [], saved: [SavedWallet(address: a, name: "Treasury", lastSeen: date(1))], current: a)
         #expect(named.entry(for: a)?.detail == short(a), "Its section says Watching")
         #expect(named.entry(for: a)?.badge == "Watching", "The toolbar has no section")
-        #expect(list.demo.title == "Demo Wallet")
-        #expect(list.demo.detail == "Sample data")
-        #expect(list.demo.badge == nil)
+        #expect(list.demo?.title == "Demo Wallet")
+        #expect(list.demo?.detail == "Sample data")
+        #expect(list.demo?.badge == nil)
+    }
+
+    @Test func theDemoIsOnlyThereWhereItsOffered() {
+        #expect(WalletList(spending: nil, savings: [], linked: [], saved: [], current: nil, offersDemo: false).all.isEmpty)
+        let showing = WalletList(spending: nil, savings: [], linked: [], saved: [], current: WalletAddress.demo, offersDemo: false)
+        #expect(showing.entry(for: WalletAddress.demo)?.kind == .demo, "It can't vanish while it's what's showing")
     }
 
     @Test func onlyAWatchedWalletCanBeRemovedHere() {

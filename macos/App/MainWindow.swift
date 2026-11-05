@@ -21,60 +21,98 @@ struct CSVDocument: FileDocument {
     }
 }
 
-/// The details: every number in here clicks through to its legs, price source and transaction, in the inspector.
+/// A sidebar of sections, and the section. Every number clicks through to what's behind it.
 struct MainWindow: View {
     let store: PortfolioStore
     @Bindable var navigation: Navigation
-    var hotWallet: HotWallet?
+    let hotWallet: HotWallet
+    let siteBridge: SiteBridge
+    var noteWriter: (any CostNoteWriter)?
+    @State private var columns = NavigationSplitViewVisibility.all
+    @State private var width: CGFloat = 1120
     @State private var exporting = false
     @State private var exportDocument: CSVDocument?
     @State private var exportError: String?
-    @Environment(\.openWindow) private var openWindow
+
+    /// How small the window can get, with the sidebar closed. It closes by itself below `sidebarWidth`.
+    static let minimumSize = CGSize(width: 480, height: 400)
+    private static let sidebarWidth: CGFloat = 640
+    /// Below this the details open over the window, because there's no room beside the section.
+    private static let inspectorWidth: CGFloat = 900
 
     private var portfolio: Portfolio? { store.portfolio }
     private var isLive: Bool { store.feed.isLive }
+    private var usesSheetForDetails: Bool { width < Self.inspectorWidth }
 
     var body: some View {
-        content
-            .frame(minWidth: 780, minHeight: 560)
-            // The window's name in the Window menu and Mission Control. In the window itself, the wallet button says it.
-            .navigationTitle(walletTitle ?? AppName.current)
-            .toolbar(removing: .title)
-            .toolbar { toolbar }
-            .inspector(isPresented: inspectorBinding) { inspector }
-            .sheet(isPresented: $navigation.isResolving) {
-                ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet)
-            }
-            .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: exportName) { result in
-                if case .failure(let error) = result { exportError = error.localizedDescription }
-                exportDocument = nil
-            }
-            .alert("Couldn't export", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(exportError ?? "")
-            }
-            // The menu asks for it. The file's written only once the server has answered.
-            .onChange(of: navigation.isExporting) { _, asked in
-                guard asked else { return }
-                navigation.isExporting = false
-                Task {
-                    do {
-                        exportDocument = CSVDocument(text: try await store.exportCSV())
-                        exporting = true
-                    } catch {
-                        exportError = "The server couldn't make this file."
-                    }
+        NavigationSplitView(columnVisibility: $columns) {
+            sidebar
+        } detail: {
+            page
+                .frame(minWidth: 320, minHeight: 320)
+                .navigationTitle(navigation.section.title)
+                .toolbar { toolbar }
+                .inspector(isPresented: inspectorBinding) { inspector }
+        }
+        .frame(minWidth: Self.minimumSize.width, minHeight: Self.minimumSize.height)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { newWidth in
+            let wasWide = width >= Self.sidebarWidth
+            let isWide = newWidth >= Self.sidebarWidth
+            width = newWidth
+            if wasWide != isWide { columns = isWide ? .all : .detailOnly }
+        }
+        .sheet(isPresented: detailsSheetBinding) { detailsSheet }
+        .sheet(isPresented: $navigation.isResolving) {
+            ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: noteWriter)
+        }
+        .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: exportName) { result in
+            if case .failure(let error) = result { exportError = error.localizedDescription }
+            exportDocument = nil
+        }
+        .alert("Couldn't export", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(exportError ?? "")
+        }
+        // The menu asks for it. The file's written only once the server has answered.
+        .onChange(of: navigation.isExporting) { _, asked in
+            guard asked else { return }
+            navigation.isExporting = false
+            Task {
+                do {
+                    exportDocument = CSVDocument(text: try await store.exportCSV())
+                    exporting = true
+                } catch {
+                    exportError = "The server couldn't make this file."
                 }
             }
-            .sheet(isPresented: $navigation.isExportingTaxReport) {
-                TaxReportView(store: store) { navigation.isExportingTaxReport = false }
+        }
+        // What's open belongs to the wallet it was opened on.
+        .onChange(of: store.address) {
+            navigation.target = nil
+        }
+        // Details belong to the section they were opened from.
+        .onChange(of: navigation.section) {
+            navigation.target = nil
+        }
+    }
+
+    private var sidebar: some View {
+        List(selection: Binding(get: { navigation.section }, set: { if let section = $0 { navigation.section = section } })) {
+            ForEach(AppSection.allCases) { section in
+                Label(section.title, systemImage: section.symbol).tag(section)
             }
-            // What's open belongs to the wallet it was opened on.
-            .onChange(of: store.address) {
-                navigation.target = nil
-                navigation.isExportingTaxReport = false
+        }
+        .navigationSplitViewColumnWidth(min: 150, ideal: 190, max: 260)
+        // A status, so it looks like one: it's text, and it's down here with nothing around it that suggests a click.
+        .safeAreaInset(edge: .bottom) {
+            if store.feed != .noWallet {
+                FeedBadge(feed: store.feed, portfolio: portfolio)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
             }
+        }
     }
 
     private var walletTitle: String? {
@@ -88,33 +126,27 @@ struct MainWindow: View {
     }
 
     private var inspectorBinding: Binding<Bool> {
-        Binding(get: { navigation.target != nil }, set: { if !$0 { navigation.target = nil } })
+        Binding(get: { navigation.target != nil && !usesSheetForDetails }, set: { if !$0 { navigation.target = nil } })
     }
 
-    /// Named, because two lone icons didn't say what they did. The status doesn't look like a button, because it isn't one.
+    private var detailsSheetBinding: Binding<Bool> {
+        Binding(get: { navigation.target != nil && usesSheetForDetails }, set: { if !$0 { navigation.target = nil } })
+    }
+
+    /// Only what does something in this section. The leading slot is the wallet's.
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            WalletButton(store: store, hotWallet: hotWallet, navigation: navigation)
-        }
-        // With no title, nothing else would hold the rest at the far end.
-        ToolbarSpacer(.flexible)
-        ToolbarItem(placement: .primaryAction) {
-            if store.feed != .noWallet {
-                FeedBadge(feed: store.feed, portfolio: portfolio)
-                    .padding(.horizontal, 6)
+        if navigation.section != .spendingMoney {
+            ToolbarItem(placement: .navigation) {
+                WalletButton(store: store, hotWallet: hotWallet, navigation: navigation)
             }
         }
-        .sharedBackgroundVisibility(.hidden)
-        ToolbarSpacer(.fixed, placement: .primaryAction)
-        ToolbarItemGroup(placement: .primaryAction) {
-            Button("Spending Money", systemImage: "banknote") { openWindow(id: WindowID.hotWallet) }
-                .labelStyle(.titleAndIcon)
-                .help("This Mac's spending money (⇧⌘M)")
-            Button("Tax Report", systemImage: "doc.text") { navigation.isExportingTaxReport = true }
-                .labelStyle(.titleAndIcon)
-                .disabled(store.address == nil)
-                .help("Export a tax report (⌘E)")
+        if navigation.section == .overview || navigation.section == .transactions {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Refresh", systemImage: "arrow.clockwise") { store.start() }
+                    .disabled(store.address == nil)
+                    .help("Refresh (⌘R)")
+            }
         }
     }
 
@@ -123,7 +155,7 @@ struct MainWindow: View {
         if let target = navigation.target {
             ExplanationPane(target: target, store: store)
                 .safeAreaBar(edge: .top) { metricPicker(target) }
-                .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
+                .inspectorColumnWidth(min: 300, ideal: 360, max: 520)
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button("Close Details", systemImage: "xmark") { navigation.target = nil }
@@ -131,6 +163,24 @@ struct MainWindow: View {
                             .help("Close (Esc)")
                     }
                 }
+        }
+    }
+
+    @ViewBuilder
+    private var detailsSheet: some View {
+        if let target = navigation.target {
+            VStack(spacing: 0) {
+                HStack {
+                    metricPicker(target)
+                    Spacer(minLength: 8)
+                    Button("Done") { navigation.target = nil }
+                        .keyboardShortcut(.cancelAction)
+                }
+                .padding(12)
+                Divider()
+                ExplanationPane(target: target, store: store)
+            }
+            .frame(minWidth: 320, idealWidth: 420, minHeight: 320, idealHeight: 520)
         }
     }
 
@@ -142,6 +192,7 @@ struct MainWindow: View {
                 ForEach(position.explainableMetrics, id: \.self) { Text($0.title).tag($0) }
             }
             .pickerStyle(.menu)
+            .labelsHidden()
             .fixedSize()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
@@ -150,11 +201,37 @@ struct MainWindow: View {
     }
 
     @ViewBuilder
-    private var content: some View {
+    private var page: some View {
+        switch navigation.section {
+        case .overview: walletPage(overview)
+        case .transactions: walletPage(transactions)
+        case .spendingMoney: HotWalletWindow(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation)
+        case .taxReport:
+            if store.address == nil {
+                NoWalletYet(navigation: navigation)
+            } else {
+                TaxReportView(store: store)
+            }
+        }
+    }
+
+    /// A section that shows a wallet, or says why there's nothing to show.
+    @ViewBuilder
+    private func walletPage(_ content: @escaping (Portfolio) -> some View) -> some View {
         if store.feed == .noWallet {
-            Welcome(store: store, hotWallet: hotWallet)
+            if navigation.section == .overview {
+                Welcome(store: store, hotWallet: hotWallet, navigation: navigation)
+            } else {
+                NoWalletYet(navigation: navigation)
+            }
         } else if let portfolio {
-            details(portfolio)
+            if !portfolio.progress.started {
+                ContentUnavailableView("Almost There", systemImage: "hourglass", description: Text(Wording.notStarted))
+            } else if portfolio.isEmpty {
+                NoActivity(portfolio: portfolio, navigation: navigation, notices: notices(portfolio))
+            } else {
+                content(portfolio)
+            }
         } else if store.feed == .reading {
             ContentUnavailableView {
                 ProgressView().controlSize(.large)
@@ -166,112 +243,45 @@ struct MainWindow: View {
         }
     }
 
-    /// Fills the window while it fits, with the table taking what's spare, and scrolls once it needs more height than the window has.
-    private func details(_ portfolio: Portfolio) -> some View {
+    /// Fills the window: the chart takes the height the rest doesn't use, within reason, and the page scrolls once it needs more than there is.
+    private func overview(_ portfolio: Portfolio) -> some View {
         GeometryReader { window in
             ScrollView {
-                AtLeastHeight(window.size.height) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        notices(portfolio)
-                        if !portfolio.progress.started {
-                            ContentUnavailableView("Still catching up", systemImage: "hourglass", description: Text(Wording.notStarted))
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if portfolio.isEmpty {
-                            VStack(spacing: 14) {
-                                ContentUnavailableView("No activity", systemImage: "tray", description: Text("Nothing moved for \(Format.shortHash(portfolio.address)) in this time."))
-                                coverageNote(portfolio)
-                                    .multilineTextAlignment(.center)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else {
-                            summary(portfolio)
-                            HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
-                            history(portfolio)
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text("Holdings").font(.headline)
-                                    Spacer()
-                                    if let rule = store.activeRuleName {
-                                        Text("\(Wording.rulesTitle): \(rule)")
-                                            .font(.callout)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    CostMethodMenu(store: store)
-                                }
-                                HoldingsTable(portfolio: portfolio, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
-                            }
-                            .frame(minHeight: 160)
-                            VStack(alignment: .leading, spacing: 2) {
-                                if let noMarket = Wording.noMarket(portfolio) {
-                                    Text(noMarket)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                coverageNote(portfolio)
-                            }
-                        }
-                    }
-                    .padding(16)
+                VStack(alignment: .leading, spacing: 18) {
+                    notices(portfolio)
+                    PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 40) { navigation.target = .total($0) }
+                        // Short of height, its amounts would shrink and cut off instead of the page scrolling.
+                        .fixedSize(horizontal: false, vertical: true)
+                    PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
+                    PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange) { navigation.target = .transaction($0) }
+                        .frame(height: portfolio.hasChartableData && !portfolio.isTooNewToChart ? chartHeight(window.size.height, rows: portfolio.listedPositions.count) : nil)
+                    HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
+                    HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
                 }
+                // A line of numbers gets hard to read across a very wide window.
+                .frame(maxWidth: 1280, alignment: .leading)
+                .padding(window.size.width < 520 ? 14 : 20)
+                .frame(maxWidth: .infinity)
             }
             .scrollBounceBehavior(.basedOnSize)
         }
     }
 
-    private func coverageNote(_ portfolio: Portfolio) -> some View {
-        Text([Wording.allBalancesMatch(portfolio), Wording.coverage(portfolio)].compactMap(\.self).joined(separator: " "))
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+    private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
+        let rest = 300 + CGFloat(rows) * HoldingsTable.rowHeight
+        return min(max(pageHeight - rest, 200), 460)
     }
 
-    /// The same size whether it's the chart or the list, so switching moves nothing else, and it gives up some height before the page has to scroll.
-    /// With too little to plot, it says so in one line and leaves the room to the holdings.
-    private func history(_ portfolio: Portfolio) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("History").font(.headline)
-                Spacer()
-                Picker("History", selection: $navigation.showsTransactions) {
-                    Text("Chart").tag(false)
-                    Text("Transactions").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-                .fixedSize()
-                .help("Chart or transactions (⌘T)")
-            }
-            if navigation.showsTransactions {
-                TransactionsTable(transactions: portfolio.transactions, currency: portfolio.currency, isLive: isLive, target: $navigation.target)
-                    .frame(minHeight: 120, idealHeight: 170, maxHeight: 170)
-            } else if !portfolio.hasChartableData {
-                nothingToChart(Wording.nothingToChart, detail: nil)
-                    .help(Wording.pnlHelp)
-            } else if portfolio.isTooNewToChart {
-                nothingToChart(Wording.tooNewToChart, detail: Wording.transactionsSoFar(portfolio.transactions.count))
+    private func transactions(_ portfolio: Portfolio) -> some View {
+        VStack(spacing: 0) {
+            let notices = notices(portfolio)
+            notices.padding(12)
+            if portfolio.transactions.isEmpty {
+                ContentUnavailableView("No Transactions Yet", systemImage: "list.bullet", description: Text("They'll show up here as they happen."))
             } else {
-                PnlChartView(points: portfolio.points, currency: portfolio.currency, isLive: isLive) { navigation.target = .transaction($0) }
-                    .frame(minHeight: 120, idealHeight: 170, maxHeight: 170)
+                TransactionsTable(transactions: portfolio.transactions, currency: portfolio.currency, isLive: isLive, target: $navigation.target)
             }
         }
-    }
-
-    private func nothingToChart(_ title: String, detail: String?) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "chart.xyaxis.line")
-                .foregroundStyle(.tertiary)
-            Text(title)
-            if let detail {
-                Text(detail).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-        }
-        .font(.callout)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     @ViewBuilder
@@ -289,21 +299,12 @@ struct MainWindow: View {
             }
         }
         if !portfolio.linkedReading.isEmpty {
-            Notice(.info, "Reading your other \(portfolio.linkedReading.count == 1 ? "wallet" : "wallets"). What came from \(portfolio.linkedReading.count == 1 ? "it" : "them") has an unknown cost until that's done.")
-        }
-    }
-
-    private func summary(_ portfolio: Portfolio) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 40) { navigation.target = .total($0) }
-                // Short of height, its amounts would shrink and cut off instead of the page scrolling.
-                .fixedSize(horizontal: false, vertical: true)
-            PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
+            Notice(.info, "Reading your other \(portfolio.linkedReading.count == 1 ? "wallet" : "wallets"). Until then, what came from \(portfolio.linkedReading.count == 1 ? "it" : "them") has an unknown cost.")
         }
     }
 }
 
-/// Rarely changed, so it sits quietly by the numbers it affects, and not at the center of the toolbar. It says what's in use, because the numbers depend on it.
+/// Rarely changed, so it sits quietly by the numbers it affects. It says what's in use, because the numbers depend on it.
 struct CostMethodMenu: View {
     let store: PortfolioStore
 
@@ -320,26 +321,109 @@ struct CostMethodMenu: View {
         .controlSize(.small)
         .fixedSize()
         .foregroundStyle(.secondary)
-        .help("\(Wording.methodHelp) (⌘1, ⌘2)")
+        .help(Wording.methodHelp)
     }
 }
 
-/// Offers its content a height, and is taller if the content needs more. A scroll view offers none, and a frame with an ideal height stops at that height, which leaves nothing to scroll.
-private struct AtLeastHeight: Layout {
-    let height: CGFloat
+/// What a wallet holds: a table when there's room for its columns, and two-line rows when there isn't.
+private struct HoldingsSection: View {
+    let portfolio: Portfolio
+    let store: PortfolioStore
+    let isLive: Bool
+    @Binding var target: ExplainTarget?
+    let onResolve: (String) -> Void
+    @State private var width: CGFloat = 800
+    @State private var showsAbout = false
 
-    init(_ height: CGFloat) {
-        self.height = height
+    private static let tableWidth: CGFloat = 560
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("Holdings").font(.headline)
+                if let matches = Wording.allBalancesMatch(portfolio) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.callout)
+                        .foregroundStyle(Tone.gain.style)
+                        .help(matches)
+                        .accessibilityLabel(matches)
+                }
+                Spacer(minLength: 8)
+                if let rule = store.activeRuleName {
+                    Text("\(Wording.rulesTitle): \(rule)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                CostMethodMenu(store: store)
+                Button("About This Data", systemImage: "info.circle") { showsAbout.toggle() }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help("What this covers")
+                    .popover(isPresented: $showsAbout, arrowEdge: .bottom) { about }
+            }
+            if width >= Self.tableWidth {
+                HoldingsTable(portfolio: portfolio, isLive: isLive, width: width, target: $target, onResolve: onResolve)
+                    .frame(height: HoldingsTable.height(rows: portfolio.listedPositions.count))
+            } else {
+                rows
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let fit = subviews.first?.sizeThatFits(ProposedViewSize(width: proposal.width, height: height)) ?? .zero
-        return CGSize(width: fit.width, height: max(fit.height, height))
+    /// The fine print, for whoever wants it.
+    private var about: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(Wording.coverage(portfolio))
+            if let noMarket = Wording.noMarket(portfolio) { Text(noMarket) }
+        }
+        .font(.callout)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(14)
+        .frame(width: 300)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        // The same offer as above. Offered what it asked for instead, the chart grows again and the page runs past its end.
-        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: height))
+    private var rows: some View {
+        VStack(spacing: 0) {
+            ForEach(portfolio.listedPositions) { position in
+                Button { target = .asset(position.asset, .amount) } label: {
+                    CompactHolding(position: position, currency: portfolio.currency, isLive: isLive)
+                }
+                .buttonStyle(.plain)
+                Divider()
+            }
+        }
+    }
+}
+
+/// A holding in a narrow window: what it is and how much, then what it's worth and how it's done. The rest is in its details.
+private struct CompactHolding: View {
+    let position: Position
+    let currency: CurrencyCode
+    let isLive: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(position.asset).fontWeight(.medium)
+                    OnchainCheck(position: position)
+                }
+                LiveNumber(Format.amount(position.values.qty, decimals: position.decimals), tone: .secondary).font(.caption)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 1) {
+                LiveNumber(position.isHeld ? position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price" : "—", tone: position.values.valueMicros == nil ? .secondary : .neutral)
+                LiveNumber(position.pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized || position.estimates.unrealized) } ?? Wording.pnlUnavailable, tone: position.pnlMicros == nil ? .secondary : Tone(signed: position.pnlMicros))
+                    .font(.caption)
+            }
+        }
+        .lineLimit(1)
+        .padding(.vertical, 7)
+        .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -347,40 +431,49 @@ private struct AtLeastHeight: Layout {
 private struct HoldingsTable: View {
     let portfolio: Portfolio
     let isLive: Bool
+    /// As much as there is, because a hidden column doesn't give its width to the others.
+    let width: CGFloat
     @Binding var target: ExplainTarget?
     let onResolve: (String) -> Void
     @State private var selection: Position.ID?
-    @State private var width: CGFloat = 0
     @State private var columns = TableColumnCustomization<Position>()
 
     private var currency: CurrencyCode { portfolio.currency }
 
+    static let rowHeight: CGFloat = 28
+
+    /// Exactly its rows, so the page does the scrolling and no row is cut off inside a shorter table.
+    static func height(rows: Int) -> CGFloat {
+        CGFloat(rows) * rowHeight + 40
+    }
+
     /// What each column needs, for what's usually in it. A column can always grow if there's room.
     private enum Column {
-        static let asset: CGFloat = 170
-        static let amount: CGFloat = 100
-        static let averagePrice: CGFloat = 105
-        static let value: CGFloat = 100
-        static let realized: CGFloat = 100
-        static let unrealized: CGFloat = 145
+        static let asset: CGFloat = 130
+        static let amount: CGFloat = 90
+        static let averagePrice: CGFloat = 90
+        static let value: CGFloat = 90
+        static let realized: CGFloat = 85
+        static let unrealized: CGFloat = 130
 
         static let averagePriceID = "average-price"
+        static let realizedID = "realized"
 
         /// A column that was hidden comes back wider than it left, more so each time, unless something stops it.
         static let comebackRoom: CGFloat = 30
 
-        /// All six, with what the table adds around them, and the one that comes back at its widest.
-        static let allWidth = asset + amount + averagePrice + value + realized + unrealized + 130 + comebackRoom
+        /// What the table adds around its columns.
+        static let chrome: CGFloat = 100
     }
 
-    /// Below the width all six need, which is the default window with the details open and the smallest window without them,
-    /// the average price paid gives way. It's in the details' menu.
-    private var isNarrow: Bool { width < Column.allWidth }
+    /// Below the width each needs, the average price paid gives way, then realized. Both stay in the details' menu.
+    private var showsAverage: Bool { width >= Column.asset + Column.amount + Column.averagePrice + Column.value + Column.realized + Column.unrealized + Column.chrome + Column.comebackRoom }
+    private var showsRealized: Bool { width >= Column.asset + Column.amount + Column.value + Column.realized + Column.unrealized + Column.chrome }
 
-    /// Hiding a column doesn't give its width to the others, so when narrow, each stops at what it needs, and the five always fit.
+    /// Hiding a column doesn't give its width to the others, so while any is hidden, each stops at what it needs, and what's left always fits.
     /// Only a change of limits reaches the rows: setting a column's width outright moves its header and leaves its cells behind.
     private func limit(_ width: CGFloat) -> CGFloat? {
-        isNarrow ? width : nil
+        showsAverage ? nil : width
     }
 
     var body: some View {
@@ -396,7 +489,7 @@ private struct HoldingsTable: View {
                 }
                 .opacity(position.isHeld ? 1 : 0.6)
             }
-            .width(min: Column.asset, ideal: Column.asset, max: limit(Column.asset))
+            .width(min: Column.asset, ideal: Column.asset * 1.3)
             .disabledCustomizationBehavior(.all)
             TableColumn("Amount") { position in
                 number(position, .amount, Format.amount(position.values.qty, decimals: position.decimals), tone: .neutral)
@@ -430,8 +523,9 @@ private struct HoldingsTable: View {
                 let realized = position.values.realizedMicros
                 number(position, .realized, realized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized) } ?? Wording.unknown, tone: realized == nil ? .secondary : Tone(signed: realized))
             }
-            .width(min: Column.realized, ideal: Column.realized, max: limit(Column.realized))
+            .width(min: Column.realized, ideal: Column.realized, max: Column.realized + Column.comebackRoom + (showsAverage ? 200 : 0))
             .alignment(.numeric)
+            .customizationID(Column.realizedID)
             .disabledCustomizationBehavior(.all)
             TableColumn("Unrealized") { position in
                 if position.isHeld {
@@ -456,17 +550,20 @@ private struct HoldingsTable: View {
         }
         .tableStyle(.inset)
         .alternatingRowBackgrounds(.disabled)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .scrollDisabled(true)
         // Not `if` around the column: a column that comes back that way lands at the end, under another column's header.
-        .onChange(of: isNarrow, initial: true) {
-            columns[visibility: Column.averagePriceID] = isNarrow ? .hidden : .visible
+        .onChange(of: showsAverage, initial: true) {
+            columns[visibility: Column.averagePriceID] = showsAverage ? .visible : .hidden
+        }
+        .onChange(of: showsRealized, initial: true) {
+            columns[visibility: Column.realizedID] = showsRealized ? .visible : .hidden
         }
         .onChange(of: selection) { _, asset in
             // Moving to a row shows its legs. A number clicked in that row has already said what to show.
             guard let asset, targetAsset != asset else { return }
             target = .asset(asset, .amount)
         }
-        // The row follows the inspector, wherever it was opened from. Closing it ends the selection, so the same row can open it again.
+        // The row follows the details, wherever they were opened from. Closing them ends the selection, so the same row can open them again.
         .onChange(of: target, initial: true) {
             selection = targetAsset
         }
@@ -521,18 +618,21 @@ private struct TransactionsTable: View {
             TableColumn("Time") { point in
                 Text(point.date.map(Format.time) ?? point.timestamp)
             }
-            TableColumn("Total PnL after") { point in
+            .width(min: 120)
+            TableColumn("Total PnL") { point in
                 LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: point.pnlMicros == nil ? .secondary : isLive ? Tone(signed: point.pnlMicros) : .neutral)
                     .help(Wording.pnlHelp)
             }
+            .width(min: 90)
             .alignment(.numeric)
-            TableColumn("Leaves out") { point in
+            TableColumn("Left out") { point in
                 if point.excludedCount > 0 {
                     LiveNumber("\(point.excludedCount) unknown", tone: .secondary)
                 } else {
                     Text("—").foregroundStyle(.tertiary)
                 }
             }
+            .width(min: 70)
             .alignment(.numeric)
         }
         .tableStyle(.inset)
@@ -550,15 +650,52 @@ private struct TransactionsTable: View {
     }
 }
 
-private struct Welcome: View {
-    let store: PortfolioStore
-    let hotWallet: HotWallet?
-    @State private var problem: String?
-    @Environment(\.openWindow) private var openWindow
+/// For a section that needs a wallet, before there is one.
+private struct NoWalletYet: View {
+    let navigation: Navigation
 
     var body: some View {
         ContentUnavailableView {
-            Label("Every transfer gets a price", systemImage: "tag")
+            Label("No Wallet Yet", systemImage: "wallet.bifold")
+        } description: {
+            Text("Add one to see this.")
+        } actions: {
+            Button("Add Wallet") { navigation.switchWallet() }
+                .buttonStyle(.borderedProminent)
+        }
+    }
+}
+
+/// A wallet with nothing to show. It says how far back it looked, because nothing moving lately doesn't mean it's empty.
+private struct NoActivity<Notices: View>: View {
+    let portfolio: Portfolio
+    let navigation: Navigation
+    let notices: Notices
+
+    var body: some View {
+        VStack(spacing: 8) {
+            notices.padding(.horizontal, 20).padding(.top, 12)
+            ContentUnavailableView {
+                Label("Nothing Here Yet", systemImage: "tray")
+            } description: {
+                Text("Nothing has moved for this wallet in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
+                    .help(Wording.coverage(portfolio))
+            } actions: {
+                Button("Change Wallet") { navigation.switchWallet() }
+            }
+        }
+    }
+}
+
+private struct Welcome: View {
+    let store: PortfolioStore
+    let hotWallet: HotWallet
+    let navigation: Navigation
+    @State private var problem: String?
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("See What a Wallet Is Worth", systemImage: "wallet.bifold")
         } description: {
             Text("See the holdings, cost and PnL of any Base wallet.")
                 .help(Wording.pnlHelp)
@@ -572,8 +709,10 @@ private struct Welcome: View {
                         WarningText(problem).font(.callout)
                     }
                 }
-                Button("Try the Demo Wallet") { store.setWallet(WalletAddress.demo) }
-                    .buttonStyle(.link)
+                if WalletList.offersDemo {
+                    Button("Try the Demo Wallet") { store.setWallet(WalletAddress.demo) }
+                        .buttonStyle(.link)
+                }
             }
             .frame(width: 360)
         }
@@ -582,15 +721,15 @@ private struct Welcome: View {
     /// Nothing to offer on a build that can't hold a key. The rest of this screen still works there.
     @ViewBuilder
     private var spendingMoney: some View {
-        if let hotWallet, hotWallet.availability == .ready {
+        if hotWallet.availability == .ready {
             VStack(spacing: 6) {
                 if let address = hotWallet.address {
                     Button("Show \(HotWalletWording.title)") { store.setWallet(address.lowercased) }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
                 } else {
-                    // The window says what this is and what can go wrong, and only it makes the key.
-                    Button("Create \(HotWalletWording.title)…") { openWindow(id: WindowID.hotWallet) }
+                    // That section says what this is and what can go wrong, and only it makes the key.
+                    Button("Create \(HotWalletWording.title)…") { navigation.section = .spendingMoney }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
                     Text(HotWalletWording.summary)
@@ -614,15 +753,12 @@ private struct Unavailable: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("Can't show this wallet", systemImage: "exclamationmark.triangle")
+            Label("Can't Show This Wallet", systemImage: "exclamationmark.triangle")
         } description: {
             Text(store.feed.staleNotice(serverURL: store.serverURL, portfolio: nil) ?? "")
         } actions: {
             Button("Try Again") { store.start() }
-            if store.address != WalletAddress.demo {
-                // A button, never automatic: fixtures must not quietly stand in for someone's real wallet.
-                Button("Use the Demo Wallet") { store.setWallet(WalletAddress.demo) }
-            }
+                .buttonStyle(.borderedProminent)
         }
     }
 }

@@ -68,7 +68,7 @@ struct MacApp: App {
         .menuBarExtraStyle(.window)
 
         Window(AppName.current, id: WindowID.main) {
-            MainWindow(store: store, navigation: navigation, hotWallet: hotWallet)
+            MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: siteBridge, noteWriter: hotWallet)
                 .holdsDockPresence()
         }
         .defaultSize(width: 1120, height: 760)
@@ -80,26 +80,21 @@ struct MacApp: App {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .toolbar) {
                 Divider()
-                ForEach(Array(CostMethod.allCases.enumerated()), id: \.element) { index, method in
-                    Button("Cost: \(method.label)") { store.setMethod(method) }
+                ForEach(Array(AppSection.allCases.enumerated()), id: \.element) { index, section in
+                    OpenSectionCommand(section: section, navigation: navigation)
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
                 }
                 Divider()
-                Button(navigation.showsTransactions ? "Show Chart" : "Show Transactions") { navigation.showsTransactions.toggle() }
-                    .keyboardShortcut("t", modifiers: .command)
+                Picker("Cost", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
+                    ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
+                }
                 Button("Refresh") { store.start() }
                     .keyboardShortcut("r", modifiers: .command)
-                Button("Export Tax Report…") { navigation.isExportingTaxReport = true }
-                    .keyboardShortcut("e", modifiers: .command)
-                    .disabled(store.address == nil)
             }
             CommandMenu("Wallet") {
                 SwitchWalletCommand(navigation: navigation)
                 Divider()
                 WalletPicker(store: store, list: store.walletList(hotWallet: hotWallet))
-            }
-            CommandGroup(before: .windowList) {
-                OpenHotWalletCommand()
             }
             CommandGroup(after: .newItem) {
                 Button("Answer Questions…") { navigation.resolve() }
@@ -113,15 +108,6 @@ struct MacApp: App {
                     .disabled(store.undoStack.isEmpty)
             }
         }
-
-        Window(HotWalletWording.title, id: WindowID.hotWallet) {
-            HotWalletWindow(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation)
-                .holdsDockPresence()
-        }
-        .defaultSize(width: 560, height: 720)
-        .windowResizability(.contentMinSize)
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
 
         Window("Site Request", id: WindowID.siteApproval) {
             SiteApprovalWindow(bridge: siteBridge)
@@ -140,7 +126,6 @@ struct MacApp: App {
 
 enum WindowID {
     static let main = "main"
-    static let hotWallet = "hot-wallet"
     static let siteApproval = "site-approval"
 }
 
@@ -153,21 +138,24 @@ private struct SwitchWalletCommand: View {
         Button("Switch Wallet…") {
             openWindow(id: WindowID.main)
             DockPresence.bringForward()
-            navigation.isSwitchingWallet = true
+            navigation.switchWallet()
         }
         .keyboardShortcut("l", modifiers: .command)
     }
 }
 
-private struct OpenHotWalletCommand: View {
+/// The window may be closed, so this opens it too.
+private struct OpenSectionCommand: View {
+    let section: AppSection
+    let navigation: Navigation
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("\(HotWalletWording.title)…") {
-            openWindow(id: WindowID.hotWallet)
+        Button(section.title) {
+            navigation.section = section
+            openWindow(id: WindowID.main)
             DockPresence.bringForward()
         }
-        .keyboardShortcut("m", modifiers: [.command, .shift])
     }
 }
 
@@ -185,7 +173,8 @@ struct MenuBarLabel: View {
             .onChange(of: alarm?.findings.count) { _, count in
                 guard count != nil else { return }
                 NSSound(named: "Sosumi")?.play()
-                openWindow(id: WindowID.hotWallet)
+                navigation.section = .spendingMoney
+                openWindow(id: WindowID.main)
                 DockPresence.bringForward()
                 NSApp.requestUserAttention(.criticalRequest)
             }
@@ -209,7 +198,8 @@ struct MenuBarLabel: View {
                     return
                 }
                 #endif
-                openWindow(id: WindowID.hotWallet)
+                navigation.section = .spendingMoney
+                openWindow(id: WindowID.main)
                 DockPresence.bringForward()
             }
     }
