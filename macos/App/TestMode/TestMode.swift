@@ -1,7 +1,6 @@
 #if DEBUG
 import AppKit
 import HotWalletKit
-import KeyVault
 import PricetagKit
 import SwiftUI
 import Synchronization
@@ -73,7 +72,7 @@ enum TestMode {
         exit(0)
     }
 
-    static func fail(_ message: String) -> Never {
+    nonisolated static func fail(_ message: String) -> Never {
         FileHandle.standardError.write(Data((message + "\n").utf8))
         exit(1)
     }
@@ -97,21 +96,54 @@ enum TestScene: String, CaseIterable {
     case mainNotUpdating = "main-not-updating"
     case mainLinkedFailed = "main-linked-failed"
     case mainCostWithheld = "main-cost-withheld"
+    case mainCAD = "main-cad"
+    case mainTransactionsCAD = "main-transactions-cad"
+    case mainDetailsCAD = "main-details-cad"
     case resolve
     case changeWallet = "change-wallet"
     case popover
     case popoverNoWallet = "popover-no-wallet"
     case popoverNotUpdating = "popover-not-updating"
+    case popoverCAD = "popover-cad"
+    case popoverHotWallet = "popover-hot-wallet"
+    case popoverHotWalletOverCap = "popover-hot-wallet-over-cap"
+    case popoverHotWalletAlarm = "popover-hot-wallet-alarm"
     case settings
+    case settingsHotWallet = "settings-hot-wallet"
+    case settingsCAD = "settings-cad"
+    case hotWalletSetup = "hot-wallet-setup"
+    case hotWalletNotProvisioned = "hot-wallet-not-provisioned"
+    case hotWalletUnreadable = "hot-wallet-unreadable"
+    case hotWallet = "hot-wallet"
+    case hotWalletNoSavings = "hot-wallet-no-savings"
+    case hotWalletNoPrice = "hot-wallet-no-price"
+    case hotWalletOverCap = "hot-wallet-over-cap"
+    case hotWalletOverCapNoSavings = "hot-wallet-over-cap-no-savings"
+    case hotWalletKeyMissing = "hot-wallet-key-missing"
+    case hotWalletAlarm = "hot-wallet-alarm"
+    case hotWalletReplacingKey = "hot-wallet-replacing-key"
+    case hotWalletReplacingKeyStuck = "hot-wallet-replacing-key-stuck"
+    case hotWalletAddSavings = "hot-wallet-add-savings"
+    case hotWalletAddSavingsFilled = "hot-wallet-add-savings-filled"
+    case hotWalletTopUp = "hot-wallet-top-up"
+    case hotWalletTopUpAtCap = "hot-wallet-top-up-at-cap"
+    case send
+    case sendKnown = "send-known"
+    case sendWaiting = "send-waiting"
+    case publishCost = "publish-cost"
+    case publishWaiting = "publish-cost-waiting"
 
     enum Chrome { case titled, none }
 
-    /// Rendering draws the inspector's text in the wrong color in dark mode, so this one only comes from a real window.
-    var needsRealWindow: Bool { self == .mainDetails }
+    /// Rendering draws the inspector's text in the wrong color in dark mode, so these only come from a real window.
+    var needsRealWindow: Bool { self == .mainDetails || self == .mainDetailsCAD }
 
     var chrome: Chrome {
         switch self {
-        case .changeWallet, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve: .none
+        case .changeWallet, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm,
+             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap,
+             .send, .sendKnown, .sendWaiting, .publishCost, .publishWaiting:
+            .none
         default: .titled
         }
     }
@@ -131,18 +163,57 @@ enum TestScene: String, CaseIterable {
         self != .mainNoWallet && self != .popoverNoWallet
     }
 
+    private var currency: CurrencyCode {
+        switch self {
+        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD: .CAD
+        default: .USD
+        }
+    }
+
+    private var hotWalletFixture: HotWalletFixture {
+        switch self {
+        case .hotWalletNotProvisioned: .notProvisioned
+        case .hotWalletUnreadable: .unreadableRecords
+        case .hotWallet, .popoverHotWallet, .settingsHotWallet, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .send, .sendKnown: .funded
+        case .sendWaiting: .waitingForTouchID
+        case .hotWalletNoSavings: .noSavings
+        case .hotWalletNoPrice: .noPrice
+        case .hotWalletOverCap, .popoverHotWalletOverCap, .hotWalletTopUpAtCap: .overCap
+        case .hotWalletOverCapNoSavings: .overCapNoSavings
+        case .hotWalletKeyMissing: .keyMissing
+        case .hotWalletAlarm, .popoverHotWalletAlarm: .alarm
+        case .hotWalletReplacingKey: .replacingKey
+        case .hotWalletReplacingKeyStuck: .replacingKeyStuck
+        default: .none
+        }
+    }
+
     func make() -> TestScreen {
         // Registered values stay in memory, so this never reads or writes anyone's settings, as long as nothing here changes one.
         let defaults = UserDefaults(suiteName: "com.benface.pricetag.mac.test-mode")!
-        defaults.register(defaults: hasWallet ? ["wallet": WalletAddress.demo] : [:])
+        var registered: [String: Any] = ["currency": currency.rawValue]
+        if hasWallet { registered["wallet"] = WalletAddress.demo }
+        if self == .sendKnown, let book = try? JSONEncoder().encode(Book().answering(TestScene.recipient, .someoneElse, focus: nil)) { registered["answers"] = book }
+        defaults.register(defaults: registered)
         let source = FixtureSource(feed: feed)
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: .milliseconds(50), unreachableDelay: .seconds(30))
         store.start()
-        // Never started, so it reads nothing, and it has nowhere to get a key from or keep anything.
-        let hotWallet = HotWallet(signer: NoKeys(), settingsStore: NoSavedSettings(), stateStore: NoSavedState(), presence: NoOneThere(), portfolioSource: { source }, costMethod: { store.method })
+        let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method })
+        // Before there's a view, which is how it'd be for anyone opening a sheet: a sheet works out what it offers when it appears.
+        let hotWalletHasRead = ReadOnce()
+        Task {
+            await hotWallet.tick()
+            await hotWallet.readHistory()
+            hotWalletHasRead.isDone = true
+        }
+        let deadline = Date.now.addingTimeInterval(5)
+        while !hotWalletHasRead.isDone {
+            guard Date.now < deadline else { TestMode.fail("This scene's hot wallet never finished reading.") }
+            RunLoop.main.run(until: .now.addingTimeInterval(0.01))
+        }
         let navigation = Navigation()
-        navigation.showsTransactions = self == .mainTransactions
-        if self == .mainDetails { navigation.target = .asset("AERO", .realized) }
+        navigation.showsTransactions = self == .mainTransactions || self == .mainTransactionsCAD
+        if self == .mainDetails || self == .mainDetailsCAD { navigation.target = .asset("AERO", .realized) }
 
         let isReady: () -> Bool = { [feed] in
             switch feed {
@@ -155,45 +226,49 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .resolve:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
-        case .main, .mainTransactions, .mainDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainCostWithheld:
+        case .main, .mainTransactions, .mainDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainCostWithheld, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
-        case .popover, .popoverNoWallet, .popoverNotUpdating:
+        case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
-        case .settings:
+        case .settings, .settingsHotWallet, .settingsCAD:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
+        case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
+            return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store)), size: CGSize(width: 560, height: 720), isReady: isReady)
+        case .hotWallet, .hotWalletNoSavings, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck:
+            // Taller than it opens, because a screenshot can't scroll to the actions and the activity at the bottom.
+            return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store)), size: CGSize(width: 560, height: 1200), isReady: isReady)
+        case .hotWalletAddSavings:
+            return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet)), isReady: isReady)
+        case .hotWalletAddSavingsFilled:
+            return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet, address: HotWalletFixture.savings.lowercased)), isReady: isReady)
+        case .hotWalletTopUp, .hotWalletTopUpAtCap:
+            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet)), isReady: isReady)
+        case .send, .sendKnown, .sendWaiting:
+            let model = SendModel(wallet: hotWallet, store: store)
+            model.token = Base.tokens.first { $0.symbol == "USDC" }!
+            model.amountText = "12.50"
+            model.addressText = TestScene.recipient
+            let isWaiting = self == .sendWaiting
+            // It never gets past the prompt, and there's no key behind it anyway.
+            if isWaiting { Task { _ = await model.send() } }
+            return TestScreen(view: AnyView(SendSheet(model: model)), isReady: { !isWaiting || model.isSending })
+        case .publishCost, .publishWaiting:
+            let draft = CostNoteDraft(wallet: "0x00000000000000000000000000000000000de301", txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
+            return TestScreen(view: AnyView(PublishCostSheet(draft: draft, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
         }
     }
+
+    private static let recipient = "0x0000000000000000000000000000000000c0ffee"
 }
 
-/// The test mode never makes, loads or signs with a key, and this is what makes sure of it.
-private struct NoKeys: Signer {
-    struct NotInTestMode: Error {}
-
-    func createKey() async throws -> EthereumAddress { throw NotInTestMode() }
-    func sign(_ transaction: UnsignedTransaction, from address: EthereumAddress) async throws -> SignedTransaction { throw NotInTestMode() }
-    func hasKey(_ address: EthereumAddress) async throws -> Bool { false }
-    func deleteKey(_ address: EthereumAddress) async throws {}
-    func addresses() async throws -> [EthereumAddress] { [] }
-}
-
-private struct NoSavedSettings: WalletSettingsStore {
-    func load() -> WalletSettings { WalletSettings() }
-    func save(_ settings: WalletSettings) {}
-}
-
-private struct NoSavedState: DeviceStateStore {
-    func load() throws -> DeviceWalletState { DeviceWalletState() }
-    func save(_ state: DeviceWalletState) throws {}
-}
-
-private struct NoOneThere: UserPresence {
-    func confirm(reason: String) async throws { throw NoKeys.NotInTestMode() }
+private final class ReadOnce {
+    var isDone = false
 }
 
 /// Stands in for the server, with the same demo wallet the tests read.
-private final class FixtureSource: PortfolioSource {
+final class FixtureSource: PortfolioSource {
     enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld }
 
     private let feed: Feed
@@ -224,11 +299,11 @@ private final class FixtureSource: PortfolioSource {
         case .serverDown: throw FetchError.unreachable
         case .stopsAnswering: if read > 1 { throw FetchError.unreachable }
         }
-        return try decode("demo-portfolio")
+        return try Self.decode(fixture("demo-portfolio", currency))
     }
 
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
-        try decode("demo-explanation")
+        try Self.decode(fixture("demo-explanation", currency))
     }
 
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
@@ -245,11 +320,15 @@ private final class FixtureSource: PortfolioSource {
 
     /// What each answer would do, as the demo's own numbers, so a card shows them in place.
     func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview] {
-        let totals = (try decode("demo-portfolio") as Portfolio).totals
+        let totals = (try Self.decode(fixture("demo-portfolio", currency)) as Portfolio).totals
         return candidates.map { _ in BookPreview(pnlMicros: totals.pnlMicros, pnlStatus: .partial, estimatedMicros: totals.estimatedMicros, unresolvedMicros: totals.unresolvedMicros, open: 4, pending: false, failed: false) }
     }
 
-    private func decode<T: Decodable>(_ name: String) throws -> T {
+    private func fixture(_ name: String, _ currency: CurrencyCode) -> String {
+        currency == .USD ? name : "\(name)-\(currency.rawValue.lowercased())"
+    }
+
+    static func decode<T: Decodable>(_ name: String) throws -> T {
         guard let url = Bundle.main.url(forResource: name, withExtension: "json") else { throw FetchError.rejected("There's no fixture called \(name).") }
         return try JSONDecoder().decode(T.self, from: Data(contentsOf: url))
     }

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import { createServer } from "node:http"
+import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
-import { describe, it } from "node:test"
+import { after, describe, it } from "node:test"
 import { ASSETS, PRICE_FEEDS, SEED_TX, type LegRow, type PricedLeg, type PriceFeed } from "@pricetag/sdk/core"
-import { datasetReader, type PriceUpdate, type Query, type Source } from "@pricetag/sdk/internal"
-import { createApi } from "../server/app.ts"
+import { datasetReader, type AmpQuery, type PriceUpdate, type Query, type Source } from "@pricetag/sdk/internal"
+import { createApi, createSource } from "../server/app.ts"
 import { AGGREGATOR_SELECTOR, warnOfNewAggregators } from "../server/feeds.ts"
 import { createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type PriceBehind } from "../server/proof.ts"
 import { ANSWER_UPDATED_TOPIC } from "../server/raw.ts"
@@ -265,7 +265,8 @@ describe("reading an update", () => {
     if (sql.includes(".price_updates")) return [{ block_num: "499990", tx_hash: TX, log_index: "7", answer: "300000000000" }]
     return []
   }
-  const proofsOver = (dataset: string | null) => {
+  const proofsOver = (name: string | null) => {
+    const dataset = name ? { name, reference: name, hash: null } : null
     const queries: string[] = []
     const query = (async (sql: string) => {
       queries.push(sql)
@@ -313,7 +314,7 @@ describe("the proof and verify routes", () => {
   const source: Source = {
     mode: "dataset",
     startBlock: LEG_BLOCK,
-    historyBlocks: null,
+    historyFrom: null,
     head: async () => ({ blockNum: LEG_BLOCK, timestamp: "2024-01-30T00:00:00.000Z" }),
     processedThrough: async (_after, head) => head,
     readWindow: async () => ({ rows: [legRow], priced: [], gasUnknown: [] }),
@@ -380,6 +381,204 @@ describe("the proof and verify routes", () => {
     assert.match(failed.body.source[0] as string, /couldn't be found/)
     assert.equal((await bad.get<{ error: string }>("verify")).status, 502)
     bad.close()
+  })
+})
+
+describe("a version tag that moves after the wallet was pinned", () => {
+  const LEG_BLOCK = blockNum + 40
+  const TAG = "a/pricetag@0.1.0"
+  const FORK_TAG = "a/cautious@0.1.0"
+  const HASH_A = "a".repeat(64)
+  const HASH_FORK = "c".repeat(64)
+  const PIN_A = `a/pricetag@${HASH_A}`
+  const PIN_FORK = `a/cautious@${HASH_FORK}`
+  const TX_B = "bb".repeat(32)
+  const ANSWER_B = (BigInt(ANSWER) * 2n).toString()
+  const CAUTIOUS_ANSWER = ((BigInt(ANSWER) * 99n) / 100n).toString()
+
+  type Tables = { reference?: Record<string, unknown> | null; update?: Record<string, unknown> | null }
+  const referenceOf = (eth: string, ethTx: string | null) => ({ block_num: String(LEG_BLOCK), eth_usd: eth, usdc_usd: "100000000", eth_tx: ethTx, usdc_tx: null })
+  const updateRow = (txHash: string, logIndex: number, answer: string) => ({ block_num: String(blockNum), tx_hash: txHash, log_index: String(logIndex), answer })
+  /** Version A's rows are the real update's. The tag now resolves to B, whose rows name another update and price. */
+  const A: Tables = { reference: referenceOf(ANSWER, tx.tx_hash), update: updateRow(tx.tx_hash, log.log_index, ANSWER) }
+  const B: Tables = { reference: referenceOf(ANSWER_B, TX_B), update: updateRow(TX_B, 9, ANSWER_B) }
+  const FORK: Tables = { reference: referenceOf(CAUTIOUS_ANSWER, tx.tx_hash) }
+  const SEEDED: Tables = { reference: referenceOf(ANSWER, SEED_TX.slice(2)), update: updateRow(SEED_TX.slice(2), 0, ANSWER) }
+
+  /** An Amp where a name reads whatever it resolves to, through an alias if the request has one. */
+  function amp(versions: Record<string, Tables>) {
+    const reads: { dataset: string; table: string }[] = []
+    let aliasedCalls = 0
+    const queryWith = (aliases: Record<string, string>) =>
+      (async (sql: string) => {
+        const [, name, table] = /FROM "([^"]+)"\.(\w+)/.exec(sql) as unknown as [string, string, string]
+        const dataset = aliases[name] ?? name
+        reads.push({ dataset, table })
+        const rows = versions[dataset]
+        if (table === "reference_prices") return rows?.reference ? [rows.reference] : []
+        if (table === "price_updates") return rows?.update ? [rows.update] : []
+        return []
+      }) as Query
+    const query = Object.assign(queryWith({}), {
+      aliased: (aliases: Record<string, string>) => {
+        aliasedCalls++
+        return queryWith(aliases)
+      },
+    }) as AmpQuery
+    return { query, reads, aliasedCalls: () => aliasedCalls }
+  }
+
+  // Nothing answers these, so a fingerprint that shows up didn't come from asking the admin API.
+  const OFFLINE = { AMP_QUERY_URL: "http://127.0.0.1:1", AMP_ADMIN_URL: "http://127.0.0.1:1", BASE_RPC_URL: "http://127.0.0.1:1", PRICETAG_BASE_DATASET: "a/base@1", PRICETAG_START_BLOCK: "5" }
+  const FORKED = { ...OFFLINE, PRICETAG_DATASET: TAG, PRICETAG_DATASET_HASH: HASH_A, PRICETAG_FORK_DATASET: FORK_TAG, PRICETAG_FORK_HASH: HASH_FORK }
+  const forked = (versions: Record<string, Tables> = { [PIN_A]: A, [PIN_FORK]: FORK, [TAG]: B }) => {
+    const server = amp(versions)
+    const created = createSource(FORKED, server.query)!
+    return { ...server, created, proofs: created.proofs }
+  }
+  const proofReads = (reads: { dataset: string; table: string }[]) => reads.filter(({ table }) => table === "reference_prices" || table === "price_updates")
+
+  it("reads the wallet's version for the update, not the tag's", async () => {
+    const { proofs, reads } = forked()
+    const found = await proofs.priceBehind(feed, LEG_BLOCK)
+    assert.deepEqual(found, { feed, update })
+    assert.deepEqual(proofReads(reads), [{ dataset: PIN_A, table: "reference_prices" }, { dataset: PIN_A, table: "price_updates" }])
+  })
+
+  it("reads the same version the wallet's prices come from", async () => {
+    const { created, proofs } = forked()
+    const [wallet] = await created.source.readReferences([LEG_BLOCK])
+    const found = await proofs.priceBehind(feed, LEG_BLOCK)
+    assert.equal(wallet?.ethUsd, ANSWER)
+    assert.equal(wallet?.ethTx, found?.update?.tx_hash)
+  })
+
+  it("shows the wallet's fingerprint for both rules, with the admin API down", async () => {
+    const { proofs, created } = forked()
+    const cautious = created.rules![1]!.rule
+    assert.deepEqual(await proofs.datasets(), [
+      { title: "Prices and activity", name: TAG, hash: HASH_A },
+      { title: "Base's blocks", name: "a/base@1", hash: null },
+    ])
+    assert.deepEqual(await proofs.datasets(cautious), [
+      { title: "Prices, by Cautious ETH", name: FORK_TAG, hash: HASH_FORK },
+      { title: "Activity, and the prices that rule starts from", name: TAG, hash: HASH_A },
+      { title: "Base's blocks", name: "a/base@1", hash: null },
+    ])
+  })
+
+  it("asks the admin API only about what isn't pinned, and shows no moved tag's fingerprint", async () => {
+    const asked: string[] = []
+    const dataset = { name: TAG, reference: "pricetag", hash: HASH_A }
+    const proofs = createProofs(amp({}).query, { baseDataset: "a/base@1", dataset, readDeposits: async () => new Map(), readManifestHash: async (name) => (asked.push(name), "b".repeat(64)), retryPauseMs: 0 })
+    assert.deepEqual((await proofs.datasets()).map(({ hash }) => hash), [HASH_A, "b".repeat(64)])
+    assert.deepEqual(asked, ["a/base@1"])
+  })
+
+  it("leaves the update unfound when the wallet's version doesn't have it, even if the tag's does", async () => {
+    const missingUpdate = forked({ [PIN_A]: { ...A, update: null }, [TAG]: B })
+    assert.deepEqual(await missingUpdate.proofs.priceBehind(feed, LEG_BLOCK), { feed, update: null })
+    assert.ok(proofReads(missingUpdate.reads).every(({ dataset }) => dataset === PIN_A))
+
+    const missingReference = forked({ [PIN_A]: {}, [TAG]: B })
+    assert.deepEqual(await missingReference.proofs.priceBehind(feed, LEG_BLOCK), { feed, update: null })
+    assert.deepEqual(proofReads(missingReference.reads), [{ dataset: PIN_A, table: "reference_prices" }])
+  })
+
+  it("keeps a price the pinned version read when it started as just that", async () => {
+    const { proofs } = forked({ [PIN_A]: SEEDED, [TAG]: B })
+    assert.ok(isSeed((await proofs.priceBehind(feed, LEG_BLOCK))?.update))
+  })
+
+  describe("without a fork", () => {
+    it("reads the tag with no header, and doesn't show a hash left over from a hosted Amp", async () => {
+      const { query, reads, aliasedCalls } = amp({ [TAG]: A, [PIN_A]: B })
+      const created = createSource({ ...OFFLINE, PRICETAG_DATASET: TAG, PRICETAG_DATASET_HASH: HASH_A }, query)!
+      assert.deepEqual(await created.proofs.priceBehind(feed, LEG_BLOCK), { feed, update })
+      assert.ok(proofReads(reads).every(({ dataset }) => dataset === TAG))
+      assert.equal(aliasedCalls(), 0)
+      assert.deepEqual((await created.proofs.datasets()).map(({ name, hash }) => [name, hash]), [[TAG, null], ["a/base@1", null]])
+    })
+
+    it("still works out a local Amp's started-up price through the tag", async () => {
+      const { query } = amp({ [TAG]: SEEDED })
+      const created = createSource({ ...OFFLINE, PRICETAG_DATASET: TAG }, query)!
+      assert.ok(isSeed((await created.proofs.priceBehind(feed, LEG_BLOCK))?.update))
+    })
+
+    it("has no update and only the base dataset when reading raw", async () => {
+      const { query, reads } = amp({})
+      const created = createSource(OFFLINE, query)!
+      assert.equal(await created.proofs.priceBehind(feed, LEG_BLOCK), null)
+      assert.deepEqual(proofReads(reads), [])
+      assert.deepEqual((await created.proofs.datasets()).map(({ name }) => name), ["a/base@1"])
+    })
+  })
+
+  describe("through the routes", () => {
+    const ME = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    const legRow: LegRow = { block_num: LEG_BLOCK, timestamp: "2024-01-30T00:00:00.000Z", tx_hash: "0xfeed", tx_index: 1, log_index: 0, token: "0x0000000000000000000000000000000000000000", account: ME, side: "credit", amount: "1000000000000000000", kind: "eth" }
+    const sourceAt = (answer: string): Source => ({
+      mode: "dataset",
+      startBlock: LEG_BLOCK,
+      historyFrom: null,
+      head: async () => ({ blockNum: LEG_BLOCK, timestamp: "2024-01-30T00:00:00.000Z" }),
+      processedThrough: async (_after, head) => head,
+      readWindow: async () => ({ rows: [legRow], priced: [], gasUnknown: [] }),
+      readReferences: async (blocks) => blocks.map((block) => ({ blockNum: block, ethUsd: answer, usdcUsd: "100000000" })),
+      readLatestReference: async () => ({ blockNum: LEG_BLOCK, ethUsd: answer, usdcUsd: "100000000" }),
+      readBalances: async (_address, block) => ({ blockNum: block, amounts: { ...Object.fromEntries(ASSETS.map((asset) => [asset, "0"])), ETH: "1000000000000000000" } }),
+      readEthBalances: async () => new Map(),
+    })
+
+    const servers: Server[] = []
+    after(() => servers.forEach((server) => server.close()))
+
+    /** The real pin and dataset reads, with this block's feed and rows, and the wallet's prices from each rule's version. */
+    async function serveForked(versions?: Record<string, Tables>) {
+      const { created, proofs, reads } = forked(versions)
+      const [market, cautious] = created.rules!
+      const api = createApi({}, {
+        ...created,
+        source: sourceAt(ANSWER),
+        rules: [{ rule: market!.rule, source: sourceAt(ANSWER) }, { rule: cautious!.rule, source: sourceAt(CAUTIOUS_ANSWER) }],
+        proofs: { ...proofs, priceBehind: (_feed, at) => proofs.priceBehind(feed, at), readBlock: async () => read },
+      })
+      const server = createServer((req, res) => void api(req, res))
+      servers.push(server)
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/portfolio/${ME}`
+      const get = async <T>(path: string, rule: string) => (await (await fetch(`${base}/${path}?leg=${encodeURIComponent("0xfeed:ETH")}&rule=${rule}`)).json()) as T
+      return { get, reads, cautiousId: cautious!.rule.id, marketId: market!.rule.id }
+    }
+    const updateCheckOf = (verification: VerificationResponse) => verification.checks.find(({ title }) => title === "Chainlink's update")
+
+    it("names A's update and fingerprint and checks A's log, by either rule", async () => {
+      const { get, reads, marketId, cautiousId } = await serveForked()
+      for (const rule of [marketId, cautiousId]) {
+        const proof = await get<ProofResponse>("proof", rule)
+        assert.match(proof.source[0] as string, /in log #2/)
+        assert.ok(proof.links.some(({ url }) => url.includes(`/tx/0x${tx.tx_hash}#`)))
+        assert.ok(!JSON.stringify(proof).includes(TX_B))
+        assert.equal(proof.datasets.find(({ name }) => name === TAG)?.hash, HASH_A)
+        assert.equal(updateCheckOf(await get<VerificationResponse>("verify", rule))?.status, "passed")
+      }
+      assert.ok(proofReads(reads).length > 0 && proofReads(reads).every(({ dataset }) => dataset === PIN_A))
+    })
+
+    it("still leaves the rule's own arithmetic to its dataset", async () => {
+      const { get, cautiousId } = await serveForked()
+      const verification = await get<VerificationResponse>("verify", cautiousId)
+      assert.match(updateCheckOf(verification)?.detail as string, /the price this rule starts from.*the rule's own dataset sets the price shown here/)
+    })
+
+    it("says the price isn't confirmed when A has no update, whatever the tag has", async () => {
+      const { get, marketId, cautiousId } = await serveForked({ [PIN_A]: { ...A, update: null }, [TAG]: B })
+      for (const rule of [marketId, cautiousId]) {
+        assert.equal(updateCheckOf(await get<VerificationResponse>("verify", rule))?.status, "unchecked")
+        assert.match((await get<ProofResponse>("proof", rule)).source[0] as string, /couldn't be found/)
+      }
+    })
   })
 })
 

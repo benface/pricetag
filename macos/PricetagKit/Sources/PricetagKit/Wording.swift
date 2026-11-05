@@ -83,7 +83,7 @@ public enum Wording {
         let opening = openingUnread
             ? "What the wallet held before that couldn't all be read yet, so some amounts may not be full balances."
             : "What the wallet held before that is included, at an unknown cost."
-        return "Covers about \(Format.duration(blocks: span.toBlock - span.fromBlock)) of history and \(trackedTokens) tokens plus ETH. \(opening) Other tokens aren't counted."
+        return "Covers about \(Format.duration(ms: BlockTime.msBetween(span.fromBlock, span.toBlock))) of history and \(trackedTokens) tokens plus ETH. \(opening) Other tokens aren't counted."
     }
 
     public static func feesUnknown(_ count: Int) -> String {
@@ -131,12 +131,13 @@ public enum Wording {
     public static func catchingUp(_ portfolio: Portfolio) -> String? {
         if !portfolio.progress.started { return notStarted }
         if portfolio.progress.behindBlocks == 0 { return nil }
-        return behind(blocks: portfolio.progress.behindBlocks)
+        let head = portfolio.latest.blockNum
+        return behind(ms: BlockTime.msBetween(head - portfolio.progress.behindBlocks, head))
     }
 
-    static func behind(blocks: Int) -> String {
+    static func behind(ms: Int) -> String {
         // Under half a minute would round to "0 min", which reads as not behind at all.
-        "The data is still catching up, \(blocks < 15 ? "less than a minute" : "about \(Format.duration(blocks: blocks))") behind the network. Anything newer isn't in these numbers yet."
+        "The data is still catching up, \(ms < 30_000 ? "less than a minute" : "about \(Format.duration(ms: ms))") behind the network. Anything newer isn't in these numbers yet."
     }
 
     public static func stale(lastUpdate: String) -> String {

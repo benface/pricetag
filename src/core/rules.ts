@@ -9,7 +9,7 @@ export const CAUTIOUS_RULE_ID = "cautious-eth"
 
 export const RULE_TEXT: Record<string, Pick<PricingRule, "name" | "summary">> = {
   [MARKET_RULE_ID]: { name: "Market price", summary: "ETH counts at what Chainlink's price feed says at each block." },
-  [CAUTIOUS_RULE_ID]: { name: "Cautious ETH", summary: "ETH counts at 1% below Chainlink's price, closer to what you'd get if you sold it. Every other price is the same." },
+  [CAUTIOUS_RULE_ID]: { name: "Cautious ETH", summary: "ETH counts at 1% below Chainlink's price, closer to what you'd get if you sold it. A token priced against ETH follows it, and every other price is the same." },
 }
 
 /** One number by each rule, in the wallet's main currency, except `usdPrice`. A null is unavailable, not zero. */
@@ -50,7 +50,7 @@ export type RuleComparison = {
 export const differenceOf = (a: string | null, b: string | null): string | null => (a === null || b === null ? null : (BigInt(b) - BigInt(a)).toString())
 
 export function whySentence(changedTxs: number): string {
-  const same = "Both read the same transactions, balances and exchange rates at the same block, so the only difference is what ETH is worth, which also sets what ETH held counts for."
+  const same = "Both read the same transactions, balances and exchange rates at the same block, so the only difference is what ETH is worth, which also sets what ETH held counts for and what a token priced against ETH is worth."
   if (changedTxs === 0) return `No transaction's cost, sale value or network fee here depends on what ETH is worth, so those stay the same. ${same}`
   return `${changedTxs === 1 ? "1 transaction's" : `${changedTxs.toLocaleString("en-US")} transactions'`} cost, sale value or network fee changed. ${same}`
 }

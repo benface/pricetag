@@ -21,7 +21,7 @@
 // elsewhere, and CRA's crypto guide doesn't count moving between your own wallets as a disposition, so that keeps what they
 // first paid, which we can't see. Those stay estimates in every country, and the report says why.
 
-import { foldPositions, formatDuration, isAddress, normalizeAddress, shortHash, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
+import { foldPositions, formatDuration, isAddress, msBetweenBlocks, normalizeAddress, shortHash, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { rateSource } from "./explain.ts"
@@ -364,7 +364,7 @@ function walletWarnings(source: Source, named: boolean): string[] {
 
 function coverageNote({ wallet }: Source, named: boolean): string {
   const { fromBlock, toBlock } = wallet.coverage
-  const span = toBlock >= fromBlock ? ` (about ${formatDuration(toBlock - fromBlock)})` : ""
+  const span = toBlock >= fromBlock ? ` (about ${formatDuration(msBetweenBlocks(fromBlock, toBlock))})` : ""
   return `${named ? `${shortHash(wallet.address)} covers` : "Covers"} blocks ${fromBlock.toLocaleString("en-US")} to ${toBlock.toLocaleString("en-US")}${span}. Anything earlier isn't here, and tokens off the tracked list aren't counted.`
 }
 
