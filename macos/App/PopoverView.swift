@@ -338,7 +338,10 @@ struct PopoverView: View {
     }
 
     private func open(_ target: ExplainTarget?) {
-        if let target { navigation.target = target }
+        if let target {
+            navigation.section = .overview
+            navigation.target = target
+        }
         dismiss()
         openWindow(id: WindowID.main)
         DockPresence.bringForward()

@@ -28,8 +28,8 @@ enum DockPresence {
     }
 
     private static func mark(_ window: NSWindow) {
-        // Not a panel or a fixed-size window like Settings, for which full screen makes no sense.
-        guard window.styleMask.contains(.titled), window.styleMask.contains(.resizable) else { return }
+        // The main window only. Full screen makes no sense for Settings or a site's request, and a request has to stay in front of what it's about.
+        guard window.identifier?.rawValue.hasPrefix(WindowID.main) == true else { return }
         window.collectionBehavior.remove(.fullScreenNone)
         window.collectionBehavior.insert(.fullScreenPrimary)
     }
