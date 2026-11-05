@@ -427,7 +427,8 @@ export function pnlOverTime(
   }
   legs.forEach((leg, i) => {
     states.set(leg.asset, applyLeg(states.get(leg.asset) ?? emptyPosition(method, leg.decimals), leg))
-    if (leg.opening || legs[i + 1]?.txHash === leg.txHash) return
+    // ETH that arrived with no transaction to name has nothing to click, and the next point counts it.
+    if (leg.opening || !leg.txHash || legs[i + 1]?.txHash === leg.txHash) return
     points.push({ blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure((asset) => markPrice(leg.blockNum, asset)) })
   })
   if (latest && (states.size > 0 || unconfirmed.size > 0)) {

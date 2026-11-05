@@ -4,6 +4,7 @@ allowBuilds:
   '@parcel/watcher': set this to true or false
   core-js-pure: set this to true or false
   msgpackr-extract: set this to true or false
+  secp256k1: set this to true or false
 # Dependencies are an attack surface here: nothing runs at install time unless listed.
 onlyBuiltDependencies: []
 strictDepBuilds: false

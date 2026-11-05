@@ -194,6 +194,14 @@ describe("taxRows", () => {
     const a = walletOf(A, [buy(10, 1n, 1000), leg(move, -E18, { kind: "transfer" })])
     const b = walletOf(B, [leg(move, E18, { kind: "transfer" }), sell(30, 1n, 2500)])
 
+    it("pooled, ETH found from a balance and named after the move's transaction doesn't stop it being a move", () => {
+      const found = leg(move, E18 / 10n, { id: `unseen:${move}:ETH`, kind: "transfer", parts: [{ token: "0x0", account: B, side: "credit", amount: (E18 / 10n).toString(), kind: "unseen_eth", logIndex: 0 }] })
+      const withFound = walletOf(B, [found, leg(move, E18, { kind: "transfer" }), sell(30, 1n, 2500)])
+      const rows = taxRows([a, withFound], { method: "average", scope: "pooled" })
+      assert.ok(!rows.some((row) => row.type === "Sent"))
+      assert.ok(rows.every((row) => row.costMicros !== usd(0)))
+    })
+
     it("pooled, a move between them isn't a sale, and the cost goes along", () => {
       const rows = taxRows([a, b], { method: "average", scope: "pooled" })
       assert.deepEqual(

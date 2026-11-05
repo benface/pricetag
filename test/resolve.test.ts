@@ -376,9 +376,10 @@ describe("the cost of an incoming leg", () => {
       })
 
       describe("as a wallet's refreshed, from what's actually read", () => {
-        const start = [...send(10, "0x1", STRANGER, A, E18, ETH_ADDRESS), ...send(20, "0x2", A, B, E18, ETH_ADDRESS)]
-        // Half an ETH that no leg explains shows up at block 25, and never goes away.
-        const heldByA = (at: number) => (at < 10 ? 0n : at < 20 ? E18 : at < 25 ? 0n : E18 / 2n)
+        const start = [...send(10, "0x1", STRANGER, A, 3n * (E18 / 2n), ETH_ADDRESS), ...send(20, "0x2", A, B, E18, ETH_ADDRESS)]
+        const addsUp = (at: number) => (at < 10 ? 0n : at < 20 ? 3n * (E18 / 2n) : E18 / 2n)
+        // Half an ETH leaves at block 25 with no leg to explain it. ETH that arrives this way gets found and counted, and this can't be.
+        const heldByA = (at: number) => (at < 25 ? addsUp(at) : 0n)
         const gasAt = (block: number, tx: string) => move(block, tx, A, "debit", 1000n, null, ETH_ADDRESS)
         const gasRow = (block: number, tx: string): LegRow => ({ ...gasAt(block, tx), kind: "gas" })
         const claimRow = (block: number, tx: string): LegRow => ({ ...move(block, tx, A, "credit", 1000n, null, ETH_ADDRESS), kind: "unwrap" })
@@ -446,26 +447,31 @@ describe("the cost of an incoming leg", () => {
 
         it("doesn't ask at all when newer gas is all that's wrong", async () => {
           const unknown = (head: number) => (head >= 40 ? [{ tx_hash: "0x9", block_num: 40 }] : [])
-          assert.deepEqual(await askedAt([30, 45], { gasUnknown: unknown, balance: (block) => (block < 10 ? 0n : block < 20 ? E18 : 0n) - (block >= 40 ? 1000n : 0n) }), [[], []])
+          assert.deepEqual(await askedAt([30, 45], { gasUnknown: unknown, balance: (block) => addsUp(block) - (block >= 40 ? 1000n : 0n) }), [[], []])
         })
 
         it("stops asking when its block is replaced and the new balance adds up", async () => {
           const unknown = (head: number) => (head >= 40 ? [{ tx_hash: "0x9", block_num: 40 }] : [])
-          // Until head 45, block 30 said it held half an ETH. After a reorg, it held none, and the legs add up.
-          const balance = (block: number, head: number) => (head >= 45 ? (block < 10 ? 0n : block < 20 ? E18 : 0n) : heldByA(block))
+          // Until head 45, block 30 said it held none. After a reorg, it held half an ETH, and the legs add up.
+          const balance = (block: number, head: number) => (head >= 45 ? addsUp(block) : heldByA(block))
           assert.deepEqual(await askedAt([30, 45], { gasUnknown: unknown, balance }), [["cost"], []])
         })
 
         it("stops asking when corrected legs add up to what it read", async () => {
           const unknown = (head: number) => (head >= 40 ? [{ tx_hash: "0x9", block_num: 40 }] : [])
-          const corrected = (head: number) => (head >= 45 ? send(25, "0x7", STRANGER, A, E18 / 2n, ETH_ADDRESS).filter((r) => r.account === A) : [])
+          const corrected = (head: number) => (head >= 45 ? send(25, "0x7", A, STRANGER, E18 / 2n, ETH_ADDRESS).filter((r) => r.account === A) : [])
           assert.deepEqual(await askedAt([30, 45], { gasUnknown: unknown, rows: corrected }), [["cost"], []])
         })
 
         it("keeps what it read when its block can't be read again, until it can", async () => {
           const unknown = (head: number) => (head >= 40 ? [{ tx_hash: "0x9", block_num: 40 }] : [])
-          const balance = (block: number, head: number) => (head === 45 && block === 30 ? null : head >= 46 ? (block < 10 ? 0n : block < 20 ? E18 : 0n) : heldByA(block))
+          const balance = (block: number, head: number) => (head === 45 && block === 30 ? null : head >= 46 ? addsUp(block) : heldByA(block))
           assert.deepEqual(await askedAt([30, 45, 46], { gasUnknown: unknown, balance }), [["cost"], ["cost"], []])
+        })
+
+        it("stops asking once ETH that arrived with no leg has been found and counted", async () => {
+          const arrives = (block: number) => addsUp(block) + (block >= 25 ? E18 / 2n : 0n)
+          assert.deepEqual(await askedAt([30], { balance: arrives }), [[]])
         })
 
         it("recovers from a failed read with newer gas missing", async () => {

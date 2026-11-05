@@ -30,6 +30,8 @@ public struct WalletSettings: Codable, Equatable, Sendable {
     public private(set) var sweepDestination: EthereumAddress?
     public var sweepsRealizedGains: Bool
     public var rpcURL: URL
+    /// Other accounts on a device that's already here. They only link costs: nothing's ever swept to them, and they aren't savings.
+    public private(set) var deviceAccounts: [EthereumAddress]
 
     public init() {
         capDollars = Int(Self.suggestedCap / Money.dollar)
@@ -37,6 +39,26 @@ public struct WalletSettings: Codable, Equatable, Sendable {
         sweepDestination = nil
         sweepsRealizedGains = true
         rpcURL = Base.publicRPC
+        deviceAccounts = []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case capDollars, coldWallets, sweepDestination, sweepsRealizedGains, rpcURL, deviceAccounts
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        capDollars = try container.decode(Int.self, forKey: .capDollars)
+        coldWallets = try container.decode([ColdWallet].self, forKey: .coldWallets)
+        sweepDestination = try container.decodeIfPresent(EthereumAddress.self, forKey: .sweepDestination)
+        sweepsRealizedGains = try container.decode(Bool.self, forKey: .sweepsRealizedGains)
+        rpcURL = try container.decode(URL.self, forKey: .rpcURL)
+        // Settings saved before this existed don't have it. Failing to read them would lose the savings wallets, so it can't be required.
+        deviceAccounts = try container.decodeIfPresent([EthereumAddress].self, forKey: .deviceAccounts) ?? []
+    }
+
+    public mutating func addDeviceAccounts(_ addresses: [EthereumAddress]) {
+        for address in addresses where !deviceAccounts.contains(address) { deviceAccounts.append(address) }
     }
 
     public var capCeiling: UInt128 { coldWallets.isEmpty ? Self.capCeilingWithoutCold : Self.capCeiling }
