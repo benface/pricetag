@@ -43,7 +43,7 @@ The numbers move on their own: `GET /api/events` says when there's a new block, 
 
 ### Spending money and savings
 
-The Mac app has a capped hot wallet, this Mac's "spending money", for everyday use with no recovery phrase. Anything above the cap goes to a hardware wallet, your "savings", by itself while the app runs. Open it from the popover or with ⇧⌘M, or create it from the first screen, which then shows it. It's an unreviewed hackathon build, for small funds only. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what it protects against and what it doesn't.
+The Mac app has a capped hot wallet, this Mac's "spending money", for everyday use with no recovery phrase. Anything above the cap goes to a hardware wallet, your "savings", by itself while the app runs. Open it from the popover or with ⇧⌘M, or create it from the first screen, which then shows it. If it's showing, the window moves to the new address when its key is replaced, and back to the first screen when it's deleted. It's an unreviewed hackathon build, for small funds only. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what it protects against and what it doesn't.
 
 - **The key** comes from `SecRandomCopyBytes`, is wrapped by the Secure Enclave, and stays in a device-only Keychain item. It can't be restored or exported: lose the Mac and you lose what's on it, up to the cap.
 - **Adding a savings wallet** is guided, with steps for a Ledger or a Keystone, and pasting for anything else. A Ledger goes through your browser and a Keystone through the Mac's camera. See [the hardware wallet notes](HARDWARE-WALLETS.md).
@@ -276,7 +276,7 @@ What a pass doesn't show, which the interface also says:
 ## Known gaps
 
 - Sending isn't in the app yet, so "Is this yours?" at send time and linking every account from one device or recovery phrase wait for that. Neither can the app write a note yet, only read one.
-- Exchange names are only as good as the list in `src/core/senders.ts`. Each is checked on Basescan, but Coinbase withdrawals on Base mostly come from addresses without a public name, so most won't say "From a Coinbase address". An imported history still matches them.
+- Exchange names are only as good as the list in `src/core/senders.ts`. Each comes from a Basescan name tag or a confirmed withdrawal. A withdrawal from an address not on the list won't say where it came from, and that includes some from Coinbase and any from another exchange. An imported history still matches them.
 - A cost entered in CAD can't be shown in USD for a wallet read in USD, because that read has no rates. It shows as unresolved there, and never as the wrong number.
 - Only the allowlist in `packages/sdk/src/tokens.ts` gets a position and a price. A transaction that also moves another token is never valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. Internal ETH isn't seen without traces, so it can't trigger this.
 - Market prices need the Pricetag dataset, so reading the raw dataset, a past transfer of a token with no oracle reads has no price.
