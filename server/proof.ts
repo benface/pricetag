@@ -1,7 +1,7 @@
 // What's behind one leg's price, and the check of the block it's in. The words are here because the clients only show them.
 // The check only reaches the raw dataset's rows: the block's header covers those, and nothing downstream of them.
 
-import { PRICE_FEEDS, SEED_TX, TOKENS, WETH_ADDRESS, answerToMicros, formatAmount, formatPrice, ptPrice, tokenByAddress, type CurrencyCode, type LegPart, type PriceFeed, type PricedLeg } from "@pricetag/sdk/core"
+import { PRICE_FEEDS, SEED_TX, TOKENS, WETH_ADDRESS, answerToMicros, formatAmount, formatPrice, ptPrice, tokenByAddress, type CurrencyCode, type LegPart, type PriceFeed, type PricedLeg, type SettledCredit } from "@pricetag/sdk/core"
 import { datasetReader, describeError, hexOf, type PriceUpdate, type Query } from "@pricetag/sdk/internal"
 import type { CheckStatus, ProofCheck, ProofDataset, ProofLink, ProofResponse, VerificationResponse } from "../src/core/api.ts"
 import type { PricingRule } from "../src/core/rules.ts"
@@ -108,12 +108,42 @@ function describePart(part: LegPart): string {
 
 const isFee = (part: LegPart) => part.kind === "gas" || part.kind === "l1_fee"
 
+/** ETH this transaction says reached its sender from unwrapping. No log says that: `Withdrawal` only names who unwrapped. */
+const isUnwrapCredit = (part: LegPart) => part.kind === "unwrap" && part.side === "credit"
+
+const describeWithdrawal = ({ logIndex, amount }: SettledCredit["withdrawals"][number]) => `Log #${logIndex}: ${formatAmount(amount, 18)} ETH unwrapped`
+
+const describeReceived = ({ received }: SettledCredit) => `ETH received: ${formatAmount(received, 18)} ETH, worked out from this wallet's balance before and after this block`
+
+/** What the logs behind this leg record. A settled credit's own row isn't one, since the balance can have changed its amount. */
+function loggedLines(leg: PricedLeg, legs: readonly PricedLeg[]): string[] {
+  const parts = partsBehind(leg, legs).filter((part) => !isFee(part) && !(leg.settledCredit && isUnwrapCredit(part)))
+  // A wallet unwrapping for itself has a row on each side of one log.
+  return [...new Set([...parts.map(describePart), ...(leg.settledCredit?.withdrawals.map(describeWithdrawal) ?? [])])]
+}
+
+/** What checking the block can't say about the ETH this leg's unwrapping brought in, or null when it brought in none. */
+function creditNote(leg: PricedLeg, legs: readonly PricedLeg[]): string | null {
+  const limit = "A log records what was unwrapped, not who ended up with the ETH."
+  if (leg.settledCredit) {
+    const { received } = leg.settledCredit
+    const none = BigInt(received) === 0n
+    const claim = none ? "That none of it reached this wallet" : `That ${formatAmount(received, 18)} ETH reached this wallet`
+    const price = leg.priceSource !== "swap" ? "" : none ? " This price counts none of it." : " This price is worked out using that amount."
+    return `${limit} ${claim} comes from its balance before and after this block, which this check doesn't read.${price}`
+  }
+  return partsBehind(leg, legs).some(isUnwrapCredit) ? `${limit} How much of it reached this wallet isn't confirmed.` : null
+}
+
 /** Whether this row's account comes from the transaction's stored sender. A log or a recipient is in what's hashed, but the sender is only signed for. */
 const reliesOnSender = (part: LegPart) => isFee(part) || (part.kind === "eth" && part.side === "debit") || (part.kind === "unwrap" && part.side === "credit")
 
 /** What checking this leg's block does and doesn't show. Nothing here can be left out for a passing result to read honestly. */
 function scopeOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: CurrencyCode, behind: PriceBehind | null): string[] {
   const hasEthereumFee = leg.parts.some((part) => part.kind === "l1_fee")
+  const note = creditNote(leg, legs)
+  const amounts = note ? "what the logs record" : "the amounts"
+  const exchanged = note ? "what the logs record" : "the amounts exchanged"
   const scope = [
     "Checking the block shows that the data Amp stored matches the block's header. It doesn't show that the header is on Base's real chain, or that the dataset's calculations ran correctly. A dataset's fingerprint only identifies its recipe.",
   ]
@@ -123,13 +153,14 @@ function scopeOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: CurrencyC
   const notFound = seed ? `this dataset started after Chainlink's last update, so its price comes from calling a contract, and ${called}` : "the update behind it couldn't be found"
   if (update && !seed) {
     const block = update.block_num.toLocaleString("en-US")
-    const covered = leg.priceSource === "oracle" ? `It covers this price, the transaction and ${leg.kind === "gas" ? "the fee paid to Base" : "the amounts"}` : "It covers the amounts exchanged and Chainlink's price, used to value them"
+    const covered = leg.priceSource === "oracle" ? `It covers this price, the transaction and ${leg.kind === "gas" ? "the fee paid to Base" : amounts}` : `It covers ${exchanged} and Chainlink's price, used to value them`
     scope.push(`${covered}: Chainlink publishes each update as a log, so block ${block} is checked too, and its log has to say ${behind?.byRule ? "the price this rule starts from" : "this price"}.`)
     scope.push(`That shows what Chainlink published. It doesn't show that Chainlink's number is right. That this update was still the latest at block ${leg.blockNum.toLocaleString("en-US")} comes from the dataset's calculations.`)
   } else {
-    if (leg.priceSource === "oracle") scope.push(`It doesn't cover this price: ${behind ? notFound : `Chainlink's price comes from calling a contract, and ${called}`}. It covers the transaction and ${leg.kind === "gas" ? "the fee paid to Base" : "the amounts"}.`)
-    if (leg.priceSource === "swap") scope.push(`It covers the amounts exchanged. It doesn't cover Chainlink's price, used to value them, because ${behind ? notFound : "block headers don't record calls to a contract"}.`)
+    if (leg.priceSource === "oracle") scope.push(`It doesn't cover this price: ${behind ? notFound : `Chainlink's price comes from calling a contract, and ${called}`}. It covers the transaction and ${leg.kind === "gas" ? "the fee paid to Base" : amounts}.`)
+    if (leg.priceSource === "swap") scope.push(`It covers ${exchanged}. It doesn't cover Chainlink's price, used to value them, because ${behind ? notFound : "block headers don't record calls to a contract"}.`)
   }
+  if (note) scope.push(note)
   if (hasEthereumFee) scope.push("It doesn't cover the fee paid to Ethereum, which only Base's receipts have.")
   if (partsBehind(leg, legs).some(reliesOnSender)) scope.push("It doesn't confirm who sent this transaction: the sender Amp stored isn't checked against the transaction's signature.")
   if (currency !== "USD") scope.push(`It doesn't cover the USD to ${currency} rate, which also comes from calling Chainlink's contract.`)
@@ -143,7 +174,7 @@ export function proofOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: Cu
     blockNum: leg.blockNum,
     txHash: leg.txHash,
     source: ruleNote ? [...source, ruleNote] : source,
-    movements: partsBehind(leg, legs).map(describePart),
+    movements: [...partsBehind(leg, legs).filter(isFee).map(describePart), ...loggedLines(leg, legs), ...(leg.settledCredit ? [describeReceived(leg.settledCredit)] : [])],
     links: [{ title: "This transaction's logs on Basescan", url: `${BASESCAN}/tx/${leg.txHash}#eventlog` }, ...links],
     datasets,
     scope: scopeOf(leg, legs, currency, behind),
@@ -175,21 +206,26 @@ function gasFrom(tx: TxRow, { block, txs }: BlockData): bigint | null {
   )
 }
 
+const logOf = (logIndex: number, tx: TxRow, { logs }: BlockData) => logs.find((candidate) => candidate.log_index === logIndex && candidate.tx_index === tx.tx_index)
+
+const loggedAmount = (log: LogRow) => BigInt(`0x${log.data.slice(0, 64) || "0"}`)
+
+const isWithdrawal = (log: LogRow) => hexOf(log.address) === hexOf(WETH_ADDRESS) && log.topics[0] === WITHDRAWAL_TOPIC
+
 /** Whether the checked rows say what a row of this leg says they do. An Ethereum fee can't be compared, because no checked row has it. */
 function partMatches(part: LegPart, tx: TxRow, data: BlockData): boolean {
-  const { logs } = data
   const account = hexOf(part.account)
   if (part.kind === "gas") return hexOf(tx.from) === account && gasFrom(tx, data) === BigInt(part.amount || "-1")
   if (part.kind === "l1_fee") return hexOf(tx.from) === account
   if (part.kind === "eth") return tx.status && tx.value === part.amount && hexOf((part.side === "debit" ? tx.from : tx.to) ?? "") === account
 
-  const log = logs.find((candidate) => candidate.log_index === part.logIndex && candidate.tx_index === tx.tx_index)
-  if (!log || !part.amount || BigInt(`0x${log.data.slice(0, 64) || "0"}`) !== BigInt(part.amount)) return false
+  const log = logOf(part.logIndex, tx, data)
+  if (!log || !part.amount || loggedAmount(log) !== BigInt(part.amount)) return false
   const weth = hexOf(WETH_ADDRESS)
   if (part.kind === "erc20") return hexOf(log.address) === hexOf(part.token) && log.topics[0] === TRANSFER_TOPIC && log.topics[part.side === "debit" ? 1 : 2] === padded(account)
   if (part.kind === "wrap") return hexOf(log.address) === weth && log.topics[0] === DEPOSIT_TOPIC && log.topics[1] === padded(account)
   if (part.kind === "unwrap") {
-    if (hexOf(log.address) !== weth || log.topics[0] !== WITHDRAWAL_TOPIC) return false
+    if (!isWithdrawal(log)) return false
     // ETH arriving from an unwrap is credited to whoever sent the transaction, since the log only names who unwrapped.
     return part.side === "debit" ? log.topics[1] === padded(account) : hexOf(tx.from) === account
   }
@@ -201,14 +237,31 @@ function activityCheck(leg: PricedLeg, legs: readonly PricedLeg[], data: BlockDa
   const tx = data.txs.find((candidate) => candidate.tx_hash === hexOf(leg.txHash))
   if (!tx) return { title, status: "failed", detail: "This transaction isn't in the checked data." }
   const parts = partsBehind(leg, legs)
-  const wrong = parts.filter((part) => !partMatches(part, tx, data))
-  if (wrong.length > 0) return { title, status: "failed", detail: `The checked data disagrees with ${wrong.map(describePart).join(", and with ")}.` }
+  const settled = leg.settledCredit
+  const wrong = new Set<string>()
+  for (const part of parts) {
+    // A settled credit's amount is the balance's, so what's compared is who it went to, and below, the logs as they're recorded.
+    if (settled && isUnwrapCredit(part)) {
+      if (hexOf(tx.from) !== hexOf(part.account)) wrong.add(describeReceived(settled))
+    } else if (!partMatches(part, tx, data)) wrong.add(describePart(part))
+  }
+  if (settled) {
+    for (const withdrawal of settled.withdrawals) {
+      const log = logOf(withdrawal.logIndex, tx, data)
+      if (!log || !isWithdrawal(log) || loggedAmount(log) !== BigInt(withdrawal.amount)) wrong.add(describeWithdrawal(withdrawal))
+    }
+    // Settling never gives more than the logs record.
+    if (BigInt(settled.received) > settled.withdrawals.reduce((sum, { amount }) => sum + BigInt(amount), 0n)) wrong.add(describeReceived(settled))
+  }
+  if (wrong.size > 0) return { title, status: "failed", detail: `The checked data disagrees with ${[...wrong].join(", and with ")}.` }
 
-  const movements = parts.filter((part) => !isFee(part)).length
+  const movements = loggedLines(leg, legs).length
   const sentences = ["This transaction is in the checked data"]
   if (movements > 0) sentences[0] += `, and ${movements === 1 ? "its movement matches" : `its ${movements} movements match`}, amounts included.`
   else if (parts.some((part) => part.kind === "gas")) sentences[0] += ", and the fee paid to Base matches its gas use and the block's base fee."
   else sentences[0] += "."
+  const note = creditNote(leg, legs)
+  if (note) sentences.push(note)
   if (parts.some((part) => part.kind === "l1_fee")) sentences.push("The fee paid to Ethereum wasn't compared.")
   if (parts.some(reliesOnSender)) sentences.push("Its sender is as Amp stored it, and isn't checked against the signature.")
   return { title, status: "passed", detail: sentences.join(" ") }
