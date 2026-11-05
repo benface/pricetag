@@ -28,7 +28,7 @@ struct RenderTests {
     @Test func drawsARealViewInLightAndDark() throws {
         let portfolio = try demoPortfolio()
         let view = VStack(alignment: .leading) {
-            PnlHeadline(portfolio: portfolio, isLive: true, size: 30) {}
+            PortfolioSummary(portfolio: portfolio, isLive: true, size: 30) { _ in }
             // A control AppKit draws, which ImageRenderer would leave out.
             Picker("Cost method", selection: .constant(CostMethod.average)) {
                 ForEach(CostMethod.allCases) { Text($0.label).tag($0) }

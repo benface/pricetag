@@ -62,16 +62,12 @@ struct PopoverView: View {
             case (_, let portfolio?) where portfolio.isEmpty:
                 Text("No activity for this wallet in this time.").foregroundStyle(.secondary)
             case (_, let portfolio?):
-                PnlHeadline(portfolio: portfolio, isLive: isLive, size: 30, onOpen: { open(.total(.pnl)) }, onResolve: {
+                PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 30) { open(.total($0)) }
+                PnlCaveat(portfolio: portfolio) {
                     navigation.resolve()
                     open(nil)
-                })
-                // Two by two, because four across would cut off anything over $9,999.
-                LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 8) {
-                    ForEach(portfolio.totalStats, id: \.metric) { stat in
-                        TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { open(.total(stat.metric)) }
-                    }
                 }
+                PnlCaveats(portfolio: portfolio)
             case (.reading, nil):
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)

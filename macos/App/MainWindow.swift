@@ -268,19 +268,12 @@ struct MainWindow: View {
     }
 
     private func summary(_ portfolio: Portfolio) -> some View {
-        HStack(alignment: .top, spacing: 32) {
-            PnlHeadline(portfolio: portfolio, isLive: isLive, size: 40, onOpen: { navigation.target = .total(.pnl) }, onResolve: { navigation.resolve() })
+        VStack(alignment: .leading, spacing: 8) {
+            PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 40) { navigation.target = .total($0) }
                 // Short of height, its amounts would shrink and cut off instead of the page scrolling.
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(alignment: .top, spacing: 26) {
-                ForEach(portfolio.totalStats, id: \.metric) { stat in
-                    TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { navigation.target = .total(stat.metric) }
-                        .frame(minWidth: 88, alignment: .leading)
-                }
-            }
-            // The headline's caveats can wrap, and these can't.
-            .fixedSize()
+            PnlCaveat(portfolio: portfolio) { navigation.resolve() }
+            PnlCaveats(portfolio: portfolio)
         }
     }
 }

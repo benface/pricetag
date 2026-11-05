@@ -1,19 +1,18 @@
 import SwiftUI
 
-/// The total, and what it leaves out, right under it.
-public struct PnlHeadline: View {
+/// The top of a wallet: what it's worth, then how it's done, then the sums behind that. An investor comes to see what they have,
+/// and a tiny loss on a new wallet shouldn't be the biggest thing on screen. It wraps when there's no room for one line.
+public struct PortfolioSummary: View {
     let portfolio: Portfolio
     let isLive: Bool
     let size: CGFloat
-    let onOpen: () -> Void
-    let onResolve: () -> Void
+    let onOpen: (TotalMetric) -> Void
 
-    public init(portfolio: Portfolio, isLive: Bool, size: CGFloat, onOpen: @escaping () -> Void, onResolve: @escaping () -> Void = {}) {
+    public init(portfolio: Portfolio, isLive: Bool, size: CGFloat, onOpen: @escaping (TotalMetric) -> Void) {
         self.portfolio = portfolio
         self.isLive = isLive
         self.size = size
         self.onOpen = onOpen
-        self.onResolve = onResolve
     }
 
     private var isEstimate: Bool { isPositive(portfolio.totals.estimatedMicros) }
@@ -23,42 +22,112 @@ public struct PnlHeadline: View {
         portfolio.pnlStatus == .unavailable ? nil : portfolio.totals.pnlMicros
     }
 
-    private func signed(_ micros: String) -> String {
-        Format.estimate(Format.signedMoney(micros, portfolio.currency), isEstimate)
+    private var value: String? {
+        portfolio.totals.valueMicros.map { Format.estimate(Format.money($0, portfolio.currency), portfolio.totals.estimated.value) }
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("Total PnL · \(portfolio.currency.rawValue)").font(.caption).foregroundStyle(.secondary).help(Wording.pnlHelp)
-            Button(action: onOpen) {
-                Group {
-                    if let pnl {
-                        LiveNumber(signed(pnl), tone: isLive ? Tone(signed: pnl) : .neutral)
-                    } else {
-                        WarningText(Wording.pnlUnavailable)
-                    }
-                }
-                .font(.system(size: pnl != nil ? size : size * 0.7, weight: .semibold, design: .rounded))
-                // One line whatever it says: a big number shrinks to fit instead of pushing everything down.
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
-                .opacity(isLive ? 1 : 0.55)
-                .animation(.easeOut(duration: 0.15), value: isLive)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .lastTextBaseline, spacing: 28) {
+                headline
+                Spacer(minLength: 0)
+                sums
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                headline
+                sums
+            }
+        }
+    }
+
+    private var headline: some View {
+        HStack(alignment: .lastTextBaseline, spacing: 28) {
+            valueStat
+            pnlStat
+        }
+    }
+
+    private var sums: some View {
+        HStack(alignment: .lastTextBaseline, spacing: 24) {
+            ForEach(portfolio.totalStats, id: \.metric) { stat in
+                TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { onOpen(stat.metric) }
+            }
+        }
+    }
+
+    private var valueStat: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            statLabel("Value · \(portfolio.currency.rawValue)", isPartial: value != nil && portfolio.totals.coverage.value.isPartial)
+            Button { onOpen(.value) } label: {
+                big(value, size: size, tone: .neutral)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("Total PnL, \(pnl.map(signed) ?? Wording.pnlUnavailable)")
+            .accessibilityLabel("Value, \(value ?? "unavailable")")
             .accessibilityHint("Shows the activity behind this number")
-            HStack(spacing: 8) {
-                if let caveat = Wording.headlineCaveat(portfolio.totals, portfolio.currency) {
-                    Text(caveat).font(.callout.weight(.medium)).foregroundStyle(Tone.warning.style).monospacedDigit()
-                }
-                if !portfolio.questions.isEmpty {
-                    Button("Resolve \(portfolio.questions.count)", action: onResolve)
-                        .controlSize(.small)
-                        .help("Answer what the app can't work out by itself")
-                }
+        }
+    }
+
+    private var pnlStat: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            statLabel("Total PnL", isPartial: portfolio.pnlStatus == .partial)
+                .help(Wording.pnlHelp)
+            Button { onOpen(.pnl) } label: {
+                big(pnl.map { Format.estimate(Format.signedMoney($0, portfolio.currency), isEstimate) }, size: size * 0.62, tone: isLive ? Tone(signed: pnl) : .neutral)
             }
-            PnlCaveats(portfolio: portfolio)
+            .buttonStyle(NumberButtonStyle())
+            .accessibilityLabel("Total PnL, \(pnl.map { Format.estimate(Format.signedMoney($0, portfolio.currency), isEstimate) } ?? Wording.pnlUnavailable)\(portfolio.pnlStatus == .partial ? ", partial" : "")")
+            .accessibilityHint("Shows the activity behind this number")
+        }
+    }
+
+    private func statLabel(_ text: String, isPartial: Bool) -> some View {
+        HStack(spacing: 4) {
+            Text(text)
+            if isPartial { Text("partial").foregroundStyle(.tertiary) }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    /// One line whatever it says: a big number shrinks to fit instead of pushing everything down. What's unknown stays a word, never $0.
+    private func big(_ text: String?, size: CGFloat, tone: Tone) -> some View {
+        Group {
+            if let text {
+                LiveNumber(text, tone: tone)
+                    .font(.system(size: size, weight: .semibold))
+            } else {
+                Text("Unavailable")
+                    .font(.system(size: max(size * 0.62, 17), weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.5)
+        .opacity(isLive ? 1 : 0.55)
+        .animation(.easeOut(duration: 0.15), value: isLive)
+    }
+}
+
+/// How much of the total is unknown or estimated, and a way to answer what can be answered.
+public struct PnlCaveat: View {
+    let portfolio: Portfolio
+    let onResolve: () -> Void
+
+    public init(portfolio: Portfolio, onResolve: @escaping () -> Void) {
+        self.portfolio = portfolio
+        self.onResolve = onResolve
+    }
+
+    public var body: some View {
+        HStack(spacing: 8) {
+            if let caveat = Wording.headlineCaveat(portfolio.totals, portfolio.currency) {
+                Text(caveat).font(.callout.weight(.medium)).foregroundStyle(Tone.warning.style).monospacedDigit()
+            }
+            if !portfolio.questions.isEmpty {
+                Button("Resolve \(portfolio.questions.count)", action: onResolve)
+                    .controlSize(.small)
+                    .help("Answer what the app can't work out by itself")
+            }
         }
     }
 }
@@ -122,7 +191,7 @@ public struct TotalStat: View {
             HStack(spacing: 4) {
                 Text(label).foregroundStyle(.secondary).help(help ?? "")
                 if text != nil, coverage?.isPartial == true {
-                    Text("partial").foregroundStyle(Tone.warning.style)
+                    Text("partial").foregroundStyle(.tertiary)
                 }
             }
             .font(.caption)
@@ -131,7 +200,7 @@ public struct TotalStat: View {
                     if let text {
                         LiveNumber(text)
                     } else {
-                        WarningText("Unavailable")
+                        Text("Unavailable").foregroundStyle(.secondary)
                     }
                 }
                 .font(.body.weight(.medium))
@@ -146,12 +215,11 @@ public struct TotalStat: View {
 }
 
 extension Portfolio {
-    /// The four sums beside the total, in reading order.
+    /// The sums beside the headline, in reading order.
     public var totalStats: [(metric: TotalMetric, label: String, help: String?, text: String?, coverage: SumCoverage?)] {
         let money = { Format.money($0, currency) }
         let signed = { Format.signedMoney($0, currency) }
         return [
-            (.value, "Value", nil, totals.valueMicros.map { Format.estimate(money($0), totals.estimated.value) }, totals.coverage.value),
             (.realized, "Realized", Wording.realizedHelp, totals.realizedMicros.map { Format.estimate(signed($0), totals.estimated.realized) }, totals.coverage.realized),
             (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map { Format.estimate(signed($0), totals.estimated.unrealized) }, totals.coverage.unrealized),
             (.gas, Wording.networkFees, nil, totals.gasMicros.map(money), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
