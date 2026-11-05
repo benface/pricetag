@@ -1134,6 +1134,24 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(texts(rig.wallet).first?.contains("over the cap, with nowhere to sweep it") == true)
     }
 
+    @Test func aGainWithNoColdWalletStillSaysToAddOne() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(10)]), withCold: false, portfolio: .success(portfolio(realized: "12000000")))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(rig.wallet.plan?.blockers == [.noDestination])
+        #expect(rig.wallet.plan?.excessUsdMicros == 0)
+        #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .USD)])
+        #expect(rig.wallet.needsAttention)
+    }
+
+    @Test func overTheCapWithAGainAndNoColdWalletSaysSoOnce() async throws {
+        let rig = await Rig(over, withCold: false, portfolio: .success(portfolio(realized: "12000000")))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(texts(rig.wallet).count == 1)
+        #expect(texts(rig.wallet).first?.contains("over the cap, with nowhere to sweep it") == true)
+    }
+
     @Test func tokensWithNoGasSaySoEvenUnderTheCap() async throws {
         let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(10)]))
         await rig.wallet.tick()

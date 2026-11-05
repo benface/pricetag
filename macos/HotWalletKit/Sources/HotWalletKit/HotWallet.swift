@@ -430,7 +430,7 @@ public final class HotWallet {
         if snapshot != nil, snapshot?.ethUsdMicros == nil { notices.append(.init(.warning, HotWalletWording.noEthPrice, short: HotWalletWording.shortNoEthPrice)) }
         if !unpricedSymbols.isEmpty { notices.append(.init(.warning, HotWalletWording.noPrice(unpricedSymbols), short: HotWalletWording.shortNoPrice(unpricedSymbols))) }
         // Being over the cap with nowhere to sweep already says to add one.
-        if settings.coldWallets.isEmpty, plan?.blockers.contains(.noDestination) != true { notices.append(.init(.warning, HotWalletWording.addSavings(beside: mainCurrency()), short: HotWalletWording.shortNoSavings)) }
+        if settings.coldWallets.isEmpty, plan?.excessUsdMicros ?? 0 == 0 { notices.append(.init(.warning, HotWalletWording.addSavings(beside: mainCurrency()), short: HotWalletWording.shortNoSavings)) }
         if ampProblem { notices.append(.init(.info, HotWalletWording.cantCheckAmp)) }
         return notices
     }
