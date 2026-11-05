@@ -9,9 +9,26 @@ import Synchronization
 /// What `macos/shot.sh` runs: one screen of the app, from fixtures, without ever taking focus. See `macos/TESTING.md`.
 /// None of this is in a release build.
 enum TestMode {
-    private static func value(after flag: String) -> String? {
+    private nonisolated static func value(after flag: String) -> String? {
         CommandLine.arguments.firstIndex(of: flag).flatMap { CommandLine.arguments.indices.contains($0 + 1) ? CommandLine.arguments[$0 + 1] : nil }
     }
+
+    /// Real numbers in place of fixtures, from `shot.sh --live`. It only reads: the hot wallet still has no key, and can't send.
+    nonisolated struct Live: Sendable {
+        let server: URL
+        let wallet: String
+        /// What the scenes that open the details open them on.
+        let asset: String
+    }
+
+    nonisolated static let live: Live? = value(after: "--live-server").flatMap(URL.init(string:)).flatMap { server in
+        value(after: "--live-wallet").map { Live(server: server, wallet: $0.lowercased(), asset: value(after: "--live-asset") ?? "ETH") }
+    }
+    static let liveCurrency = value(after: "--live-currency").flatMap(CurrencyCode.init(rawValue:))
+    /// A wallet's first read can take minutes.
+    static let readyTimeout: TimeInterval = live == nil ? 5 : 240
+    /// Live scenes load more after they appear, like the details and the tax report, and nothing here can tell when that's done.
+    static let settleTime = value(after: "--settle").flatMap(TimeInterval.init) ?? (live == nil ? 0.5 : 6)
 
     static let isRunning = CommandLine.arguments.contains("--test-scene")
 
@@ -27,7 +44,7 @@ enum TestMode {
         let screen = scene.make()
         if let output = value(after: "--output") {
             do {
-                try OffscreenRenderer.png(of: screen.view, size: screen.size, dark: dark, isReady: screen.isReady).write(to: URL(filePath: output))
+                try OffscreenRenderer.png(of: screen.view, size: screen.size, dark: dark, timeout: readyTimeout, settle: settleTime, isReady: screen.isReady).write(to: URL(filePath: output))
             } catch {
                 fail("Couldn't render \(name): \(error)")
             }
@@ -59,12 +76,12 @@ enum TestMode {
         window.setFrameOrigin(.zero)
         window.orderBack(nil)
 
-        let deadline = Date.now.addingTimeInterval(5)
+        let deadline = Date.now.addingTimeInterval(readyTimeout)
         while !screen.isReady() {
             guard Date.now < deadline else { fail("This scene's fixtures never arrived.") }
             RunLoop.main.run(until: .now.addingTimeInterval(0.05))
         }
-        RunLoop.main.run(until: .now.addingTimeInterval(0.8))
+        RunLoop.main.run(until: .now.addingTimeInterval(settleTime + 0.3))
         if screen.size == nil { window.setContentSize(controller.view.fittingSize) }
         RunLoop.main.run(until: .now.addingTimeInterval(0.2))
         if NSApp.isActive { fail("This became the active app, which it must never do.") }
@@ -358,13 +375,13 @@ enum TestScene: String, CaseIterable {
     func make() -> TestScreen {
         // Registered values stay in memory, so this never reads or writes anyone's settings, as long as nothing here changes one.
         let defaults = UserDefaults(suiteName: "com.benface.pricetag.mac.test-mode")!
-        var registered: [String: Any] = ["currency": currency.rawValue]
-        if hasWallet { registered["wallet"] = usesDemoWallet ? WalletAddress.demo : TestScene.emptyWallet }
+        var registered: [String: Any] = ["currency": (TestMode.liveCurrency ?? currency).rawValue]
+        if hasWallet { registered["wallet"] = TestMode.live?.wallet ?? (usesDemoWallet ? WalletAddress.demo : TestScene.emptyWallet) }
         if self == .sendKnown, let book = try? JSONEncoder().encode(Book().answering(TestScene.recipient, .someoneElse, focus: nil)) { registered["answers"] = book }
         if self == .resolveAnsweredWallet, let book = try? JSONEncoder().encode(Book().answering(TestScene.answeredWallet, .mine, focus: nil)) { registered["answers"] = book }
         defaults.register(defaults: registered)
-        let source = FixtureSource(feed: feed)
-        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: .milliseconds(50), unreachableDelay: .seconds(30))
+        let source: any PortfolioSource = TestMode.live.map { PricetagClient(serverURL: $0.server) } ?? FixtureSource(feed: feed)
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: TestMode.live == nil ? .milliseconds(50) : .seconds(30), unreachableDelay: .seconds(30))
         store.start()
         let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method }, mainCurrency: { store.currency })
         // Before there's a view, which is how it'd be for anyone opening a sheet: a sheet works out what it offers when it appears.
@@ -376,7 +393,7 @@ enum TestScene: String, CaseIterable {
         }
         if self != .hotWalletTopUpFirstRead {
             Task { await readHotWallet() }
-            let deadline = Date.now.addingTimeInterval(5)
+            let deadline = Date.now.addingTimeInterval(TestMode.readyTimeout)
             while !hotWalletHasRead.isDone {
                 guard Date.now < deadline else { TestMode.fail("This scene's hot wallet never finished reading.") }
                 RunLoop.main.run(until: .now.addingTimeInterval(0.01))
@@ -389,7 +406,7 @@ enum TestScene: String, CaseIterable {
         if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
         // Once the window has its size, as when someone clicks. Before that it's too small for the details to fit beside the section.
         let opened: ExplainTarget? = switch self {
-        case .mainDetails, .mainDetailsCAD: .asset("AERO", .realized)
+        case .mainDetails, .mainDetailsCAD: .asset(TestMode.live?.asset ?? "AERO", .realized)
         case .mainHoldDetails: .holdComparison
         case .mainFirstRunDetails: .asset("ETH", .onchain)
         default: nil
@@ -397,7 +414,8 @@ enum TestScene: String, CaseIterable {
         if let opened { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { navigation.target = opened } }
 
         let isReady: () -> Bool = { [feed] in
-            switch feed {
+            if TestMode.live != nil { return store.feed == .noWallet || store.portfolio != nil }
+            return switch feed {
             case .demo, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .smallAmounts, .longHistory, .answeredWallet, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
@@ -524,6 +542,7 @@ enum TestScene: String, CaseIterable {
             let draft = CostNoteDraft(wallet: "0x00000000000000000000000000000000000de301", txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
             return TestScreen(view: AnyView(PublishCostSheet(draft: draft, currency: currency, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
         case .ruleComparison, .ruleComparisonCAD:
+            if TestMode.live != nil { return TestScreen(view: AnyView(RuleComparisonSheet(store: store)), isReady: isReady) }
             guard let comparison: RuleComparison = try? FixtureSource.decode(self == .ruleComparison ? "demo-rule-comparison" : "demo-rule-comparison-cad") else { TestMode.fail("There's no comparison fixture.") }
             return TestScreen(view: AnyView(RuleComparisonTable(comparison: comparison).padding(20).frame(width: 720).background(.background)), isReady: { true })
         case .siteConnect, .siteTransaction, .siteTransactionCAD, .siteUnlimitedApproval, .siteTypedPermit:

@@ -11,6 +11,10 @@ Usage:
   shot.sh list                       Every scene. "window" ones always use a real window.
 
 --window  Captures a real window behind the desktop, instead of rendering without one. Shows the toolbar, materials and glass.
+--live <server> <wallet>  Real numbers from that server and the real node, in place of fixtures. Read-only: there's still no key.
+--currency <code>  With --live, reads in this currency.
+--asset <symbol>   With --live, what the details open on. ETH by default.
+--settle <seconds> With --live, how long to wait for what a scene loads after it appears. 6 by default.
 USAGE
   exit 64
 }
@@ -32,12 +36,30 @@ if [ "$scene" != list ]; then
 fi
 dark=NO
 window=NO
-for flag in "$@"; do
-  case $flag in
+# Handed on to the test mode as they are, so none of them can have spaces.
+live=
+while [ $# -gt 0 ]; do
+  case $1 in
     --dark) dark=YES ;;
     --window) window=YES ;;
+    --live)
+      [ $# -ge 3 ] || usage
+      live="$live --live-server $2 --live-wallet $3"
+      shift 2
+      ;;
+    --currency | --asset)
+      [ $# -ge 2 ] || usage
+      live="$live --live-${1#--} $2"
+      shift
+      ;;
+    --settle)
+      [ $# -ge 2 ] || usage
+      live="$live --settle $2"
+      shift
+      ;;
     *) usage ;;
   esac
+  shift
 done
 
 # Without the sandbox, there's no container for macOS to stop the launch and ask about when a build's signature changes.
@@ -77,7 +99,8 @@ front_app() {
 
 render() { # scene appearance output
   # Only when it fails, because macOS logs noise here that means nothing.
-  "$binary" --test-scene "$1" --appearance "$2" --output "$run/shot.png" 2>"$run/stderr" || {
+  # shellcheck disable=SC2086
+  "$binary" --test-scene "$1" --appearance "$2" --output "$run/shot.png" $live 2>"$run/stderr" || {
     cat "$run/stderr" >&2
     exit 1
   }
@@ -87,11 +110,12 @@ render() { # scene appearance output
 capture_window() { # scene appearance output
   : >"$run/stdout"
   : >"$run/stderr"
-  open -g -j -n --stdout "$run/stdout" --stderr "$run/stderr" "$run/$name.app" --args --test-scene "$1" --appearance "$2"
+  open -g -j -n --stdout "$run/stdout" --stderr "$run/stderr" "$run/$name.app" --args --test-scene "$1" --appearance "$2" $live
   tries=0
   until grep -q '^WINDOW ' "$run/stdout"; do
     tries=$((tries + 1))
-    if [ "$tries" -ge 100 ]; then
+    # A real wallet's first read can take minutes.
+    if [ "$tries" -ge "$([ -n "$live" ] && echo 2500 || echo 100)" ]; then
       echo "The test window for $1 never appeared. $(cat "$run/stderr")" >&2
       exit 1
     fi
