@@ -31,7 +31,7 @@ public struct PlannedTransfer: Equatable, Sendable, Identifiable {
 
 public struct SweepPlan: Equatable, Sendable {
     public enum Blocker: Hashable, Sendable {
-        /// Over the cap, and nowhere to sweep to.
+        /// Over the cap or holding a realized gain, and nowhere to sweep to.
         case noDestination
         /// Tokens that need to move, without the ETH to pay for it.
         case notEnoughGas
