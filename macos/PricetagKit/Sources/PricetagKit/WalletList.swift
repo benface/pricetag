@@ -49,17 +49,20 @@ public struct NamedWallet: Equatable, Sendable {
 
 /// What the user can do with a wallet here, which is what they most need to know about what they're looking at.
 public enum WalletKind: Equatable, Sendable {
+    /// Every wallet that's yours, as one.
+    case allYours
     case spendingMoney, savings, yours, watching, demo
 
     public var isOwn: Bool {
         switch self {
-        case .spendingMoney, .savings, .yours: true
+        case .allYours, .spendingMoney, .savings, .yours: true
         case .watching, .demo: false
         }
     }
 
     public var label: String {
         switch self {
+        case .allYours: WalletEntry.allYoursTitle
         case .spendingMoney: "Spending Money"
         case .savings: "Savings"
         case .yours: "Yours"
@@ -80,19 +83,30 @@ public struct WalletEntry: Identifiable, Equatable, Sendable {
     /// Under Recent, so it falls off the list by itself unless it's kept.
     public var isRecent = false
 
-    public init(address: String, name: String?, kind: WalletKind, isReplacedKey: Bool = false, isNewKey: Bool = false, isRecent: Bool = false) {
+    public init(address: String, name: String?, kind: WalletKind, isReplacedKey: Bool = false, isNewKey: Bool = false, isRecent: Bool = false, walletCount: Int = 0) {
         self.address = address
         self.name = name
         self.kind = kind
         self.isReplacedKey = isReplacedKey
         self.isNewKey = isNewKey
         self.isRecent = isRecent
+        self.walletCount = walletCount
     }
 
     public var id: String { address }
 
+    public static let allYoursTitle = "All Yours"
+
+    /// Every wallet in `yours`, as one. It has no address of its own, so it can't be renamed, removed or sent to.
+    static func allYours(count: Int) -> WalletEntry {
+        WalletEntry(address: WalletAddress.allYours, name: allYoursTitle, kind: .allYours, walletCount: count)
+    }
+
+    /// How many wallets it adds up, for All Yours.
+    public var walletCount = 0
+
     public var shortAddress: String? {
-        kind == .demo ? nil : Format.shortHash(address)
+        kind == .demo || kind == .allYours ? nil : Format.shortHash(address)
     }
 
     public var title: String {
@@ -108,6 +122,7 @@ public struct WalletEntry: Identifiable, Equatable, Sendable {
 
     /// The row's second line: what kind it is and its address, leaving out whichever the title or section already says.
     public var detail: String {
+        if kind == .allYours { return Wording.walletCount(walletCount) }
         let isUnderWatching = kind == .watching && name != nil
         let kindText = kindLabel == title || isUnderWatching ? nil : kindLabel
         let addressText = shortAddress == title ? nil : shortAddress
@@ -116,12 +131,13 @@ public struct WalletEntry: Identifiable, Equatable, Sendable {
 
     /// The same in a list with no sections to say what kind it is.
     public var pickDetail: String {
+        if kind == .allYours { return Wording.walletCount(walletCount) }
         let kindText = kindLabel == title ? nil : kindLabel
         let addressText = shortAddress == title ? nil : shortAddress
         return [kindText, addressText].compactMap(\.self).joined(separator: " · ")
     }
 
-    public var canRename: Bool { kind != .spendingMoney && kind != .demo }
+    public var canRename: Bool { kind != .spendingMoney && kind != .demo && kind != .allYours }
     /// Spending money holds a key and a savings wallet takes sweeps, so neither is only an entry in a list.
     public var canRemove: Bool { (kind == .yours && !isNewKey) || kind == .watching }
     public var canMoveToYours: Bool { kind == .watching }
@@ -132,6 +148,8 @@ public struct WalletEntry: Identifiable, Equatable, Sendable {
 
 /// Every wallet the switcher offers, in the order it offers them. Each address appears once, as the most it is to the user.
 public struct WalletList: Equatable, Sendable {
+    /// Every wallet in `yours` as one, when there's more than one to add up.
+    public let allYours: WalletEntry?
     public let yours: [WalletEntry]
     public let watching: [WalletEntry]
     public let recent: [WalletEntry]
@@ -148,6 +166,7 @@ public struct WalletList: Equatable, Sendable {
         let named = Set(yours.map(\.address))
         yours += linked.filter { !named.contains($0) && ($0 == current || !hidden.contains($0)) }.map { WalletEntry(address: $0, name: savedNames[$0], kind: .yours, isReplacedKey: replacedKeys.contains($0), isNewKey: $0 == newKey) }
         self.yours = Self.arranged(yours, by: order)
+        allYours = self.yours.count >= 2 || current == WalletAddress.allYours ? WalletEntry.allYours(count: self.yours.count) : nil
 
         let own = Set(linked + yours.map(\.address))
         let others = saved.filter { !own.contains($0.address) && $0.address != WalletAddress.demo }
@@ -160,14 +179,22 @@ public struct WalletList: Equatable, Sendable {
             .sorted { $0.lastSeen > $1.lastSeen }
             .prefix(SavedWallet.recentLimit)
             .map { WalletEntry(address: $0.address, name: nil, kind: .watching, isRecent: true) }
-        if let current, current != WalletAddress.demo, !own.contains(current), !others.contains(where: { $0.address == current }) {
+        if let current, current != WalletAddress.demo, !WalletAddress.isAllYours(current), !own.contains(current), !others.contains(where: { $0.address == current }) {
             recent.insert(WalletEntry(address: current, name: nil, kind: .watching, isRecent: true), at: 0)
         }
         self.recent = recent
         demo = offersDemo || current == WalletAddress.demo ? WalletEntry(address: WalletAddress.demo, name: nil, kind: .demo) : nil
     }
 
-    public var all: [WalletEntry] { yours + watching + recent + (demo.map { [$0] } ?? []) }
+    public var all: [WalletEntry] { (allYours.map { [$0] } ?? []) + yours + watching + recent + (demo.map { [$0] } ?? []) }
+
+    /// What All Yours adds up: every wallet listed under Yours.
+    public var allYoursAddresses: [String] { yours.map(\.address) }
+
+    /// What each wallet is called here, for saying which wallet something is in.
+    public var names: [String: String] {
+        Dictionary((yours + watching + recent).map { ($0.address, $0.title) }, uniquingKeysWith: { first, _ in first })
+    }
 
     /// What an address field can offer, before a flow takes out what it doesn't permit. The demo has no real address, and its wallets aren't anyone's.
     public var pickable: [WalletEntry] {

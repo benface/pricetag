@@ -89,6 +89,9 @@ export function describeTransaction(legs: readonly PricedLeg[], currency: Curren
   return `Network fee of ${formatMoney(fees.reduce((sum, leg) => sum + worth(BigInt(leg.delta.replace("-", "")), BigInt(leg.priceMicros as string), leg.decimals), 0n), currency)}`
 }
 
+/** A transaction that moved something from one of your wallets to another. `legs` are what arrived. */
+export const movedBetweenSentence = (legs: readonly PricedLeg[]) => `Moved ${movedAmounts(legs)} between your wallets`
+
 export function priceSourceLabel(source: PriceSource): string {
   return { oracle: "market price feed", swap: "from this exchange", market: "market price" }[source]
 }

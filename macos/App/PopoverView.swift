@@ -40,6 +40,7 @@ struct PopoverView: View {
             footer
         }
         .environment(\.updatingNote, store.updatingNote)
+        .environment(\.walletNames, store.walletList(hotWallet: hotWallet).names)
         .frame(width: 320)
         .background(.regularMaterial)
         .focusable()

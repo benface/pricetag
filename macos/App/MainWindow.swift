@@ -59,6 +59,8 @@ struct MainWindow: View {
                 .inspector(isPresented: inspectorBinding) { inspector }
         }
         .frame(minWidth: Self.minimumSize.width, minHeight: Self.minimumSize.height)
+        // What each wallet is called, wherever All Yours says which wallet something is in.
+        .environment(\.walletNames, store.walletList(hotWallet: hotWallet).names)
         // Only for the details opening and closing. It doesn't reach anything else that changes at another moment.
         .motion(Motion.panel, value: navigation.target == nil)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { newWidth in
@@ -173,7 +175,8 @@ struct MainWindow: View {
                 Button("Buy", systemImage: "plus") { navigation.isBuying = true }
                     // A plus on its own could mean adding anything.
                     .labelStyle(.titleAndIcon)
-                    .help("Buy crypto")
+                    // With every wallet showing, it says which one it's for.
+                    .help(WalletAddress.isAllYours(store.address) ? "Buy crypto for \(HotWalletWording.title)" : "Buy crypto")
             }
         }
         // In a narrow window Buy's label takes its room, and pushing either into the overflow menu would hide Buy. ⌘R and the View menu still refresh.
@@ -359,7 +362,7 @@ struct MainWindow: View {
             if portfolio.transactions.isEmpty {
                 ContentUnavailableView("No Transactions Yet", systemImage: "list.bullet", description: Text("They'll show up here as they happen."))
             } else {
-                TransactionsTable(transactions: portfolio.transactions, currency: portfolio.currency, isLive: isLive, target: $navigation.target)
+                TransactionsTable(transactions: portfolio.transactions, currency: portfolio.currency, isLive: isLive, showsWallets: portfolio.isAllYours, target: $navigation.target)
             }
         }
     }
@@ -373,6 +376,32 @@ struct MainWindow: View {
         if portfolio.mode == .demo {
             Notice(.info, Wording.demo)
         }
+        if portfolio.isAllYours {
+            allYoursNotices(portfolio)
+        } else {
+            linkedNotices(portfolio)
+        }
+    }
+
+    /// Wallets that aren't in All Yours' numbers yet, by name, since the numbers are only theirs once they are.
+    @ViewBuilder
+    private func allYoursNotices(_ portfolio: Portfolio) -> some View {
+        let names = store.walletList(hotWallet: hotWallet).names
+        if !portfolio.linkedFailed.isEmpty {
+            HStack(spacing: 8) {
+                Notice(.warning, Wording.allYoursFailed(portfolio.linkedFailed.map(names.walletName)))
+                Button("Try Again") { store.refresh() }
+            }
+            .arrives()
+        }
+        if !portfolio.linkedReading.isEmpty {
+            Notice(.info, Wording.allYoursReading(portfolio.linkedReading.map(names.walletName)))
+                .arrives()
+        }
+    }
+
+    @ViewBuilder
+    private func linkedNotices(_ portfolio: Portfolio) -> some View {
         if !portfolio.linkedFailed.isEmpty {
             HStack(spacing: 8) {
                 Notice(.warning, Wording.linkedFailed(portfolio.linkedFailed.count))
@@ -550,6 +579,7 @@ private struct HoldingsTable: View {
     let onResolve: (String) -> Void
     @State private var selection: Position.ID?
     @State private var columns = TableColumnCustomization<Position>()
+    @Environment(\.walletNames) private var walletNames
 
     private var currency: CurrencyCode { portfolio.currency }
 
@@ -603,6 +633,7 @@ private struct HoldingsTable: View {
                     balanceCheck(position)
                 }
                 .opacity(position.isHeld ? 1 : 0.6)
+                .help(breakdown(position) ?? "")
             }
             .width(min: Column.asset, ideal: Column.assetRoom, max: limit(Column.assetRoom))
             .disabledCustomizationBehavior(.all)
@@ -702,6 +733,22 @@ private struct HoldingsTable: View {
         .buttonStyle(NumberButtonStyle())
     }
 
+    /// Where each wallet's share is, for All Yours, so nothing that's unknown hides inside a total.
+    private func breakdown(_ position: Position) -> String? {
+        guard let parts = position.wallets, !parts.isEmpty else { return nil }
+        return parts.map { part in
+            let unknown = part.hasUnknownCost ? ", \(Format.amount(part.unknownCostQty, decimals: position.decimals)) at an unknown cost" : ""
+            return "\(walletNames.walletName(part.wallet)): \(Format.amount(part.qty, decimals: position.decimals)) \(position.asset)\(unknown)"
+        }.joined(separator: "\n")
+    }
+
+    /// Which wallets an unknown cost is in, for All Yours.
+    private func unknownIn(_ position: Position) -> String? {
+        let parts = (position.wallets ?? []).filter(\.hasUnknownCost)
+        guard !parts.isEmpty else { return nil }
+        return "Unknown cost in \(parts.map { walletNames.walletName($0.wallet) }.formatted(.list(type: .and)))"
+    }
+
     private func number(_ position: Position, _ metric: AssetMetric, _ text: String, tone: Tone) -> some View {
         Button {
             target = .asset(position.asset, metric)
@@ -714,7 +761,7 @@ private struct HoldingsTable: View {
                 .justKnown(justKnown.contains(position.asset) && (metric == .average || metric == .unrealized))
         }
         .buttonStyle(NumberButtonStyle())
-        .help(metric.help ?? "")
+        .help((text == Wording.unknown ? unknownIn(position) : nil) ?? metric.help ?? "")
         .accessibilityLabel("\(position.asset) \(metric.label), \(text)")
     }
 }
@@ -724,7 +771,11 @@ private struct TransactionsTable: View {
     let transactions: [PnlPoint]
     let currency: CurrencyCode
     let isLive: Bool
+    /// Which wallet each one is in, for All Yours.
+    let showsWallets: Bool
     @Binding var target: ExplainTarget?
+    @Environment(\.walletNames) private var walletNames
+    @State private var columns = TableColumnCustomization<PnlPoint>()
     @State private var selection: PnlPoint.ID?
     @FocusState private var isFocused: Bool
 
@@ -732,8 +783,10 @@ private struct TransactionsTable: View {
         if case .transaction(let hash) = target { hash } else { nil }
     }
 
+    private static let walletColumnID = "wallet"
+
     var body: some View {
-        Table(transactions, selection: $selection) {
+        Table(transactions, selection: $selection, columnCustomization: $columns) {
             TableColumn("Time") { point in
                 Text(point.date.map(Format.time) ?? point.timestamp)
             }
@@ -749,6 +802,17 @@ private struct TransactionsTable: View {
                 }
             }
             .width(min: 100)
+            TableColumn("Wallet") { point in
+                let names = (point.wallets ?? []).map(walletNames.walletName)
+                Text(names.formatted(.list(type: .and)))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(names.formatted(.list(type: .and)))
+            }
+            .width(min: 90, ideal: 140, max: 220)
+            .customizationID(Self.walletColumnID)
+            .disabledCustomizationBehavior(.all)
             TableColumn("Total PnL") { point in
                 LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: point.pnlMicros == nil ? .secondary : isLive ? Tone(signed: point.pnlMicros) : .neutral)
                     .opacity(isLive ? 1 : 0.55)
@@ -777,6 +841,10 @@ private struct TransactionsTable: View {
         }
         .onChange(of: target, initial: true) {
             selection = transactions.first { $0.txHash == targetHash }?.id
+        }
+        // Not `if` around the column, for the same reason as the holdings' columns.
+        .onChange(of: showsWallets, initial: true) {
+            columns[visibility: Self.walletColumnID] = showsWallets ? .visible : .hidden
         }
         .accessibilityLabel("Transactions")
     }
@@ -850,7 +918,7 @@ private struct NoActivity<Notices: View>: View {
             // Never shown here: what holds the key is the only place to trust it, since a tampered page could show another.
             Text("To receive here, copy the address from the device or app that holds its key, and check it there.")
         } else {
-            Text("Nothing has moved for this wallet in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
+            Text("Nothing has moved \(portfolio.isAllYours ? "in any of your wallets" : "for this wallet") in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
                 .help(Wording.coverage(portfolio))
         }
     }

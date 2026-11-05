@@ -12,6 +12,7 @@ public struct ResolveFlow: View {
     @State private var isImporting = false
     @State private var publishing: CostNoteDraft?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.walletNames) private var walletNames
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
     @FocusState private var focusedCost: String?
@@ -152,7 +153,9 @@ public struct ResolveFlow: View {
 
     private func detail(_ question: Question) -> String {
         let transfers = question.transfers == 1 ? "1 transfer" : "\(question.transfers) transfers"
-        let elsewhere = question.wallet != store.portfolio?.address.lowercased() ? " · arrived in your other wallet \(Format.shortHash(question.wallet))" : ""
+        let elsewhere = store.portfolio?.isAllYours == true
+            ? " · arrived in \(walletNames.walletName(question.wallet))"
+            : question.wallet != store.portfolio?.address.lowercased() ? " · arrived in your other wallet \(Format.shortHash(question.wallet))" : ""
         guard let sender = question.sender else { return "We can't tell what you paid for this\(elsewhere)." }
         return "From \(Format.shortHash(sender)) · \(transfers)\(elsewhere)"
     }

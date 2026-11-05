@@ -230,7 +230,9 @@ public final class PortfolioStore {
             wakePending = false
             return
         }
-        let duration = isPushed && delay == reachableDelay && !feed.isStale ? pushedDelay : delay
+        // While All Yours still has wallets on their way, they could be done by the next read, block or not.
+        let isWaitingOnWallets = portfolio?.isAllYours == true && portfolio?.linkedReading.isEmpty == false
+        let duration = isPushed && delay == reachableDelay && !feed.isStale && !isWaitingOnWallets ? pushedDelay : delay
         let sleeping = Task { _ = try? await Task.sleep(for: duration) }
         sleeper = sleeping
         await withTaskCancellationHandler { await sleeping.value } onCancel: { sleeping.cancel() }
@@ -243,7 +245,7 @@ public final class PortfolioStore {
         guard next != self.address else { return }
         self.address = next
         defaults.set(next, forKey: Keys.wallet)
-        if let next, next != WalletAddress.demo {
+        if let next, next != WalletAddress.demo, !WalletAddress.isAllYours(next) {
             saveWallets(SavedWallet.seeing(next, at: now(), in: savedWallets, own: book.linkedWallets))
             saveHidden(hiddenWallets.filter { $0 != next })
         }
@@ -380,8 +382,11 @@ public final class PortfolioStore {
     }
 
     private func saveHidden(_ hidden: [String]) {
+        guard hidden != hiddenWallets else { return }
         hiddenWallets = hidden
         defaults.set(hidden, forKey: Keys.hiddenWallets)
+        // All Yours is every wallet that's listed, so it's something else now.
+        if WalletAddress.isAllYours(address), pollTask != nil { answersChanged() }
     }
 
     /// A key is gone, and `next` took over from it, if anything did. Whoever's looking at its wallet follows, or they'd see an empty address and
@@ -504,6 +509,7 @@ public final class PortfolioStore {
 
     public func comparison() async throws -> RuleComparison {
         guard let address else { throw CancellationError() }
+        guard !WalletAddress.isAllYours(address) else { throw FetchError.rejected("Rules are compared one wallet at a time.") }
         return try await source.comparison(address: address, method: method, currency: currency, linked: linked(for: address), book: bookToSend(book, for: address))
     }
 
@@ -593,13 +599,18 @@ public final class PortfolioStore {
         return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked, book: request.book)
     }
 
+    /// Whether a leg in this wallet belongs to what's on screen.
+    private func isShowing(_ address: String) -> Bool {
+        address == self.address || (WalletAddress.isAllYours(self.address) && allYoursWallets.contains(address))
+    }
+
     public func proof(leg: String, address: String) async throws -> Proof {
-        guard address == self.address else { throw CancellationError() }
+        guard isShowing(address) else { throw CancellationError() }
         return try await source.proof(leg: leg, address: address, currency: currency, rule: selectedRule)
     }
 
     public func verification(leg: String, address: String) async throws -> Verification {
-        guard address == self.address else { throw CancellationError() }
+        guard isShowing(address) else { throw CancellationError() }
         return try await source.verification(leg: leg, address: address, currency: currency, rule: selectedRule)
     }
 
@@ -610,8 +621,15 @@ public final class PortfolioStore {
     }
 
     public func linked(for address: String) -> [String] {
+        // All Yours is read as every wallet it adds up, which are all the user's own.
+        if WalletAddress.isAllYours(address) { return allYoursWallets }
         // Costs only carry over onto a wallet that's the user's own. A wallet being watched could be anyone's.
-        linkedWallets.contains(address) ? linkedWallets.filter { $0 != address } : []
+        return linkedWallets.contains(address) ? linkedWallets.filter { $0 != address } : []
+    }
+
+    /// What All Yours adds up: every wallet that's the user's and still on the list. The demo's aren't anyone's.
+    public var allYoursWallets: [String] {
+        book.linkedWallets.filter { !hiddenWallets.contains($0) && !WalletAddress.isDemo($0) }
     }
 
     /// Where this store reads from, for anything else that needs the same server.

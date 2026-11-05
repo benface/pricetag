@@ -12,6 +12,7 @@ import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fi
 import { foldBook, previewBook } from "../src/core/resolve.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule } from "../src/core/rules.ts"
 import { verifyLink } from "./links.ts"
+import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type Unread } from "./combined.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
 import { createCoinbase } from "./coinbase.ts"
 import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onramp.ts"
@@ -37,6 +38,9 @@ function parseScope(value: string | null): TaxScope | null {
 
 /** How many other wallets a report can add. Each is a full read. */
 const MAX_OTHER_WALLETS = 20
+
+/** How long a read of all the user's wallets waits on the slowest before answering with the rest. A wallet catching up takes far less. */
+const ALL_YOURS_WAIT_MS = 2_500
 
 function parseCurrency(value: string | null): CurrencyCode | null {
   if (value === null) return "USD"
@@ -324,6 +328,91 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     return read
   }
 
+  /**
+   * Every one of the user's wallets that's read, in `currency`, and the ones that aren't yet. One slow wallet doesn't hold up
+   * the rest: each read starts, and after a moment whatever's done is the answer, with the rest still on their way. With
+   * nothing read at all, it waits for the first one. `fresh: false` only takes what's already been read.
+   */
+  async function readAllYours(addresses: readonly string[], currency: CurrencyCode, rule: (typeof rules)[number] | null, books: readonly Book[], fresh: boolean, res: ServerResponse): Promise<{ read: WalletResponse[]; unread: Unread } | null> {
+    const from = rule?.wallets ?? wallets
+    if (!from) {
+      sendJson(res, 503, { error: "No data source is set up, so only the demo wallet is available." })
+      return null
+    }
+    if (fresh) {
+      const pending = new Set(
+        addresses.map((address) => {
+          const reading: Promise<void> = from.get(address).then(
+            () => {
+              linkedFailures.delete(address)
+              pending.delete(reading)
+            },
+            (error: unknown) => {
+              console.error("Wallet read failed:", describeError(error))
+              linkedFailures.add(address)
+              pending.delete(reading)
+            },
+          )
+          return reading
+        }),
+      )
+      const all = Promise.all(pending)
+      await Promise.race([all, new Promise((resolve) => setTimeout(resolve, ALL_YOURS_WAIT_MS))])
+      while (pending.size > 0 && !addresses.some((address) => from.peek(address))) await Promise.race(pending)
+    }
+    const read: WalletResponse[] = []
+    const unread: { reading: string[]; failed: string[] } = { reading: [], failed: [] }
+    for (const address of addresses) {
+      const wallet = from.peek(address)
+      if (!wallet) {
+        ;(linkedFailures.has(address) ? unread.failed : unread.reading).push(address)
+        continue
+      }
+      const converted = await inCurrency(rule ? { ...wallet, rule: rule.rule.id, ruleNote: rule.note } : wallet, currency, res, books)
+      if (!converted) return null
+      read.push(converted)
+    }
+    if (read.length === 0 && fresh) {
+      sendJson(res, 502, { error: "None of your wallets could be read." })
+      return null
+    }
+    return { read, unread }
+  }
+
+  /** All of the user's wallets as one: `linked` is every one of them. Demo data never mixes in, because nobody owns it. */
+  async function allYours(action: string | undefined, body: Record<string, unknown>, req: IncomingMessage, res: ServerResponse, { method, currency, book, rule }: { method: Method; currency: CurrencyCode; book: Book; rule: (typeof rules)[number] | null }): Promise<void> {
+    const listed: unknown = body.linked
+    if (!Array.isArray(listed) || !listed.every((address) => typeof address === "string" && isAddress(address))) return sendJson(res, 400, { error: "Your wallets are a list of Base addresses." })
+    const addresses = [...new Set((listed as string[]).map((address) => address.toLowerCase()))].filter((address) => address !== DEMO_ADDRESS && !demoWallet(address))
+    if (addresses.length === 0) return sendJson(res, 400, { error: "There are no wallets of yours to add up." })
+    if (addresses.length > MAX_OTHER_WALLETS + 1) return sendJson(res, 400, { error: `This can add up to ${MAX_OTHER_WALLETS + 1} wallets.` })
+    if (action === "compare") return sendJson(res, 400, { error: "Rules are compared one wallet at a time." })
+    const target = action === "explain" ? parseExplainTarget(new URL(req.url ?? "/", "http://localhost").searchParams) : null
+    if (action === "explain" && !target) return sendJson(res, 400, { error: "That isn't a number this can explain." })
+    const candidates = action === "preview" ? (Array.isArray(body.candidates) ? body.candidates.map(parseBook) : null) : []
+    if (!candidates || candidates.includes(null) || candidates.length > 8) return sendJson(res, 400, { error: "Those answers can't be read." })
+    const books = action === "preview" ? (candidates as Book[]) : [book]
+    const found = await readAllYours(addresses, currency, rule, books, action === undefined, res)
+    if (!found) return
+    const { read, unread } = found
+    if (read.length === 0) {
+      res.writeHead(204, { "cache-control": "no-store" })
+      res.end()
+      return
+    }
+    if (action === "preview") return sendJson(res, 200, { previews: previewCombined(read, method, candidates as Book[], unread) })
+    if (action === "export") {
+      res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" })
+      res.end(exportCombined(read, method, book))
+      return
+    }
+    if (target) {
+      const explanation = explainCombined(read, method, target, book, unread)
+      return explanation ? sendJson(res, 200, explanation) : sendJson(res, 404, { error: "None of your wallets has anything like that." })
+    }
+    sendJson(res, 200, combinedPortfolioOf(read, method, book, unread))
+  }
+
   /** The provider's detail stays in the server's log, and the client gets a sentence it can show. */
   async function onrampAnswer(res: ServerResponse, read: () => Promise<unknown>) {
     try {
@@ -383,6 +472,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const rule = body.rule === undefined || body.rule === null ? (rules[0] ?? null) : (rules.find((r) => r.rule.id === body.rule) ?? null)
     if (body.rule !== undefined && body.rule !== null && !rule) return sendJson(res, 400, { error: "That pricing rule isn't available here." })
     const action = match[2]
+    if (match[1] === ALL_YOURS) return allYours(action, body, req, res, { method, currency, book, rule })
 
     const target = action === "explain" ? parseExplainTarget(new URL(req.url ?? "/", "http://localhost").searchParams) : null
     if (action === "explain" && !target) return sendJson(res, 400, { error: "That isn't a number this can explain." })

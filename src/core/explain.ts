@@ -338,18 +338,20 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
   }
 }
 
-export function explainHold(positions: readonly Position[], comparison: HoldComparison, { view, source }: ExplainContext): Explanation {
+/** `combined` is for several of the user's wallets at once, where moving between them is neither putting in nor taking out. */
+export function explainHold(positions: readonly Position[], comparison: HoldComparison, { view, source }: ExplainContext, { combined = false } = {}): Explanation {
   const { currency } = view
   const money = (micros: string) => formatMoney(micros, currency)
   const signed = (micros: string | null) => (micros === null ? "unavailable" : formatSignedMoney(micros, currency))
   const { holdMicros, ethValueMicros, ethPriceMicros, ethQty, putInMicros, takenOutMicros, walletMicros, gainThatLeftMicros, differenceMicros, ranOut } = comparison
   const caveat = holdCaveatSentence(comparison, currency)
+  const [here, these] = combined ? ["your wallets", "Your wallets"] : ["this wallet", "This wallet"]
   const lines = [
-    "Takes each amount put in this wallet, turns it into ETH at that moment's price, and values that ETH at today's price.",
-    "Put in means whatever arrived from outside this wallet, at what it cost you, or at its price when it arrived if that's all that's known. Exchanges inside the wallet aren't put in.",
-    ...(BigInt(takenOutMicros) > 0n ? [`${money(takenOutMicros)} left this wallet, so it leaves the ETH too, at its price when it left.${ranOut ? " Holding ETH would have run out before all of it could leave." : ""}`] : []),
+    `Takes each amount put in ${here}, turns it into ETH at that moment's price, and values that ETH at today's price.`,
+    `Put in means whatever arrived from outside ${here}, at what it cost you, or at its price when it arrived if that's all that's known. Exchanges inside ${combined ? "them" : "the wallet"} aren't put in${combined ? ", and neither are moves between them" : ""}.`,
+    ...(BigInt(takenOutMicros) > 0n ? [`${money(takenOutMicros)} left ${here}, so it leaves the ETH too, at its price when it left.${ranOut ? " Holding ETH would have run out before all of it could leave." : ""}`] : []),
     ...(ethValueMicros !== null && ethPriceMicros !== null ? [`${money(putInMicros)} put in leaves ${formatAmount(ethQty, 18)} ETH, worth ${money(ethValueMicros)} at today's ${formatPrice(ethPriceMicros, currency)}.`] : []),
-    `This wallet: ${signed(walletMicros)}. That's its total PnL after network fees${BigInt(gainThatLeftMicros) === 0n ? "" : `, and ${signed(gainThatLeftMicros)} on what left it, which total PnL doesn't count because a transfer isn't a sale`}. Holding ETH pays no fees.`,
+    `${these}: ${signed(walletMicros)}. That's ${combined ? "their" : "its"} total PnL after network fees${BigInt(gainThatLeftMicros) === 0n ? "" : `, and ${signed(gainThatLeftMicros)} on what left ${combined ? "them" : "it"}, which total PnL doesn't count because a transfer isn't a sale`}. Holding ETH pays no fees.`,
     `${HOLD_ETH}: ${signed(holdMicros)}.`,
     ...(differenceMicros !== null ? [holdDifferenceSentence(differenceMicros, currency)] : []),
     ...(caveat ? [caveat] : []),

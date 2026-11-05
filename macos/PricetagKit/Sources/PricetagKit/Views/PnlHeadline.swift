@@ -122,6 +122,7 @@ public struct PortfolioAttention: View {
     let portfolio: Portfolio
     let onOpen: (ExplainTarget) -> Void
     let onResolve: () -> Void
+    @Environment(\.walletNames) private var walletNames
 
     public init(portfolio: Portfolio, onOpen: @escaping (ExplainTarget) -> Void, onResolve: @escaping () -> Void) {
         self.portfolio = portfolio
@@ -130,7 +131,7 @@ public struct PortfolioAttention: View {
     }
 
     public var body: some View {
-        if let attention = portfolio.attention {
+        if let attention = portfolio.attention(names: walletNames) {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) {
                     message(attention)
@@ -295,14 +296,18 @@ extension Portfolio {
     }
 
     /// nil when the numbers leave out nothing and rest on nothing estimated.
-    public var attention: Attention? {
+    public var attention: Attention? { attention(names: [:]) }
+
+    /// The same, calling each of the user's wallets by its name in `names`, for a total across several of them.
+    public func attention(names: [String: String]) -> Attention? {
+        let name = { (address: String) in names[address] ?? Format.shortHash(address) }
         var lines = Wording.unreadBalances(unreadAssets).map { [$0] } ?? []
         if totals.unpricedGas { lines.append(Wording.unpricedFees) }
         if !gasUnknownTxs.isEmpty { lines.append(Wording.feesUnknown(gasUnknownTxs.count)) }
         if !l1FeeUnknownTxs.isEmpty { lines.append(Wording.networkFeeUnknown(l1FeeUnknownTxs.count)) }
-        lines += withheld.map { Wording.withheld(wallet: $0.wallet, asset: $0.asset) }
+        lines += withheld.map { Wording.withheld(wallet: $0.wallet, asset: $0.asset, name: name) }
         lines += Wording.missingRates(self)
-        let excludedList = Wording.excluded(totals.excluded)
+        let excludedList = Wording.excluded(totals.excluded, name: name)
         if let title = Wording.leavesOut(totals, currency) { return Attention(title: title, details: lines, fullList: excludedList) }
         if let excludedList { return Attention(title: excludedList, details: lines, fullList: nil) }
         guard let first = lines.first else { return nil }

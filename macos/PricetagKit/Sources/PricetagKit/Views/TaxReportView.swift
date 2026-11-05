@@ -19,8 +19,18 @@ public struct TaxReportView: View {
         _model = State(initialValue: model ?? TaxReportModel(currency: store.currency, fetch: { try await store.taxReport($0) }))
     }
 
+    /// What the report is on. All Yours has no address of its own, so it's on the first of them, with the rest alongside.
+    private var reportAddress: String? {
+        WalletAddress.isAllYours(store.address) ? store.allYoursWallets.first : store.address
+    }
+
+    private var reportLinked: [String] {
+        guard let address = store.address else { return [] }
+        return store.linked(for: address).filter { $0 != reportAddress }
+    }
+
     private var request: TaxReportRequest? {
-        model.request(address: store.address, currency: store.currency, serverURL: store.serverURL, book: store.book, linked: store.address.map(store.linked(for:)) ?? [])
+        model.request(address: reportAddress, currency: store.currency, serverURL: store.serverURL, book: store.book, linked: reportLinked)
     }
 
     private var badWallet: String? {
@@ -89,7 +99,7 @@ public struct TaxReportView: View {
                     "Add a wallet",
                     prompt: wallets.isEmpty ? "Paste an address" : "Paste an address, or find a wallet",
                     text: $addingWallet,
-                    wallets: wallets.filter { model.offers($0, showing: store.address, linked: store.address.map(store.linked(for:)) ?? []) },
+                    wallets: wallets.filter { model.offers($0, showing: reportAddress, linked: reportLinked) },
                     read: readAddress,
                     takesSeveral: true,
                     onAddress: model.addOtherWallet
