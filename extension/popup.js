@@ -1,5 +1,5 @@
 // @ts-check
-// Shows what the app says about the wallet, and opens its top-up flow. The amount and the address are all handled in the app.
+// Shows what the app says about the wallet, and opens its receive and top-up flows. The amount and the address are all handled in the app.
 // The page is complete before anything answers, and nothing here holds it up: the browser shows it, then this fills it in.
 
 /** @param {string} id */
@@ -12,6 +12,7 @@ const address = element("address")
 const copy = /** @type {HTMLButtonElement} */ (element("copy"))
 const copyIcon = element("copy-icon")
 const copiedIcon = element("copied-icon")
+const receive = /** @type {HTMLButtonElement} */ (element("receive"))
 const topUp = /** @type {HTMLButtonElement} */ (element("top-up"))
 
 const port = chrome.runtime.connect({ name: "popup" })
@@ -49,6 +50,8 @@ function show(result) {
   address.textContent = result.address ? `${result.address.slice(0, 6)}…${result.address.slice(-4)}` : ""
   address.title = result.address ?? ""
   copy.hidden = !result.address
+  // Both need a key that can safely take money, which is what the app means by this.
+  receive.disabled = !result.canTopUp
   topUp.disabled = !result.canTopUp
   status.textContent = result.problem ?? (result.sites === undefined ? "" : sitesConnected(result.sites))
 }
@@ -93,9 +96,13 @@ copy.addEventListener("click", async () => {
   }, 1500)
 })
 
-topUp.addEventListener("click", () => {
-  ask("topUp", ({ error }) => {
+/** @param {string} method */
+function openInApp(method) {
+  ask(method, ({ error }) => {
     if (error) status.textContent = error.message
     else window.close()
   })
-})
+}
+
+receive.addEventListener("click", () => openInApp("receive"))
+topUp.addEventListener("click", () => openInApp("topUp"))
