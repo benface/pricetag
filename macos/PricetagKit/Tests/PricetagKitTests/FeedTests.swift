@@ -160,6 +160,25 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(!notice.contains("block"))
     }
 
+    @Test func knowsWhenAReadStartedUntilItsDone() async throws {
+        let clock = TestClock(now)
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let source = ScriptedSource([.success(try realPortfolio(at: now)), .failure(.unreachable)])
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { clock.date })
+        #expect(store.readingSince == now)
+        clock.date = now.addingTimeInterval(90)
+        await _ = store.poll()
+        #expect(store.feed == .live)
+        #expect(store.readingSince == nil)
+        store.setMethod(store.method == .average ? .fifo : .average)
+        #expect(store.readingSince == now.addingTimeInterval(90))
+        store.stop()
+        await _ = store.poll()
+        #expect(store.feed == .serverUnreachable)
+        #expect(store.readingSince == nil)
+    }
+
     @Test func comesBackWhenTheServerDoes() async throws {
         let (store, _, _) = makeStore([.failure(.unreachable), .success(try realPortfolio(at: now))])
         await _ = store.poll()
@@ -218,7 +237,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         }
         #expect(store.feed == .reading)
         #expect(store.portfolio == held)
-        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Updating…")
+        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: $0).text == "Updating…" })
         let later = now.addingTimeInterval(1)
         await gate.answer(.success(try realPortfolio(at: later)))
         await _ = second.value
@@ -287,7 +306,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         let (store, source, _) = makeStore([.success(try realPortfolio(at: now)), .failure(.timedOut), .failure(.timedOut)])
         await _ = store.poll()
         await _ = store.poll()
-        #expect(store.feed == .ampUnavailable(Wording.readTooSlow))
+        #expect(store.feed == .tooSlow)
         #expect(store.portfolio != nil)
         #expect(await source.timeouts == [.seconds(180), .seconds(15), .seconds(180)])
     }
@@ -295,7 +314,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     @Test func aFirstReadThatTimesOutFromAnAnsweringServerIsntOffline() async throws {
         let (store, source, _) = makeStore([.failure(.timedOut)])
         await _ = store.poll()
-        #expect(store.feed == .ampUnavailable(Wording.readTooSlow))
+        #expect(store.feed == .tooSlow)
         #expect(await source.timeouts == [.seconds(180)])
     }
 
@@ -312,7 +331,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         let (store, _, _) = makeStore([.success(try realPortfolio(at: old))])
         await _ = store.poll()
         #expect(store.feed == .behind(seconds: 600))
-        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Behind")
+        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: $0).text == "Behind" })
     }
 
     @Test func aDatasetBehindTheChainIsntLive() async throws {
@@ -323,7 +342,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(!store.feed.isStale)
         let notice = try #require(store.feed.staleNotice(serverURL: store.serverURL, portfolio: store.portfolio))
         #expect(notice.contains("about 2 min behind"))
-        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Catching up")
+        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: $0).text == "Catching up" })
     }
 
     @Test func aDatasetThatHasntStartedIsntLive() async throws {
@@ -530,24 +549,28 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 }
 
 @Suite struct FeedSummaryTests {
+    private let server = URL(string: "http://127.0.0.1:8787")!
+
     @Test func onlyShowsANumberWhileLive() throws {
         let portfolio = try demoPortfolio()
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .ampUnavailable("x"), .noAmpConfigured("x"), .rejected("x")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("x"), .noAmpConfigured("x"), .rejected("x")]
         for state in states {
-            let summary = FeedSummary(feed: state, portfolio: portfolio)
-            #expect(summary.isWarning)
-            #expect(!summary.text.contains("$"), "\(state)")
+            for shows in MenuBarShows.allCases {
+                let summary = FeedSummary(feed: state, portfolio: portfolio, shows: shows)
+                #expect(summary.isWarning)
+                #expect(!summary.text.contains("$"), "\(state)")
+            }
         }
     }
 
     @Test func aPartialTotalWarns() throws {
-        let summary = FeedSummary(feed: .live, portfolio: try demoPortfolio())
+        let summary = FeedSummary(feed: .live, portfolio: try demoPortfolio(), shows: .pnl)
         #expect(summary.isWarning)
         #expect(summary.text == "Demo ≈+$149.30")
     }
 
     @Test func anUnavailableTotalHasNoNumber() throws {
-        let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .unavailable))
+        let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .unavailable), shows: .pnl)
         #expect(summary.isWarning)
         #expect(summary.text == "PnL unavailable")
     }
@@ -558,25 +581,60 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         totals["pnlMicros"] = NSNull()
         object["totals"] = totals
         let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
-        let summary = FeedSummary(feed: .live, portfolio: portfolio)
+        let summary = FeedSummary(feed: .live, portfolio: portfolio, shows: .pnl)
         #expect(summary.isWarning)
         #expect(!summary.text.contains("$"))
     }
 
     @Test func aProblemFitsInAFewWords() throws {
         let portfolio = try demoPortfolio()
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x")]
         for state in states {
             let problem = try #require(state.shortProblem(portfolio: portfolio))
             #expect(problem.count <= 26, "\(state)")
             #expect(!problem.contains("."), "\(state)")
         }
-        #expect(FeedState.behind(seconds: 600).shortProblem(portfolio: portfolio) == "Data is 10 min old")
+        #expect(FeedState.behind(seconds: 600).shortProblem(portfolio: portfolio) == "Prices are 10 min behind")
     }
 
     @Test func nothingWrongHasNoProblem() throws {
         let portfolio = try demoPortfolio()
         for state in [FeedState.noWallet, .reading, .live] { #expect(state.shortProblem(portfolio: portfolio) == nil) }
+        for state in [FeedState.noWallet, .reading, .live, .catchingUp] { #expect(state.problem(serverURL: server, portfolio: portfolio) == nil) }
+    }
+
+    @Test func aProblemSaysWhatHappenedThatMoneyIsFineAndWhatToDoWithoutTheServersAddress() throws {
+        let portfolio = try realPortfolio(at: Date())
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("Couldn't read from Amp."), .noAmpConfigured("No Amp."), .rejected("Nope.")]
+        for state in states {
+            for shown in [portfolio, nil] {
+                let problem = try #require(state.problem(serverURL: server, portfolio: shown))
+                #expect(problem.message.contains(Wording.moneyUnaffected), "\(state)")
+                for technical in ["127.0.0.1", "http", "server", "Amp", "8787"] {
+                    #expect(!problem.message.contains(technical), "\(state): \(technical)")
+                    #expect(!problem.title.contains(technical), "\(state): \(technical)")
+                }
+                // Old numbers say they're old, and from when.
+                #expect(problem.message.contains("aren't updating") == (shown != nil), "\(state)")
+            }
+        }
+    }
+
+    @Test func theTechnicalSideStaysAvailable() throws {
+        let down = try #require(FeedState.serverUnreachable.problem(serverURL: server, portfolio: nil))
+        #expect(down.title == "The Price Service Isn't Running")
+        #expect(down.message.hasSuffix("Start it, then try again."))
+        #expect(down.detail?.contains("http://127.0.0.1:8787") == true)
+        #expect(down.detail?.contains("pnpm start") == true)
+        #expect(FeedState.ampUnavailable("Couldn't read from Amp.").problem(serverURL: server, portfolio: nil)?.detail?.contains("Couldn't read from Amp.") == true)
+        #expect(FeedState.rejected("Nope.").problem(serverURL: server, portfolio: nil)?.detail?.contains("Nope.") == true)
+    }
+
+    @Test func aServerElsewhereIsntOneToStart() throws {
+        let remote = try #require(FeedState.serverUnreachable.problem(serverURL: URL(string: "https://prices.example.com")!, portfolio: nil))
+        #expect(!remote.message.contains("this Mac"))
+        #expect(!remote.message.contains("Start it"))
+        #expect(remote.detail == "Nothing answered at https://prices.example.com.")
     }
 
     @Test func theGlanceListsWhatsHeldLargestFirst() throws {
@@ -683,9 +741,47 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     }
 
     @Test func aCompleteTotalDoesntWarn() throws {
-        let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .complete))
+        let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .complete), shows: .pnl)
         #expect(!summary.isWarning)
         #expect(summary.text == "≈+$149.30")
+    }
+
+    @MainActor @Test func showsValueUnlessAskedOtherwise() throws {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        let store = PortfolioStore(defaults: defaults)
+        #expect(store.menuBarShows == .value)
+        store.setMenuBarShows(.icon)
+        #expect(PortfolioStore(defaults: defaults).menuBarShows == .icon)
+    }
+
+    @Test func valueSaysWhenItLeavesSomethingOut() throws {
+        let portfolio = try realPortfolio(at: Date(), status: .complete)
+        let summary = FeedSummary(feed: .live, portfolio: portfolio, shows: .value)
+        #expect(summary.text == "≈$7,571.03")
+        #expect(summary.isWarning == portfolio.isValuePartial)
+        #expect(FeedSummary(feed: .live, portfolio: try demoPortfolio(), shows: .value).text == "Demo ≈$7,571.03")
+    }
+
+    @Test func anUnknownValueHasNoNumber() throws {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(realPortfolio(at: Date(), status: .complete))) as! [String: Any]
+        var totals = object["totals"] as! [String: Any]
+        totals["valueMicros"] = NSNull()
+        object["totals"] = totals
+        let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        let summary = FeedSummary(feed: .live, portfolio: portfolio, shows: .value)
+        #expect(summary.isWarning)
+        #expect(summary.text == "Value unavailable")
+    }
+
+    @Test func aFirstReadSaysSoWhateverItShows() {
+        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: .reading, portfolio: nil, shows: $0).text == "Reading…" })
+    }
+
+    @Test func iconOnlyShowsNoNumber() throws {
+        let real = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .unavailable), shows: .icon)
+        #expect(real.text.isEmpty)
+        #expect(!real.isWarning)
+        #expect(FeedSummary(feed: .live, portfolio: try demoPortfolio(), shows: .icon).text == "Demo")
     }
 }
 
