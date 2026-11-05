@@ -126,6 +126,11 @@ enum TestScene: String, CaseIterable {
     case hotWalletAddSavingsFilled = "hot-wallet-add-savings-filled"
     case hotWalletTopUp = "hot-wallet-top-up"
     case hotWalletTopUpAtCap = "hot-wallet-top-up-at-cap"
+    case send
+    case sendKnown = "send-known"
+    case sendWaiting = "send-waiting"
+    case publishCost = "publish-cost"
+    case publishWaiting = "publish-cost-waiting"
 
     enum Chrome { case titled, none }
 
@@ -135,7 +140,8 @@ enum TestScene: String, CaseIterable {
     var chrome: Chrome {
         switch self {
         case .changeWallet, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm,
-             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap:
+             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap,
+             .send, .sendKnown, .sendWaiting, .publishCost, .publishWaiting:
             .none
         default: .titled
         }
@@ -166,7 +172,8 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .hotWallet, .popoverHotWallet, .settingsHotWallet, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp: .funded
+        case .hotWallet, .popoverHotWallet, .settingsHotWallet, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .send, .sendKnown: .funded
+        case .sendWaiting: .waitingForTouchID
         case .hotWalletNoSavings: .noSavings
         case .hotWalletNoPrice: .noPrice
         case .hotWalletOverCap, .popoverHotWalletOverCap, .hotWalletTopUpAtCap: .overCap
@@ -184,6 +191,7 @@ enum TestScene: String, CaseIterable {
         let defaults = UserDefaults(suiteName: "com.benface.pricetag.mac.test-mode")!
         var registered: [String: Any] = ["currency": currency.rawValue]
         if hasWallet { registered["wallet"] = WalletAddress.demo }
+        if self == .sendKnown, let book = try? JSONEncoder().encode(Book().answering(TestScene.recipient, .someoneElse, focus: nil)) { registered["answers"] = book }
         defaults.register(defaults: registered)
         let source = FixtureSource(feed: feed)
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: .milliseconds(50), unreachableDelay: .seconds(30))
@@ -235,8 +243,22 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet, address: HotWalletFixture.savings.lowercased)), isReady: isReady)
         case .hotWalletTopUp, .hotWalletTopUpAtCap:
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet)), isReady: isReady)
+        case .send, .sendKnown, .sendWaiting:
+            let model = SendModel(wallet: hotWallet, store: store)
+            model.token = Base.tokens.first { $0.symbol == "USDC" }!
+            model.amountText = "12.50"
+            model.addressText = TestScene.recipient
+            let isWaiting = self == .sendWaiting
+            // It never gets past the prompt, and there's no key behind it anyway.
+            if isWaiting { Task { _ = await model.send() } }
+            return TestScreen(view: AnyView(SendSheet(model: model)), isReady: { !isWaiting || model.isSending })
+        case .publishCost, .publishWaiting:
+            let draft = CostNoteDraft(wallet: "0x00000000000000000000000000000000000de301", txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
+            return TestScreen(view: AnyView(PublishCostSheet(draft: draft, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
         }
     }
+
+    private static let recipient = "0x0000000000000000000000000000000000c0ffee"
 }
 
 private final class ReadOnce {

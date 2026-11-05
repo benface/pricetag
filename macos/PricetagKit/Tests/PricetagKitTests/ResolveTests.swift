@@ -233,6 +233,173 @@ actor BookSource: PortfolioSource {
         #expect(store.book.linkedWallets.contains(sender))
     }
 
+    @Test func writesTheNoteTheServerReads() throws {
+        struct Vector: Decodable { let txHash: String; let asset: String; let usdMicros: String; let calldata: String }
+        struct Vectors: Decodable { let note: Vector }
+        let vector = try resource("format-vectors", as: Vectors.self).note
+        let calldata = try #require(CostNote.calldata(txHash: vector.txHash, asset: vector.asset, usdMicros: vector.usdMicros))
+        #expect("0x" + calldata.map { String(format: "%02x", $0) }.joined() == vector.calldata)
+    }
+
+    @Test func refusesANoteTheServerWouldntRead() {
+        let tx = "0x" + String(repeating: "ab", count: 32)
+        #expect(CostNote.calldata(txHash: "0xabc", asset: "USDC", usdMicros: "1") == nil)
+        #expect(CostNote.calldata(txHash: tx.uppercased(), asset: "USDC", usdMicros: "1") == nil)
+        #expect(CostNote.calldata(txHash: tx, asset: "US:DC", usdMicros: "1") == nil)
+        #expect(CostNote.calldata(txHash: tx, asset: "USDC", usdMicros: "-1") == nil)
+        #expect(CostNote.calldata(txHash: tx, asset: "USDC", usdMicros: "") == nil)
+    }
+
+    @Test func accountsInThisWalletGoInTheBookWithoutAQuestion() throws {
+        let (store, _, _) = try makeStore()
+        store.setLinkedWallets([wallet, sender])
+        #expect(store.book.senders[wallet]?.kind == .mine)
+        #expect(store.book.senders[sender]?.kind == .mine)
+        #expect(store.undoStack.isEmpty, "nobody answered anything, so there's nothing to undo")
+        #expect(!store.hasAnswers)
+        store.setLinkedWallets([])
+        #expect(store.book.senders[sender] == nil, "a mistyped savings wallet can't stay linked")
+    }
+
+    @Test func anAccountOutranksAnEarlierAnswerUntilItsRemoved() throws {
+        let (store, _, _) = try makeStore()
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        store.setLinkedWallets([sender])
+        #expect(store.book.senders[sender]?.kind == .mine)
+        store.setBook(store.book.enteringCost("k", Money(micros: "5", currency: .USD)))
+        store.setLinkedWallets([])
+        #expect(store.book.senders[sender]?.kind == .someoneElse, "what was said before it was an account still stands")
+    }
+
+    @Test func undoCantBringBackARemovedAccount() throws {
+        let (store, _, _) = try makeStore()
+        store.setLinkedWallets([wallet])
+        store.setBook(store.book.enteringCost("k", Money(micros: "5", currency: .USD)))
+        store.setLinkedWallets([])
+        #expect(store.book.senders[wallet] == nil)
+        store.undo()
+        #expect(store.book.senders[wallet] == nil)
+        #expect(store.book.costs["k"] == nil)
+    }
+
+    @Test func accountsArentSavedAsAnswers() throws {
+        let (store, _, defaults) = try makeStore()
+        store.setLinkedWallets([wallet])
+        store.setBook(store.book.enteringCost("k", Money(micros: "5", currency: .USD)))
+        let reopened = PortfolioStore(defaults: defaults, makeSource: { _ in BookSource([]) })
+        #expect(reopened.book.costs["k"] != nil)
+        #expect(reopened.book.senders[wallet] == nil, "whether it's still an account is for the wallet to say")
+    }
+
+    @Test func forgettingOrUndoingAnswersKeepsTheAccounts() throws {
+        let (store, _, _) = try makeStore()
+        store.setLinkedWallets([wallet])
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        #expect(store.hasAnswers)
+        store.undo()
+        #expect(store.book.senders[wallet]?.kind == .mine)
+        store.setBook(Book())
+        #expect(store.book.senders[wallet]?.kind == .mine)
+    }
+
+    @Test func aWatchedWalletDoesntTakeCostsFromTheseAccounts() async throws {
+        let (store, source, _) = try makeStore()
+        let watched = "0x00000000000000000000000000000000000000cc"
+        store.setWallet(watched)
+        store.stop()
+        store.setLinkedWallets([wallet])
+        await _ = store.poll()
+        #expect(await source.books.last?.senders[wallet] == nil)
+        store.setBook(store.book.answering(sender, .mine, focus: watched))
+        store.stop()
+        await _ = store.poll()
+        #expect(await source.books.last?.senders[wallet]?.kind == .mine, "they've said this one's theirs too")
+    }
+
+    func question(receipts: [CostReceipt], noteAbout: String? = "0x" + String(repeating: "cd", count: 32)) -> Question {
+        Question(id: "q", kind: .cost, wallet: wallet, sender: nil, known: nil, costKey: "k", noteAbout: noteAbout, needsCost: false, arrivals: [Arrival(asset: "USDC", decimals: 6, units: "5")], receipts: receipts, transfers: receipts.count, firstAt: "", lastAt: "", evidence: [], valueMicros: nil)
+    }
+
+    @Test func onlyAQuestionAboutOneTokenInOneTransactionCanBeANote() throws {
+        let tx = "0x" + String(repeating: "cd", count: 32)
+        let receipt = CostReceipt(wallet: wallet, legId: "\(tx):USDC", asset: "USDC", units: "5")
+        #expect(question(receipts: [receipt]).noteDraft == CostNoteDraft(wallet: wallet, txHash: tx, asset: "USDC", decimals: 6, units: "5"))
+        #expect(question(receipts: [receipt, receipt]).noteDraft == nil)
+        #expect(question(receipts: [receipt], noteAbout: nil).noteDraft == nil, "the server says it's only part of what arrived")
+        #expect(question(receipts: [receipt], noteAbout: "opening").noteDraft == nil)
+    }
+
+    @Test func aNoteIsOnlyOfferedForAWalletThatCanSignIt() async throws {
+        let (store, _, _) = try makeStore()
+        let tx = "0x" + String(repeating: "cd", count: 32)
+        let open = question(receipts: [CostReceipt(wallet: wallet, legId: "\(tx):USDC", asset: "USDC", units: "5")])
+        #expect(ResolveModel(store: store).noteDraft(for: open) == nil)
+        #expect(ResolveModel(store: store, noteWriter: FakeNoteWriter(wallet: sender)).noteDraft(for: open) == nil)
+        #expect(ResolveModel(store: store, noteWriter: FakeNoteWriter(wallet: wallet)).noteDraft(for: open) != nil)
+    }
+
+    /// The demo's question about VIRTUAL, which came in one transaction.
+    func virtualDraft(_ store: PortfolioStore) async throws -> (ResolveModel, CostNoteDraft, Question, FakeNoteWriter) {
+        await _ = store.poll()
+        let writer = FakeNoteWriter(wallet: nil)
+        let model = ResolveModel(store: store, firstAsset: "VIRTUAL", noteWriter: writer)
+        let question = try #require(model.current)
+        return (model, try #require(model.noteDraft(for: question)), question, writer)
+    }
+
+    @Test func aPublishedCostGoesOutThenStaysHereInUSD() async throws {
+        let (store, _, _) = try makeStore()
+        store.setCurrency(.CAD)
+        store.stop()
+        let (model, draft, question, writer) = try await virtualDraft(store)
+        #expect(await model.publish(draft, usd: "250"))
+        let note = String(decoding: try #require(writer.written.first), as: UTF8.self)
+        #expect(note == "patina:cost:1:\(draft.txHash):VIRTUAL:250000000")
+        #expect(store.book.costs[try #require(question.costKey)] == Money(micros: "250000000", currency: .USD), "a note's always in USD, whatever's on screen")
+    }
+
+    @Test func aCostThatDidntGetPublishedIsntKept() async throws {
+        let (store, _, _) = try makeStore()
+        let (model, draft, question, writer) = try await virtualDraft(store)
+        writer.noteProblem = "No gas."
+        #expect(await model.publish(draft, usd: "250") == false)
+        #expect(store.book.costs[try #require(question.costKey)] == nil)
+        #expect(model.failure == "No gas.")
+        #expect(!model.isPublishing, "the sheet can close again")
+    }
+
+    @Test func publishingNeedsAnAmount() async throws {
+        let (store, _, _) = try makeStore()
+        let (model, draft, _, writer) = try await virtualDraft(store)
+        #expect(await model.publish(draft, usd: "lots") == false)
+        #expect(writer.written.isEmpty)
+    }
+
+    @Test func aDraftFromAWalletThatChangedDoesntPublish() async throws {
+        let (store, _, _) = try makeStore()
+        let (model, draft, question, writer) = try await virtualDraft(store)
+        writer.wallet = "0x00000000000000000000000000000000000000dd"
+        #expect(await model.publish(draft, usd: "250") == false)
+        #expect(writer.written.isEmpty)
+        #expect(model.failure != nil)
+        #expect(store.book.costs[try #require(question.costKey)] == nil)
+    }
+
+    @Test func publishingKeepsAnswersGivenDuringTheWait() async throws {
+        let (store, _, _) = try makeStore()
+        let (model, draft, question, writer) = try await virtualDraft(store)
+        var wasPublishing = false
+        writer.onWrite = {
+            wasPublishing = model.isPublishing
+            store.setBook(store.book.answering("0x00000000000000000000000000000000000000ee", .someoneElse, focus: nil))
+        }
+        #expect(await model.publish(draft, usd: "250"))
+        #expect(wasPublishing, "what keeps the sheet's Cancel and Escape from closing it on something that's still going out")
+        #expect(!model.isPublishing)
+        #expect(store.book.senders["0x00000000000000000000000000000000000000ee"]?.kind == .someoneElse)
+        #expect(store.book.costs[try #require(question.costKey)] != nil)
+    }
+
     @Test func aPendingPreviewSaysSo() {
         #expect(Wording.consequence(BookPreview(pnlMicros: nil, pnlStatus: .unavailable, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: true, failed: false), .USD) == "Reading that wallet…")
     }
@@ -280,5 +447,24 @@ actor BookSource: PortfolioSource {
         struct Vectors: Decodable { let linkMessage: Vector }
         let vector = try resource("format-vectors", as: Vectors.self).linkMessage
         #expect(Wording.linkMessage(owner: vector.owner, address: vector.address) == vector.message)
+    }
+}
+
+@MainActor
+final class FakeNoteWriter: CostNoteWriter {
+    var wallet: String?
+    var written: [[UInt8]] = []
+    var noteProblem: String?
+    var onWrite: (() -> Void)?
+
+    init(wallet: String?) {
+        self.wallet = wallet
+    }
+
+    func canWriteNote(from wallet: String) -> Bool { wallet == self.wallet || self.wallet == nil }
+    func writeNote(_ calldata: [UInt8], asset: String, from wallet: String) async -> Bool {
+        written.append(calldata)
+        onWrite?()
+        return noteProblem == nil
     }
 }

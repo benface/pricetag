@@ -11,6 +11,10 @@ public struct SignedRecord: Codable, Equatable, Identifiable, Sendable {
 
     public enum Reason: String, Codable, Sendable {
         case aboveCap, manual, rotation
+        /// The user sent it to someone, or to another wallet of theirs.
+        case sent
+        /// A cost the user published. `symbol` is the token it's about, and nothing moved.
+        case note
     }
 
     public let hash: String
