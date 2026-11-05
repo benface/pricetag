@@ -5,14 +5,17 @@ import LocalAuthenticationEmbeddedUI
 import PricetagKit
 import SwiftUI
 
-struct ConfirmationRow: Identifiable {
+struct ConfirmationRow {
     let label: String
     let value: String
     var isAddress = false
     /// Who an address belongs to, above it, when that's known.
     var name: String?
-    /// With its value, since a call can give or get more than one thing.
-    var id: String { label + value }
+}
+
+extension EnvironmentValues {
+    /// The tallest an approval can be. Otherwise the smallest screen's, since this doesn't know which one it'll open on.
+    @Entry var confirmationHeightLimit: CGFloat?
 }
 
 enum ConfirmationHero {
@@ -40,30 +43,67 @@ struct ConfirmationView<Footer: View>: View {
     var data: String?
     @ViewBuilder let footer: Footer
 
+    @Environment(\.confirmationHeightLimit) private var heightLimit
     @State private var showsDetails = false
+    @State private var pinnedHeight: CGFloat = 0
+    @State private var hasMoreBelow = false
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 18) {
-                who
-                heroView
-                if let message { LongText(text: message) }
-                if !rows.isEmpty { rowsBox }
-                ForEach(warnings) { warning in
-                    if warning.isStrong {
-                        StrongWarning(text: warning.text)
-                    } else {
-                        Notice(.info, warning.text)
-                    }
+            // What's being approved scrolls when there's too much of it. Warnings and the way out never do, because a site chooses how much there is.
+            ScrollView {
+                VStack(spacing: 18) {
+                    who
+                    heroView
+                    if let message { LongText(text: message) }
+                    if !rows.isEmpty { rowsBox }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 28)
+                .padding(.bottom, warnings.isEmpty ? 20 : 18)
+            }
+            .scrollIndicators(.visible)
+            .onScrollGeometryChange(for: Bool.self) { $0.visibleRect.maxY < $0.contentSize.height - 4 } action: { hasMoreBelow = $1 }
+            .frame(maxHeight: max(Self.leastScrollHeight, (heightLimit ?? Self.screenHeight) - pinnedHeight))
+            .fixedSize(horizontal: false, vertical: true)
+            // A scroll bar only shows once it's scrolling, and what's out of sight is part of what's being approved.
+            .overlay(alignment: .bottom) {
+                if hasMoreBelow {
+                    Label("More below", systemImage: "chevron.down")
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(.regularMaterial, in: Capsule())
+                        .shadow(radius: 2, y: 1)
+                        .padding(.bottom, 8)
+                        .allowsHitTesting(false)
                 }
             }
+            VStack(spacing: 20) {
+                if !warnings.isEmpty {
+                    VStack(spacing: 18) {
+                        ForEach(warnings) { warning in
+                            if warning.isStrong {
+                                StrongWarning(text: warning.text)
+                            } else {
+                                Notice(.info, warning.text)
+                            }
+                        }
+                    }
+                }
+                footer
+            }
             .padding(.horizontal, 20)
-            .padding(.top, 28)
             .padding(.bottom, 20)
-            footer
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) { pinnedHeight = $0 }
         }
+    }
+
+    private static var leastScrollHeight: CGFloat { 160 }
+
+    /// With room for the title bar, which the window adds on top of what's in it.
+    private static var screenHeight: CGFloat {
+        (NSScreen.screens.map(\.visibleFrame.height).min() ?? 700) - 40
     }
 
     @ViewBuilder
@@ -127,7 +167,8 @@ struct ConfirmationView<Footer: View>: View {
     private var rowsBox: some View {
         GroupBox {
             VStack(spacing: 8) {
-                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                // By position, since nothing about a row has to be different from the next.
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                     if index > 0 { Divider() }
                     RowView(row: row)
                 }
@@ -156,7 +197,7 @@ struct ConfirmationView<Footer: View>: View {
             .accessibilityValue(showsDetails ? "Showing" : "Hidden")
             if showsDetails {
                 VStack(spacing: 6) {
-                    ForEach(details) { RowView(row: $0).font(.callout) }
+                    ForEach(Array(details.enumerated()), id: \.offset) { RowView(row: $0.element).font(.callout) }
                 }
                 if let data { LongText(text: data) }
             }

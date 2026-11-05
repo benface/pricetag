@@ -154,10 +154,15 @@ private struct SiteRequestSummary<Footer: View>: View {
                 ConfirmationRow(label: label, value: AddressText.grouped(contract.checksummed), isAddress: true, name: "Unknown token")
             }
         }
-        let allowances = preview.allowances.map {
-            ConfirmationRow(label: "You'd allow", value: AddressText.grouped($0.spender.checksummed), isAddress: true, name: "This address to spend \($0.words)")
+        let allowances = preview.allowances.flatMap { allowance in
+            var rows = [ConfirmationRow(label: "You'd allow", value: AddressText.grouped(allowance.spender.checksummed), isAddress: true, name: "This address to spend \(allowance.words)")]
+            if let contract = allowance.unknownContract {
+                rows.append(ConfirmationRow(label: "For", value: AddressText.grouped(contract.checksummed), isAddress: true, name: allowance.isCollection ? "Unknown collection" : "Unknown token"))
+            }
+            return rows
         }
-        let rows = preview.gives.map { row("You'd give", $0) } + preview.gets.map { row("You'd get", $0) } + allowances
+        // What can leave comes first, so a long list of what's arriving can't push it out of sight.
+        let rows = preview.gives.map { row("You'd give", $0) } + allowances + preview.gets.map { row("You'd get", $0) }
         return rows.isEmpty ? [ConfirmationRow(label: "Your balances", value: "No change")] : rows
     }
 

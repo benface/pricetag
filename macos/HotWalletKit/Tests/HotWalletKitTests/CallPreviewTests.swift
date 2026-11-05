@@ -105,6 +105,65 @@ private let wethText = weth.contract!.lowercased
         #expect(multi?.gives == [.unknown(contract: scamToken)])
     }
 
+    private let otherSpender = EthereumAddress("0x6666666666666666666666666666666666666666")!
+    private let otherCollection = EthereumAddress("0x7777777777777777777777777777777777777777")!
+    private let item7 = "0x" + String(repeating: "0", count: 63) + "7"
+    private let item8 = "0x" + String(repeating: "0", count: 63) + "8"
+
+    private func itemApproval(_ collection: EthereumAddress = scamToken, spender: EthereumAddress, id: String) -> JSONValue {
+        log(collection.lowercased, "Approval(address,address,uint256)", [word(wallet), word(spender), id], data: "0x")
+    }
+
+    @Test func twoTokensForOneSpenderStayTwo() {
+        let daiText = dai.contract!.lowercased
+        let result = preview([approval(usdcText, spender: router, data: amountData(5_000_000)), approval(daiText, spender: router, data: amountData(5 * oneEth))])
+        #expect(result?.allowances.map(\.words) == ["up to 5 USDC", "up to 5 DAI"])
+        #expect(result?.allowances.allSatisfy { $0.unknownContract == nil } == true)
+    }
+
+    @Test func eachItemIsItsOwnPermission() {
+        let two = preview([itemApproval(spender: router, id: item7), itemApproval(spender: router, id: item8)])
+        #expect(two?.allowances.map(\.words) == ["2 items you hold"])
+        #expect(two?.allowances.first?.isUnlimited == false)
+
+        // An item has one approved spender, so a new one takes over.
+        let reassigned = preview([itemApproval(spender: router, id: item7), itemApproval(spender: otherSpender, id: item7)])
+        #expect(reassigned?.allowances.map(\.spender) == [otherSpender])
+        #expect(reassigned?.allowances.map(\.words) == ["one item you hold"])
+
+        let revokedOne = preview([itemApproval(spender: router, id: item7), itemApproval(spender: router, id: item8), itemApproval(spender: .zero, id: item7)])
+        #expect(revokedOne?.allowances.map(\.words) == ["one item you hold"])
+        #expect(preview([itemApproval(spender: router, id: item7), itemApproval(spender: .zero, id: item7)])?.allowances == [])
+
+        // Moving it ends the approval, even for a collection that doesn't log that.
+        let moved = preview([itemApproval(spender: router, id: item7), log(scamToken.lowercased, "Transfer(address,address,uint256)", [word(wallet), word(router), item7], data: "0x")])
+        #expect(moved?.allowances == [])
+        #expect(moved?.gives == [.unknown(contract: scamToken)])
+    }
+
+    @Test func anUnknownAllowanceSaysWhichContract() {
+        let collections = preview([itemApproval(spender: router, id: item7), itemApproval(otherCollection, spender: router, id: item7)])
+        #expect(collections?.allowances.map(\.unknownContract) == [scamToken, otherCollection])
+        #expect(collections?.allowances.allSatisfy(\.isCollection) == true)
+
+        let forAll = { (collection: EthereumAddress, flag: UInt128) in
+            log(collection.lowercased, "ApprovalForAll(address,address,bool)", [word(wallet), word(router)], data: amountData(flag))
+        }
+        let everyItem = preview([forAll(scamToken, 1), forAll(otherCollection, 1), forAll(otherCollection, 0)])
+        #expect(everyItem?.allowances.map(\.unknownContract) == [scamToken])
+        #expect(everyItem?.allowances.first?.asset.contains("0x5555") == true)
+
+        let tokens = preview([approval(scamToken.lowercased, spender: router, data: amountData(5)), approval(otherCollection.lowercased, spender: router, data: "0x" + String(repeating: "f", count: 64))])
+        #expect(tokens?.allowances.map(\.unknownContract) == [scamToken, otherCollection])
+        #expect(tokens?.allowances.map(\.words) == ["some of a token this app doesn't know", "all of a token this app doesn't know"])
+        #expect(tokens?.allowances.map(\.isCollection) == [false, false])
+    }
+
+    @Test func anAllowlistedTokenDoesntHaveItems() {
+        #expect(preview([itemApproval(usdc.contract!, spender: router, id: item7)]) == nil)
+        #expect(preview([log(usdcText, "ApprovalForAll(address,address,bool)", [word(wallet), word(router)], data: amountData(1))]) == nil)
+    }
+
     @Test func anAllowanceThatsLeftOverIsShown() {
         let limited = preview([approval(usdcText, spender: router, data: amountData(5_000_000))])
         #expect(limited?.allowances.map(\.words) == ["up to 5 USDC"])
@@ -242,6 +301,15 @@ private let wethText = weth.contract!.lowercased
         let review = try await quoted(unreadable, chain: chain)
         #expect(review.warnings.first?.isStrong == true)
         #expect(review.warnings.first?.text.contains("all of your USDC") == true)
+    }
+
+    @Test func manyUnlimitedAllowancesAreOneWarningThatCantPushTheRestAway() async throws {
+        let unlimited = "0x" + String(repeating: "f", count: 64)
+        let chain = FakeChain(snapshot())
+        await chain.setSimulation(.success(simulated([approval(usdcText, spender: router, data: unlimited), approval(dai.contract!.lowercased, spender: router, data: unlimited), approval(scamToken.lowercased, spender: router, data: unlimited)])))
+        let review = try await quoted(unreadable, chain: chain)
+        #expect(review.preview?.allowances.count == 3)
+        #expect(review.warnings.filter(\.isStrong).map(\.text) == [SiteWording.unlimited(count: 3)])
     }
 
     @Test func anUnknownTokenIsFlaggedAndNeverPriced() async throws {

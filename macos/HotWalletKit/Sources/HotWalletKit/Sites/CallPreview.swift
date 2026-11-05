@@ -16,6 +16,10 @@ public struct CallPreview: Equatable, Sendable {
         public let spender: EthereumAddress
         /// As in "to spend all of your USDC".
         public let words: String
+        /// What it's for when that's off the allowlist, which has no name to go by.
+        public let unknownContract: EthereumAddress?
+        public let isCollection: Bool
+        /// As in "take all of your USDC", when it's unlimited.
         let asset: String
         let isUnlimited: Bool
     }
@@ -68,13 +72,27 @@ struct CallSimulation {
     }
 
     private struct Grant {
+        enum Kind: Equatable {
+            /// nil if it doesn't fit, which means unlimited.
+            case amount(UInt128?, Token?)
+            /// An item has one approved spender at a time, whoever that was before.
+            case item(id: String)
+            case everyItem
+        }
+
         let contract: EthereumAddress
         let spender: EthereumAddress
-        let token: Token?
-        let amount: UInt128?
-        /// One item, or every item in a collection, rather than an amount of a token.
-        let isItem: Bool
-        let isEveryItem: Bool
+        let kind: Kind
+
+        /// Whether this is the same permission as `other`, which a later log takes the place of.
+        func isSamePermission(as other: Grant) -> Bool {
+            guard contract == other.contract else { return false }
+            switch (kind, other.kind) {
+            case (.item(let id), .item(let otherID)): return id == otherID
+            case (.amount, .amount), (.everyItem, .everyItem): return spender == other.spender
+            default: return false
+            }
+        }
     }
 
     let blockTime: UInt128?
@@ -106,7 +124,11 @@ struct CallSimulation {
         switch kind {
         case Self.transfer:
             guard topics.count == 3 || (topics.count == 4 && token == nil), let from = Self.address(topics[1]), let to = Self.address(topics[2]) else { return false }
-            guard topics.count == 3 else { return moveUnknown(contract, from: from, to: to, wallet: wallet) }
+            guard topics.count == 3 else {
+                // Moving an item ends what was approved for it, and not every collection logs that.
+                grants.removeAll { $0.contract == contract && $0.kind == .item(id: topics[3]) }
+                return moveUnknown(contract, from: from, to: to, wallet: wallet)
+            }
             guard data.count == 32 else { return false }
             if let token {
                 guard let amount = Self.amount(data) else { return false }
@@ -122,18 +144,19 @@ struct CallSimulation {
             guard let amount = Self.amount(data) else { return false }
             return kind == Self.deposit ? add(amount, to: &gained, token) : add(amount, to: &spent, token)
         case Self.approval:
-            guard topics.count == 3 || topics.count == 4, let owner = Self.address(topics[1]), let spender = Self.address(topics[2]) else { return false }
+            guard topics.count == 3 || (topics.count == 4 && token == nil), let owner = Self.address(topics[1]), let spender = Self.address(topics[2]) else { return false }
             guard owner == wallet else { return true }
-            let isItem = topics.count == 4
-            guard isItem || data.count == 32 else { return false }
-            let amount = isItem ? UInt128(1) : Self.amount(data)
-            let isCleared = !isItem && data.allSatisfy { $0 == 0 }
-            note(Grant(contract: contract, spender: spender, token: token, amount: amount, isItem: isItem, isEveryItem: false), isCleared: isCleared || (isItem && spender == .zero))
+            if topics.count == 4 {
+                note(Grant(contract: contract, spender: spender, kind: .item(id: topics[3])), isCleared: spender == .zero)
+                return true
+            }
+            guard data.count == 32 else { return false }
+            note(Grant(contract: contract, spender: spender, kind: .amount(Self.amount(data), token)), isCleared: data.allSatisfy { $0 == 0 })
             return true
         case Self.approvalForAll:
-            guard topics.count == 3, let owner = Self.address(topics[1]), let spender = Self.address(topics[2]), data.count == 32 else { return false }
+            guard topics.count == 3, token == nil, let owner = Self.address(topics[1]), let spender = Self.address(topics[2]), data.count == 32 else { return false }
             guard owner == wallet else { return true }
-            note(Grant(contract: contract, spender: spender, token: nil, amount: nil, isItem: true, isEveryItem: true), isCleared: data.allSatisfy { $0 == 0 })
+            note(Grant(contract: contract, spender: spender, kind: .everyItem), isCleared: data.allSatisfy { $0 == 0 })
             return true
         default:
             return true
@@ -160,9 +183,9 @@ struct CallSimulation {
         return !overflowed
     }
 
-    /// The latest one for this spender is what's left when it's all over.
+    /// The latest one is what's left when it's all over.
     private mutating func note(_ grant: Grant, isCleared: Bool) {
-        grants.removeAll { $0.contract == grant.contract && $0.spender == grant.spender && $0.isEveryItem == grant.isEveryItem }
+        grants.removeAll { $0.isSamePermission(as: grant) }
         if !isCleared { grants.append(grant) }
     }
 
@@ -186,23 +209,41 @@ struct CallSimulation {
         return CallPreview(
             gives: gives + unknownGiven.map { .unknown(contract: $0) },
             gets: gets + unknownGotten.map { .unknown(contract: $0) },
-            allowances: grants.map(Self.allowance)
+            allowances: allowances
         )
     }
 
-    private static func allowance(_ grant: Grant) -> CallPreview.Allowance {
-        if grant.isEveryItem {
-            return CallPreview.Allowance(spender: grant.spender, words: "every item you hold in this collection", asset: "items in this collection", isUnlimited: true)
+    private var allowances: [CallPreview.Allowance] {
+        var result: [CallPreview.Allowance] = []
+        var countedItems: Set<[EthereumAddress]> = []
+        for grant in grants {
+            let contractText = SiteWording.address(grant.contract)
+            switch grant.kind {
+            case .everyItem:
+                result.append(CallPreview.Allowance(spender: grant.spender, words: "every item you hold in this collection", unknownContract: grant.contract, isCollection: true, asset: "items in the collection at \(contractText)", isUnlimited: true))
+            case .item:
+                // Items in one collection for one spender go together, however many.
+                guard countedItems.insert([grant.contract, grant.spender]).inserted else { continue }
+                let count = grants.count { other in
+                    if case .item = other.kind { other.contract == grant.contract && other.spender == grant.spender } else { false }
+                }
+                result.append(CallPreview.Allowance(spender: grant.spender, words: count == 1 ? "one item you hold" : "\(count) items you hold", unknownContract: grant.contract, isCollection: true, asset: "items in the collection at \(contractText)", isUnlimited: false))
+            case .amount(let amount, let token):
+                let name = token?.symbol ?? "a token this app doesn't know"
+                let asset = token?.symbol ?? "tokens at \(contractText)"
+                let isUnlimited = amount.map { $0 >= TransactionReview.unlimitedAt } ?? true
+                let words: String
+                if isUnlimited {
+                    words = token == nil ? "all of \(name)" : "all of your \(name)"
+                } else if let token, let amount {
+                    words = "up to \(Money.text(ofUnits: amount, decimals: token.decimals)) \(token.symbol)"
+                } else {
+                    words = "some of \(name)"
+                }
+                result.append(CallPreview.Allowance(spender: grant.spender, words: words, unknownContract: token == nil ? grant.contract : nil, isCollection: false, asset: asset, isUnlimited: isUnlimited))
+            }
         }
-        if grant.isItem {
-            return CallPreview.Allowance(spender: grant.spender, words: "one item you hold", asset: "items in this collection", isUnlimited: false)
-        }
-        let asset = grant.token?.symbol ?? "this token"
-        guard let amount = grant.amount, amount < TransactionReview.unlimitedAt else {
-            return CallPreview.Allowance(spender: grant.spender, words: "all of your \(asset)", asset: asset, isUnlimited: true)
-        }
-        let words = grant.token.map { "up to \(Money.text(ofUnits: amount, decimals: $0.decimals)) \($0.symbol)" } ?? "some of a token this app doesn't know"
-        return CallPreview.Allowance(spender: grant.spender, words: words, asset: asset, isUnlimited: false)
+        return result
     }
 
     private static func address(_ topic: String) -> EthereumAddress? {

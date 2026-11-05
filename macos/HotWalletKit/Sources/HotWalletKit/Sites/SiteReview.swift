@@ -28,6 +28,11 @@ public enum SiteWording {
         "This lets \(spender) take all of your \(asset), now or at any time later, without asking again. Scams rely on this. Only approve it if you trust this site and meant to do this."
     }
 
+    /// One warning however many, so a call can't push everything else off the screen with them. The rows say which they are.
+    static func unlimited(count: Int) -> String {
+        "This lets others take all of \(count) different tokens or collections, now or at any time later, without asking again. Scams rely on this. Only approve it if you trust this site and meant to do this."
+    }
+
     static func typedPermit(spender: String?) -> String {
         "This signature lets \(spender ?? "someone else") spend your tokens or act for you, with no transaction and no fee, so you won't see it happen. Scams rely on this. Only approve it if you trust this site and meant to do this."
     }
@@ -287,7 +292,10 @@ extension TransactionReview {
             if let preview {
                 warnings.append(SiteWarning(SiteWording.previewIsAnEstimate))
                 if preview.movesUnknownToken { warnings.append(SiteWarning(SiteWording.previewHasUnknownToken)) }
-                for allowance in preview.allowances where allowance.isUnlimited {
+                let unlimited = preview.allowances.filter(\.isUnlimited)
+                if unlimited.count > 1 {
+                    warnings.append(SiteWarning(SiteWording.unlimited(count: unlimited.count), isStrong: true))
+                } else if let allowance = unlimited.first {
                     warnings.append(SiteWarning(SiteWording.unlimited(spender: SiteWording.address(allowance.spender), asset: allowance.asset), isStrong: true))
                 }
             } else {

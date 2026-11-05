@@ -19,6 +19,7 @@ struct HotWalletFixture {
     /// What a simulation says these do, in `FixtureChain`.
     static let swapRouter = "0x2626664c2603336e57b271c5c0b26f421741e481"
     static let unknownRouter = "0x00000000000000000000000000000000000de305"
+    static let longRouter = "0x00000000000000000000000000000000000de307"
 
     private var hasWallet = true
     private var hasSavings = true
@@ -186,6 +187,15 @@ private nonisolated struct FixtureChain: ChainClient {
                 Self.log(unknownToken, .transfer, to, wallet, 1_000_000_000_000_000_000),
                 Self.log(usdc, .approval, wallet, to, UInt128.max),
             ]
+        case HotWalletFixture.longRouter:
+            let dai = "0x50c5725949a6f0c72e6c4a641f24049a917db0cb"
+            let unknownTokens = (0..<12).map { index in "0x00000000000000000000000000000000000de4" + String(format: "%02x", index) }
+            logs = [
+                Self.log(usdc, .transfer, wallet, to, 200_000_000),
+                Self.log(usdc, .approval, wallet, to, 5_000_000),
+                Self.log(dai, .approval, wallet, to, 5_000_000_000_000_000_000),
+                Self.log(unknownToken, .approval, wallet, to, UInt128.max),
+            ] + unknownTokens.map { Self.log($0, .transfer, to, wallet, 1) }
         default:
             return .failure(SiteError(code: -32601, message: "the method eth_simulateV1 does not exist/is not available"))
         }
