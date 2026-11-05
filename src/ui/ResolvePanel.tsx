@@ -203,10 +203,14 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
               {formatAmount(arrival.units, arrival.decimals)} {arrival.asset}
             </strong>
           ))}
-          <p className="small muted">
-            {current.sender ? `From ${shortHash(current.sender)} · ${current.transfers === 1 ? "1 transfer" : `${current.transfers} transfers`}` : "We can't tell what you paid for this"}
-            {current.wallet !== wallet.address.toLowerCase() ? ` · arrived in your other wallet ${shortHash(current.wallet)}` : ""}
-          </p>
+          {current.sender ? (
+            <p className="small muted">
+              From {shortHash(current.sender)} · {current.transfers === 1 ? "1 transfer" : `${current.transfers} transfers`}
+              {current.wallet !== wallet.address.toLowerCase() ? ` · arrived in your other wallet ${shortHash(current.wallet)}` : ""}
+            </p>
+          ) : current.wallet !== wallet.address.toLowerCase() ? (
+            <p className="small muted">Arrived in your other wallet {shortHash(current.wallet)}</p>
+          ) : null}
           {current.evidence.map((fact) => (
             <p key={fact} className="small muted">
               💡 {fact}

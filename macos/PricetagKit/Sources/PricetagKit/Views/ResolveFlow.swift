@@ -150,7 +150,9 @@ public struct ResolveFlow: View {
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
             }
-            Text(detail(question)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+            if let detail = detail(question) {
+                Text(detail).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+            }
             ForEach(question.evidence, id: \.self) { fact in
                 Label(fact, systemImage: "lightbulb").font(.callout).foregroundStyle(.secondary)
             }
@@ -158,11 +160,12 @@ public struct ResolveFlow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func detail(_ question: Question) -> String {
+    /// What it can say about where this came from. With no sender, the line under the question already says why it's asked.
+    private func detail(_ question: Question) -> String? {
         let transfers = question.transfers == 1 ? "1 transfer" : "\(question.transfers) transfers"
-        let elsewhere = question.wallet != store.portfolio?.address.lowercased() ? " · arrived in your other wallet \(Format.shortHash(question.wallet))" : ""
-        guard let sender = question.sender else { return "We can't tell what you paid for this\(elsewhere)." }
-        return "From \(Format.shortHash(sender)) · \(transfers)\(elsewhere)"
+        let isElsewhere = question.wallet != store.portfolio?.address.lowercased()
+        guard let sender = question.sender else { return isElsewhere ? "Arrived in your other wallet \(Format.shortHash(question.wallet))" : nil }
+        return "From \(Format.shortHash(sender)) · \(transfers)\(isElsewhere ? " · arrived in your other wallet \(Format.shortHash(question.wallet))" : "")"
     }
 
     private func senderCard(_ question: Question) -> some View {
