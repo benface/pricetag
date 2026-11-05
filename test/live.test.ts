@@ -141,7 +141,7 @@ describe("following the chain", () => {
     await chain.stop()
   })
 
-  it("polls when the stream fails, and goes back to it from the newest block", async () => {
+  it("polls when the stream fails, and goes back to it from the last block it finished, without saying the polled ones again", async () => {
     const hand = handStream()
     let mark = MARK
     const chain = following({ stream: hand.stream, readMark: async () => mark, retryMs: 20 })
@@ -151,9 +151,28 @@ describe("following the chain", () => {
     hand.send(new Error("no stream here"))
     assert.deepEqual(await first, { kind: "block", blockNum: 101, reorgFrom: null, via: "polling" })
     while (hand.resumes.length < 2) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.deepEqual(hand.resumes[1], MARK)
+    hand.send(blockOf(101), blockOf(102))
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 102, reorgFrom: null, via: "stream" })
+    await chain.stop()
+  })
+
+  it("says a reorg that replaced the last streamed block while polling, however deep, once the stream is back", async () => {
+    // Found on a real Amp (WORK-497): a derived table took longer than the stall timeout to recover from a 328-block reorg.
+    const hand = handStream()
+    let mark = MARK
+    const chain = following({ stream: hand.stream, readMark: async () => mark, stallMs: 5, retryMs: 20 })
+    const first = chain.next()
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    hand.send(blockOf(101))
+    assert.deepEqual(await first, { kind: "block", blockNum: 101, reorgFrom: null, via: "stream" })
+    // The stream goes quiet, and polling only sees a higher head, which is on the new chain.
+    mark = { blockNum: 500, hash: "0xnew500" }
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 500, reorgFrom: null, via: "polling" })
+    while (hand.resumes.length < 2) await new Promise((resolve) => setTimeout(resolve, 2))
     assert.deepEqual(hand.resumes[1], { blockNum: 101, hash: "0x101" })
-    hand.send(blockOf(102))
-    assert.equal(((await chain.next()) as { via: string }).via, "stream")
+    hand.send(blockOf(501, 90, "0xnew501"))
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 501, reorgFrom: 90, via: "stream" })
     await chain.stop()
   })
 

@@ -27,7 +27,7 @@ An honest account of building Pricetag on Amp, November 4 to 5, 2026. Private to
 | "The data is tables, with no custom indexer to write" | [ampdb.com](https://ampdb.com) | True. 15 tables of SQL and 3 JS functions (`dataset/pricetag.json`). A hand-checked swap was within 0.0075% of Chainlink ([WORK-319]) | measured | **Held** |
 | "A derived dataset is a SQL query Amp keeps updated block by block" | [ampdb.com](https://ampdb.com) | True, within the incremental rules in [section 4](#4-where-it-falls-short). `benface/pricetag@0.1.0` ran overnight with no failure events ([WORK-448]) | measured | **Held** |
 | "Under a second behind the chain head" | [ampdb.com](https://ampdb.com), said of raw datasets | Close for raw data: a median of about 0.4–1.2 s on today's 200 ms blocks, and at most 4.7 s. But apps read derived tables, and `priced_legs` runs a median of about 4–6 s behind, at most about 11 s. The line on the site's hero doesn't say it's raw only | measured | **Raw nearly, derived no** |
-| "Correct through reorgs" | [ampdb.com](https://ampdb.com) | Not seen. No real reorg happened during any run, so our handling is only proven against a fake Amp ([WORK-356]). The design reads well ([`docs/reorgs.md`](https://github.com/edgeandnode/amp/blob/5c966c6f37203fe242175a9e407c1d7ec1fb5dec/docs/reorgs.md)). [WORK-497] forces one through a real local Amp | code | **Not tested** |
+| "Correct through reorgs" | [ampdb.com](https://ampdb.com) | Held locally, but slowly for deep ones, and not every time. We forced 13 reorgs of 5 to 400 blocks through a local `ampd` on an Anvil fork of Base ([WORK-497]). Raw tables matched the new chain in 2–17 s. Derived ones took 3–18 s for up to 26 blocks, 29–49 s for 119–136, and 93–125 s for 277–343, because a derived job walks back to the fork one block at a time (`crates/atlatl/src/streaming_query.rs:1515` at v0.0.42). Until then they return the old rows with no error. Twice in 6 reorgs over 250 blocks, Amp didn't recover while we watched: once raw tables kept the old blocks, and once 4 derived tables failed every query ([WORK-519]). The app's streaming client matched the new chain every time Amp did, after a fix to where our stream resumes. One that only polls still misses a reorg older than a minute ([WORK-520]). Only Anvil, so it says nothing about a real Base reorg | measured, code | **Held, slow when deep** |
 | "Query as of a pinned revision and get the same answer every time" | [ampdb.com](https://ampdb.com) | Pinned hashes held: a wrong hash fails ([WORK-365]), a replay with different batches differed on 0 of 926 blocks ([WORK-330]), and two deployments matched on every row sampled ([WORK-376]). Two exceptions: a failed `eth_call` can commit a permanent NULL ([WORK-326]), and JS functions can see the clock and random numbers ([WORK-322]). Tags can move, as documented, and did so silently on us | measured | **Held, with gaps** |
 | "Bad RPC data never lands": "With `--verify`, Amp recomputes header hashes and Merkle roots" | [ampdb.com](https://ampdb.com) | Can't work on Base. OP Stack deposits are unsupported, and every Base block starts with one. The feature is marked [experimental in the docs](https://github.com/edgeandnode/amp/blob/5c966c6f37203fe242175a9e407c1d7ec1fb5dec/docs/feat/verification.md), not on the site. `ampctl verify` fails every Base block with no reason given ([WORK-378], [#1819]) | measured, docs | **Not on Base** |
 | "Stream results... with signals that tell your application which rows to replace" | [docs.ampdb.com](https://docs.ampdb.com) | The server does this. The TypeScript SDK's `client.stream` drops the block ranges those signals are, and dies on the 30 s keepalive, so we read Flight directly ([WORK-356], `packages/sdk/src/amp.ts:129`). Fixes are approved but unreleased: npm is still at 0.0.55 ([WORK-141], [142][WORK-142], [144][WORK-144]) | measured | **Server yes, SDK no** |
@@ -226,8 +226,7 @@ Ranked by value. None of these should merge before the demo, since they change `
 | 4 | **Stream `legs WHERE account = ...` for live updates** instead of a signal and a re-read ([WORK-493]) | Only new rows per update, which could fix [WORK-410]. It already ran on these tables ([WORK-356]) | Balances and fees still need reads. Needs its own client until the SDK fixes ship |
 | 5 | **Try a longer history** on a separate test dataset, say 30 days ([WORK-495]) | Fewer unknown costs, the demo's biggest limit | Time, storage and old aggregator addresses. Never measured |
 | 6 | **Ask for compressed results** ([#3377] merged) for busy wallets | Smaller transfers for 75,000-row reads | Client support not checked |
-| 7 | **Force a reorg through a real local Amp** ([WORK-497]) | Evidence for "correct through reorgs", and the app's handling tested end to end | Only Anvil, so it says nothing about a real Base reorg |
-| 8 | **Join on the block number directly,** now that those joins stack | Fewer stages | Only schema-checked, so low value on its own |
+| 7 | **Join on the block number directly,** now that those joins stack | Fewer stages | Only schema-checked, so low value on its own |
 
 **Tried or read, and not worth it now:**
 - **`client.stream`:** switch back once [WORK-141] and [144][WORK-144] ship, and delete `createRangeStream`.
@@ -333,7 +332,7 @@ No new issues were filed in the `amp` project: everything that meets its bar alr
 
 **Don't say:**
 - "Under a second," "verified by Amp," or "any EVM chain," without what's above.
-- "Correct through reorgs." We haven't seen one. [WORK-497] tests it locally, so this can change if it passes.
+- "Correct through reorgs," with nothing after it. We forced them locally on Anvil, not on Base ([WORK-497]), and deep ones took Amp about 2 minutes, or didn't recover. Say: "We forced reorgs through a local Amp. Up to 136 blocks, 27 seconds of Base, the app fixed itself in under a minute."
 - "All through Amp." L1 fees and deposit fields come from an RPC, and sends always will.
 - "We could add PnL leaderboards." It can't be a shared table, and it isn't this product anyway.
 - "Nobody else prices transfers." Goldsky Feeds sells a price per transfer. Ours is different because it's an open dataset with source labels, a forkable rule, and an honest `unknown`.
@@ -389,6 +388,8 @@ No new issues were filed in the `amp` project: everything that meets its bar alr
 [WORK-494]: https://multica.ai/benface-work/issues/01a1acf0-b035-74d7-95c1-86616c797330
 [WORK-495]: https://multica.ai/benface-work/issues/01a1acf0-b3b9-70df-ac74-e7f964f347b3
 [WORK-497]: https://multica.ai/benface-work/issues/01a1acfb-4a15-7718-b36d-9c5c03aae7c1
+[WORK-519]: https://multica.ai/benface-work/issues/01a1ad4a-d011-7430-8447-bb5443d76b0c
+[WORK-520]: https://multica.ai/benface-work/issues/01a1ad4a-d2ec-7501-9a5b-1095fea392d3
 [#479]: https://github.com/edgeandnode/amp/issues/479
 [#1819]: https://github.com/edgeandnode/amp/issues/1819
 [#3377]: https://github.com/edgeandnode/amp/issues/3377

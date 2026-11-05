@@ -46,6 +46,11 @@ function merged(pending: ChainTick | null, next: ChainTick): ChainTick {
 
 async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS, retryMs = RETRY_MS, stallMs = STALL_MS }: FollowConfig, emit: (tick: ChainTick) => void, signal: AbortSignal) {
   let last: BlockMark | null = null
+  /**
+   * Where the stream resumes: the last block it finished, not the newest one polling found. Polling only sees a reorg at
+   * the head, so this lets Amp say if one replaced this block in the meantime, however deep it was.
+   */
+  let resume: BlockMark | null = null
   /** The first block replaced by a reorg that no tick has said yet. It outlives a stream that dies halfway through reporting one. */
   let reorgFrom: number | null = null
 
@@ -66,7 +71,10 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
         const isSameBlock = range.end === at.blockNum && range.hash === at.hash
         if (range.start <= at.blockNum && !isSameBlock) reorgFrom = Math.min(reorgFrom ?? range.start, range.start)
         if (!range.complete || isSameBlock) continue
-        at = last = { blockNum: range.end, hash: range.hash }
+        at = resume = { blockNum: range.end, hash: range.hash }
+        // Catching up on blocks polling already said, with nothing replaced.
+        if (reorgFrom === null && last && range.end <= last.blockNum) continue
+        last = at
         emit(tickFor(range.end, "stream"))
       }
       throw new Error("The stream ended")
@@ -91,7 +99,8 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
     if (stream) {
       try {
         last ??= await readMark(null)
-        if (last) await followStream(stream, last)
+        resume ??= last
+        if (resume) await followStream(stream, resume)
       } catch (error) {
         if (signal.aborted) return
         logger.warn(`Amp's stream stopped, so polling until it's back: ${describeError(error)}`)
