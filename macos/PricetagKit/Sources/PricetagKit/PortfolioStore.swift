@@ -59,6 +59,10 @@ public final class PortfolioStore {
     public private(set) var address: String?
     public private(set) var method: CostMethod
     public private(set) var currency: CurrencyCode
+    /// How the holdings are ordered. It's the same for every wallet, and it's remembered.
+    public var holdingsSort: HoldingsSort {
+        didSet { defaults.set(holdingsSort.rawValue, forKey: Keys.holdingsSort) }
+    }
     /// What one USD buys right now in `currency`, for what isn't part of a wallet's own read. Nil in USD, or with no current rate.
     private var currentRate: CurrentRate?
     public private(set) var serverURL: URL
@@ -121,6 +125,7 @@ public final class PortfolioStore {
         self.address = address
         self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
         self.currency = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
+        self.holdingsSort = defaults.string(forKey: Keys.holdingsSort).flatMap(HoldingsSort.init(rawValue:)) ?? .largestFirst
         self.serverURL = serverURL
         self.answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.selectedRule = defaults.string(forKey: Keys.rule)
@@ -571,6 +576,7 @@ public final class PortfolioStore {
         static let book = "answers"
         static let rule = "pricingRule"
         static let savedWallets = "savedWallets"
+        static let holdingsSort = "holdingsSort"
     }
 }
 

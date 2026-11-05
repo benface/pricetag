@@ -26,7 +26,7 @@ import Testing
         #expect(!held.isEmpty)
         #expect(held.allSatisfy { $0.explainableMetrics.contains(.average) })
         let usdc = try #require(held.first { $0.asset == "USDC" })
-        #expect(usdc.explainableMetrics.map(\.title) == ["Balance check", "Amount", "Average price paid", "Value", "Realized PnL", "Unrealized PnL"])
+        #expect(usdc.explainableMetrics.map(\.title) == ["Balance check", "Amount", "Price", "Average price paid", "Value", "Realized PnL", "Unrealized PnL", "Return"])
     }
 
     @Test func keepsUnknownPointsUnknown() throws {

@@ -13,6 +13,8 @@ public enum Wording {
     public static let pnlHelp = "PnL is profit and loss: what you've gained or lost so far."
     public static let realizedHelp = "Gain or loss on what you've sold or spent."
     public static let unrealizedHelp = "Gain or loss on what you still hold, at the current price."
+    public static let marketEstimates = "Some prices are estimates, from the market."
+    public static let returnHelp = "Unrealized PnL as a share of what you paid for what you still hold."
 
     public static let holdTitle = "Compared with holding ETH"
     public static let holdWallet = "This wallet, after network fees"
@@ -337,7 +339,9 @@ extension AssetMetric {
         switch self {
         case .amount: "amount"
         case .average: Wording.averagePricePaid.lowercased()
+        case .price: "price"
         case .value: "value"
+        case .return: "return"
         case .realized: "realized PnL"
         case .unrealized: "unrealized PnL"
         case .onchain: Wording.balanceCheck.lowercased()
@@ -353,6 +357,7 @@ extension AssetMetric {
         switch self {
         case .realized: Wording.realizedHelp
         case .unrealized: Wording.unrealizedHelp
+        case .return: Wording.returnHelp
         default: nil
         }
     }

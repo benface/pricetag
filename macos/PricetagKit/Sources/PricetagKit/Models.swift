@@ -105,6 +105,8 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public let price: LatestPrice?
     public let values: PositionValues
     public let pnlMicros: String?
+    /// Unrealized over the cost of what's held, in basis points. nil when either is unknown, or it cost nothing. Never 0 for unknown.
+    public let returnBps: String?
     public let shortfallQty: String
     public let legCount: Int
     public let reconciliation: Reconciliation?
@@ -124,7 +126,8 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
         AssetMetric.tableOrder.filter { metric in
             switch metric {
             case .amount, .realized: true
-            case .average, .value, .unrealized: isHeld
+            case .price: price != nil
+            case .average, .value, .unrealized, .return: isHeld
             case .onchain: reconciliation != nil || hasShortfall
             }
         }
@@ -308,16 +311,7 @@ public struct Portfolio: Codable, Sendable, Equatable {
 
     /// What a glance lists: what's held, most valuable first. One with no price can't be ranked, so it goes last, and it isn't treated as worth nothing.
     public func largestHoldings(_ limit: Int) -> [Position] {
-        func value(_ position: Position) -> Decimal? { position.values.valueMicros.flatMap { Decimal(string: $0) } }
-        let sorted = listedPositions.filter(\.isHeld).sorted { a, b in
-            switch (value(a), value(b)) {
-            case let (a?, b?) where a != b: a > b
-            case (_?, nil): true
-            case (nil, _?): false
-            default: a.asset < b.asset
-            }
-        }
-        return Array(sorted.prefix(limit))
+        Array(listedPositions.filter(\.isHeld).sorted(using: HoldingsSort.largestFirst).prefix(limit))
     }
 
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
@@ -435,9 +429,9 @@ public enum TotalMetric: String, Sendable, Hashable, CaseIterable {
 }
 
 public enum AssetMetric: String, Sendable, Hashable, CaseIterable {
-    case amount, average, value, realized, unrealized, onchain
+    case amount, average, price, value, realized, unrealized, `return`, onchain
 
-    static let tableOrder: [AssetMetric] = [.onchain, .amount, .average, .value, .realized, .unrealized]
+    static let tableOrder: [AssetMetric] = [.onchain, .amount, .price, .average, .value, .realized, .unrealized, .return]
 }
 
 /// A number someone clicked, to read what's behind it.
