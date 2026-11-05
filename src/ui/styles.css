@@ -189,6 +189,13 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .check.passed .check-mark { color: var(--gain); }
 .check.failed .check-mark, .check.unchecked .check-mark { color: var(--warn-ink); }
 .proof-result.failed, .proof-result.unchecked { color: var(--warn-ink); font-weight: 600; }
+.hold h2 { margin: 0 0 8px; font-weight: 400; }
+.hold p { margin: 8px 0 0; }
+.hold-numbers { display: flex; flex-wrap: wrap; gap: 8px 32px; align-items: end; width: 100%; padding: 0; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.hold-numbers > span:not(.hold-difference) > span:first-child { display: block; }
+.hold-numbers strong { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.hold-numbers:hover strong { text-decoration: underline; }
+.hold-difference { font-size: 14px; color: var(--text-secondary); }
 .tax-link { text-align: right; margin: -6px 2px 14px; }
 .tax { display: flex; flex-direction: column; gap: 12px; }
 .tax .notice { margin: 0; }

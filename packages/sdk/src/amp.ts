@@ -1,6 +1,10 @@
 // The only file that talks to Amp, and the only place the token is used. `core.ts` must never reach this, so it stays out of browsers.
 
-import { createAuthInterceptor, createClient } from "@edgeandnode/amp"
+import { create, toBinary } from "@bufbuild/protobuf"
+import { AnySchema, anyPack } from "@bufbuild/protobuf/wkt"
+import { ArrowFlight, createAuthInterceptor, createClient } from "@edgeandnode/amp"
+import * as Flight from "@edgeandnode/amp/proto/Flight_pb"
+import * as FlightSql from "@edgeandnode/amp/proto/FlightSql_pb"
 import type { Interceptor } from "@connectrpc/connect"
 import { createGrpcTransport } from "@connectrpc/connect-node"
 
@@ -98,4 +102,48 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
     return result
   }
   return Object.assign(queryWith(clientWith()), { aliased: (aliases: Record<string, string>) => queryWith(clientWith(aliases)) })
+}
+
+/** A block and its hash, which is what a stream resumes from. */
+export type BlockMark = { blockNum: number; hash: string }
+
+/** The blocks one message of a stream covers. `complete` means every row in them has been sent. */
+export type StreamRange = { start: number; end: number; hash: string; complete: boolean }
+
+/** A query followed as new blocks arrive, from just after `resume`. It says what each message covers, and leaves the rows. */
+export type StreamRanges = (sql: string, resume: BlockMark, signal: AbortSignal) => AsyncIterable<StreamRange>
+
+/** What a stream message says it covers, or null for one that says nothing, like a keepalive or the schema. */
+export function parseStreamRange(metadata: Uint8Array, network: string): StreamRange | null {
+  if (metadata.length === 0) return null
+  const { ranges, ranges_complete: complete } = JSON.parse(new TextDecoder().decode(metadata)) as {
+    ranges: { network: string; numbers: { start: number; end: number }; hash: string }[]
+    ranges_complete: boolean
+  }
+  const range = ranges.find((r) => r.network === network)
+  if (!range) throw new Error(`The stream reports ${ranges.map((r) => r.network).join(", ") || "no network"}, not ${network}`)
+  return { start: range.numbers.start, end: range.numbers.end, hash: range.hash, complete }
+}
+
+/**
+ * Amp's own `client.stream` can't be used here, for two reasons found by running it. It drops each batch's block ranges, and
+ * they're the only way to see a reorg. And it fails on the empty keepalive Amp sends every 30 s, because it reads that
+ * as Arrow data. So this reads Flight directly, and only the metadata: rows always come from a bounded query.
+ *
+ * `network` is the name Amp's block ranges use, like `base-mainnet`.
+ */
+export function createRangeStream(url: string, token: string | undefined, network: string): StreamRanges {
+  const { client } = ArrowFlight.make(createGrpcTransport({ baseUrl: url, interceptors: token ? [createAuthInterceptor(token)] : [] }))
+  return async function* (sql, resume, signal) {
+    const command = anyPack(FlightSql.CommandStatementQuerySchema, create(FlightSql.CommandStatementQuerySchema, { query: sql }))
+    const descriptor = create(Flight.FlightDescriptorSchema, { type: Flight.FlightDescriptor_DescriptorType.CMD, cmd: toBinary(AnySchema, command) })
+    const headers = { "amp-stream": "true", "amp-resume": JSON.stringify({ [network]: { number: resume.blockNum, hash: resume.hash } }) }
+    const info = await client.getFlightInfo(descriptor, { signal, headers })
+    const ticket = info.endpoint[0]?.ticket
+    if (!ticket) throw new Error("Amp didn't answer the stream with a ticket")
+    for await (const message of client.doGet(ticket, { signal })) {
+      const range = parseStreamRange(message.appMetadata, network)
+      if (range) yield range
+    }
+  }
 }

@@ -3,7 +3,7 @@
 // that also moved a token off the allowlist, an opening balance, a balance the legs don't explain, and senders to answer
 // for: another of this user's wallets, a stranger, an exchange address and a bridge. Answering them is the demo.
 
-import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, normalizeAddress, openingLegs, type CurrencyCode, type LegKind, type LegRow, type Rates, type Reference } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, markNeeds, normalizeAddress, openingLegs, type CurrencyCode, type LegKind, type LegRow, type Rates, type Reference } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
 
 export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
@@ -91,6 +91,9 @@ const SAVINGS_FROM = START_BLOCK - 500
 /** What these tokens were trading at. In the real thing, this comes from `priced_legs` with guards. DEGEN has no market. */
 const MARKET: Record<string, string> = { AERO: "1400000", cbBTC: "68000000000", DAI: "1000100", USDT: "999900", VIRTUAL: "2100000" }
 const market = (asset: string) => MARKET[asset] ?? null
+/** Where AERO was trading on its way there: near what the wallet paid and sold it for at those blocks. */
+const AERO_MARKET: [blockOffset: number, usdMicros: string][] = [[900, "1250000"], [1200, "1310000"], [1500, "1360000"], [2400, "1500000"], [3000, "1470000"], [3600, "1450000"], [4200, "1430000"], [4800, "1410000"], [5000, "1400000"]]
+const marketAt = (asset: string, block: number) => (asset === "AERO" ? AERO_MARKET.find(([offset]) => START_BLOCK + offset === block)?.[1] : MARKET[asset]) ?? null
 
 function reference(blockOffset: number, ethUsd: number, usdcUsd = 0.9998): Reference {
   return {
@@ -119,9 +122,11 @@ const references: Reference[] = [
   reference(HEAD_OFFSET, 2640),
 ]
 
+const opening = { blockNum: START_BLOCK - 1, amounts: { DAI: (250n * E18).toString() } }
+
 const legs = [
   // DAI that was already there before the first block read, and hasn't moved since.
-  ...openingLegs({ blockNum: START_BLOCK - 1, amounts: { DAI: (250n * E18).toString() } }, new Date(START_TIME - 2000).toISOString()),
+  ...openingLegs(opening, new Date(START_TIME - 2000).toISOString()),
   ...buildPricedLegs({ account: DEMO_ADDRESS, rows, references, priced: derivePricedRows(rows, references), market }),
 ]
 
@@ -154,6 +159,7 @@ const common = {
   rates: null,
   notes: [],
   marketChecked: true,
+  marketMarks: {},
 }
 
 /** USD for one Canadian dollar, moving enough that converting at the wrong moment would show. */
@@ -183,9 +189,16 @@ export function demoRates(currency: CurrencyCode): Rates {
   return { byBlock: Object.fromEntries(rounds.map((r) => [r.blockNum, r.round])), latest: rounds.at(-1) ?? null }
 }
 
+const marketMarks: WalletResponse["marketMarks"] = {}
+for (const { asset, block } of markNeeds(DEMO_ADDRESS, rows, opening)) {
+  const price = marketAt(asset, block)
+  if (price) (marketMarks[block] ??= {})[asset] = price
+}
+
 export const DEMO_WALLET: WalletResponse = {
   ...common,
   address: DEMO_ADDRESS,
+  marketMarks,
   coverage: { fromBlock: START_BLOCK, toBlock: START_BLOCK + HEAD_OFFSET },
   legs,
   balances: { blockNum: START_BLOCK + HEAD_OFFSET, amounts: Object.fromEntries([...balances].map(([asset, amount]) => [asset, amount.toString()])) },

@@ -1105,6 +1105,131 @@ describe("market prices, notes and unlisted tokens", () => {
     const atOlder = a.pricedOn(ME, older, {}, await a.marketOn(ME, older, {}))!
     assert.ok(atOlder.prices.AERO!.blockNum <= 960, "a price from after that block would be the wrong one")
     assert.deepEqual(older.notes, [], "nor a note from after it")
+    assert.deepEqual([byA.marketMarks[950]?.AERO, byB.marketMarks[950]], ["1300000", undefined], "a chart's prices come from each rule's own trades too")
+  })
+
+  it("marks what's held at each later transaction's block, from at or before it", async () => {
+    const { source, reads } = marketFake(new Map([[900, [row(900)]], [950, [aeroRow(950)]], [980, [row(980)]]]), {})
+    const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.deepEqual(wallet.marketMarks, { 950: { AERO: "1300000" }, 980: { AERO: "1300000" } })
+    assert.equal(reads.filter(([, , to]) => to === 900).length, 1, "950 and 980 share a read, and 900 isn't held yet")
+    assert.deepEqual(wallet.legs.map((l) => l.blockNum), [900, 950, 980], "and nothing else changes")
+  })
+
+  it("leaves a block out when too little trading backs a price there", async () => {
+    const { source } = marketFake(new Map([[950, [aeroRow(950)]], [980, [row(980)]]]), {
+      async readMarketTrades() {
+        return []
+      },
+    })
+    assert.deepEqual((await createWallets(source, headAt(1000), noFees).get(ME)).marketMarks, {})
+  })
+
+  describe("on a busy wallet", () => {
+    const busy = new Map([[150, [aeroRow(150)]], ...Array.from({ length: 40 }, (_, i): [number, LegRow[]] => [300 + i * 150, [row(300 + i * 150)]])])
+    const HEAD = 300 + 39 * 150
+
+    it("reads what prices the wallet first, and fills in the chart over the next refreshes, newest first", async () => {
+      const { source, reads } = marketFake(busy, { historyFrom: (head) => head - HEAD })
+      let head = HEAD
+      const wallets = createWallets(source, async () => headAt(head)(), noFees)
+      const first = await wallets.get(ME)
+      assert.equal(reads.length, 20, "the same limit as before")
+      assert.equal(first.marketChecked, true, "all that's waiting is chart points")
+      assert.equal(first.legs[0]?.priceMicros, "1300000")
+      assert.equal(first.prices.AERO?.source, "market")
+      assert.equal(first.marketMarks[HEAD]?.AERO, "1300000")
+      assert.equal(first.marketMarks[450], undefined, "not read yet, so it has no price")
+      head += 1
+      const second = await wallets.get(ME)
+      head += 1
+      const third = await wallets.get(ME)
+      assert.equal(second.marketChecked, true)
+      assert.ok(Object.keys(third.marketMarks).length > Object.keys(first.marketMarks).length)
+      assert.equal(third.marketMarks[450]?.AERO, "1300000")
+    })
+
+    it("still calls what prices the wallet checked when a read for the chart fails", async () => {
+      let count = 0
+      const { source } = marketFake(busy, {
+        historyFrom: (head) => head - HEAD,
+        async readMarketTrades(_, __, to) {
+          if (++count > 5) throw new Error("boom")
+          return trades(to)
+        },
+      })
+      const wallet = await createWallets(source, headAt(HEAD), noFees).get(ME)
+      assert.equal(count, 6, "it stops at the first failure")
+      assert.equal(wallet.marketChecked, true)
+      assert.equal(wallet.legs[0]?.priceMicros, "1300000")
+    })
+
+    describe("read as of a fixed block, which has no new block coming", () => {
+      const RANGE = { from: 1, to: HEAD }
+      const settled = async () => headAt(HEAD + 1000)()
+      const readBalances: Source["readBalances"] = async (_, block) => ({ blockNum: block, amounts: Object.fromEntries(ASSETS.map((asset) => [asset, "0"])) })
+      const marked = (wallet: { marketMarks: Record<string, unknown> }) => Object.keys(wallet.marketMarks).length
+
+      it("keeps reading what the limit left, then stops", async () => {
+        const { source, reads } = marketFake(busy, { readBalances })
+        const wallets = createWallets(source, settled, noFees)
+        assert.deepEqual([marked(await wallets.get(ME, RANGE)), reads.length], [20, 20])
+        assert.deepEqual([marked(await wallets.get(ME, RANGE)), reads.length], [40, 40])
+        assert.deepEqual([marked(await wallets.get(ME, RANGE)), reads.length], [41, 41])
+        assert.deepEqual([marked(await wallets.get(ME, RANGE)), reads.length], [41, 41], "there's nothing left to read")
+      })
+
+      it("tries a failed read for the chart again, without calling what prices the wallet unchecked", async () => {
+        let fail = true
+        let count = 0
+        const { source } = marketFake(busy, {
+          readBalances,
+          async readMarketTrades(_, __, to) {
+            if (fail && ++count === 5) throw new Error("boom")
+            return trades(to)
+          },
+        })
+        const wallets = createWallets(source, settled, noFees)
+        const failed = await wallets.get(ME, RANGE)
+        assert.equal(failed.marketChecked, true)
+        assert.equal(marked(failed), 4)
+        fail = false
+        const retried = await wallets.get(ME, RANGE)
+        assert.equal(retried.marketChecked, true)
+        assert.equal(marked(retried), 24)
+      })
+
+      it("tries a failed read of a price the wallet needs again, and says so until it works", async () => {
+        let fail = true
+        const { source } = marketFake(busy, {
+          readBalances,
+          async readMarketTrades(_, __, to) {
+            if (fail) throw new Error("boom")
+            return trades(to)
+          },
+        })
+        const wallets = createWallets(source, settled, noFees)
+        assert.equal((await wallets.get(ME, RANGE)).marketChecked, false)
+        fail = false
+        const retried = await wallets.get(ME, RANGE)
+        assert.equal(retried.marketChecked, true)
+        assert.equal(retried.legs[0]?.priceMicros, "1300000")
+      })
+
+      it("doesn't keep reading a dataset whose priced_legs can't be trusted, or a source with no market", async () => {
+        let checks = 0
+        const { source, windows } = fake(busy, () => reference(HEAD))
+        const untrusted = createWallets({ ...source, readBalances, marketReady: async () => (checks++, false), readMarketTrades: async () => [] }, settled, noFees)
+        await untrusted.get(ME, RANGE)
+        await untrusted.get(ME, RANGE)
+        assert.equal(checks, 1)
+        const none = createWallets({ ...source, readBalances }, settled, noFees)
+        const before = windows.length
+        const first = await none.get(ME, RANGE)
+        assert.equal(await none.get(ME, RANGE).then((w) => w.coverage.toBlock), first.coverage.toBlock)
+        assert.equal(windows.length, before + 1)
+      })
+    })
   })
 
   it("reads a market price for the block it's asked about, when the wallet was read in another bucket", async () => {

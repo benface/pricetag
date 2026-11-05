@@ -11,6 +11,6 @@ enum HotWalletFactory {
         #else
         let signer = KeyVault()
         #endif
-        return HotWallet(signer: signer, portfolioSource: { store.currentSource }, costMethod: { store.method })
+        return HotWallet(signer: signer, portfolioSource: { store.currentSource }, costMethod: { store.method }, mainCurrency: { store.currency })
     }
 }

@@ -478,3 +478,63 @@ private let stolen = "0x" + String(repeating: "ab", count: 32)
         #expect(await rig.wallet.writeNote(note, asset: "USDC", from: hotAddress.lowercased) == false)
     }
 }
+
+@MainActor
+@Suite struct SendsAndNotesBetweenTicksTests {
+    private let note = CostNote.calldata(txHash: stolen, asset: "USDC", usdMicros: "250000000")!
+
+    private func sign(_ reason: SignedRecord.Reason, on rig: Rig) async throws -> String {
+        let isOnItsWay = reason == .note
+            ? await rig.wallet.writeNote(note, asset: "USDC", from: hotAddress.lowercased)
+            : await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: friend))
+        #expect(isOnItsWay)
+        let record = try #require(rig.wallet.records.first)
+        #expect(record.reason == reason)
+        #expect(record.status == .pending)
+        return record.hash
+    }
+
+    @Test(arguments: [SignedRecord.Reason.sent, .note])
+    func aRunningWalletShowsItLandingWithoutATick(_ reason: SignedRecord.Reason) async throws {
+        let rig = await Rig(funded, tickDelay: .seconds(3600), receiptDelay: .milliseconds(10))
+        rig.wallet.start()
+        defer { rig.wallet.stop() }
+        for _ in 0..<500 where rig.wallet.snapshot == nil { try await Task.sleep(for: .milliseconds(10)) }
+        _ = try await sign(reason, on: rig)
+        await rig.chain.confirmAll()
+        for _ in 0..<500 where rig.wallet.records.first?.status != .confirmed { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(rig.wallet.records.first?.status == .confirmed)
+        #expect(rig.wallet.sweepProblem == nil)
+    }
+
+    @Test(arguments: [SignedRecord.Reason.sent, .note])
+    func oneThatLandsCatchesBalancesUp(_ reason: SignedRecord.Reason) async throws {
+        let rig = await Rig(funded)
+        _ = try await sign(reason, on: rig)
+        await rig.chain.confirmAll()
+        await rig.wallet.lookBetweenTicks()
+        #expect(rig.wallet.records.first?.status == .confirmed)
+        #expect(rig.wallet.snapshot?.nonce == 0, "the node's latest block doesn't include it yet")
+
+        await rig.chain.set(snapshot(eth: oneEth / 200, tokens: [usdc: usdcUnits(15)], nonce: 1))
+        await rig.wallet.lookBetweenTicks()
+        #expect(rig.wallet.snapshot?.nonce == 1)
+        #expect(rig.wallet.sweepProblem == nil)
+        #expect(rig.stateStore.saved.sweptGains[hotAddress] == nil)
+    }
+
+    @Test(arguments: [SignedRecord.Reason.sent, .note])
+    func oneThatRevertsSaysSoAndDoesntPauseSweeps(_ reason: SignedRecord.Reason) async throws {
+        let rig = await Rig(funded)
+        let hash = try await sign(reason, on: rig)
+        await rig.chain.setReceipt(hash, succeeded: false)
+        await rig.wallet.lookBetweenTicks()
+        let record = try #require(rig.wallet.records.first)
+        #expect(record.status == .failed)
+        #expect(rig.wallet.sweepProblem == HotWalletWording.failedOnchain(record))
+
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1))
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.count == 2, "the next deposit still sweeps")
+    }
+}

@@ -48,6 +48,7 @@ The RPC is configurable and untrusted.
 - [x] Every read in a tick is pinned to one block, and nothing is signed from a read older than the last receipt, so a slow node can't cause the same excess to be swept twice.
 - [x] Deleting a key during a rotation takes three reads in a row saying it's empty, plus an answer from Amp that it holds no tokens off the allowlist. That answer has to reach the block where the key first read as empty, and be within a minute of now. Without that, the old key stays until the user chooses to leave what's on it.
 - [x] The block of the last receipt is on disk, so the wait for newer balances survives a restart.
+- [x] While a transaction is on its way, its receipt is checked about once a second. That check only settles receipts and updates what's shown. Signing, giving up on a transaction, and the reads behind alarms and deleting a key stay on the 15 s tick, so checking faster doesn't make them any quicker to trigger.
 - [ ] **A lying node can still cost something.** It can claim false balances, which wastes gas on sweeps that fail. It can raise a false alarm, or hide activity from the nonce check, though not from the comparison with Amp. If it and the server both say the old key is empty during a rotation, the key is deleted and whatever's still there is lost.
 
 ## Cap and sweeps

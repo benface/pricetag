@@ -20,7 +20,8 @@
     "check:keychain": "macos/keychain-test.sh",
     "amp:start": "scripts/amp start",
     "amp:stop": "scripts/amp stop",
-    "example": "node --env-file-if-exists=.env.local packages/sdk/examples/portfolio.ts"
+    "example": "node --env-file-if-exists=.env.local packages/sdk/examples/portfolio.ts",
+    "example:watch": "node --env-file-if-exists=.env.local packages/sdk/examples/watch.ts"
   },
   "dependencies": {
     "@noble/hashes": "1.8.0",

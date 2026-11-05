@@ -148,7 +148,7 @@ struct PopoverView: View {
         if hotWallet.alarm != nil { return "Key may be stolen" }
         guard hotWallet.address != nil else { return "Set up" }
         guard let plan = hotWallet.plan else { return "Reading…" }
-        return "\(HotWalletWording.usd(plan.valueUsdMicros)) of \(HotWalletWording.usd(hotWallet.settings.capUsdMicros))"
+        return "\(hotWallet.usd(plan.valueUsdMicros)) of \(hotWallet.usd(hotWallet.settings.capUsdMicros))"
     }
 
     private var footer: some View {
