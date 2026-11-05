@@ -46,6 +46,17 @@ final class Navigation {
     var resolvingAsset: String?
     var isExporting = false
 
+    /// What the wallet's page shows: its holdings, or where to enter a wallet when there isn't one.
+    func showOverview() {
+        section = .overview
+    }
+
+    /// Opens the details of a number, which belong to the overview.
+    func explain(_ target: ExplainTarget) {
+        section = .overview
+        self.target = target
+    }
+
     /// Goes to spending money and asks for its Send sheet, which appears once the section is on screen.
     func send() {
         section = .spendingMoney

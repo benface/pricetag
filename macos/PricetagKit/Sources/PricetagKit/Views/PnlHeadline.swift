@@ -63,6 +63,7 @@ public struct PortfolioSummary: View {
     private var valueStat: some View {
         VStack(alignment: .leading, spacing: 2) {
             statLabel("Value · \(portfolio.currency.rawValue)", isPartial: portfolio.isValuePartial)
+                .help(portfolio.partialValueReason ?? "")
             Button { onOpen(.value) } label: {
                 big(value, size: size, tone: .neutral)
             }
@@ -246,10 +247,18 @@ extension Portfolio {
         totalValueText != nil && totals.coverage.value.isPartial
     }
 
-    /// What a partial value leaves out, for its tooltip. nil when it leaves out nothing.
-    public var valueLeavesOut: String? {
+    /// Why the value is partial, for its tooltip, by the same causes the SDK counts. nil when it isn't.
+    public var partialValueReason: String? {
         guard isValuePartial else { return nil }
-        return Wording.valueLeavesOut(listedPositions.filter { $0.isHeld && $0.values.valueMicros == nil }.map(\.asset))
+        let listed = listedPositions
+        let unchecked = listed.filter { $0.reconciliation?.status == .unchecked && $0.reconciliation?.heldIsCurrent != true }
+        return Wording.partialValue(
+            noPrice: listed.filter { $0.isHeld && $0.values.valueMicros == nil }.map(\.asset),
+            unread: unreadAssets,
+            unchecked: unchecked.map(\.asset),
+            // Unconfirmed positions already say so, and that's the bigger doubt.
+            incompleteHistory: listed.filter { position in position.hasShortfall && position.reconciliation?.status != .unchecked && position.reconciliation?.status != .incomplete }.map(\.asset)
+        )
     }
 
     public var totalPnlTone: Tone {

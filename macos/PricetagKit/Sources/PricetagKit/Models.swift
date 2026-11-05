@@ -94,6 +94,8 @@ public struct Reconciliation: Codable, Sendable, Equatable {
     public let reason: String?
     /// On ETH that doesn't match: the transactions most likely behind it.
     public let unseenEth: [UnseenEth]?
+    /// On a balance that couldn't be checked: whether what's shown is still what the chain last said it holds. Without this, its value is only a best estimate.
+    public let heldIsCurrent: Bool?
 }
 
 public struct Position: Codable, Sendable, Equatable, Identifiable {

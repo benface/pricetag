@@ -183,6 +183,30 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(store.feed == .reading)
     }
 
+    @Test func aNewWalletShowsWhenThereIsNoWallet() {
+        let (store, _, _) = makeStore([])
+        store.setWallet(nil)
+        store.showNewWallet("0xDEF")
+        store.stop()
+        #expect(store.address == "0xdef")
+        #expect(store.feed == .reading)
+    }
+
+    @Test func aNewWalletReplacesTheDemoWallet() {
+        let (store, _, _) = makeStore([])
+        store.setWallet(WalletAddress.demo)
+        store.showNewWallet("0xdef")
+        store.stop()
+        #expect(store.address == "0xdef")
+    }
+
+    @Test func aNewWalletLeavesARealWalletShowing() {
+        let (store, _, _) = makeStore([])
+        store.showNewWallet("0xdef")
+        store.stop()
+        #expect(store.address == "0xabc")
+    }
+
     @Test func aNewMethodStopsCallingTheOldNumbersLiveAtOnce() async throws {
         let (store, _, _) = makeStore([.success(try realPortfolio(at: now)), .success(try realPortfolio(at: now, method: .fifo))])
         await _ = store.poll()
@@ -387,29 +411,81 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(all.first?.asset == "cbBTC")
     }
 
-    @Test func aValueMissingAHoldingSaysSoEvenWhenThatHoldingIsntListed() throws {
+    /// The demo, changed, with its value counted as partial the way the SDK counts it.
+    private func partialPortfolio(valueCoverage: [String: Int] = ["known": 6, "missing": 1], _ change: (inout [String: Any]) -> Void) throws -> Portfolio {
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
-        var positions = object["positions"] as! [[String: Any]]
-        let index = try #require(positions.firstIndex { $0["asset"] as? String == "USDC" })
-        var values = positions[index]["values"] as! [String: Any]
-        values["valueMicros"] = NSNull()
-        positions[index]["values"] = values
-        object["positions"] = positions
         var totals = object["totals"] as! [String: Any]
         var coverage = totals["coverage"] as! [String: Any]
-        coverage["value"] = ["known": 6, "missing": 1]
+        coverage["value"] = valueCoverage
         totals["coverage"] = coverage
         object["totals"] = totals
-        let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        change(&object)
+        return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func changing(_ asset: String, in object: inout [String: Any], _ change: (inout [String: Any]) -> Void) {
+        var positions = object["positions"] as! [[String: Any]]
+        for index in positions.indices where positions[index]["asset"] as? String == asset { change(&positions[index]) }
+        object["positions"] = positions
+    }
+
+    private func removingPrice(of asset: String, in object: inout [String: Any]) {
+        changing(asset, in: &object) { position in
+            var values = position["values"] as! [String: Any]
+            values["valueMicros"] = NSNull()
+            position["values"] = values
+        }
+    }
+
+    @Test func aValueMissingAHoldingSaysSoEvenWhenThatHoldingIsntListed() throws {
+        let portfolio = try partialPortfolio { removingPrice(of: "USDC", in: &$0) }
         #expect(!portfolio.largestHoldings(5).map(\.asset).contains("USDC"))
         #expect(portfolio.isValuePartial)
-        #expect(portfolio.valueLeavesOut == "USDC has no price right now, so it isn't in this value.")
+        #expect(portfolio.partialValueReason == "USDC has no price right now.")
+    }
+
+    @Test func anUnreadBalanceIsntCalledAMissingPrice() throws {
+        let portfolio = try partialPortfolio(valueCoverage: ["known": 7, "missing": 1]) { $0["unreadAssets"] = ["wstETH"] }
+        #expect(portfolio.partialValueReason == "Couldn't read the balance of wstETH.")
+    }
+
+    @Test func anUncheckedBalanceSaysSoUnlessItsStillCurrent() throws {
+        let unchecked: (Bool) throws -> Portfolio = { isCurrent in
+            try self.partialPortfolio { object in
+                self.changing("AERO", in: &object) { $0["reconciliation"] = ["status": "unchecked", "heldIsCurrent": isCurrent] }
+            }
+        }
+        #expect(try unchecked(false).partialValueReason == "Couldn't check the balance of AERO.")
+        #expect(try unchecked(true).partialValueReason == "This value isn't complete.")
+    }
+
+    @Test func incompleteHistorySaysSo() throws {
+        let portfolio = try partialPortfolio { object in
+            changing("AERO", in: &object) { $0["shortfallQty"] = "5" }
+        }
+        #expect(portfolio.partialValueReason == "Incomplete history for AERO.")
+    }
+
+    @Test func aValueWithSeveralCausesNamesEach() throws {
+        let portfolio = try partialPortfolio(valueCoverage: ["known": 5, "missing": 3]) { object in
+            removingPrice(of: "USDC", in: &object)
+            removingPrice(of: "DAI", in: &object)
+            object["unreadAssets"] = ["wstETH"]
+        }
+        let reason = try #require(portfolio.partialValueReason)
+        #expect(reason.contains("have no price right now."))
+        #expect(reason.contains("USDC") && reason.contains("DAI"))
+        #expect(reason.contains("Couldn't read the balance of wstETH."))
+    }
+
+    @Test func noKnownCauseDoesntGuessOne() throws {
+        #expect(try partialPortfolio { _ in }.partialValueReason == "This value isn't complete.")
     }
 
     @Test func aWholeValueIsntPartial() throws {
         let portfolio = try demoPortfolio()
         #expect(!portfolio.isValuePartial)
-        #expect(portfolio.valueLeavesOut == nil)
+        #expect(portfolio.partialValueReason == nil)
     }
 
     @Test func attentionFitsInAFewWords() throws {

@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { chartMoneyTicks, formatChartSpan, formatSignedMoney, formatTime, type CurrencyCode, type PnlPoint } from "@pricetag/sdk/core"
+import { placeChartTimes } from "../core/chart-times.ts"
 import { NOTHING_TO_CHART, PNL_HELP } from "../core/wording.ts"
 
 const HEIGHT = 220
 const MARGIN = { top: 16, right: 84, bottom: 26, left: 64 }
+const TIME_ROW = 14
 
 type Props = { points: PnlPoint[]; currency: CurrencyCode; onSelect: (point: PnlPoint) => void }
 
@@ -13,6 +15,8 @@ export function PnlChart({ points, currency, onSelect }: Props) {
   const [width, setWidth] = useState(720)
   const [active, setActive] = useState<number | null>(null)
   const [asTable, setAsTable] = useState(false)
+  const times = useRef<SVGGElement>(null)
+  const [timeWidths, setTimeWidths] = useState<number[]>([])
 
   useEffect(() => {
     if (!box.current) return
@@ -72,8 +76,16 @@ export function PnlChart({ points, currency, onSelect }: Props) {
   const lastValue = chart.values[points.length - 1]
   const [firstTime, lastTime] = formatChartSpan(points[0]?.timestamp ?? "", last?.timestamp ?? "", width < 520)
   // Everything at one moment only needs saying once, and that's at the end of the axis.
-  const xLabels = firstTime === lastTime ? [{ index: points.length - 1, text: lastTime }] : [{ index: 0, text: firstTime }, { index: points.length - 1, text: lastTime }]
+  const xLabels = points.length === 0 ? [] : firstTime === lastTime ? [{ index: points.length - 1, text: lastTime }] : [{ index: 0, text: firstTime }, { index: points.length - 1, text: lastTime }]
   const showMarkers = points.length <= 60
+
+  // Before anything's drawn, so a time never shows up in the wrong place first. A hidden chart measures as nothing, so it's measured again when shown.
+  useLayoutEffect(() => {
+    setTimeWidths(Array.from(times.current?.querySelectorAll("text") ?? [], (text) => text.getComputedTextLength()))
+  }, [firstTime, lastTime, asTable, chart.hasData])
+
+  const placedTimes = placeChartTimes(xLabels.map((_, i) => timeWidths[i] ?? 0), { start: MARGIN.left, end: MARGIN.left + chart.plotWidth, width })
+  const rows = Math.max(0, ...placedTimes.map(({ row }) => row))
 
   return (
     <section className="card">
@@ -131,7 +143,7 @@ export function PnlChart({ points, currency, onSelect }: Props) {
           if (selected?.txHash) onSelect(selected)
         }}
       >
-        <svg width={width} height={HEIGHT} role="img" aria-label="Total PnL after each transaction">
+        <svg width={width} height={HEIGHT + rows * TIME_ROW} role="img" aria-label="Total PnL after each transaction">
           {chart.ticks.map((tick) => (
             <g key={tick.value}>
               <line x1={MARGIN.left} x2={MARGIN.left + chart.plotWidth} y1={chart.y(tick.value)} y2={chart.y(tick.value)} className={tick.value === 0 ? "axis-zero" : "grid"} />
@@ -140,13 +152,13 @@ export function PnlChart({ points, currency, onSelect }: Props) {
               </text>
             </g>
           ))}
-          {points.length > 0
-            ? xLabels.map(({ index, text }) => (
-                <text key={index} x={chart.x(chart.times[index] as number)} y={HEIGHT - 6} textAnchor={index === 0 && xLabels.length > 1 ? "start" : "end"} className="tick">
-                  {text}
-                </text>
-              ))
-            : null}
+          <g ref={times}>
+            {xLabels.map(({ index, text }, i) => (
+              <text key={index} x={placedTimes[i]?.x} y={HEIGHT - 6 + (placedTimes[i]?.row ?? 0) * TIME_ROW} className="tick">
+                {text}
+              </text>
+            ))}
+          </g>
           <path d={chart.path} className="line" />
           {showMarkers
             ? points.map((p, i) => {

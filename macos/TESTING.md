@@ -40,7 +40,7 @@ What macOS allows, found by trying it on macOS 27.2:
 
 Not tried, because it would have interrupted: running this while a full-screen app or another Space is in front.
 
-The `route-*` scenes check more than looks: they press what the menu bar's Send and Top Up press, with the window closed and with it open on another section, and fail unless the sheet opens.
+The `route-*` scenes check more than looks: they press what the menu bar's buttons press, with the window closed and with it open on another section, and fail unless they get where they promise and stay there.
 
 Scenes for the main window and Settings always use a real window, because their sidebar, toolbar and tabs are drawn by the window server. A window can't be larger than the display, so `main-huge` shows as much as this display allows. A test window's toolbar has no room for Settings' tabs, which show properly in the real one. Sheets, including the details in a narrow window, don't appear in a capture.
 

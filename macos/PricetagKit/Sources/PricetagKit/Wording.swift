@@ -221,13 +221,15 @@ public enum Wording {
         count == 1 ? "Answer 1 Question" : "Answer \(Format.block(count)) Questions"
     }
 
-    /// Why a value is partial. Names the holdings when they're known, because they may not be on screen.
-    public static func valueLeavesOut(_ assets: [String]) -> String {
-        switch assets.count {
-        case 0: "Some holdings have no price right now, so they aren't in this value."
-        case 1: "\(assets[0]) has no price right now, so it isn't in this value."
-        default: "\(assets.joined(separator: ", ")) have no price right now, so they aren't in this value."
-        }
+    /// Why a value is partial, for its tooltip. Names the holdings, because they may not be on screen. With no cause known, it only says what's sure.
+    public static func partialValue(noPrice: [String], unread: [String], unchecked: [String], incompleteHistory: [String]) -> String {
+        func list(_ assets: [String]) -> String { assets.joined(separator: ", ") }
+        var causes: [String] = []
+        if !noPrice.isEmpty { causes.append("\(list(noPrice)) \(noPrice.count == 1 ? "has" : "have") no price right now.") }
+        if !unread.isEmpty { causes.append("Couldn't read the balance of \(list(unread)).") }
+        if !unchecked.isEmpty { causes.append("Couldn't check the balance of \(list(unchecked)).") }
+        if !incompleteHistory.isEmpty { causes.append("Incomplete history for \(list(incompleteHistory)).") }
+        return causes.isEmpty ? "This value isn't complete." : causes.joined(separator: " ")
     }
 
     /// `leavesOut` in a few words. The biggest thing it leaves out, because the rest is a click away.

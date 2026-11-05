@@ -27,7 +27,6 @@ struct MainWindow: View {
     @Bindable var navigation: Navigation
     let hotWallet: HotWallet
     let siteBridge: SiteBridge
-    var noteWriter: (any CostNoteWriter)?
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var width: CGFloat = 1120
     @State private var exporting = false
@@ -69,7 +68,7 @@ struct MainWindow: View {
             WalletSheet(store: store)
         }
         .sheet(isPresented: $navigation.isResolving) {
-            ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: noteWriter)
+            ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet)
         }
         .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: "\(AppName.current) \(walletName)") { result in
             if case .failure(let error) = result { exportError = error.localizedDescription }
@@ -221,7 +220,7 @@ struct MainWindow: View {
     private func walletPage(_ content: @escaping (Portfolio) -> some View) -> some View {
         if store.feed == .noWallet {
             if navigation.section == .overview {
-                Welcome(store: store)
+                Welcome(store: store, hotWallet: hotWallet, navigation: navigation)
             } else {
                 NoWalletYet(navigation: navigation)
             }
@@ -445,7 +444,7 @@ private struct HoldingsTable: View {
     /// What each column needs, for what's usually in it. A column can always grow if there's room.
     private enum Column {
         static let asset: CGFloat = 130
-        static let amount: CGFloat = 90
+        static let amount: CGFloat = 100
         static let averagePrice: CGFloat = 90
         static let value: CGFloat = 90
         static let realized: CGFloat = 85
@@ -587,6 +586,8 @@ private struct HoldingsTable: View {
         } label: {
             LiveNumber(text, tone: isLive ? tone : .neutral)
                 .lineLimit(1)
+                // A long amount gets smaller rather than losing digits.
+                .minimumScaleFactor(0.7)
                 .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
         }
         .buttonStyle(NumberButtonStyle())
@@ -684,16 +685,42 @@ private struct NoActivity<Notices: View>: View {
 
 private struct Welcome: View {
     let store: PortfolioStore
+    let hotWallet: HotWallet
+    let navigation: Navigation
 
     var body: some View {
         ContentUnavailableView {
             Label("See What a Wallet Is Worth", systemImage: "wallet.bifold")
         } description: {
             Text("Paste a Base address to see its holdings, cost and PnL.")
-                .help(Wording.pnlHelp)
+                .help("A wallet you look up is only read, and nothing signs for it.")
         } actions: {
-            WalletForm(store: store, onDone: {})
-                .frame(width: 340)
+            VStack(spacing: 16) {
+                spendingMoney
+                WalletForm(store: store, onDone: {})
+            }
+            .frame(width: 340)
+        }
+    }
+
+    /// Nothing to offer on a build that can't hold a key. The rest of this screen still works there.
+    @ViewBuilder
+    private var spendingMoney: some View {
+        if hotWallet.availability == .ready {
+            if let address = hotWallet.address {
+                Button("Show Spending Money") { store.setWallet(address.lowercased) }
+                    .buttonStyle(.borderedProminent)
+            } else {
+                // That section says what this is and what can go wrong, and only it makes the key.
+                Button("Create Spending Money…") { navigation.section = .spendingMoney }
+                    .buttonStyle(.borderedProminent)
+                    .help(HotWalletWording.summary)
+            }
+            HStack {
+                VStack { Divider() }
+                Text("or").font(.callout).foregroundStyle(.secondary)
+                VStack { Divider() }
+            }
         }
     }
 }

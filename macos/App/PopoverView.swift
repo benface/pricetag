@@ -96,7 +96,7 @@ struct PopoverView: View {
                 HStack {
                     Text("No wallet yet").foregroundStyle(.secondary)
                     Spacer()
-                    Button("Add Wallet…") { open(nil) }
+                    Button("Add Wallet…") { openOverview() }
                         .controlSize(.small)
                 }
             case (_, let portfolio?) where !portfolio.progress.started:
@@ -179,7 +179,7 @@ struct PopoverView: View {
                 }
             }
             .buttonStyle(NumberButtonStyle())
-            .help(portfolio.valueLeavesOut ?? "")
+            .help(portfolio.partialValueReason ?? "")
             .accessibilityLabel("Value, \(portfolio.totalValueText ?? "unavailable")\(portfolio.isValuePartial ? ", partial" : "")")
             .accessibilityHint("Shows the activity behind this number")
             Button { open(.total(.pnl)) } label: {
@@ -240,7 +240,7 @@ struct PopoverView: View {
             }
             let more = portfolio.listedPositions.count - holdings.count
             if more > 0 {
-                Button { open(nil) } label: {
+                Button { openOverview() } label: {
                     Text("\(more) more")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -338,13 +338,16 @@ struct PopoverView: View {
     }
 
     private func open(_ target: ExplainTarget?) {
-        if let target {
-            navigation.section = .overview
-            navigation.target = target
-        }
+        if let target { navigation.explain(target) }
         dismiss()
         openWindow(id: WindowID.main)
         DockPresence.bringForward()
+    }
+
+    /// `open(nil)` goes back to whichever section was showing, which suits Open but not something that promises the holdings or the wallet form.
+    private func openOverview() {
+        navigation.showOverview()
+        open(nil)
     }
 
     private func openHotWallet() {

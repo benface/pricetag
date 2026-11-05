@@ -27,7 +27,7 @@ struct HotWalletWindow: View {
                 ContentUnavailableView("Can't Open This Wallet", systemImage: "exclamationmark.triangle", description: Text(message))
             case .ready:
                 if wallet.address == nil {
-                    HotWalletSetup(wallet: wallet)
+                    HotWalletSetup(wallet: wallet, store: store)
                 } else {
                     HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation)
                 }
@@ -40,6 +40,7 @@ struct HotWalletWindow: View {
 /// Says what this is before there's anything to lose.
 private struct HotWalletSetup: View {
     let wallet: HotWallet
+    let store: PortfolioStore
     @State private var understands = false
     @State private var showsHowItWorks = false
 
@@ -51,7 +52,7 @@ private struct HotWalletSetup: View {
                     .foregroundStyle(.secondary)
                 Text("Spending Money")
                     .font(.title2.bold())
-                Text("A small balance on this Mac for everyday use. Anything above your cap moves to your savings.")
+                Text("\(HotWalletWording.summary) Anything above your cap moves to your savings.")
                     .fixedSize(horizontal: false, vertical: true)
                 // What can't be undone stays in full, and on screen.
                 Notice(.warning, HotWalletWording.cannotBeRestored)
@@ -76,7 +77,12 @@ private struct HotWalletSetup: View {
                 }
                 Toggle("I understand this money can't be restored if this Mac is lost", isOn: $understands)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Create Spending Money") { Task { await wallet.createWallet() } }
+                Button("Create Spending Money") {
+                    Task {
+                        await wallet.createWallet()
+                        if let address = wallet.address { store.showNewWallet(address.lowercased) }
+                    }
+                }
                     .buttonStyle(.borderedProminent)
                     .disabled(!understands || wallet.isWorking)
                 if let problem = wallet.sweepProblem {
