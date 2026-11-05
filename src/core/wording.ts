@@ -106,6 +106,11 @@ export function linkedFailedSentence(count: number): string {
   return count === 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : `Couldn't read ${count} of your other wallets, so what came from them may show as unresolved.`
 }
 
+/** A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent. */
+export function withheldSentence(wallet: string, asset: string): string {
+  return `${shortHash(wallet)}'s ${asset} history can't be confirmed, so what it sent has an unknown cost where it arrived.`
+}
+
 export function feesUnknownSentence(count: number): string {
   return `Network fees couldn't be worked out for ${count} ${count === 1 ? "transaction" : "transactions"}, so the network fees shown are too low.`
 }

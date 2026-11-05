@@ -187,7 +187,7 @@ func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, ou
         "unresolvedMicros": "0", "estimatedMicros": "0", "estimated": { "value": false, "realized": \(estimatedRealized), "unrealized": false }, "noMarket": []
       },
       "pnlStatus": "complete", "points": [],
-      "questions": [], "meter": { "open": 0, "answered": 0, "waiting": 0 }, "linkedReading": [], "linkedFailed": [\(linkedFailed.map { "\"\($0)\"" }.joined(separator: ","))], "marketChecked": true
+      "questions": [], "meter": { "open": 0, "answered": 0, "waiting": 0 }, "linkedReading": [], "linkedFailed": [\(linkedFailed.map { "\"\($0)\"" }.joined(separator: ","))], "withheld": [], "marketChecked": true
     }
     """
     return try! JSONDecoder().decode(Portfolio.self, from: Data(json.utf8))
