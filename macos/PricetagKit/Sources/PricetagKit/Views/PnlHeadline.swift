@@ -149,9 +149,9 @@ public struct PortfolioAttention: View {
             Button(Wording.answerQuestions(portfolio.questions.count), action: onResolve)
                 .controlSize(.small)
                 .fixedSize()
-                .help("Answer what the app can't work out by itself (⇧⌘R)")
+                .help("Say what the app can't work out by itself, so what you paid is known (⇧⌘R)")
         } else {
-            Button("See Why") { onOpen(portfolio.attentionTarget) }
+            Button(Wording.showMissing) { onOpen(portfolio.attentionTarget) }
                 .controlSize(.small)
                 .fixedSize()
         }
@@ -331,7 +331,7 @@ extension Portfolio {
         return Attention(title: first, details: Array(lines.dropFirst()), fullList: nil)
     }
 
-    /// Where "See Why" goes: the balance that doesn't match when that's the reason, or else what the total is made of.
+    /// Where "Show What's Missing" goes: the balance that doesn't match when that's the reason, or else what the total is made of.
     public var attentionTarget: ExplainTarget {
         if let position = listedPositions.first(where: { $0.isIncomplete || $0.hasShortfall || $0.reconciliation?.status == .unchecked }) {
             return .asset(position.asset, .onchain)

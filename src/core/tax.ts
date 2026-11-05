@@ -21,7 +21,7 @@
 // elsewhere, and CRA's crypto guide doesn't count moving between your own wallets as a disposition, so that keeps what they
 // first paid, which we can't see. Those stay estimates in every country, and the report says why.
 
-import { foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
+import { foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { rateSource } from "./explain.ts"
@@ -318,6 +318,63 @@ function poolLegs(sources: readonly Source[], moves: ReadonlySet<string>): { leg
 
 export type TaxSettings = { country: TaxCountryCode; method: Method; scope: TaxScope }
 
+/** A calendar year, the newest one there's history for, or everything. */
+export type TaxYear = number | "latest" | "all"
+
+export function parseTaxYear(value: unknown): TaxYear | null {
+  if (value === undefined || value === null || value === "all") return "all"
+  if (value === "latest") return value
+  const year = typeof value === "string" && /^\d{4}$/.test(value) ? Number(value) : value
+  return typeof year === "number" && Number.isInteger(year) && year >= 2000 && year <= 2999 ? year : null
+}
+
+/** In UTC, like the file's dates. */
+const yearOf = (timestamp: string) => Number(timestamp.slice(0, 4))
+
+/** When the last of these wallets' history starts, since a year is only whole once every wallet's is. */
+function historyStart(wallets: readonly WalletResponse[]): string {
+  return wallets.map((wallet) => timestampOfBlock(wallet.coverage.fromBlock, wallet.latest)).reduce((a, b) => (a > b ? a : b))
+}
+
+/** Every year with some history, newest first. */
+function yearsOf(wallets: readonly WalletResponse[]): number[] {
+  const first = Math.min(...wallets.map((wallet) => yearOf(timestampOfBlock(wallet.coverage.fromBlock, wallet.latest))))
+  const last = Math.max(...wallets.map((wallet) => yearOf(wallet.latest.timestamp)))
+  return Array.from({ length: Math.max(0, last - first + 1) }, (_, i) => last - i)
+}
+
+const longDate = (timestamp: string) => new Date(timestamp).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" })
+
+/** Said plainly when a year's history isn't all here, because what's missing would change its gains. */
+function partialYearNote(year: number, start: string): string | null {
+  const startYear = yearOf(start)
+  if (startYear > year) return `Records start on ${longDate(start)}, so nothing from ${year} is here.`
+  if (startYear === year && start > `${year}-01-01T00:00:00.000Z`) return `Records start on ${longDate(start)}, so ${year} is missing everything before then.`
+  return null
+}
+
+/**
+ * A sale, fee or send split into a known and an unknown part is two rows in the file, and still one thing that happened.
+ * The same leg is always the same wallet, transaction, kind and asset.
+ */
+const eventKey = (row: TaxRow) => `${row.wallet}:${row.txHash}:${row.type}:${row.asset}`
+
+/** What happened, counted once each, with whether any part of it has an unknown gain. */
+function eventsOf(rows: readonly TaxRow[]): Map<string, { type: TaxRow["type"]; wallet: string; unknown: boolean }> {
+  const events = new Map<string, { type: TaxRow["type"]; wallet: string; unknown: boolean }>()
+  for (const row of rows) {
+    const event = events.get(eventKey(row)) ?? { type: row.type, wallet: row.wallet, unknown: false }
+    event.unknown ||= row.gainMicros === null
+    events.set(eventKey(row), event)
+  }
+  return events
+}
+
+/** What the app shows of the file before it's saved. */
+export type TaxPreviewRow = Pick<TaxRow, "timestamp" | "type" | "asset" | "amount" | "decimals" | "gainMicros" | "status">
+
+const PREVIEW_ROWS = 5
+
 function rowsFrom(sources: readonly Source[], method: Method, scope: TaxScope, country: TaxCountry | null): TaxRow[] {
   const rows: TaxRow[] = []
   if (scope === "pooled") {
@@ -426,22 +483,38 @@ export function taxCsv(rows: readonly TaxRow[], notes: readonly string[], { meth
 }
 
 /** `wallets[0]` is the one asked about. They all have to be in the same currency. */
-export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSettings, context: TaxContext = {}): TaxReportResponse {
+/**
+ * `wallets[0]` is the one asked about. They all have to be in the same currency. A year only picks which rows are listed:
+ * what each one cost is still worked out from all the history there is, as it would be across tax years.
+ */
+export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSettings & { year?: TaxYear }, context: TaxContext = {}): TaxReportResponse {
   const { country: code, method, scope } = settings
   const country = TAX_COUNTRIES[code]
   const first = wallets[0] as WalletResponse
   const { currency } = first
   const sources = sourcesOf(wallets, method, context)
   const named = wallets.length > 1
-  const rows = rowsFrom(sources, method, scope, country)
+  const years = yearsOf(wallets)
+  const year = settings.year === "latest" ? (years[0] ?? null) : settings.year === "all" || settings.year === undefined ? null : settings.year
+  const allRows = rowsFrom(sources, method, scope, country)
+  const rows = year === null ? allRows : allRows.filter((row) => yearOf(row.timestamp) === year)
+  const partialYear = year === null ? null : partialYearNote(year, historyStart(wallets))
   const count = (status: TaxRowStatus) => rows.filter((row) => row.status === status).length
   const unresolved = count("unresolved")
   const estimated = count("estimated")
   const selfReported = count("self-reported")
   const given = rows.filter((row) => row.givenCost).length
   const counted = rows.filter((row) => row.gainMicros !== null)
+  const events = [...eventsOf(rows).values()]
+  // Where to fix what's unknown: the wallets whose sales say so, and any wallet holding an asset with an unknown gain
+  // that arrived with no known cost. Across wallets, that cost is part of another wallet's sale, which has no question.
+  const unknownAssets = new Set(rows.filter((row) => row.gainMicros === null).map((row) => row.asset))
+  const unknownIn = new Set([
+    ...events.filter((event) => event.unknown).map((event) => event.wallet.toLowerCase()),
+    ...sources.filter(({ view }) => view.legs.some((leg) => unknownAssets.has(leg.asset) && BigInt(leg.delta) > 0n && leg.costMicros === null)).map(({ wallet }) => wallet.address.toLowerCase()),
+  ])
 
-  const warnings: string[] = []
+  const warnings: string[] = partialYear === null ? [] : [partialYear]
   if (unresolved > 0) warnings.push(`${plural(unresolved, "row")} of ${rows.length.toLocaleString("en-US")} ${unresolved === 1 ? "is" : "are"} unresolved. What can't be worked out says "unknown". It's never counted as 0, and it isn't in the gain total.`)
   if (estimated > 0) warnings.push(`${plural(estimated, "row")} of ${rows.length.toLocaleString("en-US")} ${estimated === 1 ? "rests" : "rest"} on an estimate.`)
   if (selfReported > 0) warnings.push(`${plural(selfReported, "row")} of ${rows.length.toLocaleString("en-US")} ${selfReported === 1 ? "uses" : "use"} a cost you entered or imported, which the chain can't confirm, so keep your records for it.`)
@@ -463,10 +536,11 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     ...(fromAnswers.length > 0 ? [`This includes the wallets you've said are yours: ${fromAnswers.map(shortHash).join(", ")}.`] : []),
     ...sources.map((source) => coverageNote(source, named)),
     ...(currency === "USD" ? [] : [`Amounts convert at the rate when each transaction happened, from ${rateSource(currency)}. A tax authority may expect another source.`]),
+    ...(year === null ? [] : [`Only what happened in ${year} is listed, by its date in UTC. What it cost still counts everything before it.`]),
     ...COMMON_NOTES,
     ...country.notes,
   ]
-  const summary = `Prepared for ${country.inSentence}: ${METHOD_LABELS[method].toLowerCase()}, ${SCOPE_LABELS[scope].toLowerCase()}, in ${currency}.`
+  const summary = `Prepared for ${country.inSentence}${year === null ? "" : `, ${year}`}: ${METHOD_LABELS[method].toLowerCase()}, ${SCOPE_LABELS[scope].toLowerCase()}, in ${currency}.`
 
   return {
     wallets: wallets.map((wallet) => wallet.address),
@@ -475,7 +549,15 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     scope,
     currency,
     defaults: { method: country.method, scope: country.scope },
+    year,
+    years,
+    partialYear,
     rowCount: rows.length,
+    soldCount: events.filter((event) => event.type === "Sold").length,
+    feeCount: events.filter((event) => event.type === "Network fee").length,
+    sentCount: events.filter((event) => event.type === "Sent").length,
+    unknownCount: events.filter((event) => event.unknown).length,
+    unknownWallets: wallets.map((wallet) => wallet.address.toLowerCase()).filter((address) => unknownIn.has(address)),
     unresolvedCount: unresolved,
     estimatedCount: estimated,
     selfReportedCount: selfReported,
@@ -483,7 +565,8 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     disclaimer: TAX_DISCLAIMER,
     warnings,
     notes,
-    filename: `tax-report-${first.address.slice(0, 8)}-${code}-${method === "fifo" ? "oldest-first" : "average"}-${currency}.csv`,
+    preview: rows.slice(0, PREVIEW_ROWS).map(({ timestamp, type, asset, amount, decimals, gainMicros, status }) => ({ timestamp, type, asset, amount, decimals, gainMicros, status })),
+    filename: `tax-report-${first.address.slice(0, 8)}-${year === null ? "" : `${year}-`}${code}-${method === "fifo" ? "oldest-first" : "average"}-${currency}.csv`,
     csv: taxCsv(rows, [TAX_DISCLAIMER, summary, ...warnings, ...notes], { method, scope, currency }),
   }
 }
