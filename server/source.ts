@@ -264,8 +264,8 @@ export function sharedReads(query: Query, config: { baseDataset: string; dataset
 }
 
 /**
- * L1 fees, read once for good when their block is past any reorg, so a second pricing rule reading the same wallet only
- * pays for what the first hasn't read. `tip` is the newest block known, or null when none is.
+ * L1 fees, read once for good when their block is already past any reorg, so a second pricing rule reading the same
+ * wallet only pays for what the first hasn't read. `tip` is the newest block known, or null when none is.
  */
 export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL1Fees {
   const settled = new Map<string, { blockNum: number; fee: string }>()
@@ -278,8 +278,9 @@ export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL
       return false
     })
     if (unread.length === 0) return fees
-    const found = await read(unread)
+    // Before the read, because the head can move on during it, and a fee read before a reorg isn't final just because the reorg is over.
     const newest = tip()
+    const found = await read(unread)
     for (const { txHash, blockNum } of unread) {
       const fee = found.get(txHash)
       if (fee === undefined) continue

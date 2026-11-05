@@ -6,9 +6,9 @@ import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
-import { REORG_BLOCKS, createWallets, datasetSource, describeError, isNotStarted, type ReadL1Fees } from "@pricetag/sdk/internal"
+import { REORG_BLOCKS, createWallets, datasetSource, describeError, isNotStarted, type ReadL1Fees, type Source } from "@pricetag/sdk/internal"
 import { resolvingSource, settledL1Fees, sharedReads } from "../server/source.ts"
-import { encodeNote } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, encodeNote } from "@pricetag/sdk/core"
 
 /** Sends the path exactly as written, which fetch wouldn't. */
 function get(server: Server, path: string): Promise<{ status: number; body: string }> {
@@ -376,6 +376,77 @@ describe("reading a wallet by two pricing rules", () => {
     assert.deepEqual([...(await fees(requests)).keys()], ["0xa"])
     assert.deepEqual([...(await fees(requests)).keys()].sort(), ["0xa", "0xb"])
     assert.deepEqual(asked, [["0xa", "0xb"], ["0xb"]])
+  })
+
+  it("only keeps an L1 fee that was already past any reorg when its read started", async () => {
+    let head = 1000
+    let fee = "24"
+    let reads = 0
+    const read: ReadL1Fees = async (requests) => {
+      reads += 1
+      const found = new Map(requests.map(({ txHash }) => [txHash, fee]))
+      // A reorg changes the fee and the head moves on, both while this read is still running.
+      if (reads === 1) [fee, head] = ["34", 1025]
+      return found
+    }
+    const reference = (blockNum: number) => ({ blockNum, ethUsd: "240000000000", usdcUsd: "100000000" })
+    const gas = { block_num: 995, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: "0xabc", tx_index: 1, log_index: 0, token: ETH_ADDRESS, account: `0x${ME}`, side: "debit" as const, amount: "1000", kind: "gas" as const }
+    const source: Source = {
+      mode: "raw",
+      startBlock: 900,
+      historyBlocks: null,
+      head: async () => null,
+      processedThrough: async (_, to) => to,
+      readWindow: async (_, from, to) => ({ rows: [gas].filter((row) => row.block_num >= from && row.block_num <= to), priced: null, gasUnknown: [] }),
+      readReferences: async (blocks) => blocks.map(reference),
+      readLatestReference: async (to) => reference(to),
+      readBalances: async (_, blockNum) => ({ blockNum, amounts: {} }),
+      readEthBalances: async () => new Map(),
+    }
+    const wallets = createWallets(source, async () => ({ blockNum: head, timestamp: "2026-11-04T00:00:00.000Z" }), settledL1Fees(read, () => head))
+    const paid = async () => (await wallets.get(`0x${ME}`)).legs.find((leg) => leg.kind === "gas")?.delta
+    assert.equal(await paid(), "-1024")
+    assert.equal(await paid(), "-1034", "the read once its block has settled is a real one")
+    assert.equal(reads, 2)
+    head = 1040
+    assert.equal(await paid(), "-1034")
+    assert.equal(reads, 2, "and that one's kept")
+  })
+
+  it("a head that moves on during a note or ETH balance read doesn't make its answer final", async () => {
+    const note = `${encodeNote(NOTE_TX, "USDC", "5").slice(2)}`
+    const balance = `${"00".repeat(31)}05`
+    let to = 200
+    const { query, queries } = chain([])
+    let release = () => {}
+    let held = false
+    const reading = async <T>(sql: string) => {
+      if (!sql.includes(".transactions") && !sql.includes("eth_call")) return query<T>(sql)
+      queries.push(sql)
+      if (held) await new Promise<void>((resolve) => (release = resolve))
+      return (sql.includes("eth_call") ? [{ block_num: to - 5, r: { data: balance } }] : [{ block_num: to - 5, tx_hash: "cc", input: note }]) as T[]
+    }
+    const shared = sharedReads(reading, config)
+    for (const reader of [shared.readNotes, shared.readEthBalances]) {
+      to += 100
+      await shared.readLegs(`0x${ME}`, 1, to)
+      const block = to - 5
+      const read = () => reader(`0x${ME}`, [block])
+      held = true
+      const first = read()
+      const later = shared.readLegs(`0x${ME}`, 1, to + REORG_BLOCKS)
+      await new Promise((resolve) => setImmediate(resolve))
+      held = false
+      release()
+      await Promise.all([first, later])
+      const answers = async () => {
+        queries.length = 0
+        await read()
+        return queries.filter((sql) => sql.includes(".transactions") || sql.includes("eth_call")).length
+      }
+      assert.equal(await answers(), 1, "it wasn't past any reorg when that read started, so it's read again")
+      assert.equal(await answers(), 0, "and that one's kept")
+    }
   })
 
   it("both rules' wallets end up with the same rows, from one read of the history", async () => {
