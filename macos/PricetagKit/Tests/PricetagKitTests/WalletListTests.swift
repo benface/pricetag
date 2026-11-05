@@ -55,6 +55,22 @@ struct WalletListTests {
         #expect(WalletList(spending: nil, savings: [], linked: [], saved: [], current: WalletAddress.demo).recent.isEmpty)
     }
 
+    @Test func aProofLinksToTheUsersOwnWalletsAndNeverAWatchedOne() throws {
+        let list = WalletList(spending: nil, savings: [], linked: [a, b], saved: [SavedWallet(address: c, lastSeen: date(1)), SavedWallet(address: d, name: "Treasury", lastSeen: date(1))], current: b)
+        let watched = try #require(list.entry(for: d))
+        #expect(list.proof(of: watched, current: b) == WalletProof(address: d, owner: b, title: "Treasury"), "the one showing, when it's theirs")
+        #expect(list.proof(of: watched, current: c).owner == a, "another of theirs, when it's not")
+        let alone = WalletList(spending: nil, savings: [], linked: [], saved: [SavedWallet(address: c, lastSeen: date(1))], current: nil)
+        #expect(alone.proof(of: try #require(alone.entry(for: c)), current: c).owner == c, "with nothing else, it speaks for itself")
+        #expect(list.proof(of: watched, current: b).message == Wording.linkMessage(owner: b, address: d))
+    }
+
+    @Test func onlyWhatTheUserSaidCanBeTakenBack() {
+        let list = WalletList(spending: NamedWallet(address: a, name: "Spending Money"), savings: [NamedWallet(address: b, name: "Ledger")], linked: [a, b, c, d], accounts: [a, b, c], saved: [], current: nil)
+        #expect(list.yours.map(\.canUnlink) == [false, false, false, true], "a key that's been replaced stays, whatever anyone says")
+        #expect(!list.yours.contains { $0.canProve })
+    }
+
     @Test func eachRowSaysWhatItsTitleDoesnt() {
         let list = WalletList(spending: NamedWallet(address: a, name: "Spending Money"), savings: [NamedWallet(address: b, name: "Savings"), NamedWallet(address: c, name: "Ledger")], linked: [], saved: [], current: d)
         let short = { (address: String) in Format.shortHash(address) }

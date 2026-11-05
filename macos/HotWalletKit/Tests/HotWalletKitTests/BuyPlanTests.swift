@@ -40,9 +40,10 @@ struct BuyPlanTests {
         #expect(plan(50, room: 0).sweeps == 50 * Money.dollar)
     }
 
-    @Test func withoutSavingsItsLimitedToTheRoom() {
-        #expect(plan(25, savings: false).problem == nil)
-        #expect(plan(26, savings: false).problem == .needsSavings)
+    @Test func withoutSavingsNothingCanBeBoughtEvenWhatFits() {
+        // The page can raise the amount, so a small preset is no limit: at $500, $475 would have nowhere to go.
+        for dollars in [5, 25, 26, 500] { #expect(plan(dollars, savings: false).problem == .needsSavings) }
+        #expect(plan(5, native: false, savings: false).problem == .needsSavings)
     }
 
     @Test func aTokenThatCantBeSweptForLackOfGasIsStopped() {
@@ -74,7 +75,7 @@ struct BuyPlanTests {
 
     @Test func belowTheMinimumIsSaidFirst() {
         #expect(plan(4).problem == .belowMinimum)
-        #expect(plan(0, savings: false).problem == .belowMinimum)
+        #expect(plan(0).problem == .belowMinimum)
         #expect(plan(5).problem == nil)
     }
 

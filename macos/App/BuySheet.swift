@@ -57,8 +57,8 @@ struct BuySheet: View {
                 .font(.title2.bold())
             if wallet.address == nil {
                 Notice(.info, "What you buy lands in Spending Money, so that comes first.")
-            } else if !hasSavings, wallet.topUpRoom < UInt128(BuyPlan.minimumDollars) * Money.dollar {
-                Notice(.info, "There's only room for \(wallet.usd(wallet.topUpRoom)) in Spending Money. To buy more, add a savings wallet for the rest to go to.")
+            } else if !hasSavings {
+                Notice(.info, "What you buy lands in Spending Money, and anything above your cap moves to your savings. \(PurchaseWording.provider)'s page can change the amount, so add a savings wallet first.")
             } else {
                 form
             }
@@ -103,7 +103,8 @@ struct BuySheet: View {
             Text("\(PurchaseWording.provider)'s minimum is about \(wallet.usd(dollars: BuyPlan.minimumDollars)), depending on how you pay.")
                 .foregroundStyle(.secondary)
         case .needsSavings:
-            Notice(.info, "There's room for \(wallet.usd(wallet.topUpRoom)) in Spending Money. To buy more, add a savings wallet for the rest to go to.")
+            // The sheet asks for one instead of showing this.
+            EmptyView()
         case .noGasToSweep:
             Notice(.warning, "This wallet doesn't have enough ETH to move USDC to \(savingsName), so it could get stuck here. Buy ETH this time.")
         case .notReadYet:
@@ -112,12 +113,6 @@ struct BuySheet: View {
         case nil:
             VStack(alignment: .leading, spacing: 4) {
                 Text(whereItGoes)
-                // The page can change the amount, and nothing here can stop it.
-                if !hasSavings {
-                    Text("If you buy more on \(PurchaseWording.provider)'s page, the rest stays here above your cap until you add a savings wallet.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
                 if plan.sweeps > 0 {
                     Text("Keep \(AppName.current) open until it lands. If it's closed, it moves the next time it opens.")
                         .font(.caption)
@@ -146,7 +141,7 @@ struct BuySheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-            } else if !hasSavings, plan.problem == .needsSavings || wallet.topUpRoom < UInt128(BuyPlan.minimumDollars) * Money.dollar {
+            } else if !hasSavings {
                 Button("Add a Savings Wallet…") {
                     addSavings()
                     dismiss()

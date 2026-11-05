@@ -6,7 +6,7 @@ public struct BuyPlan: Equatable, Sendable {
     public enum Problem: Equatable, Sendable {
         /// Below what the provider takes for some ways to pay. Its page has the last word.
         case belowMinimum
-        /// More than fits, with no savings wallet for the rest to go to.
+        /// No savings wallet. The provider's page can raise the amount, so nothing can keep a purchase to the room, and what's above it would have nowhere to go.
         case needsSavings
         /// Not enough ETH to move this token at today's fees, so what's above the cap would be stuck.
         case noGasToSweep
@@ -25,10 +25,10 @@ public struct BuyPlan: Equatable, Sendable {
         let amount = UInt128(max(dollars, 0)) * Money.dollar
         stays = min(amount, roomUsdMicros)
         sweeps = amount.subtractingClamped(roomUsdMicros)
-        if dollars < Self.minimumDollars {
-            problem = .belowMinimum
-        } else if sweeps > 0, destination == nil {
+        if destination == nil {
             problem = .needsSavings
+        } else if dollars < Self.minimumDollars {
+            problem = .belowMinimum
         } else if let fees, let priceUsdMicros, let after = Self.holdings(holdings, buying: amount, of: token, priceUsdMicros: priceUsdMicros) {
             // What a sweep would make of it, whatever the amount: the provider's page can change it, so a token that can't move at all is a problem even if this much would fit.
             let sweep = SweepPlanner.automatic(holdings: after, capUsdMicros: capUsdMicros, fees: fees, destination: destination, pendingGainUsdMicros: 0)

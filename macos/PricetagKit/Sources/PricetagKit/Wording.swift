@@ -322,6 +322,9 @@ public enum Wording {
     public static let readTooSlow = "The server is answering, but this wallet is taking too long to read."
     public static let serverTooSlow = "The server took too long to answer."
     public static let notAnAddress = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
+    public static let notASignature = "That isn't a signature. It should start with 0x, then 130 letters and numbers."
+    public static let wrongSignature = "That signature isn't from this wallet."
+    public static let couldntCheckSignature = "Couldn't check it. Is the server running?"
 }
 
 extension AssetMetric {

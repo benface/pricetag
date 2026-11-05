@@ -743,6 +743,11 @@ public enum WalletAddress {
         value.wholeMatch(of: /0x[0-9a-fA-F]{40}/) != nil
     }
 
+    /// The shape of a signature, which nothing else someone might paste has, including a private key.
+    public static func isSignature(_ value: String) -> Bool {
+        value.wholeMatch(of: /0x[0-9a-fA-F]{130}/) != nil
+    }
+
     /// The one address in whatever was pasted, which is often more than the address: `base:0x…`, or a link to an explorer's page.
     /// Nil if there's none, or several to choose between. A transaction hash is longer, so it never counts.
     public static func find(in text: String) -> String? {
