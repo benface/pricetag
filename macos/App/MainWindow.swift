@@ -321,7 +321,7 @@ private struct HoldingsTable: View {
     private enum Column {
         static let asset: CGFloat = 160
         static let balanceCheck: CGFloat = 100
-        static let amount: CGFloat = 85
+        static let amount: CGFloat = 100
         static let averagePrice: CGFloat = 130
         static let value: CGFloat = 85
         static let realized: CGFloat = 120
@@ -470,6 +470,8 @@ private struct HoldingsTable: View {
                 if warn { WarningIcon() }
                 LiveNumber(text, tone: isLive ? tone : (warn ? .warning : .neutral))
                     .lineLimit(1)
+                    // A long amount gets smaller rather than losing digits.
+                    .minimumScaleFactor(0.7)
             }
             .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
         }
