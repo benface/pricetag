@@ -53,11 +53,11 @@ struct WalletButton: View {
                 Text(current?.title ?? "Add Wallet")
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .layoutPriority(1)
+                // Never cut off: a long name mustn't hide that this is only being watched.
                 if let badge = current?.badge {
                     Text(badge)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .fixedSize()
                 }
                 Image(systemName: "chevron.down")
                     .imageScale(.small)

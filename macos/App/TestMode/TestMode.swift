@@ -265,7 +265,9 @@ enum TestScene: String, CaseIterable {
         let defaults = UserDefaults(suiteName: "com.benface.pricetag.mac.test-mode")!
         var registered: [String: Any] = ["currency": currency.rawValue]
         if hasWallet { registered["wallet"] = shownWallet ?? (usesDemoWallet ? WalletAddress.demo : TestScene.emptyWallet) }
-        if listsWallets, let saved = try? JSONEncoder().encode(TestScene.savedWallets) { registered["savedWallets"] = saved }
+        // The longest name anyone's likely to give, where there's the least room for it.
+        let wallets = self == .mainWatchingNamedSmallest ? [SavedWallet(address: TestScene.namedWallet, name: "The Long-Term Family Treasury Wallet on Base", lastSeen: .distantPast)] : TestScene.savedWallets
+        if listsWallets, let saved = try? JSONEncoder().encode(wallets) { registered["savedWallets"] = saved }
         if self == .sendKnown, let book = try? JSONEncoder().encode(Book().answering(TestScene.recipient, .someoneElse, focus: nil)) { registered["answers"] = book }
         if self == .resolveAnsweredWallet, let book = try? JSONEncoder().encode(Book().answering(TestScene.answeredWallet, .mine, focus: nil)) { registered["answers"] = book }
         defaults.register(defaults: registered)
