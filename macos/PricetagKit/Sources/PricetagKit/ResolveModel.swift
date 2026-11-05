@@ -16,6 +16,14 @@ public enum Ownership: String, Sendable, CaseIterable, Identifiable {
         case .someoneElse: "Someone else"
         }
     }
+
+    public var answer: SenderAnswer {
+        switch self {
+        case .mine: .mine
+        case .myExchange: SenderAnswer(kind: .myExchange)
+        case .someoneElse: .someoneElse
+        }
+    }
 }
 
 @MainActor
@@ -24,6 +32,7 @@ public final class ResolveModel {
     private let store: PortfolioStore
     /// This holding's questions come first, because that's what Resolve was clicked on.
     private let firstAsset: String?
+    private let noteWriter: (any CostNoteWriter)?
 
     /// Skipped for now. A skipped question stays open and stays flagged, and comes back next time.
     public private(set) var skipped: Set<String> = []
@@ -34,10 +43,13 @@ public final class ResolveModel {
     /// Asking what they paid, because they said it's their exchange account.
     public private(set) var isAskingCost = false
     public var failure: String?
+    /// From the moment it's asked for until it's on its way or isn't going. It can't be called back in that time.
+    public private(set) var isPublishing = false
 
-    public init(store: PortfolioStore, firstAsset: String? = nil) {
+    public init(store: PortfolioStore, firstAsset: String? = nil, noteWriter: (any CostNoteWriter)? = nil) {
         self.store = store
         self.firstAsset = firstAsset
+        self.noteWriter = noteWriter
     }
 
     public var questions: [Question] {
@@ -50,7 +62,7 @@ public final class ResolveModel {
     public var meter: Meter? { store.portfolio?.meter }
     public var canUndo: Bool { !store.undoStack.isEmpty }
     /// Every question's answered. Anything skipped doesn't count.
-    public var isBalanced: Bool { meter?.isBalanced == true }
+    public var isBalanced: Bool { meter?.isBalanced == true && store.portfolio?.withheld.isEmpty == true }
 
     /// The books each answer leads to. "My exchange account" changes nothing until there's a cost, so it isn't one.
     private func candidate(_ ownership: Ownership, for question: Question) -> Book? {
@@ -93,11 +105,11 @@ public final class ResolveModel {
     }
 
     /// The books a typed cost leads to. nil until every amount reads as one.
-    private func candidate(costs dollars: [String: String], for question: Question) -> Book? {
+    private func candidate(costs dollars: [String: String], in currency: CurrencyCode? = nil, for question: Question) -> Book? {
         var micros: [String: Money] = [:]
         for arrival in question.arrivals {
             guard let amount = Format.micros(fromDollars: dollars[arrival.asset] ?? "") else { return nil }
-            micros[arrival.asset] = Money(micros: amount, currency: store.currency)
+            micros[arrival.asset] = Money(micros: amount, currency: currency ?? store.currency)
         }
         if let sender = question.sender {
             return store.book.enteringExchangeCosts(sender, receipts: question.receipts, amounts: micros, focus: store.portfolio?.address)
@@ -129,6 +141,33 @@ public final class ResolveModel {
     public func enterCost(_ dollars: [String: String]) -> Bool {
         guard let question = current, let book = candidate(costs: dollars, for: question) else { return false }
         store.setBook(book)
+        advance()
+        return true
+    }
+
+    /// The note this question could publish, when the wallet it arrived in is one this app can sign for.
+    public func noteDraft(for question: Question) -> CostNoteDraft? {
+        guard let draft = question.noteDraft, noteWriter?.canWriteNote(from: draft.wallet) == true else { return nil }
+        return draft
+    }
+
+    /// Publishes what was paid, and keeps it here too, so the question's answered before the note's been read back. `usd` is as typed,
+    /// because a note is always in USD. True once it's on its way.
+    public func publish(_ draft: CostNoteDraft, usd: String) async -> Bool {
+        guard !isPublishing, let question = current, question.noteDraft == draft, let noteWriter, let micros = Format.micros(fromDollars: usd), let calldata = CostNote.calldata(txHash: draft.txHash, asset: draft.asset, usdMicros: micros) else { return false }
+        failure = nil
+        guard noteWriter.canWriteNote(from: draft.wallet) else {
+            failure = "That wallet can't publish this any more, so nothing was signed."
+            return false
+        }
+        isPublishing = true
+        defer { isPublishing = false }
+        guard await noteWriter.writeNote(calldata, asset: draft.asset, from: draft.wallet) else {
+            failure = noteWriter.noteProblem
+            return false
+        }
+        // Worked out now, because answers can change during the wait, and this shouldn't undo them.
+        if let book = candidate(costs: [draft.asset: usd], in: .USD, for: question) { store.setBook(book) }
         advance()
         return true
     }

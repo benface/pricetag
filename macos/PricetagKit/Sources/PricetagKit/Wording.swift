@@ -14,6 +14,11 @@ public enum Wording {
     public static let realizedHelp = "Gain or loss on what you've sold or spent."
     public static let unrealizedHelp = "Gain or loss on what you still hold, at the current price."
 
+    public static let holdTitle = "Compared with holding ETH"
+    public static let holdWallet = "This wallet, after network fees"
+    public static let holdEth = "If you'd held ETH instead"
+    public static let holdPast = "Past results don't predict future ones."
+
     public static let rulesTitle = "Pricing rule"
     public static let rulesHelp = "Prices come from a public recipe anyone can copy and change. Each rule here is one version of it, named by its fingerprint. Switching only changes which one this wallet is read through."
 
@@ -62,6 +67,33 @@ public enum Wording {
         count > shown ? "Activity (newest \(shown) of \(Format.block(count)))" : "Activity (\(Format.block(count)))"
     }
 
+    /// How this wallet did next to holding, when the two cover the same money.
+    public static func holdDifference(_ micros: String, _ currency: CurrencyCode, estimated: Bool = false) -> String {
+        let isLess = micros.hasPrefix("-")
+        let about = estimated ? "About " : ""
+        guard isLess || isPositive(micros) else { return "\(about)\(estimated ? "the" : "The") same as holding ETH." }
+        return "\(about)\(Format.money(isLess ? String(micros.dropFirst()) : micros, currency)) \(isLess ? "less" : "more") than holding ETH."
+    }
+
+    /// What keeps the two from being set against each other, or nil when nothing does.
+    public static func holdCaveat(_ comparison: HoldComparison, _ currency: CurrencyCode) -> String? {
+        if comparison.status == .complete { return nil }
+        switch comparison.unavailable {
+        case .noCurrentEthPrice: return "Unavailable, because there's no current ETH price to compare with."
+        case .leftWithNoKnownValue: return "Unavailable, because something left this wallet with no known value, so what holding ETH would have left can't be worked out."
+        case .leftWithNoKnownShare: return "Unavailable, because something left this wallet after an exchange of several tokens at once, so how much of it came from what was put in can't be worked out."
+        case .nothingKnownPutIn: return "Unavailable, because nothing put in this wallet has a known value yet."
+        case nil: break
+        }
+        let count = comparison.unknownAmounts
+        let amounts = count == 1 ? "1 other amount has no known value, and isn't counted." : "\(Format.block(count)) other amounts have no known value, and aren't counted."
+        return [
+            "Partial, so the two don't cover the same money. Holding ETH counts the \(Format.money(comparison.putInMicros, currency)) put in with a known value.",
+            count > 0 ? amounts : nil,
+            comparison.walletLeavesOut ? "This wallet's total leaves some things out." : nil,
+        ].compactMap(\.self).joined(separator: " ")
+    }
+
     /// What a total leaves out, or nil when it leaves out nothing.
     public static func excluded(_ excluded: [Exclusion]) -> String? {
         if excluded.isEmpty { return nil }
@@ -83,7 +115,7 @@ public enum Wording {
         let opening = openingUnread
             ? "What the wallet held before that couldn't all be read yet, so some amounts may not be full balances."
             : "What the wallet held before that is included, at an unknown cost."
-        return "Covers about \(Format.duration(blocks: span.toBlock - span.fromBlock)) of history and \(trackedTokens) tokens plus ETH. \(opening) Other tokens aren't counted."
+        return "Covers about \(Format.duration(ms: BlockTime.msBetween(span.fromBlock, span.toBlock))) of history and \(trackedTokens) tokens plus ETH. \(opening) Other tokens aren't counted."
     }
 
     public static func feesUnknown(_ count: Int) -> String {
@@ -131,12 +163,13 @@ public enum Wording {
     public static func catchingUp(_ portfolio: Portfolio) -> String? {
         if !portfolio.progress.started { return notStarted }
         if portfolio.progress.behindBlocks == 0 { return nil }
-        return behind(blocks: portfolio.progress.behindBlocks)
+        let head = portfolio.latest.blockNum
+        return behind(ms: BlockTime.msBetween(head - portfolio.progress.behindBlocks, head))
     }
 
-    static func behind(blocks: Int) -> String {
+    static func behind(ms: Int) -> String {
         // Under half a minute would round to "0 min", which reads as not behind at all.
-        "The data is still catching up, \(blocks < 15 ? "less than a minute" : "about \(Format.duration(blocks: blocks))") behind the network. Anything newer isn't in these numbers yet."
+        "The data is still catching up, \(ms < 30_000 ? "less than a minute" : "about \(Format.duration(ms: ms))") behind the network. Anything newer isn't in these numbers yet."
     }
 
     public static func stale(lastUpdate: String) -> String {
@@ -172,6 +205,11 @@ public enum Wording {
 
     public static func linkedFailed(_ count: Int) -> String {
         count == 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : "Couldn't read \(count) of your other wallets, so what came from them may show as unresolved."
+    }
+
+    /// A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent.
+    public static func withheld(wallet: String, asset: String) -> String {
+        "\(Format.shortHash(wallet))'s \(asset) history can't be confirmed, so what it sent has an unknown cost where it arrived."
     }
 
     /// A preview's headline, as it would read.

@@ -1,8 +1,8 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { CURRENCIES, TOKENS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatSignedMoney, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
-import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, METHOD_LABELS, NETWORK_FEES, currentPriceSource, tokenLabel, unseenEthCause } from "./wording.ts"
+import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unseenEthCause } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"
 
@@ -33,7 +33,7 @@ function diff(after: string, before: string): bigint {
 /** Where a wallet's numbers are explained from: what's on screen, and its USD facts to show beside them. */
 export type ExplainContext = {
   view: Pick<WalletView, "currency" | "latestRate" | "missingRateTxs">
-  source: { positions: Position[]; totals: Totals; points: PnlPoint[] } | null
+  source: { positions: Position[]; totals: Totals; points: PnlPoint[]; holdComparison?: HoldComparison } | null
   /** Said on every explanation when a pricing rule other than the default is on. */
   ruleNote?: string | null
 }
@@ -196,7 +196,7 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
     ? `Current price: ${formatPrice(price.micros, currency)}${price.usdMicros ? ` (${formatPrice(price.usdMicros, "USD")} USD)` : ""}, from ${currentPriceSource(price.source)} at block ${price.blockNum.toLocaleString("en-US")}.${price.source === "market" ? " That makes it an estimate." : ""}`
     : currency !== "USD" && !view.latestRate
       ? `There's no current USD to ${currency} rate, so ${asset} has no current value here.`
-      : TOKENS.some((t) => t.symbol === asset && t.oracle)
+      : TOKENS.some((t) => t.symbol === asset && t.oracle) || TOKEN_FEEDS[asset]
       ? `There's no current price for ${asset}, because the market price feed's latest answer failed or is too old. An old price would quietly be wrong.`
       : `There's no current price for ${asset}, because it hasn't traded enough recently for a price to be trusted.`
   const lines: string[] = []
@@ -236,7 +236,9 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
       value = values.realizedMicros && signed(values.realizedMicros)
       if (values.realizedMicros === null) {
         const known = BigInt(state.resolvedDisposedQty) > 0n ? ` ${signed(state.realizedMicros)} is the part that is known.` : ""
-        lines.push(`${formatAmount(state.unresolvedDisposedQty, decimals)} ${asset} was sold or spent with an unknown cost or no price, so its gain can't be known.${known}`)
+        const soldAt = (units: string, what: string) => (BigInt(units) > 0n ? [`${formatAmount(units, decimals)} ${asset} was sold or spent at ${what}`] : [])
+        const unknowns = [...soldAt(state.unknownCostDisposedQty, "an unknown cost"), ...soldAt(state.unknownProceedsQty, "an unknown price")]
+        lines.push(`${unknowns.join(", and ")}, so its gain can't be known.${known}`)
       } else lines.push("What you received minus what it cost, on what was sold or spent on network fees. The fees themselves are a separate cost in the total.")
       break
     case "unrealized":
@@ -303,8 +305,8 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
   if (totals.unpricedGas && (metric === "gas" || metric === "pnl")) lines.push("Some network fees had no price at the time, so they aren't included.")
   const relevant = totals.excluded.filter(({ reason }) => {
     if (metric === "value") return reason === "no current price" || reason === "incomplete history" || reason === "balance couldn't be read"
-    if (metric === "realized") return reason === "sold at an unknown cost" || reason === "doesn't match its actual balance" || reason === "not checked against its actual balance"
-    if (metric === "unrealized") return reason !== "sold at an unknown cost"
+    if (metric === "realized") return reason === "sold at an unknown cost" || reason === "sold or spent at an unknown price" || reason === "doesn't match its actual balance" || reason === "not checked against its actual balance"
+    if (metric === "unrealized") return reason !== "sold at an unknown cost" && reason !== "sold or spent at an unknown price"
     return metric === "pnl"
   })
   for (const { asset, reason } of relevant) lines.push(`Not included: ${asset} (${reason}).`)
@@ -327,6 +329,34 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
   }
 }
 
+export function explainHold(positions: readonly Position[], comparison: HoldComparison, { view, source }: ExplainContext): Explanation {
+  const { currency } = view
+  const money = (micros: string) => formatMoney(micros, currency)
+  const signed = (micros: string | null) => (micros === null ? "unavailable" : formatSignedMoney(micros, currency))
+  const { holdMicros, ethValueMicros, ethPriceMicros, ethQty, putInMicros, takenOutMicros, walletMicros, gainThatLeftMicros, differenceMicros, ranOut } = comparison
+  const caveat = holdCaveatSentence(comparison, currency)
+  const lines = [
+    "Takes each amount put in this wallet, turns it into ETH at that moment's price, and values that ETH at today's price.",
+    "Put in means whatever arrived from outside this wallet, at what it cost you, or at its price when it arrived if that's all that's known. Exchanges inside the wallet aren't put in.",
+    ...(BigInt(takenOutMicros) > 0n ? [`${money(takenOutMicros)} left this wallet, so it leaves the ETH too, at its price when it left.${ranOut ? " Holding ETH would have run out before all of it could leave." : ""}`] : []),
+    ...(ethValueMicros !== null && ethPriceMicros !== null ? [`${money(putInMicros)} put in leaves ${formatAmount(ethQty, 18)} ETH, worth ${money(ethValueMicros)} at today's ${formatPrice(ethPriceMicros, currency)}.`] : []),
+    `This wallet: ${signed(walletMicros)}. That's its total PnL after network fees${BigInt(gainThatLeftMicros) === 0n ? "" : `, and ${signed(gainThatLeftMicros)} on what left it, which total PnL doesn't count because a transfer isn't a sale`}. Holding ETH pays no fees.`,
+    `${HOLD_ETH}: ${signed(holdMicros)}.`,
+    ...(differenceMicros !== null ? [holdDifferenceSentence(differenceMicros, currency)] : []),
+    ...(caveat ? [caveat] : []),
+    ...exchangeLines(view, "both"),
+    HOLD_PAST,
+  ]
+  return {
+    currency,
+    title: HOLD_ETH,
+    value: holdMicros && formatSignedMoney(holdMicros, currency),
+    sourceValue: source?.holdComparison?.holdMicros ? inUsd(formatSignedMoney(source.holdComparison.holdMicros, "USD")) : null,
+    lines,
+    effects: holdEffects(positions).reverse(),
+  }
+}
+
 export function explainPoint(positions: readonly Position[], point: PnlPoint, { view, source }: ExplainContext): Explanation {
   const usd = source?.points.find((p) => p.txHash === point.txHash)
   return {
@@ -339,16 +369,19 @@ export function explainPoint(positions: readonly Position[], point: PnlPoint, { 
   }
 }
 
+type ExplainFacts = { positions: readonly Position[]; totals: Totals; points: readonly PnlPoint[]; holdComparison?: HoldComparison }
+
 /** A number someone clicked. Holding this and not its explanation means what's open always describes what's on screen. */
-export type ExplainTarget = { kind: "total"; metric: TotalMetric } | { kind: "asset"; asset: string; metric: Metric } | { kind: "tx"; txHash: string }
+export type ExplainTarget = { kind: "total"; metric: TotalMetric } | { kind: "asset"; asset: string; metric: Metric } | { kind: "tx"; txHash: string } | { kind: "hold" }
 
 /** What a target says about these numbers, or null when they have no such asset or transaction. */
-export function explainTarget(target: ExplainTarget, facts: { positions: readonly Position[]; totals: Totals; points: readonly PnlPoint[] }, context: ExplainContext = USD_CONTEXT): Explanation | null {
+export function explainTarget(target: ExplainTarget, facts: ExplainFacts, context: ExplainContext = USD_CONTEXT): Explanation | null {
   const explanation = explainNumber(target, facts, context)
   return explanation && context.ruleNote ? { ...explanation, lines: [...explanation.lines, context.ruleNote] } : explanation
 }
 
-function explainNumber(target: ExplainTarget, { positions, totals, points }: { positions: readonly Position[]; totals: Totals; points: readonly PnlPoint[] }, context: ExplainContext): Explanation | null {
+function explainNumber(target: ExplainTarget, { positions, totals, points, holdComparison }: ExplainFacts, context: ExplainContext): Explanation | null {
+  if (target.kind === "hold") return holdComparison ? explainHold(positions, holdComparison, context) : null
   if (target.kind === "total") return explainTotal(positions, totals, target.metric, context)
   if (target.kind === "asset") {
     const position = positions.find((p) => p.asset === target.asset)

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, MARKET_MAX_AGE_BLOCKS, marketPrice, marketTrades, type LegRow, type MarketRow, type MarketTrade, type Reference } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, TOKEN_FEEDS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, LAST_2S_BLOCK, markNeeds, marketPrice, marketTrades, pnlOverTime, referenceMarks, type LegRow, type MarketRow, type MarketTrade, type Reference } from "@pricetag/sdk/core"
 import type { Query } from "@pricetag/sdk/internal"
 import { resolvingSource } from "../server/source.ts"
 
@@ -25,8 +25,14 @@ describe("a market price", () => {
   })
 
   it("is gone once its trades are too old", () => {
-    assert.equal(marketPrice(steady, "AERO", 990 + MARKET_MAX_AGE_BLOCKS)?.usdMicros, "1100000")
-    assert.equal(marketPrice(steady, "AERO", 991 + MARKET_MAX_AGE_BLOCKS), null)
+    assert.equal(marketPrice(steady, "AERO", 990 + 900)?.usdMicros, "1100000")
+    assert.equal(marketPrice(steady, "AERO", 991 + 900), null)
+  })
+
+  it("lasts just as long in time after the 200 ms upgrade", () => {
+    const after = [trade(LAST_2S_BLOCK + 10, "0xa", "1000000"), trade(LAST_2S_BLOCK + 15, "0xb", "1100000"), trade(LAST_2S_BLOCK + 20, "0xc", "1200000")]
+    assert.equal(marketPrice(after, "AERO", LAST_2S_BLOCK + 10 + 9000)?.usdMicros, "1100000")
+    assert.equal(marketPrice(after, "AERO", LAST_2S_BLOCK + 11 + 9000), null)
   })
 
   it("won't let small trades set it", () => {
@@ -158,6 +164,53 @@ describe("a trade in a transaction with an unconfirmed credit", () => {
   })
 })
 
+describe("what a chart needs marked", () => {
+  const moved = (block_num: number, token: string, side: LegRow["side"], amount: bigint, account = ME, tx_index = 1): LegRow => ({ block_num, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: `0x${block_num}${tx_index}`, tx_index, log_index: 0, token, account, side, amount: amount.toString(), kind: "erc20" })
+  const gas = (block_num: number) => ({ ...moved(block_num, ETH_ADDRESS, "debit", 1n), kind: "gas" as const })
+  const blocksOf = (needs: { asset: string; block: number }[], asset = "AERO") => needs.filter((n) => n.asset === asset).map((n) => n.block)
+
+  it("is each block with a transaction that leaves the token held, newest first", () => {
+    const rows = [gas(5), moved(10, AERO, "credit", E18), gas(20), moved(30, AERO, "debit", E18), gas(40)]
+    assert.deepEqual(blocksOf(markNeeds(ME, rows, null)), [20, 10])
+  })
+
+  it("starts from what was held before the first block", () => {
+    assert.deepEqual(markNeeds(ME, [gas(5)], { amounts: { AERO: E18.toString() } }), [{ asset: "AERO", block: 5 }])
+  })
+
+  it("has nothing to mark for a token that comes and goes within one transaction, which only gets a point after it", () => {
+    assert.deepEqual(blocksOf(markNeeds(ME, [moved(10, AERO, "credit", E18), moved(10, AERO, "debit", E18), gas(20)], null)), [])
+  })
+
+  it("keeps a token bought and sold in different transactions of one block, in the order they ran", () => {
+    const bought = moved(10, AERO, "credit", E18, ME, 1)
+    const sold = moved(10, AERO, "debit", E18, ME, 2)
+    assert.deepEqual(blocksOf(markNeeds(ME, [bought, sold, gas(20)], null)), [10])
+    assert.deepEqual(blocksOf(markNeeds(ME, [sold, bought, gas(20)], null)), [10], "whatever order the rows came in")
+    const soldFirst = [moved(10, AERO, "debit", E18, ME, 1), moved(10, AERO, "credit", E18, ME, 2), gas(20)]
+    assert.deepEqual(blocksOf(markNeeds(ME, soldFirst, { amounts: { AERO: E18.toString() } })), [20, 10], "and one sold then bought back is held after it")
+  })
+
+  it("marks the chart at each of those transactions", () => {
+    const usdc = (amount: bigint, side: LegRow["side"], index: number) => moved(10, USDC_ADDRESS, side, amount * E6, ME, index)
+    // Buys 100 AERO for $100, then sells them for $200 in the same block, with AERO trading at $2.
+    const rows = [moved(10, AERO, "credit", 100n * E18, ME, 1), usdc(100n, "debit", 1), moved(10, AERO, "debit", 100n * E18, ME, 2), usdc(200n, "credit", 2)]
+    const references = [{ blockNum: 10, ethUsd: "200000000000", usdcUsd: "100000000" }]
+    const legs = buildPricedLegs({ account: ME, rows, references, priced: derivePricedRows(rows, references) }).filter((l) => l.asset === "AERO")
+    const marks = Object.fromEntries(markNeeds(ME, rows, null).map(({ asset, block }) => [block, { [asset]: "2000000" }]))
+    assert.deepEqual(pnlOverTime(legs, "average", {}, referenceMarks(references, marks), null).map((p) => p.pnlMicros), ["100000000", "100000000"])
+  })
+
+  it("doesn't count more leaving than arrived against what comes later", () => {
+    const rows = [moved(10, AERO, "debit", 5n * E18), gas(20), moved(30, AERO, "credit", E18), gas(40)]
+    assert.deepEqual(blocksOf(markNeeds(ME, rows, null)), [40, 30])
+  })
+
+  it("leaves out tokens with a feed, and other accounts' rows", () => {
+    assert.deepEqual(markNeeds(ME, [moved(10, USDC_ADDRESS, "credit", E6), moved(20, AERO, "credit", E18, "0x00000000000000000000000000000000000000bb")], null), [])
+  })
+})
+
 describe("where a rule's market prices come from", () => {
   it("reads a fork's own priced_legs, so its trades are priced by its rule", async () => {
     const asked: string[] = []
@@ -168,5 +221,42 @@ describe("where a rule's market prices come from", () => {
     const source = resolvingSource(query, { baseDataset: "base", dataset: "pricetag", priceDataset: "pricing", startBlock: 1, network: "base" })
     await source.readMarketTrades?.("AERO", 1, 2)
     assert.ok(asked[0]?.includes(`"pricing".priced_legs`))
+  })
+})
+
+describe("reading the token feeds", () => {
+  const word = (value: bigint) => value.toString(16).padStart(64, "0")
+  const roundData = (answer: bigint, updatedAt: bigint) => `${word(1n)}${word(answer)}${word(0n)}${word(updatedAt)}${word(1n)}`
+  const BLOCK = { block_num: 50, timestamp: Date.parse("2026-11-04T00:00:00.000Z") }
+
+  function fakeQuery(row: Record<string, unknown> | null) {
+    const asked: string[] = []
+    const query = (async (sql: string) => {
+      asked.push(sql)
+      return row ? [row] : []
+    }) as unknown as Query
+    return { asked, source: resolvingSource(query, { baseDataset: "base", dataset: "pricetag", startBlock: 1, network: "base_mainnet" }) }
+  }
+
+  it("reads every feed in one bounded query, and leaves out a failed one", async () => {
+    const { asked, source } = fakeQuery({ ...BLOCK, f0: { data: roundData(63_000_000n, 1000n) }, f1: null })
+    const rounds = await source.readFeedRounds?.(["AERO", "DAI"], 50)
+    assert.deepEqual(rounds, { AERO: { answer: "63000000", updatedAt: 1000, blockNum: 50, timestamp: "2026-11-04T00:00:00.000Z" } })
+    assert.equal(asked.length, 1)
+    assert.ok(asked[0]?.includes(TOKEN_FEEDS.AERO!.address))
+    assert.ok(asked[0]?.includes(TOKEN_FEEDS.DAI!.address))
+    assert.ok(asked[0]?.includes(`FROM (SELECT block_num, timestamp FROM "base".blocks WHERE block_num BETWEEN 50 AND 50 AND block_num IN (50) LIMIT 1)`), "see the note on eth_call's shape in readReferences")
+  })
+
+  it("has nothing to ask about a token with no feed, or a block with no row", async () => {
+    const none = fakeQuery(null)
+    assert.deepEqual(await none.source.readFeedRounds?.(["ETH"], 50), {})
+    assert.equal(none.asked.length, 0)
+    assert.deepEqual(await none.source.readFeedRounds?.(["AERO"], 50), {})
+  })
+
+  it("leaves out a negative answer", async () => {
+    const { source } = fakeQuery({ ...BLOCK, f0: { data: roundData((1n << 256n) - 1n, 1000n) } })
+    assert.deepEqual(await source.readFeedRounds?.(["AERO"], 50), {})
   })
 })

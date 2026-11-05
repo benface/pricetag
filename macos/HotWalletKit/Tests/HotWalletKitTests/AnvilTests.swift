@@ -141,6 +141,50 @@ struct AnvilTests {
         #expect((try await client.snapshot(of: cold)).balances[usdc] == usdcUnits(500))
     }
 
+    @Test func sendsAndPublishesACostForReal() async throws {
+        let vault = KeyVault(store: MemoryKeys())
+        let hot = try await vault.createKey()
+        let friend = try await vault.createKey()
+        let client = RPCChainClient(url: rpc!)
+        let stateStore = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hot
+        try stateStore.save(state)
+        let unreachable = ScriptedPortfolios(.failure(.unreachable))
+        let wallet = HotWallet(signer: vault, settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { unreachable }, makeChain: { _ in client })
+
+        _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth / 100)])
+        _ = try await anvil("anvil_dealERC20", [hot.lowercased, usdc.contract!.lowercased, hex(usdcUnits(10))])
+
+        #expect(await wallet.send(SendRequest(token: usdc, amount: usdcUnits(4), to: friend)))
+        #expect(wallet.sweepProblem == nil)
+        await wallet.tick()
+        #expect(wallet.records.first?.status == .confirmed)
+        #expect((try await client.snapshot(of: friend)).balances[usdc] == usdcUnits(4))
+
+        // Anvil mines just after a send returns, so give the read a block past the receipt it found.
+        await wallet.tick()
+        #expect(await wallet.send(SendRequest(token: Base.eth, amount: oneEth / 10000, to: friend)))
+        #expect(wallet.sweepProblem == nil)
+        await wallet.tick()
+        #expect((try await client.snapshot(of: friend)).balances[Base.eth] == oneEth / 10000)
+
+        await wallet.tick()
+        let calldata = try #require(CostNote.calldata(txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", usdMicros: "250000000"))
+        #expect(await wallet.writeNote(calldata, asset: "USDC", from: hot.lowercased))
+        #expect(wallet.sweepProblem == nil)
+        let note = try #require(wallet.records.first)
+        let onchain = try #require(try await anvil("eth_getTransactionByHash", [note.hash]) as? [String: Any])
+        #expect((onchain["from"] as? String)?.lowercased() == hot.lowercased)
+        #expect((onchain["to"] as? String)?.lowercased() == hot.lowercased)
+        #expect(onchain["value"] as? String == "0x0")
+        #expect(onchain["input"] as? String == "0x" + Hex.encode(calldata), "this is exactly what the server's parseNote reads")
+        await wallet.tick()
+        #expect(wallet.records.first?.status == .confirmed)
+        #expect(wallet.alarm == nil, "nothing it sent looks stolen")
+        #expect((try await client.snapshot(of: hot)).nonce == 3)
+    }
+
     /// Compiled-in addresses are the whole of the trust here, so each one is asked what it is, on the real chain's code and state.
     @Test func everyFeedIsWhatItSays() async throws {
         let feeds = Array(Oracle.others.values) + [.eth, .usdc]
@@ -193,6 +237,34 @@ struct AnvilTests {
         #expect((wallet.plan?.valueUsdMicros ?? .max) <= 51 * Money.dollar, "about the cap is left")
         let saved = try await client.snapshot(of: cold)
         #expect(others.filter { (saved.balances[$0] ?? 0) > 0 }.count >= others.count - 1, "all but what's left under the cap")
+    }
+
+    @Test func aRunningWalletShowsASendLandingWithoutWaitingForATick() async throws {
+        let vault = KeyVault(store: MemoryKeys())
+        let hot = try await vault.createKey()
+        let cold = try await vault.createKey()
+        let client = RPCChainClient(url: rpc!)
+        let stateStore = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hot
+        try stateStore.save(state)
+        let unreachable = ScriptedPortfolios(.failure(.unreachable))
+        let wallet = HotWallet(signer: vault, settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { unreachable }, makeChain: { _ in client }, tickDelay: .seconds(3600))
+        try wallet.addColdWallet(address: cold.lowercased, name: "Fork")
+        wallet.setCap(dollars: 50)
+        _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth / 1000)])
+        _ = try await anvil("anvil_dealERC20", [hot.lowercased, usdc.contract!.lowercased, hex(usdcUnits(500))])
+
+        wallet.start()
+        defer { wallet.stop() }
+        let clock = ContinuousClock()
+        let started = clock.now
+        for _ in 0..<300 where wallet.snapshot?.nonce != 1 { try await Task.sleep(for: .milliseconds(100)) }
+        let waited = clock.now - started
+        #expect(wallet.records.first?.status == .confirmed)
+        #expect(wallet.snapshot?.nonce == 1)
+        #expect((wallet.snapshot?.balances[usdc] ?? 0) < usdcUnits(100))
+        #expect(waited < .seconds(15), "the one tick here sent it, and the next is an hour away")
     }
 
     @Test func sweepsEverythingIncludingEth() async throws {

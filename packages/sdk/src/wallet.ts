@@ -3,7 +3,9 @@
 
 import { viewWallet, type CurrencyCode, type Rates, type WalletView } from "./currency.ts"
 import type { Method } from "./fold.ts"
+import { compareWithHoldingEth, type HoldComparison } from "./hold.ts"
 import type { PricedLeg, Reference, UnseenEth } from "./legs.ts"
+import type { MarketMarks } from "./market.ts"
 import type { CostNote } from "./notes.ts"
 import { foldPositions, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type Head, type LatestPrices, type PnlPoint, type PnlStatus, type Position, type Totals } from "./portfolio.ts"
 import type { BalanceSnapshot } from "./reconcile.ts"
@@ -45,6 +47,8 @@ export type WalletData = {
   openingUnread: string[]
   /** The last balance read for each asset in `unreadBalances` that has one. */
   lastBalances: Record<string, { blockNum: number; amount: string }>
+  /** The last ETH balance read with every fee up to it known. A fee that can't be read yet says nothing about what came before it. */
+  lastCheckableEth: { blockNum: number; amount: string } | null
   /** Assets with no balance read at `coverage.toBlock`, which isn't the same as holding none. Empty until reads start. */
   unreadBalances: string[]
   /** Where ETH arrived that no row explains, with the transactions that took a token from this wallet there. */
@@ -53,6 +57,8 @@ export type WalletData = {
   notes: CostNote[]
   /** Whether market prices were read successfully, so a token without one really has no market. */
   marketChecked: boolean
+  /** What this wallet's tokens without a feed traded at, at the blocks of its transactions, for a chart. Some can still be unread. */
+  marketMarks: MarketMarks
 }
 
 export const hasStarted = ({ coverage }: Pick<WalletData, "coverage">) => coverage.toBlock >= coverage.fromBlock
@@ -68,6 +74,8 @@ export type FoldedWallet = {
   pnlStatus: PnlStatus
   /** PnL after each transaction, for a chart. */
   points: PnlPoint[]
+  /** What this wallet made next to what simply holding ETH would have. */
+  holdComparison: HoldComparison
 }
 
 /** With nothing read, there's no sum at all. Adding up no legs would otherwise say $0. */
@@ -78,13 +86,15 @@ export function foldWallet(wallet: WalletData, method: Method, view: WalletView 
   const positions = foldPositions(view.legs, method, view.prices, wallet)
   const unread = unreadAssets(positions, wallet)
   const totals = hasStarted(wallet) ? sumTotals(positions, unread) : noTotals()
+  const status = pnlStatus(totals, wallet.gasUnknownTxs)
   return {
     view,
     positions,
     unreadAssets: unread,
     totals,
-    pnlStatus: pnlStatus(totals, wallet.gasUnknownTxs),
+    pnlStatus: status,
     points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket)),
+    holdComparison: compareWithHoldingEth(positions, totals, status, view.prices, view.markPrice),
   }
 }
 

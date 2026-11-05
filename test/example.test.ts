@@ -13,9 +13,9 @@ const reference = { block_num: "100", eth_usd: "240000000000", usdc_usd: "100000
 const leg = (token: string, side: string, amount: string, kind: string) => ({ block_num: "100", timestamp: 1_800_000_000_000, tx_hash: "aa", tx_index: 3, log_index: 0, token, account: ME, side, amount, kind })
 
 /** Runs the real example, with only its Amp client replaced. */
-function runExample(tables: Tables, through?: Through) {
+function runExample(tables: Tables, through?: Through, example = "portfolio.ts", args: string[] = []) {
   const path = (relative: string) => fileURLToPath(new URL(relative, import.meta.url))
-  const { status, stdout, stderr } = spawnSync(process.execPath, ["--import", path("./support/example-hooks.ts"), path("../packages/sdk/examples/portfolio.ts"), `0x${ME}`], {
+  const { status, stdout, stderr } = spawnSync(process.execPath, ["--import", path("./support/example-hooks.ts"), path(`../packages/sdk/examples/${example}`), `0x${ME}`, ...args], {
     encoding: "utf8",
     env: { ...process.env, PRICETAG_START_BLOCK: "100", FAKE_AMP: JSON.stringify({ tables, through }) },
   })
@@ -71,5 +71,11 @@ describe("the example", () => {
     assert.match(stdout, /AERO: 500 \| cost \$1,000\.00 \| value unknown \(no price\)/)
     assert.match(stdout, /leaving out: .*AERO/)
     assert.match(stdout, /Latest: AERO in 0xaa, price \$2\.00 \(swap\), cost paid/)
+  })
+
+  it("watches a wallet, and stops after as many updates as it's asked for", () => {
+    const { status, stdout } = runExample({ legs: [leg(USDC, "credit", "1000000", "erc20")], reference_prices: [reference, { ...reference, block_num: "199" }], balances: { 99: { USDC: "5000000" }, 200: { USDC: "6000000" } } }, undefined, "watch.ts", ["1"])
+    assert.equal(status, 0)
+    assert.match(stdout, /^To block 200: 2 legs, value \$6\.00, PnL unknown \(unavailable\), leaving out: \d+ things?\n$/)
   })
 })

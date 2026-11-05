@@ -1,4 +1,5 @@
-// The live feed: polls the server, remembers the wallet, and knows whether what it holds is still true.
+// The live feed: reads when the server says there's a new block, polls when it can't say, remembers the wallet, and knows
+// whether what it holds is still true.
 
 import Foundation
 import Observation
@@ -45,7 +46,7 @@ public struct ExplanationRequest: Hashable, Sendable {
 @Observable
 public final class PortfolioStore {
     public static let defaultServerURL = URL(string: "http://127.0.0.1:8787")!
-    /// Past this, the newest block is too old to call live. Base makes a block every 2 s.
+    /// Past this, the newest block is too old to call live.
     static let behindAfterSeconds = 120
 
     /// What the store holds, which may not be current: read `feed` before calling it live. While a new method's, currency's
@@ -58,8 +59,8 @@ public final class PortfolioStore {
     public private(set) var currency: CurrencyCode
     public private(set) var serverURL: URL
     /// What the user has said about where things came from. It stays on this device.
-    public private(set) var book: Book
-    /// What each answer replaced, newest last, so Undo is always there.
+    private var answers: Book
+    /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
     public private(set) var undoStack: [Book] = []
     /// The server's pricing rules. Empty when it has only one, so there's nothing to choose.
     public private(set) var rules: [PricingRule] = []
@@ -74,41 +75,52 @@ public final class PortfolioStore {
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let reachableDelay: Duration
     @ObservationIgnored private let unreachableDelay: Duration
+    @ObservationIgnored private let pushedDelay: Duration
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private var eventsTask: Task<Void, Never>?
+    /// The server is telling this store about new blocks, so a read only needs to happen on a timer in case that stops working.
+    @ObservationIgnored private var isPushed = false
+    /// What the next read is waiting on, which a new block cuts short.
+    @ObservationIgnored private var sleeper: Task<Void, Never>?
+    /// A block arrived during a read, which may have missed it.
+    @ObservationIgnored private var wakePending = false
 
     public init(
         defaults: UserDefaults = .standard,
         makeSource: @escaping @Sendable (URL) -> any PortfolioSource = { PricetagClient(serverURL: $0) },
         now: @escaping @Sendable () -> Date = { Date() },
         reachableDelay: Duration = .seconds(2),
-        unreachableDelay: Duration = .seconds(5)
+        unreachableDelay: Duration = .seconds(5),
+        pushedDelay: Duration = .seconds(15)
     ) {
         self.defaults = defaults
         self.makeSource = makeSource
         self.now = now
         self.reachableDelay = reachableDelay
         self.unreachableDelay = unreachableDelay
+        self.pushedDelay = pushedDelay
         let address = defaults.string(forKey: Keys.wallet)
         let serverURL = defaults.string(forKey: Keys.server).flatMap(URL.init(string:)) ?? Self.defaultServerURL
         self.address = address
         self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
         self.currency = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
         self.serverURL = serverURL
-        self.book = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
+        self.answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.selectedRule = defaults.string(forKey: Keys.rule)
         self.feed = address == nil ? .noWallet : .reading
         self.source = makeSource(serverURL)
     }
 
-    /// Starts polling, or starts over, say after a change or when asked to refresh.
+    /// Starts following, or starts over, say after a change or when asked to refresh.
     public func start() {
-        pollTask?.cancel()
+        stop()
         Task { await refreshRules() }
         guard address != nil else { return }
+        eventsTask = Task { [weak self] in await self?.followEvents() }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let delay = await self?.poll() else { return }
-                try? await Task.sleep(for: delay)
+                await self?.wait(delay)
             }
         }
     }
@@ -116,6 +128,46 @@ public final class PortfolioStore {
     public func stop() {
         pollTask?.cancel()
         pollTask = nil
+        eventsTask?.cancel()
+        eventsTask = nil
+        isPushed = false
+        wakePending = false
+    }
+
+    /// Wakes a read for each new block the server reports, for as long as it can, and tries again when it stops.
+    private func followEvents() async {
+        while !Task.isCancelled {
+            guard let events = source.headEvents() else { return }
+            do {
+                for try await _ in events {
+                    guard !Task.isCancelled else { return }
+                    isPushed = true
+                    wake()
+                }
+            } catch {}
+            guard !Task.isCancelled else { return }
+            // Back to polling straight away, not after the long wait that being told about blocks allowed.
+            isPushed = false
+            wake()
+            try? await Task.sleep(for: unreachableDelay)
+        }
+    }
+
+    private func wake() {
+        if let sleeper { sleeper.cancel() } else { wakePending = true }
+    }
+
+    /// Waits for the next read, which a new block ends early. The usual delay only applies while the server isn't reporting blocks, or a read just failed.
+    private func wait(_ delay: Duration) async {
+        if wakePending {
+            wakePending = false
+            return
+        }
+        let duration = isPushed && delay == reachableDelay && !feed.isStale ? pushedDelay : delay
+        let sleeping = Task { _ = try? await Task.sleep(for: duration) }
+        sleeper = sleeping
+        await withTaskCancellationHandler { await sleeping.value } onCancel: { sleeping.cancel() }
+        if sleeper == sleeping { sleeper = nil }
     }
 
     /// `address` is 0x… or `WalletAddress.demo`, or nil to forget the wallet.
@@ -143,6 +195,17 @@ public final class PortfolioStore {
         guard next != linkedWallets else { return }
         linkedWallets = next
         if address != nil, pollTask != nil { start() }
+    }
+
+    /// The answers, with the accounts in this wallet as `mine`. Nobody's asked about those, so there's nothing to undo or save, and
+    /// one that's removed is simply gone, or a mistyped savings wallet would stay linked.
+    public var book: Book {
+        answers.linking(linkedWallets)
+    }
+
+    /// Whether there's anything of the user's own to forget.
+    public var hasAnswers: Bool {
+        !answers.isEmpty
     }
 
     public func setCurrency(_ currency: CurrencyCode) {
@@ -182,7 +245,7 @@ public final class PortfolioStore {
 
     public func comparison() async throws -> RuleComparison {
         guard let address else { throw CancellationError() }
-        return try await source.comparison(address: address, method: method, currency: currency, linked: linked(for: address), book: book)
+        return try await source.comparison(address: address, method: method, currency: currency, linked: linked(for: address), book: bookToSend(book, for: address))
     }
 
     public func setServerURL(_ url: URL) {
@@ -200,9 +263,10 @@ public final class PortfolioStore {
 
     /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced.
     public func setBook(_ next: Book) {
-        guard next != book else { return }
-        undoStack.append(book)
-        store(next)
+        let nextAnswers = answers(in: next)
+        guard nextAnswers != answers else { return }
+        undoStack.append(answers)
+        store(nextAnswers)
     }
 
     public func undo() {
@@ -211,21 +275,34 @@ public final class PortfolioStore {
     }
 
     private func store(_ next: Book) {
-        book = next
+        answers = next
         defaults.set(try? JSONEncoder().encode(next), forKey: Keys.book)
         start()
+    }
+
+    /// A book built on `book` has the accounts in it, and they aren't answers. What was said about one before it was an account stays.
+    private func answers(in next: Book) -> Book {
+        var kept = next.unlinking(linkedWallets)
+        for account in linkedWallets where next.senders[account]?.kind == .mine { kept.senders[account] = answers.senders[account] }
+        return kept
+    }
+
+    /// What goes along with a read. A wallet being watched could be anyone's, and it didn't get its costs from this user's accounts
+    /// just because they sent it something, so it only gets what's actually been answered.
+    private func bookToSend(_ book: Book, for address: String) -> Book {
+        book.linkedWallets.contains(address) ? book : book.unlinking(linkedWallets)
     }
 
     /// What these answers would do to the headline. Nothing's kept, so asking changes nothing.
     public func previews(of candidates: [Book]) async throws -> [BookPreview] {
         guard let address else { throw FetchError.unreachable }
-        return try await source.previews(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), candidates: candidates)
+        return try await source.previews(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), candidates: candidates.map { bookToSend($0, for: address) })
     }
 
     /// Every movement as a spreadsheet, marked so an estimate or an unknown can't pass for an exact number.
     public func exportCSV() async throws -> String {
         guard let address else { throw FetchError.unreachable }
-        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), book: book)
+        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), book: bookToSend(book, for: address))
     }
 
     /// Reads an exchange's history, and keeps what it found on this device. Says how many withdrawals had no usable cost.
@@ -247,7 +324,7 @@ public final class PortfolioStore {
 
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), serverURL: serverURL, book: book) }
+        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), serverURL: serverURL, book: bookToSend(book, for: $0)) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
@@ -296,7 +373,7 @@ public final class PortfolioStore {
         // reads the wallet again, so they get as long as a first read.
         let timeout: Duration = portfolio?.currency == currency && !isOtherRule ? .seconds(15) : .seconds(180)
         do {
-            let next = try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: book, timeout: timeout)
+            let next = try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address), timeout: timeout)
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()

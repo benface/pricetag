@@ -59,12 +59,15 @@ public final class HotWallet {
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let tickDelay: Duration
     @ObservationIgnored private let readDelay: Duration
+    @ObservationIgnored private let receiptDelay: Duration
     @ObservationIgnored private var chain: any ChainClient
     @ObservationIgnored private var tickTask: Task<Void, Never>?
     @ObservationIgnored private var readTask: Task<Void, Never>?
+    @ObservationIgnored private var receiptTask: Task<Void, Never>?
     @ObservationIgnored private var missedReceipts: [String: Int] = [:]
     @ObservationIgnored private var nonceAheadTicks = 0
     @ObservationIgnored private var emptyReads = 0
+    @ObservationIgnored private var catchUpReads = 0
     @ObservationIgnored private var pausedUntil: Date?
     @ObservationIgnored private var lastInLine: Task<Void, Never>?
     /// When the old key first read as empty in a rotation. History has to reach that block before it can say there's nothing else.
@@ -74,12 +77,14 @@ public final class HotWallet {
     static let pauseAfterFailure: TimeInterval = 300
     /// How long a transaction can go unseen before its nonce counts as free again.
     static let pendingTimeout: TimeInterval = 180
-    /// About a minute of Base. History from further back than this says nothing about what the key holds now.
-    static let historyFreshnessBlocks: UInt64 = 30
+    /// History from further back than this says nothing about what the key holds now.
+    static let historyFreshnessMs = 60_000
     /// How long a rotation can wait for current history before it says so. A first read can take this long.
     static let historyGrace: TimeInterval = 180
     /// Nodes behind a load balancer can disagree for a moment, so these have to hold for a few reads before they count.
     static let readsBeforeAlarm = 3
+    /// A receipt can come back a second or so before a node's latest block includes it. A node further behind than this can wait for the next tick.
+    static let readsToCatchUp = 5
 
     public init(
         signer: any Signer = KeyVault(),
@@ -91,7 +96,8 @@ public final class HotWallet {
         makeChain: @escaping @Sendable (URL) -> any ChainClient = { RPCChainClient(url: $0) },
         now: @escaping @Sendable () -> Date = { Date() },
         tickDelay: Duration = .seconds(15),
-        readDelay: Duration = .seconds(20)
+        readDelay: Duration = .seconds(20),
+        receiptDelay: Duration = .seconds(1)
     ) {
         self.signer = signer
         self.settingsStore = settingsStore
@@ -103,6 +109,7 @@ public final class HotWallet {
         self.now = now
         self.tickDelay = tickDelay
         self.readDelay = readDelay
+        self.receiptDelay = receiptDelay
         let settings = settingsStore.load()
         self.settings = settings
         self.chain = makeChain(settings.rpcURL)
@@ -122,6 +129,7 @@ public final class HotWallet {
         publishLinkedWallets()
         tickTask?.cancel()
         readTask?.cancel()
+        receiptTask?.cancel()
         tickTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.tick()
@@ -136,11 +144,18 @@ public final class HotWallet {
                 try? await Task.sleep(for: delay)
             }
         }
+        receiptTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let delay = self?.receiptDelay, (try? await Task.sleep(for: delay)) != nil else { return }
+                await self?.lookBetweenTicks()
+            }
+        }
     }
 
     public func stop() {
         tickTask?.cancel()
         readTask?.cancel()
+        receiptTask?.cancel()
     }
 
     /// Runs after everything that's already waiting. Whatever signs goes through here, because two at once would use the same nonce.
@@ -183,6 +198,42 @@ public final class HotWallet {
             availability = .notProvisioned
         } catch {
             sweepProblem = error.localizedDescription
+        }
+    }
+
+    /// Whether there's a landing to look for. A tick that couldn't read the chain, or read the wrong one, has to clear that first.
+    private var isWaitingToLand: Bool {
+        guard availability == .ready, chainProblem == nil, let address, let snapshot, snapshot.chainID == Base.chainID else { return false }
+        return catchUpReads > 0 && snapshot.blockNumber < state.settledThroughBlock ?? 0 || (state.records[address] ?? []).contains { $0.status == .pending }
+    }
+
+    /// Shows a transaction landing soon after it does, and reads nothing unless one is on its way. This only ever settles a receipt and
+    /// updates what's shown. Signing, giving up on a transaction and the counts behind alarms and deleting a key all assume a tick's pace, so they wait for one.
+    func lookBetweenTicks() async {
+        guard isWaitingToLand else { return }
+        await inTurn { [self] in
+            guard isWaitingToLand, let address else { return }
+            do {
+                let records = state.records[address] ?? []
+                for record in records where record.status == .pending {
+                    // An earlier one in this loop landed with the same nonce, so this one can't.
+                    guard state.records[address]?.first(where: { $0.hash == record.hash })?.status == .pending else { continue }
+                    if let receipt = try await chain.receipt(of: record.hash) {
+                        try settle(record, with: receipt, among: records, address: address)
+                    }
+                }
+                guard catchUpReads > 0, let snapshot, snapshot.blockNumber < state.settledThroughBlock ?? 0 else { return }
+                catchUpReads -= 1
+                let newer = try await chain.snapshot(of: address)
+                self.snapshot = newer
+                guard newer.chainID == Base.chainID else { return }
+                refreshPlan(snapshot: newer, address: address)
+            } catch is CancellationError {
+            } catch is ChainError {
+                // The next tick says so if it's more than a moment.
+            } catch {
+                sweepProblem = error.localizedDescription
+            }
         }
     }
 
@@ -281,7 +332,7 @@ public final class HotWallet {
     private func otherTokens(on address: EthereumAddress, emptySinceBlock: UInt64, snapshot: ChainSnapshot) -> Int? {
         guard !ampProblem, let portfolio, portfolio.address == address.lowercased, portfolio.progress.started else { return nil }
         let reached = UInt64(max(portfolio.coverage.toBlock, 0))
-        guard reached >= emptySinceBlock, reached + Self.historyFreshnessBlocks >= snapshot.blockNumber else { return nil }
+        guard reached >= emptySinceBlock, reached >= BlockTime.blockBefore(Int(snapshot.blockNumber), ms: Self.historyFreshnessMs) else { return nil }
         return portfolio.unlisted.count
     }
 
@@ -316,6 +367,9 @@ public final class HotWallet {
     }
 
     public var canTopUp: Bool { alarm == nil && rotation == nil && address != nil && !isKeyMissing }
+
+    /// Whether the person using this can have it sign something. A key that may be stolen, or that's being replaced, only moves to safety.
+    public var canSend: Bool { availability == .ready && canTopUp }
 
     /// Holdings it can't value, which the cap can't see.
     public var unpricedSymbols: [String] {
@@ -530,6 +584,7 @@ public final class HotWallet {
         sweepProblem = nil
         pausedUntil = nil
         nonceAheadTicks = 0
+        catchUpReads = 0
         missedReceipts = [:]
         resetEmptyReads()
     }
@@ -573,6 +628,91 @@ public final class HotWallet {
         }
     }
 
+    // MARK: - Sending
+
+    /// The most of a token that can be sent right now.
+    public func maximumSend(of token: Token) -> UInt128 {
+        snapshot.map { SendPlanner.maximum(of: token, snapshot: $0) } ?? 0
+    }
+
+    /// Why nothing can go to this address, if nothing can.
+    public func problem(sendingTo recipient: EthereumAddress) -> SendProblem? {
+        guard let address else { return nil }
+        return SendPlanner.problem(sendingTo: recipient, from: address, retired: state.retired)
+    }
+
+    /// Asks the person at the device, then signs exactly this, and checks it again against a fresh read. True once it's on its way.
+    @discardableResult
+    public func send(_ request: SendRequest) async -> Bool {
+        guard let address, canSend else { return false }
+        var isOnItsWay = false
+        await work(confirming: "send \(Money.text(ofUnits: request.amount, decimals: request.token.decimals)) \(request.token.symbol) to \(request.to.checksummed)") { [self] in
+            let snapshot = try await readToSign(address)
+            if let problem = self.problem(sendingTo: request.to) ?? SendPlanner.problem(with: request, snapshot: snapshot) { throw ChainError.rejected(problem.message) }
+            let price = self.price(of: request.token, snapshot: snapshot)
+            try await signAndSend(
+                to: request.token.contract ?? request.to,
+                value: request.token.isNative ? request.amount : 0,
+                data: request.token.isNative ? [] : Calldata.transfer(to: request.to, amount: request.amount),
+                from: address,
+                snapshot: snapshot
+            ) { hash, nonce in
+                SignedRecord(
+                    hash: hash, nonce: nonce, to: request.to, symbol: request.token.symbol, decimals: request.token.decimals,
+                    amount: String(request.amount), usdMicros: price.map { String(Money.usdMicros(of: request.amount, priceMicros: $0, decimals: request.token.decimals)) }, gainUsdMicros: "0",
+                    reason: .sent, createdAt: now(), status: .pending
+                )
+            }
+            isOnItsWay = true
+        }
+        return isOnItsWay
+    }
+
+    /// A transaction asked for by hand, with everything before it settled, because it's checked against what this read says.
+    private func readToSign(_ address: EthereumAddress) async throws -> ChainSnapshot {
+        try checkStillAllowed(address)
+        let snapshot = try await chain.snapshot(of: address)
+        self.snapshot = snapshot
+        guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
+        guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
+        try await settlePending(address: address, snapshot: snapshot)
+        try checkStillAllowed(address)
+        guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected(HotWalletWording.lastOneStillShowingUp) }
+        guard !(state.records[address] ?? []).contains(where: { $0.status == .pending }) else { throw ChainError.rejected(HotWalletWording.lastOneOnItsWay) }
+        return snapshot
+    }
+
+    private func checkStillAllowed(_ address: EthereumAddress) throws {
+        guard address == self.address, canSend else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
+    }
+
+    private func signAndSend(to: EthereumAddress, value: UInt128, data: [UInt8], from address: EthereumAddress, snapshot: ChainSnapshot, record: (String, UInt64) -> SignedRecord) async throws {
+        let estimate = try await chain.estimateGas(from: address, to: to, value: value, data: data)
+        // A plain send to a plain address uses exactly what it's quoted.
+        let gasLimit = data.isEmpty && estimate == 21000 ? estimate : estimate + estimate / 4
+        guard snapshot.balances[Base.eth] ?? 0 >= value + snapshot.fees.costWei(gas: UInt128(gasLimit)) else { throw ChainError.rejected(HotWalletWording.noGasToSend) }
+        // History is read outside the line, so an alarm can arrive during any wait, and that stops this as much as it would have before.
+        try checkStillAllowed(address)
+        let nonce = AlarmCheck.nextNonce(records: state.records[address] ?? [], onchainNonce: snapshot.nonce)
+        let transaction = UnsignedTransaction(
+            chainID: Base.chainID,
+            nonce: nonce,
+            maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas,
+            maxFeePerGas: snapshot.fees.maxFeePerGas,
+            gasLimit: gasLimit,
+            to: to,
+            value: value,
+            data: data
+        )
+        let signed = try await signer.sign(transaction, from: address)
+        try checkStillAllowed(address)
+        do {
+            try await recordAndSend(signed, from: address, record: record(signed.hash, nonce))
+        } catch ChainError.unreachable {
+            // It may have got through, so it counts as on its way, and the receipt check settles it.
+        }
+    }
+
     // MARK: - Signing
 
     private func execute(_ plan: SweepPlan, from address: EthereumAddress, to destination: EthereumAddress, reason: SignedRecord.Reason, snapshot: ChainSnapshot) async throws {
@@ -600,29 +740,11 @@ public final class HotWallet {
                     data: data
                 )
                 let signed = try await signer.sign(transaction, from: address)
-                // On disk before it leaves, so a crash in between can't make this look like someone else's transaction.
-                let record = SignedRecord(
+                try await recordAndSend(signed, from: address, record: SignedRecord(
                     hash: signed.hash, nonce: nonce, to: destination, symbol: transfer.token.symbol, decimals: transfer.token.decimals,
                     amount: String(transfer.amount), usdMicros: transfer.usdMicros.map { String($0) }, gainUsdMicros: String(transfer.gainUsdMicros),
                     reason: reason, createdAt: now(), status: .pending
-                )
-                // Signing the same thing again gives the same hash, and that's one transaction, however many times it's sent.
-                if let index = state.records[address]?.firstIndex(where: { $0.hash == record.hash }) {
-                    state.records[address]?[index] = record
-                } else {
-                    state.records[address, default: []].append(record)
-                }
-                try persist()
-                do {
-                    try await chain.send(signed)
-                } catch ChainError.rejected(let message) {
-                    updateRecord(hash: signed.hash, address: address) { $0.status = .dropped }
-                    try persist()
-                    throw ChainError.rejected(message)
-                } catch ChainError.unreachable {
-                    // It may have got through, so it stays pending. The receipt check settles it.
-                    throw ChainError.unreachable
-                }
+                ))
                 nonce += 1
                 sweepProblem = nil
             } catch let ChainError.rejected(message) {
@@ -633,27 +755,34 @@ public final class HotWallet {
         }
     }
 
+    /// On disk before it leaves, so a crash in between can't make this look like someone else's transaction.
+    private func recordAndSend(_ signed: SignedTransaction, from address: EthereumAddress, record: SignedRecord) async throws {
+        // Signing the same thing again gives the same hash, and that's one transaction, however many times it's sent.
+        if let index = state.records[address]?.firstIndex(where: { $0.hash == record.hash }) {
+            state.records[address]?[index] = record
+        } else {
+            state.records[address, default: []].append(record)
+        }
+        try persist()
+        do {
+            try await chain.send(signed)
+        } catch ChainError.rejected(let message) {
+            updateRecord(hash: signed.hash, address: address) { $0.status = .dropped }
+            try persist()
+            throw ChainError.rejected(message)
+        } catch ChainError.unreachable {
+            // It may have got through, so it stays pending. The receipt check settles it.
+            throw ChainError.unreachable
+        }
+    }
+
     private func settlePending(address: EthereumAddress, snapshot: ChainSnapshot) async throws {
         let records = state.records[address] ?? []
         for record in records where record.status == .pending || wasDroppedButMayHaveLanded(record, among: records, snapshot: snapshot) {
             // An earlier one in this loop landed with the same nonce, so this one can't.
             guard state.records[address]?.first(where: { $0.hash == record.hash })?.status == record.status else { continue }
             if let receipt = try await chain.receipt(of: record.hash) {
-                for other in records where other.nonce == record.nonce && other.hash != record.hash {
-                    updateRecord(hash: other.hash, address: address) { $0.status = .dropped }
-                }
-                updateRecord(hash: record.hash, address: address) { $0.status = receipt.succeeded ? .confirmed : .failed }
-                missedReceipts[record.hash] = nil
-                state.settledThroughBlock = max(state.settledThroughBlock ?? 0, receipt.blockNumber)
-                if receipt.succeeded, let gain = UInt128(record.gainUsdMicros), gain > 0 {
-                    let swept = state.sweptGains[address].flatMap { UInt128($0) } ?? 0
-                    state.sweptGains[address] = String(swept + gain)
-                }
-                if !receipt.succeeded {
-                    sweepProblem = "A sweep of \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
-                    pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
-                }
-                try persist()
+                try settle(record, with: receipt, among: records, address: address)
             } else if record.status == .dropped {
                 continue
             } else if snapshot.nonce > record.nonce {
@@ -670,6 +799,30 @@ public final class HotWallet {
                 try persist()
             }
         }
+    }
+
+    private func settle(_ record: SignedRecord, with receipt: Receipt, among records: [SignedRecord], address: EthereumAddress) throws {
+        for other in records where other.nonce == record.nonce && other.hash != record.hash {
+            updateRecord(hash: other.hash, address: address) { $0.status = .dropped }
+        }
+        updateRecord(hash: record.hash, address: address) { $0.status = receipt.succeeded ? .confirmed : .failed }
+        missedReceipts[record.hash] = nil
+        state.settledThroughBlock = max(state.settledThroughBlock ?? 0, receipt.blockNumber)
+        catchUpReads = Self.readsToCatchUp
+        if receipt.succeeded, let gain = UInt128(record.gainUsdMicros), gain > 0 {
+            let swept = state.sweptGains[address].flatMap { UInt128($0) } ?? 0
+            state.sweptGains[address] = String(swept + gain)
+        }
+        if !receipt.succeeded {
+            switch record.reason {
+            case .aboveCap, .manual, .rotation:
+                sweepProblem = "A sweep of \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
+                pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
+            case .sent, .note:
+                sweepProblem = HotWalletWording.failedOnchain(record)
+            }
+        }
+        try persist()
     }
 
     /// Given up on, but something has used its nonce, and nothing this app signed is known to be what did. It may have landed late,
@@ -709,5 +862,27 @@ public final class HotWallet {
 
     private func persist() throws {
         try stateStore.save(state)
+    }
+}
+
+extension HotWallet: CostNoteWriter {
+    public var noteProblem: String? { sweepProblem }
+
+    public func canWriteNote(from wallet: String) -> Bool {
+        canSend && wallet.lowercased() == address?.lowercased
+    }
+
+    /// From this wallet to itself, with no value, so all it does is say this in public. Only ever from this app's own screens.
+    public func writeNote(_ calldata: [UInt8], asset: String, from wallet: String) async -> Bool {
+        guard let address, canWriteNote(from: wallet) else { return false }
+        var isOnItsWay = false
+        await work(confirming: "publish what you paid for \(asset), which anyone can read") { [self] in
+            let snapshot = try await readToSign(address)
+            try await signAndSend(to: address, value: 0, data: calldata, from: address, snapshot: snapshot) { hash, nonce in
+                SignedRecord(hash: hash, nonce: nonce, to: address, symbol: asset, decimals: 18, amount: "0", usdMicros: nil, gainUsdMicros: "0", reason: .note, createdAt: now(), status: .pending)
+            }
+            isOnItsWay = true
+        }
+        return isOnItsWay
     }
 }

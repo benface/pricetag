@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
-import { REORG_BLOCKS, createWallets, datasetSource, describeError, isNotStarted, type ReadL1Fees, type Source } from "@pricetag/sdk/internal"
+import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type ReadL1Fees, type Source } from "@pricetag/sdk/internal"
 import { resolvingSource, settledL1Fees, sharedReads } from "../server/source.ts"
 import { ETH_ADDRESS, encodeNote } from "@pricetag/sdk/core"
 
@@ -249,7 +249,7 @@ describe("reading a wallet by two pricing rules", () => {
     const { rows } = await shared.readLegs(`0x${ME}`, 1, 210)
     assert.deepEqual(rows.map((r) => r.block_num).sort((a, b) => a - b), [5, 190, 205])
     assert.equal(reads('"ds".legs').length, 1)
-    assert.ok(reads('"ds".legs')[0]!.includes(`BETWEEN ${200 - REORG_BLOCKS + 1} AND 210`))
+    assert.ok(reads('"ds".legs')[0]!.includes(`BETWEEN ${settledThrough(200) + 1} AND 210`))
     assert.ok(!reads('"base".logs').some((sql) => inRange(sql, 5)), "an old block's lookup isn't repeated")
   })
 
@@ -356,8 +356,8 @@ describe("reading a wallet by two pricing rules", () => {
     const asked: string[][] = []
     const read: ReadL1Fees = async (requests) => (asked.push(requests.map((r) => r.txHash)), new Map(requests.map((r) => [r.txHash, `fee-${r.blockNum}`])))
     const fees = settledL1Fees(read, () => 100)
-    const settled = { txHash: "0xold", blockNum: 100 - REORG_BLOCKS }
-    const recent = { txHash: "0xnew", blockNum: 100 - REORG_BLOCKS + 1 }
+    const settled = { txHash: "0xold", blockNum: settledThrough(100) }
+    const recent = { txHash: "0xnew", blockNum: settledThrough(100) + 1 }
     assert.deepEqual([...(await fees([settled, recent]))].sort(), [["0xnew", `fee-${recent.blockNum}`], ["0xold", `fee-${settled.blockNum}`]])
     assert.deepEqual([...(await fees([settled, recent]))].sort(), [["0xnew", `fee-${recent.blockNum}`], ["0xold", `fee-${settled.blockNum}`]])
     assert.deepEqual(asked, [["0xold", "0xnew"], ["0xnew"]])
@@ -394,7 +394,7 @@ describe("reading a wallet by two pricing rules", () => {
     const source: Source = {
       mode: "raw",
       startBlock: 900,
-      historyBlocks: null,
+      historyFrom: null,
       head: async () => null,
       processedThrough: async (_, to) => to,
       readWindow: async (_, from, to) => ({ rows: [gas].filter((row) => row.block_num >= from && row.block_num <= to), priced: null, gasUnknown: [] }),
@@ -434,7 +434,7 @@ describe("reading a wallet by two pricing rules", () => {
       const read = () => reader(`0x${ME}`, [block])
       held = true
       const first = read()
-      const later = shared.readLegs(`0x${ME}`, 1, to + REORG_BLOCKS)
+      const later = shared.readLegs(`0x${ME}`, 1, to + 100)
       await new Promise((resolve) => setImmediate(resolve))
       held = false
       release()
