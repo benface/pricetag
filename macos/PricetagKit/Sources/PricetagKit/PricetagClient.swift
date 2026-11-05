@@ -18,12 +18,13 @@ public enum FetchError: Error, Equatable, Sendable {
 public protocol PortfolioSource: Sendable {
     /// `linked` is the user's other wallets, which transfers between carry their cost.
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio
+    /// The same, from what the server last read, without waiting on a new read. It may be behind, so it's never live. Nil if the server hasn't read this wallet.
+    func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio?
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation
     /// What each set of answers would do to the headline, in the same order.
     func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview]
     func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String
     func importCoinbase(csv: String) async throws -> ExchangeImport
-    func verifyLink(owner: String, address: String, signature: String) async throws -> Bool
     /// Empty when the server has only one, so there's nothing to choose.
     func rules() async throws -> [PricingRule]
     func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison
@@ -42,10 +43,10 @@ public protocol PortfolioSource: Sendable {
 /// Nothing here needs to be there for a source that only reads, like one in a test.
 extension PortfolioSource {
     public func headEvents() -> AsyncThrowingStream<Void, any Error>? { nil }
+    public func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio? { nil }
     public func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview] { throw FetchError.unreachable }
     public func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String { throw FetchError.unreachable }
     public func importCoinbase(csv: String) async throws -> ExchangeImport { throw FetchError.unreachable }
-    public func verifyLink(owner: String, address: String, signature: String) async throws -> Bool { throw FetchError.unreachable }
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
     public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof { throw FetchError.unreachable }
     public func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
@@ -97,6 +98,12 @@ public struct PricetagClient: PortfolioSource {
         try await decoded(post("/api/portfolio/\(address)", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book), timeout: timeout))
     }
 
+    public func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio? {
+        // Past this, a real read is as quick, say when a currency's rates have to be read first.
+        let data = try await post("/api/portfolio/\(address)/last", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book), timeout: .seconds(5))
+        return data.isEmpty ? nil : try decoded(data) as Portfolio
+    }
+
     public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
         try await decoded(post("/api/portfolio/\(address)/explain", query: target.queryItems, body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book), timeout: .seconds(30)))
     }
@@ -134,11 +141,6 @@ public struct PricetagClient: PortfolioSource {
 
     public func importCoinbase(csv: String) async throws -> ExchangeImport {
         try await decoded(post("/api/import/coinbase", body: ["csv": csv], timeout: .seconds(30)))
-    }
-
-    public func verifyLink(owner: String, address: String, signature: String) async throws -> Bool {
-        let answer: VerifyAnswer = try await decoded(post("/api/links/verify", body: ["owner": owner, "address": address, "signature": signature], timeout: .seconds(15)))
-        return answer.verified
     }
 
     public func rules() async throws -> [PricingRule] {
@@ -209,7 +211,7 @@ public struct PricetagClient: PortfolioSource {
             throw FetchError.unreachable
         }
         guard let status = (response as? HTTPURLResponse)?.statusCode else { throw FetchError.unreachable }
-        if status == 200 { return data }
+        if status == 200 || status == 204 { return data }
         let message = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error ?? "The server answered with an error (\(status))."
         switch status {
         case 502: throw FetchError.ampUnavailable(message)

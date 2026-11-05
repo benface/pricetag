@@ -216,12 +216,15 @@ private struct TransactionsTable: View {
             .alignment(.numeric)
             .disabledCustomizationBehavior(.all)
             TableColumn("Gain") { item in
+                // What a sale made rests on costs, so it's what can change while a read runs. Once per row, like the holdings.
                 if let gain = item.gainText(currency) {
                     LiveNumber(gain, tone: item.gain?.micros == nil ? .secondary : isLive ? Tone(signed: item.gain?.micros) : .neutral)
                         .lineLimit(1)
+                        .opacity(isLive ? 1 : 0.55)
                         .help(Wording.realizedHelp)
+                        .updatingMark()
                 } else {
-                    dash
+                    dash.updatingMark()
                 }
             }
             .width(min: 70, ideal: 90, max: limit(80) ?? 120)

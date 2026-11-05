@@ -12,6 +12,14 @@ public enum HotWalletWording {
         "Add a savings wallet. Without one, this is all you have, so the cap stays at \(display.whole(WalletSettings.capCeilingWithoutCold)) and nothing can be swept."
     }
 
+    /// Why removing a savings wallet is more than a list entry: where sweeps go next, and what's kept.
+    public static func removingFromSavings(sweepsNowGoTo next: String?, wasDestination: Bool, cap: String) -> String {
+        let kept = "It stays in Yours, with what's on it."
+        guard wasDestination else { return kept }
+        if let next { return "Sweeps go to \(next) from now on. \(kept)" }
+        return "Sweeps stop, and the cap can't be more than \(cap) until you add another. \(kept)"
+    }
+
     public static let addSavingsButton = "Add a Savings Wallet…"
 
     /// Without a savings wallet, the money can still come from a hardware wallet that hasn't been added, but nothing goes back to it.
@@ -29,6 +37,11 @@ public enum HotWalletWording {
 
     public static func topUpNeedsGas(hasDestination: Bool) -> String {
         "Send some of it as ETH. This wallet needs a little to pay for its \(hasDestination ? "sweeps" : "transactions")."
+    }
+
+    /// Receive's one line. An address can't turn money away, so it says what happens to anything over the cap.
+    public static func receiveNote(cap: String, hasDestination: Bool) -> String {
+        "Send only on Base. Anything above your \(cap) cap " + (hasDestination ? "gets swept to your savings." : "stays here until you add a savings wallet.")
     }
 
     public static let sweepsOnlyWhileOpen = "Sweeps only run while the app is open. If it's closed, whatever arrives stays here until it opens again."

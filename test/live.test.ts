@@ -665,10 +665,11 @@ describe("wallets.rewind", () => {
   it("waits for a read in progress, so it can't undo the rewind", async () => {
     const tables: Tables = { legs: [creditAt(100, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(120, "5") }
     const { query } = fakeAmp(tables, 100)
-    let release = () => {}
+    // Every query that's waiting, because a read can have several going at once.
+    const waiting: (() => void)[] = []
     let held = false
     const gated: Query = async <T,>(sql: string, timeoutMs?: number) => {
-      if (held) await new Promise<void>((resolve) => (release = resolve))
+      if (held) await new Promise<void>((resolve) => waiting.push(resolve))
       return query<T>(sql, timeoutMs)
     }
     const source = datasetSource(gated, { dataset: "benface/pricetag@0.0.1", baseDataset: "b", startBlock: 50, network: "base_mainnet" })
@@ -680,7 +681,7 @@ describe("wallets.rewind", () => {
     await new Promise((resolve) => setTimeout(resolve, 5))
     assert.equal(rewound, false)
     held = false
-    release()
+    for (const release of waiting) release()
     await reading
     await rewinding
     tables.legs = [creditAt(100, "cc", "7")]

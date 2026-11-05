@@ -199,6 +199,10 @@ public enum Wording {
         "The data is still catching up, \(ms < 30_000 ? "less than a minute" : "about \(Format.duration(ms: ms))") behind the network. Anything newer isn't in these numbers yet."
     }
 
+    public static func updating(lastUpdate: String) -> String {
+        "Updating. These numbers are from \(lastUpdate)."
+    }
+
     public static func stale(lastUpdate: String) -> String {
         "These numbers aren't updating. Last update: \(lastUpdate)."
     }
@@ -254,11 +258,6 @@ public enum Wording {
         if total == 0 { return nil }
         let off = portfolio.unlisted.isEmpty ? "" : "\(listed.isEmpty ? "" : ", plus ")\(portfolio.unlisted.count) we don't track"
         return "\(total) \(total == 1 ? "token" : "tokens") with no market: \(listed.joined(separator: ", "))\(off). Often spam, and not counted in any total."
-    }
-
-    /// What a wallet signs to prove it's this user's. The server checks the signature against the same words.
-    public static func linkMessage(owner: String, address: String) -> String {
-        "Patina: \(address.lowercased()) is my wallet, and belongs with \(owner.lowercased()).\n\nThis only links them in my own app. It can't move funds or approve anything."
     }
 
     public static func linkedFailed(_ count: Int) -> String {
@@ -322,14 +321,18 @@ public enum Wording {
     public static let reading = "Reading this wallet. The first read can take a minute."
     public static let readTooSlow = "The server is answering, but this wallet is taking too long to read."
     public static let serverTooSlow = "The server took too long to answer."
+    /// What moving a wallet on the list changes. They're in the numbers right away, so it's said right away, next to the way back.
+    public static let movedToYours = "Costs now follow money between this wallet and your others."
+    public static let movedToWatching = "Costs no longer follow money from this wallet."
+    public static let removedYours = "Removed. Costs no longer follow money from this wallet."
+    public static let removedWatching = "Removed."
+    public static let removedReplacedKey = "Removed from the list. Costs still follow its money, and pasting its address brings it back."
+
     public static let notAnAddress = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
     public static let addressHasATypo = "That address has a typo in it. Check it, or paste it again."
     public static let addressIsShortened = "That's a shortened address. Paste the whole thing."
     public static let addressWithExtras = "Paste just the address, with nothing around it."
     public static let notAllAddresses = "These aren't Base addresses. Fix them, or clear them."
-    public static let notASignature = "That isn't a signature. It should start with 0x, then 130 letters and numbers."
-    public static let wrongSignature = "That signature isn't from this wallet."
-    public static let couldntCheckSignature = "Couldn't check it. Is the server running?"
 }
 
 extension AssetMetric {
