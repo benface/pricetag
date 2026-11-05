@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import HotWalletKit
+import KeyVault
 import PricetagKit
 import SwiftUI
 import Synchronization
@@ -165,6 +166,11 @@ enum TestScene: String, CaseIterable {
     case publishWaiting = "publish-cost-waiting"
     case ruleComparison = "rule-comparison"
     case ruleComparisonCAD = "rule-comparison-cad"
+    case siteConnect = "site-connect"
+    case siteTransaction = "site-transaction"
+    case siteTransactionCAD = "site-transaction-cad"
+    case siteUnlimitedApproval = "site-unlimited-approval"
+    case siteTypedPermit = "site-typed-permit"
 
     enum Chrome { case titled, none }
 
@@ -214,7 +220,7 @@ enum TestScene: String, CaseIterable {
 
     private var currency: CurrencyCode {
         switch self {
-        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .hotWalletCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD, .publishCAD, .ruleComparisonCAD: .CAD
+        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .hotWalletCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD, .publishCAD, .ruleComparisonCAD, .siteTransactionCAD: .CAD
         default: .USD
         }
     }
@@ -224,6 +230,8 @@ enum TestScene: String, CaseIterable {
         case .hotWalletNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
         case .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .settingsShowingSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
+        case .siteConnect: .funded
+        case .siteTransaction, .siteTransactionCAD, .siteUnlimitedApproval, .siteTypedPermit: .connectedToSite
         case .sendWaiting: .waitingForTouchID
         case .hotWalletTopUpOneDollar: .nearCap
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
@@ -334,6 +342,34 @@ enum TestScene: String, CaseIterable {
         case .ruleComparison, .ruleComparisonCAD:
             guard let comparison: RuleComparison = try? FixtureSource.decode(self == .ruleComparison ? "demo-rule-comparison" : "demo-rule-comparison-cad") else { TestMode.fail("There's no comparison fixture.") }
             return TestScreen(view: AnyView(RuleComparisonTable(comparison: comparison).padding(20).frame(width: 720).background(.background)), isReady: { true })
+        case .siteConnect, .siteTransaction, .siteTransactionCAD, .siteUnlimitedApproval, .siteTypedPermit:
+            guard let wallet = hotWallet.address?.lowercased else { TestMode.fail("This scene's hot wallet has no address.") }
+            let bridge = SiteBridge(wallet: hotWallet)
+            let request = siteRequest(from: wallet)
+            // Through the real checks and wording, up to the window. Nothing answers it there, so it goes no further.
+            _ = bridge.begin(SiteRequest(connection: UUID(), id: "1", origin: HotWalletFixture.site, method: request.method, parameters: request.parameters))
+            let armed = ContinuousClock.now + SiteApprovalView.armingDelay
+            return TestScreen(view: AnyView(SiteApprovalWindow(bridge: bridge).navigationTitle(SiteApprovalWindow.title)), isReady: { bridge.current != nil && ContinuousClock.now >= armed })
+        }
+    }
+
+    /// What a site asks for in each of its scenes.
+    private func siteRequest(from wallet: String) -> (method: String, parameters: JSONValue?) {
+        let spender = "4444444444444444444444444444444444444444"
+        guard let usdc = Base.tokens.first(where: { $0.symbol == "USDC" })?.contract?.lowercased else { TestMode.fail("There's no USDC.") }
+        func transaction(to: String, value: String, data: String) -> (String, JSONValue?) {
+            ("eth_sendTransaction", .array([.object(["from": .string(wallet), "to": .string(to), "value": .string(value), "data": .string(data)])]))
+        }
+        switch self {
+        case .siteTransaction, .siteTransactionCAD:
+            return transaction(to: "0x3333333333333333333333333333333333333333", value: "0x71afd498d0000", data: "0x12345678" + String(repeating: "0", count: 24) + spender)
+        case .siteUnlimitedApproval:
+            return transaction(to: usdc, value: "0x0", data: "0x095ea7b3" + String(repeating: "0", count: 24) + spender + String(repeating: "f", count: 64))
+        case .siteTypedPermit:
+            let permit = #"{"domain":{"name":"USD Coin","version":"2","chainId":8453,"verifyingContract":"\#(usdc)"},"types":{"Permit":[{"name":"owner","type":"address"},{"name":"spender","type":"address"},{"name":"value","type":"uint256"},{"name":"nonce","type":"uint256"},{"name":"deadline","type":"uint256"}]},"primaryType":"Permit","message":{"owner":"\#(wallet)","spender":"0x\#(spender)","value":"115792089237316195423570985008687907853269984665640564039457584007913129639935","nonce":"0","deadline":"1793836800"}}"#
+            return ("eth_signTypedData_v4", .array([.string(wallet), .string(permit)]))
+        default:
+            return ("eth_requestAccounts", nil)
         }
     }
 
