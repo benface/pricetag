@@ -25,6 +25,8 @@ public struct PnlChartView: View {
 
     public var body: some View {
         let series = PnlSeries(points: points)
+        let moneyTicks = ChartAxis.moneyTicks(series.plotted.compactMap(\.value), currency)
+        let timeAxis = ChartAxis.TimeAxis(dates: series.plotted.map(\.date))
         Chart {
             ForEach(Array(series.gaps.enumerated()), id: \.offset) { _, gap in
                 RectangleMark(xStart: .value("Unknown from", gap.lowerBound), xEnd: .value("Unknown to", gap.upperBound))
@@ -64,21 +66,21 @@ public struct PnlChartView: View {
                     }
             }
         }
+        .chartYScale(domain: ChartAxis.moneyDomain(moneyTicks))
+        .chartXScale(domain: timeAxis.domain)
         .chartYAxis {
-            AxisMarks(position: .trailing) { value in
+            AxisMarks(position: .trailing, values: moneyTicks.map(\.value)) { value in
                 AxisGridLine().foregroundStyle(.quaternary)
                 AxisValueLabel {
-                    if let amount = value.as(Double.self) {
-                        // Formatted first: `Text(_:format:)` would swap in the system's locale, and print US$ in Canada.
-                        Text(amount.formatted(.currency(code: currency.rawValue).locale(currency.locale).notation(.compactName).precision(.fractionLength(0...2)))).monospacedDigit()
-                    }
+                    // Formatted first: `Text(_:format:)` would swap in the system's locale, and print US$ in Canada.
+                    Text(moneyTicks[value.index].label).monospacedDigit()
                 }
             }
         }
         .chartXAxis {
-            AxisMarks { _ in
+            AxisMarks(values: timeAxis.ticks) { _ in
                 AxisGridLine().foregroundStyle(.quaternary)
-                AxisValueLabel(format: .dateTime.hour().minute())
+                AxisValueLabel(format: timeAxis.format)
             }
         }
         .chartOverlay { proxy in

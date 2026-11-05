@@ -6,6 +6,8 @@ import SwiftUI
 /// Where every approval happens. It's here and not on the page or in the extension, because nothing a site controls can draw in
 /// this window or press its buttons. Closing the window rejects.
 struct SiteApprovalWindow: View {
+    static let title = "Site Request"
+
     let bridge: SiteBridge
 
     var body: some View {
@@ -44,6 +46,9 @@ struct SiteApprovalWindow: View {
 
 /// One request, in words a person can check. For anything that can move money, Touch ID asks as soon as it's on show.
 struct SiteApprovalView: View {
+    /// So a window that opens under the pointer can't catch a click meant for the page behind it.
+    static let armingDelay = Duration.seconds(1)
+
     let approval: SiteApproval
     let waitingBehind: Int
     let usd: (UInt128) -> String
@@ -88,7 +93,6 @@ struct SiteApprovalView: View {
 private struct ConnectFooter: View {
     let connect: () -> Void
     let reject: () -> Void
-    /// So a window that opens under the pointer can't catch a click meant for the page behind it.
     @State private var isArmed = false
 
     var body: some View {
@@ -102,7 +106,7 @@ private struct ConnectFooter: View {
         }
         .controlSize(.large)
         .task {
-            try? await Task.sleep(for: .seconds(1))
+            try? await Task.sleep(for: SiteApprovalView.armingDelay)
             isArmed = true
         }
     }

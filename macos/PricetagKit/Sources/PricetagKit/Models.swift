@@ -334,7 +334,9 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
 
     public var isIncoming: Bool { !delta.hasPrefix("-") }
     public var date: Date? { parseTimestamp(timestamp) }
-    public var transactionURL: URL? { opening ? nil : URL(string: "https://basescan.org/tx/\(txHash)") }
+    /// What the wallet already held has no transaction behind it, and neither does ETH that arrived with none to name.
+    public var hasTransaction: Bool { !opening && !txHash.isEmpty }
+    public var transactionURL: URL? { hasTransaction ? URL(string: "https://basescan.org/tx/\(txHash)") : nil }
 }
 
 public struct Explanation: Codable, Sendable, Equatable {

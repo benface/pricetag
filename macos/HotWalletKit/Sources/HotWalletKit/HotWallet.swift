@@ -42,6 +42,8 @@ public final class HotWallet {
     /// What's keeping a rotation from deleting the old key. The user can still choose to leave it behind.
     public private(set) var rotationHold: RotationHold?
     public var onLinkedWalletsChange: (([String]) -> Void)?
+    /// A key is gone, and this one took over from it, if any did. A rotation can finish with nothing open, so this isn't left to a view.
+    public var onKeyRetired: ((EthereumAddress, EthereumAddress?) -> Void)?
 
     public var address: EthereumAddress? { state.active }
     public var alarm: StolenKeyAlarm? { state.alarm }
@@ -390,6 +392,7 @@ public final class HotWallet {
         if let rotation { wallets.append(rotation.to.lowercased) }
         wallets += state.retired.map(\.lowercased)
         wallets += settings.coldWallets.map(\.address.lowercased)
+        wallets += settings.deviceAccounts.map(\.lowercased)
         return wallets
     }
 
@@ -431,7 +434,7 @@ public final class HotWallet {
         if snapshot != nil, snapshot?.ethUsdMicros == nil { notices.append(.init(.warning, HotWalletWording.noEthPrice)) }
         if !unpricedSymbols.isEmpty { notices.append(.init(.warning, HotWalletWording.noPrice(unpricedSymbols))) }
         // Being over the cap with nowhere to sweep already says to add one.
-        if settings.coldWallets.isEmpty, plan?.blockers.contains(.noDestination) != true { notices.append(.init(.warning, HotWalletWording.addSavings(beside: mainCurrency()))) }
+        if settings.coldWallets.isEmpty, plan?.excessUsdMicros ?? 0 == 0 { notices.append(.init(.warning, HotWalletWording.addSavings(beside: mainCurrency()))) }
         if ampProblem { notices.append(.init(.info, HotWalletWording.cantCheckAmp)) }
         return notices
     }
@@ -500,6 +503,13 @@ public final class HotWallet {
         guard !state.retired.contains(address) else { throw .isARetiredKey }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         updateSettings { $0.add(ColdWallet(address: address, name: cleanName.isEmpty ? "Savings" : cleanName, confirmedOnDeviceAt: now())) }
+    }
+
+    /// Other accounts on a device, which go in the book as the user's from here on. This can't tell whose they are, so the caller has to have asked. They only link costs.
+    public func linkDeviceAccounts(_ addresses: [String]) {
+        let accounts = addresses.compactMap(EthereumAddress.init).filter { $0 != .zero && $0 != address && !state.retired.contains($0) }
+        guard !accounts.isEmpty else { return }
+        updateSettings { $0.addDeviceAccounts(accounts) }
     }
 
     public func removeColdWallet(_ address: EthereumAddress) {
@@ -580,9 +590,7 @@ public final class HotWallet {
     }
 
     private func finishRotation(_ rotation: Rotation) async throws {
-        state.retired.append(rotation.from)
-        state.active = rotation.to
-        forgetTheOldKeysState()
+        retire(rotation.from, activating: rotation.to)
         try persist()
         try await signer.deleteKey(rotation.from)
         publishLinkedWallets()
@@ -593,12 +601,17 @@ public final class HotWallet {
         guard let address else { return }
         await work(confirming: "delete this wallet's key, which can't be undone") { [self] in
             try await signer.deleteKey(address)
-            state.retired.append(address)
-            state.active = nil
-            forgetTheOldKeysState()
+            retire(address, activating: nil)
             try persist()
             publishLinkedWallets()
         }
+    }
+
+    private func retire(_ key: EthereumAddress, activating next: EthereumAddress?) {
+        state.retired.append(key)
+        state.active = next
+        forgetTheOldKeysState()
+        onKeyRetired?(key, next)
     }
 
     /// Everything that was about one key, whose alarms, dismissals, block numbers and reads say nothing about the next one.
@@ -1082,6 +1095,10 @@ public final class HotWallet {
 }
 
 extension HotWallet: CostNoteWriter {
+    public func canWriteNoteOnDevice(from wallet: String) -> Bool {
+        settings.coldWallets.contains { $0.address.lowercased == wallet.lowercased() }
+    }
+
     public var noteProblem: String? { sweepProblem }
 
     public func canWriteNote(from wallet: String) -> Bool {

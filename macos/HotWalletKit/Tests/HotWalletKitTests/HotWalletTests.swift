@@ -573,6 +573,35 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         for transaction in await rig.signer.signed { #expect(allowed.contains(transaction.to)) }
     }
 
+    @Test func aDevicesOtherAccountsAreLinkedButNeverSavings() async throws {
+        let rig = await Rig(snapshot(eth: oneEth))
+        let other = "0x" + String(repeating: "ab", count: 20)
+        let destination = rig.wallet.settings.sweepDestination
+        rig.wallet.linkDeviceAccounts([other, other, "nope", hotAddress.lowercased, EthereumAddress.zero.lowercased])
+        #expect(rig.wallet.linkedWallets.filter { $0 == other }.count == 1)
+        #expect(rig.wallet.linkedWallets.filter { $0 == hotAddress.lowercased }.count == 1, "the hot wallet is already there, and isn't a device's")
+        #expect(!rig.wallet.linkedWallets.contains(EthereumAddress.zero.lowercased))
+        #expect(!rig.wallet.settings.coldWallets.contains { $0.address.lowercased == other })
+        #expect(rig.wallet.settings.sweepDestination == destination)
+    }
+
+    @Test func settingsSavedBeforeDeviceAccountsStillLoad() throws {
+        var settings = WalletSettings()
+        settings.add(ColdWallet(address: coldAddress, name: "Ledger", confirmedOnDeviceAt: Date(timeIntervalSince1970: 0)))
+        var fields = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
+        #expect(fields.removeValue(forKey: "deviceAccounts") != nil)
+        let loaded = try JSONDecoder().decode(WalletSettings.self, from: JSONSerialization.data(withJSONObject: fields))
+        #expect(loaded.coldWallets.map(\.address) == [coldAddress])
+        #expect(loaded.deviceAccounts.isEmpty)
+    }
+
+    @Test func aColdWalletsNoteGoesToItsDevice() async throws {
+        let rig = await Rig(snapshot(eth: oneEth))
+        #expect(rig.wallet.canWriteNoteOnDevice(from: coldAddress.lowercased))
+        #expect(!rig.wallet.canWriteNoteOnDevice(from: "0x" + String(repeating: "ab", count: 20)))
+        #expect(!rig.wallet.canWriteNoteOnDevice(from: hotAddress.lowercased))
+    }
+
     @Test func topUpRoomIsWhatTheCapHasLeft() async throws {
         let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(30)]))
         await rig.wallet.tick()
@@ -1132,6 +1161,24 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(texts(rig.wallet).first?.contains("over the cap, with nowhere to sweep it") == true)
     }
 
+    @Test func aGainWithNoColdWalletStillSaysToAddOne() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(10)]), withCold: false, portfolio: .success(portfolio(realized: "12000000")))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(rig.wallet.plan?.blockers == [.noDestination])
+        #expect(rig.wallet.plan?.excessUsdMicros == 0)
+        #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .USD)])
+        #expect(rig.wallet.needsAttention)
+    }
+
+    @Test func overTheCapWithAGainAndNoColdWalletSaysSoOnce() async throws {
+        let rig = await Rig(over, withCold: false, portfolio: .success(portfolio(realized: "12000000")))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(texts(rig.wallet).count == 1)
+        #expect(texts(rig.wallet).first?.contains("over the cap, with nowhere to sweep it") == true)
+    }
+
     @Test func tokensWithNoGasSaySoEvenUnderTheCap() async throws {
         let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(10)]))
         await rig.wallet.tick()
@@ -1202,6 +1249,75 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     }
 }
 
+/// What the main window and menu bar show, wired up the way the app does it.
+@MainActor
+@Suite struct ShownWalletTests {
+    private func makeStore(_ rig: Rig, showing address: String? = hotAddress.lowercased) -> PortfolioStore {
+        let portfolios = rig.portfolios
+        let store = PortfolioStore(defaults: UserDefaults(suiteName: "shown-wallet-\(UUID().uuidString)")!, makeSource: { _ in portfolios })
+        store.setWallet(address)
+        store.stop()
+        rig.wallet.onKeyRetired = { store.followRetiredWallet($0.lowercased, to: $1?.lowercased) }
+        return store
+    }
+
+    @Test func aRotationThatFinishesByItselfShowsTheNewKey() async throws {
+        let rig = await Rig(snapshot(eth: 0), portfolio: .success(portfolio(toBlock: 2000)))
+        let store = makeStore(rig)
+        await rig.wallet.replaceKey()
+        #expect(store.address == hotAddress.lowercased, "the old key is still the wallet until it's empty")
+        await rig.wallet.readHistory()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        store.stop()
+        #expect(rig.wallet.address == nextAddress)
+        #expect(store.address == nextAddress.lowercased)
+    }
+
+    @Test func aRotationThatLeavesFundsBehindShowsTheNewKey() async throws {
+        let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(10)]))
+        let store = makeStore(rig)
+        await rig.wallet.replaceKey()
+        await rig.wallet.finishRotationLeavingFundsBehind()
+        store.stop()
+        #expect(store.address == nextAddress.lowercased)
+    }
+
+    @Test func aDeletedKeyGoesBackToTheFirstScreen() async throws {
+        let rig = await Rig()
+        let store = makeStore(rig)
+        await rig.wallet.deleteWallet()
+        store.stop()
+        #expect(store.address == nil)
+        #expect(store.feed == .noWallet)
+    }
+
+    @Test func aDeleteThatsCancelledChangesNothing() async throws {
+        let rig = await Rig(presence: false)
+        let store = makeStore(rig)
+        await rig.wallet.deleteWallet()
+        #expect(rig.wallet.address == hotAddress)
+        #expect(store.address == hotAddress.lowercased)
+    }
+
+    @Test func anyOtherWalletStaysShowing() async throws {
+        let watched = coldAddress.lowercased
+        let replaced = await Rig(snapshot(eth: 0))
+        let stillWatched = makeStore(replaced, showing: watched)
+        await replaced.wallet.replaceKey()
+        await replaced.wallet.finishRotationLeavingFundsBehind()
+        stillWatched.stop()
+        #expect(replaced.wallet.address == nextAddress)
+        #expect(stillWatched.address == watched)
+
+        let deleted = await Rig()
+        let stillDemo = makeStore(deleted, showing: WalletAddress.demo)
+        await deleted.wallet.deleteWallet()
+        stillDemo.stop()
+        #expect(deleted.wallet.address == nil)
+        #expect(stillDemo.address == WalletAddress.demo)
+    }
+}
+
 @Suite struct DeviceStateTests {
     @Test func survivesTheFile() throws {
         let url = URL.temporaryDirectory.appending(path: "work331-\(UUID().uuidString)/state.json")
@@ -1261,4 +1377,24 @@ private struct FailingChain: ChainClient {
     func receipt(of hash: String) throws -> Receipt? { throw ChainError.unreachable }
     func read(_ method: String, _ parameters: JSONValue) throws -> RPCAnswer { throw ChainError.unreachable }
     func l1Fee(ofPayload payload: [UInt8]) throws -> UInt128 { throw ChainError.unreachable }
+}
+
+@Suite struct ShownWalletWordingTests {
+    private let spending = "0x00000000000000000000000000000000000de301"
+    private let other = "0x00000000000000000000000000000000000de302"
+
+    @Test func noWalletShowingIsNeverCalledSpendingMoney() {
+        // Two nils are equal, which is how a fresh install came to be told it held a key.
+        #expect(HotWalletWording.shownWallet(nil, spendingMoney: nil) == "No wallet is showing. Choose one in the main window.")
+        #expect(HotWalletWording.shownWallet(nil, spendingMoney: spending) == "No wallet is showing. Choose one in the main window.")
+    }
+
+    @Test func aWalletYouLookedUpIsOnlyRead() {
+        #expect(HotWalletWording.shownWallet(other, spendingMoney: nil) == "This wallet is only read, and nothing signs for it.")
+        #expect(HotWalletWording.shownWallet(other, spendingMoney: spending) == "This wallet is only read, and nothing signs for it. The one key in this app is below.")
+    }
+
+    @Test func spendingMoneySaysSo() {
+        #expect(HotWalletWording.shownWallet(spending, spendingMoney: spending).hasPrefix("This is this Mac's spending money"))
+    }
 }

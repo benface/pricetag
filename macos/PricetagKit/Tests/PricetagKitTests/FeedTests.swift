@@ -183,6 +183,66 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(store.feed == .reading)
     }
 
+    @Test func aNewWalletShowsWhenThereIsNoWallet() {
+        let (store, _, _) = makeStore([])
+        store.setWallet(nil)
+        store.showNewWallet("0xDEF")
+        store.stop()
+        #expect(store.address == "0xdef")
+        #expect(store.feed == .reading)
+    }
+
+    @Test func aNewWalletReplacesTheDemoWallet() {
+        let (store, _, _) = makeStore([])
+        store.setWallet(WalletAddress.demo)
+        store.showNewWallet("0xdef")
+        store.stop()
+        #expect(store.address == "0xdef")
+    }
+
+    @Test func aNewWalletLeavesARealWalletShowing() {
+        let (store, _, _) = makeStore([])
+        store.showNewWallet("0xdef")
+        store.stop()
+        #expect(store.address == "0xabc")
+    }
+
+    @Test func aReplacedWalletIsFollowed() {
+        let (store, _, defaults) = makeStore([])
+        store.followRetiredWallet("0xABC", to: "0xDEF")
+        store.stop()
+        #expect(store.address == "0xdef")
+        #expect(store.feed == .reading)
+        #expect(defaults.string(forKey: "wallet") == "0xdef", "and it's still there after a restart")
+    }
+
+    @Test func aDeletedWalletGoesBackToTheFirstScreen() {
+        let (store, _, defaults) = makeStore([])
+        store.followRetiredWallet("0xabc", to: nil)
+        store.stop()
+        #expect(store.address == nil)
+        #expect(store.feed == .noWallet)
+        #expect(defaults.string(forKey: "wallet") == nil)
+    }
+
+    @Test func anotherWalletStaysWhenAKeyIsRetired() {
+        let (store, _, _) = makeStore([])
+        store.followRetiredWallet("0xdef", to: "0x123")
+        store.followRetiredWallet("0xdef", to: nil)
+        store.stop()
+        #expect(store.address == "0xabc")
+
+        store.setWallet(WalletAddress.demo)
+        store.followRetiredWallet("0xdef", to: nil)
+        store.stop()
+        #expect(store.address == WalletAddress.demo)
+
+        store.setWallet(nil)
+        store.followRetiredWallet("0xdef", to: "0x123")
+        store.stop()
+        #expect(store.address == nil, "nothing was showing, so nothing follows")
+    }
+
     @Test func aNewMethodStopsCallingTheOldNumbersLiveAtOnce() async throws {
         let (store, _, _) = makeStore([.success(try realPortfolio(at: now)), .success(try realPortfolio(at: now, method: .fifo))])
         await _ = store.poll()

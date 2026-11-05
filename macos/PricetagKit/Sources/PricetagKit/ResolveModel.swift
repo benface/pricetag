@@ -156,6 +156,12 @@ public final class ResolveModel {
         return draft
     }
 
+    /// The note this question could publish from a device, through the web app, when the wallet it arrived in is savings.
+    public func deviceNoteDraft(for question: Question) -> CostNoteDraft? {
+        guard let draft = question.noteDraft, noteWriter?.canWriteNoteOnDevice(from: draft.wallet) == true else { return nil }
+        return draft
+    }
+
     /// Publishes what was paid, and keeps it here too, so the question's answered before the note's been read back. `usd` is as typed,
     /// because a note is always in USD. True once it's on its way.
     public func publish(_ draft: CostNoteDraft, usd: String) async -> Bool {

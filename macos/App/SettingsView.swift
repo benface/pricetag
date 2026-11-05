@@ -54,7 +54,7 @@ struct SettingsView: View {
                 Button("Forget This Wallet") { store.setWallet(nil) }
                     .disabled(store.address == nil)
             } footer: {
-                Text("This wallet is only read, and nothing signs for it. The one key in this app is below.")
+                Text(HotWalletWording.shownWallet(store.address, spendingMoney: hotWallet.address?.lowercased))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -119,6 +119,8 @@ struct SettingsView: View {
         }
         .task { await store.refreshRules() }
         .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
+        // It read one wallet's numbers once, and replacing a key can change the wallet behind it.
+        .onChange(of: store.address) { isComparing = false }
     }
 
     private var spendingMoney: some View {

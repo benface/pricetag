@@ -275,7 +275,6 @@ struct TouchIDFooter: View {
     let leaveTitle: String
     let leave: () -> Void
 
-    /// So a window that opens under the pointer can't catch a click meant for the page behind it.
     @State private var isArmed = false
 
     var body: some View {
@@ -293,7 +292,7 @@ struct TouchIDFooter: View {
         .background(WindowInFrontReader { gate.windowChanged(isInFront: $0) })
         .onDisappear(perform: gate.stop)
         .task {
-            try? await Task.sleep(for: .seconds(1))
+            try? await Task.sleep(for: SiteApprovalView.armingDelay)
             isArmed = true
         }
         .animation(.snappy, value: gate.phase)

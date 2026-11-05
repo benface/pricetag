@@ -23,7 +23,7 @@ struct HotWalletWindow: View {
                 ContentUnavailableView("Can't Open This Wallet", systemImage: "exclamationmark.triangle", description: Text(message))
             case .ready:
                 if wallet.address == nil {
-                    HotWalletSetup(wallet: wallet)
+                    HotWalletSetup(wallet: wallet, store: store)
                 } else {
                     HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation)
                 }
@@ -37,6 +37,7 @@ struct HotWalletWindow: View {
 /// Says what this is before there's anything to lose.
 private struct HotWalletSetup: View {
     let wallet: HotWallet
+    let store: PortfolioStore
     @State private var understands = false
 
     var body: some View {
@@ -46,7 +47,7 @@ private struct HotWalletSetup: View {
                 .foregroundStyle(.secondary)
             Text("This Mac's spending money")
                 .font(.title.bold())
-            Text("A small balance for everyday use, with no recovery phrase to write down. Your savings stay on a hardware wallet, and anything here above the cap goes to them by itself.")
+            Text("\(HotWalletWording.summary) Your savings stay on a hardware wallet, and anything here above the cap goes to them by itself.")
                 .fixedSize(horizontal: false, vertical: true)
             Notice(.warning, HotWalletWording.cannotBeRestored)
             VStack(alignment: .leading, spacing: 6) {
@@ -60,7 +61,12 @@ private struct HotWalletSetup: View {
             Toggle("I understand this money can't be restored if this Mac is lost", isOn: $understands)
             HStack {
                 Spacer()
-                Button("Create Spending Money") { Task { await wallet.createWallet() } }
+                Button("Create Spending Money") {
+                    Task {
+                        await wallet.createWallet()
+                        if let address = wallet.address { store.showNewWallet(address.lowercased) }
+                    }
+                }
                     .buttonStyle(.borderedProminent)
                     .disabled(!understands || wallet.isWorking)
             }
@@ -80,6 +86,7 @@ private struct HotWalletDetails: View {
     let navigation: Navigation
     @State private var isAddingCold = false
     @State private var isToppingUp = false
+    @State private var addingFromDevice: AddSavingsLink?
     @State private var isSending = false
     @State private var isSweeping = false
     @State private var isConfirmingRotation = false
@@ -107,7 +114,13 @@ private struct HotWalletDetails: View {
         }
         .formStyle(.grouped)
         .sheet(isPresented: $isAddingCold) { AddColdWalletSheet(wallet: wallet) }
-        .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet) }
+        .sheet(item: $addingFromDevice) { AddColdWalletSheet(wallet: wallet, link: $0) }
+        .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet, server: store.serverURL) }
+        .onChange(of: navigation.addingSavings, initial: true) { _, link in
+            guard let link else { return }
+            navigation.addingSavings = nil
+            addingFromDevice = link
+        }
         .onChange(of: navigation.wantsTopUp, initial: true) { _, wants in
             guard wants else { return }
             navigation.wantsTopUp = false
@@ -408,18 +421,30 @@ private struct HotWalletDetails: View {
     }
 }
 
-/// The Mac app has no device code, so the user is the one who checks the address against the device.
+/// The Mac app has no device code, so the user is the one who checks the address against the device. That includes one the web app
+/// sent over, and any other accounts it names, since anyone can make that link.
 struct AddColdWalletSheet: View {
     let wallet: HotWallet
+    private let link: AddSavingsLink?
+    @State private var acceptedAccounts: Set<String> = []
     @Environment(\.dismiss) private var dismiss
-    @State private var name = ""
+    @State private var name: String
     @State private var address: String
     @State private var matches = false
     @State private var problem: String?
 
     init(wallet: HotWallet, address: String = "") {
         self.wallet = wallet
+        link = nil
+        _name = State(initialValue: "")
         _address = State(initialValue: address)
+    }
+
+    init(wallet: HotWallet, link: AddSavingsLink) {
+        self.wallet = wallet
+        self.link = link
+        _name = State(initialValue: link.name)
+        _address = State(initialValue: link.address)
     }
 
     private var parsed: EthereumAddress? {
@@ -438,6 +463,7 @@ struct AddColdWalletSheet: View {
                 .onChange(of: address) {
                     matches = false
                     problem = nil
+                    acceptedAccounts = []
                 }
             if let parsed {
                 // In groups, because nobody really compares 40 characters in one run.
@@ -453,6 +479,24 @@ struct AddColdWalletSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if !suggestedAccounts.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("This link also names other accounts. Tick the ones you know are yours.")
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(suggestedAccounts, id: \.self) { account in
+                        Toggle(isOn: accepted(account)) {
+                            Text(EthereumAddress(account).map { AddressText.grouped($0.checksummed) } ?? account)
+                                .font(.caption.monospaced())
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Text("Costs will follow what moves to and from the ones you tick, and no money is sent there. Leave out any you don't recognize.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             if let problem {
                 WarningText(problem).font(.callout)
             }
@@ -469,9 +513,24 @@ struct AddColdWalletSheet: View {
         .frame(width: 460)
     }
 
+    /// Only while this is the wallet the link named, which is all it can be said to know about.
+    private var suggestedAccounts: [String] {
+        guard let link, address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == link.address.lowercased() else { return [] }
+        return link.linked
+    }
+
+    private func accepted(_ account: String) -> Binding<Bool> {
+        Binding {
+            acceptedAccounts.contains(account)
+        } set: { isAccepted in
+            if isAccepted { acceptedAccounts.insert(account) } else { acceptedAccounts.remove(account) }
+        }
+    }
+
     private func add() {
         do {
             try wallet.addColdWallet(address: address, name: name)
+            wallet.linkDeviceAccounts(link?.accountsToLink(accepted: acceptedAccounts, adding: address) ?? [])
             dismiss()
         } catch {
             switch error {
@@ -483,17 +542,24 @@ struct AddColdWalletSheet: View {
     }
 }
 
-/// Until the web app's device flow lands (WORK-325), this says what to do on the device by hand.
+/// The Mac app has no device code, so this picks the amount, and the web app's device flow does the rest. The steps by hand are there for when that can't.
 struct TopUpSheet: View {
     let wallet: HotWallet
+    let server: URL
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @State private var dollars = 0.0
 
-    init(wallet: HotWallet) {
+    init(wallet: HotWallet, server: URL) {
         self.wallet = wallet
+        self.server = server
     }
 
     private var room: Int { Int(wallet.topUpRoom / Money.dollar) }
+
+    private var deviceLink: URL? {
+        wallet.address.flatMap { DeviceFlow.topUp(server: server, to: $0.checksummed, dollars: Int(dollars)) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -504,7 +570,9 @@ struct TopUpSheet: View {
             } else {
                 LabeledContent("Amount") {
                     HStack {
+                        // A slider needs two ends, and with room for one dollar, the other end is too much.
                         Slider(value: $dollars, in: 1...Double(max(room, 2)), step: 1)
+                            .disabled(room < 2)
                         Text(wallet.usd(dollars: Int(dollars)))
                             .monospacedDigit()
                             .frame(width: 56, alignment: .trailing)
@@ -514,19 +582,25 @@ struct TopUpSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("On your hardware wallet:").bold()
-                    Label("Choose Send, on Base", systemImage: "1.circle")
-                    Label("Enter about \(wallet.usd(dollars: Int(dollars))) of ETH or USDC\(ethHint)", systemImage: "2.circle")
-                    Label("Send it to this address", systemImage: "3.circle")
-                    if let address = wallet.address {
-                        Text(address.checksummed)
-                            .font(.callout.monospaced())
-                            .textSelection(.enabled)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
+                Text("This opens your browser, where your hardware wallet signs the transfer. A Ledger needs Chrome, Brave, Edge or another Chromium browser.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                DisclosureGroup("Or do it by hand on the device") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Choose Send, on Base", systemImage: "1.circle")
+                        Label("Enter about \(wallet.usd(dollars: Int(dollars))) of ETH or USDC\(ethHint)", systemImage: "2.circle")
+                        Label("Send it to this address", systemImage: "3.circle")
+                        if let address = wallet.address {
+                            Text(address.checksummed)
+                                .font(.callout.monospaced())
+                                .textSelection(.enabled)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                        }
+                        Label("Check the address on the device's screen before you confirm", systemImage: "4.circle")
                     }
-                    Label("Check the address on the device's screen before you confirm", systemImage: "4.circle")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 6)
                 }
                 if wallet.holdings.first(where: { $0.token.isNative })?.balance ?? 0 < SweepPlanner.minimumGasReserveWei {
                     Notice(.warning, "Send some of it as ETH. This wallet needs a little to pay for its sweeps.")
@@ -540,13 +614,22 @@ struct TopUpSheet: View {
                         NSPasteboard.general.setString(address.checksummed, forType: .string)
                     }
                 }
-                Button("Done") { dismiss() }
+                Button(room >= 1 ? "Cancel" : "Done") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                if room >= 1, let deviceLink {
+                    Button("Continue in Browser") {
+                        openURL(deviceLink)
+                        dismiss()
+                    }
                     .keyboardShortcut(.defaultAction)
+                }
             }
         }
         .padding(20)
         .frame(width: 460)
         .onAppear { dollars = Double(max(1, min(room, 20))) }
+        // A read can leave less room than there was when this opened. What's chosen stays if it still fits.
+        .onChange(of: room) { dollars = min(dollars, Double(max(room, 1))) }
     }
 
     private var ethHint: String {

@@ -223,11 +223,12 @@ if (worker) {
   await popup.send("Page.navigate", { url: `${extension}popup.html` })
   let status: any
   for (let tries = 0; tries < 100; tries++) {
-    status = await popup.evaluate(`document.getElementById("status") && ({ status: document.getElementById("status").textContent, address: document.getElementById("address").textContent, disabled: document.getElementById("top-up").disabled })`)
-    if (status && status.status !== "Asking Patina…") break
+    status = await popup.evaluate(`document.getElementById("address") && ({ status: document.getElementById("status").textContent, address: document.getElementById("address").title, short: document.getElementById("address").textContent, lines: document.getElementById("address").getClientRects().length, disabled: document.getElementById("top-up").disabled })`)
+    if (status?.address) break
     await sleep(100)
   }
   check("the popup shows the hot wallet", status?.address?.toLowerCase() === hotWallet.toLowerCase(), status)
+  check("its address is short, on one line", status?.short === `${status?.address?.slice(0, 6)}…${status?.address?.slice(-4)}` && status?.lines === 1, status)
   check("and Top up can be pressed", status?.disabled === false, status)
   if (process.env.POPUP_SCREENSHOT) {
     const shot = await popup.send("Page.captureScreenshot", { format: "png" })

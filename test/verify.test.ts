@@ -432,6 +432,48 @@ describe("ETH a wallet received from unwrapping", () => {
   const statuses = (verification: ReturnType<typeof verificationOf>) => verification.checks.map((check) => check.status)
   const ALL_PASS = ["passed", "passed", "passed", "passed", "passed"]
 
+  describe("ETH only the balance says arrived", () => {
+    const part: LegPart = { token: ETH_ADDRESS, account, side: "credit", amount: E18.toString(), kind: "unseen_eth", logIndex: 0 }
+    const received: PricedLeg = {
+      id: `unseen:${blockNum}:ETH`,
+      asset: "ETH",
+      delta: E18.toString(),
+      decimals: 18,
+      kind: "transfer",
+      priceMicros: "2420000000",
+      priceSource: "oracle",
+      priceNote: null,
+      costMicros: null,
+      proceedsMicros: null,
+      costLabel: "unknown",
+      blockNum,
+      timestamp: "2026-11-04T00:00:00.000Z",
+      txHash,
+      txIndex: user.tx_index,
+      parts: [part],
+    }
+    const data = { block, txs, logs }
+
+    it("passes on the transaction, and says the check doesn't reach the amount", () => {
+      const activity = verificationOf(received, [received], data, deposits).checks.find(({ title }) => title === "This activity")!
+      assert.equal(activity.status, "passed")
+      assert.match(activity.detail, /No log or transaction value records this ETH/)
+      assert.match(activity.detail, /which this check doesn't read/)
+      assert.doesNotMatch(activity.detail, /match/)
+    })
+
+    it("says where the amount came from, and that the transaction is only the likeliest", () => {
+      const proof = proofOf(received, [received], "USD", [], null)
+      assert.deepEqual(proof.movements, ["ETH received: 1 ETH, worked out from this wallet's balance before and after this block"])
+      assert.ok(proof.scope.some((line) => line.includes("comes from its balance") && line.includes("only the likeliest source")))
+    })
+
+    it("fails if that transaction didn't go through", () => {
+      const failed = txs.map((tx) => (tx.tx_hash === user.tx_hash ? { ...tx, status: false } : tx))
+      assert.equal(verificationOf(received, [received], { ...data, txs: failed }, deposits).checks.find(({ title }) => title === "This activity")!.status, "failed")
+    })
+  })
+
   describe("when less than the withdrawal arrived", () => {
     const { eth, cbBtc, gas, check, proof } = sale({ withdrawn: [E18], received: (9n * E18) / 10n })
 

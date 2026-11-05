@@ -58,7 +58,8 @@ if is_serving; then
 fi
 
 cd "$repo"
-[ -d node_modules ] || pnpm install --frozen-lockfile
+# The Top Up and Publish buttons open the web app's hardware wallet flow, which this server serves from the build.
+{ pnpm install --frozen-lockfile && pnpm build; } || echo "Couldn't build the web app, so Top Up and Publish from a device won't open." >&2
 PORT=$port node --env-file-if-exists=.env.local server/index.ts &
 server=$!
 trap 'kill "$server" 2>/dev/null || true' EXIT INT TERM

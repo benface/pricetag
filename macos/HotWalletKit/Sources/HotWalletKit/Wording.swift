@@ -5,10 +5,19 @@ import PricetagKit
 public enum HotWalletWording {
     public static let title = "Spending Money"
     public static let label = "Hackathon, small funds only"
+    public static let summary = "A small balance for everyday use, with no recovery phrase to write down."
     public static let cannotBeRestored = "This money lives only on this device. There's no recovery phrase and no backup: if this device is lost or erased, what's on it is gone."
     public static let newDevice = "Getting a new device? Sweep everything to your savings first."
     public static func addSavings(beside main: CurrencyCode) -> String {
         "Add a savings wallet. Without one, this is all you have, so the cap stays at \(usd(dollars: 25, beside: main)) and nothing can be swept."
+    }
+
+    /// What Settings says about the wallet showing. Both are lowercased addresses, and neither may be there.
+    public static func shownWallet(_ shown: String?, spendingMoney: String?) -> String {
+        guard let shown else { return "No wallet is showing. Choose one in the main window." }
+        if shown == spendingMoney { return "This is this Mac's spending money, the one wallet this app holds a key for. Its settings are below." }
+        let onlyRead = "This wallet is only read, and nothing signs for it."
+        return spendingMoney == nil ? onlyRead : "\(onlyRead) The one key in this app is below."
     }
 
     public static let sweepsOnlyWhileOpen = "Sweeps only run while the app is open. If it's closed, whatever arrives stays here until it opens again."
