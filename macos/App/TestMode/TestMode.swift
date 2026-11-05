@@ -95,6 +95,10 @@ enum TestScene: String, CaseIterable {
     case mainServerDown = "main-server-down"
     case mainNotUpdating = "main-not-updating"
     case mainLinkedFailed = "main-linked-failed"
+    case mainEmpty = "main-empty"
+    case mainEmptySmallest = "main-empty-smallest"
+    case mainEmptyNotice = "main-empty-notice"
+    case mainNotStarted = "main-not-started"
     case holdComparison = "hold-comparison"
     case mainHoldDetails = "main-hold-details"
     case mainCostWithheld = "main-cost-withheld"
@@ -164,12 +168,22 @@ enum TestScene: String, CaseIterable {
         case .mainNotUpdating, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
         case .mainCostWithheld: .costWithheld
+        case .mainEmpty, .mainEmptySmallest: .empty
+        case .mainEmptyNotice: .emptyReadingLinked
+        case .mainNotStarted: .notStarted
         default: .demo
         }
     }
 
     private var hasWallet: Bool {
         self != .mainNoWallet && self != .popoverNoWallet
+    }
+
+    private var usesDemoWallet: Bool {
+        switch self {
+        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .mainNotStarted: false
+        default: true
+        }
     }
 
     private var currency: CurrencyCode {
@@ -201,7 +215,7 @@ enum TestScene: String, CaseIterable {
         // Registered values stay in memory, so this never reads or writes anyone's settings, as long as nothing here changes one.
         let defaults = UserDefaults(suiteName: "com.benface.pricetag.mac.test-mode")!
         var registered: [String: Any] = ["currency": currency.rawValue]
-        if hasWallet { registered["wallet"] = WalletAddress.demo }
+        if hasWallet { registered["wallet"] = usesDemoWallet ? WalletAddress.demo : TestScene.emptyWallet }
         if self == .sendKnown, let book = try? JSONEncoder().encode(Book().answering(TestScene.recipient, .someoneElse, focus: nil)) { registered["answers"] = book }
         defaults.register(defaults: registered)
         let source = FixtureSource(feed: feed)
@@ -227,7 +241,7 @@ enum TestScene: String, CaseIterable {
 
         let isReady: () -> Bool = { [feed] in
             switch feed {
-            case .demo, .linkedFails, .costWithheld: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .linkedFails, .costWithheld, .empty, .emptyReadingLinked, .notStarted: store.feed == .noWallet || store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
             case .stopsAnswering: store.feed == .serverUnreachable && store.portfolio != nil
@@ -238,8 +252,10 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .holdComparison:
             return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
-        case .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainCostWithheld, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+        case .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
+        case .mainEmptySmallest:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
         case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
@@ -273,6 +289,7 @@ enum TestScene: String, CaseIterable {
     }
 
     private static let recipient = "0x0000000000000000000000000000000000c0ffee"
+    private static let emptyWallet = "0x00000000000000000000000000000000000de301"
 }
 
 /// The card in each state it can be in, from what `test/hold.test.ts` wrote.
@@ -305,7 +322,7 @@ private final class ReadOnce {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld }
+    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, empty, emptyReadingLinked, notStarted }
 
     private let feed: Feed
     private let reads = Mutex(0)
@@ -323,19 +340,42 @@ final class FixtureSource: PortfolioSource {
         case .demo: break
         case .linkedFails:
             // The demo, with one of its linked wallets unreadable.
-            guard let url = Bundle.main.url(forResource: "demo-portfolio", withExtension: "json"), var object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else { throw FetchError.rejected("There's no fixture called demo-portfolio.") }
-            object["linkedFailed"] = ["0x00000000000000000000000000000000000de301"]
-            return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+            return try demo { $0["linkedFailed"] = ["0x00000000000000000000000000000000000de301"] }
         case .costWithheld:
             // The demo, with what one of its linked wallets sent left unknown.
-            guard let url = Bundle.main.url(forResource: "demo-portfolio", withExtension: "json"), var object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else { throw FetchError.rejected("There's no fixture called demo-portfolio.") }
-            object["withheld"] = [["wallet": "0x00000000000000000000000000000000000de301", "asset": "USDC"]]
-            return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+            return try demo { $0["withheld"] = [["wallet": "0x00000000000000000000000000000000000de301", "asset": "USDC"]] }
+        case .empty: return try newWallet(started: true, readingLinked: false, address: address)
+        case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: address)
+        case .notStarted: return try newWallet(started: false, readingLinked: false, address: address)
         case .neverAnswers: try await Task.sleep(for: .seconds(600))
         case .serverDown: throw FetchError.unreachable
         case .stopsAnswering: if read > 1 { throw FetchError.unreachable }
         }
         return try Self.decode(fixture("demo-portfolio", currency))
+    }
+
+    /// The demo, changed a little.
+    private func demo(_ change: (inout [String: Any]) -> Void) throws -> Portfolio {
+        guard let url = Bundle.main.url(forResource: "demo-portfolio", withExtension: "json"), var object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else { throw FetchError.rejected("There's no fixture called demo-portfolio.") }
+        change(&object)
+        return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    /// A real wallet with nothing in it yet, optionally waiting on another one, which is a notice above the empty state.
+    private func newWallet(started: Bool, readingLinked: Bool, address: String) throws -> Portfolio {
+        try demo {
+            $0["address"] = address
+            $0["mode"] = "dataset"
+            $0["positions"] = [Any]()
+            $0["points"] = [Any]()
+            $0["questions"] = [Any]()
+            $0["outgoingTxs"] = [Any]()
+            $0["unlisted"] = [Any]()
+            $0["progress"] = ["started": started, "behindBlocks": 0]
+            // Up to date, so the only notice is the one asked for.
+            $0["latest"] = ["blockNum": 53505400, "timestamp": Date.now.formatted(.iso8601)]
+            if readingLinked { $0["linkedReading"] = ["0x00000000000000000000000000000000000de302"] }
+        }
     }
 
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
