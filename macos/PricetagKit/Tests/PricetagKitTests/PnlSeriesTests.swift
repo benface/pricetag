@@ -81,6 +81,23 @@ import Testing
         }
     }
 
+    @Test func theHourThatRepeatsWhenTheClocksGoBackReadsDifferently() {
+        // 2027-11-07T04:00:00Z, midnight in Toronto, with 1 AM coming twice.
+        let found = axis(from: 1_825_560_000, spanning: 4 * 3600)
+        #expect(found.axis.showsTimeZone)
+        #expect(found.labels.count == 5)
+        #expect(Set(found.labels).count == 5, "\(found.labels)")
+        #expect(found.labels[1].contains("EDT") && found.labels[2].contains("EST"), "\(found.labels)")
+        let halfHours = axis(from: 1_825_560_000 + 3600, spanning: 2 * 3600)
+        #expect(Set(halfHours.labels).count == halfHours.labels.count, "\(halfHours.labels)")
+    }
+
+    @Test func aTimeZoneOnlyShowsWhenItsNeeded() {
+        #expect(!axis(spanning: 4 * 3600).axis.showsTimeZone)
+        // 2027-03-14T06:00:00Z: the clocks go ahead in Toronto, and no time comes twice.
+        #expect(!axis(from: 1_805_004_000, spanning: 4 * 3600).axis.showsTimeZone)
+    }
+
     @Test func aMinuteIsMarkedInSeconds() {
         let found = axis(spanning: 60)
         #expect(found.axis.label == .second)

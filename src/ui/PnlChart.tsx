@@ -4,6 +4,8 @@ import { NOTHING_TO_CHART, PNL_HELP } from "../core/wording.ts"
 
 const HEIGHT = 220
 const MARGIN = { top: 16, right: 84, bottom: 26, left: 64 }
+/** The widest a narrow chart's time gets, like "12:57:05 PM" or "12:57 AM EST", with a gap after it. */
+const TIME_LABEL_ROOM = 78
 
 type Props = { points: PnlPoint[]; currency: CurrencyCode; onSelect: (point: PnlPoint) => void }
 
@@ -70,9 +72,10 @@ export function PnlChart({ points, currency, onSelect }: Props) {
   const point = active === null ? null : (points[active] ?? null)
   const last = points[points.length - 1]
   const lastValue = chart.values[points.length - 1]
-  const [firstTime, lastTime] = formatChartSpan(points[0]?.timestamp ?? "", last?.timestamp ?? "", width < 520)
+  const narrow = width < 520
+  const [firstTime, lastTime] = formatChartSpan(points[0]?.timestamp ?? "", last?.timestamp ?? "", narrow)
   // Everything at one moment only needs saying once, and that's at the end of the axis.
-  const xLabels = firstTime === lastTime ? [{ index: points.length - 1, text: lastTime }] : [{ index: 0, text: firstTime }, { index: points.length - 1, text: lastTime }]
+  const xLabels = points.length === 0 ? [] : firstTime === lastTime ? [{ index: points.length - 1, text: lastTime }] : [{ index: 0, text: firstTime }, { index: points.length - 1, text: lastTime }]
   const showMarkers = points.length <= 60
 
   return (
@@ -140,13 +143,16 @@ export function PnlChart({ points, currency, onSelect }: Props) {
               </text>
             </g>
           ))}
-          {points.length > 0
-            ? xLabels.map(({ index, text }) => (
-                <text key={index} x={chart.x(chart.times[index] as number)} y={HEIGHT - 6} textAnchor={index === 0 && xLabels.length > 1 ? "start" : "end"} className="tick">
-                  {text}
-                </text>
-              ))
-            : null}
+          {xLabels.map(({ index, text }) => {
+            const end = chart.x(chart.times[points.length - 1] as number)
+            const isLast = index === points.length - 1
+            // A narrow chart can't fit both times under the line, so the last one starts at its point and runs into the margin.
+            return (
+              <text key={index} x={isLast ? end : Math.max(0, Math.min(chart.x(chart.times[index] as number), end - TIME_LABEL_ROOM))} y={HEIGHT - 6} textAnchor={isLast && !narrow ? "end" : "start"} className="tick">
+                {text}
+              </text>
+            )
+          })}
           <path d={chart.path} className="line" />
           {showMarkers
             ? points.map((p, i) => {

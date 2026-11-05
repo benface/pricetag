@@ -406,6 +406,21 @@ describe("a chart's axes", () => {
     assert.doesNotMatch(formatChartSpan(at(0), at(3 * 86_400_000), true)[0], /:/)
   })
 
+  it("tells apart the hour that repeats when the clocks go back", () => {
+    const zone = process.env.TZ
+    process.env.TZ = "America/Toronto"
+    try {
+      for (const narrow of [false, true]) {
+        const [first, last] = formatChartSpan("2027-11-07T05:30:00.000Z", "2027-11-07T06:30:00.000Z", narrow)
+        assert.match(first, /1:30.*EDT/)
+        assert.match(last, /1:30.*EST/)
+      }
+    } finally {
+      if (zone === undefined) delete process.env.TZ
+      else process.env.TZ = zone
+    }
+  })
+
   it("says one moment once", () => {
     const [first, last] = formatChartSpan("2026-11-05T02:57:05.000Z", "2026-11-05T02:57:05.000Z")
     assert.equal(first, last)
