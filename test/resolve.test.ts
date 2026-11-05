@@ -5,7 +5,7 @@ import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
 import { createWallets, type Source } from "@pricetag/sdk/internal"
 import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, shortHash, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
-import { answerSender, costKey, emptyBook, enterExchangeCosts, linkMessage, linkedWallets, parseBook, type Book, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
+import { answerSender, costKey, emptyBook, enterExchangeCosts, linkMessage, linkedWallets, parseBook, proofOwner, type Book, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
 import { matchWithdrawals, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
@@ -1498,6 +1498,37 @@ describe("proving a wallet by signing", () => {
     assert.equal(await verifyLink(A, B, signature, async () => C), false)
     assert.equal(await verifyLink(A, B, "0x1234", async () => B), false)
     assert.equal(await verifyLink(A, B, signature, async () => Promise.reject(new Error("bad"))), false)
+  })
+
+  it("links only the wallet that signed, not the one showing", () => {
+    const linked = answerSender(emptyBook(), null, B, { kind: "mine" })
+    assert.deepEqual(linked.senders, { [B]: { kind: "mine" } })
+    assert.deepEqual(linkedWallets(linked), [B])
+    const raw = { mode: "raw" } as const
+    const paid = send(20, "0x2", B, A, 1000n * E6)
+    const shown = (book: Book) => foldBook(wallet(A, paid, raw), [wallet(B, [...buy(10, "0x1", B, 1000n), ...paid], raw)], "average", book).positions.find((p) => p.asset === "USDC")?.effects[0]?.leg.costLabel
+    assert.equal(shown(linked), "unknown", "no cost carries onto the wallet that was showing")
+    assert.notEqual(shown(answerSender(emptyBook(), A, B, { kind: "mine" })), "unknown", "as it would if it were theirs too")
+  })
+
+  it("links to the wallet showing if it's the user's, or another of theirs, and never a watched one", () => {
+    const yours = answerSender(answerSender(emptyBook(), null, A, { kind: "mine" }), null, C, { kind: "mine" })
+    assert.equal(proofOwner(yours, B, C), C, "the one showing, when it's theirs")
+    assert.equal(proofOwner(yours, B, STRANGER), A, "another of theirs, when it's not")
+    assert.equal(proofOwner(emptyBook(), B, STRANGER), B, "with nothing else, it speaks for itself")
+    assert.equal(proofOwner(answerSender(emptyBook(), null, STRANGER, { kind: "someone-else" }), B, STRANGER), B, "someone else's wallet isn't theirs")
+  })
+
+  it("doesn't link a real wallet to the demo's, even after answering for them", () => {
+    const played = answerSender(emptyBook(), DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, { kind: "mine" })
+    assert.equal(proofOwner(played, B, DEMO_ADDRESS), B)
+    assert.equal(proofOwner(answerSender(played, null, A, { kind: "mine" }), B, DEMO_ADDRESS), A)
+  })
+
+  it("doesn't link a wallet to itself when it has another to link to", () => {
+    const yours = answerSender(answerSender(emptyBook(), null, A, { kind: "mine" }), null, B, { kind: "mine" })
+    assert.equal(proofOwner(yours, B, B), A)
+    assert.equal(proofOwner(yours, B.toUpperCase().replace("0X", "0x"), STRANGER), A, "whatever its capitalization")
   })
 })
 

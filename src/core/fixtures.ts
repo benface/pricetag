@@ -5,10 +5,10 @@
 
 import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, markNeeds, normalizeAddress, openingLegs, type CurrencyCode, type LegKind, type LegRow, type Rates, type Reference } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
+import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS } from "./book.ts"
 
-export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
-/** The demo's other wallet. Nothing links them until someone answers that it's theirs. */
-export const DEMO_SAVINGS_ADDRESS = "0x00000000000000000000000000000000000de301"
+export { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS }
+
 const STRANGER = "0x000000000000000000000000000000000000be11"
 const SELLER = "0x000000000000000000000000000000000000be12"
 const COINBASE = "0x71660c4005ba85c37ccec55d0c4493e66fe775d3"
