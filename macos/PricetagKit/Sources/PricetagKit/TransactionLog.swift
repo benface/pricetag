@@ -209,7 +209,7 @@ extension TransactionItem {
         return gain.micros.map { Format.estimate(Format.signedMoney($0, currency), gain.estimated) } ?? Wording.unknown
     }
 
-    /// The first of its unknown costs that an open question asks about, which is where Fill In starts. That holds after
+    /// The first of its unknown costs that an open question asks about, which is where answering starts. That holds after
     /// all of it was sold or sent, since answering still fixes what the sale made. nil when no answer could change it.
     public func answerableAsset(in questions: [Question]) -> String? {
         unknownCost.first { asset in questions.contains { $0.arrivals.contains { $0.asset == asset } } }

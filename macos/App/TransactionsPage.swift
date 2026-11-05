@@ -185,11 +185,13 @@ private struct TransactionsTable: View {
                 Text(item.date.map(Format.clock) ?? "—")
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
+                    .tableCell()
             }
             .width(min: 64, ideal: 70, max: limit(70) ?? 90)
             .disabledCustomizationBehavior(.all)
             TableColumn("What happened") { item in
                 whatHappened(item)
+                    .tableCell()
             }
             .width(min: 160, max: whatHappenedLimit)
             .disabledCustomizationBehavior(.all)
@@ -198,6 +200,7 @@ private struct TransactionsTable: View {
                     Text(who)
                         .lineLimit(1)
                         .help(item.counterparty ?? who)
+                        .tableCell()
                 } else {
                     dash
                 }
@@ -210,6 +213,7 @@ private struct TransactionsTable: View {
                     LiveNumber(amount, tone: item.amount?.micros == nil ? .secondary : .neutral)
                         .lineLimit(1)
                         .opacity(isLive ? 1 : 0.55)
+                        .tableCell()
                 } else {
                     dash
                 }
@@ -225,6 +229,7 @@ private struct TransactionsTable: View {
                         .opacity(isLive ? 1 : 0.55)
                         .help(Wording.realizedHelp)
                         .updatingMark()
+                        .tableCell()
                 } else {
                     dash.updatingMark()
                 }
@@ -295,7 +300,7 @@ private struct TransactionsTable: View {
                     .lineLimit(1)
                     .help(summary)
             } else {
-                dash
+                Text("—").foregroundStyle(.tertiary)
             }
             Spacer(minLength: 4)
             unknownCost(item)
@@ -317,11 +322,14 @@ private struct TransactionsTable: View {
                     .help("What you paid for \(list(item.unknownCost)) is unknown, so it isn't in your PnL.")
             }
             if let fixable {
-                Button("Fill In") { onResolve(fixable) }
+                let title = Wording.answerQuestions(portfolio.questions.count { $0.arrivals.contains { $0.asset == fixable } })
+                // The same button as the holdings, whose name is in its tooltip and for VoiceOver.
+                Button(title, systemImage: "questionmark.bubble") { onResolve(fixable) }
+                    .labelStyle(.iconOnly)
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
-                    .accessibilityLabel("Fill in \(fixable)'s cost")
-                    .help("What you paid for \(list(item.unknownCost)) is unknown. Answer what the app can't work out about \(fixable).")
+                    .accessibilityLabel("\(title) about \(fixable)")
+                    .help("What you paid for \(list(item.unknownCost)) is unknown. \(title) about \(fixable), so what you paid is known.")
             }
         }
     }
@@ -331,6 +339,6 @@ private struct TransactionsTable: View {
     }
 
     private var dash: some View {
-        Text("—").foregroundStyle(.tertiary)
+        Text("—").foregroundStyle(.tertiary).tableCell()
     }
 }

@@ -251,9 +251,14 @@ struct MainWindow: View {
         }
     }
 
-    /// A section that shows a wallet, or says why there's nothing to show.
-    @ViewBuilder
+    /// A section that shows a wallet, or says why there's nothing to show. The first numbers fade in over the spinner rather than replacing it at once.
     private func walletPage(_ content: @escaping (Portfolio) -> some View) -> some View {
+        walletPageContent(content)
+            .motion(Motion.state, value: portfolio == nil)
+    }
+
+    @ViewBuilder
+    private func walletPageContent(_ content: @escaping (Portfolio) -> some View) -> some View {
         if store.feed == .noWallet {
             if navigation.section == .overview {
                 Welcome(store: store, hotWallet: hotWallet, navigation: navigation)
@@ -275,6 +280,7 @@ struct MainWindow: View {
             }
             // Another wallet starts from the top with nothing selected, and its numbers appear rather than rolling from these.
             .id(store.address)
+            .transition(.opacity)
         } else if store.feed == .reading {
             ContentUnavailableView {
                 ProgressView().controlSize(.large)
@@ -285,6 +291,7 @@ struct MainWindow: View {
                         .contentTransition(.numericText())
                 }
             }
+            .transition(.opacity)
         } else {
             Unavailable(store: store)
         }
@@ -504,7 +511,7 @@ private struct HoldingsSection: View {
     }
 }
 
-/// What a right-click on a holding offers. Each is also in the interface: the row opens its details, and Fill In is in the row.
+/// What a right-click on a holding offers. Each is also in the interface: the row opens its details, and answering is in the row.
 private struct HoldingActions: View {
     let position: Position
     let currency: CurrencyCode
@@ -514,25 +521,10 @@ private struct HoldingActions: View {
     var body: some View {
         Button("Show Details", action: onShow)
         if position.resolvable {
-            Button("Fill In Cost…", action: onResolve)
+            Button("Answer Questions…", action: onResolve)
         }
         Divider()
         Button("Copy") { Clipboard.copy(position.copyText(currency: currency)) }
-    }
-}
-
-extension View {
-    /// A cost that's just become known, lit softly and fading by itself. The number's already rolled to what's real by then.
-    fileprivate func justKnown(_ isOn: Bool) -> some View {
-        background {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Tone.gain.style)
-                .opacity(isOn ? 0.2 : 0)
-                .padding(.horizontal, -5)
-                .padding(.vertical, -2)
-                // It comes up quickly and goes slowly.
-                .animation(isOn ? Motion.feedback : .easeOut(duration: 0.8 * Motion.slowdown), value: isOn)
-        }
     }
 }
 
@@ -664,6 +656,7 @@ private struct HoldingsTable: View {
                     balanceCheck(position)
                 }
                 .opacity(position.isHeld ? 1 : 0.6)
+                .tableCell()
             }
             .width(min: Column.asset, ideal: Column.assetRoom, max: limit(Column.assetRoom))
             .disabledCustomizationBehavior(.all)
@@ -717,11 +710,13 @@ private struct HoldingsTable: View {
                     let unrealized = position.values.unrealizedMicros
                     HStack(spacing: 6) {
                         if position.resolvable {
-                            Button("Fill In") { onResolve(position.asset) }
+                            // The column has room for the number beside a symbol, not a name. The name's in its tooltip and for VoiceOver.
+                            Button(questionsTitle(position.asset), systemImage: "questionmark.bubble") { onResolve(position.asset) }
+                                .labelStyle(.iconOnly)
                                 .buttonStyle(.bordered)
                                 .controlSize(.mini)
-                                .accessibilityLabel("Fill in \(position.asset)'s cost")
-                                .help("Answer what the app can't work out about \(position.asset)")
+                                .accessibilityLabel("\(questionsTitle(position.asset)) about \(position.asset)")
+                                .help("\(questionsTitle(position.asset)) about \(position.asset), so what you paid is known")
                         }
                         number(position, .unrealized, unrealized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.unrealized) } ?? Wording.unknown, tone: unrealized == nil ? .secondary : Tone(signed: unrealized))
                     }
@@ -780,12 +775,17 @@ private struct HoldingsTable: View {
         if case .asset(let asset, _) = target { asset } else { nil }
     }
 
+    /// Counts this holding's own questions, which are the ones that come first.
+    private func questionsTitle(_ asset: String) -> String {
+        Wording.answerQuestions(max(1, portfolio.questions.count { $0.arrivals.contains { $0.asset == asset } }))
+    }
+
     private func position(_ asset: String) -> Position? {
         portfolio.listedPositions.first { $0.asset == asset }
     }
 
     private var dash: some View {
-        Text("—").foregroundStyle(.tertiary)
+        Text("—").foregroundStyle(.tertiary).tableCell()
     }
 
     /// Unknown whenever its cost is, and never 0%. With a known cost of nothing, there's no share of it to show.
@@ -818,6 +818,14 @@ private struct HoldingsTable: View {
         .buttonStyle(NumberButtonStyle())
         .help(metric.help ?? "")
         .accessibilityLabel("\(position.asset) \(metric.label), \(text)")
+        .tableCell()
+    }
+}
+
+extension View {
+    /// Lines a cell up with its column's title, which the header draws a couple of points in from each side.
+    func tableCell() -> some View {
+        padding(.horizontal, 2)
     }
 }
 

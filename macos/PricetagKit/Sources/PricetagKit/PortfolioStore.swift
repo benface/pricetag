@@ -25,6 +25,8 @@ private struct HistoryEntry {
     let name: String
     /// Before the step while it's in the undo history, and after it while it's in the redo history.
     var book: Book
+    /// When the answers in `book` were given, and what they were about, so Undo and Redo put back each answer's own date.
+    var details: AnswerDetails
     var wallet: WalletStep?
 }
 
@@ -114,6 +116,8 @@ public final class PortfolioStore {
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
     /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
+    /// When each answer was given and what it was about, for the list of answers. Never sent anywhere.
+    public private(set) var answerDetails: AnswerDetails
     private var history: [HistoryEntry] = []
     /// What Undo took back, newest last, until something else changes.
     private var future: [HistoryEntry] = []
@@ -189,7 +193,9 @@ public final class PortfolioStore {
         self.holdingsSort = defaults.string(forKey: Keys.holdingsSort).flatMap(HoldingsSort.init(rawValue:)) ?? .largestFirst
         self.menuBarShows = defaults.string(forKey: Keys.menuBar).flatMap(MenuBarShows.init(rawValue:)) ?? .value
         self.serverURL = serverURL
-        self.answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
+        let answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
+        self.answers = answers
+        self.answerDetails = (defaults.data(forKey: Keys.answerDetails).flatMap { try? JSONDecoder().decode(AnswerDetails.self, from: $0) } ?? AnswerDetails()).keeping(answers)
         self.selectedRule = defaults.string(forKey: Keys.rule)
         var saved = defaults.data(forKey: Keys.savedWallets).flatMap { try? JSONDecoder().decode([SavedWallet].self, from: $0) } ?? []
         // From before there was a list, the wallet being shown is all there is to remember.
@@ -375,13 +381,14 @@ public final class PortfolioStore {
         )
         let entriesBefore = Set(history.map(\.id))
         let bookBefore = answers
+        let detailsBefore = answerDetails
         change()
         snapshot.changedAnswer = answers.senders[address]
         // An answer the change gave is part of it, so it's this entry and not one of its own.
         history.removeAll { !entriesBefore.contains($0.id) }
         let id = UUID()
         snapshot.undoEntry = id
-        history.append(HistoryEntry(id: id, name: name, book: bookBefore, wallet: WalletStep(snapshot: snapshot, change: change, alsoUndo: alsoUndo)))
+        history.append(HistoryEntry(id: id, name: name, book: bookBefore, details: detailsBefore, wallet: WalletStep(snapshot: snapshot, change: change, alsoUndo: alsoUndo)))
         future = []
         return snapshot
     }
@@ -396,10 +403,16 @@ public final class PortfolioStore {
     private func putBack(_ snapshot: WalletListSnapshot) {
         let address = snapshot.address
         let isUnchanged = { (book: Book) in book.senders[address] == snapshot.changedAnswer }
+        let before = snapshot.undoEntry.flatMap { entry in history.first { $0.id == entry }?.details }
         if isUnchanged(answers), answers.senders[address] != snapshot.answer {
             var next = answers
             next.senders[address] = snapshot.answer
-            store(next)
+            // The wallet's answer goes back to what it was, date included, and every other answer keeps its own.
+            var details = answerDetails
+            if let before {
+                for id in Set(([answers, next]).flatMap(\.answerEntries).filter { $0.isAbout(address) }.map(\.id)) { details.restore(id, from: before) }
+            }
+            store(next, details: details)
         }
         // The change's own entry goes with it, wherever it is now.
         var since = snapshot.undoDepth
@@ -407,9 +420,13 @@ public final class PortfolioStore {
             history.remove(at: index)
             since = index
         }
-        // What was saved for Undo since then has the change in it. Undoing something else mustn't bring it back.
+        // What was saved for Undo since then has the change in it. Undoing something else mustn't bring it back, or its date.
         for index in history.indices where index >= since && isUnchanged(history[index].book) {
+            let ids = history[index].book.answerEntries.filter { $0.isAbout(address) }.map(\.id)
             history[index].book.senders[address] = snapshot.answer
+            if let before {
+                for id in ids + history[index].book.answerEntries.filter({ $0.isAbout(address) }).map(\.id) { history[index].details.restore(id, from: before) }
+            }
         }
         var wallets = savedWallets
         if let index = wallets.firstIndex(where: { $0.address == address }) {
@@ -427,6 +444,10 @@ public final class PortfolioStore {
         }
         saveHidden(hiddenWallets.filter { $0 != address } + (snapshot.wasHidden ? [address] : []))
         if snapshot.wasShowing { setWallet(address) }
+    }
+
+    private func saveDetails() {
+        defaults.set(try? JSONEncoder().encode(answerDetails), forKey: Keys.answerDetails)
     }
 
     private func saveWallets(_ wallets: [SavedWallet]) {
@@ -474,6 +495,48 @@ public final class PortfolioStore {
     /// Whether there's anything of the user's own to forget.
     public var hasAnswers: Bool {
         !answers.isEmpty
+    }
+
+    /// What the user has said, newest first. Accounts this Mac knows are theirs aren't answers, so they aren't here, even if something was said
+    /// about one before it was an account.
+    public var answerEntries: [AnswerEntry] {
+        answers.answerEntries
+            .filter { entry in
+                switch entry.said {
+                case .sender(let address, _), .exchangeCost(let address, _, _): !linkedWallets.contains(address)
+                case .cost, .imported: true
+                }
+            }
+            .sorted { (answeredAt($0) ?? .distantPast) > (answeredAt($1) ?? .distantPast) }
+    }
+
+    /// nil for one given before answers had dates.
+    public func answeredAt(_ entry: AnswerEntry) -> Date? {
+        answerDetails.dates[entry.id]
+    }
+
+    public func about(_ entry: AnswerEntry) -> String? {
+        about(id: entry.id)
+    }
+
+    public func about(id: String) -> String? {
+        answerDetails.about[id]
+    }
+
+    /// Takes back one answer, wherever it is in the list, so its question comes back. Undo brings it back.
+    public func removeAnswer(_ entry: AnswerEntry) {
+        setBook(answers.removing(entry), action: "Remove Answer")
+    }
+
+    /// A different answer about who a sender is.
+    public func changeAnswer(_ entry: AnswerEntry, to kind: SenderAnswer.Kind) {
+        guard case .sender(let address, _) = entry.said else { return }
+        setBook(answers.changing(address, to: kind), action: "Change Answer")
+    }
+
+    /// A different amount for what was paid, in the currency it was given in.
+    public func changeCost(_ entry: AnswerEntry, to micros: String) {
+        setBook(answers.changingCost(of: entry, to: micros), action: "Change Answer")
     }
 
     /// USD amounts as they should read right now.
@@ -587,13 +650,17 @@ public final class PortfolioStore {
     }
 
     /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced,
-    /// and the Edit menu calls it `action`.
-    public func setBook(_ next: Book, action: String = "Answer") {
+    /// and the Edit menu calls it `action`. Each answer this says something new for is dated now. `about` is what a question was about, in its own words, by answer.
+    public func setBook(_ next: Book, about: [String: String] = [:], action: String = "Answer") {
         let nextAnswers = answers(in: next)
         guard nextAnswers != answers else { return }
-        history.append(HistoryEntry(id: UUID(), name: action, book: answers))
+        let given = answers.answerEntries
+        var details = answerDetails
+        for entry in nextAnswers.answerEntries where !given.contains(where: { $0.id == entry.id && $0.says(entry) }) { details.dates[entry.id] = now() }
+        details.about.merge(about) { _, new in new }
+        history.append(HistoryEntry(id: UUID(), name: action, book: answers, details: answerDetails))
         future = []
-        store(nextAnswers)
+        store(nextAnswers, details: details)
     }
 
     /// What a provider says, and not an answer, so there's nothing to undo, and undoing an answer doesn't lose it.
@@ -607,6 +674,8 @@ public final class PortfolioStore {
 
     public func undo() {
         guard var entry = history.last else { return }
+        let detailsBefore = entry.details
+        entry.details = answerDetails
         if let wallet = entry.wallet {
             // All of it, as the wallet list's own Undo does: its name, its place in the list, and whether it was showing.
             wallet.alsoUndo?()
@@ -615,7 +684,7 @@ public final class PortfolioStore {
             history.removeLast()
             let previous = entry.book
             entry.book = answers
-            store(previous)
+            store(previous, details: detailsBefore)
         }
         future.append(entry)
     }
@@ -631,17 +700,27 @@ public final class PortfolioStore {
             if let last = history.popLast() {
                 var step = last.wallet
                 step?.snapshot.undoEntry = entry.id
-                history.append(HistoryEntry(id: entry.id, name: last.name, book: last.book, wallet: step))
+                history.append(HistoryEntry(id: entry.id, name: last.name, book: last.book, details: last.details, wallet: step))
+            }
+            // The same answer as before too, so it keeps the date it had, not today's.
+            var details = answerDetails
+            for answer in answers.answerEntries where answer.isAbout(wallet.snapshot.address) { details.restore(answer.id, from: entry.details) }
+            if details != answerDetails {
+                answerDetails = details
+                saveDetails()
             }
         } else {
-            history.append(HistoryEntry(id: entry.id, name: entry.name, book: answers))
-            store(entry.book)
+            history.append(HistoryEntry(id: entry.id, name: entry.name, book: answers, details: answerDetails))
+            store(entry.book, details: entry.details)
         }
     }
 
-    private func store(_ next: Book) {
+    /// `details` goes with `next`, or what's there now stays for whatever `next` still says.
+    private func store(_ next: Book, details: AnswerDetails? = nil) {
         answers = next
         defaults.set(try? JSONEncoder().encode(next), forKey: Keys.book)
+        answerDetails = (details ?? answerDetails).keeping(next)
+        saveDetails()
         answersChanged()
     }
 
@@ -831,6 +910,7 @@ public final class PortfolioStore {
         static let menuBar = "menuBarShows"
         static let server = "serverURL"
         static let book = "answers"
+        static let answerDetails = "answerDetails"
         static let rule = "pricingRule"
         static let savedWallets = "savedWallets"
         static let walletOrder = "walletOrder"
