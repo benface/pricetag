@@ -33,6 +33,7 @@ struct HotWalletFixture {
     private var recordsAreUnreadable = false
     private var isConnectedToSite = false
     private var hasSiteActivity = false
+    private var isReplaced = false
 
     /// No wallet yet, which is also what every scene that isn't about one gets.
     static let none = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:])
@@ -55,6 +56,8 @@ struct HotWalletFixture {
     static let replacingKey = HotWalletFixture(rotation: Rotation(from: spending, to: replacement, destination: replacement))
     /// Tokens and no ETH, so the old key can't be emptied, and there's nothing it could sign.
     static let replacingKeyStuck = HotWalletFixture(balances: ["USDC": 20_000_000], rotation: Rotation(from: spending, to: replacement, destination: replacement), canActOnChain: true)
+    /// The key's been replaced, so its activity, and what was bought for it, belong to a key that's gone.
+    static let replaced = HotWalletFixture(hasRecords: true, isReplaced: true)
     static let replacingKeyMissing = HotWalletFixture(keys: .isMissing, rotation: Rotation(from: spending, to: replacement, destination: replacement))
 
     func make(source: any PortfolioSource, costMethod: @escaping @MainActor () -> CostMethod, moneyDisplay: @escaping @MainActor () -> MoneyDisplay) -> HotWallet {
@@ -84,7 +87,8 @@ struct HotWalletFixture {
         var state = DeviceWalletState()
         if wasDeleted { state.retired = [Self.spending] }
         guard hasWallet else { return state }
-        state.active = Self.spending
+        state.active = isReplaced ? Self.replacement : Self.spending
+        if isReplaced { state.retired = [Self.spending] }
         state.rotation = rotation
         if isConnectedToSite { state.connectedSites = [Self.site] }
         if hasRecords, TestMode.live == nil { state.records[Self.spending] = records }
