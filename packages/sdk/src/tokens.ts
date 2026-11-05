@@ -63,15 +63,6 @@ export const PRICE_FEEDS: readonly [PriceFeed, PriceFeed] = [
  */
 export const SEED_TX = `0x${"0".repeat(64)}`
 
-/** Base's first 200ms block, from its 2026-11-05 18:00 UTC upgrade. Blocks before it are 2 s apart. */
-const FAST_BLOCKS_FROM = 53_556_127
-
-/** How many blocks up to `block` it takes to span `seconds`, which is what keeps a read over a time window bounded. */
-export function blocksWithin(seconds: number, block: number): number {
-  const fast = Math.max(0, block - FAST_BLOCKS_FROM)
-  return seconds * 5 <= fast ? Math.ceil(seconds * 5) : fast + Math.ceil((seconds - fast / 5) / 2)
-}
-
 /**
  * A swap price outside this range is rejected, and the leg has no usable price. Swaps can imply absurd prices:
  * WORK-319 saw up to 6.6e12× the oracle. The ranges are wide on purpose, so they only catch those.

@@ -314,7 +314,7 @@ describe("the proof and verify routes", () => {
   const source: Source = {
     mode: "dataset",
     startBlock: LEG_BLOCK,
-    historyBlocks: null,
+    historyFrom: null,
     head: async () => ({ blockNum: LEG_BLOCK, timestamp: "2024-01-30T00:00:00.000Z" }),
     processedThrough: async (_after, head) => head,
     readWindow: async () => ({ rows: [legRow], priced: [], gasUnknown: [] }),
@@ -521,7 +521,7 @@ describe("a version tag that moves after the wallet was pinned", () => {
     const sourceAt = (answer: string): Source => ({
       mode: "dataset",
       startBlock: LEG_BLOCK,
-      historyBlocks: null,
+      historyFrom: null,
       head: async () => ({ blockNum: LEG_BLOCK, timestamp: "2024-01-30T00:00:00.000Z" }),
       processedThrough: async (_after, head) => head,
       readWindow: async () => ({ rows: [legRow], priced: [], gasUnknown: [] }),

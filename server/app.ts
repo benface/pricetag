@@ -85,8 +85,8 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
     }
     return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates, proofs }
   }
-  const historyBlocks = Number(env.PRICETAG_HISTORY_BLOCKS || 1800)
-  if (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
+  const historyBlocks = env.PRICETAG_HISTORY_BLOCKS ? Number(env.PRICETAG_HISTORY_BLOCKS) : null
+  if (historyBlocks !== null && (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0)) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
   return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates, proofs }
 }
 

@@ -152,7 +152,7 @@ describe("the portfolio endpoint with linked wallets", () => {
   const source: Source = {
     mode: "raw",
     startBlock: 1,
-    historyBlocks: null,
+    historyFrom: null,
     head: async () => ({ blockNum: 20, timestamp: "2026-11-04T00:00:00.000Z" }),
     processedThrough: async (_, head) => head,
     readWindow: async (address) => ({ rows: rows[address] ?? [], priced: null, gasUnknown: [] }),

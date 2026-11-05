@@ -12,14 +12,22 @@ struct FormatVectors: Decodable {
         let amount, signed: String
     }
     struct Span: Decodable {
-        let blocks: Int
+        let ms: Int
         let duration: String
+    }
+    struct BlockSpan: Decodable {
+        let from, to, ms: Int
+    }
+    struct BlocksBefore: Decodable {
+        let block, ms, before: Int
     }
     let usd: [USD]
     let cad: [USD]
     let price: [Price]
     let amount: [Amount]
     let duration: [Span]
+    let blockSpans: [BlockSpan]
+    let blocksBefore: [BlocksBefore]
 }
 
 @Suite struct FormatTests {
@@ -59,7 +67,16 @@ struct FormatVectors: Decodable {
 
     @Test func durationMatchesTheWebApp() {
         for vector in vectors.duration {
-            #expect(Format.duration(blocks: vector.blocks) == vector.duration, "\(vector.blocks)")
+            #expect(Format.duration(ms: vector.ms) == vector.duration, "\(vector.ms)")
+        }
+    }
+
+    @Test func blockTimesMatchTheWebApp() {
+        for vector in vectors.blockSpans {
+            #expect(BlockTime.msBetween(vector.from, vector.to) == vector.ms, "\(vector.from) \(vector.to)")
+        }
+        for vector in vectors.blocksBefore {
+            #expect(BlockTime.blockBefore(vector.block, ms: vector.ms) == vector.before, "\(vector.block) \(vector.ms)")
         }
     }
 

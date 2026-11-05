@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { ETH_ADDRESS, TOKEN_FEEDS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, MARKET_MAX_AGE_BLOCKS, markNeeds, marketPrice, marketTrades, pnlOverTime, referenceMarks, type LegRow, type MarketRow, type MarketTrade, type Reference } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, TOKEN_FEEDS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, LAST_2S_BLOCK, markNeeds, marketPrice, marketTrades, pnlOverTime, referenceMarks, type LegRow, type MarketRow, type MarketTrade, type Reference } from "@pricetag/sdk/core"
 import type { Query } from "@pricetag/sdk/internal"
 import { resolvingSource } from "../server/source.ts"
 
@@ -25,8 +25,14 @@ describe("a market price", () => {
   })
 
   it("is gone once its trades are too old", () => {
-    assert.equal(marketPrice(steady, "AERO", 990 + MARKET_MAX_AGE_BLOCKS)?.usdMicros, "1100000")
-    assert.equal(marketPrice(steady, "AERO", 991 + MARKET_MAX_AGE_BLOCKS), null)
+    assert.equal(marketPrice(steady, "AERO", 990 + 900)?.usdMicros, "1100000")
+    assert.equal(marketPrice(steady, "AERO", 991 + 900), null)
+  })
+
+  it("lasts just as long in time after the 200 ms upgrade", () => {
+    const after = [trade(LAST_2S_BLOCK + 10, "0xa", "1000000"), trade(LAST_2S_BLOCK + 15, "0xb", "1100000"), trade(LAST_2S_BLOCK + 20, "0xc", "1200000")]
+    assert.equal(marketPrice(after, "AERO", LAST_2S_BLOCK + 10 + 9000)?.usdMicros, "1100000")
+    assert.equal(marketPrice(after, "AERO", LAST_2S_BLOCK + 11 + 9000), null)
   })
 
   it("won't let small trades set it", () => {

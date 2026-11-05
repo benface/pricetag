@@ -45,6 +45,8 @@ The Mac app has a capped hot wallet, this Mac's "spending money", for everyday u
 - **The key** comes from `SecRandomCopyBytes`, is wrapped by the Secure Enclave, and stays in a device-only Keychain item. It can't be restored or exported: lose the Mac and you lose what's on it, up to the cap.
 - **The cap** is yours to set, $50 by default and $100 at most, or $25 at most until you add a savings wallet. A plain address can't enforce a cap, so it's what triggers a sweep and not a hard limit.
 - **Sweeps** send whatever is above the cap, and realized gains unless you turn that off, to your chosen savings wallet. They only move tokens with a trusted price, they keep enough ETH for gas, and they skip dust. Costs carry over as `inherited`, because the app tells the server which wallets are yours: `GET /api/portfolio/<address>?linked=<addresses>`.
+- **Sending** goes to any address, after Touch ID, for ETH and the tokens the app tracks. A new address asks "Is this yours?", and the answer stays on this Mac with the rest. The hot wallet and your savings wallets never ask: they're always linked, for any wallet that's yours, whatever you've answered. A wallet you're only watching doesn't take costs from them.
+- **Publishing a cost** writes what you paid onchain, as a zero-value send to itself that the server reads as `self-reported`. Resolve offers it when the answer covers everything of one token that arrived in one transaction in this wallet, and warns first, because it publicly ties the amount to the wallet for good. It's always in USD. A savings wallet's cost needs its device to sign (WORK-325), so Resolve doesn't offer it there.
 - **The alarm** compares what Amp and the chain say this wallet did with what the app signed. If they differ, it alerts loudly, stops top-ups, and offers to sweep what's left and replace the key.
 
 Holding a key needs a provisioned build, which `pnpm mac` makes when the team pinned in `macos/run.sh` is signed in to Xcode. Without that, the app says it can't hold a key, and everything else works. It reads balances from `https://mainnet.base.org` directly, set in Settings, so sweeps don't depend on the server. Debug builds have their own wallet.
@@ -54,7 +56,7 @@ Holding a key needs a provisioned build, which `pnpm mac` makes when the team pi
 The server is the only thing that talks to Amp, so the token never reaches the browser or the Mac app. It can read from either:
 
 - **The Pricetag dataset**, when `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` are set. This is the design: the dataset carries the price, and reads it from Chainlink's logs, as [below](#where-prices-come-from).
-- **The raw Base dataset**, otherwise. It reads the wallet's transactions and logs, and the oracle with `eth_call`, then derives the same rows at query time. A wallet's first read takes about 15 s for an hour of blocks (longer for a busy wallet), and it only looks back `PRICETAG_HISTORY_BLOCKS`.
+- **The raw Base dataset**, otherwise. It reads the wallet's transactions and logs, and the oracle with `eth_call`, then derives the same rows at query time. A wallet's first read takes about 15 s for an hour of blocks (longer for a busy wallet), and it only looks back an hour, or `PRICETAG_HISTORY_BLOCKS` if that's set.
 
 Both go through the same path after that, and they gave identical legs on the wallet they were compared on.
 
@@ -68,13 +70,20 @@ pnpm dev
 pnpm amp:stop    # stops it and deletes its data
 ```
 
-`amp:start` runs `ampd solo` on localhost with a throwaway Docker Postgres, then deploys a raw Base dataset and the Pricetag dataset (`dataset/pricetag.json`) from `PRICETAG_HISTORY_BLOCKS` before the head, 1,800 blocks (an hour) by default. Every start computes a new start block and begins empty, because `amp:stop` deletes everything. Only one local Amp can run at a time, because its ports are fixed.
+`amp:start` runs `ampd solo` on localhost with a throwaway Docker Postgres, then deploys a raw Base dataset and the Pricetag dataset (`dataset/pricetag.json`) from `PRICETAG_HISTORY_BLOCKS` before the head, 1,800 blocks by default. That's 6 minutes of Base's 200 ms blocks, because each block costs the same requests however long it took. Every start computes a new start block and begins empty, because `amp:stop` deletes everything. Only one local Amp can run at a time, because its ports are fixed.
 
 It adds a marked block to the end of `.env.local` that points the app at the local Amp and sets `PRICETAG_START_BLOCK`. That block overrides your own values while Amp runs, and `amp:stop` removes it, so nothing else changes. To read from a hosted Amp instead, don't start the local one, and set `AMP_QUERY_URL`, `AMP_QUERY_TOKEN`, `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` yourself.
 
 **Use a dedicated RPC for a demo.** `BASE_RPC_URL` in `.env.local` defaults to the public `https://mainnet.base.org`, which allows 25 requests a second per IP and is shared with anything else on your network. A failed call stops the raw dataset, and everything built on it, until its retry succeeds. To avoid that, `amp:start` runs a small relay (`scripts/rpc-throttle.ts`) that holds requests to `BASE_RPC_RATE_LIMIT` a second, 20 by default, and retries 429s. Raise it to whatever a dedicated RPC allows. Of Amp's processes, only the relay gets `BASE_RPC_URL`. The app's server also uses it, for L1 fees. Neither ever logs it. Never commit a key.
 
-On the public RPC, a fresh start takes about 9 minutes for the default hour of blocks. For a quicker one, use `PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start`, which takes about 2 minutes.
+**On Base's 200 ms blocks, from November 5, 2026 at 18:00 UTC, following the head takes about 10 requests a second,** all for the raw dataset, because prices come from logs. Measured with this script on Base Sepolia, which already has those blocks, at the default 20 requests a second to `sepolia.base.org`:
+
+| Start | Time to chain head | After that |
+| --- | --- | --- |
+| Default, 1,800 blocks | About 7 minutes for the raw dataset, `legs` and `reference_prices`. About 11 until the script said so, waiting on `priced_legs`, which has few rows there | 3–11 blocks behind (about 2 s at most) for 6 minutes, with no job errors |
+| `PRICETAG_HISTORY_BLOCKS=300` | About 2 minutes | 5 blocks behind |
+
+Mainnet's RPC and blocks may differ. The previous dataset, which read prices with `eth_call`, couldn't follow these blocks: its `reference_prices` kept falling behind, or held hundreds of blocks behind, at 20, 25 and 35 requests a second.
 
 **A local Amp's first prices come from `eth_call`.** It only has logs from its start block, and USDC/USD's last update can be up to a day older. So `amp:start` reads each feed's latest round from its contract at the start block (`dataset/local.ts`), and those stand in as updates, with an all-zero transaction, for as long as the real ones would have lasted. If that read fails, `amp:start` stops before the backfill. Proof says a price came from the contract, and Verify doesn't claim to cover it. It covers the price from the first real log onward.
 
@@ -136,7 +145,7 @@ The dataset reads Chainlink's prices from the `AnswerUpdated` logs its contracts
 
 `priced_legs` joins `reference_prices` on the block, and carries the same answers and transactions.
 
-- **An update only counts for so long.** ETH/USD's lasts 2,600 s (longest gap seen in a day: 1,236 s), and USDC/USD's 25 hours (longest gap in 76 rounds: 86,490 s). They're in time because feeds update on a clock, and Base's blocks go from 2 s to 200 ms on 2026-11-05. `blocksWithin` turns a window into blocks for reads and start filters. After that, that price is `unknown`, never stale. Exchanges lose their price too, because `pt_price` needs both feeds. If both feeds lapsed together, a block would have no row at all, and the app would show as behind until a fix.
+- **An update only counts for so long.** ETH/USD's lasts 2,600 s (longest gap seen in a day: 1,236 s), and USDC/USD's 25 hours (longest gap in 76 rounds: 86,490 s). They're in time because feeds update on a clock, and Base's blocks go from 2 s to 200 ms on 2026-11-05. `blockBefore` turns a window into blocks for reads and start filters. After that, that price is `unknown`, never stale. Exchanges lose their price too, because `pt_price` needs both feeds. If both feeds lapsed together, a block would have no row at all, and the app would show as behind until a fix.
 - **When Chainlink changes a feed's aggregator, a new dataset version is needed.** Proxies emit no log when that happens, so no table can notice: the old address just goes quiet. The server asks each proxy for its `aggregator()` when it starts, and warns if it isn't listed. To fix it, add the address to `PRICE_FEEDS` and deploy a new version. Both feeds last changed about 2 months ago, and about 5 months before that.
 - **ETH/USD leads what its proxy returns.** A log comes 15 or 16 blocks before the proxy shows the new round (once in a while, just 1). The price is the newer published value, so it isn't delayed to match. Compared block by block with `eth_call`, that's the only difference.
 

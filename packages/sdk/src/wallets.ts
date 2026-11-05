@@ -2,8 +2,9 @@
 // Keeps each wallet's rows in memory: one full read, then only new blocks, because a wallet read scans the whole range.
 
 import { describeError, type Logger } from "./amp.ts"
+import { LAST_2S_BLOCK, blockBefore, timestampOfBlock } from "./chain.ts"
 import { buildPricedLegs, derivePricedRows, oneWaySendBalanceBlocks, settleUnwraps, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PricedRow, type Reference } from "./legs.ts"
-import { MARKET_MAX_AGE_BLOCKS, markNeeds, marketPrice, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
+import { MARKET_MAX_AGE_MS, markNeeds, marketPrice, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
 import type { CostNote } from "./notes.ts"
 import { feedPrice, foldPositions, latestPrices, type FeedRound, type Head, type LatestPrices } from "./portfolio.ts"
 import type { ReadL1Fees } from "./receipts.ts"
@@ -18,7 +19,8 @@ export type Source = {
   mode: Mode
   /** The first block a wallet's history can start from, or null to count back from the head. */
   startBlock: number | null
-  historyBlocks: number | null
+  /** Where counting back from the head lands. */
+  historyFrom: ((head: number) => number) | null
   head(after: number | null): Promise<Head | null>
   /**
    * The newest block, in `after`..`head`, that every table a wallet read needs has processed, or null if none has.
@@ -46,13 +48,13 @@ export type Source = {
 /** Blocks to read, inclusive, where the source's defaults aren't wanted. `to` reads the wallet as of that block. */
 export type WalletRange = { from?: number | undefined; to?: number | undefined }
 
-/** Re-read this many blocks on each refresh, so a reorg near the tip replaces what it changed. */
-export const REORG_BLOCKS = 30
+/** Re-read this much of the chain on each refresh, so a reorg near the tip replaces what it changed. */
+const REORG_MS = 60_000
+/** The newest block past any reorg, seen from `tip`. */
+export const settledThrough = (tip: number) => blockBefore(tip, REORG_MS)
 const MAX_WALLETS = 20
 /** A busy wallet catches up over a few refreshes, and until then the swaps left say they aren't confirmed. */
 const MAX_ETH_BALANCES_PER_READ = 400
-/** Base's block time, which is exact. */
-const BLOCK_MS = 2000
 
 type Cached = {
   fromBlock: number
@@ -134,7 +136,7 @@ const rowKeys = (rows: readonly LegRow[]) => rows.map(rowKey).sort().join()
  */
 function isL1FeeSettled(fee: L1Fee | undefined, blockNum: number, tip: number): boolean {
   if (fee?.blockNum !== blockNum) return false
-  return fee.readAtTip - blockNum >= REORG_BLOCKS || tip - blockNum < REORG_BLOCKS
+  return blockNum <= settledThrough(fee.readAtTip) || blockNum > settledThrough(tip)
 }
 
 /**
@@ -143,7 +145,7 @@ function isL1FeeSettled(fee: L1Fee | undefined, blockNum: number, tip: number): 
  */
 function isL1FeeCurrent(fee: L1Fee | undefined, blockNum: number, tip: number): boolean {
   if (fee?.blockNum !== blockNum) return false
-  return fee.readAtTip === tip || fee.readAtTip - blockNum >= REORG_BLOCKS
+  return fee.readAtTip === tip || blockNum <= settledThrough(fee.readAtTip)
 }
 
 const isComplete = (snapshot: BalanceSnapshot | null) => snapshot !== null && ASSETS.every((asset) => snapshot.amounts[asset] !== undefined)
@@ -163,13 +165,16 @@ export function marketNeeds(rows: readonly LegRow[], priced: readonly PricedRow[
   })
 }
 
-/** A price for each block in a bucket, so a thousand transfers don't make a thousand queries. Always at or before the block. */
+/** A price for each block in a bucket, so a thousand transfers don't make a thousand queries. Always at or before the block. In 2 s blocks. */
 const MARKET_BUCKET_BLOCKS = 150
 /** A current price moves on faster. */
 const MARKET_HEAD_BUCKET_BLOCKS = 30
 /** Each read is a query, and they run one at a time. What's left waits for the next refresh, and has no price until then. */
 const MARKET_READS_PER_REFRESH = 20
-const bucketOf = (block: number, size = MARKET_BUCKET_BLOCKS) => block - (block % size)
+function bucketOf(block: number, slowSize = MARKET_BUCKET_BLOCKS): number {
+  const size = block > LAST_2S_BLOCK ? slowSize * 10 : slowSize
+  return block - (block % size)
+}
 const MARKET_ASSETS = TOKENS.filter((t) => !t.oracle).map((t) => t.asset)
 type MarketRead = { asset: string; bucket: number }
 const marketKey = ({ asset, bucket }: MarketRead) => `${asset}:${bucket}`
@@ -199,14 +204,14 @@ function feedPrices(rounds: Record<string, FeedRound>, prices: LatestPrices): La
 /** Whether a reorg could have changed any opening balance since it was read. */
 function openingMayChange(wallet: Cached | undefined, chain: Head): boolean {
   if (!wallet) return false
-  return Object.values(wallet.openingReadAt).some((readAt) => chain.blockNum > readAt && readAt - (wallet.fromBlock - 1) < REORG_BLOCKS)
+  return Object.values(wallet.openingReadAt).some((readAt) => chain.blockNum > readAt && wallet.fromBlock - 1 > settledThrough(readAt))
 }
 
 /**
  * Whether a wallet read as of a fixed block could have changed since its last refresh. It could until a refresh happens
  * with its last block past any reorg, and that one is the last. Its coverage stops moving, so a new block is the only sign.
  */
-const fixedMayChange = (wallet: Cached, chain: Head) => chain.blockNum > wallet.readAtHead && wallet.readAtHead - wallet.coveredTo < REORG_BLOCKS
+const fixedMayChange = (wallet: Cached, chain: Head) => chain.blockNum > wallet.readAtHead && wallet.coveredTo > settledThrough(wallet.readAtHead)
 
 /** A live read's re-reads follow its coverage, which can lag. A fixed read's coverage stops, so only the chain says what's settled. */
 const tipOf = (range: WalletRange, coveredTo: number, chain: Head) => (range.to === undefined ? coveredTo : chain.blockNum)
@@ -224,10 +229,10 @@ function l1FeeRows(rows: readonly LegRow[], fees: Cached["l1Fees"]): { rows: Leg
   return { rows: result, unknownTxs }
 }
 
-/** A block in the past, as if it were the head. Base's block time is exact, so its timestamp doesn't need a read. */
+/** A block in the past, as if it were the head. Base's block times are exact, so its timestamp doesn't need a read. */
 function headAsOf(head: Head, to: number | undefined): Head {
   if (to === undefined || to >= head.blockNum) return head
-  return { blockNum: to, timestamp: new Date(new Date(head.timestamp).getTime() - (head.blockNum - to) * BLOCK_MS).toISOString() }
+  return { blockNum: to, timestamp: timestampOfBlock(to, head) }
 }
 
 const keyOf = (address: string, { from, to }: WalletRange) => `${address.toLowerCase()}:${from ?? ""}:${to ?? ""}`
@@ -276,7 +281,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const missing = [...new Map([...wanted, ...extra].map((w) => [marketKey(w), w])).entries()].filter(([key]) => !market.has(key))
     for (const [key, { asset, bucket }] of missing.slice(0, MARKET_READS_PER_REFRESH)) {
       try {
-        market.set(key, marketPrice(await source.readMarketTrades(asset, bucket - MARKET_MAX_AGE_BLOCKS, bucket), asset, bucket))
+        market.set(key, marketPrice(await source.readMarketTrades(asset, blockBefore(bucket, MARKET_MAX_AGE_MS), bucket), asset, bucket))
       } catch (error) {
         logger.warn(`Market read failed: ${describeError(error)}`)
         break
@@ -355,7 +360,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const cached = wallets.get(key)
     if (cached && (range.to === undefined ? cached.latest.blockNum >= head.blockNum : isFixedCurrent(address, cached, head, chain))) return cached
 
-    const fromBlock = cached?.fromBlock ?? range.from ?? source.startBlock ?? Math.max(0, head.blockNum - (source.historyBlocks ?? 0))
+    const fromBlock = cached?.fromBlock ?? range.from ?? source.startBlock ?? Math.max(0, source.historyFrom?.(head.blockNum) ?? head.blockNum)
     // Coverage only moves up to what's been processed. If it followed the chain, a table catching up later would
     // never be read for the blocks it skipped past.
     const processed = await source.processedThrough(cached?.coveredTo ?? fromBlock, head.blockNum)
@@ -369,7 +374,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const gasUnknown = new Map(cached?.gasUnknown ?? [])
     const ethBalances = new Map(cached?.ethBalances ?? [])
     if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo || reorgable)) {
-      const readFrom = cached ? Math.max(fromBlock, cached.coveredTo - REORG_BLOCKS + 1) : fromBlock
+      const readFrom = cached ? Math.max(fromBlock, settledThrough(cached.coveredTo) + 1) : fromBlock
       const window = await source.readWindow(address, readFrom, coveredTo)
       rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
       for (const block of known.keys()) if (block >= readFrom) known.delete(block)
@@ -397,7 +402,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     // A transaction with only gas in it is what a note looks like. Anything near the tip could still change, so it's read again.
     let notes = cached?.notes ?? []
     let notesReadTo = cached?.notesReadTo ?? fromBlock - 1
-    const settled = Math.min(coveredTo, tip - REORG_BLOCKS)
+    const settled = Math.min(coveredTo, settledThrough(tip))
     if (source.readNotes && coveredTo >= fromBlock) {
       const movers = new Set(rows.filter((r) => r.kind !== "gas" && r.kind !== "l1_fee").map((r) => r.tx_hash))
       const noteBlocks = [...new Set(rows.filter((r) => r.kind === "gas" && !movers.has(r.tx_hash) && r.block_num > notesReadTo).map((r) => r.block_num))]
@@ -470,7 +475,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       const micros = marketAt(asset, block)
       if (micros) (marketMarks[block] ??= {})[asset] = micros
     }
-    const openedAt = new Date(new Date(wallet.latest.timestamp).getTime() - (wallet.latest.blockNum - wallet.fromBlock + 1) * BLOCK_MS).toISOString()
+    const openedAt = timestampOfBlock(wallet.fromBlock - 1, wallet.latest)
     return {
       address,
       mode: source.mode,
@@ -523,7 +528,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         fromBlock: wallet.fromBlock,
         coveredTo: through,
         rows,
-        latest: { blockNum: through, timestamp: new Date(new Date(wallet.latest.timestamp).getTime() - (wallet.latest.blockNum - through) * BLOCK_MS).toISOString() },
+        latest: { blockNum: through, timestamp: timestampOfBlock(through, wallet.latest) },
         gasUnknown: wallet.gasUnknown,
         opening: wallet.opening,
         closing,

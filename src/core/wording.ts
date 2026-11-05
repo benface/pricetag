@@ -2,7 +2,7 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import { formatAmount, formatDuration, formatMoney, shortHash, type CostLabel, type CurrencyCode, type FoldLeg, type Method, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
+import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, type CostLabel, type CurrencyCode, type FoldLeg, type Method, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
@@ -95,7 +95,7 @@ export function excludedSentence(excluded: readonly { asset: string; reason: str
 
 export function coverageSentence(coverage: { fromBlock: number; toBlock: number }, trackedTokens: number, openingUnread: boolean): string {
   const opening = openingUnread ? "What the wallet held before that couldn't all be read yet, so some amounts may not be full balances." : "What the wallet held before that is included, at an unknown cost."
-  return `Covers about ${formatDuration(coverage.toBlock - coverage.fromBlock)} of history and ${trackedTokens} tokens plus ETH. ${opening} Other tokens aren't counted.`
+  return `Covers about ${formatDuration(msBetweenBlocks(coverage.fromBlock, coverage.toBlock))} of history and ${trackedTokens} tokens plus ETH. ${opening} Other tokens aren't counted.`
 }
 
 export function networkFeeUnknownSentence(count: number): string {
@@ -112,9 +112,9 @@ export function feesUnknownSentence(count: number): string {
 
 export const NOT_STARTED = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."
 
-export function behindSentence(blocks: number): string {
+export function behindSentence(ms: number): string {
   // Under half a minute would round to "0 min", which reads as not behind at all.
-  return `The data is still catching up, ${blocks < 15 ? "less than a minute" : `about ${formatDuration(blocks)}`} behind the network. Anything newer isn't in these numbers yet.`
+  return `The data is still catching up, ${ms < 30_000 ? "less than a minute" : `about ${formatDuration(ms)}`} behind the network. Anything newer isn't in these numbers yet.`
 }
 
 export function staleSentence(lastUpdate: string): string {

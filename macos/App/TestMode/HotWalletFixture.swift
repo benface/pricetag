@@ -25,12 +25,14 @@ struct HotWalletFixture {
     private var rotation: Rotation?
     private var canActOnChain = false
     private var recordsAreUnreadable = false
+    private var promptNeverAnswers = false
 
     /// No wallet yet, which is also what every scene that isn't about one gets.
     static let none = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:])
     static let notProvisioned = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:], keys: .notProvisioned)
     static let unreadableRecords = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:], recordsAreUnreadable: true)
     static let funded = HotWalletFixture(hasRecords: true)
+    static let waitingForTouchID = HotWalletFixture(promptNeverAnswers: true)
     static let noSavings = HotWalletFixture(hasSavings: false, balances: ["ETH": 1_000_000_000_000_000, "USDC": 10_000_000])
     static let noPrice = HotWalletFixture(balances: ["ETH": 5_000_000_000_000_000, "USDC": 20_000_000, "AERO": 12_000_000_000_000_000_000])
     static let overCap = HotWalletFixture(balances: ["ETH": 10_000_000_000_000_000, "USDC": 80_000_000])
@@ -46,7 +48,7 @@ struct HotWalletFixture {
             signer: NoKeys(answer: keys),
             settingsStore: FixedSettings(settings: settings),
             stateStore: FixedState(state: recordsAreUnreadable ? nil : state),
-            presence: NoOneThere(),
+            presence: promptNeverAnswers ? StillAsking() : NoOneThere(),
             portfolioSource: { source },
             costMethod: costMethod,
             makeChain: { [snapshot] _ in FixtureChain(snapshot: snapshot) },
@@ -142,6 +144,14 @@ private nonisolated struct FixedState: DeviceStateStore {
 
 private nonisolated struct NoOneThere: UserPresence {
     func confirm(reason: String) async throws { TestMode.fail("A scene asked for Touch ID: \(reason).") }
+}
+
+/// A prompt nobody's answered yet, to show what a screen does in the meantime. It goes no further, so nothing here can sign.
+private nonisolated struct StillAsking: UserPresence {
+    func confirm(reason: String) async throws {
+        try await Task.sleep(for: .seconds(600))
+        TestMode.fail("A scene's Touch ID prompt ran out of time.")
+    }
 }
 
 /// Stands in for the node. It only ever answers reads.

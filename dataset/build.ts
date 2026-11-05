@@ -12,7 +12,7 @@
 // and UDFs that never return null or throw, because one bad row stops the whole dataset.
 
 import { readFileSync, writeFileSync } from "node:fs"
-import { ERC20_ADDRESSES, ETH_ADDRESS, PRICE_FEEDS, SEED_TX, TOKENS, WETH_ADDRESS, blocksWithin, type PriceFeed } from "@pricetag/sdk/core"
+import { ERC20_ADDRESSES, ETH_ADDRESS, PRICE_FEEDS, SEED_TX, TOKENS, WETH_ADDRESS, blockBefore, type PriceFeed } from "@pricetag/sdk/core"
 
 const MANIFEST = new URL("./pricetag.json", import.meta.url)
 const CAUTIOUS_MANIFEST = new URL("./cautious-eth.json", import.meta.url)
@@ -65,7 +65,7 @@ function priceUpdatesSql(start: number, seeds: readonly FeedSeed[] | null) {
   get_field(t, 'current') AS answer, get_field(t, 'roundId') AS round_id, get_field(t, 'updatedAt') AS updated_at
 FROM (SELECT block_num, timestamp, tx_hash, log_index, address, evm_decode_log(topic1, topic2, topic3, data, '${ANSWER_UPDATED}') AS t
   FROM base.logs WHERE topic0 = evm_topic('${ANSWER_UPDATED}') AND address IN (${addressList(PRICE_FEEDS.flatMap((feed) => feed.aggregators))}))`
-  if (!seeds) return `${logs}\nWHERE block_num() >= ${start - Math.max(...PRICE_FEEDS.map((feed) => blocksWithin(feed.validSeconds, start)))}`
+  if (!seeds) return `${logs}\nWHERE block_num() >= ${Math.min(...PRICE_FEEDS.map((feed) => blockBefore(start, feed.validSeconds * 1000)))}`
   const rows = seeds.map(
     ({ feed, answer, roundId, updatedAt }) =>
       `SELECT block_num, timestamp, arrow_cast(X'${hex(SEED_TX)}', 'FixedSizeBinary(32)') AS tx_hash, arrow_cast(0, 'UInt32') AS log_index, '${feed.name}' AS feed,
