@@ -78,6 +78,7 @@ public final class PortfolioStore {
     public var holdingsSort: HoldingsSort {
         didSet { defaults.set(holdingsSort.rawValue, forKey: Keys.holdingsSort) }
     }
+    public private(set) var menuBarShows: MenuBarShows
     /// What one USD buys right now in `currency`, for what isn't part of a wallet's own read. Nil in USD, or with no current rate.
     private var currentRate: CurrentRate?
     public private(set) var serverURL: URL
@@ -152,6 +153,7 @@ public final class PortfolioStore {
         self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
         self.currency = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
         self.holdingsSort = defaults.string(forKey: Keys.holdingsSort).flatMap(HoldingsSort.init(rawValue:)) ?? .largestFirst
+        self.menuBarShows = defaults.string(forKey: Keys.menuBar).flatMap(MenuBarShows.init(rawValue:)) ?? .value
         self.serverURL = serverURL
         self.answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.selectedRule = defaults.string(forKey: Keys.rule)
@@ -456,6 +458,12 @@ public final class PortfolioStore {
         settingsChanged()
     }
 
+    /// Only the menu bar changes, so there's nothing to read again.
+    public func setMenuBarShows(_ shows: MenuBarShows) {
+        menuBarShows = shows
+        defaults.set(shows.rawValue, forKey: Keys.menuBar)
+    }
+
     public func setRule(_ id: String) {
         guard id != (selectedRule ?? rules.first?.id) else { return }
         selectedRule = id
@@ -732,6 +740,7 @@ public final class PortfolioStore {
         static let wallet = "wallet"
         static let method = "method"
         static let currency = "currency"
+        static let menuBar = "menuBarShows"
         static let server = "serverURL"
         static let book = "answers"
         static let rule = "pricingRule"

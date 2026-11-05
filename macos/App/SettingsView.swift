@@ -87,6 +87,10 @@ struct SettingsView: View {
                     ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
                 }
                 .help(Wording.methodHelp)
+                Picker("Menu bar shows", selection: Binding(get: { store.menuBarShows }, set: { store.setMenuBarShows($0) })) {
+                    ForEach(MenuBarShows.allCases) { Text($0.label).tag($0) }
+                }
+                .help("Also in the menu bar item's right-click menu. Problems with the data show whichever you choose.")
             }
             if store.rules.count > 1 {
                 Section {

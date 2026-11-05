@@ -2,13 +2,28 @@
 
 import Foundation
 
+/// What the menu bar item shows while the feed is live. Value by default, because a PnL that's always on screen is a score to watch, and it's on show to anyone looking.
+public enum MenuBarShows: String, Codable, Sendable, CaseIterable, Identifiable {
+    case value, pnl, icon
+
+    public var id: Self { self }
+    public var label: String {
+        switch self {
+        case .value: "Value"
+        case .pnl: "PnL"
+        case .icon: "Icon Only"
+        }
+    }
+}
+
 public struct FeedSummary: Equatable, Sendable {
     /// Empty when there's nothing to say yet, and an icon has to do.
     public let text: String
     public let isWarning: Bool
 
     /// A number only appears here while the feed is live. Old numbers stay in the popover and the window, labeled as old.
-    public init(feed: FeedState, portfolio: Portfolio?) {
+    /// What's wrong with the feed shows whatever `shows` is. What's wrong with a number only shows with that number.
+    public init(feed: FeedState, portfolio: Portfolio?, shows: MenuBarShows) {
         switch feed {
         case .noWallet: (text, isWarning) = ("", false)
         // With numbers in the window, they're the last answer until the new one arrives.
@@ -29,11 +44,23 @@ public struct FeedSummary: Equatable, Sendable {
                 (text, isWarning) = ("\(prefix)No activity", false)
                 return
             }
-            guard portfolio.pnlStatus != .unavailable, let pnl = portfolio.totals.pnlMicros else {
-                (text, isWarning) = (prefix + Wording.pnlUnavailable, true)
-                return
+            switch shows {
+            case .icon:
+                (text, isWarning) = (portfolio.mode == .demo ? "Demo" : "", false)
+            case .value:
+                guard let value = portfolio.totalValueText else {
+                    (text, isWarning) = (prefix + Wording.valueUnavailable, true)
+                    return
+                }
+                // With no line beside it to say what's estimated, a number here keeps its own mark.
+                (text, isWarning) = (prefix + Format.estimate(value, portfolio.totals.estimated.value), portfolio.isValuePartial)
+            case .pnl:
+                guard let pnl = portfolio.totalPnlText else {
+                    (text, isWarning) = (prefix + Wording.pnlUnavailable, true)
+                    return
+                }
+                (text, isWarning) = (prefix + Format.estimate(pnl, isPositive(portfolio.totals.estimatedMicros)), portfolio.pnlStatus == .partial)
             }
-            (text, isWarning) = (prefix + Format.estimate(Format.signedMoney(pnl, portfolio.currency), isPositive(portfolio.totals.estimatedMicros)), portfolio.pnlStatus == .partial)
         }
     }
 }

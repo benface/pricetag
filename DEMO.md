@@ -29,7 +29,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 
 About 5 minutes. **Before you start:**
 - The server has been running for at least 5 minutes, with the wallet already read once under each rule, so nothing's a cold read.
-- USD, Average cost, and the Market price rule.
+- USD, Average cost, and the Market price rule. The menu bar shows Value, the default: right-click it to check.
 - The Coinbase question is **unanswered**, and what you paid is on a sticky note.
 - The main window and Settings are arranged side by side.
 
