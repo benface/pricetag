@@ -188,6 +188,8 @@ private struct RowView: View {
                 }
             }
             .textSelection(.enabled)
+            // Ahead of the spacer, so an address only shrinks when it has to.
+            .layoutPriority(1)
         }
     }
 }
