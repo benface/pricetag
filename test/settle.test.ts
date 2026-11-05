@@ -423,7 +423,7 @@ describe("a swap someone else sends for a wallet", () => {
     assert.match(sale.priceNote!, /may have been sold/)
     assert.equal(usdc.state.unresolvedDisposedQty, SOLD.toString())
     assert.equal(usdc.values.realizedMicros, null)
-    assert.ok(sumTotals(positions).excluded.some((e) => e.asset === "USDC" && e.reason === "sold at an unknown cost"))
+    assert.ok(sumTotals(positions).excluded.some((e) => e.asset === "USDC" && e.reason === "sold or spent at an unknown cost"))
   })
 
   it("keeps USDC's check, because its balance does match, and ETH's difference, because nothing's guessed", () => {

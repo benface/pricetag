@@ -21,7 +21,7 @@ Which prints something like this. This wallet held most of this before the first
 Blocks 53517359 to 53518014
 ETH: 143.6716 | cost unknown | value $346,994.90 (oracle) | realized unknown | unrealized unknown | reconciled
 USDC: 200,253.2 | cost unknown | value $200,218.56 (oracle) | realized unknown | unrealized unknown | reconciled
-PnL: unknown (unavailable), gas $0.00, leaving out: ETH (sold at an unknown cost, unknown cost), USDC (sold at an unknown cost, unknown cost)
+PnL: unknown (unavailable), gas $0.00, leaving out: ETH (sold or spent at an unknown cost, unknown cost), USDC (sold or spent at an unknown cost, unknown cost)
 Latest: ETH in 0x3920fc301a4d45b33d11fd22218e79f1b3e1233c82d8dc0e9450e7ac3f4a74c1, price $2,415.19 (oracle), cost paid
 ```
 

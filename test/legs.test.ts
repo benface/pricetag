@@ -554,11 +554,17 @@ describe("an entirely unknown result stays unavailable", () => {
     })
 
     it("the cost, when what's sold arrived from elsewhere", () => {
-      assert.deepEqual(reasons([received, { ...row("0x2", AERO, "debit", 200n * E18), block_num: 101 }, { ...row("0x2", USDC_ADDRESS, "credit", 100n * E6), block_num: 101 }]), ["sold at an unknown cost"])
+      assert.deepEqual(reasons([received, { ...row("0x2", AERO, "debit", 200n * E18), block_num: 101 }, { ...row("0x2", USDC_ADDRESS, "credit", 100n * E6), block_num: 101 }]), ["sold or spent at an unknown cost"])
     })
 
     it("both, when neither is known", () => {
-      assert.deepEqual(reasons([received, ...absurdSale(200n * E18)]), ["sold at an unknown cost", "sold or spent at an unknown price"])
+      assert.deepEqual(reasons([received, ...absurdSale(200n * E18)]), ["sold or spent at an unknown cost", "sold or spent at an unknown price"])
+    })
+
+    it("the cost, in words that fit a network fee paid from what was already held", () => {
+      const received = { ...row("0x1", ETH_ADDRESS, "credit", E18), block_num: 99 }
+      const legs = legsOf([received, row("0x2", ETH_ADDRESS, "debit", E18 / 1000n, "gas")], references)
+      assert.deepEqual(sumTotals(foldPositions(legs, "fifo", {})).excluded.filter((e) => e.reason.startsWith("sold")), [{ asset: "ETH", reason: "sold or spent at an unknown cost" }])
     })
   })
 
@@ -593,7 +599,7 @@ describe("an entirely unknown result stays unavailable", () => {
           assert.equal(totals.realizedMicros, null)
           assert.equal(totals.pnlMicros, null)
           assert.deepEqual(totals.coverage.realized, { known: 0, missing: 1 })
-          assert.ok(totals.excluded.some((e) => e.asset === "ETH" && e.reason === "sold at an unknown cost"))
+          assert.ok(totals.excluded.some((e) => e.asset === "ETH" && e.reason === "sold or spent at an unknown cost"))
           assert.equal(pnlOverTime(legs, method, {}, marks(references), null).at(-1)!.pnlMicros, null)
         })
 
