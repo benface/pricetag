@@ -94,6 +94,9 @@ struct BuyPlanTests {
         #expect(unread.problem == .notReadYet)
         let noPrice = BuyPlan(usdMicros: 20 * Money.dollar, token: Base.eth, priceUsdMicros: nil, holdings: [Holding(token: Base.eth, balance: 0, priceUsdMicros: nil)], capUsdMicros: 50 * Money.dollar, roomUsdMicros: 50 * Money.dollar, fees: lowFees, destination: cold)
         #expect(noPrice.problem == .notReadYet)
+        // An empty field before the first read says it's reading, not that it's below the minimum.
+        let empty = BuyPlan(usdMicros: 0, token: Base.eth, priceUsdMicros: nil, holdings: [], capUsdMicros: 25 * Money.dollar, roomUsdMicros: 25 * Money.dollar, fees: nil, destination: nil)
+        #expect(empty.problem == .notReadYet)
     }
 
     @Test func belowTheMinimumIsSaidFirst() {

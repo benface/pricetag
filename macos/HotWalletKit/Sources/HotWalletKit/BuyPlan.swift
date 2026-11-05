@@ -27,7 +27,10 @@ public struct BuyPlan: Equatable, Sendable {
     public init(usdMicros amount: UInt128, token: Token, priceUsdMicros: UInt128?, holdings: [Holding], capUsdMicros: UInt128, roomUsdMicros: UInt128, fees: FeeQuote?, destination: EthereumAddress?) {
         fits = min(amount, roomUsdMicros)
         aboveCap = amount.subtractingClamped(roomUsdMicros)
-        if amount < Self.minimumUsdMicros {
+        if holdings.isEmpty {
+            // Nothing's been read, so there's no room to measure against yet, and no amount to judge.
+            problem = .notReadYet
+        } else if amount < Self.minimumUsdMicros {
             problem = .belowMinimum
         } else if let fees, let priceUsdMicros, let after = Self.holdings(holdings, buying: amount, of: token, priceUsdMicros: priceUsdMicros) {
             // What a sweep would make of it, whatever the amount: the provider's page can change it, so a token that can't move at all is a problem even if this much would fit.
