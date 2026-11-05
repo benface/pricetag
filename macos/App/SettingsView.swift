@@ -38,21 +38,16 @@ struct SettingsView: View {
                 }
             }
             Section {
-                TextField("Server", text: $server, prompt: Text(PortfolioStore.defaultServerURL.absoluteString))
-                    .onSubmit(applyServer)
-                if let serverError {
-                    WarningText(serverError).font(.callout)
+                LabeledContent("Wallet") {
+                    HStack {
+                        Text(store.address.map { $0 == WalletAddress.demo ? "Demo wallet" : Format.shortHash($0) } ?? "None")
+                            .textSelection(.enabled)
+                            .help(store.address ?? "")
+                        Button("Forget") { store.setWallet(nil) }
+                            .controlSize(.small)
+                            .disabled(store.address == nil)
+                    }
                 }
-            } footer: {
-                Text("\(AppName.current) only talks to this server, and the server is the only thing that talks to Amp. Plain HTTP only works for a server on this Mac.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Section {
-                LabeledContent("Wallet", value: store.address.map { $0 == WalletAddress.demo ? "Demo wallet" : $0 } ?? "None")
-                    .textSelection(.enabled)
-                Button("Forget This Wallet") { store.setWallet(nil) }
-                    .disabled(store.address == nil)
             } footer: {
                 Text("This wallet is only read, and nothing signs for it. The one key in this app is below.")
                     .font(.caption)
@@ -72,8 +67,8 @@ struct SettingsView: View {
                         }
                     }
                 }
-                TextField("Wallet to add, 0x…", text: $proving)
-                    .font(.body.monospaced())
+                TextField("Add a wallet", text: $proving, prompt: Text("0x…"))
+                    .font(proving.isEmpty ? .body : .body.monospaced())
                     .autocorrectionDisabled()
                 if WalletAddress.isValid(proving), store.address.map(WalletAddress.isValid) == true {
                     LabeledContent("Sign this with that wallet") {
@@ -101,14 +96,30 @@ struct SettingsView: View {
                 if let linkResult { Text(linkResult).font(.callout) }
             }
             Section {
-                Button("Forget All My Answers", role: .destructive) { store.setBook(Book()) }
-                    .disabled(!store.hasAnswers)
+                LabeledContent("Who sent what") {
+                    Button("Forget All My Answers", role: .destructive) { store.setBook(Book()) }
+                        .controlSize(.small)
+                        .disabled(!store.hasAnswers)
+                }
+            } header: {
+                Text("Your Answers")
             } footer: {
-                Text("Your answers about who sent what stay on this Mac. They're only sent to the server above, to work out your numbers, and it doesn't keep them.")
+                Text("Your answers about who sent what stay on this Mac. They're only sent to the server below, to work out your numbers, and it doesn't keep them.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             spendingMoney
+            Section {
+                TextField("Server", text: $server, prompt: Text(PortfolioStore.defaultServerURL.absoluteString))
+                    .onSubmit(applyServer)
+                if let serverError {
+                    WarningText(serverError).font(.callout)
+                }
+            } footer: {
+                Text("\(AppName.current) only talks to this server, and the server is the only thing that talks to Amp. Plain HTTP only works for a server on this Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .frame(width: 480)
