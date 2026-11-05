@@ -59,6 +59,8 @@ struct MainWindow: View {
                 .inspector(isPresented: inspectorBinding) { inspector }
         }
         .frame(minWidth: Self.minimumSize.width, minHeight: Self.minimumSize.height)
+        // Only for the details opening and closing. It doesn't reach anything else that changes at another moment.
+        .motion(Motion.panel, value: navigation.target == nil)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { newWidth in
             let wasWide = width >= Self.sidebarWidth
             let isWide = newWidth >= Self.sidebarWidth
@@ -71,12 +73,23 @@ struct MainWindow: View {
             Task { await purchases.check() }
         }
         .sheet(isPresented: $navigation.isBuying) {
-            BuySheet(wallet: hotWallet, purchases: purchases) { navigation.section = .spendingMoney } addSavings: { navigation.addSavings() }
+            BuySheet(wallet: hotWallet, purchases: purchases) { navigation.showSpendingMoney() } addSavings: { navigation.addSavings() }
+        }
+        .sheet(isPresented: $navigation.isReceiving) {
+            ReceiveSheet(wallet: hotWallet) { navigation.showSpendingMoney() }
         }
         .sheet(isPresented: $navigation.isResolving) {
             ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet) { AnyView(PublishFromDeviceButton(link: $0, browsers: .real)) }
         }
-        .sheet(item: $navigation.provingWallet) { ProveWalletSheet(store: store, proof: $0) }
+        .sheet(isPresented: $navigation.isSettingUpSpendingMoney) {
+            SpendingMoneySetup(wallet: hotWallet, store: store) { navigation.isSettingUpSpendingMoney = false }
+                .frame(width: 480, height: 400)
+        }
+        .confirmationDialog(navigation.removingFromSavings.map { "Remove \($0.title) from savings?" } ?? "", isPresented: Binding(get: { navigation.removingFromSavings != nil }, set: { if !$0 { navigation.removingFromSavings = nil } }), presenting: navigation.removingFromSavings) { entry in
+            Button("Remove from Savings", role: .destructive) { store.removeFromSavings(entry, hotWallet: hotWallet) }
+        } message: { entry in
+            Text(hotWallet.removingFromSavingsMessage(entry.address))
+        }
         .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: exportName) { result in
             if case .failure(let error) = result { exportError = error.localizedDescription }
             exportDocument = nil
@@ -107,7 +120,7 @@ struct MainWindow: View {
         // Or it would open again by itself with the window.
         .onDisappear {
             navigation.isSwitchingWallet = false
-            navigation.provingWallet = nil
+            navigation.removingFromSavings = nil
         }
     }
 
@@ -150,10 +163,8 @@ struct MainWindow: View {
     /// Only what does something in this section. The leading slot is the wallet's.
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        if navigation.section != .spendingMoney {
-            ToolbarItem(placement: .navigation) {
-                WalletButton(store: store, hotWallet: hotWallet, navigation: navigation, maxWidth: width < Self.sidebarWidth ? 230 : 300)
-            }
+        ToolbarItem(placement: .navigation) {
+            WalletButton(store: store, hotWallet: hotWallet, navigation: navigation, maxWidth: width < Self.sidebarWidth ? 230 : 300)
         }
         // With no title in a small window, nothing else would hold the rest at the far end.
         ToolbarSpacer(.flexible)
@@ -179,7 +190,7 @@ struct MainWindow: View {
         if let target = navigation.target {
             ExplanationPane(target: target, store: store)
                 .safeAreaBar(edge: .top) { metricPicker(target) }
-                .inspectorColumnWidth(min: 300, ideal: 360, max: 520)
+                .inspectorColumnWidth(min: 300, ideal: 330, max: 520)
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button("Close Details", systemImage: "xmark") { navigation.target = nil }
@@ -227,9 +238,17 @@ struct MainWindow: View {
     @ViewBuilder
     private var page: some View {
         switch navigation.section {
-        case .overview: walletPage(overview)
+        case .overview:
+            if isShowingSpendingMoney {
+                spendingMoneyOverview
+            } else {
+                walletPage { portfolio in
+                    GeometryReader { window in
+                        overviewPage(pageWidth: window.size.width) { overview(portfolio, pageHeight: window.size.height) }
+                    }
+                }
+            }
         case .transactions: walletPage(transactions)
-        case .spendingMoney: HotWalletWindow(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases)
         case .taxReport:
             if store.address == nil {
                 NoWalletYet(navigation: navigation)
@@ -253,7 +272,7 @@ struct MainWindow: View {
                 if !portfolio.progress.started {
                     ContentUnavailableView("Almost There", systemImage: "hourglass", description: Text(Wording.notStarted))
                 } else if portfolio.isEmpty {
-                    NoActivity(portfolio: portfolio, navigation: navigation, notices: notices(portfolio))
+                    NoActivity(portfolio: portfolio, entry: store.walletList(hotWallet: hotWallet).entry(for: store.address), hotWallet: hotWallet, navigation: navigation, notices: notices(portfolio))
                 } else {
                     content(portfolio)
                 }
@@ -271,28 +290,61 @@ struct MainWindow: View {
         }
     }
 
-    /// Fills the window: the chart takes the height the rest doesn't use, within reason, and the page scrolls once it needs more than there is.
-    private func overview(_ portfolio: Portfolio) -> some View {
+    private var isShowingSpendingMoney: Bool {
+        // With no wallet showing and no key yet, there's nothing here for these to be equal about.
+        guard hotWallet.availability == .ready, let address = hotWallet.address else { return false }
+        return address.lowercased == store.address
+    }
+
+    /// The same numbers as any wallet, with what only this one can do around them. Those work whatever the server's doing, so they stay on the page either way.
+    private var spendingMoneyOverview: some View {
         GeometryReader { window in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    notices(portfolio)
-                    PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 40) { navigation.target = .total($0) }
-                        // Short of height, its amounts would shrink and cut off instead of the page scrolling.
-                        .fixedSize(horizontal: false, vertical: true)
-                    PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
-                    PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange) { navigation.target = .transaction($0) }
-                        .frame(height: portfolio.hasChartableData && !portfolio.isTooNewToChart ? chartHeight(window.size.height, rows: portfolio.listedPositions.count) : nil)
-                    HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
-                    HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
+            overviewPage(pageWidth: window.size.width) {
+                HotWalletDetails(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases, showsHoldings: !hasHoldingsInOverview) {
+                    walletPage { overview($0, pageHeight: window.size.height) }
+                        .frame(minHeight: hasHoldingsInOverview ? nil : 260)
                 }
+            }
+        }
+    }
+
+    private var hasHoldingsInOverview: Bool {
+        guard let portfolio else { return false }
+        return portfolio.progress.started && !portfolio.isEmpty
+    }
+
+    private func overviewPage(pageWidth: CGFloat, @ViewBuilder content: () -> some View) -> some View {
+        ScrollView {
+            content()
                 // A line of numbers gets hard to read across a very wide window.
                 .frame(maxWidth: 1280, alignment: .leading)
-                .padding(window.size.width < 520 ? 14 : 20)
+                .padding(pageWidth < 520 ? 14 : 20)
                 .frame(maxWidth: .infinity)
-            }
-            .scrollBounceBehavior(.basedOnSize)
         }
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    /// Fills the window: the chart takes the height the rest doesn't use, within reason, and the page scrolls once it needs more than there is.
+    private func overview(_ portfolio: Portfolio, pageHeight: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            notices(portfolio)
+            PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 40) { navigation.target = .total($0) }
+                // Short of height, its amounts would shrink and cut off instead of the page scrolling.
+                .fixedSize(horizontal: false, vertical: true)
+            PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
+                .arrives()
+            PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange) { navigation.target = .transaction($0) }
+                .frame(height: portfolio.hasChartableData && !portfolio.isTooNewToChart ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
+            HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
+            HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
+        }
+        // A notice, the attention box or the chart coming or going, without the page below it jumping.
+        .motion(Motion.state, value: pageShape(portfolio))
+    }
+
+    /// What can add or remove a whole block of the page.
+    private func pageShape(_ portfolio: Portfolio) -> [Bool] {
+        [portfolio.attention == nil, portfolio.hasChartableData && !portfolio.isTooNewToChart, store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
     }
 
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
@@ -316,6 +368,7 @@ struct MainWindow: View {
     private func notices(_ portfolio: Portfolio) -> some View {
         if let notice = store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) {
             Notice(.warning, notice)
+                .arrives()
         }
         if portfolio.mode == .demo {
             Notice(.info, Wording.demo)
@@ -325,9 +378,11 @@ struct MainWindow: View {
                 Notice(.warning, Wording.linkedFailed(portfolio.linkedFailed.count))
                 Button("Try Again") { store.refresh() }
             }
+            .arrives()
         }
         if !portfolio.linkedReading.isEmpty {
             Notice(.info, "Reading your other \(portfolio.linkedReading.count == 1 ? "wallet" : "wallets"). Until then, what came from \(portfolio.linkedReading.count == 1 ? "it" : "them") has an unknown cost.")
+                .arrives()
         }
     }
 }
@@ -362,6 +417,8 @@ private struct HoldingsSection: View {
     let onResolve: (String) -> Void
     @State private var width: CGFloat = 800
     @State private var showsAbout = false
+    /// Costs that were unknown until this last read. They're lit for a moment, and only ever after the server's said so.
+    @State private var justKnown: Set<String> = []
 
     private static let tableWidth: CGFloat = 560
 
@@ -391,13 +448,22 @@ private struct HoldingsSection: View {
                     .popover(isPresented: $showsAbout, arrowEdge: .bottom) { about }
             }
             if width >= Self.tableWidth {
-                HoldingsTable(portfolio: portfolio, isLive: isLive, width: width, target: $target, onResolve: onResolve)
+                HoldingsTable(portfolio: portfolio, isLive: isLive, width: width, justKnown: justKnown, target: $target, onResolve: onResolve)
                     .frame(height: HoldingsTable.height(rows: portfolio.listedPositions.count))
             } else {
                 rows
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .onChange(of: portfolio.costWatch) { old, new in
+            let arrived = new.arrivals(since: old)
+            if !arrived.isEmpty { justKnown.formUnion(arrived) }
+        }
+        .task(id: justKnown) {
+            guard !justKnown.isEmpty else { return }
+            try? await Task.sleep(for: Motion.highlight)
+            if !Task.isCancelled { justKnown = [] }
+        }
     }
 
     /// The fine print, for whoever wants it.
@@ -417,10 +483,27 @@ private struct HoldingsSection: View {
             ForEach(portfolio.listedPositions) { position in
                 Button { target = .asset(position.asset, .amount) } label: {
                     CompactHolding(position: position, currency: portfolio.currency, isLive: isLive)
+                        .padding(.horizontal, 4)
+                        .justKnown(justKnown.contains(position.asset))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(RowButtonStyle())
                 Divider()
             }
+        }
+    }
+}
+
+extension View {
+    /// A cost that's just become known, lit softly and fading by itself. The number's already rolled to what's real by then.
+    fileprivate func justKnown(_ isOn: Bool) -> some View {
+        background {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Tone.gain.style)
+                .opacity(isOn ? 0.2 : 0)
+                .padding(.horizontal, -5)
+                .padding(.vertical, -2)
+                // It comes up quickly and goes slowly.
+                .animation(isOn ? Motion.feedback : .easeOut(duration: 0.8 * Motion.slowdown), value: isOn)
         }
     }
 }
@@ -462,6 +545,7 @@ private struct HoldingsTable: View {
     let isLive: Bool
     /// As much as there is, because a hidden column doesn't give its width to the others.
     let width: CGFloat
+    let justKnown: Set<String>
     @Binding var target: ExplainTarget?
     let onResolve: (String) -> Void
     @State private var selection: Position.ID?
@@ -634,6 +718,7 @@ private struct HoldingsTable: View {
                 // A long amount gets smaller rather than losing digits.
                 .minimumScaleFactor(0.7)
                 .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
+                .justKnown(justKnown.contains(position.asset) && (metric == .average || metric == .unrealized))
         }
         .buttonStyle(NumberButtonStyle())
         .help(metric.help ?? "")
@@ -720,11 +805,25 @@ private struct NoWalletYet: View {
     }
 }
 
-/// A wallet with nothing to show. It says how far back it looked, because nothing moving lately doesn't mean it's empty.
+/// A wallet with nothing to show. One of yours offers ways to fund it. A watched one says how far back it looked, because nothing
+/// moving lately doesn't mean it's empty.
 private struct NoActivity<Notices: View>: View {
     let portfolio: Portfolio
+    let entry: WalletEntry?
+    let hotWallet: HotWallet
     let navigation: Navigation
     let notices: Notices
+
+    /// This Mac's wallet, while it can still take money.
+    private var isSpendingMoney: Bool { entry?.kind == .spendingMoney && hotWallet.canSend }
+    /// Buying lands in Spending Money, whichever wallet of yours this is.
+    private var canBuy: Bool { entry?.kind.isOwn == true && hotWallet.canSend }
+    /// A wallet of yours whose key is somewhere else. A replaced spending key's is nowhere, so nothing should go to it, and the one
+    /// Spending Money is moving to is this Mac's.
+    private var isHeldElsewhere: Bool {
+        guard let entry, entry.kind == .savings || entry.kind == .yours else { return false }
+        return !entry.isReplacedKey && !entry.isNewKey
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -732,13 +831,34 @@ private struct NoActivity<Notices: View>: View {
             ContentUnavailableView {
                 Label("Nothing Here Yet", systemImage: "tray")
             } description: {
-                Text("Nothing has moved for this wallet in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
-                    .help(Wording.coverage(portfolio))
+                description
             } actions: {
-                Button("Switch Wallet") { navigation.switchWallet() }
+                if isSpendingMoney {
+                    Button("Receive…") { navigation.isReceiving = true }
+                        .buttonStyle(.borderedProminent)
+                }
+                if canBuy {
+                    Button("Buy…") { navigation.isBuying = true }
+                }
+                if !isSpendingMoney, !canBuy {
+                    Button("Switch Wallet") { navigation.switchWallet() }
+                }
             }
             // Fills what's left, so a notice stays at the top instead of floating over it.
             .frame(maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private var description: some View {
+        if isSpendingMoney {
+            Text("Receive from another wallet or an exchange, or buy some with a card.")
+        } else if isHeldElsewhere {
+            // Never shown here: what holds the key is the only place to trust it, since a tampered page could show another.
+            Text("To receive here, copy the address from the device or app that holds its key, and check it there.")
+        } else {
+            Text("Nothing has moved for this wallet in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
+                .help(Wording.coverage(portfolio))
         }
     }
 }
@@ -777,8 +897,8 @@ private struct Welcome: View {
                 Button("Show \(HotWalletWording.title)") { store.setWallet(address.lowercased) }
                     .buttonStyle(.borderedProminent)
             } else {
-                // That section says what this is and what can go wrong, and only it makes the key.
-                Button("Create \(HotWalletWording.title)…") { navigation.section = .spendingMoney }
+                // That sheet says what this is and what can go wrong, and only it makes the key.
+                Button("Create \(HotWalletWording.title)…") { navigation.showSpendingMoney() }
                     .buttonStyle(.borderedProminent)
                     .help(HotWalletWording.summary)
             }

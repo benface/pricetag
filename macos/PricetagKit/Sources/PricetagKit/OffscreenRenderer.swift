@@ -15,6 +15,7 @@ public enum OffscreenRenderer {
     public static func png(of view: some View, size: CGSize? = nil, dark: Bool = false, timeout: TimeInterval = 5, settle: TimeInterval = 0.5, isReady: () -> Bool = { true }) throws -> Data {
         // The one policy that can't become the active app, whatever the view does.
         NSApplication.shared.setActivationPolicy(.prohibited)
+        Motion.playsEntrances = false
         let controller = NSHostingController(rootView: view)
         let window = NSWindow(contentRect: CGRect(origin: .zero, size: size ?? CGSize(width: 480, height: 320)), styleMask: .borderless, backing: .buffered, defer: true)
         window.isReleasedWhenClosed = false

@@ -7,7 +7,7 @@ struct SettingsView: View {
 
     let store: PortfolioStore
     let hotWallet: HotWallet
-    @State var tab: Pane = .general
+    @Binding var tab: Pane
     @State var server = ""
     @State var serverError: String?
     @State private var isComparing = false
@@ -22,8 +22,6 @@ struct SettingsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Stands in for a small display in a test scene.
     var displayRoom: CGFloat?
-    /// Where a menu asks for a tab.
-    var navigation: Navigation?
 
     /// What's left of the display under the title bar and the tabs.
     private static var roomOnDisplay: CGFloat {
@@ -49,11 +47,6 @@ struct SettingsView: View {
             if rpcError == nil { rpc = hotWallet.settings.rpcURL.absoluteString }
         }
         .task { await store.refreshRules() }
-        .onChange(of: navigation?.settingsPane, initial: true) { _, pane in
-            guard let pane else { return }
-            tab = pane
-            navigation?.settingsPane = nil
-        }
         .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
         // It read one wallet's numbers once, and replacing a key can change the wallet behind it.
         .onChange(of: store.address) { isComparing = false }

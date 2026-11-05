@@ -585,6 +585,25 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.settings.sweepDestination == destination)
     }
 
+    @Test func aDevicesOtherAccountCanBeUnlinkedButNothingElseCan() async throws {
+        let rig = await Rig(snapshot(eth: oneEth))
+        let other = "0x" + String(repeating: "ab", count: 20)
+        rig.wallet.linkDeviceAccounts([other])
+        let before = rig.wallet.settings.coldWallets
+        rig.wallet.unlinkDeviceAccount(try #require(EthereumAddress(other)))
+        #expect(!rig.wallet.linkedWallets.contains(other))
+        rig.wallet.unlinkDeviceAccount(hotAddress)
+        #expect(rig.wallet.linkedWallets.contains(hotAddress.lowercased), "this only ever touches a device's other accounts")
+        #expect(rig.wallet.settings.coldWallets == before)
+    }
+
+    @Test func removingASavingsWalletSaysWhereSweepsGoNext() {
+        let kept = "It stays in Yours, with what's on it."
+        #expect(HotWalletWording.removingFromSavings(sweepsNowGoTo: "Trezor", wasDestination: false, cap: "$25") == kept)
+        #expect(HotWalletWording.removingFromSavings(sweepsNowGoTo: "Trezor", wasDestination: true, cap: "$25") == "Sweeps go to Trezor from now on. \(kept)")
+        #expect(HotWalletWording.removingFromSavings(sweepsNowGoTo: nil, wasDestination: true, cap: "$25").hasPrefix("Sweeps stop"))
+    }
+
     @Test func settingsSavedBeforeDeviceAccountsStillLoad() throws {
         var settings = WalletSettings()
         settings.add(ColdWallet(address: coldAddress, name: "Ledger", confirmedOnDeviceAt: Date(timeIntervalSince1970: 0)))
@@ -1303,13 +1322,14 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     }
 
     @Test func topUpNeverPromisesASweepWithNoSavings() {
-        for sentence in [HotWalletWording.topUpTitle(hasDestination: false), HotWalletWording.topUpRoom("$5.00", hasDestination: false), HotWalletWording.topUpAtCap("$25.00", hasDestination: false), HotWalletWording.topUpNeedsGas(hasDestination: false)] {
+        for sentence in [HotWalletWording.topUpTitle(hasDestination: false), HotWalletWording.topUpRoom("$5.00", hasDestination: false), HotWalletWording.topUpAtCap("$25.00", hasDestination: false), HotWalletWording.topUpNeedsGas(hasDestination: false), HotWalletWording.receiveNote(cap: "$25.00", hasDestination: false)] {
             #expect(!sentence.contains("swept"))
             #expect(!sentence.contains("sweeps"))
             #expect(!sentence.contains("from Savings"))
         }
         #expect(HotWalletWording.topUpRoom("$5.00", hasDestination: true).contains("swept back to your savings"))
         #expect(HotWalletWording.topUpAtCap("$25.00", hasDestination: true).contains("swept straight back"))
+        #expect(HotWalletWording.receiveNote(cap: "$25.00", hasDestination: true).contains("swept to your savings"))
     }
 
     @Test func overTheCapWithNoColdWalletSaysSoOnce() async throws {

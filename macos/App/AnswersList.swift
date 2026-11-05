@@ -8,7 +8,9 @@ struct AnswersList: View {
     @State private var isConfirmingForget = false
 
     var body: some View {
-        let entries = store.answerEntries
+        let all = store.answerEntries
+        // What was paid for what an exchange account sent sits under that account, each one with its own date and Remove.
+        let entries = all.filter { if case .exchangeCost = $0.said { false } else { true } }
         Section {
             if entries.isEmpty {
                 Text("Nothing yet. When the app can't tell what you paid for something, it asks, and what you say is listed here.")
@@ -16,7 +18,7 @@ struct AnswersList: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(entries) { entry in
-                AnswerRow(store: store, entry: entry)
+                AnswerRow(store: store, entry: entry, costs: costs(of: entry, in: all))
             }
         } header: {
             Text("Your Answers")
@@ -35,77 +37,116 @@ struct AnswersList: View {
                 }
         }
     }
+
+    /// In the order they were given.
+    private func costs(of entry: AnswerEntry, in all: [AnswerEntry]) -> [AnswerEntry] {
+        guard case .sender(let address, .myExchange) = entry.said else { return [] }
+        return all
+            .compactMap { cost -> (Int, AnswerEntry)? in
+                guard case .exchangeCost(let sender, let index, _) = cost.said, sender == address else { return nil }
+                return (index, cost)
+            }
+            .sorted { $0.0 < $1.0 }
+            .map(\.1)
+    }
 }
 
 private struct AnswerRow: View {
     let store: PortfolioStore
     let entry: AnswerEntry
+    /// What was paid for what this exchange account sent.
+    var costs: [AnswerEntry] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            LabeledContent {
-                HStack(spacing: 6) {
-                    control
-                    Button("Remove Answer", systemImage: "minus.circle", role: .destructive) { store.removeAnswer(entry) }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
-                        .help("Takes this answer back, so it's asked again")
-                }
-            } label: {
-                Text(title).textSelection(.enabled)
-                if let detail { Text(detail) }
-            }
-            .help(store.answeredAt(entry).map { "Answered \(Format.time($0))" } ?? "")
-            if case .sender(_, let answer) = entry.said, answer.kind == .myExchange {
-                exchangeCosts(answer.costs ?? [])
+            line(entry, title: title, help: removeHelp)
+            if case .sender(_, .myExchange) = entry.said {
+                exchangeCosts
             }
         }
+    }
+
+    /// One answer, with what changes it and what takes it back.
+    private func line(_ entry: AnswerEntry, title: String, help: String) -> some View {
+        LabeledContent {
+            HStack(spacing: 6) {
+                control(entry)
+                Button("Remove Answer", systemImage: "minus.circle", role: .destructive) { store.removeAnswer(entry) }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help(help)
+            }
+        } label: {
+            Text(title).textSelection(.enabled)
+            if let detail = detail(entry) { Text(detail) }
+        }
+        .help(store.answeredAt(entry).map { "Answered \(Format.time($0))" } ?? "")
         .contextMenu {
             Button("Remove Answer", role: .destructive) { store.removeAnswer(entry) }
         }
     }
 
+    private var removeHelp: String {
+        if case .sender(_, .myExchange) = entry.said { return "Takes back this answer and what you paid, so it's asked again" }
+        return "Takes this answer back, so it's asked again"
+    }
+
     @ViewBuilder
-    private var control: some View {
+    private func control(_ entry: AnswerEntry) -> some View {
         switch entry.said {
-        case .sender(_, let answer):
-            Picker("Answer", selection: Binding(get: { Ownership(answer.kind) }, set: { store.changeAnswer(entry, to: $0.answer.kind) })) {
+        case .sender(_, let kind):
+            Picker("Answer", selection: Binding(get: { Ownership(kind) }, set: { store.changeAnswer(entry, to: $0.answer.kind) })) {
                 ForEach(Ownership.allCases) { Text($0.title).tag($0) }
             }
             .labelsHidden()
             .fixedSize()
         case .cost(_, let money):
             CostField(money: money) { store.changeCost(entry, to: $0) }
+        case .exchangeCost(_, _, let cost):
+            CostField(money: Money(micros: cost.micros, currency: cost.currency)) { store.changeCost(entry, to: $0) }
         case .imported:
             EmptyView()
         }
     }
 
-    /// What was paid for what came from an exchange account, one line for each time it was said.
-    private func exchangeCosts(_ costs: [ExchangeCost]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    /// What was paid for what came from an exchange account, one answer for each time it was asked, with where that arrived.
+    private var exchangeCosts: some View {
+        VStack(alignment: .leading, spacing: 8) {
             if costs.isEmpty {
                 Text("What you paid isn't said yet, so it's asked next time.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            ForEach(Array(costs.enumerated()), id: \.offset) { index, cost in
-                LabeledContent("Paid for its \(cost.asset)") {
-                    CostField(money: Money(micros: cost.micros, currency: cost.currency)) { store.changeCost(entry, index: index, to: $0) }
+            ForEach(costs) { cost in
+                if case .exchangeCost(_, _, let paid) = cost.said {
+                    line(cost, title: "Paid for \(store.about(cost) ?? "its \(paid.asset)")", help: "Takes back what you paid for this, so it's asked again. It stays your exchange account.")
+                        .font(.callout)
                 }
-                .font(.callout)
             }
         }
         .padding(.leading, 12)
+    }
+
+    /// Where what a cost covers arrived: one place when there's one, or how many transfers.
+    private func place(of receipts: [CostReceipt]) -> String? {
+        let subjects = receipts.compactMap { CostSubject(wallet: $0.wallet, legId: $0.legId) }
+        let places = Set(subjects.map(\.place))
+        guard let first = subjects.first else { return nil }
+        let place = places.count == 1 ? first.place.prefix(1).uppercased() + first.place.dropFirst() : "\(receipts.count) transfers"
+        let wallets = Set(subjects.map(\.wallet))
+        guard wallets.count == 1, !isShowing(first.wallet) else { return place }
+        return "\(place), in \(name(of: first.wallet) ?? Format.shortHash(first.wallet))"
     }
 
     private var title: String {
         switch entry.said {
         case .sender(let address, _):
             return name(of: address).map { "\($0) · \(Format.shortHash(address))" } ?? Format.shortHash(address)
+        case .exchangeCost(_, _, let cost):
+            return cost.asset
         case .cost(let key, _):
             guard let subject = CostSubject(key: key) else { return key }
-            let place = subject.transaction.map { "in transaction \(Format.shortHash($0))" } ?? subject.block.map { "that arrived in block \(Format.block($0))" } ?? ""
+            let place = subject.place
             let wallet = isShowing(subject.wallet) ? "" : ", in \(name(of: subject.wallet) ?? Format.shortHash(subject.wallet))"
             return "\(subject.asset) \(place)\(wallet)"
         case .imported(let withdrawals):
@@ -113,12 +154,15 @@ private struct AnswerRow: View {
         }
     }
 
-    private var detail: String? {
+    private func detail(_ entry: AnswerEntry) -> String? {
         var parts: [String] = []
-        if case .imported(let withdrawals) = entry.said {
+        switch entry.said {
+        case .imported(let withdrawals):
             parts.append(withdrawals.count == 1 ? "1 withdrawal" : "\(Format.block(withdrawals.count)) withdrawals")
-        } else if let about = store.about(entry) {
-            parts.append(about)
+        case .exchangeCost(_, _, let cost):
+            if let place = place(of: cost.receipts) { parts.append(place) }
+        case .sender, .cost:
+            if let about = store.about(entry) { parts.append(about) }
         }
         if let date = store.answeredAt(entry) { parts.append(date.formatted(.dateTime.month(.abbreviated).day().locale(Locale(identifier: "en_US")))) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")

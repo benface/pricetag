@@ -53,8 +53,7 @@ private final class TestClock: @unchecked Sendable {
 
     @Test func datesAndWhatItWasAboutStayOnThisMacAndAreNeverSent() async throws {
         let (store, defaults) = try makeStore()
-        store.describe(AnswerEntry.senderID(sender), as: "0.002 ETH from Coinbase")
-        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil), about: [AnswerEntry.senderID(sender): "0.002 ETH from Coinbase"])
         let reopened = PortfolioStore(defaults: defaults, makeSource: { _ in BookSource([]) })
         let answer = try entry(reopened, AnswerEntry.senderID(sender))
         #expect(reopened.answeredAt(answer) != nil)
@@ -66,12 +65,13 @@ private final class TestClock: @unchecked Sendable {
 
     @Test func whatNoAnswerSaysAnyMoreIsDropped() throws {
         let (store, defaults) = try makeStore()
-        store.describe(AnswerEntry.senderID(sender), as: "250 DAI")
-        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil), about: [AnswerEntry.senderID(sender): "250 DAI"])
         store.removeAnswer(try entry(store, AnswerEntry.senderID(sender)))
-        #expect(store.answerDetails.about[AnswerEntry.senderID(sender)] != nil, "Undo can still bring it back")
+        #expect(store.answerDetails == AnswerDetails())
         let reopened = PortfolioStore(defaults: defaults, makeSource: { _ in BookSource([]) })
         #expect(reopened.answerDetails == AnswerDetails(), "nothing can bring it back after a relaunch")
+        store.undo()
+        #expect(store.about(try entry(store, AnswerEntry.senderID(sender))) == "250 DAI", "Undo brings it back with the answer")
     }
 
     @Test func removingAnAnswerAsksItsQuestionAgainAndUndoBringsItBack() throws {
@@ -100,7 +100,7 @@ private final class TestClock: @unchecked Sendable {
 
         let receipt = CostReceipt(wallet: wallet, legId: "unseen:1:ETH", asset: "ETH", units: "1")
         store.setBook(store.book.enteringExchangeCosts(other, receipts: [receipt], amounts: ["ETH": Money(micros: "5100000", currency: .USD)], focus: nil))
-        store.changeCost(try entry(store, AnswerEntry.senderID(other)), index: 0, to: "5200000")
+        store.changeCost(try entry(store, AnswerEntry.exchangeCostID(sender: other, asset: "ETH", receipts: [receipt])), to: "5200000")
         let costs = try #require(store.book.senders[other]?.costs)
         #expect(costs.map(\.micros) == ["5200000"])
         #expect(costs.first?.receipts == [receipt], "it still covers what it covered")
@@ -140,6 +140,127 @@ private final class TestClock: @unchecked Sendable {
         model.answer(.someoneElse)
         let arrived = question.arrivals.map { "\(Format.amount($0.units, decimals: $0.decimals)) \($0.asset)" }.formatted(.list(type: .and))
         #expect(store.about(try entry(store, AnswerEntry.senderID(sender))) == arrived)
+    }
+
+    // Two withdrawals of ETH from one exchange account, in different blocks, each asked about and answered on its own.
+    private func twoWithdrawals(_ store: PortfolioStore, clock: TestClock) -> (first: CostReceipt, second: CostReceipt) {
+        let first = CostReceipt(wallet: wallet, legId: "unseen:53500120:ETH", asset: "ETH", units: "2100000000000000")
+        let second = CostReceipt(wallet: wallet, legId: "unseen:53521400:ETH", asset: "ETH", units: "1850000000000000")
+        store.setBook(store.book.answering(other, SenderAnswer(kind: .myExchange), focus: nil))
+        for receipt in [first, second] {
+            clock.date += 60
+            let id = AnswerEntry.exchangeCostID(sender: other, asset: "ETH", receipts: [receipt])
+            store.setBook(store.book.enteringExchangeCosts(other, receipts: [receipt], amounts: ["ETH": Money(micros: "5100000", currency: .USD)], focus: nil), about: [id: receipt == first ? "0.0021 ETH" : "0.00185 ETH"])
+        }
+        return (first, second)
+    }
+
+    @Test func eachTimeAnExchangeAccountWasPaidForIsItsOwnAnswer() throws {
+        let clock = TestClock()
+        let (store, _) = try makeStore(clock: clock)
+        let (first, second) = twoWithdrawals(store, clock: clock)
+        let ids = [first, second].map { AnswerEntry.exchangeCostID(sender: other, asset: "ETH", receipts: [$0]) }
+        #expect(ids[0] != ids[1])
+        #expect(store.about(try entry(store, ids[0])) == "0.0021 ETH")
+        #expect(store.about(try entry(store, ids[1])) == "0.00185 ETH")
+        #expect(store.answeredAt(try entry(store, ids[0])) == Date(timeIntervalSince1970: 1_793_750_460))
+        #expect(store.answeredAt(try entry(store, ids[1])) == Date(timeIntervalSince1970: 1_793_750_520))
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(other))) == Date(timeIntervalSince1970: 1_793_750_400), "paying for what it sent doesn't make it a new answer about who it is")
+        let subject = try #require(CostSubject(wallet: first.wallet, legId: first.legId))
+        #expect(subject.place == "in block 53,500,120")
+    }
+
+    @Test(arguments: [0, 1]) func takingBackOneCostKeepsTheAccountAndTheOther(_ removed: Int) throws {
+        let clock = TestClock()
+        let (store, _) = try makeStore(clock: clock)
+        let receipts = twoWithdrawals(store, clock: clock)
+        let both = [receipts.first, receipts.second]
+        let ids = both.map { AnswerEntry.exchangeCostID(sender: other, asset: "ETH", receipts: [$0]) }
+        let dates = try ids.map { store.answeredAt(try entry(store, $0)) }
+        clock.date += 60
+        store.removeAnswer(try entry(store, ids[removed]))
+        let kept = 1 - removed
+        #expect(store.book.senders[other]?.kind == .myExchange)
+        #expect(store.book.senders[other]?.costs?.map(\.receipts) == [[both[kept]]])
+        #expect(!store.answerEntries.contains { $0.id == ids[removed] })
+        #expect(store.answeredAt(try entry(store, ids[kept])) == dates[kept], "the other keeps its date")
+        #expect(store.about(try entry(store, ids[kept])) == (kept == 0 ? "0.0021 ETH" : "0.00185 ETH"))
+        store.undo()
+        #expect(store.book.senders[other]?.costs?.map(\.receipts) == [[both[0]], [both[1]]])
+        #expect(try ids.map { store.answeredAt(try entry(store, $0)) } == dates)
+    }
+
+    @Test func takingBackTheLastCostKeepsItAnExchangeAccount() throws {
+        let (store, _) = try makeStore()
+        let receipt = CostReceipt(wallet: wallet, legId: "unseen:1:ETH", asset: "ETH", units: "1")
+        store.setBook(store.book.enteringExchangeCosts(other, receipts: [receipt], amounts: ["ETH": Money(micros: "5100000", currency: .USD)], focus: nil))
+        store.removeAnswer(try entry(store, AnswerEntry.exchangeCostID(sender: other, asset: "ETH", receipts: [receipt])))
+        #expect(store.book.senders[other] == SenderAnswer(kind: .myExchange), "so what was paid is asked again")
+    }
+
+    @Test func changingOneCostLeavesTheOtherAlone() throws {
+        let clock = TestClock()
+        let (store, _) = try makeStore(clock: clock)
+        let (first, second) = twoWithdrawals(store, clock: clock)
+        store.changeCost(try entry(store, AnswerEntry.exchangeCostID(sender: other, asset: "ETH", receipts: [second])), to: "4000000")
+        #expect(store.book.senders[other]?.costs?.map(\.micros) == ["5100000", "4000000"])
+        #expect(store.book.senders[other]?.costs?.map(\.receipts) == [[first], [second]])
+    }
+
+    @Test func undoPutsBackTheDateOfARepeatedAnswer() throws {
+        let clock = TestClock()
+        let (store, _) = try makeStore(clock: clock)
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        clock.date += 60
+        store.changeAnswer(try entry(store, AnswerEntry.senderID(sender)), to: .mine)
+        clock.date += 60
+        store.changeAnswer(try entry(store, AnswerEntry.senderID(sender)), to: .someoneElse)
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_520))
+        store.undo()
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_460))
+        store.undo()
+        #expect(store.book.senders[sender] == .someoneElse)
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_400))
+    }
+
+    @Test func undoPutsBackTheDateOfAnAnswerGivenAgain() throws {
+        let clock = TestClock()
+        let (store, _) = try makeStore(clock: clock)
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        clock.date += 60
+        store.removeAnswer(try entry(store, AnswerEntry.senderID(sender)))
+        clock.date += 60
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_520))
+        store.undo()
+        store.undo()
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_400))
+    }
+
+    @Test func anAnswerFromBeforeDatesStaysUndatedThroughUndo() throws {
+        let defaults = UserDefaults(suiteName: "answers-tests-\(UUID().uuidString)")!
+        defaults.set(wallet, forKey: "wallet")
+        defaults.set(try JSONEncoder().encode(Book().answering(sender, .someoneElse, focus: nil)), forKey: "answers")
+        let source = BookSource([try demoPortfolio()])
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source })
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == nil)
+        store.changeAnswer(try entry(store, AnswerEntry.senderID(sender)), to: .mine)
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) != nil)
+        store.undo()
+        #expect(store.book.senders[sender] == .someoneElse)
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == nil, "it never had one, so it doesn't get today's")
+    }
+
+    @Test func takingBackAWalletMoveKeepsItsDate() throws {
+        let clock = TestClock()
+        let (store, _) = try makeStore(clock: clock)
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        clock.date += 60
+        let snapshot = store.changeWallet(sender) { store.moveToYours(sender) }
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_460))
+        store.restore(snapshot)
+        #expect(store.book.senders[sender] == .someoneElse)
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_400))
     }
 
     @Test func aCostKeySaysWhatItsAbout() throws {
