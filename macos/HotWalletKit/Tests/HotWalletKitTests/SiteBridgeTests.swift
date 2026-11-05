@@ -34,6 +34,7 @@ private struct SiteRig {
     let signer: FakeSigner
     let stateStore: MemoryStateStore
     let presence: CountingPresence
+    let portfolios: ScriptedPortfolios
     let bridge: SiteBridge
     let connection = UUID()
 
@@ -53,6 +54,7 @@ private struct SiteRig {
         self.signer = signer
         self.stateStore = stateStore
         self.presence = presence
+        self.portfolios = portfolios
         wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: presence, portfolioSource: { portfolios }, makeChain: { _ in chain }, now: now)
         bridge = SiteBridge(wallet: wallet, now: now)
     }
@@ -524,6 +526,24 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         // Replacing the key signs its own moves, as it runs. None of them are this.
         #expect(await rig.signer.signed.allSatisfy { $0.to != EthereumAddress(recipient) })
         #expect(rig.wallet.records.allSatisfy { $0.reason != .site })
+    }
+
+    /// History is read outside the line, so an alarm can arrive while an approved transaction is waiting on the node.
+    @Test func anAlarmWhileItsWaitingOnTheNodeStopsIt() async {
+        let rig = SiteRig()
+        await rig.connect()
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        await rig.chain.hold(snapshots: true)
+        await rig.bridge.approve(approval.id)
+        await waitForHeldCall(rig)
+        await rig.portfolios.set(.success(portfolio(outgoing: ["0xabc"])))
+        await rig.wallet.readHistory()
+        #expect(rig.wallet.alarm != nil)
+        await rig.chain.release()
+
+        #expect(code(await task.value) == -32000)
+        #expect(await rig.signer.signed.isEmpty)
+        #expect(rig.wallet.records.isEmpty)
     }
 
     @Test func sitesFailingOnchainDontHoldUpSweeps() async throws {

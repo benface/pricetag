@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { formatSignedMoney, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
+import type { Book } from "../core/book.ts"
 import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, type TaxCountryCode, type TaxScope } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME } from "../core/wording.ts"
 
@@ -31,8 +32,9 @@ function remember(key: string, value: string | null) {
   else localStorage.setItem(key, value)
 }
 
-async function fetchReport(address: string, query: URLSearchParams, signal: AbortSignal): Promise<TaxReportResponse> {
-  const response = await fetch(`/api/tax-report/${address}?${query}`, { signal })
+/** A post, because answers don't belong in a URL, where they'd end up in logs. */
+async function fetchReport(address: string, request: object, signal: AbortSignal): Promise<TaxReportResponse> {
+  const response = await fetch(`/api/tax-report/${address}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request), signal })
   const body = (await response.json().catch(() => ({}))) as TaxReportResponse & { error?: string }
   if (!response.ok) throw new Error(body.error ?? "Couldn't build the report.")
   return body
@@ -47,7 +49,7 @@ function download({ csv, filename }: TaxReportResponse) {
   URL.revokeObjectURL(url)
 }
 
-export function TaxPanel({ address, currency, onClose }: { address: string; currency: CurrencyCode; onClose: () => void }) {
+export function TaxPanel({ address, currency, book, onClose }: { address: string; currency: CurrencyCode; book: Book; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const close = useRef<HTMLButtonElement>(null)
   const [country, setCountry] = useState(() => readCountry(currency))
@@ -64,7 +66,6 @@ export function TaxPanel({ address, currency, onClose }: { address: string; curr
   const scope = chosenScope ?? rules.scope
   const { others, bad: badOther } = useMemo(() => readOtherWallets(othersText, address), [othersText, address])
   const isDemo = address === "demo"
-  const also = badOther ? "" : others.join(",")
 
   // As in `ExplainPanel`: a native modal keeps focus inside, and closing by unmounting doesn't restore it.
   useLayoutEffect(() => {
@@ -84,9 +85,7 @@ export function TaxPanel({ address, currency, onClose }: { address: string; curr
     const controller = new AbortController()
     setLoading(true)
     setError(null)
-    const query = new URLSearchParams({ country, method, scope, currency })
-    if (also) query.set("also", also)
-    fetchReport(address, query, controller.signal)
+    fetchReport(address, { country, method, scope, currency, also: others, book }, controller.signal)
       .then((next) => {
         setReport(next)
         setLoading(false)
@@ -99,7 +98,7 @@ export function TaxPanel({ address, currency, onClose }: { address: string; curr
         setLoading(false)
       })
     return () => controller.abort()
-  }, [address, country, method, scope, currency, also, badOther])
+  }, [address, country, method, scope, currency, others, badOther, book])
 
   const chooseMethod = (next: Method | null) => {
     remember(METHOD_KEY, next)

@@ -1,12 +1,12 @@
 {
   "kind": "manifest",
   "dependencies": {
-    "pricetag": "benface/pricetag@0.0.1"
+    "pricetag": "benface/pricetag@0.1.0"
   },
   "tables": {
     "reference_prices": {
       "input": {
-        "sql": "SELECT block_num, timestamp,\n  named_struct('c0', get_field(eth_round, 'c0'), 'c1', self.pt_cautious(get_field(eth_round, 'c1')), 'c2', get_field(eth_round, 'c2'), 'c3', get_field(eth_round, 'c3'), 'c4', get_field(eth_round, 'c4')) AS eth_round, usdc_round\nFROM pricetag.reference_prices WHERE block_num() >= 53515446"
+        "sql": "SELECT block_num, timestamp, self.pt_cautious(eth_answer) AS eth_answer, usdc_answer, eth_tx, usdc_tx\nFROM pricetag.reference_prices WHERE block_num() >= 53515446"
       },
       "schema": {
         "arrow": {
@@ -42,120 +42,28 @@
               "nullable": false
             },
             {
-              "name": "eth_round",
+              "name": "eth_answer",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "usdc_answer",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "eth_tx",
               "type": {
-                "Struct": [
-                  {
-                    "name": "c0",
-                    "data_type": {
-                      "Decimal128": [
-                        38,
-                        0
-                      ]
-                    },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c1",
-                    "data_type": "Utf8",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c2",
-                    "data_type": "Utf8",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c3",
-                    "data_type": "Utf8",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c4",
-                    "data_type": {
-                      "Decimal128": [
-                        38,
-                        0
-                      ]
-                    },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  }
-                ]
+                "FixedSizeBinary": 32
               },
               "nullable": true
             },
             {
-              "name": "usdc_round",
+              "name": "usdc_tx",
               "type": {
-                "Struct": [
-                  {
-                    "name": "c0",
-                    "data_type": {
-                      "Decimal128": [
-                        38,
-                        0
-                      ]
-                    },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c1",
-                    "data_type": "Utf8",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c2",
-                    "data_type": "Utf8",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c3",
-                    "data_type": "Utf8",
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  },
-                  {
-                    "name": "c4",
-                    "data_type": {
-                      "Decimal128": [
-                        38,
-                        0
-                      ]
-                    },
-                    "nullable": true,
-                    "dict_id": 0,
-                    "dict_is_ordered": false,
-                    "metadata": {}
-                  }
-                ]
+                "FixedSizeBinary": 32
               },
-              "nullable": false
+              "nullable": true
             }
           ]
         }
@@ -164,7 +72,7 @@
     },
     "priced_legs": {
       "input": {
-        "sql": "SELECT p.block_num, p.timestamp, p.tx_hash, p.account,\n  p.sold_token, p.sold_amount, p.bought_token, p.bought_amount,\n  get_field(r.eth_round, 'c1') AS eth_usd, get_field(r.usdc_round, 'c1') AS usdc_usd,\n  self.pt_price(evm_decode_hex(p.sold_token), p.sold_amount, evm_decode_hex(p.bought_token), p.bought_amount, get_field(r.eth_round, 'c1'), get_field(r.usdc_round, 'c1')) AS priced\nFROM pricetag.single_pairs p\nJOIN self.reference_prices r ON p._block_num = r._block_num\nWHERE block_num() >= 53515446"
+        "sql": "SELECT p.block_num, p.timestamp, p.tx_hash, p.account,\n  p.sold_token, p.sold_amount, p.bought_token, p.bought_amount,\n  r.eth_answer AS eth_usd, r.usdc_answer AS usdc_usd, r.eth_tx, r.usdc_tx,\n  self.pt_price(evm_decode_hex(p.sold_token), p.sold_amount, evm_decode_hex(p.bought_token), p.bought_amount, r.eth_answer, r.usdc_answer) AS priced\nFROM pricetag.single_pairs p\nJOIN self.reference_prices r ON p._block_num = r._block_num\nWHERE block_num() >= 53515446"
       },
       "schema": {
         "arrow": {
@@ -245,6 +153,20 @@
             {
               "name": "usdc_usd",
               "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "eth_tx",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": true
+            },
+            {
+              "name": "usdc_tx",
+              "type": {
+                "FixedSizeBinary": 32
+              },
               "nullable": true
             },
             {

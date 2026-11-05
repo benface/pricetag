@@ -302,6 +302,46 @@ describe("a claim that cancels out what left", () => {
   })
 })
 
+describe("what's kept of a settled transaction's logs", () => {
+  const logged = (amount: bigint, logIndex: number) => ({ ...claim(amount), log_index: logIndex })
+  const sold = row(CBBTC, "debit", CB_SOLD, "erc20")
+  const evidence = (rows: LegRow[], received: bigint) => settle(rows, balances(5000n, 5000n - 100n + received)).rows
+
+  it("keeps the withdrawal's amount next to a smaller credit, on the transaction's rows", () => {
+    const rows = evidence([gas(100n), sold, logged(1000n, 7)], 900n)
+    assert.deepEqual(creditsOf(rows), [["0xcb", "900", true]])
+    for (const r of rows) assert.deepEqual(r.settledCredit, { received: "900", withdrawals: [{ logIndex: 7, amount: "1000" }] })
+    const legs = buildPricedLegs({ account: ME, rows, references, priced: [] })
+    assert.deepEqual(legs.map((l) => l.settledCredit?.received), [undefined, "900", "900"])
+  })
+
+  it("keeps each withdrawal when they combine into one credit", () => {
+    const rows = evidence([gas(100n), sold, logged(600n, 7), logged(400n, 9)], 900n)
+    assert.deepEqual(creditsOf(rows), [["0xcb", "900", true]])
+    assert.deepEqual(rows[0]!.settledCredit!.withdrawals, [{ logIndex: 7, amount: "600" }, { logIndex: 9, amount: "400" }])
+  })
+
+  it("keeps them when the whole claim holds, whose rows don't change", () => {
+    const rows = evidence([gas(100n), sold, logged(600n, 7), logged(400n, 9)], 1000n)
+    assert.deepEqual(creditsOf(rows), [["0xcb", "600", true], ["0xcb", "400", true]])
+    assert.deepEqual(rows[0]!.settledCredit, { received: "1000", withdrawals: [{ logIndex: 7, amount: "600" }, { logIndex: 9, amount: "400" }] })
+  })
+
+  it("keeps them when nothing arrived and the credit is gone", () => {
+    const rows = evidence([gas(100n), sold, logged(1000n, 7)], 0n)
+    assert.deepEqual(creditsOf(rows), [])
+    const [leg] = buildPricedLegs({ account: ME, rows, references, priced: [] }).filter((l) => l.kind !== "gas")
+    assert.deepEqual(leg!.settledCredit, { received: "0", withdrawals: [{ logIndex: 7, amount: "1000" }] })
+  })
+
+  it("has nothing to say about a credit that wasn't settled, or a transaction with no claim", () => {
+    const unsettled = settle([gas(100n), sold, logged(1000n, 7)], new Map()).rows
+    assert.ok(unsettled.every((r) => r.settledCredit === undefined))
+    const another = [gas(100n), sold, logged(1000n, 7), row(USDC_ADDRESS, "credit", 5n, "erc20", "0xother", BLOCK - 1)]
+    assert.equal(evidence(another, 900n).find((r) => r.tx_hash === "0xother")!.settledCredit, undefined)
+  })
+})
+
 describe("the priced rows of a settled transaction", () => {
   const SWAP_ROW = (bought: bigint): PricedRow => ({
     block_num: BLOCK,

@@ -8,10 +8,6 @@ import KeyVault
 nonisolated enum HotWalletDebug {
     private static let service = "com.benface.pricetag.hot-wallet.self-test"
 
-    static let opensWindow = CommandLine.arguments.contains("--open-spending-money")
-
-    static let sheet = value(after: "--sheet")
-
     /// No window opens by itself, and nothing activates, so a scripted run doesn't interrupt anyone.
     static let isQuiet = CommandLine.arguments.contains("--quiet")
 

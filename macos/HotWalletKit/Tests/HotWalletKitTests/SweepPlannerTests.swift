@@ -367,9 +367,18 @@ private func plan(_ holdings: [Holding], cap: UInt128 = cap, fees: FeeQuote = ch
             let sanity: Sanity?
         }
 
+        struct TokenFeed: Decodable {
+            let address: String
+            let description: String
+            let decimals: Int
+            let answersInEth: Bool
+            let maxAgeSeconds: UInt128
+        }
+
         let tokens: [Entry]
         let ethUsdFeed: String
         let usdcUsdFeed: String
+        let feeds: [String: TokenFeed]
     }
 
     private struct Sanity: Decodable {
@@ -388,6 +397,20 @@ private func plan(_ holdings: [Holding], cap: UInt128 = cap, fees: FeeQuote = ch
         }
         #expect(fixture.ethUsdFeed == Base.ethUsdFeed.lowercased)
         #expect(fixture.usdcUsdFeed == Base.usdcUsdFeed.lowercased)
+    }
+
+    @Test func feedsMatchTheServers() throws {
+        let url = try #require(Bundle.module.url(forResource: "tokens", withExtension: "json", subdirectory: "Resources"))
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        #expect(Set(fixture.feeds.keys) == Set(Oracle.others.keys))
+        for (asset, entry) in fixture.feeds {
+            let feed = try #require(Oracle.others[asset])
+            #expect(entry.address == feed.address.lowercased, "\(asset)")
+            #expect(entry.description == feed.description, "\(asset)")
+            #expect(entry.decimals == feed.decimals, "\(asset)")
+            #expect(entry.answersInEth == feed.answersInEth, "\(asset)")
+            #expect(entry.maxAgeSeconds == feed.maxAgeSeconds, "\(asset)")
+        }
     }
 
     @Test func everyTokenHasAFeed() {

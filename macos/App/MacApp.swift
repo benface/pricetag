@@ -51,17 +51,9 @@ struct MacApp: App {
         }
     }
 
-    private var opensSpendingMoney: Bool {
-        #if DEBUG
-        HotWalletDebug.opensWindow
-        #else
-        false
-        #endif
-    }
-
     private var opensAtLaunch: Bool {
         #if DEBUG
-        !opensSpendingMoney && !HotWalletDebug.isQuiet
+        !HotWalletDebug.isQuiet
         #else
         true
         #endif
@@ -76,7 +68,7 @@ struct MacApp: App {
         .menuBarExtraStyle(.window)
 
         Window(AppName.current, id: WindowID.main) {
-            MainWindow(store: store, navigation: navigation)
+            MainWindow(store: store, navigation: navigation, noteWriter: hotWallet)
                 .holdsDockPresence()
         }
         .defaultSize(width: 1120, height: 760)
@@ -171,11 +163,6 @@ struct MenuBarLabel: View {
 
     var body: some View {
         label
-            #if DEBUG
-            .task {
-                if HotWalletDebug.opensWindow { openWindow(id: WindowID.hotWallet) }
-            }
-            #endif
             // In the label because it's the one view that's always there. A possibly stolen key can't wait for someone to look.
             .onChange(of: alarm?.findings.count) { _, count in
                 guard count != nil else { return }

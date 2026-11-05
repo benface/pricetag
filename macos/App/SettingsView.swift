@@ -61,10 +61,14 @@ struct SettingsView: View {
             Section("Your Other Wallets") {
                 ForEach(store.book.linkedWallets.filter { $0 != store.address }, id: \.self) { wallet in
                     LabeledContent(Format.shortHash(wallet)) {
-                        Button("Unlink") {
-                            var next = store.book
-                            next.senders[wallet] = nil
-                            store.setBook(next)
+                        if store.linkedWallets.contains(wallet) {
+                            Text("In this wallet").foregroundStyle(.secondary)
+                        } else {
+                            Button("Unlink") {
+                                var next = store.book
+                                next.senders[wallet] = nil
+                                store.setBook(next)
+                            }
                         }
                     }
                 }
@@ -98,7 +102,7 @@ struct SettingsView: View {
             }
             Section {
                 Button("Forget All My Answers", role: .destructive) { store.setBook(Book()) }
-                    .disabled(store.book.isEmpty)
+                    .disabled(!store.hasAnswers)
             } footer: {
                 Text("Your answers about who sent what stay on this Mac. They're only sent to the server above, to work out your numbers, and it doesn't keep them.")
                     .font(.caption)

@@ -80,6 +80,7 @@ private struct HotWalletDetails: View {
     let navigation: Navigation
     @State private var isAddingCold = false
     @State private var isToppingUp = false
+    @State private var isSending = false
     @State private var isConfirmingSweep = false
     @State private var isConfirmingRotation = false
     @State private var isConfirmingAbandon = false
@@ -112,12 +113,7 @@ private struct HotWalletDetails: View {
             navigation.wantsTopUp = false
             if wallet.canTopUp { isToppingUp = true }
         }
-        #if DEBUG
-        .onAppear {
-            isAddingCold = HotWalletDebug.sheet == "add-cold"
-            isToppingUp = HotWalletDebug.sheet == "top-up"
-        }
-        #endif
+        .sheet(isPresented: $isSending) { SendSheet(model: SendModel(wallet: wallet, store: store)) }
     }
 
     private func alarmBanner(_ alarm: StolenKeyAlarm) -> some View {
@@ -322,6 +318,8 @@ private struct HotWalletDetails: View {
     private var actions: some View {
         Section {
             HStack {
+                Button("Send…") { isSending = true }
+                    .disabled(!wallet.canSend)
                 Button("Top Up from Savings…") { isToppingUp = true }
                     .disabled(!wallet.canTopUp)
                 Button("Sweep Everything…") { isConfirmingSweep = true }
@@ -374,7 +372,7 @@ private struct HotWalletDetails: View {
             ForEach(wallet.records) { record in
                 HStack {
                     VStack(alignment: .leading) {
-                        Text("\(Format.amount(record.amount, decimals: record.decimals)) \(record.symbol)")
+                        Text(record.reason == .note ? "What you paid for \(record.symbol)" : "\(Format.amount(record.amount, decimals: record.decimals)) \(record.symbol)")
                             .monospacedDigit()
                         Text("\(reasonText(record)) · \(Format.time(record.createdAt))")
                             .font(.caption)
@@ -399,6 +397,8 @@ private struct HotWalletDetails: View {
         case .manual: "Swept by you"
         case .rotation: "Replacing the key"
         case .site: record.site ?? "A site"
+        case .sent: "Sent to \(Format.shortHash(record.to.checksummed))"
+        case .note: "Published for anyone to read"
         }
     }
 
@@ -413,13 +413,18 @@ private struct HotWalletDetails: View {
 }
 
 /// The Mac app has no device code, so the user is the one who checks the address against the device.
-private struct AddColdWalletSheet: View {
+struct AddColdWalletSheet: View {
     let wallet: HotWallet
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
-    @State private var address = ""
+    @State private var address: String
     @State private var matches = false
     @State private var problem: String?
+
+    init(wallet: HotWallet, address: String = "") {
+        self.wallet = wallet
+        _address = State(initialValue: address)
+    }
 
     private var parsed: EthereumAddress? {
         EthereumAddress(address.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -440,7 +445,7 @@ private struct AddColdWalletSheet: View {
                 }
             if let parsed {
                 // In groups, because nobody really compares 40 characters in one run.
-                Text(grouped(parsed.checksummed))
+                Text(AddressText.grouped(parsed.checksummed))
                     .font(.title3.monospaced())
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -468,12 +473,6 @@ private struct AddColdWalletSheet: View {
         .frame(width: 460)
     }
 
-    private func grouped(_ address: String) -> String {
-        let digits = Array(address.dropFirst(2))
-        let groups = stride(from: 0, to: digits.count, by: 4).map { String(digits[$0..<min($0 + 4, digits.count)]) }
-        return "0x " + groups.joined(separator: " ")
-    }
-
     private func add() {
         do {
             try wallet.addColdWallet(address: address, name: name)
@@ -489,10 +488,14 @@ private struct AddColdWalletSheet: View {
 }
 
 /// Until the web app's device flow lands (WORK-325), this says what to do on the device by hand.
-private struct TopUpSheet: View {
+struct TopUpSheet: View {
     let wallet: HotWallet
     @Environment(\.dismiss) private var dismiss
     @State private var dollars = 0.0
+
+    init(wallet: HotWallet) {
+        self.wallet = wallet
+    }
 
     private var room: Int { Int(wallet.topUpRoom / Money.dollar) }
 
