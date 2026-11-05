@@ -76,7 +76,7 @@ struct SettingsView: View {
                             .disabled(store.address == nil)
                     }
                 }
-                .help("This wallet is only read, and nothing signs for it.")
+                .help(HotWalletWording.shownWallet(store.address, spendingMoney: hotWallet.address?.lowercased))
             }
             Section("Your Other Wallets") {
                 ForEach(store.book.linkedWallets.filter { $0 != store.address }, id: \.self) { wallet in

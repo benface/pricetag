@@ -69,14 +69,17 @@ import Testing
 }
 
 @Suite struct ChartAxisTests {
-    private var calendar: Calendar {
+    private func calendar(in zone: String = "America/Toronto") -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "America/Toronto")!
+        calendar.timeZone = TimeZone(identifier: zone)!
         return calendar
     }
 
-    private func axis(from start: TimeInterval = 1_793_800_000, spanning span: TimeInterval) -> (axis: ChartAxis.TimeAxis, labels: [String]) {
+    private var calendar: Calendar { calendar() }
+
+    private func axis(from start: TimeInterval = 1_793_800_000, spanning span: TimeInterval, in zone: String = "America/Toronto") -> (axis: ChartAxis.TimeAxis, labels: [String]) {
         let date = Date(timeIntervalSince1970: start)
+        let calendar = calendar(in: zone)
         let axis = ChartAxis.TimeAxis(dates: [date, date.addingTimeInterval(span)], calendar: calendar)
         var format = axis.format
         format.timeZone = calendar.timeZone
@@ -94,6 +97,30 @@ import Testing
             #expect((1...7).contains(found.labels.count), "\(span): \(found.labels)")
             #expect(found.axis.ticks.allSatisfy(found.axis.domain.contains), "\(span)")
         }
+    }
+
+    @Test func theHourThatRepeatsWhenTheClocksGoBackReadsDifferently() {
+        // 2027-11-07T04:00:00Z, midnight in Toronto, with 1 AM coming twice.
+        let found = axis(from: 1_825_560_000, spanning: 4 * 3600)
+        #expect(found.axis.showsTimeZone)
+        #expect(found.labels.count == 5)
+        #expect(Set(found.labels).count == 5, "\(found.labels)")
+        #expect(found.labels[1].contains("EDT") && found.labels[2].contains("EST"), "\(found.labels)")
+        let halfHours = axis(from: 1_825_560_000 + 3600, spanning: 2 * 3600)
+        #expect(Set(halfHours.labels).count == halfHours.labels.count, "\(halfHours.labels)")
+    }
+
+    @Test func aZoneThatMovesHalfAnHourAlsoReadsDifferently() {
+        // 2027-04-03T14:00:00Z: Lord Howe goes back 30 minutes at 15:00Z, and its zones only have numeric names.
+        let found = axis(from: 1_806_760_800, spanning: 3600, in: "Australia/Lord_Howe")
+        #expect(found.axis.showsTimeZone)
+        #expect(Set(found.labels).count == found.labels.count, "\(found.labels)")
+    }
+
+    @Test func aTimeZoneOnlyShowsWhenItsNeeded() {
+        #expect(!axis(spanning: 4 * 3600).axis.showsTimeZone)
+        // 2027-03-14T06:00:00Z: the clocks go ahead in Toronto, and no time comes twice.
+        #expect(!axis(from: 1_805_004_000, spanning: 4 * 3600).axis.showsTimeZone)
     }
 
     @Test func aMinuteIsMarkedInSeconds() {

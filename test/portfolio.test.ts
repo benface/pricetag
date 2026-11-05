@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
+import { placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import * as wording from "../src/core/wording.ts"
@@ -404,6 +405,47 @@ describe("a chart's axes", () => {
     assert.match(formatChartSpan(at(0), at(20_000))[0], /:\d\d:\d\d/)
     assert.doesNotMatch(formatChartSpan(at(0), at(90_000))[0], /:\d\d:\d\d/)
     assert.doesNotMatch(formatChartSpan(at(0), at(3 * 86_400_000), true)[0], /:/)
+  })
+
+  it("tells apart the hour that repeats when the clocks go back", () => {
+    const zone = process.env.TZ
+    const cases = [
+      ["America/Toronto", "2027-11-07T05:30:00.000Z", "2027-11-07T06:30:00.000Z", /1:30.*EDT/, /1:30.*EST/],
+      ["Australia/Lord_Howe", "2027-04-03T14:30:00.000Z", "2027-04-03T15:00:00.000Z", /1:30.*GMT\+11/, /1:30.*GMT\+10:30/],
+    ] as const
+    try {
+      for (const [name, start, end, firstZone, lastZone] of cases) {
+        process.env.TZ = name
+        for (const narrow of [false, true]) {
+          const [first, last] = formatChartSpan(start, end, narrow)
+          assert.match(first, firstZone)
+          assert.match(last, lastZone)
+        }
+      }
+    } finally {
+      if (zone === undefined) delete process.env.TZ
+      else process.env.TZ = zone
+    }
+  })
+
+  it("places two times inside the chart without touching, however wide they are", () => {
+    for (const chartWidth of [202, 242, 297, 312, 680]) {
+      for (const widths of [[28, 28], [62, 62], [69, 69], [100, 110], [150, 160]]) {
+        const [first, last] = placeChartTimes(widths, { start: 64, end: chartWidth - 84, width: chartWidth }) as [{ x: number; row: number }, { x: number; row: number }]
+        const [firstWidth, lastWidth] = widths as [number, number]
+        assert.ok(first.x >= 0 && first.x + firstWidth <= chartWidth, `${chartWidth} ${widths}`)
+        assert.ok(last.x >= 0 && last.x + lastWidth <= chartWidth, `${chartWidth} ${widths}`)
+        assert.ok(first.row !== last.row || first.x + firstWidth < last.x, `${chartWidth} ${widths}`)
+      }
+    }
+  })
+
+  it("only moves times away from their points when it has to", () => {
+    assert.deepEqual(placeChartTimes([100, 100], { start: 64, end: 596, width: 680 }), [{ x: 64, row: 0 }, { x: 496, row: 0 }])
+    assert.deepEqual(placeChartTimes([62, 62], { start: 64, end: 158, width: 242 }), [{ x: 64, row: 0 }, { x: 158, row: 0 }])
+    assert.deepEqual(placeChartTimes([100, 110], { start: 64, end: 158, width: 242 }), [{ x: 20, row: 0 }, { x: 132, row: 0 }])
+    assert.deepEqual(placeChartTimes([100, 110], { start: 64, end: 118, width: 202 }), [{ x: 64, row: 0 }, { x: 92, row: 1 }])
+    assert.deepEqual(placeChartTimes([60], { start: 64, end: 158, width: 242 }), [{ x: 98, row: 0 }])
   })
 
   it("says one moment once", () => {

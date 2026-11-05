@@ -50,6 +50,8 @@ enum ChartAxis {
         let label: Label
         /// What the chart spans, which has to have some width even for a single moment.
         let domain: ClosedRange<Date>
+        /// Only where times would otherwise read the same, in the hour that repeats when the clocks go back.
+        let showsTimeZone: Bool
 
         private static let minute = 60.0
         private static let hour = 3600.0
@@ -68,6 +70,7 @@ enum ChartAxis {
                 ticks = [moment]
                 label = .minute
                 domain = moment.addingTimeInterval(-30)...moment.addingTimeInterval(30)
+                showsTimeZone = false
                 return
             }
             let span = end.timeIntervalSince(start)
@@ -88,6 +91,10 @@ enum ChartAxis {
             case .day: label = .day
             default: label = .month
             }
+            var plain = Self.format(label, showsTimeZone: false)
+            plain.timeZone = calendar.timeZone
+            plain.locale = Locale(identifier: "en_US")
+            showsTimeZone = Set(self.ticks.map { $0.formatted(plain) }).count < self.ticks.count
         }
 
         private static func roundedDown(_ date: Date, to unit: Calendar.Component, count: Int, _ calendar: Calendar) -> Date {
@@ -111,13 +118,19 @@ enum ChartAxis {
         }
 
         var format: Date.FormatStyle {
+            Self.format(label, showsTimeZone: showsTimeZone)
+        }
+
+        private static func format(_ label: Label, showsTimeZone: Bool) -> Date.FormatStyle {
+            let style: Date.FormatStyle
             switch label {
-            case .second: .dateTime.hour().minute().second()
-            case .minute: .dateTime.hour().minute()
-            case .dayAndHour: .dateTime.month(.abbreviated).day().hour()
-            case .day: .dateTime.month(.abbreviated).day()
-            case .month: .dateTime.month(.abbreviated).year()
+            case .second: style = .dateTime.hour().minute().second()
+            case .minute: style = .dateTime.hour().minute()
+            case .dayAndHour: style = .dateTime.month(.abbreviated).day().hour()
+            case .day: style = .dateTime.month(.abbreviated).day()
+            case .month: style = .dateTime.month(.abbreviated).year()
             }
+            return showsTimeZone ? style.timeZone(.specificName(.short)) : style
         }
     }
 }
