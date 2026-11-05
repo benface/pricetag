@@ -208,6 +208,16 @@ import Testing
         #expect(flow.sweepsGoHere)
     }
 
+    @Test func aSecondWalletWithTheSameNameDoesntNameTheFirst() async throws {
+        let (flow, wallet) = await model(withCold: true)
+        let first = try #require(wallet.settings.coldWallets.first)
+        flow.address = address
+        flow.name = first.name
+        flow.matches = true
+        try flow.add()
+        #expect(flow.sweepDestinationName == nil)
+    }
+
     @Test func theFirstWalletSaysItCanStartSweeps() async throws {
         let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(100)]), withCold: false)
         await rig.wallet.tick()

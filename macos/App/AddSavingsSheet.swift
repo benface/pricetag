@@ -92,7 +92,7 @@ struct AddColdWalletSheet: View {
             case .pick, .keystoneScan: EmptyView()
             case .ledgerBrowser: EmptyView()
             case .paste:
-                Button("Continue") { model.next() }
+                Button("Next") { model.next() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(model.parsed == nil)
             case .check:
@@ -326,9 +326,9 @@ private struct LedgerBrowserStep: View {
                 Notice(.warning, AddSavingsWording.noBrowser(found.defaultThatCant))
                 Link("Get Chrome", destination: DeviceBrowsers.getChrome)
             }
-            TroubleList(troubles: page.troubles, isExpanded: showsTrouble)
             Button("Paste an Address Instead") { model.enterByHand() }
                 .buttonStyle(.link)
+            TroubleList(troubles: page.troubles, isExpanded: showsTrouble)
         }
     }
 
@@ -366,7 +366,7 @@ private struct KeystoneScanStep: View {
 
     /// Holding it up to a camera only makes sense with one that's working.
     private var shown: AddSavingsWording.Page {
-        camera?.state == .denied || camera?.state == .noCamera || camera?.state == .failed ? page.titleOnly : page
+        camera?.state == .denied || camera?.state == .noCamera || camera?.state == .failed ? AddSavingsWording.Page(title: AddSavingsWording.noCamera, body: "") : page
     }
 
     var body: some View {
@@ -432,6 +432,9 @@ private struct CheckStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let progress = model.progress {
+                StepDots(current: progress.current, total: progress.total)
+            }
             Text(page.title)
                 .font(.title2.bold())
             Text(page.body)
@@ -456,7 +459,11 @@ private struct CheckStep: View {
                     Notice(model.wouldStartSweeps ? .warning : .info, notice)
                 }
                 Toggle(AddSavingsWording.matches, isOn: $model.matches)
-                TextField("Name", text: $model.name, prompt: Text("Savings"))
+                // Outside a form, a text field doesn't show its label.
+                LabeledContent("Name") {
+                    TextField("Name", text: $model.name, prompt: Text("Savings"))
+                        .labelsHidden()
+                }
             }
             Text(AddSavingsWording.checkWarning)
                 .font(.caption)
