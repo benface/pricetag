@@ -44,7 +44,11 @@ struct PopoverView: View {
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
-        .onAppear { isFocused = true }
+        .onAppear {
+            isFocused = true
+            StatusItemMenu.shared.closePopover = { dismiss() }
+        }
+        .onDisappear { StatusItemMenu.shared.closePopover = nil }
         .onKeyPress(.downArrow) { moveHighlight(by: 1) }
         .onKeyPress(.upArrow) { moveHighlight(by: -1) }
         .onKeyPress(.return) {

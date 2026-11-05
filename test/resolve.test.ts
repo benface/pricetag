@@ -9,7 +9,7 @@ import { answerSender, costKey, emptyBook, enterExchangeCosts, linkMessage, link
 import { matchWithdrawals, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
-import { allocateTaken, foldBook, isBalanced, missingWallets, previewBook, readKey, readsMatching } from "../src/core/resolve.ts"
+import { allocateTaken, foldBook, isBalanced, microsOf, missingWallets, previewBook, readKey, readsMatching } from "../src/core/resolve.ts"
 
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`
 const [A, B, C, STRANGER] = [addr(0xa1), addr(0xb1), addr(0xc1), addr(0xd1)] as [string, string, string, string]
@@ -1614,5 +1614,21 @@ describe("wallets read another way", () => {
       reads = store(reads, linked(RULES.market))
       assert.deepEqual(headline(back, others(reads, back)), ZERO.market)
     })
+  })
+})
+
+describe("a cost as typed", () => {
+  it("reads a decimal comma as a decimal, not as thousands", () => {
+    assert.equal(microsOf("46,20"), "46200000")
+    assert.equal(microsOf("$46,2"), "46200000")
+    assert.equal(microsOf("1 234,50 $"), "1234500000")
+    assert.equal(microsOf("$1,234.50"), "1234500000")
+    assert.equal(microsOf("1,234"), "1234000000")
+    assert.equal(microsOf("1,234,567.50"), "1234567500000")
+    assert.equal(microsOf("0"), "0")
+  })
+
+  it("refuses a comma it can't tell apart", () => {
+    for (const bad of ["1.234,50", "12,3456", "1,23,456", "0,125", ",5", ""]) assert.equal(microsOf(bad), null, bad)
   })
 })

@@ -2,7 +2,7 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { currentRateMicros, isAddress, isCurrencyCode, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { currentRateMicros, isAddress, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createWallets, describeError, followChain, followRawSql, followSql, readHeadMark, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
@@ -15,7 +15,7 @@ import { verifyLink } from "./links.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
 import { createCoinbase } from "./coinbase.ts"
 import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onramp.ts"
-import { createRates } from "./rates.ts"
+import { createRates, readPaidRates } from "./rates.ts"
 import { createDepositReader } from "./block.ts"
 import { warnOfNewAggregators } from "./feeds.ts"
 import { createManifestReader, createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
@@ -40,7 +40,7 @@ const MAX_OTHER_WALLETS = 20
 
 function parseCurrency(value: string | null): CurrencyCode | null {
   if (value === null) return "USD"
-  return isCurrencyCode(value) ? value : null
+  return isMainCurrency(value) ? value : null
 }
 
 /** A pricing rule, and where a wallet's rows come from when it's read through that rule. */
@@ -172,7 +172,7 @@ const NO_ONRAMP = "Buying isn't set up on this server."
 function fiatOf(value: unknown): FiatAmount | undefined {
   const { amount, currency } = recordOf(value) ?? {}
   if (typeof amount !== "string" || !/^\d{1,9}(\.\d{1,2})?$/.test(amount) || !/[1-9]/.test(amount)) return undefined
-  return typeof currency === "string" && isCurrencyCode(currency) ? { amount, currency } : undefined
+  return typeof currency === "string" && isMainCurrency(currency) ? { amount, currency } : undefined
 }
 
 export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env)) {
@@ -261,11 +261,13 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   /** A wallet with the rates to show it in `currency`, or answers the request with why it can't. Never falls back to USD. */
-  async function inCurrency(wallet: WalletResponse, currency: CurrencyCode, res: ServerResponse): Promise<WalletResponse | null> {
-    if (currency === "USD") return wallet
+  async function inCurrency(wallet: WalletResponse, currency: CurrencyCode, res: ServerResponse, books: readonly Book[] = []): Promise<WalletResponse | null> {
     try {
-      const rates = created && wallet.mode !== "demo" ? await created.readRates(currency, wallet) : demoRates(currency)
-      return { ...wallet, currency, rates }
+      const live = created && wallet.mode !== "demo" ? created : null
+      const paidRates = live ? await readPaidRates(live.readRates, wallet, currency, books) : undefined
+      const paid = paidRates ? { ...wallet, paidRates } : wallet
+      if (currency === "USD") return paid
+      return { ...paid, currency, rates: live ? await live.readRates(currency, wallet) : demoRates(currency) }
     } catch (error) {
       sendAmpError(res, error)
       return null
@@ -315,7 +317,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       // With no data source, only the demo's own wallets can ever be read, so this one isn't still reading.
       if (!wallet && !wallets) linkedFailures.add(address)
       if (!wallet) continue
-      const converted = await inCurrency(wallet, currency, res)
+      const converted = await inCurrency(wallet, currency, res, books)
       if (!converted) return null
       read.push(converted)
     }
@@ -396,7 +398,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     }
 
     const read = await readWallet(match[1] as string, res, { fresh: action === undefined, rule })
-    const wallet = read && (await inCurrency(read, currency, res))
+    const wallet = read && (await inCurrency(read, currency, res, books))
     if (!wallet) return
     // The client's own wallets, which only count on a wallet that's real.
     const known: unknown[] = wallet.mode === "demo" || !Array.isArray(body.linked) ? [] : body.linked
@@ -453,7 +455,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       const read: WalletResponse[] = []
       for (const next of addresses) {
         const wallet = await readWallet(next, res)
-        const converted = wallet && (await inCurrency(wallet, currency, res))
+        const converted = wallet && (await inCurrency(wallet, currency, res, [book]))
         if (!converted) return null
         read.push(converted)
       }
@@ -512,9 +514,9 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         const [pricedA, pricedB] = [blocksOf(a), blocksOf(b)]
         if (a.legs.some((leg) => pricedA.has(leg.blockNum) !== pricedB.has(leg.blockNum))) return null
         // One read of the rates, on both sides. Answers the request itself when it fails, so that's not a "not yet".
-        const shown = await inCurrency(a, currency, res)
+        const shown = await inCurrency(a, currency, res, book ? [book] : [])
         if (!shown) return undefined
-        return [{ ...shown, rule: first.rule.id, ruleNote: first.note }, { ...b, currency: shown.currency, rates: shown.rates, rule: second.rule.id, ruleNote: second.note }]
+        return [{ ...shown, rule: first.rule.id, ruleNote: first.note }, { ...b, currency: shown.currency, rates: shown.rates, ...(shown.paidRates ? { paidRates: shown.paidRates } : {}), rule: second.rule.id, ruleNote: second.note }]
       }
       const main = await pair(own, true)
       if (main === undefined) return
@@ -570,8 +572,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
 
     if (path === "/api/rate") {
       const currency = new URL(req.url ?? "/", "http://localhost").searchParams.get("currency")
-      if (!isCurrencyCode(currency)) {
-        sendJson(res, 400, { error: "That isn't a currency this app knows." })
+      if (!isMainCurrency(currency)) {
+        sendJson(res, 400, { error: "That isn't a currency this app shows amounts in." })
         return true
       }
       await answerRate(currency, res)

@@ -521,6 +521,7 @@ describe("GET /api/rate", () => {
     assert.deepEqual((await read("?currency=CAD")).body, { currency: "CAD", rateMicros: null })
     assert.deepEqual((await read("?currency=USD")).body, { currency: "USD", rateMicros: null })
     assert.equal((await read("?currency=XYZ")).status, 400)
+    assert.equal((await read("?currency=EUR")).status, 400, "only what's paid in so far, and not a main currency")
     assert.equal((await read("")).status, 400)
     server.close()
   })

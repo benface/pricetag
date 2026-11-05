@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
@@ -371,12 +371,19 @@ describe("the formatters the Swift package repeats", () => {
       usd: usd.map((micros) => ({ micros, usd: formatMoney(micros, "USD"), signed: formatSignedMoney(micros, "USD") })),
       cad: usd.map((micros) => ({ micros, usd: formatMoney(micros, "CAD"), signed: formatSignedMoney(micros, "CAD") })),
       price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, "USD"), cad: formatPrice(micros, "CAD") })),
+      others: (["EUR", "GBP", "CHF"] as const).map((currency) => ({
+        currency,
+        money: usd.map((micros) => ({ micros, usd: formatMoney(micros, currency), signed: formatSignedMoney(micros, currency) })),
+        price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, currency) })),
+        chartTicks: [[0], [-0.0023], [0.75], [120], [-250000, 1250000]].map((values) => ({ values, ticks: chartMoneyTicks(values, currency) })),
+      })),
       labeledUsd: ["$2,376.00", "+$24.00", "-$24.00", "$0.004", "-$0.004"].map((text) => ({ text, usd: labelUsd(text, "USD"), cad: labelUsd(text, "CAD") })),
       amount: units.map(([value, decimals]) => ({ units: value, decimals, amount: formatAmount(value, decimals), signed: formatSignedAmount(value, decimals) })),
       chartTicks: [[], [0], [-0.0023], [-0.0015, -0.0023], [0.000001], [-0.2], [0.75], [8.5], [-3, 12], [120], [1250], [8000], [-250000, 1250000], [12000000]].map((values) => ({ values, usd: chartMoneyTicks(values, "USD"), cad: chartMoneyTicks(values, "CAD") })),
       duration: [0, 60_000, 3_600_000, 7_198_000, 7_200_000, 10_800_000, 200_000_000].map((ms) => ({ ms, duration: formatDuration(ms) })),
       blockSpans: [[100, 130], [LAST_2S_BLOCK - 5, LAST_2S_BLOCK], [LAST_2S_BLOCK - 5, LAST_2S_BLOCK + 10], [LAST_2S_BLOCK, LAST_2S_BLOCK + 300], [LAST_2S_BLOCK + 5, LAST_2S_BLOCK + 305], [130, 100]].map(([from, to]) => ({ from, to, ms: msBetweenBlocks(from as number, to as number) })),
       blocksBefore: [[130, 60_000], [LAST_2S_BLOCK, 60_000], [LAST_2S_BLOCK + 10, 60_000], [LAST_2S_BLOCK + 300, 60_000], [LAST_2S_BLOCK + 301, 60_000], [LAST_2S_BLOCK + 300, 60_100], [10, 60_000]].map(([block, ms]) => ({ block, ms, before: blockBefore(block as number, ms as number) })),
+      plainAmount: ["46,20", "46,2", "0,5", "1 234,50", "1\u00a0234,50", "1\u202f234,50", "1,234", "1,234,567.50", "1,000.", "12.50", "46", ".5", "", "abc", "1.234,50", "12,3456", "1,23,456", "1,234,50", "1234,567", "0,125", "012,345", ",5", "5,", "1,,5", "46,20.5", "abc,5", "٤٦,٢٠"].map((text) => ({ text, plain: plainAmount(text) })),
       linkMessage: { owner: DEMO_WALLET.address, address: "0x00000000000000000000000000000000000DE301", message: linkMessage(DEMO_WALLET.address, "0x00000000000000000000000000000000000DE301") },
       note: { txHash: `0x${"ab".repeat(32)}`, asset: "USDC", usdMicros: "250000000", calldata: encodeNote(`0x${"ab".repeat(32)}`, "USDC", "250000000") },
     })

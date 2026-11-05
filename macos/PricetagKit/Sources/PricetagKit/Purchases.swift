@@ -37,8 +37,10 @@ public struct OnrampOrder: Codable, Sendable, Equatable {
     public let blockNum: Int?
     public let cost: Money?
     public let costUsdMicros: String?
+    /// The currency it was paid in, when that's why `cost` is nil: there's no rate for it.
+    public let paidIn: String?
 
-    public init(provider: String = "coinbase", id: String, status: Status, failure: Failure? = nil, asset: String? = nil, units: String? = nil, wallet: String? = nil, network: String? = nil, txHash: String? = nil, blockNum: Int? = nil, cost: Money? = nil, costUsdMicros: String? = nil) {
+    public init(provider: String = "coinbase", id: String, status: Status, failure: Failure? = nil, asset: String? = nil, units: String? = nil, wallet: String? = nil, network: String? = nil, txHash: String? = nil, blockNum: Int? = nil, cost: Money? = nil, costUsdMicros: String? = nil, paidIn: String? = nil) {
         self.provider = provider
         self.id = id
         self.status = status
@@ -51,6 +53,7 @@ public struct OnrampOrder: Codable, Sendable, Equatable {
         self.blockNum = blockNum
         self.cost = cost
         self.costUsdMicros = costUsdMicros
+        self.paidIn = paidIn
     }
 
     /// What goes in the book. Nil until it's delivered and says all of this, because a cost is never made up from part of it.
@@ -97,6 +100,8 @@ public enum PurchasePhase: Equatable, Sendable {
     case costUnknown
     /// The order doesn't say what was paid for it, as when it was paid from crypto already held. Its cost stays unknown.
     case costNotSaid
+    /// It was paid in a currency there's no rate for. Its cost stays unknown.
+    case noRateFor(String)
     case failed(OnrampOrder.Failure)
     /// There's been a long time with no order. Someone could still have paid, so it's asked about whenever the app starts or comes back.
     case noOrderYet
@@ -104,7 +109,7 @@ public enum PurchasePhase: Equatable, Sendable {
     public var isFinished: Bool {
         switch self {
         case .onProvidersPage, .noOrderYet, .onItsWay, .arriving: false
-        case .recorded, .costUnknown, .costNotSaid, .failed: true
+        case .recorded, .costUnknown, .costNotSaid, .noRateFor, .failed: true
         }
     }
 
@@ -148,6 +153,7 @@ public enum PurchaseWording {
         case .recorded(let cost): "Cost \(Format.money(cost, beside: main)), fees included"
         case .costUnknown: "Cost unknown. The order didn't match what arrived"
         case .costNotSaid: "Cost unknown. The order doesn't say what you paid for it"
+        case .noRateFor(let currency): "Cost unknown. There's no exchange rate for \(currency)"
         case .failed(.payment): "\(provider) couldn't take the payment"
         case .failed(.delivery): "\(provider) couldn't deliver it"
         case .noOrderYet: "No order from \(provider) yet"
@@ -156,7 +162,7 @@ public enum PurchaseWording {
 
     public static func isWarning(_ phase: PurchasePhase) -> Bool {
         switch phase {
-        case .costUnknown, .costNotSaid, .failed: true
+        case .costUnknown, .costNotSaid, .noRateFor, .failed: true
         default: false
         }
     }
@@ -212,7 +218,7 @@ public final class PurchaseTracker {
         case .pending: return .onItsWay
         case .succeeded:
             if order.txHash == nil { return .onItsWay }
-            guard let recorded = order.purchase else { return .costNotSaid }
+            guard let recorded = order.purchase else { return order.paidIn.map(PurchasePhase.noRateFor) ?? .costNotSaid }
             switch matchOf(order.id) {
             case .recorded: return .recorded(recorded.cost)
             case .unmatched: return .costUnknown

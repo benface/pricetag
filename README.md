@@ -176,8 +176,9 @@ Both apps show every value in the chosen currency, USD or CAD, and remember the 
 - **Spending Money uses the current rate too.** It reads `GET /api/rate?currency=CAD`, so it doesn't wait on any wallet's history, every 5 minutes. A failed read is tried again after 30 seconds and keeps the last rate for an hour at most. After that, with no current rate at all, or on a server with no data source, whose demo rates aren't for real balances, its amounts go back to USD and say `US$`. The web app's top-up form reads the same way while it's open. A display rate is all it is: the cap, sweeps and what's signed work in USD.
 - **What stays in USD says so.** The ETH price in the rule comparison is one, because the comparison is about a USD feed. A published cost note is another, because the note itself is in USD. So is what you paid if Coinbase charged you in USD.
 - **A missing rate is never filled in.** That amount is unavailable, whatever depends on it says so, and no other day's rate stands in. A feed that hasn't updated in 3 days counts as missing, since forex markets close for only about 2.
+- **A purchase keeps what was really paid,** in USD, CAD, EUR, GBP or CHF. Read in another currency, it converts at the rate of the block it arrived in, from the feed for what was paid, and its source says what was paid. Coinbase's own USD total only stands in when that feed has no answer. A purchase in a currency with no feed, like SEK, stays unknown and is asked about: Coinbase's USD total for it hasn't been checked against a real order.
 
-To add a currency, add its Chainlink feed to `CURRENCIES` in `packages/sdk/src/currency.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/Currency.swift`. Base has feeds for EUR, GBP, AUD, CHF, SGD and others.
+To add a currency, add its Chainlink feed to `CURRENCIES` in `packages/sdk/src/currency.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/Currency.swift`. To show one as a main currency, also add it to `MAIN_CURRENCY_CODES` and `CurrencyCode.mainChoices`. Base also has feeds for AUD, SGD and others. A new currency's feed needs its address checked against its `description()` onchain.
 
 ## Tax report
 

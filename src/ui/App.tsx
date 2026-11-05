@@ -1,5 +1,5 @@
 import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { CURRENCIES, CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isCurrencyCode, msBetweenBlocks, sumTotals, type Coverage, type CurrencyCode, type HoldComparison, type Method, type Position } from "@pricetag/sdk/core"
+import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isMainCurrency, msBetweenBlocks, sumTotals, type Coverage, type CurrencyCode, type HoldComparison, type Method, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { explainTarget, missingRatesLine, mismatchCause, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
@@ -63,7 +63,7 @@ const CURRENCY_KEY = "pricetag.currency"
 /** Remembered in this browser, since there are no accounts. USD until it's changed. */
 function readCurrency(): CurrencyCode {
   const value = localStorage.getItem(CURRENCY_KEY)
-  return isCurrencyCode(value) ? value : "USD"
+  return isMainCurrency(value) ? value : "USD"
 }
 
 function Num({ onClick, label, children, tone }: { onClick: () => void; label: string; children: ReactNode; tone?: "gain" | "loss" | "warn" | null }) {
@@ -292,7 +292,7 @@ export function App() {
         <label className="currency">
           <span className="muted small">Main currency</span>
           <select value={chosenCurrency} onChange={(e) => chooseCurrency(e.target.value as CurrencyCode)}>
-            {CURRENCY_CODES.map((code) => (
+            {MAIN_CURRENCY_CODES.map((code) => (
               <option key={code} value={code}>
                 {code} · {CURRENCIES[code].name}
               </option>

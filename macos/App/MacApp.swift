@@ -202,9 +202,22 @@ struct MenuBarLabel: View {
     let navigation: Navigation
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         MenuBarLabelContent(summary: summary, isAlarm: alarm != nil)
+            .onAppear {
+                StatusItemMenu.shared.start(
+                    openApp: {
+                        openWindow(id: WindowID.main)
+                        DockPresence.bringForward()
+                    },
+                    openSettings: {
+                        openSettings()
+                        DockPresence.bringForward()
+                    }
+                )
+            }
             // In the label because it's the one view that's always there. A possibly stolen key can't wait for someone to look.
             .onChange(of: alarm?.findings.count) { _, count in
                 guard count != nil else { return }
