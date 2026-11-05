@@ -346,7 +346,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return taxReport(taxMatch[1] as string, { country: body.country, method: body.method, scope: body.scope }, also as string[], currency, book, res)
     }
 
-    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare))?$/.exec(path)
+    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last))?$/.exec(path)
     if (!match) return sendJson(res, 404, { error: "Not found" })
     const method = parseMethod(typeof body.method === "string" ? body.method : null)
     if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
@@ -371,6 +371,12 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return compare(match[1] as string, currency, method, walletsBehind(linking, { address: match[1] as string }), res, linking)
     }
 
+    // What's already been read, folded for this request, which takes no query. It may be behind, so it's for showing while a real read runs.
+    if (action === "last" && !(rule?.wallets ?? wallets)?.peek(match[1] as string)) {
+      res.writeHead(204, { "cache-control": "no-store" })
+      res.end()
+      return
+    }
     const read = await readWallet(match[1] as string, res, { fresh: action === undefined, rule })
     const wallet = read && (await inCurrency(read, currency, res))
     if (!wallet) return
