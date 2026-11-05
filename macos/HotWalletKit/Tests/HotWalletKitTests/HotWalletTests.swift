@@ -41,7 +41,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     @Test func twoAtOnceDontUseTheSameNonce() async throws {
         let rig = await Rig(snapshot(eth: oneEth / 100, tokens: [usdc: usdcUnits(500)]))
         async let tick: Void = rig.wallet.tick()
-        async let sweep: Void = rig.wallet.sweepEverything()
+        async let sweep = rig.wallet.sweepEverything()
         _ = await (tick, sweep)
         let nonces = await rig.signer.signed.map(\.nonce)
         #expect(Set(nonces).count == nonces.count)
@@ -1118,7 +1118,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
     @Test func aRotationThatStartsDuringTheDeletePromptStopsTheDelete() async throws {
         let prompt = OpenPrompt()
-        let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(10)]), prompt: prompt)
+        let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(10)]), userPresence: prompt)
         prompt.whileOpen = { await rig.wallet.replaceKey() }
         await rig.wallet.deleteWallet()
         #expect(rig.wallet.address == hotAddress)
@@ -1129,7 +1129,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
     @Test func aRotationThatFinishesDuringTheDeletePromptLeavesTheNewKey() async throws {
         let prompt = OpenPrompt()
-        let rig = await Rig(snapshot(eth: 0), prompt: prompt)
+        let rig = await Rig(snapshot(eth: 0), userPresence: prompt)
         prompt.whileOpen = {
             await rig.wallet.replaceKey()
             await rig.wallet.finishRotationLeavingFundsBehind()
@@ -1142,7 +1142,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
     @Test func aDeleteDuringTheReplacePromptMakesNoNewKey() async throws {
         let prompt = OpenPrompt()
-        let rig = await Rig(snapshot(eth: 0), prompt: prompt)
+        let rig = await Rig(snapshot(eth: 0), userPresence: prompt)
         prompt.whileOpen = { await rig.wallet.deleteWallet() }
         await rig.wallet.replaceKey()
         await rig.wallet.tick()
@@ -1153,7 +1153,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
     @Test func aDeleteDuringTheLeaveBehindPromptStaysDeleted() async throws {
         let prompt = OpenPrompt()
-        let rig = await Rig(snapshot(eth: 0), prompt: prompt, portfolio: .success(portfolio(toBlock: 2000)))
+        let rig = await Rig(snapshot(eth: 0), userPresence: prompt, portfolio: .success(portfolio(toBlock: 2000)))
         await rig.wallet.replaceKey()
         prompt.whileOpen = {
             await rig.wallet.readHistory()
@@ -1169,7 +1169,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
     @Test func aRotationThatFinishesDuringTheLeaveBehindPromptOnlyFinishesOnce() async throws {
         let prompt = OpenPrompt()
-        let rig = await Rig(snapshot(eth: 0), prompt: prompt, portfolio: .success(portfolio(toBlock: 2000)))
+        let rig = await Rig(snapshot(eth: 0), userPresence: prompt, portfolio: .success(portfolio(toBlock: 2000)))
         await rig.wallet.replaceKey()
         prompt.whileOpen = {
             await rig.wallet.readHistory()
@@ -1183,7 +1183,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
     @Test func aSweepAfterItsWalletIsDeletedReadsNothing() async throws {
         let prompt = OpenPrompt()
-        let rig = await Rig(snapshot(tokens: [usdc: usdcUnits(10)]), prompt: prompt)
+        let rig = await Rig(snapshot(tokens: [usdc: usdcUnits(10)]), userPresence: prompt)
         prompt.whileOpen = { await rig.wallet.deleteWallet() }
         await rig.wallet.sweepEverything()
         #expect(rig.wallet.snapshot == nil)

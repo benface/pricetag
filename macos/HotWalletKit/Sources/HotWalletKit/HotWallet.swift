@@ -55,6 +55,7 @@ public final class HotWallet {
     @ObservationIgnored private let settingsStore: any WalletSettingsStore
     @ObservationIgnored private let stateStore: any DeviceStateStore
     @ObservationIgnored private let presence: any UserPresence
+    @ObservationIgnored private var lastAnswerAt: Date?
     @ObservationIgnored private let portfolioSource: @MainActor () -> any PortfolioSource
     @ObservationIgnored private let costMethod: @MainActor () -> CostMethod
     @ObservationIgnored private let mainCurrency: @MainActor () -> CurrencyCode
@@ -543,9 +544,21 @@ public final class HotWallet {
     }
 
     /// Everything on the allowlist, to the chosen savings wallet, after asking the person at the device.
-    public func sweepEverything() async {
-        guard let address, let destination = settings.sweepDestination else { return }
-        await work(confirming: "sweep everything to your savings") { [self] in
+    /// What sweeping everything would move right now, for showing. It's worked out again from a fresh read before anything's signed.
+    public var sweepPreview: SweepPreview? {
+        guard let snapshot, let destination = settings.sweepDestination else { return nil }
+        let transfers = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: destination).transfers
+        let feeWei = transfers.reduce(UInt128(0)) { $0 + snapshot.fees.costWei(of: $1.token) }
+        return SweepPreview(transfers: transfers, feeWei: feeWei, feeUsdMicros: snapshot.ethUsdMicros.map { Money.usdMicros(of: feeWei, priceMicros: $0, decimals: 18) })
+    }
+
+    /// True once it's on its way.
+    @discardableResult
+    public func sweepEverything(in prompt: PresencePrompt? = nil) async -> Bool {
+        guard let address, let destination = settings.sweepDestination else { return false }
+        var isOnItsWay = false
+        let name = settings.coldWallets.first { $0.address == destination }?.name ?? "your savings"
+        await work(confirming: "sweep everything to \(name)", in: prompt) { [self] in
             guard self.address == address else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
             let snapshot = try await patientSnapshot(of: address)
             self.snapshot = snapshot
@@ -556,7 +569,9 @@ public final class HotWallet {
             if everything.blockers.contains(.notEnoughGas), everything.transfers.isEmpty { throw ChainError.rejected(HotWalletWording.noGas) }
             pausedUntil = nil
             try await execute(everything, from: address, to: destination, reason: .manual, snapshot: snapshot)
+            isOnItsWay = true
         }
+        return isOnItsWay
     }
 
     /// A new key, with everything moved off the old one, which is deleted once it's empty. After an alarm, what's left goes
@@ -646,12 +661,12 @@ public final class HotWallet {
     }
 
     /// The prompt comes first and waits outside the line, so an open prompt doesn't hold up automatic sweeps.
-    private func work(confirming reason: String? = nil, _ body: @escaping @MainActor () async throws -> Void) async {
+    private func work(confirming reason: String? = nil, in prompt: PresencePrompt? = nil, _ body: @escaping @MainActor () async throws -> Void) async {
         isWorking = true
         defer { isWorking = false }
         do {
             sweepProblem = nil
-            if let reason { try await presence.confirm(reason: reason) }
+            if let reason { try await confirmPresence(reason: reason, in: prompt) }
             var failure: (any Error)?
             await inTurn {
                 do {
@@ -663,6 +678,8 @@ public final class HotWallet {
             if let failure { throw failure }
         } catch let error as LAError where [.userCancel, .appCancel, .systemCancel].contains(error.code) {
             // They changed their mind, which isn't a problem to report.
+        } catch is LAError {
+            sweepProblem = HotWalletWording.touchIDDidNotConfirm
         } catch let error as ChainError {
             switch error {
             case .rejected(let message): sweepProblem = message
@@ -705,9 +722,27 @@ public final class HotWallet {
         try? persist()
     }
 
-    func confirmPresence(reason: String) async throws {
-        try await presence.confirm(reason: reason)
+    func confirmPresence(reason: String, in prompt: PresencePrompt? = nil) async throws {
+        if let prompt {
+            try await presence.confirm(reason: reason, in: prompt)
+            // They backed out as the touch landed. Backing out wins, because it's what's on screen.
+            if prompt.isCancelled { throw LAError(.appCancel) }
+            prompt.markConfirmed()
+        } else {
+            try await presence.confirm(reason: reason)
+        }
+        noteAnswer()
     }
+
+    /// The user just answered something, so whatever's next waits a moment. A touch that's still on the sensor can't count for it.
+    func noteAnswer() {
+        lastAnswerAt = now()
+    }
+
+    /// Asking again before this could catch a second touch meant for what's just gone.
+    public var nextPromptAt: Date? { lastAnswerAt?.addingTimeInterval(Self.pauseBetweenPrompts) }
+
+    static let pauseBetweenPrompts: TimeInterval = 2
 
     func readForSite(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer {
         // A node on another chain would tell a site things that aren't true of Base.
@@ -748,7 +783,8 @@ public final class HotWallet {
             maxFeePerGas: snapshot.fees.maxFeePerGas,
             feeWei: fees.costWei(gas: UInt128(gasLimit)),
             ethUsdMicros: snapshot.ethUsdMicros,
-            ethBalance: snapshot.balances[Base.eth] ?? 0
+            ethBalance: snapshot.balances[Base.eth] ?? 0,
+            tokenUsdMicros: Base.tokens.first { $0.contract == transaction.to }.flatMap { price(of: $0, snapshot: snapshot) }
         )
     }
 
@@ -829,10 +865,10 @@ public final class HotWallet {
 
     /// Asks the person at the device, then signs exactly this, and checks it again against a fresh read. True once it's on its way.
     @discardableResult
-    public func send(_ request: SendRequest) async -> Bool {
+    public func send(_ request: SendRequest, in prompt: PresencePrompt? = nil) async -> Bool {
         guard let address, canSend else { return false }
         var isOnItsWay = false
-        await work(confirming: "send \(Money.text(ofUnits: request.amount, decimals: request.token.decimals)) \(request.token.symbol) to \(request.to.checksummed)") { [self] in
+        await work(confirming: "send \(Money.text(ofUnits: request.amount, decimals: request.token.decimals)) \(request.token.symbol) to \(request.to.checksummed)", in: prompt) { [self] in
             let snapshot = try await readToSign(address)
             if let problem = self.problem(sendingTo: request.to) ?? SendPlanner.problem(with: request, snapshot: snapshot) { throw ChainError.rejected(problem.message) }
             let price = self.price(of: request.token, snapshot: snapshot)

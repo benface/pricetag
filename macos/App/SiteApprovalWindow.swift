@@ -4,7 +4,7 @@ import PricetagKit
 import SwiftUI
 
 /// Where every approval happens. It's here and not on the page or in the extension, because nothing a site controls can draw in
-/// this window or press its buttons. Rejecting is the default, and closing the window rejects too.
+/// this window or press its buttons. Closing the window rejects.
 struct SiteApprovalWindow: View {
     static let title = "Site Request"
 
@@ -15,19 +15,26 @@ struct SiteApprovalWindow: View {
             if let failure = bridge.failure {
                 SiteFailureView(failure: failure) { bridge.dismissFailure() }
             } else if let approval = bridge.current {
-                SiteApprovalView(approval: approval, waitingBehind: bridge.pending.count - 1, usd: bridge.usd) { acknowledged in
-                    await bridge.approve(approval.id, acknowledged: acknowledged)
+                SiteApprovalView(approval: approval, waitingBehind: bridge.pending.count - 1, usd: bridge.usd, gate: ApprovalPrompt(needsAcknowledgment: approval.needsAcknowledgment, notBefore: { bridge.nextPromptAt }) { prompt, acknowledged in
+                    await bridge.approve(approval.id, acknowledged: acknowledged, in: prompt)
+                }) {
+                    Task { await bridge.approve(approval.id) }
                 } reject: {
                     bridge.reject(approval.id)
                 }
                 .id(approval.id)
             } else if let working = bridge.working {
-                SiteWorkingView(work: working)
+                SiteProgressView(work: working, usd: bridge.usd, isDone: false)
+            } else if let finished = bridge.finished {
+                SiteProgressView(work: finished, usd: bridge.usd, isDone: true)
             }
         }
         .frame(width: 480)
+        // Under the title bar, which has nothing in it but the close button.
+        .ignoresSafeArea(edges: .top)
         // Closing it answers what's on show. If that was a failure, what's waiting behind it comes up next, because nobody has seen it yet.
         .onDisappear {
+            bridge.dismissFinished()
             if bridge.failure != nil {
                 bridge.dismissFailure()
             } else {
@@ -37,6 +44,7 @@ struct SiteApprovalWindow: View {
     }
 }
 
+/// One request, in words a person can check. For anything that can move money, Touch ID asks as soon as it's on show.
 struct SiteApprovalView: View {
     /// So a window that opens under the pointer can't catch a click meant for the page behind it.
     static let armingDelay = Duration.seconds(1)
@@ -44,166 +52,120 @@ struct SiteApprovalView: View {
     let approval: SiteApproval
     let waitingBehind: Int
     let usd: (UInt128) -> String
-    let approve: (_ acknowledged: Bool) async -> Void
+    @State var gate: ApprovalPrompt
+    /// Connecting only shows an address, so it takes a click and no Touch ID.
+    let connect: () -> Void
     let reject: () -> Void
 
-    @State private var isArmed = false
-    @State private var acknowledged = false
-    @State private var isApproving = false
-    @State private var showsData = false
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(site)
-                    .font(.title2.bold())
-                    .textSelection(.enabled)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                Text(asking)
-                    .foregroundStyle(.secondary)
-            }
-            details
-            ForEach(approval.warnings) { warning in
-                if warning.isStrong {
-                    StrongWarning(text: warning.text)
+        SiteRequestSummary(approval: approval, usd: usd) {
+            VStack(spacing: 8) {
+                if case .connect = approval.action {
+                    ConnectFooter(connect: connect, reject: reject)
                 } else {
-                    Notice(.info, warning.text)
+                    TouchIDFooter(gate: gate, verb: verb, doing: isMessage ? "Signing…" : "Sending…", leaveTitle: "Reject", leave: reject)
                 }
-            }
-            if approval.needsAcknowledgment {
-                Toggle("I understand, and I trust this site", isOn: $acknowledged)
-            }
-            HStack {
                 if waitingBehind > 0 {
                     Text("\(waitingBehind) more waiting")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Spacer()
-                Button("Reject", action: reject)
-                    .keyboardShortcut(.defaultAction)
-                Button(approveTitle) {
-                    isApproving = true
-                    Task {
-                        await approve(acknowledged)
-                        isApproving = false
-                    }
-                }
-                .disabled(!isArmed || isApproving || (approval.needsAcknowledgment && !acknowledged))
-                .help(approval.needsAcknowledgment && !acknowledged ? "Read the warning first" : "")
             }
         }
-        .padding(20)
-        .onExitCommand(perform: reject)
+        // Reject has this shortcut already, once it can take it. This is for when focus is in the text.
+        .onExitCommand { if gate.backOut() { reject() } }
+    }
+
+    private var isMessage: Bool {
+        if case .message = approval.action { true } else { false }
+    }
+
+    private var verb: String {
+        switch approval.action {
+        case .transaction(let review) where review.moved != nil: "send"
+        case .message: "sign"
+        default: "approve"
+        }
+    }
+}
+
+/// Connecting moves nothing, so it's the one approval with no Touch ID.
+private struct ConnectFooter: View {
+    let connect: () -> Void
+    let reject: () -> Void
+    @State private var isArmed = false
+
+    var body: some View {
+        HStack {
+            Spacer()
+            Button("Reject", action: reject)
+                .keyboardShortcut(.cancelAction)
+            Button("Connect", action: connect)
+                .buttonStyle(.borderedProminent)
+                .disabled(!isArmed)
+        }
+        .controlSize(.large)
         .task {
-            try? await Task.sleep(for: Self.armingDelay)
+            try? await Task.sleep(for: SiteApprovalView.armingDelay)
             isArmed = true
         }
     }
+}
 
-    /// Without https://, which is the only scheme a site can have here apart from this Mac's own.
-    private var site: String {
-        approval.origin.hasPrefix("https://") ? String(approval.origin.dropFirst(8)) : approval.origin
-    }
+/// What a request is, the same before and after it's approved.
+private struct SiteRequestSummary<Footer: View>: View {
+    let approval: SiteApproval
+    let usd: (UInt128) -> String
+    @ViewBuilder let footer: Footer
 
-    private var asking: String {
-        switch approval.action {
-        case .connect: "wants to connect to your \(HotWalletWording.title.lowercased())"
-        case .transaction: "wants to send a transaction from your \(HotWalletWording.title.lowercased())"
-        case .message: "wants your signature"
-        }
-    }
-
-    private var approveTitle: String {
-        switch approval.action {
-        case .connect: "Connect"
-        case .transaction: "Approve and Send"
-        case .message: "Sign"
-        }
-    }
-
-    @ViewBuilder
-    private var details: some View {
+    var body: some View {
         switch approval.action {
         case .connect:
-            Text("It will see this wallet's address and balances, and can ask you to approve things here. It can't move anything without you, and it can't see your savings.")
-                .fixedSize(horizontal: false, vertical: true)
+            ConfirmationView(asker: .site(approval.site), hero: .words("Connect to \(HotWalletWording.title)"), rows: [
+                ConfirmationRow(label: "It can see", value: "This wallet's address and balances"),
+                ConfirmationRow(label: "It can't", value: "Move anything without you, or see your savings"),
+            ]) {
+                footer
+            }
         case .transaction(let review):
-            transaction(review)
+            ConfirmationView(asker: .site(approval.site), hero: hero(review), worth: review.moved?.usdMicros.map(usd), rows: rows(review), warnings: approval.warnings, details: details(review), data: review.data.isEmpty ? nil : "0x" + Hex.encode(review.data)) {
+                footer
+            }
         case .message(let review):
-            message(review)
-        }
-    }
-
-    private func transaction(_ review: TransactionReview) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(review.headline)
-                .font(.headline)
-                .fixedSize(horizontal: false, vertical: true)
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
-                GridRow {
-                    Text("Sends").foregroundStyle(.secondary)
-                    // To the last digit, because this is what's being approved.
-                    Text(amount(Money.text(ofUnits: review.value, decimals: 18), usdMicros: review.valueUsdMicros))
-                }
-                GridRow {
-                    Text("Fee, about").foregroundStyle(.secondary)
-                    Text(amount(Format.amount(String(review.feeWei), decimals: 18), usdMicros: review.feeUsdMicros))
-                }
-                GridRow {
-                    Text("To").foregroundStyle(.secondary)
-                    Text(review.toName.map { "\($0) (\(review.to.checksummed))" } ?? review.to.checksummed)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                }
-            }
-            .monospacedDigit()
-            if !review.data.isEmpty {
-                // Its own button and not a DisclosureGroup, whose focus ring gets cut off at the edge of a window this narrow.
-                Button {
-                    showsData.toggle()
-                } label: {
-                    Label("What it sends to the contract", systemImage: showsData ? "chevron.down" : "chevron.right")
-                        .font(.callout)
-                        .padding(.vertical, 2)
-                        .padding(.horizontal, 4)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityValue(showsData ? "Showing" : "Hidden")
-                if showsData {
-                    longText("0x" + Hex.encode(review.data))
-                }
+            ConfirmationView(asker: .site(approval.site), hero: .words(review.headline), rows: review.contract.map { [ConfirmationRow(label: "Contract", value: AddressText.grouped($0.checksummed), isAddress: true)] } ?? [], warnings: approval.warnings, message: review.body) {
+                footer
             }
         }
     }
 
-    private func message(_ review: MessageReview) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(review.headline)
-                .font(.headline)
-            if let contract = review.contract {
-                Text("For the contract \(contract.checksummed)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            longText(review.body)
-        }
+    private func hero(_ review: TransactionReview) -> ConfirmationHero {
+        review.moved.map { .amount($0.text, symbol: $0.symbol) } ?? .words(review.headline)
     }
 
-    private func longText(_ text: String) -> some View {
-        ScrollView {
-            Text(text)
-                .font(.caption.monospaced())
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
+    private func rows(_ review: TransactionReview) -> [ConfirmationRow] {
+        var rows: [ConfirmationRow] = []
+        if let recipient = review.recipient {
+            rows.append(ConfirmationRow(label: "To", value: AddressText.grouped(recipient.checksummed), isAddress: true))
+        } else if let spender = review.spender {
+            rows.append(ConfirmationRow(label: "Spender", value: AddressText.grouped(spender.checksummed), isAddress: true))
+        } else {
+            rows.append(ConfirmationRow(label: "Contract", value: AddressText.grouped(review.to.checksummed), isAddress: true))
         }
-        .frame(maxHeight: 220)
-        .fixedSize(horizontal: false, vertical: true)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        // A token this app doesn't know is only as good as its contract, so that's never tucked away.
+        if review.toName == nil, review.recipient != review.to, review.recipient != nil || review.spender != nil {
+            rows.append(ConfirmationRow(label: "Contract", value: AddressText.grouped(review.to.checksummed), isAddress: true))
+        }
+        if review.alsoSendsEth {
+            rows.append(ConfirmationRow(label: "Also sends", value: amount(Money.text(ofUnits: review.value, decimals: 18), usdMicros: review.valueUsdMicros)))
+        }
+        rows.append(ConfirmationRow(label: "Network fee", value: "About \(review.feeUsdMicros.map(usd) ?? "\(Format.amount(String(review.feeWei), decimals: 18)) ETH")"))
+        return rows
+    }
+
+    /// What's tucked away: the contract of a token this app knows, since the rows say who's on the other end of it.
+    private func details(_ review: TransactionReview) -> [ConfirmationRow] {
+        guard let name = review.toName, review.recipient != review.to, review.recipient != nil || review.spender != nil else { return [] }
+        return [ConfirmationRow(label: name, value: AddressText.grouped(review.to.checksummed), isAddress: true)]
     }
 
     private func amount(_ text: String, usdMicros: UInt128?) -> String {
@@ -211,61 +173,49 @@ struct SiteApprovalView: View {
     }
 }
 
-/// Between approving and the transaction going out, which can take a few seconds when the network is busy.
-private struct SiteWorkingView: View {
+/// Between approving and the transaction going out, which can take a few seconds when the network is busy, and a moment after to say it did.
+struct SiteProgressView: View {
     let work: SiteWork
+    let usd: (UInt128) -> String
+    let isDone: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
-            ProgressView().controlSize(.small)
-            Text(work.isTransaction ? "Sending for \(work.origin)…" : "Signing for \(work.origin)…")
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
+        SiteRequestSummary(approval: work.approval, usd: usd) {
+            ProgressFooter(doing: work.isTransaction ? "Sending…" : "Signing…", done: work.isTransaction ? "Sent" : "Signed", isDone: isDone)
         }
-        .padding(20)
     }
 }
 
 /// It's approved, and it didn't happen. The site will say something too, but only this knows why.
-private struct SiteFailureView: View {
+struct SiteFailureView: View {
     let failure: SiteFailure
     let dismiss: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(failure.isTransaction ? "This Transaction Didn't Go Out" : "This Wasn't Signed")
-                    .font(.title2.bold())
-                Text(failure.origin)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
+        VStack(spacing: 14) {
+            Image(systemName: "xmark.octagon.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(Tone.loss.style)
+                .accessibilityHidden(true)
+            Text(failure.isTransaction ? "This Didn't Go Out" : "This Wasn't Signed")
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
+            Text(failure.origin)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
             Notice(.warning, failure.reason)
                 .textSelection(.enabled)
             if failure.isTransaction {
                 Text("Nothing was sent, so no money moved.")
+                    .foregroundStyle(.secondary)
             }
             HStack {
                 Spacer()
                 Button("OK", action: dismiss)
                     .keyboardShortcut(.defaultAction)
+                    .controlSize(.large)
             }
         }
-        .padding(20)
+        .padding(24)
         .onExitCommand(perform: dismiss)
-    }
-}
-
-private struct StrongWarning: View {
-    let text: String
-
-    var body: some View {
-        Label(text, systemImage: "exclamationmark.octagon.fill")
-            .font(.callout.weight(.medium))
-            .foregroundStyle(.white)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.red, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
