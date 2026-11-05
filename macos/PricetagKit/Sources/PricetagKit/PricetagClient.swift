@@ -5,6 +5,8 @@ import Foundation
 public enum FetchError: Error, Equatable, Sendable {
     /// Nothing answered at the server's address.
     case unreachable
+    /// Nothing came back in time, from a server that's gone or one still busy with a slow read.
+    case timedOut
     /// The server answered, and it can't read from Amp right now.
     case ampUnavailable(String)
     /// The server has no Amp connection set up, so it only has the demo wallet.
@@ -179,6 +181,8 @@ public struct PricetagClient: PortfolioSource {
             (data, response) = try await session.data(for: request)
         } catch let error as URLError where error.code == .cancelled {
             throw CancellationError()
+        } catch let error as URLError where error.code == .timedOut {
+            throw FetchError.timedOut
         } catch {
             throw FetchError.unreachable
         }
