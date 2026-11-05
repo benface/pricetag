@@ -291,6 +291,8 @@ describe("linking a device's accounts", () => {
 
 describe("links into the flow", () => {
   test("a top-up", () => {
+    assert.deepEqual(parseDeviceLink("?addsavings=ledger"), { kind: "add-savings", device: "ledger" })
+    assert.deepEqual(parseDeviceLink("?addsavings=anything"), { kind: "add-savings", device: null })
     assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=20`), { kind: "top-up", to: HOT, usdMicros: "20000000" })
     assert.deepEqual(parseDeviceLink(`?topup=${HOT}`), { kind: "top-up", to: HOT, usdMicros: null })
   })

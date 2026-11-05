@@ -22,6 +22,11 @@ public enum DeviceFlow {
         return link(server, items)
     }
 
+    /// The page that gets an address from a Ledger and sends it back here in an `AddSavingsLink`.
+    public static func addSavingsFromLedger(server: URL) -> URL? {
+        link(server, [URLQueryItem(name: "addsavings", value: "ledger")])
+    }
+
     private static func link(_ server: URL, _ items: [URLQueryItem]) -> URL? {
         guard var parts = URLComponents(url: server, resolvingAgainstBaseURL: false) else { return nil }
         parts.queryItems = items
@@ -63,5 +68,42 @@ public struct AddSavingsLink: Equatable, Identifiable, Sendable {
 
     private static func isAddress(_ text: String) -> Bool {
         text.wholeMatch(of: /0x[0-9a-fA-F]{40}/) != nil
+    }
+}
+
+/// A browser on this Mac.
+public struct InstalledBrowser: Equatable, Sendable {
+    public let bundleID: String
+    public let name: String
+    public let url: URL
+
+    public init(bundleID: String, name: String, url: URL) {
+        self.bundleID = bundleID
+        self.name = name
+        self.url = url
+    }
+}
+
+/// Which browser can do a Ledger's part. Only Chromium browsers have WebHID, so a default like Safari can't.
+public struct LedgerBrowserChoice: Equatable, Sendable {
+    /// Nil when nothing on this Mac is known to reach a Ledger.
+    public let browser: InstalledBrowser?
+    /// The default browser's name, when it's the one that can't.
+    public let defaultThatCant: String?
+
+    /// In the order to offer them, when the default can't.
+    private static let chromium = [
+        "com.google.Chrome", "com.brave.Browser", "com.microsoft.edgemac", "company.thebrowser.Browser", "com.vivaldi.Vivaldi", "com.operasoftware.Opera", "org.chromium.Chromium",
+        "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary", "com.brave.Browser.beta", "com.brave.Browser.nightly", "com.microsoft.edgemac.Beta", "com.microsoft.edgemac.Dev", "com.microsoft.edgemac.Canary",
+    ]
+
+    public init(defaultBrowser: InstalledBrowser?, installed: [InstalledBrowser]) {
+        if let defaultBrowser, Self.chromium.contains(defaultBrowser.bundleID) {
+            browser = defaultBrowser
+            defaultThatCant = nil
+        } else {
+            browser = Self.chromium.lazy.compactMap { id in installed.first { $0.bundleID == id } }.first
+            defaultThatCant = defaultBrowser?.name
+        }
     }
 }

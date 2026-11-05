@@ -38,7 +38,7 @@ const connectors: Connectors = {
   send: async () => `0x${"ab".repeat(32)}`,
 }
 
-const chosen = scene === "check" || scene === "ready" ? (accounts[1] as SeenAccount).address : (accounts[0] as SeenAccount).address
+const chosen = scene === "check" || scene === "ready" || scene === "handoff" ? (accounts[1] as SeenAccount).address : (accounts[0] as SeenAccount).address
 
 const root = createRoot(document.getElementById("root") as HTMLElement)
 
@@ -56,6 +56,6 @@ if (scene === "code") {
     onView={() => {}}
     onClose={() => {}}
     connectors={connectors}
-    {...(scene === "route" ? {} : { start: { signer, accounts, chosen, step: scene as "accounts", ...(params.get("look") ? { lookOnDevice: true } : {}) } })}
+    {...(scene === "route" ? {} : { start: { signer, accounts, chosen, step: scene === "handoff" ? "check" : (scene as "accounts"), ...(scene === "handoff" ? { handingOff: true } : {}), ...(params.get("look") ? { lookOnDevice: true } : {}) } })}
   />,
 )
