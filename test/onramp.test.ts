@@ -285,8 +285,18 @@ describe("signing a request", () => {
     assert.ok(verify("sha256", Buffer.from(`${header}.${claims}`), { key: createPublicKey(privateKey), dsaEncoding: "ieee-p1363" }, Buffer.from(signature, "base64url")))
   })
 
-  it("refuses a secret that isn't a key when the server starts, without saying what it was", () => {
-    assert.throws(() => createOnramp({ COINBASE_ONRAMP_KEY_ID: "id", COINBASE_ONRAMP_KEY_SECRET: "not-it" }), (error: Error) => !error.message.includes("not-it"))
+  it("turns buying off for a secret that isn't a key, and doesn't say what it was", () => {
+    const logged: unknown[][] = []
+    const error = console.error
+    console.error = (...line: unknown[]) => logged.push(line)
+    try {
+      assert.equal(createOnramp({ COINBASE_ONRAMP_KEY_ID: "id", COINBASE_ONRAMP_KEY_SECRET: "not-it" }), null)
+      assert.equal(createOnramp({ COINBASE_ONRAMP_KEY_ID: "id", COINBASE_ONRAMP_KEY_SECRET: "-----BEGIN not-it" }), null)
+    } finally {
+      console.error = error
+    }
+    assert.equal(logged.length, 2)
+    assert.ok(!JSON.stringify(logged).includes("not-it"))
   })
 
   it("is off without a key", () => {

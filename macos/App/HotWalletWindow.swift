@@ -370,7 +370,7 @@ private struct HotWalletDetails: View {
     private var sites: some View {
         Section {
             ForEach(wallet.connectedSites, id: \.self) { origin in
-                LabeledContent(origin) {
+                LabeledContent(siteName(origin)) {
                     Button("Disconnect") { siteBridge.disconnect(origin) }
                         .buttonStyle(.borderless)
                 }
@@ -501,7 +501,7 @@ private struct HotWalletDetails: View {
         case .aboveCap: record.gainUsdMicros == "0" ? "Above the cap" : "Above the cap or realized gains"
         case .manual: "Swept by you"
         case .rotation: "Replacing the key"
-        case .site: record.site ?? "A site"
+        case .site: record.site.map(siteName) ?? "A site"
         case .sent: "Sent to \(Format.shortHash(record.to.checksummed))"
         case .note: "Published for anyone to read"
         }

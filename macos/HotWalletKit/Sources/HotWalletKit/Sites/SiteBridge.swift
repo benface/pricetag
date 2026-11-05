@@ -97,7 +97,7 @@ public struct SiteFailure: Identifiable, Equatable, Sendable {
 }
 
 /// A site as people read it: without https://, which is the only scheme a site can have here apart from this Mac's own.
-private func siteName(_ origin: String) -> String {
+public func siteName(_ origin: String) -> String {
     origin.hasPrefix("https://") ? String(origin.dropFirst(8)) : origin
 }
 

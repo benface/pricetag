@@ -26,7 +26,7 @@ function signerOf(secret: string): { alg: "EdDSA" | "ES256"; sign: (data: Buffer
     return { alg: "ES256", sign: (data) => sign("sha256", data, { key, dsaEncoding: "ieee-p1363" }) }
   }
   const bytes = Buffer.from(secret, "base64")
-  if (bytes.length !== 64) throw new Error("COINBASE_ONRAMP_KEY_SECRET isn't a key Coinbase gave out")
+  if (bytes.length !== 64) throw new Error("Not a key")
   const key = createPrivateKey({ format: "jwk", key: { kty: "OKP", crv: "Ed25519", d: bytes.subarray(0, 32).toString("base64url"), x: bytes.subarray(32).toString("base64url") } })
   return { alg: "EdDSA", sign: (data) => sign(null, data, key) }
 }
@@ -101,8 +101,13 @@ export function createOnramp(env: Env, send: typeof fetch = fetch): Onramp | nul
   const keyId = env.COINBASE_ONRAMP_KEY_ID
   const secret = env.COINBASE_ONRAMP_KEY_SECRET
   if (!keyId || !secret) return null
-  // Fails at startup, with the variable's name and not its value, rather than at the first purchase.
-  signerOf(secret)
+  // A bad key turns off buying, and not the whole server. Its name goes in the log, and never its value.
+  try {
+    signerOf(secret)
+  } catch {
+    console.error("COINBASE_ONRAMP_KEY_SECRET isn't a key Coinbase gave out, so buying is off.")
+    return null
+  }
   const rpcUrl = env.BASE_RPC_URL || DEFAULT_RPC_URL
   const mocked = env.COINBASE_ONRAMP_MOCK === "1"
 
