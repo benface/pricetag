@@ -196,6 +196,12 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public let excludedCount: Int
     /// What its transaction did, in words. The last point has no transaction.
     public var summary: String? = nil
+    /// What was held right after it, at that moment's prices. Only what's known, and nil when nothing is, which isn't $0.
+    public var valueMicros: String? = nil
+    /// What was held right before it, at the same prices, so a deposit is a jump. nil when it leaves out other things than `valueMicros`.
+    public var valueBeforeMicros: String? = nil
+    /// What `valueMicros` leaves out.
+    public var valueExcludedCount: Int? = nil
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
     public var date: Date? { parseTimestamp(timestamp) }
@@ -323,13 +329,18 @@ public struct Portfolio: Codable, Sendable, Equatable {
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
     /// A balance that couldn't be read doesn't count as nothing.
     public var isEmpty: Bool { positions.isEmpty && unreadAssets.isEmpty }
-    public var hasChartableData: Bool { points.contains { $0.pnlMicros != nil } }
+    public var hasChartableData: Bool { hasChartableData(.pnl) }
+    public var isTooNewToChart: Bool { isTooNewToChart(.pnl) }
+
+    public func hasChartableData(_ metric: ChartMetric) -> Bool { points.contains { metric.micros($0) != nil } }
     /// A line says nothing with a transaction or two, or across a few minutes: it's an empty box with a flat line in it.
-    public var isTooNewToChart: Bool {
-        let known = points.filter { $0.txHash != nil && $0.pnlMicros != nil }.compactMap(\.date)
+    public func isTooNewToChart(_ metric: ChartMetric) -> Bool {
+        let known = points.filter { $0.txHash != nil && metric.micros($0) != nil }.compactMap(\.date)
         guard known.count >= 3, let first = known.min(), let last = known.max() else { return true }
         return last.timeIntervalSince(first) < 5 * 60
     }
+    /// There's a chart to show, and not a placeholder.
+    public func canChart(_ metric: ChartMetric) -> Bool { hasChartableData(metric) && !isTooNewToChart(metric) }
     /// Every point with a transaction behind it, newest first.
     public var transactions: [PnlPoint] { points.filter { $0.txHash != nil }.reversed() }
 }
