@@ -689,7 +689,7 @@ private struct Welcome: View {
         ContentUnavailableView {
             Label("See What a Wallet Is Worth", systemImage: "wallet.bifold")
         } description: {
-            Text("Paste a Base address to see its holdings, cost and PnL. It's view-only.")
+            Text("Paste a Base address to see its holdings, cost and PnL.")
                 .help(Wording.pnlHelp)
         } actions: {
             WalletForm(store: store, onDone: {})
