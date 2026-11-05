@@ -75,14 +75,17 @@ public struct WalletEntry: Identifiable, Equatable, Sendable {
     public let kind: WalletKind
     /// A spending key that's been replaced. It's the user's whatever anyone says, and costs keep following its money.
     public var isReplacedKey = false
+    /// The key spending money is moving to, which has money on its way, so nothing about it is up to the list until that's done.
+    public var isNewKey = false
     /// Under Recent, so it falls off the list by itself unless it's kept.
     public var isRecent = false
 
-    public init(address: String, name: String?, kind: WalletKind, isReplacedKey: Bool = false, isRecent: Bool = false) {
+    public init(address: String, name: String?, kind: WalletKind, isReplacedKey: Bool = false, isNewKey: Bool = false, isRecent: Bool = false) {
         self.address = address
         self.name = name
         self.kind = kind
         self.isReplacedKey = isReplacedKey
+        self.isNewKey = isNewKey
         self.isRecent = isRecent
     }
 
@@ -96,7 +99,7 @@ public struct WalletEntry: Identifiable, Equatable, Sendable {
         name ?? (kind == .demo ? "Demo Wallet" : Format.shortHash(address))
     }
 
-    private var kindLabel: String { isReplacedKey ? "Replaced Key" : kind.label }
+    private var kindLabel: String { isNewKey ? "New Key" : isReplacedKey ? "Replaced Key" : kind.label }
 
     /// What the title doesn't already say. Nothing for the demo wallet, which has its own notice.
     public var badge: String? {
@@ -113,9 +116,9 @@ public struct WalletEntry: Identifiable, Equatable, Sendable {
 
     public var canRename: Bool { kind != .spendingMoney && kind != .demo }
     /// Spending money holds a key and a savings wallet takes sweeps, so neither is only an entry in a list.
-    public var canRemove: Bool { kind == .yours || kind == .watching }
+    public var canRemove: Bool { (kind == .yours && !isNewKey) || kind == .watching }
     public var canMoveToYours: Bool { kind == .watching }
-    public var canMoveToWatching: Bool { kind == .yours && !isReplacedKey }
+    public var canMoveToWatching: Bool { kind == .yours && !isReplacedKey && !isNewKey }
     public var canKeep: Bool { isRecent }
     public var canStopBeingSavings: Bool { kind == .savings }
 }
@@ -129,14 +132,14 @@ public struct WalletList: Equatable, Sendable {
     public let demo: WalletEntry?
 
     /// `linked` is every wallet the user has said is theirs, which includes the spending money and savings ones.
-    /// `replacedKeys` is the ones among them this Mac's wallet used to spend from. `order` is how the user arranged them, and `hidden` is what they took
+    /// `replacedKeys` is the ones among them this Mac's wallet used to spend from, and `newKey` the one it's moving to. `order` is how the user arranged them, and `hidden` is what they took
     /// off the list that stays theirs anyway, until they look at it again.
-    public init(spending: NamedWallet?, savings: [NamedWallet], linked: [String], replacedKeys: [String] = [], saved: [SavedWallet], current: String?, offersDemo: Bool = true, order: [String] = [], hidden: [String] = []) {
+    public init(spending: NamedWallet?, savings: [NamedWallet], linked: [String], replacedKeys: [String] = [], newKey: String? = nil, saved: [SavedWallet], current: String?, offersDemo: Bool = true, order: [String] = [], hidden: [String] = []) {
         let savedNames = Dictionary(saved.compactMap { wallet in wallet.name.map { (wallet.address, $0) } }, uniquingKeysWith: { first, _ in first })
         var yours = spending.map { [WalletEntry(address: $0.address, name: $0.name, kind: .spendingMoney)] } ?? []
         yours += savings.filter { $0.address != spending?.address }.map { WalletEntry(address: $0.address, name: $0.name, kind: .savings) }
         let named = Set(yours.map(\.address))
-        yours += linked.filter { !named.contains($0) && ($0 == current || !hidden.contains($0)) }.map { WalletEntry(address: $0, name: savedNames[$0], kind: .yours, isReplacedKey: replacedKeys.contains($0)) }
+        yours += linked.filter { !named.contains($0) && ($0 == current || !hidden.contains($0)) }.map { WalletEntry(address: $0, name: savedNames[$0], kind: .yours, isReplacedKey: replacedKeys.contains($0), isNewKey: $0 == newKey) }
         self.yours = Self.arranged(yours, by: order)
 
         let own = Set(linked + yours.map(\.address))
@@ -163,9 +166,10 @@ public struct WalletList: Equatable, Sendable {
         address.flatMap { address in all.first { $0.address == address } }
     }
 
-    /// What to show once this one is gone. Never the demo, which must not quietly stand in for a real wallet.
+    /// What to show once this one is gone. Never the demo, which must not quietly stand in for a real wallet, or a key that's been replaced, which isn't one
+    /// anyone's using. With nothing else, it's nothing, which is the first screen.
     public func next(afterRemoving address: String) -> String? {
-        (yours + watching + recent).first { $0.address != address }?.address
+        (yours + watching + recent).first { $0.address != address && !$0.isReplacedKey }?.address
     }
 
     /// What the user arranged comes first, in that order. Whatever they haven't placed yet follows, as it would have been.

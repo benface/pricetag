@@ -4,14 +4,15 @@
 import Foundation
 import Observation
 
-/// The wallet list and what it depends on, as it was before a change.
+/// What the list and the answers said about one wallet, before a change to it.
 public struct WalletListSnapshot: Sendable {
-    let answers: Book
+    let address: String
+    let answer: SenderAnswer?
     let undoDepth: Int
-    let saved: [SavedWallet]
-    let order: [String]
-    let hidden: [String]
-    let address: String?
+    let saved: SavedWallet?
+    let orderIndex: Int?
+    let wasHidden: Bool
+    let wasShowing: Bool
 }
 
 public enum FeedState: Equatable, Sendable {
@@ -274,18 +275,47 @@ public final class PortfolioStore {
         saveOrder(walletOrder.filter { !addresses.contains($0) } + arranged)
     }
 
-    /// Puts the list back as it was when this was taken. It's for an Undo right after a change, because anything since goes with it.
-    public var walletListSnapshot: WalletListSnapshot {
-        WalletListSnapshot(answers: answers, undoDepth: undoStack.count, saved: savedWallets, order: walletOrder, hidden: hiddenWallets, address: address)
+    /// What Undo needs to put this one wallet back. It's about nothing else, so whatever else has changed since stays changed.
+    public func walletListSnapshot(of address: String) -> WalletListSnapshot {
+        WalletListSnapshot(
+            address: address,
+            answer: answers.senders[address],
+            undoDepth: undoStack.count,
+            saved: savedWallets.first { $0.address == address },
+            orderIndex: walletOrder.firstIndex(of: address),
+            wasHidden: hiddenWallets.contains(address),
+            wasShowing: self.address == address
+        )
     }
 
     public func restore(_ snapshot: WalletListSnapshot) {
-        if snapshot.answers != answers { store(snapshot.answers) }
-        undoStack.removeLast(max(undoStack.count - snapshot.undoDepth, 0))
-        saveWallets(snapshot.saved)
-        saveOrder(snapshot.order)
-        saveHidden(snapshot.hidden)
-        if snapshot.address != address { setWallet(snapshot.address) }
+        let address = snapshot.address
+        if answers.senders[address] != snapshot.answer {
+            var next = answers
+            next.senders[address] = snapshot.answer
+            store(next)
+        }
+        // Only when the change's own entry is on top. Anything said since keeps its place.
+        if undoStack.count == snapshot.undoDepth + 1 { undoStack.removeLast() }
+        var wallets = savedWallets
+        if let index = wallets.firstIndex(where: { $0.address == address }) {
+            // A name given since is the user's latest word on it. Without one, an entry the change made goes with the change.
+            if let saved = snapshot.saved {
+                wallets[index].isKept = saved.isKept
+            } else if wallets[index].name == nil {
+                wallets.remove(at: index)
+            }
+        } else if let saved = snapshot.saved {
+            wallets.append(saved)
+        }
+        saveWallets(wallets)
+        if let index = snapshot.orderIndex, !walletOrder.contains(address) {
+            var order = walletOrder
+            order.insert(address, at: min(index, order.count))
+            saveOrder(order)
+        }
+        saveHidden(hiddenWallets.filter { $0 != address } + (snapshot.wasHidden ? [address] : []))
+        if snapshot.wasShowing { setWallet(address) }
     }
 
     private func saveWallets(_ wallets: [SavedWallet]) {

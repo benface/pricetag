@@ -131,12 +131,13 @@ struct WalletListTests {
         #expect(store.hiddenWallets.isEmpty, "looking at it brings it back")
     }
 
-    @Test func undoPutsTheListBackAsItWas() {
+    @Test func undoPutsTheWalletBackAsItWas() {
         let (store, _) = makeStore()
         store.setWallet(a)
         store.renameWallet(a, to: "Laptop")
         store.moveToYours(a)
-        let before = store.walletListSnapshot
+        store.moveWallets(in: [a, b], from: [1], to: 0)
+        let before = store.walletListSnapshot(of: a)
         let depth = store.undoStack.count
         store.removeWallet(a, showing: b)
         #expect(store.address == b)
@@ -144,7 +145,57 @@ struct WalletListTests {
         #expect(store.address == a)
         #expect(store.book.linkedWallets == [a])
         #expect(store.savedWallets.first { $0.address == a }?.name == "Laptop")
+        #expect(store.walletOrder == [b, a])
         #expect(store.undoStack.count == depth)
+    }
+
+    @Test func undoKeepsACostRecordedSince() throws {
+        let (store, defaults) = makeStore()
+        let before = store.walletListSnapshot(of: a)
+        store.moveToYours(a)
+        store.recordPurchase(Purchase(provider: "coinbase", order: "1", wallet: b, asset: "ETH", units: "1", txHash: "0x1", blockNum: 1, cost: Money(micros: "5000000", currency: "USD"), costUsdMicros: "5000000"))
+        store.restore(before)
+        #expect(store.book.purchases.count == 1)
+        #expect(store.book.linkedWallets.isEmpty, "only the move is undone")
+        #expect(store.undoStack.isEmpty, "there's nothing left of it to undo")
+        let reopened = PortfolioStore(defaults: defaults, makeSource: { _ in ScriptedSource(Array(repeating: .failure(.unreachable), count: 50)) })
+        #expect(reopened.book.purchases.count == 1, "and that's what was saved")
+    }
+
+    @Test func undoKeepsAnythingElseChangedSince() {
+        let (store, _) = makeStore()
+        store.renameWallet(b, to: "Before")
+        let before = store.walletListSnapshot(of: a)
+        store.moveToWatching(a)
+        store.renameWallet(b, to: "After")
+        store.moveToYours(c)
+        store.renameWallet(a, to: "Named Since")
+        store.restore(before)
+        #expect(store.savedWallets.first { $0.address == b }?.name == "After")
+        #expect(store.book.linkedWallets == [c], "another answer given since stays")
+        #expect(store.savedWallets.first { $0.address == a }?.name == "Named Since", "so does the wallet's own new name")
+        #expect(store.savedWallets.first { $0.address == a }?.isKept == nil)
+        let unnamed = store.walletListSnapshot(of: d)
+        store.moveToWatching(d)
+        store.restore(unnamed)
+        #expect(!store.savedWallets.contains { $0.address == d }, "an entry only the move made goes with it")
+    }
+
+    @Test func aKeySpendingMoneyIsMovingToCantBeMovedOrRemoved() throws {
+        let list = WalletList(spending: NamedWallet(address: a, name: "Spending Money"), savings: [], linked: [a, b], newKey: b, saved: [], current: a)
+        let new = try #require(list.entry(for: b))
+        #expect(new.kind == .yours)
+        #expect(!new.canMoveToWatching)
+        #expect(!new.canRemove)
+        #expect(new.badge == "New Key")
+        #expect(new.isNewKey)
+    }
+
+    @Test func aReplacedKeyIsNeverWhatShowsNext() {
+        let replaced = WalletList(spending: nil, savings: [], linked: [a, b], replacedKeys: [a, b], saved: [], current: nil)
+        #expect(replaced.next(afterRemoving: a) == nil, "with nothing else, it's the first screen")
+        let others = WalletList(spending: nil, savings: [], linked: [a, b, c], replacedKeys: [a, b], saved: [], current: nil)
+        #expect(others.next(afterRemoving: a) == c)
     }
 
     @Test func dragsAreSavedPerSectionAndAcrossLaunches() {

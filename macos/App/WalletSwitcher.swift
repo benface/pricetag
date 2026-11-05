@@ -11,6 +11,7 @@ extension PortfolioStore {
             savings: hotWallet?.settings.coldWallets.map { NamedWallet(address: $0.address.lowercased, name: $0.name) } ?? [],
             linked: book.linkedWallets,
             replacedKeys: hotWallet?.replacedKeys ?? [],
+            newKey: hotWallet?.rotation?.to.lowercased,
             saved: savedWallets,
             current: address,
             offersDemo: WalletList.offersDemo,
@@ -449,7 +450,7 @@ struct WalletSwitcher: View {
 
     /// Does it, and says what changed right away, because the numbers change with it. An account from a device comes back with Undo too.
     private func change(_ entry: WalletEntry, to text: String, _ action: () -> Void) {
-        let before = store.walletListSnapshot
+        let before = store.walletListSnapshot(of: entry.address)
         let account = hotWallet?.settings.deviceAccounts.first { $0.lowercased == entry.address }
         action()
         note = WalletListNote(text: text) { [store, hotWallet] in

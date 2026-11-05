@@ -165,10 +165,13 @@ struct MainWindow: View {
         if hotWallet.availability == .ready {
             ToolbarItem(placement: .primaryAction) {
                 Button("Buy", systemImage: "plus") { navigation.isBuying = true }
+                    // A plus on its own could mean adding anything.
+                    .labelStyle(.titleAndIcon)
                     .help("Buy crypto")
             }
         }
-        if store.address != nil, navigation.section == .overview || navigation.section == .transactions {
+        // In a narrow window Buy's label takes its room, and pushing either into the overflow menu would hide Buy. ⌘R and the View menu still refresh.
+        if store.address != nil, navigation.section == .overview || navigation.section == .transactions, width >= Self.sidebarWidth || hotWallet.availability != .ready {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh", systemImage: "arrow.clockwise") { store.start() }
                     .help("Refresh (⌘R)")
@@ -278,7 +281,9 @@ struct MainWindow: View {
     }
 
     private var isShowingSpendingMoney: Bool {
-        hotWallet.availability == .ready && hotWallet.address?.lowercased == store.address
+        // With no wallet showing and no key yet, there's nothing here for these to be equal about.
+        guard hotWallet.availability == .ready, let address = hotWallet.address else { return false }
+        return address.lowercased == store.address
     }
 
     /// The same numbers as any wallet, with what only this one can do around them. Those work whatever the server's doing, so they stay on the page either way.
