@@ -23,10 +23,12 @@ import {
   PNL_HELP,
   PNL_UNAVAILABLE,
   READING,
+  ANSWER_QUESTIONS,
   REALIZED_HELP,
   RETURN_HELP,
   UNPRICED_FEES,
   UNREALIZED_HELP,
+  answerQuestionsLabel,
   behindSentence,
   coverageSentence,
   excludedSentence,
@@ -221,8 +223,8 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
                             {values.unrealizedMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : est(signed(values.unrealizedMicros), position.estimates.unrealized)}
                           </Num>
                           {unknown && resolvable.has(asset) ? (
-                            <button type="button" className="resolve-button" aria-label={`Resolve ${asset}`} onClick={() => onResolve(asset)}>
-                              Resolve
+                            <button type="button" className="resolve-button" aria-label={`Answer questions about ${asset}`} onClick={() => onResolve(asset)}>
+                              {ANSWER_QUESTIONS}
                             </button>
                           ) : null}
                         </>
@@ -428,7 +430,7 @@ export function App() {
                   {caveat ? <p className="caveat">{caveat}</p> : null}
                   {questions.length > 0 ? (
                     <button type="button" className="resolve-button big" onClick={() => setResolving({ asset: null })}>
-                      Resolve {questions.length}
+                      {answerQuestionsLabel(questions.length)}
                     </button>
                   ) : null}
                   {totals.excluded.length > 0 ? (

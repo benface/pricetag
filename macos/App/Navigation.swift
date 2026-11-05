@@ -75,7 +75,7 @@ final class Navigation {
     /// Which pane Settings opens on, for what points there from elsewhere.
     var settingsPane = SettingsView.Pane.general
     var isResolving = false
-    /// Which holding Fill In was clicked on, so its questions come first.
+    /// Which holding's questions were asked for, so they come first.
     var resolvingAsset: String?
     var isExporting = false
     /// A notification was clicked. Spending Money scrolls to its row and lights it up, and the window opens if it's closed.
