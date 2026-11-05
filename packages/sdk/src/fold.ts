@@ -454,3 +454,16 @@ export function valuePosition(state: PositionState, priceMicros: string | null):
     estimatedRealizedMicros: state.estimatedRealizedMicros,
   }
 }
+
+/**
+ * What's held has gained or lost, as a share of what it cost, in basis points rounded half away from zero. null whenever
+ * its cost or value is unknown, so an unknown is never 0%, and when it cost nothing, because there's no share of nothing.
+ */
+export function returnBps({ costMicros, unrealizedMicros }: Pick<PositionValues, "costMicros" | "unrealizedMicros">): string | null {
+  if (costMicros === null || unrealizedMicros === null) return null
+  const cost = BigInt(costMicros)
+  if (cost <= 0n) return null
+  const gain = BigInt(unrealizedMicros) * 10_000n
+  const size = ((gain < 0n ? -gain : gain) * 2n + cost) / (2n * cost)
+  return (gain < 0n ? -size : size).toString()
+}

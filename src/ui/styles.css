@@ -236,3 +236,7 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .code-light { padding: 12px; border-radius: 10px; background: #fff; align-self: center; }
 .code-progress { width: 100%; }
 .exchange { display: flex; flex-direction: column; gap: 10px; }
+.sort-button { all: unset; cursor: pointer; white-space: nowrap; }
+.sort-button:hover { color: var(--text-primary); }
+.sort-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 3px; }
+.sort-mark { display: inline-block; min-width: 1ch; }

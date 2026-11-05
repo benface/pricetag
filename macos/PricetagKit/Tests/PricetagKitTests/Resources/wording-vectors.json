@@ -198,6 +198,7 @@
     "pnlHelp": "PnL is profit and loss: what you've gained or lost so far.",
     "realizedHelp": "Gain or loss on what you've sold or spent.",
     "unrealizedHelp": "Gain or loss on what you still hold, at the current price.",
+    "returnHelp": "Unrealized PnL as a share of what you paid for what you still hold.",
     "notStarted": "Numbers appear once the data reaches this wallet.",
     "unpricedFees": "Some network fees had no price at the time, and aren't in this total.",
     "demo": "Demo data, not a real wallet.",
