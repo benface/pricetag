@@ -1273,3 +1273,23 @@ private struct FailingChain: ChainClient {
     func read(_ method: String, _ parameters: JSONValue) throws -> RPCAnswer { throw ChainError.unreachable }
     func l1Fee(ofPayload payload: [UInt8]) throws -> UInt128 { throw ChainError.unreachable }
 }
+
+@Suite struct ShownWalletWordingTests {
+    private let spending = "0x00000000000000000000000000000000000de301"
+    private let other = "0x00000000000000000000000000000000000de302"
+
+    @Test func noWalletShowingIsNeverCalledSpendingMoney() {
+        // Two nils are equal, which is how a fresh install came to be told it held a key.
+        #expect(HotWalletWording.shownWallet(nil, spendingMoney: nil) == "No wallet is showing. Choose one in the main window.")
+        #expect(HotWalletWording.shownWallet(nil, spendingMoney: spending) == "No wallet is showing. Choose one in the main window.")
+    }
+
+    @Test func aWalletYouLookedUpIsOnlyRead() {
+        #expect(HotWalletWording.shownWallet(other, spendingMoney: nil) == "This wallet is only read, and nothing signs for it.")
+        #expect(HotWalletWording.shownWallet(other, spendingMoney: spending) == "This wallet is only read, and nothing signs for it. The one key in this app is below.")
+    }
+
+    @Test func spendingMoneySaysSo() {
+        #expect(HotWalletWording.shownWallet(spending, spendingMoney: spending).hasPrefix("This is this Mac's spending money"))
+    }
+}
