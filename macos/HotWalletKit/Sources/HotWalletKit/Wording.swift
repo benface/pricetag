@@ -12,6 +12,14 @@ public enum HotWalletWording {
         "Add a savings wallet. Without one, this is all you have, so the cap stays at \(usd(dollars: 25, beside: main)) and nothing can be swept."
     }
 
+    /// What Settings says about the wallet showing. Both are lowercased addresses, and neither may be there.
+    public static func shownWallet(_ shown: String?, spendingMoney: String?) -> String {
+        guard let shown else { return "No wallet is showing. Choose one in the main window." }
+        if shown == spendingMoney { return "This is this Mac's spending money, the one wallet this app holds a key for. Its settings are below." }
+        let onlyRead = "This wallet is only read, and nothing signs for it."
+        return spendingMoney == nil ? onlyRead : "\(onlyRead) The one key in this app is below."
+    }
+
     public static let sweepsOnlyWhileOpen = "Sweeps only run while the app is open. If it's closed, whatever arrives stays here until it opens again."
 
     /// The cap, and everything measured against it, stays in USD.

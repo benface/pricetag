@@ -127,6 +127,7 @@ enum TestScene: String, CaseIterable {
     case settings
     case settingsHotWallet = "settings-hot-wallet"
     case settingsShowingSpendingMoney = "settings-showing-spending-money"
+    case settingsNoWallet = "settings-no-wallet"
     case settingsCAD = "settings-cad"
     case settingsHotWalletCAD = "settings-hot-wallet-cad"
     case hotWalletSetup = "hot-wallet-setup"
@@ -191,7 +192,7 @@ enum TestScene: String, CaseIterable {
 
     private var hasWallet: Bool {
         switch self {
-        case .mainNoWallet, .mainNoWalletSmallest, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .popoverNoWallet: false
+        case .mainNoWallet, .mainNoWalletSmallest, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .popoverNoWallet, .settingsNoWallet: false
         default: true
         }
     }
@@ -287,7 +288,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
         case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
-        case .settings, .settingsHotWallet, .settingsShowingSpendingMoney, .settingsCAD, .settingsHotWalletCAD:
+        case .settings, .settingsHotWallet, .settingsShowingSpendingMoney, .settingsNoWallet, .settingsCAD, .settingsHotWalletCAD:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 720), isReady: isReady)
