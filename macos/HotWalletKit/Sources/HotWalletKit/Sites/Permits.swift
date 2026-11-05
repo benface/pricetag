@@ -32,7 +32,8 @@ public struct PermitSummary: Equatable, Sendable {
         let who = SiteWording.who(spender)
         let asset = tokenSymbol ?? "this token"
         if kind == .permit2Transfer { return isUnlimited ? "Let \(who) take all of your \(asset), once" : "Let \(who) take up to \(amount), once" }
-        if isZero { return "Stop \(who) from spending your \(asset)" }
+        // Only sending the signature changes anything, and whoever has it can choose not to, so this is a request, not a stop.
+        if isZero { return "Sign a request to stop \(who) spending your \(asset)" }
         return isUnlimited ? "Let \(who) spend all of your \(asset)" : "Let \(who) spend up to \(amount)"
     }
 
@@ -63,9 +64,10 @@ public struct PermitSummary: Equatable, Sendable {
                   let word = try? TypedData.integerWord(value, bits: 160, signed: false), let usedBy = Self.date(deadline, formatDate) else { return nil }
             kind = .permit2Allowance
             (token, spender, amount) = (tokenAddress, spenderAddress, word)
-            // Permit2 takes zero to mean the block it's used in, so it ends as soon as it starts.
+            // Permit2 takes zero to mean the time of the block it's used in, and allows spending until that time has passed. So it
+            // holds, up to the amount and as many times as that allows, for the couple of seconds Base takes for a block.
             guard let ends = try? TypedData.integerWord(expiration, bits: 48, signed: false) else { return nil }
-            allowedUntil = Self.seconds(ends) == 0 ? "As soon as it's used" : Self.date(Self.seconds(ends), formatDate)
+            allowedUntil = Self.seconds(ends) == 0 ? "Only the few seconds it's used in" : Self.date(Self.seconds(ends), formatDate)
             mustBeUsedBy = usedBy
         case "PermitTransferFrom" where contract == KnownContracts.permit2 && fields == ["TokenPermissions permitted", "address spender", "uint256 nonce", "uint256 deadline"]
             && data.types["TokenPermissions"]?.map({ "\($0.type) \($0.name)" }) == ["address token", "uint256 amount"]:

@@ -57,6 +57,11 @@ private func permitSingle(amount: String, expiration: String, verifyingContract:
         previewed.preview = CallPreview(gives: [known("200", "USDC")], gets: [known("0.0757", "ETH")], allowances: [])
         let swap = TransactionReview(SiteTransaction(to: EthereumAddress(stranger)!, value: 0, data: [0x12, 0x34, 0x56, 0x78]), quote: previewed)
         #expect(swap.title == "Swap 200 USDC for about 0.0757 ETH")
+        // ETH alone doesn't make it clear: what it's sent for is still unknown.
+        let paying = TransactionReview(SiteTransaction(to: EthereumAddress(stranger)!, value: 1_000_000_000_000_000, data: [0x12, 0x34, 0x56, 0x78]), quote: quote)
+        #expect(paying.isUnreadableCall)
+        #expect(paying.title == SiteWording.unclear)
+        #expect(paying.headline == "Send 0.001 ETH with a request this app can't read")
         // A call it can read keeps its own words.
         let send = TransactionReview(SiteTransaction(to: EthereumAddress(stranger)!, value: 1_000_000_000_000_000, data: []), quote: quote)
         #expect(send.title == send.headline)
@@ -107,7 +112,19 @@ private func permitSingle(amount: String, expiration: String, verifyingContract:
     @Test func aLimitedPermitSaysHowMuch() throws {
         #expect(try review(eip2612(value: "250000000")).permit?.amount == "250 USDC")
         #expect(try review(eip2612(value: "250000000")).headline == "Let 0x4444…4444 spend up to 250 USDC")
-        #expect(try review(eip2612(value: "0")).headline == "Stop 0x4444…4444 from spending your USDC")
+    }
+
+    /// Signing a permit for nothing changes nothing until it's sent, and the site can keep it, so the words never say it stops anything.
+    @Test func aPermitForNothingIsOnlyARequest() throws {
+        let zero = try review(eip2612(value: "0"))
+        #expect(zero.headline == "Sign a request to stop 0x4444…4444 spending your USDC")
+        #expect(zero.warnings.contains(SiteWarning(SiteWording.removalIsOnlyARequest(spender: "0x4444…4444"))))
+        let permit2 = try review(permitSingle(amount: "0", expiration: "1796428800"))
+        #expect(permit2.headline == "Sign a request to stop Uniswap (0x6fF5…9b43) spending your USDC")
+        #expect(permit2.warnings.contains(SiteWarning(SiteWording.removalIsOnlyARequest(spender: "Uniswap (0x6fF5…9b43)"))))
+        // Nothing gets easier to approve.
+        #expect(zero.warnings.first?.isStrong == true)
+        #expect(try review(eip2612(value: "1")).warnings.allSatisfy { $0.text != SiteWording.removalIsOnlyARequest(spender: "0x4444…4444") })
     }
 
     /// A token off the list has no decimals anyone can trust, so it's units, and it's named as unknown.
@@ -141,7 +158,9 @@ private func permitSingle(amount: String, expiration: String, verifyingContract:
         #expect(message.warnings.first?.text.contains("Uniswap (0x6fF5…9b43)") == true)
         // Permit2's own maximum, 2^160 - 1.
         #expect(try review(permitSingle(amount: "1461501637330902918203684832716283019655932542975", expiration: "0")).permit?.amount == "Unlimited")
-        #expect(try review(permitSingle(amount: "1", expiration: "0")).permit?.allowedUntil == "As soon as it's used")
+        // Zero is the block it's used in, which can hold more than one transfer up to the amount, so it isn't once or instant.
+        #expect(try review(permitSingle(amount: "1", expiration: "0")).permit?.allowedUntil == "Only the few seconds it's used in")
+        #expect(try review(permitSingle(amount: "1", expiration: "1")).permit?.allowedUntil == "at 1")
     }
 
     /// The same shape from anywhere but Permit2 is something else, which has to be shown as it is.

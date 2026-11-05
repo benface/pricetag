@@ -127,7 +127,7 @@ private struct SiteRequestSummary<Footer: View>: View {
                 footer
             }
         case .transaction(let review):
-            ConfirmationView(asker: .site(approval.site), hero: hero(review), worth: review.preview == nil ? review.moved?.usdMicros.map(money) : nil, rows: rows(review), warnings: approval.warnings, details: details(review), data: review.data.isEmpty ? nil : "0x" + Hex.encode(review.data)) {
+            ConfirmationView(asker: .site(approval.site), hero: hero(review), worth: review.isUnreadableCall ? nil : review.moved?.usdMicros.map(money), rows: rows(review), warnings: approval.warnings, details: details(review), data: review.data.isEmpty ? nil : "0x" + Hex.encode(review.data)) {
                 footer
             }
         case .message(let review):
@@ -160,9 +160,10 @@ private struct SiteRequestSummary<Footer: View>: View {
         return rows
     }
 
-    /// A big number says that's the whole of it, which it isn't when something comes back. The preview's rows say what goes each way.
+    /// A big number says that's the whole of it, which it isn't when something comes back, or when nothing says what the call does.
+    /// The rows say what goes where.
     private func hero(_ review: TransactionReview) -> ConfirmationHero {
-        guard review.preview == nil, let moved = review.moved else { return .words(review.title) }
+        guard !review.isUnreadableCall, let moved = review.moved else { return .words(review.title) }
         return .amount(moved.text, symbol: moved.symbol)
     }
 
@@ -201,6 +202,10 @@ private struct SiteRequestSummary<Footer: View>: View {
         // A token this app doesn't know is only as good as its contract, so that's never tucked away.
         if review.toName == nil, review.recipient != review.to, review.recipient != nil || review.spender != nil {
             rows.append(Self.contractRow(review.to))
+        }
+        // With no estimate, the ETH is all that's certain, so it's a row under the title rather than the title itself.
+        if review.preview == nil, review.isUnreadableCall, review.value > 0 {
+            rows.insert(ConfirmationRow(label: "Sends", value: amount(Money.text(ofUnits: review.value, decimals: 18), usdMicros: review.valueUsdMicros)), at: 0)
         }
         if review.alsoSendsEth {
             rows.append(ConfirmationRow(label: "Also sends", value: amount(Money.text(ofUnits: review.value, decimals: 18), usdMicros: review.valueUsdMicros)))

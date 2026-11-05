@@ -49,6 +49,11 @@ public enum SiteWording {
         "This signature lets \(spender ?? "someone else") spend your tokens or act for you, with no transaction and no fee, so you won't see it happen. Scams rely on this. Only approve it if you trust this site and meant to do this."
     }
 
+    /// A permit for nothing takes effect only when someone sends it, and the site can just keep it.
+    static func removalIsOnlyARequest(spender: String) -> String {
+        "Signing this doesn't stop anything by itself. It only takes effect if it's sent, so whatever \(spender) can spend now, it still can until then."
+    }
+
     static let unreadableMessage = "This can't be read as text, so there's no way to know what it would be used for. Scams rely on this."
     static let anyChain = "This signature isn't tied to a network, so it could be used anywhere, not just on Base."
     static let burn = "This sends to an address nobody controls, where nothing can ever be recovered."
@@ -152,7 +157,7 @@ public struct TransactionReview: Equatable, Sendable {
     public var preview: CallPreview?
 
     /// Whether all there is to say about this is what the node can work out.
-    var isUnreadableCall: Bool { preview != nil || warnings.contains(SiteWarning(SiteWording.unreadableCall)) }
+    public var isUnreadableCall: Bool { preview != nil || warnings.contains(SiteWarning(SiteWording.unreadableCall)) }
 
     /// What the window says this does. For a call this app can't read, that's the estimate's words when it's clear, and plainly
     /// that it isn't otherwise. Touch ID only ever gets `headline`, which says nothing an estimate came up with.
@@ -388,6 +393,7 @@ extension MessageReview {
         if Self.looksLikeAPermit(data) { warnings.insert(SiteWarning(SiteWording.typedPermit(spender: spender), isStrong: true), at: 0) }
         // The token list is Base's, so a permit for anywhere else isn't read as one.
         let permit = chain == Base.chainID ? PermitSummary(data, formatDate: formatDate) : nil
+        if let permit, permit.isZero, permit.kind != .permit2Transfer { warnings.append(SiteWarning(SiteWording.removalIsOnlyARequest(spender: SiteWording.who(permit.spender)))) }
         let headline = permit?.headline ?? "Sign \(data.domain["name"]?.string.map { "this for \($0)" } ?? "this message")"
         self.init(headline: headline, body: Self.pretty(data.message, indent: 0), contract: contract, warnings: warnings, signable: try data.signable(), permit: permit)
     }
