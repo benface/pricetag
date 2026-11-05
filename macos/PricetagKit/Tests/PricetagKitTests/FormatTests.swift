@@ -27,6 +27,10 @@ struct FormatVectors: Decodable {
     struct BlocksBefore: Decodable {
         let block, ms, before: Int
     }
+    struct PlainAmount: Decodable {
+        let text: String
+        let plain: String?
+    }
     struct Other: Decodable {
         struct OtherPrice: Decodable { let micros, price: String }
         struct OtherTicks: Decodable {
@@ -48,6 +52,7 @@ struct FormatVectors: Decodable {
     let duration: [Span]
     let blockSpans: [BlockSpan]
     let blocksBefore: [BlocksBefore]
+    let plainAmount: [PlainAmount]
 }
 
 @Suite struct FormatTests {
@@ -68,6 +73,13 @@ struct FormatVectors: Decodable {
         for vector in vectors.cad {
             #expect(Format.money(vector.micros, .CAD) == vector.usd, "\(vector.micros)")
             #expect(Format.signedMoney(vector.micros, .CAD) == vector.signed, "\(vector.micros)")
+        }
+    }
+
+    @Test func plainAmountMatchesTheWebApp() {
+        #expect(vectors.plainAmount.contains { $0.text == "46,20" && $0.plain == "46.20" })
+        for vector in vectors.plainAmount {
+            #expect(Format.plainAmount(vector.text) == vector.plain, "\(vector.text)")
         }
     }
 

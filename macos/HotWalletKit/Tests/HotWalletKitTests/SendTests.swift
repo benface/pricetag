@@ -566,10 +566,12 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
     @Test func amountsAreReadExactly() {
         #expect(Money.units(fromText: "1.5", decimals: 6) == 1_500_000)
         #expect(Money.units(fromText: "1,000", decimals: 6) == 1_000_000_000)
+        #expect(Money.units(fromText: "1,5", decimals: 6) == 1_500_000, "a decimal comma isn't thousands")
+        #expect(Money.units(fromText: "46,20", decimals: 6) == 46_200_000)
         #expect(Money.units(fromText: ".25", decimals: 2) == 25)
         #expect(Money.units(fromText: "1.", decimals: 2) == 100)
         #expect(Money.units(fromText: "1.1234567", decimals: 6) == nil, "rounding someone's money isn't this app's call")
-        for bad in ["", ".", "-1", "1e5", "1.2.3", "abc"] { #expect(Money.units(fromText: bad, decimals: 6) == nil, "\(bad)") }
+        for bad in ["", ".", "-1", "1e5", "1.2.3", "abc", "$5", "1.234,50", "12,3456", "1,23,456", "0,125"] { #expect(Money.units(fromText: bad, decimals: 6) == nil, "\(bad)") }
         #expect(Money.units(fromText: String(repeating: "9", count: 60), decimals: 18) == nil)
     }
 

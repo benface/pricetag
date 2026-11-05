@@ -39,6 +39,17 @@ export function labelUsd(text: string, main: CurrencyCode): string {
   return main === "USD" ? text : text.replace("$", "US$")
 }
 
+/**
+ * A number as someone typed it, without its spaces and grouping, or null when a comma in it can't be told apart. Whether what's left is a number is the caller's to check.
+ * A comma only groups thousands in threes, so "46,20" is 46.20, and dropping it would make that 4,620. Anything else with a comma is refused rather than guessed.
+ */
+export function plainAmount(text: string): string | null {
+  const clean = text.replace(/\s/g, "")
+  if (/^\d+,\d{1,2}$/.test(clean)) return clean.replace(",", ".")
+  if (clean.includes(",") && !/^[1-9]\d{0,2}(,\d{3})+(\.\d*)?$/.test(clean)) return null
+  return clean.replaceAll(",", "")
+}
+
 /** What was paid, beside amounts in another currency, so no kind of dollar is left bare. This locale says US$, CA$, €, £ and CHF. */
 export function formatPaid(micros: string, currency: CurrencyCode): string {
   return new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(Number(micros) / 1e6)
