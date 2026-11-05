@@ -388,19 +388,19 @@ struct WalletSwitcher: View {
         }
         if entry.canMoveToYours {
             Button("Move to Yours") {
-                change(entry, to: Wording.movedToYours) { store.moveToYours(entry.address) }
+                change(entry, to: Wording.movedToYours, named: "Move to Yours") { store.moveToYours(entry.address) }
             }
         }
         if entry.canMoveToWatching {
             Button("Move to Watching") {
-                change(entry, to: Wording.movedToWatching) { store.moveToWatching(entry, hotWallet: hotWallet) }
+                change(entry, to: Wording.movedToWatching, named: "Move to Watching") { store.moveToWatching(entry, hotWallet: hotWallet) }
             }
         }
         if entry.canRemove {
             Divider()
             Button("Remove from List", role: .destructive) {
                 let text = entry.isReplacedKey ? Wording.removedReplacedKey : entry.kind == .yours ? Wording.removedYours : Wording.removedWatching
-                change(entry, to: text) { store.remove(entry, showing: list.next(afterRemoving: entry.address), hotWallet: hotWallet) }
+                change(entry, to: text, named: "Remove from List") { store.remove(entry, showing: list.next(afterRemoving: entry.address), hotWallet: hotWallet) }
             }
         }
         if entry.canStopBeingSavings {
@@ -425,10 +425,10 @@ struct WalletSwitcher: View {
 
     /// Does it, and says what changed right away, because the numbers change with it. An account from a device comes back with Undo too,
     /// here and in the Edit menu.
-    private func change(_ entry: WalletEntry, to text: String, _ action: @escaping () -> Void) {
+    private func change(_ entry: WalletEntry, to text: String, named name: String, _ action: @escaping () -> Void) {
         let account = hotWallet?.settings.deviceAccounts.first { $0.lowercased == entry.address }
         let relink = { [hotWallet] in if let account { hotWallet?.linkDeviceAccounts([account.lowercased]) } }
-        let before = store.changeWallet(entry.address, alsoUndo: relink, action)
+        let before = store.changeWallet(entry.address, name: name, alsoUndo: relink, action)
         note = WalletListNote(text: text) { [store] in
             relink()
             store.restore(before)

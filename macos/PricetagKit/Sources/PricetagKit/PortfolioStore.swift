@@ -335,10 +335,11 @@ public final class PortfolioStore {
         saveOrder(walletOrder.filter { !addresses.contains($0) } + arranged)
     }
 
-    /// Makes a change to one wallet, and returns what Undo needs to take back that change and nothing else. Edit's Undo takes back the same,
-    /// with `alsoUndo` for what's outside the store, and Redo makes the change again.
+    /// Makes a change to one wallet, and returns what Undo needs to take back that change and nothing else. It's one step in Edit's history,
+    /// called `name`, whatever it did to the answers: a watched wallet's removal or an account's unlinking changes none. Edit's Undo takes back
+    /// the same, with `alsoUndo` for what's outside the store, and Redo makes the change again.
     @discardableResult
-    public func changeWallet(_ address: String, alsoUndo: (() -> Void)? = nil, _ change: @escaping () -> Void) -> WalletListSnapshot {
+    public func changeWallet(_ address: String, name: String, alsoUndo: (() -> Void)? = nil, _ change: @escaping () -> Void) -> WalletListSnapshot {
         var snapshot = WalletListSnapshot(
             address: address,
             answer: answers.senders[address],
@@ -348,11 +349,16 @@ public final class PortfolioStore {
             wasHidden: hiddenWallets.contains(address),
             wasShowing: self.address == address
         )
-        let entriesBefore = history.map(\.id)
+        let entriesBefore = Set(history.map(\.id))
+        let bookBefore = answers
         change()
         snapshot.changedAnswer = answers.senders[address]
-        snapshot.undoEntry = history.last.flatMap { entriesBefore.contains($0.id) ? nil : $0.id }
-        if snapshot.undoEntry != nil { history[history.count - 1].wallet = WalletStep(snapshot: snapshot, change: change, alsoUndo: alsoUndo) }
+        // An answer the change gave is part of it, so it's this entry and not one of its own.
+        history.removeAll { !entriesBefore.contains($0.id) }
+        let id = UUID()
+        snapshot.undoEntry = id
+        history.append(HistoryEntry(id: id, name: name, book: bookBefore, wallet: WalletStep(snapshot: snapshot, change: change, alsoUndo: alsoUndo)))
+        future = []
         return snapshot
     }
 
@@ -589,10 +595,10 @@ public final class PortfolioStore {
         if let wallet = entry.wallet {
             // Making it again clears what's left to redo, which is still there to redo after it.
             let rest = future
-            let snapshot = changeWallet(wallet.snapshot.address, alsoUndo: wallet.alsoUndo, wallet.change)
+            changeWallet(wallet.snapshot.address, name: entry.name, alsoUndo: wallet.alsoUndo, wallet.change)
             future = rest
             // The same change as before, so the wallet list's Undo, which knows it by its first snapshot, still finds it.
-            if snapshot.undoEntry != nil, let last = history.popLast() {
+            if let last = history.popLast() {
                 var step = last.wallet
                 step?.snapshot.undoEntry = entry.id
                 history.append(HistoryEntry(id: entry.id, name: last.name, book: last.book, wallet: step))
