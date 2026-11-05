@@ -204,7 +204,7 @@ struct PurchaseRow: View {
                     .buttonStyle(.borderless)
                     .help(phase.isUpToThem ? "Stop waiting for this one" : "Dismiss")
             }
-            if let hash = purchase.order?.txHash, let url = URL(string: "https://basescan.org/tx/\(hash)") {
+            if let hash = purchase.order?.txHash, let url = Basescan.transaction(hash) {
                 Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                     .foregroundStyle(.secondary)
                     .help("Open this transaction")

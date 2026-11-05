@@ -70,7 +70,7 @@ WORK-452 rewrites the steps for whatever has merged by Thursday at 13:45.
 | **Thu by 9:30** | Withdraw **$40 of ETH from Coinbase** on Base. Write down the total you paid for both withdrawals, this one and Wednesday's | This is what makes WORK-424 visible, see below. Earlier is better: the chart's one-day change needs a known point from before the range starts, so this has to be at least 24 h before the demo |
 | **Once it shows in the app** | With the extension on `app.uniswap.org`, swap **$12 of ETH to cbBTC**, then **$12 of ETH to AERO**. Don't answer the Coinbase question | Costs that are really paid, and prices that move. Waiting avoids landing in the payout's block, which would leave costs unknown. Each row should show a dollar cost. If one says unknown, see below |
 | **Thu after 14:00** | In Settings, turn off **Sweep realized gains to savings**. Then swap **half the AERO to USDC** | Gives Realized a number, adds a transaction after the block switch, and won't sweep on stage. Sell into USDC rather than ETH, because ETH paid out through a contract is the hardest case |
-| **Fri morning** | **Undo Last Answer** if Coinbase was the last thing you answered. Otherwise Settings > **Forget All My Answers**, then re-enter any other answers | Puts steps 5 and 6 back on stage |
+| **Fri morning** | **Edit > Undo Answer** (⌘Z) if Coinbase was the last thing you answered. Otherwise Settings > **Forget All My Answers**, then re-enter any other answers | Puts steps 5 and 6 back on stage |
 
 **If a swap's cost says unknown, don't buy again.** A later purchase doesn't repair the earlier one, and answering Coinbase doesn't either. Click the row and read its reason, then:
 - **It says a contract's ETH couldn't be confirmed:** wait a few minutes, because this can clear by itself.
@@ -130,7 +130,7 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 **Morning**
 - [ ] Read the 8:00 health check on this issue.
 - [ ] Fund and buy, as above.
-- [ ] Right after the buys, answer the Coinbase card. There should be no other question and no line saying what PnL leaves out. If it does, read what it leaves out, and see above. Then **Undo Last Answer**.
+- [ ] Right after the buys, answer the Coinbase card. There should be no other question and no line saying what PnL leaves out. If it does, read what it leaves out, and see above. Then **Edit > Undo Answer** (⌘Z).
 - [ ] Review WORK-426, then 431 and 432. Merging 426 starts WORK-449's test on real data, so read its results if they're in by 14:00.
 - [ ] Say on WORK-448 what time the demo is.
 - [ ] Make one small real purchase with **Buy…** (steps on WORK-462), and check its cost shows with no question.
