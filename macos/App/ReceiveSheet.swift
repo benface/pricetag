@@ -32,6 +32,7 @@ struct ReceiveSheet: View {
                 Notice(wallet.address == nil ? .info : .warning, problem)
             } else if let address = wallet.address {
                 code(address.checksummed)
+                    .contextMenu { AddressActions(address: address.checksummed) }
                 VStack(spacing: 2) {
                     ForEach(Format.groupedAddress(address.checksummed), id: \.self) { Text($0) }
                 }
@@ -39,6 +40,7 @@ struct ReceiveSheet: View {
                 .accessibilityElement(children: .combine)
                 // A character at a time, as it's checked against what the sender pasted.
                 .accessibilityLabel(Text("This wallet's address, ") + Text(Spoken.address(address.checksummed)).speechSpellsOutCharacters())
+                .contextMenu { AddressActions(address: address.checksummed) }
                 Text(HotWalletWording.receiveNote(cap: wallet.capText, hasDestination: wallet.settings.sweepDestination != nil))
                     .font(.callout)
                     .secondaryText()

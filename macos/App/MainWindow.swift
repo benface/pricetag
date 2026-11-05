@@ -114,7 +114,7 @@ struct MainWindow: View {
         }
         // What's open belongs to the wallet it was opened on.
         .onChange(of: store.address) {
-            navigation.target = nil
+            navigation.forgetDetails()
             navigation.isResolving = false
         }
         // Or it would open again by itself with the window.
@@ -174,13 +174,6 @@ struct MainWindow: View {
                     // A plus on its own could mean adding anything.
                     .labelStyle(.titleAndIcon)
                     .help("Buy crypto")
-            }
-        }
-        // In a narrow window Buy's label takes its room, and pushing either into the overflow menu would hide Buy. ⌘R and the View menu still refresh.
-        if store.address != nil, navigation.section == .overview || navigation.section == .transactions, width >= Self.sidebarWidth || hotWallet.availability != .ready {
-            ToolbarItem(placement: .primaryAction) {
-                Button("Refresh", systemImage: "arrow.clockwise") { store.refresh() }
-                    .help("Refresh (⌘R)")
             }
         }
     }
@@ -505,9 +498,29 @@ private struct HoldingsSection: View {
                         .justKnown(justKnown.contains(position.asset))
                 }
                 .buttonStyle(RowButtonStyle())
+                .contextMenu {
+                    HoldingActions(position: position, currency: portfolio.currency, onShow: { target = .asset(position.asset, .amount) }, onResolve: { onResolve(position.asset) })
+                }
                 Divider()
             }
         }
+    }
+}
+
+/// What a right-click on a holding offers. Each is also in the interface: the row opens its details, and Fill In is in the row.
+private struct HoldingActions: View {
+    let position: Position
+    let currency: CurrencyCode
+    let onShow: () -> Void
+    let onResolve: () -> Void
+
+    var body: some View {
+        Button("Show Details", action: onShow)
+        if position.resolvable {
+            Button("Fill In Cost…", action: onResolve)
+        }
+        Divider()
+        Button("Copy") { Clipboard.copy(position.copyText(currency: currency)) }
     }
 }
 
@@ -686,6 +699,15 @@ private struct HoldingsTable: View {
         .tableStyle(.inset)
         .alternatingRowBackgrounds(.disabled)
         .scrollDisabled(true)
+        .contextMenu(forSelectionType: Position.ID.self) { assets in
+            if let position = assets.first.flatMap(position) {
+                HoldingActions(position: position, currency: currency, onShow: { target = .asset(position.asset, .amount) }, onResolve: { onResolve(position.asset) })
+            }
+        }
+        .onCopyCommand {
+            guard let position = selection.flatMap(position) else { return [] }
+            return [NSItemProvider(object: position.copyText(currency: currency) as NSString)]
+        }
         // Not `if` around the column: a column that comes back that way lands at the end, under another column's header.
         .onChange(of: showsAverage, initial: true) {
             columns[visibility: Column.averagePriceID] = showsAverage ? .visible : .hidden
@@ -706,6 +728,10 @@ private struct HoldingsTable: View {
 
     private var targetAsset: String? {
         if case .asset(let asset, _) = target { asset } else { nil }
+    }
+
+    private func position(_ asset: String) -> Position? {
+        portfolio.listedPositions.first { $0.asset == asset }
     }
 
     private var dash: some View {
@@ -751,6 +777,10 @@ private struct TransactionsTable: View {
         if case .transaction(let hash) = target { hash } else { nil }
     }
 
+    private func hash(_ id: PnlPoint.ID) -> String? {
+        transactions.first { $0.id == id }?.txHash
+    }
+
     var body: some View {
         Table(transactions, selection: $selection) {
             TableColumn("Time") { point in
@@ -789,6 +819,15 @@ private struct TransactionsTable: View {
         }
         .tableStyle(.inset)
         .alternatingRowBackgrounds(.disabled)
+        .contextMenu(forSelectionType: PnlPoint.ID.self) { ids in
+            if let hash = ids.first.flatMap(hash) {
+                TransactionActions(hash: hash) { target = .transaction(hash) }
+            }
+        }
+        .onCopyCommand {
+            guard let hash = selection.flatMap(hash) else { return [] }
+            return [NSItemProvider(object: hash as NSString)]
+        }
         .focused($isFocused)
         .onAppear { isFocused = true }
         .onChange(of: selection) { _, id in
