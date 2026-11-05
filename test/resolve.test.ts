@@ -1046,6 +1046,15 @@ describe("each kind of sender", () => {
     assert.equal(position(wallet(A, rows), [], emptyBook()).values.costMicros, null)
   })
 
+  for (const payout of ["0x4b5c71082d027d16d2a146465d66f9eec11634f6", "0xbf2f1213f47e76f1c1d9b7a536f2cb8b347d59b4"]) {
+    it(`names a token payout from Coinbase's contract ${payout.slice(0, 8)}, and still asks`, () => {
+      const rows = send(10, "0x1", payout, A, 100n * E6)
+      const [q] = question(rows)
+      assert.deepEqual(q?.evidence, ["From a Coinbase address"])
+      assert.equal(position(wallet(A, rows), [], emptyBook()).values.costMicros, null)
+    })
+  }
+
   it("my exchange account asks for the cost, and stays open until it has one", () => {
     const rows = send(10, "0x1", COINBASE, A, 100n * E6)
     const asked = book({ [COINBASE]: { kind: "my-exchange" } })
