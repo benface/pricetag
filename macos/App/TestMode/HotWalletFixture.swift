@@ -98,8 +98,12 @@ struct HotWalletFixture {
 
     /// What the wallet has spent, which this has no records of, so it isn't taken for a stolen key. Blocks until it's read, because a scene needs it before it starts.
     private static var liveHistory: Portfolio? {
-        guard let live = TestMode.live, let data = try? Data(contentsOf: live.server.appending(path: "/api/portfolio/\(live.wallet)")) else { return nil }
-        return try? JSONDecoder().decode(Portfolio.self, from: data)
+        guard let live = TestMode.live else { return nil }
+        // A first read can outlast one request, and the server keeps going, so another picks it up. Without this, everything it ever spent would raise the alarm.
+        for _ in 0..<4 {
+            if let data = try? Data(contentsOf: live.server.appending(path: "/api/portfolio/\(live.wallet)")), let history = try? JSONDecoder().decode(Portfolio.self, from: data) { return history }
+        }
+        TestMode.fail("Couldn't read this wallet's history from the server.")
     }
 
     /// One of each way a transaction can end up, and each reason to send one.
