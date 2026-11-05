@@ -46,6 +46,8 @@ private actor WaitingChain: ChainClient {
     }
     func send(_ transaction: SignedTransaction) { sent.append(transaction) }
     func receipt(of hash: String) -> Receipt? { nil }
+    func read(_ method: String, _ parameters: JSONValue) -> RPCAnswer { .success(.null) }
+    func l1Fee(ofPayload payload: [UInt8]) -> UInt128 { 1 }
 }
 
 @MainActor

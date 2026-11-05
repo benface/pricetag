@@ -7,6 +7,8 @@ import SwiftUI
 struct HotWalletWindow: View {
     let wallet: HotWallet
     let store: PortfolioStore
+    let siteBridge: SiteBridge
+    let navigation: Navigation
 
     var body: some View {
         Group {
@@ -23,7 +25,7 @@ struct HotWalletWindow: View {
                 if wallet.address == nil {
                     HotWalletSetup(wallet: wallet)
                 } else {
-                    HotWalletDetails(wallet: wallet, store: store)
+                    HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation)
                 }
             }
         }
@@ -74,6 +76,8 @@ private struct HotWalletSetup: View {
 private struct HotWalletDetails: View {
     let wallet: HotWallet
     let store: PortfolioStore
+    let siteBridge: SiteBridge
+    let navigation: Navigation
     @State private var isAddingCold = false
     @State private var isToppingUp = false
     @State private var isSending = false
@@ -97,12 +101,18 @@ private struct HotWalletDetails: View {
             holdings
             if !wallet.unlisted.isEmpty { untouched }
             savings
+            if !wallet.connectedSites.isEmpty { sites }
             actions
             if !wallet.records.isEmpty { activity }
         }
         .formStyle(.grouped)
         .sheet(isPresented: $isAddingCold) { AddColdWalletSheet(wallet: wallet) }
         .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet) }
+        .onChange(of: navigation.wantsTopUp, initial: true) { _, wants in
+            guard wants else { return }
+            navigation.wantsTopUp = false
+            if wallet.canTopUp { isToppingUp = true }
+        }
         .sheet(isPresented: $isSending) { SendSheet(model: SendModel(wallet: wallet, store: store)) }
     }
 
@@ -288,6 +298,23 @@ private struct HotWalletDetails: View {
         }
     }
 
+    private var sites: some View {
+        Section {
+            ForEach(wallet.connectedSites, id: \.self) { origin in
+                LabeledContent(origin) {
+                    Button("Disconnect") { siteBridge.disconnect(origin) }
+                        .buttonStyle(.borderless)
+                }
+            }
+        } header: {
+            Text("Connected Sites")
+        } footer: {
+            Text("They can see this wallet's address and ask you to approve things. Disconnecting doesn't undo any token approvals you already gave them.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var actions: some View {
         Section {
             HStack {
@@ -369,6 +396,7 @@ private struct HotWalletDetails: View {
         case .aboveCap: record.gainUsdMicros == "0" ? "Above the cap" : "Above the cap or realized gains"
         case .manual: "Swept by you"
         case .rotation: "Replacing the key"
+        case .site: record.site ?? "A site"
         case .sent: "Sent to \(Format.shortHash(record.to.checksummed))"
         case .note: "Published for anyone to read"
         }

@@ -75,6 +75,42 @@ public enum ChainError: Error, Equatable {
     /// The node looked at the request and refused it, so it's certain nothing happened.
     case rejected(String)
     case unreadable
+    /// The node wouldn't look at the request, however long this waited, so it's certain nothing happened.
+    case rateLimited
+
+    /// Whether asking again could go differently. Only for reads and for what hasn't been signed.
+    var isWorthRetrying: Bool {
+        self == .unreachable || self == .unreadable || self == .rateLimited
+    }
+}
+
+/// Holds calls back so they don't go over a node's limit. The public node allows 25 a second per IP, and counts each call in a batch.
+/// One read of the wallet is about 20, so with a site's reads on top of that, some of them used to get refused.
+actor NodePacer {
+    /// At most 23 in any one second, which leaves a little for anything else on this network, like the server.
+    static let publicNode = NodePacer(callsPerSecond: 15, burst: 8)
+
+    /// The most calls to send at once. A bigger batch goes in pieces.
+    nonisolated let burst: Int
+    private let callsPerSecond: Int
+    private var available: Double
+    private var updated = ContinuousClock.now
+
+    init(callsPerSecond: Int, burst: Int) {
+        self.callsPerSecond = callsPerSecond
+        self.burst = burst
+        available = Double(burst)
+    }
+
+    /// Returns when these calls can go. Whoever asks first goes first, because what's short is owed by whoever comes next.
+    func wait(forCalls count: Int) async throws {
+        let now = ContinuousClock.now
+        let elapsed = updated.duration(to: now) / .seconds(1)
+        available = min(Double(burst), available + elapsed * Double(callsPerSecond))
+        updated = now
+        available -= Double(count)
+        if available < 0 { try await Task.sleep(for: .seconds(-available / Double(callsPerSecond))) }
+    }
 }
 
 public protocol ChainClient: Sendable {
@@ -82,6 +118,10 @@ public protocol ChainClient: Sendable {
     func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64
     func send(_ transaction: SignedTransaction) async throws
     func receipt(of hash: String) async throws -> Receipt?
+    /// Passes a read a site asked for on to the node, with the node's own answer, including why a call reverted.
+    func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer
+    /// What the chain would charge for this transaction's L1 data right now, on top of its gas.
+    func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128
 }
 
 /// A JSON-RPC node, and every read of one tick in a single batch. It can lie about what it tells us, but all it can get out of
@@ -89,13 +129,22 @@ public protocol ChainClient: Sendable {
 public struct RPCChainClient: ChainClient {
     private let url: URL
     private let session: URLSession
+    private let pacer: NodePacer?
+    private let retryDelays: [Duration]
 
     public init(url: URL) {
-        self.url = url
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 15
-        session = URLSession(configuration: configuration)
+        // A node someone chose has its own limits, which this hears about if it goes past them.
+        self.init(url: url, session: URLSession(configuration: configuration), pacer: url == Base.publicRPC ? .publicNode : nil)
+    }
+
+    init(url: URL, session: URLSession, pacer: NodePacer?, retryDelays: [Duration] = [.seconds(1), .seconds(2), .seconds(3), .seconds(4)]) {
+        self.url = url
+        self.session = session
+        self.pacer = pacer
+        self.retryDelays = retryDelays
     }
 
     public func snapshot(of address: EthereumAddress) async throws -> ChainSnapshot {
@@ -155,7 +204,12 @@ public struct RPCChainClient: ChainClient {
     }
 
     public func send(_ transaction: SignedTransaction) async throws {
-        _ = try await single("eth_sendRawTransaction", [transaction.rawHex])
+        do {
+            _ = try await single("eth_sendRawTransaction", [transaction.rawHex])
+        } catch ChainError.unreadable {
+            // It answered, but not about this. That says nothing about whether it took the transaction.
+            throw ChainError.unreachable
+        }
     }
 
     public func receipt(of hash: String) async throws -> Receipt? {
@@ -163,6 +217,34 @@ public struct RPCChainClient: ChainClient {
         // A node can say a transaction is in a block without having a block number for it yet, which isn't settled.
         guard let status = receipt["status"], let block = receipt["blockNumber"], !(block is NSNull) else { return nil }
         return Receipt(succeeded: try Self.quantity(status) == 1, blockNumber: UInt64(try Self.quantity(block)))
+    }
+
+    public func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128 {
+        let (method, parameters) = call(Base.gasPriceOracle, Calldata.l1Fee(ofPayload: payload), at: "latest")
+        return try Self.quantity(try await single(method, parameters))
+    }
+
+    public func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer {
+        let body = try JSONEncoder().encode(JSONValue.object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string(method), "params": parameters]))
+        for attempt in 0...retryDelays.count {
+            if attempt > 0 { try await Task.sleep(for: retryDelays[attempt - 1]) }
+            try await pacer?.wait(forCalls: 1)
+            let (data, status) = try await post(body)
+            guard case .object(let answer)? = try? JSONDecoder().decode(JSONValue.self, from: data) else {
+                if status == 429 { continue }
+                throw ChainError.unreachable
+            }
+            if status == 429 || Self.isRateLimit(code: answer["code"]?.integer, message: answer["message"]?.string) { continue }
+            if case .object(let error)? = answer["error"] {
+                let code = error["code"]?.integer
+                let message = error["message"]?.string
+                if Self.isRateLimit(code: code, message: message) { continue }
+                return .failure(SiteError(code: code ?? -32603, message: message ?? "The node refused this.", data: error["data"]))
+            }
+            guard let result = answer["result"] else { throw ChainError.unreachable }
+            return .success(result)
+        }
+        throw ChainError.rateLimited
     }
 
     private func call(_ to: EthereumAddress, _ data: [UInt8], at block: String) -> (String, [Any]) {
@@ -173,34 +255,79 @@ public struct RPCChainClient: ChainClient {
         try await batch([(method, parameters)])[0].get()
     }
 
+    /// Asks again for whatever the node wouldn't answer yet, since it didn't look at those at all. Even a signed transaction is
+    /// safe to send twice, because it's one transaction however many times it's sent.
     private func batch(_ calls: [(String, [Any])]) async throws -> [Result<Any?, ChainError>] {
-        let body = calls.enumerated().map { index, call in
-            ["jsonrpc": "2.0", "id": index, "method": call.0, "params": call.1] as [String: Any]
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let data: Data
-        do {
-            (data, _) = try await session.data(for: request)
-        } catch let error as URLError where error.code == .cancelled {
-            throw CancellationError()
-        } catch {
-            throw ChainError.unreachable
-        }
-        guard let answers = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { throw ChainError.unreachable }
         var results = [Result<Any?, ChainError>](repeating: .failure(.unreadable), count: calls.count)
+        var remaining = Array(calls.indices)
+        for attempt in 0...retryDelays.count {
+            if attempt > 0 { try await Task.sleep(for: retryDelays[attempt - 1]) }
+            let size = pacer?.burst ?? remaining.count
+            var refused: [Int] = []
+            for start in stride(from: 0, to: remaining.count, by: size) {
+                let piece = Array(remaining[start..<min(start + size, remaining.count)])
+                try await pacer?.wait(forCalls: piece.count)
+                refused += try await ask(piece, of: calls, into: &results)
+            }
+            remaining = refused
+            if remaining.isEmpty { break }
+        }
+        return results
+    }
+
+    /// Returns which of these the node wouldn't answer because of its rate limit. It can say so for the whole batch or for each call in it.
+    private func ask(_ indices: [Int], of calls: [(String, [Any])], into results: inout [Result<Any?, ChainError>]) async throws -> [Int] {
+        // An earlier refusal says nothing about this attempt. If this one gets no answer, that's all that's known.
+        for index in indices { results[index] = .failure(.unreadable) }
+        let body = indices.map { index in
+            ["jsonrpc": "2.0", "id": index, "method": calls[index].0, "params": calls[index].1] as [String: Any]
+        }
+        let (data, status) = try await post(try JSONSerialization.data(withJSONObject: body))
+        let parsed = try? JSONSerialization.jsonObject(with: data)
+        guard status != 429, let answers = parsed as? [[String: Any]] else {
+            let refusal = parsed as? [String: Any]
+            guard status == 429 || Self.isRateLimit(code: refusal?["code"] as? Int, message: refusal?["message"] as? String) else { throw ChainError.unreachable }
+            for index in indices { results[index] = .failure(.rateLimited) }
+            return indices
+        }
+        var limited: [Int] = []
         for answer in answers {
             guard let id = answer["id"] as? Int, results.indices.contains(id) else { continue }
             if let error = answer["error"] as? [String: Any] {
-                results[id] = .failure(.rejected(error["message"] as? String ?? "The node refused this."))
+                if Self.isRateLimit(code: error["code"] as? Int, message: error["message"] as? String) {
+                    results[id] = .failure(.rateLimited)
+                    limited.append(id)
+                } else {
+                    results[id] = .failure(.rejected(error["message"] as? String ?? "The node refused this."))
+                }
             } else {
                 let result = answer["result"]
                 results[id] = .success(result is NSNull ? nil : result)
             }
         }
-        return results
+        return limited
+    }
+
+    private func post(_ body: Data) async throws -> (Data, Int) {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = body
+        do {
+            let (data, response) = try await session.data(for: request)
+            return (data, (response as? HTTPURLResponse)?.statusCode ?? 200)
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        } catch {
+            throw ChainError.unreachable
+        }
+    }
+
+    /// The public node says `-32007` and "25/second request limit reached", inside an HTTP 200 when it's about part of a batch.
+    static func isRateLimit(code: Int?, message: String?) -> Bool {
+        if code == -32007 || code == -32029 || code == 429 { return true }
+        let text = message?.lowercased() ?? ""
+        return text.contains("rate limit") || text.contains("request limit") || text.contains("too many requests")
     }
 
     /// A hex number, up to what a UInt128 holds. An allowlisted token's balance can't get near that, so more means something's wrong.
@@ -288,7 +415,7 @@ enum Oracle {
 }
 
 public enum Calldata {
-    private static func selector(_ signature: String) -> [UInt8] {
+    static func selector(_ signature: String) -> [UInt8] {
         Array(keccak256(Array(signature.utf8)).prefix(4))
     }
 
@@ -318,9 +445,12 @@ public enum Calldata {
     static let typicalSweepBytes = 180
 
     static func l1Fee(ofPayloadBytes count: Int) -> [UInt8] {
-        let padded = (count + 31) / 32 * 32
         // Non-zero and varied, so this doesn't compress better than a real transaction would.
-        let payload = (0..<padded).map { UInt8(truncatingIfNeeded: $0 &* 167 &+ 1) | 1 }
-        return selector("getL1Fee(bytes)") + word(32) + word(UInt128(count)) + payload
+        l1Fee(ofPayload: (0..<count).map { UInt8(truncatingIfNeeded: $0 &* 167 &+ 1) | 1 })
+    }
+
+    static func l1Fee(ofPayload payload: [UInt8]) -> [UInt8] {
+        let padding = (32 - payload.count % 32) % 32
+        return selector("getL1Fee(bytes)") + word(32) + word(UInt128(payload.count)) + payload + [UInt8](repeating: 0, count: padding)
     }
 }

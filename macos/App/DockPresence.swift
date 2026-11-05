@@ -14,6 +14,9 @@ enum DockPresence {
     /// `NSApp.activate()` only works if the app in front offers to yield, and a menu bar panel doesn't make it. The window
     /// then opens behind everything, so this asks with the older call, which is only ever made on a click in this app.
     static func bringForward() {
+        #if DEBUG
+        if HotWalletDebug.isQuiet { return }
+        #endif
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
