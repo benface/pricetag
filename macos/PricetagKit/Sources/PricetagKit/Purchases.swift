@@ -1,0 +1,270 @@
+// Buying through a provider's page: what's been started, what its order says, and recording what it cost. Nothing here
+// touches a key or signs anything. The page takes the payment, and what arrives is read from the chain like anything else.
+
+import Foundation
+import Observation
+
+public struct OnrampSession: Codable, Sendable, Equatable {
+    public let url: String
+    public let ref: String
+
+    /// Only the provider's own page. Whatever a server says, this app won't send a purchase anywhere else.
+    public var page: URL? {
+        guard let page = URL(string: url), page.scheme == "https", page.host() == "pay.coinbase.com" else { return nil }
+        return page
+    }
+}
+
+/// A provider's order, as it says. What it doesn't say, or says in a way that can't be read, is nil.
+public struct OnrampOrder: Codable, Sendable, Equatable {
+    public enum Status: String, Codable, Sendable {
+        case pending, succeeded, failed
+    }
+
+    public enum Failure: String, Codable, Sendable {
+        case payment, delivery
+    }
+
+    public let id: String
+    public let status: Status
+    public let failure: Failure?
+    public let asset: String?
+    public let units: String?
+    public let wallet: String?
+    public let network: String?
+    public let txHash: String?
+    public let blockNum: Int?
+    public let cost: Money?
+    public let costUsdMicros: String?
+
+    public init(id: String, status: Status, failure: Failure? = nil, asset: String? = nil, units: String? = nil, wallet: String? = nil, network: String? = nil, txHash: String? = nil, blockNum: Int? = nil, cost: Money? = nil, costUsdMicros: String? = nil) {
+        self.id = id
+        self.status = status
+        self.failure = failure
+        self.asset = asset
+        self.units = units
+        self.wallet = wallet
+        self.network = network
+        self.txHash = txHash
+        self.blockNum = blockNum
+        self.cost = cost
+        self.costUsdMicros = costUsdMicros
+    }
+
+    /// What goes in the book. Nil until it's delivered and says all of this, because a cost is never made up from part of it.
+    public var purchase: Purchase? {
+        guard status == .succeeded, let asset, let units, let wallet, let txHash else { return nil }
+        guard let paid = cost ?? costUsdMicros.map({ Money(micros: $0, currency: .USD) }) else { return nil }
+        return Purchase(provider: "coinbase", order: id, wallet: wallet, asset: asset, units: units, txHash: txHash, blockNum: blockNum, cost: paid, costUsdMicros: costUsdMicros)
+    }
+}
+
+/// A purchase someone started from this device. It's kept, so one still going is picked up after a restart.
+public struct TrackedPurchase: Codable, Sendable, Equatable, Identifiable {
+    public let ref: String
+    public let wallet: String
+    public let asset: String
+    public let dollars: Int
+    public let startedAt: Date
+    public var order: OnrampOrder?
+
+    public var id: String { ref }
+
+    public init(ref: String, wallet: String, asset: String, dollars: Int, startedAt: Date, order: OnrampOrder? = nil) {
+        self.ref = ref
+        self.wallet = wallet
+        self.asset = asset
+        self.dollars = dollars
+        self.startedAt = startedAt
+        self.order = order
+    }
+}
+
+/// Where a purchase has got to, as simply as it can be said.
+public enum PurchasePhase: Equatable, Sendable {
+    /// The page is open, and there's no order yet.
+    case onProvidersPage
+    case onItsWay
+    /// Delivered, and not seen on the chain yet. Its cost is known, and waits for that.
+    case arriving
+    case recorded(Money)
+    /// What arrived isn't exactly what the order says, or the order doesn't say what it cost. Its cost stays unknown.
+    case costUnknown
+    case failed(OnrampOrder.Failure)
+    /// Nothing came of the page, so nothing was bought.
+    case nothingBought
+
+    public var isFinished: Bool {
+        switch self {
+        case .onProvidersPage, .onItsWay, .arriving: false
+        case .recorded, .costUnknown, .failed, .nothingBought: true
+        }
+    }
+}
+
+public enum PurchaseWording {
+    /// What the order says once it says, because the amount can be changed on the page. Until then, what was chosen.
+    public static func title(_ purchase: TrackedPurchase, usd: (Int) -> String) -> String {
+        if let units = purchase.order?.units, let asset = purchase.order?.asset, let decimals = ["ETH": 18, "USDC": 6][asset] {
+            return "\(Format.amount(units, decimals: decimals)) \(asset)"
+        }
+        return "\(usd(purchase.dollars)) of \(purchase.order?.asset ?? purchase.asset)"
+    }
+
+    public static func status(_ phase: PurchasePhase) -> String {
+        switch phase {
+        case .onProvidersPage: "Waiting for you on Coinbase"
+        case .onItsWay: "On its way"
+        case .arriving: "Delivered. Waiting to see it arrive"
+        case .recorded(let cost): "Cost \(Format.money(cost.micros, cost.currency)), fees included"
+        case .costUnknown: "Arrived, cost unknown. It didn't match the order"
+        case .failed(.payment): "Coinbase couldn't take the payment"
+        case .failed(.delivery): "Coinbase couldn't deliver it"
+        case .nothingBought: "Nothing was bought"
+        }
+    }
+
+    public static func isWarning(_ phase: PurchasePhase) -> Bool {
+        switch phase {
+        case .costUnknown, .failed: true
+        default: false
+        }
+    }
+}
+
+@MainActor
+@Observable
+public final class PurchaseTracker {
+    public private(set) var purchases: [TrackedPurchase]
+    /// Why orders can't be checked right now. They're tried again, and nothing's lost.
+    public private(set) var problem: String?
+
+    @ObservationIgnored private let store: PortfolioStore
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let now: @Sendable () -> Date
+    @ObservationIgnored private let pollDelay: Duration
+    @ObservationIgnored private let matchOf: @MainActor (String) -> PurchaseMatch.State?
+    @ObservationIgnored private var polling: Task<Void, Never>?
+
+    /// A page's session only lasts minutes, and paying doesn't take this long, so by now nothing's coming.
+    private static let pageTimeout: TimeInterval = 2 * 60 * 60
+    /// How long to keep asking for the block of a delivery that doesn't have one, which is how a batched payout is found.
+    private static let blockTimeout: TimeInterval = 60 * 60
+    private static let shownFinished = 5
+    private static let key = "purchases"
+
+    public init(
+        store: PortfolioStore,
+        defaults: UserDefaults = .standard,
+        now: @escaping @Sendable () -> Date = { .now },
+        pollDelay: Duration = .seconds(10),
+        matchOf: (@MainActor (String) -> PurchaseMatch.State?)? = nil
+    ) {
+        self.store = store
+        self.defaults = defaults
+        self.now = now
+        self.pollDelay = pollDelay
+        self.matchOf = matchOf ?? { order in store.portfolio?.purchases?.first { $0.order == order }?.state }
+        purchases = defaults.data(forKey: Self.key).flatMap { try? JSONDecoder().decode([TrackedPurchase].self, from: $0) } ?? []
+    }
+
+    /// What to say when a purchase couldn't start.
+    public static func message(for error: any Error) -> String { failureMessage(for: error) }
+
+    public func purchases(of wallet: String) -> [TrackedPurchase] {
+        purchases.filter { $0.wallet == wallet.lowercased() }.reversed()
+    }
+
+    public func phase(of purchase: TrackedPurchase) -> PurchasePhase {
+        guard let order = purchase.order else {
+            return now().timeIntervalSince(purchase.startedAt) > Self.pageTimeout ? .nothingBought : .onProvidersPage
+        }
+        switch order.status {
+        case .failed: return .failed(order.failure ?? .payment)
+        case .pending: return .onItsWay
+        case .succeeded:
+            if order.txHash == nil { return .onItsWay }
+            guard let recorded = order.purchase else { return .costUnknown }
+            switch matchOf(order.id) {
+            case .recorded: return .recorded(recorded.cost)
+            case .unmatched: return .costUnknown
+            case .waiting, nil: return .arriving
+            }
+        }
+    }
+
+    /// Asks the server for a page, and starts following it. Throws when there's no page to open, with something to say about why.
+    public func begin(wallet: String, asset: String, dollars: Int, cryptoAmount: String) async throws -> URL {
+        let session = try await store.currentSource.onrampSession(address: wallet, asset: asset, cryptoAmount: cryptoAmount)
+        guard let page = session.page else { throw FetchError.rejected("The server sent a page that isn't Coinbase's.") }
+        purchases.append(TrackedPurchase(ref: session.ref, wallet: wallet.lowercased(), asset: asset, dollars: dollars, startedAt: now()))
+        save()
+        start()
+        return page
+    }
+
+    /// Keeps checking while anything's open. Here and not in a view, because a delivery gets its cost whether or not a window's open.
+    public func start() {
+        guard polling == nil, purchases.contains(where: isOpen) else { return }
+        polling = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                await self.check()
+                guard self.purchases.contains(where: self.isOpen) else { break }
+                try? await Task.sleep(for: self.pollDelay)
+            }
+            self?.polling = nil
+        }
+    }
+
+    /// Reads every open order. A failed read changes nothing, so a purchase can't get lost, and it's tried again.
+    public func check() async {
+        var failure: String?
+        for purchase in purchases where isOpen(purchase) {
+            do {
+                let orders = try await store.currentSource.onrampOrders(ref: purchase.ref)
+                failure = nil
+                guard let order = orders.first, let index = purchases.firstIndex(where: { $0.ref == purchase.ref }) else { continue }
+                if purchases[index].order != order {
+                    purchases[index].order = order
+                    save()
+                }
+                if let recorded = order.purchase { store.recordPurchase(recorded) }
+            } catch is CancellationError {
+                return
+            } catch {
+                failure = failureMessage(for: error)
+            }
+        }
+        problem = failure
+        trim()
+    }
+
+    /// Someone who's left the page without paying says so. It's kept going if an order has already started.
+    public func dismiss(_ purchase: TrackedPurchase) {
+        purchases.removeAll { $0.ref == purchase.ref }
+        save()
+    }
+
+    private func isOpen(_ purchase: TrackedPurchase) -> Bool {
+        let age = now().timeIntervalSince(purchase.startedAt)
+        guard let order = purchase.order else { return age <= Self.pageTimeout }
+        switch order.status {
+        case .failed: return false
+        case .pending: return true
+        case .succeeded: return order.txHash == nil || (order.blockNum == nil && age <= Self.blockTimeout)
+        }
+    }
+
+    /// What's finished only matters for a while, and what's still going stays however long this gets.
+    private func trim() {
+        let finished = purchases.filter { !isOpen($0) }
+        guard finished.count > Self.shownFinished else { return }
+        let dropped = Set(finished.dropLast(Self.shownFinished).map(\.ref))
+        purchases.removeAll { dropped.contains($0.ref) }
+        save()
+    }
+
+    private func save() {
+        defaults.set(try? JSONEncoder().encode(purchases), forKey: Self.key)
+    }
+}

@@ -142,13 +142,14 @@ const ESTIMATED_COST = "Part of its cost is an estimate, from a market price."
 const ESTIMATED_PROCEEDS = "What it sold for is an estimate, from a market price."
 const ESTIMATED_BOTH = "What it sold for and part of its cost are estimates, from market prices."
 const REPORTED_COST = "Part of its cost is what you entered or imported, which the chain can't confirm."
+const purchasedCost = (source: string) => `Some or all of its cost: ${source}, fees included.`
 const MISMATCH = "This asset's history doesn't match its onchain balance, so its cost can't be trusted."
 const UNCHECKED = "This asset hasn't been checked against its onchain balance yet, so its cost isn't shown."
 const DIFFERENT_STARTS = "These wallets' histories start at different blocks, so their costs can't be worked out together."
 
 /** Units with a known cost, what they cost, and where that cost came from. The fold keeps count, whatever a lot is labeled. */
 function knownOf(state: PositionState) {
-  const known = { qty: 0n, cost: 0n, estimated: 0n, given: 0n, reportedQty: 0n }
+  const known = { qty: 0n, cost: 0n, estimated: 0n, given: 0n, reportedQty: 0n, purchasedQty: 0n, purchaseSource: null as string | null }
   for (const lot of state.lots) {
     if (lot.costMicros === null) continue
     known.qty += BigInt(lot.qty)
@@ -156,6 +157,10 @@ function knownOf(state: PositionState) {
     known.estimated += BigInt(lot.estimatedCostMicros ?? "0")
     known.given += BigInt(lot.givenCostMicros ?? "0")
     if (lot.reported) known.reportedQty += BigInt(lot.qty)
+    if (lot.purchaseSource) {
+      known.purchasedQty += BigInt(lot.qty)
+      known.purchaseSource = lot.purchaseSource
+    }
   }
   return known
 }
@@ -209,7 +214,8 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
     // By units rather than dollars, because $0 is a cost someone can enter.
     const reported = knownBefore.reportedQty > knownAfter.reportedQty
     const estimate = costIsEstimated && proceedsAreEstimated ? ESTIMATED_BOTH : costIsEstimated ? ESTIMATED_COST : proceedsAreEstimated ? ESTIMATED_PROCEEDS : null
-    const reason = [estimate, given > 0n ? (country?.marketRowNote ?? null) : null, reported ? REPORTED_COST : null].filter((note) => note !== null).join(" ")
+    const purchased = knownBefore.purchasedQty > knownAfter.purchasedQty && knownBefore.purchaseSource ? purchasedCost(knownBefore.purchaseSource) : null
+    const reason = [estimate, given > 0n ? (country?.marketRowNote ?? null) : null, reported ? REPORTED_COST : null, purchased].filter((note) => note !== null).join(" ")
     rows.push(row({ amount: resolvedQty.toString(), proceedsMicros: resolvedProceeds.toString(), costMicros: knownCost.toString(), gainMicros: gain.toString(), status: estimate ? "estimated" : reported ? "self-reported" : "resolved", reason: reason || null, givenCost: given > 0n }))
   }
   if (unknownQty > 0n) {

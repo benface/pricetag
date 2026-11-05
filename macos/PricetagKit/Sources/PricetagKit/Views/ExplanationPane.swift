@@ -125,7 +125,7 @@ public struct LegRow: View {
             }
             .font(.caption)
             if showsProof, let address = store.address {
-                ProofPanel(leg: leg.id, address: address, store: store).id("\(address):\(leg.id):\(currency.rawValue):\(store.selectedRule ?? "")")
+                ProofPanel(leg: leg.id, address: address, store: store, costSource: leg.costSource).id("\(address):\(leg.id):\(currency.rawValue):\(store.selectedRule ?? "")")
             }
         }
         .padding(.vertical, 3)
@@ -158,7 +158,7 @@ public struct LegRow: View {
             Tag("No price", isWarning: true)
         }
         if leg.isIncoming {
-            Tag(Wording.costTag(leg.costLabel), isWarning: leg.costLabel == "unknown")
+            Tag(Wording.costTag(leg.costLabel, source: leg.costSource), isWarning: leg.costLabel == "unknown")
             if leg.partlyUnknown { Tag("Partly unknown", isWarning: true) }
         }
         if leg.estimated { Tag("Estimate") }

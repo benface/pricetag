@@ -1,14 +1,15 @@
 // Fills in what we can about each incoming movement's cost, across all of a user's linked wallets, and says what's left to ask.
 //
-// In order: paid, inherited, self-reported, received at market, unknown. `paid` comes from the transaction itself (legs.ts).
-// The rest come from here, and the fold then runs on the result. An unanswered sender stays unknown: it could be the user's
-// own wallet, so assuming otherwise would be a guess.
+// In order: paid, inherited, self-reported, received at market, unknown. `paid` comes from the transaction itself (legs.ts),
+// or from a provider's order that matches a movement exactly. The rest come from here, and the fold then runs on the result.
+// An unanswered sender stays unknown: it could be the user's own wallet, so assuming otherwise would be a guess.
 
 import { applyLegTaking, emptyPosition, foldWallet, formatAmount, historyGaps, lessPaidAt, normalizeAddress, orderMatters, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "./api.ts"
-import { costKey, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Receipt, type SenderAnswer } from "./book.ts"
+import { costKey, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
+import { purchaseSource } from "./wording.ts"
 
 /** What arrived with no cost, and who could say. A null sender means there's no one to ask about, only what it cost. */
 type OpenItem = { wallet: string; leg: PricedLeg; sender: string | null; units: bigint; evidence?: string[] }
@@ -16,7 +17,14 @@ type OpenItem = { wallet: string; leg: PricedLeg; sender: string | null; units: 
 export type Resolved = {
   legs: Map<string, PricedLeg[]>
   open: OpenItem[]
+  purchases: PurchaseState[]
 }
+
+/**
+ * What became of a purchase. recorded: it's the cost of what arrived. waiting: nothing's been seen arriving from its
+ * transaction yet. unmatched: something was, and it isn't exactly what the order says, or it can't be shown in this currency.
+ */
+export type PurchaseState = { order: string; state: "recorded" | "waiting" | "unmatched" }
 
 /** A wallet whose history of an asset can't be confirmed, so what it sent arrived with its cost unknown. */
 export type Withheld = { wallet: string; asset: string }
@@ -172,9 +180,32 @@ function withPieces(leg: PricedLeg, pieces: CostPiece[]): PricedLeg {
 
 const reported = (leg: PricedLeg, usdMicros: string): PricedLeg => ({ ...leg, costLabel: "self-reported", costMicros: usdMicros })
 
+/**
+ * Whether this movement came from this purchase's transaction. ETH inside a batched payout has no row and may not name its
+ * transaction, so it's found by the block its balance rose in, and the exact amount still has to agree.
+ */
+const cameFrom = (purchase: Purchase, leg: PricedLeg) =>
+  leg.asset === purchase.asset && leg.kind === "transfer" && !leg.opening && BigInt(leg.delta) > 0n && (leg.txHash.toLowerCase() === purchase.txHash || (leg.blockNum === purchase.blockNum && leg.parts.some((part) => part.kind === "unseen_eth")))
+
+/** Which movement each purchase paid for, by `costKey`. Only one exact match counts, and a movement only has one cost. */
+function purchasedLegs(sides: readonly Side[], book: Book): Map<string, Purchase> {
+  const purchased = new Map<string, Purchase>()
+  for (const purchase of book.purchases ?? []) {
+    const side = sides.find(({ wallet }) => normalizeAddress(wallet.address) === purchase.wallet)
+    const exact = side?.view.legs.filter((leg) => cameFrom(purchase, leg) && leg.delta === purchase.units) ?? []
+    const key = exact.length === 1 ? costKey(purchase.wallet, (exact[0] as PricedLeg).id) : null
+    if (key && !purchased.has(key)) purchased.set(key, purchase)
+  }
+  return purchased
+}
+
+/** What a purchase cost in the currency being folded. Null when that can't be said, which leaves it unknown. */
+const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: PricedLeg) => moneyIn(side, cost, leg) ?? (costUsdMicros === null ? null : moneyIn(side, { micros: costUsdMicros, currency: "USD" }, leg))
+
 export function resolveLegs(sides: readonly Side[], method: Method, book: Book): Resolved {
   const linked = new Set(linkedWallets(book))
   const read = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
+  const purchased = purchasedLegs(sides, book)
   const open: OpenItem[] = []
   const gaps = new Map<string, Map<string, HistoryGap>>()
   /**
@@ -191,7 +222,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
   // Everything that could be an exchange withdrawal, across every wallet read, so one withdrawal can't explain two of them.
   const arrivals: ExchangeArrival[] = sides.flatMap(({ wallet, view }) =>
     view.legs.flatMap((leg) => {
-      const sources = leg.kind === "transfer" && !leg.opening && isOpenCredit(leg) ? sourcesOf(leg) : null
+      const sources = leg.kind === "transfer" && !leg.opening && isOpenCredit(leg) && !purchased.has(costKey(wallet.address, leg.id)) ? sourcesOf(leg) : null
       const someoneElses = sources?.some(({ address }) => book.senders[address]?.kind === "someone-else" || linked.has(address) || address === normalizeAddress(wallet.address))
       return sources && !someoneElses ? [{ key: costKey(wallet.address, leg.id), wallet: wallet.address, asset: leg.asset, units: BigInt(leg.delta), timestamp: leg.timestamp }] : []
     }),
@@ -226,6 +257,10 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const { wallet } = side
     const address = normalizeAddress(wallet.address)
     const units = BigInt(leg.delta)
+    // What the provider says was paid for exactly this, which nothing anyone entered can know better.
+    const purchase = purchased.get(costKey(address, leg.id))
+    const bought = purchase ? purchaseCost(side, purchase, leg) : null
+    if (purchase && bought !== null) return { ...leg, costLabel: "paid", costMicros: bought, purchaseSource: purchaseSource(purchase.provider) }
     const latestNote = wallet.notes.filter((n) => n.txHash === leg.txHash && n.asset === leg.asset).at(-1)
     const note = latestNote && !noteIsAmbiguous(leg, side.view.legs) ? latestNote : undefined
     const sources = leg.kind === "transfer" && !leg.opening ? sourcesOf(leg) : null
@@ -293,7 +328,13 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const recipients = next.kind === "transfer" && taken.length > 0 ? recipientsOf(next) : null
     for (const [recipient, pieces] of allocateTaken(taken, recipients ?? [], method)) carried.set(`${next.txHash}:${address}:${next.asset}:${recipient}`, pieces)
   }
-  return { legs: output, open }
+  const legsOf = (wallet: string) => output.get(wallet) ?? []
+  const purchases = (book.purchases ?? []).filter(({ wallet }) => read.has(wallet)).map((purchase): PurchaseState => {
+    const legs = legsOf(purchase.wallet).filter((leg) => cameFrom(purchase, leg))
+    const recorded = [...purchased].some(([key, match]) => match === purchase && legs.some((leg) => costKey(purchase.wallet, leg.id) === key && leg.purchaseSource))
+    return { order: purchase.order, state: recorded ? "recorded" : legs.length === 0 ? "waiting" : "unmatched" }
+  })
+  return { legs: output, open, purchases }
 }
 
 export type Arrival = { asset: string; decimals: number; units: string }
@@ -427,6 +468,7 @@ export type BookFold = {
   meter: Meter
   /** Other wallets' history that can't be confirmed, and that's why some of what arrived in this wallet has an unknown cost. */
   withheld: Withheld[]
+  purchases: PurchaseState[]
 }
 
 /**
@@ -439,7 +481,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
   const sideOf = (wallet: WalletResponse): Side => ({ wallet, view: usd ? usdView(wallet) : viewWallet(wallet) })
   const sides = [focus, ...others.filter((w) => normalizeAddress(w.address) !== address && linked.has(normalizeAddress(w.address)) && sameRead(w, focus))].map(sideOf)
   const view = (sides[0] as Side).view
-  const { legs: resolved, open } = resolveLegs(sides, method, book)
+  const { legs: resolved, open, purchases } = resolveLegs(sides, method, book)
   const legs = resolved.get(address) as PricedLeg[]
   // What came from a linked wallet was first paid for in its blocks, which only its oracle reads have.
   const markPrice: MarkPrice = (blockNum, asset) => sides.map((side) => side.view.markPrice(blockNum, asset)).find((price) => price !== null) ?? null
@@ -457,6 +499,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
     questions,
     meter: meterOf(questions, book, focus, missingWallets(book, focus, others).length),
     withheld: withheldIn(legs).filter(({ wallet }) => wallet !== address),
+    purchases,
   }
 }
 

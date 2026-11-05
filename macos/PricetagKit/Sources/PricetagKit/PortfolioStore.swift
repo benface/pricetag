@@ -318,6 +318,14 @@ public final class PortfolioStore {
         store(nextAnswers)
     }
 
+    /// What a provider says, and not an answer, so there's nothing to undo, and undoing an answer doesn't lose it.
+    public func recordPurchase(_ purchase: Purchase) {
+        let next = answers.recording(purchase)
+        guard next != answers else { return }
+        undoStack = undoStack.map { $0.recording(purchase) }
+        store(next)
+    }
+
     public func undo() {
         guard let previous = undoStack.popLast() else { return }
         store(previous)

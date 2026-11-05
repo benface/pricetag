@@ -32,6 +32,9 @@ public protocol PortfolioSource: Sendable {
     func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification
     /// One element each time the server says there's a new block, until the connection goes. Nil when this source can't say.
     func headEvents() -> AsyncThrowingStream<Void, any Error>?
+    /// A provider's page for buying `cryptoAmount` of `asset` for this address, and what to ask about its order by.
+    func onrampSession(address: String, asset: String, cryptoAmount: String) async throws -> OnrampSession
+    func onrampOrders(ref: String) async throws -> [OnrampOrder]
 }
 
 /// Nothing here needs to be there for a source that only reads, like one in a test.
@@ -46,6 +49,8 @@ extension PortfolioSource {
     public func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
     public func rules() async throws -> [PricingRule] { [] }
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
+    public func onrampSession(address: String, asset: String, cryptoAmount: String) async throws -> OnrampSession { throw FetchError.unreachable }
+    public func onrampOrders(ref: String) async throws -> [OnrampOrder] { throw FetchError.unreachable }
 }
 
 public struct PricetagClient: PortfolioSource {
@@ -143,6 +148,15 @@ public struct PricetagClient: PortfolioSource {
         try await decoded(post("/api/portfolio/\(address)/compare", body: FoldBody(method: method, currency: currency, rule: nil, linked: linked, book: book), timeout: .seconds(180)))
     }
 
+    public func onrampSession(address: String, asset: String, cryptoAmount: String) async throws -> OnrampSession {
+        try await decoded(post("/api/onramp/session", body: ["address": address, "asset": asset, "cryptoAmount": cryptoAmount], timeout: .seconds(30)))
+    }
+
+    public func onrampOrders(ref: String) async throws -> [OnrampOrder] {
+        let body: OrdersBody = try await get("/api/onramp/orders/\(ref)", query: [], timeout: .seconds(30))
+        return body.orders
+    }
+
     private func decoded<Body: Decodable>(_ data: Data) throws -> Body {
         do {
             return try JSONDecoder().decode(Body.self, from: data)
@@ -194,6 +208,10 @@ public struct PricetagClient: PortfolioSource {
         case 503: throw FetchError.noAmpConfigured(message)
         default: throw FetchError.rejected(message)
         }
+    }
+
+    private struct OrdersBody: Decodable {
+        let orders: [OnrampOrder]
     }
 
     private struct RulesBody: Decodable {

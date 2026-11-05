@@ -27,6 +27,7 @@ struct MainWindow: View {
     @Bindable var navigation: Navigation
     let hotWallet: HotWallet
     let siteBridge: SiteBridge
+    let purchases: PurchaseTracker
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var width: CGFloat = 1120
     @State private var exporting = false
@@ -207,7 +208,7 @@ struct MainWindow: View {
         switch navigation.section {
         case .overview: walletPage(overview)
         case .transactions: walletPage(transactions)
-        case .spendingMoney: HotWalletWindow(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation)
+        case .spendingMoney: HotWalletWindow(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases)
         case .taxReport:
             if store.address == nil {
                 NoWalletYet(navigation: navigation)

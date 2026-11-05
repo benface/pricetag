@@ -19,6 +19,7 @@ struct MacApp: App {
     @State private var hotWallet: HotWallet
     @State private var navigation: Navigation
     @State private var siteBridge: SiteBridge
+    @State private var purchases: PurchaseTracker
     @State private var bridgeServer: BridgeServer?
 
     init() {
@@ -47,6 +48,10 @@ struct MacApp: App {
         // Here and not in a view: the menu bar shows the total, and sweeps run, whether or not anything is open.
         hotWallet.start()
         store.start()
+        // So an order still going when this last quit gets its cost.
+        let purchases = PurchaseTracker(store: store)
+        purchases.start()
+        _purchases = State(initialValue: purchases)
         _store = State(initialValue: store)
         _hotWallet = State(initialValue: hotWallet)
         _navigation = State(initialValue: navigation)
@@ -83,7 +88,7 @@ struct MacApp: App {
         .menuBarExtraStyle(.window)
 
         Window(AppName.current, id: WindowID.main) {
-            MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: siteBridge)
+            MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: siteBridge, purchases: purchases)
                 .holdsDockPresence()
         }
         .defaultSize(width: 1120, height: 760)

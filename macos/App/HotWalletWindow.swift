@@ -9,6 +9,7 @@ struct HotWalletWindow: View {
     let store: PortfolioStore
     let siteBridge: SiteBridge
     let navigation: Navigation
+    let purchases: PurchaseTracker
 
     var body: some View {
         Group {
@@ -29,7 +30,7 @@ struct HotWalletWindow: View {
                 if wallet.address == nil {
                     HotWalletSetup(wallet: wallet, store: store)
                 } else {
-                    HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation)
+                    HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases)
                 }
             }
         }
@@ -101,8 +102,10 @@ private struct HotWalletDetails: View {
     let store: PortfolioStore
     let siteBridge: SiteBridge
     let navigation: Navigation
+    let purchases: PurchaseTracker
     @State private var isAddingCold = false
     @State private var isToppingUp = false
+    @State private var isBuying = false
     @State private var isSending = false
     /// A new savings wallet to send a little to, once its sheet has gone.
     @State private var testingSavings: EthereumAddress?
@@ -124,6 +127,7 @@ private struct HotWalletDetails: View {
             }
             balance
             actions
+            if !shownPurchases.isEmpty { bought }
             holdings
             if !wallet.unlisted.isEmpty { untouched }
             savings
@@ -135,6 +139,11 @@ private struct HotWalletDetails: View {
             AddColdWalletSheet(wallet: wallet, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
         }
         .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet, server: store.serverURL) }
+        .sheet(isPresented: $isBuying) { BuySheet(wallet: wallet, purchases: purchases) }
+        // Coming back from Coinbase's page is when there's news.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await purchases.check() }
+        }
         .onChange(of: navigation.addingSavings, initial: true) { _, link in
             // The sheet takes it from there, and it may already be open, waiting for this.
             if link != nil { isAddingCold = true }
@@ -247,6 +256,21 @@ private struct HotWalletDetails: View {
     private var gaugeValue: Double {
         guard let value = wallet.plan?.valueUsdMicros else { return 0 }
         return min(1, Double(value) / Double(wallet.settings.capUsdMicros))
+    }
+
+    private var shownPurchases: [TrackedPurchase] {
+        address.map { purchases.purchases(of: $0.lowercased) } ?? []
+    }
+
+    private var bought: some View {
+        Section("Purchases") {
+            if let problem = purchases.problem {
+                WarningText(problem).font(.callout)
+            }
+            ForEach(shownPurchases) { purchase in
+                PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), usd: { wallet.usd(dollars: $0) }) { purchases.dismiss(purchase) }
+            }
+        }
     }
 
     private var holdings: some View {
@@ -365,6 +389,7 @@ private struct HotWalletDetails: View {
             ViewThatFits(in: .horizontal) {
                 HStack {
                     send
+                    buy
                     topUp
                     sweep
                     Spacer()
@@ -373,6 +398,7 @@ private struct HotWalletDetails: View {
                 VStack(alignment: .leading) {
                     HStack {
                         send
+                        buy
                         topUp
                     }
                     HStack {
@@ -382,6 +408,7 @@ private struct HotWalletDetails: View {
                 }
                 VStack(alignment: .leading) {
                     send
+                    buy
                     topUp
                     sweep
                     replaceKey
@@ -410,6 +437,11 @@ private struct HotWalletDetails: View {
         Button("Send…") { isSending = true }
             .buttonStyle(.borderedProminent)
             .disabled(!wallet.canSend)
+    }
+
+    private var buy: some View {
+        Button("Buy…") { isBuying = true }
+            .disabled(!wallet.canTopUp)
     }
 
     private var topUp: some View {

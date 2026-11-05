@@ -51,8 +51,9 @@ public enum Wording {
     }
 
     /// Where a leg's cost came from.
-    public static func costTag(_ label: String) -> String {
-        switch label {
+    public static func costTag(_ label: String, source: String? = nil) -> String {
+        if let source { return "Cost: \(source.lowercased())" }
+        return switch label {
         case "paid": "Cost: what you paid"
         case "inherited": "Cost: from your other wallet"
         case "received at market": "Cost: market price when received"

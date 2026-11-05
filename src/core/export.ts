@@ -49,7 +49,7 @@ export function exportCsv(positions: readonly Position[], currency: CurrencyCode
         money(leg.priceMicros),
         leg.priceSource ?? "",
         incoming ? money(leg.costMicros) : "",
-        incoming ? leg.costLabel : "",
+        incoming ? (leg.purchaseSource ?? leg.costLabel) : "",
         money(leg.proceedsMicros),
         statusOf(effect, noMarket),
       ]
