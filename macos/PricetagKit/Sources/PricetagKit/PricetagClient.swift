@@ -31,6 +31,8 @@ public protocol PortfolioSource: Sendable {
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof
     func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification
+    /// What a wallet lets others spend, checked onchain just now.
+    func approvals(address: String) async throws -> WalletApprovals
     /// One element each time the server says there's a new block, until the connection goes. Nil when this source can't say.
     func headEvents() -> AsyncThrowingStream<Void, any Error>?
     /// A provider's page for buying `asset` for this address, and what to ask about its order by. It starts at `fiat`, what was typed, when the provider can start from that currency, and otherwise at `cryptoAmount`.
@@ -50,6 +52,7 @@ extension PortfolioSource {
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
     public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof { throw FetchError.unreachable }
     public func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
+    public func approvals(address: String) async throws -> WalletApprovals { throw FetchError.unreachable }
     public func rules() async throws -> [PricingRule] { [] }
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
     public func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout { throw FetchError.unreachable }
@@ -124,6 +127,11 @@ public struct PricetagClient: PortfolioSource {
     }
 
     /// Reads every wallet in it, so it gets as long as a first read.
+    /// The first read of a wallet's history can take a while, until the dataset has its own table of approvals.
+    public func approvals(address: String) async throws -> WalletApprovals {
+        try await get("/api/approvals/\(address)", query: [], timeout: .seconds(180))
+    }
+
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
         try await decoded(post("/api/tax-report/\(request.address)", body: request.body, timeout: .seconds(180)))
     }

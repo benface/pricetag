@@ -997,6 +997,65 @@ public final class HotWallet {
         return isOnItsWay
     }
 
+    // MARK: - Revoking
+
+    /// What revoking these would cost right now, to show before Touch ID asks. Nil when the node can't say, or says one would fail.
+    public func quoteRevocations(_ revocations: [Revocation]) async -> RevocationQuote? {
+        guard let address, !revocations.isEmpty, revocations.count <= RevocationPlanner.maximum, revocations.allSatisfy(\.isAllowed) else { return nil }
+        let transactions = RevocationPlanner.transactions(for: revocations)
+        do {
+            let snapshot = try await patientSnapshot(of: address)
+            guard snapshot.chainID == Base.chainID, snapshot.fees.isPlausible else { return nil }
+            var feeWei: UInt128 = 0
+            for transaction in transactions {
+                let gas = try await chain.estimateGas(from: address, to: transaction.to, value: 0, data: transaction.data)
+                let unsigned = UnsignedTransaction(chainID: Base.chainID, nonce: snapshot.nonce, maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas, maxFeePerGas: snapshot.fees.maxFeePerGas, gasLimit: gas + gas / 4, to: transaction.to, value: 0, data: transaction.data)
+                let fees = FeeQuote(maxFeePerGas: snapshot.fees.maxFeePerGas, maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas, l1FeeWei: try await chain.l1Fee(ofPayload: unsigned.signingPayload))
+                feeWei += fees.costWei(gas: UInt128(gas + gas / 4))
+            }
+            return RevocationQuote(feeWei: feeWei, feeUsdMicros: snapshot.ethUsdMicros.map { Money.usdMicros(of: feeWei, priceMicros: $0, decimals: 18) }, transactions: transactions.count)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Asks the person at the device once, then signs one transaction for each token or collection, and one for Permit2. Each only
+    /// sets an allowance to nothing. True once they're all on their way. One that fails stops the rest, and says why.
+    @discardableResult
+    public func revoke(_ revocations: [Revocation], in prompt: PresencePrompt? = nil) async -> Bool {
+        guard let address, canSend, !revocations.isEmpty, revocations.count <= RevocationPlanner.maximum, revocations.allSatisfy(\.isAllowed) else { return false }
+        let transactions = RevocationPlanner.transactions(for: revocations)
+        var isOnItsWay = false
+        lastSubmitted = []
+        let what = revocations.count == 1 ? "an approval for \(revocations[0].label)" : "\(revocations.count) approvals"
+        await work(confirming: "revoke \(what)", in: prompt) { [self] in
+            submitting = []
+            defer {
+                lastSubmitted = submitting ?? []
+                submitting = nil
+            }
+            let snapshot = try await readToSign(address)
+            for transaction in transactions {
+                let first = transaction.revocations[0]
+                try await signAndSend(to: transaction.to, value: 0, data: transaction.data, from: address, snapshot: snapshot) { hash, nonce in
+                    SignedRecord(
+                        hash: hash, nonce: nonce, to: transaction.revocations.count == 1 ? first.spender : Base.permit2,
+                        symbol: transaction.revocations.map(\.label).joined(separator: ", "), decimals: 0, amount: "0", usdMicros: nil, gainUsdMicros: "0",
+                        reason: .revoke, createdAt: now(), status: .pending
+                    )
+                }
+            }
+            isOnItsWay = true
+        }
+        return isOnItsWay
+    }
+
+    /// What the confirmation asks for, in its own terms.
+    public func revokeConfirmed(_ revocations: [Revocation], in prompt: PresencePrompt) async -> ApprovalResult {
+        if await revoke(revocations, in: prompt) { return .done }
+        return sweepProblem.map(ApprovalResult.failed) ?? .cancelled
+    }
+
     /// A transaction asked for by hand, with everything before it settled, because it's checked against what this read says.
     private func readToSign(_ address: EthereumAddress) async throws -> ChainSnapshot {
         try checkStillAllowed(address)
@@ -1166,7 +1225,7 @@ public final class HotWallet {
             case .aboveCap, .manual, .rotation:
                 sweepProblem = "A sweep of \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
                 pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
-            case .sent, .note:
+            case .sent, .note, .revoke:
                 sweepProblem = HotWalletWording.failedOnchain(record)
             case .site:
                 // The site's to answer for, so it doesn't hold up sweeps.

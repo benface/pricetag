@@ -226,3 +226,45 @@ export type VerificationResponse = {
   summary: string
   checks: ProofCheck[]
 }
+
+/** One approval a wallet gave that still lets someone spend from it. */
+export type ApprovalView = {
+  /** Its kind, token and spender, which is what makes it this approval. */
+  id: string
+  kind: "token" | "permit2" | "collection"
+  /** The token, or for a collection, its contract. */
+  token: string
+  /** Only for a tracked token. Anything else can call itself anything, so it's never named. */
+  symbol: string | null
+  decimals: number | null
+  spender: string
+  /** Whose contract it is, when it's a well-known one. That says who, not that it's safe. */
+  spenderName: string | null
+  /** In the token's smallest units. Null for a collection, which allows every NFT in it. */
+  amount: string | null
+  /** The amount in the token, when it's tracked and not unlimited. */
+  amountText: string | null
+  unlimited: boolean
+  /** When a Permit2 allowance stops working. */
+  expiresAt: string | null
+  /** The newest transaction that set it, when the history has it. */
+  grantedTx: string | null
+  grantedBlock: number | null
+  grantedAt: string | null
+  /** In the wallet's history, or only found by checking well-known apps, so it may be older than the history. */
+  found: "history" | "known-spender"
+}
+
+export type ApprovalsResponse = {
+  mode: Mode
+  address: string
+  /** The block every approval here was checked at. */
+  checkedAt: Head
+  /** The blocks searched for approval events, and the dataset they came from. */
+  history: { fromBlock: number; throughBlock: number; dataset: string }
+  /** Where this list comes from, line by line, like a price's proof. */
+  source: string[]
+  approvals: ApprovalView[]
+  /** Approvals in the history whose contract didn't answer, so what they allow isn't known. */
+  unreadable: number
+}

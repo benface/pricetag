@@ -603,6 +603,11 @@ public final class PortfolioStore {
         return try await source.verification(leg: leg, address: address, currency: currency, rule: selectedRule)
     }
 
+    /// Any wallet's, not just the one showing, since the security page asks about each of them.
+    public func approvals(address: String) async throws -> WalletApprovals {
+        try await source.approvals(address: address)
+    }
+
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
         // A request from before a change of server has nothing to say about what's on screen now.
         guard request.serverURL == serverURL else { throw CancellationError() }

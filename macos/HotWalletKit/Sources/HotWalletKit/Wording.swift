@@ -152,9 +152,11 @@ public enum HotWalletWording {
     public static let changedWhileWaiting = "This wallet changed while that was waiting, so nothing was signed."
 
     public static func failedOnchain(_ record: SignedRecord) -> String {
-        record.reason == .note
-            ? "Publishing the cost of \(record.symbol) failed onchain. Nothing was published, but its gas was spent."
-            : "Sending \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
+        switch record.reason {
+        case .note: "Publishing the cost of \(record.symbol) failed onchain. Nothing was published, but its gas was spent."
+        case .revoke: "Revoking an approval for \(record.symbol) failed onchain. It may still be there, and its gas was spent."
+        default: "Sending \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
+        }
     }
 
     public static func alarm(_ alarm: StolenKeyAlarm) -> String {
