@@ -61,10 +61,24 @@ const sendUsdc = (units: bigint) => rpc<string>("eth_sendTransaction", [{ from: 
  * doesn't, so the chain gets one of each every few blocks, from the sender, never the watched wallet.
  */
 async function activity() {
-  const amountIn = 10n ** 15n
-  const swap = `0x04e45aaf${word(WETH)}${word(USDC)}${word(500n)}${word(SENDER)}${word(amountIn)}${word(0n)}${word(0n)}`
-  await rpc("eth_sendTransaction", [{ from: SENDER, to: ROUTER, value: hex(amountIn), data: swap, gas: hex(400_000) }])
+  await swapEth(10n ** 15n)
   await rpc("eth_sendTransaction", [{ from: SENDER, to: UNLISTED, data: "0x", gas: hex(100_000) }])
+}
+
+/** The sender sells `wei` of ETH for USDC on Uniswap, which gives `priced_legs` a row for it. */
+function swapEth(wei: bigint) {
+  const swap = `0x04e45aaf${word(WETH)}${word(USDC)}${word(500n)}${word(SENDER)}${word(wei)}${word(0n)}${word(0n)}`
+  return rpc<string>("eth_sendTransaction", [{ from: SENDER, to: ROUTER, value: hex(wei), data: swap, gas: hex(400_000) }])
+}
+
+/**
+ * Every transaction in these blocks, as `<block>:<hash>`. A hash alone isn't enough: after a reorg the miner sends the old
+ * chain's transactions again, and with the same nonce and data they get the same hash, in a later block.
+ */
+async function txsIn(from: number, to: number): Promise<Set<string>> {
+  const txs = new Set<string>()
+  for (let n = from; n <= to; n++) for (const tx of (await rpc<{ transactions: string[] }>("eth_getBlockByNumber", [hex(n), false])).transactions) txs.add(`${n}:${tx.toLowerCase()}`)
+  return txs
 }
 
 /** `blocks` blocks at once, after anything already sent, with activity in the last one. */
@@ -99,7 +113,12 @@ async function pauseMiner() {
 const query = createQuery(FLIGHT, undefined, { logger: { warn: (message) => log("query warn", { message }) } })
 const count = async (sql: string) => Number((await query<{ n: unknown }>(sql))[0]?.n ?? 0)
 const hashOf = (value: unknown) => `0x${String(value).replace(/^0x/, "").toLowerCase()}`
-const hashList = (txs: readonly string[]) => txs.map((tx) => `X'${tx.slice(2).toLowerCase()}'`).join(", ")
+const hashList = (txs: readonly string[]) => txs.map((tx) => `X'${tx.slice(2).toLowerCase()}'`).join(", ") || "X'00'"
+/** Every transaction a table has a row for, from `first` on, as `<block>:<hash>`. */
+const txsOf = async (table: string, first: number) =>
+  new Set((await query<{ block_num: unknown; tx_hash: unknown }>(`SELECT DISTINCT block_num, tx_hash FROM ${table} WHERE block_num >= ${first}`)).map((r) => `${Number(r.block_num)}:${hashOf(r.tx_hash)}`))
+const pricedTxs = (first: number) => txsOf(`"${DATASET}".priced_legs`, first)
+const hasTx = (rows: Set<string>, tx: string) => [...rows].some((row) => row.endsWith(`:${tx}`))
 
 type Rewind = { table: string; start: number; previousEnd: number; at: number }
 
@@ -221,11 +240,15 @@ async function reorg(depth: number, round: number) {
   const forkPoint = await head()
   const snapshot = await rpc<string>("evm_snapshot")
   const oldTxs = [await sendEth(BigInt(round + 1) * ETH), await sendUsdc(BigInt(round + 1) * 10_000_000n)]
+  // A swap of an amount no other block has, so its price row on each chain is told apart.
+  const oldSwap = await swapEth(2n * 10n ** 15n + BigInt(round))
   await rpc("anvil_mine", ["0x1"])
   await mineNow(depth - 1)
   miner.paused = false
   const oldSince = Date.now()
   for (const w of watchers) await until(`${label}: ${w.name} shows the old chain`, oldSince, () => walletMatches(w, oldSince, oldTxs, []))
+  // The old chain's price row has to be there for its removal to mean anything.
+  const oldPriced = await until(`${label}: priced_legs has the old swap`, oldSince, async () => hasTx(await pricedTxs(forkPoint + 1), oldSwap))
 
   await pauseMiner()
   const oldHead = await head()
@@ -234,9 +257,11 @@ async function reorg(depth: number, round: number) {
   const probes = [first, Math.floor((first + oldHead) / 2), oldHead]
   const oldHashes = new Map<number, string>()
   for (const n of probes) oldHashes.set(n, (await blockHash(n)).toLowerCase())
+  const oldChainTxs = await txsIn(first, oldHead)
   await rpc("evm_revert", [snapshot])
   // Another transfer in the first replaced block, then a chain one block longer than the old one, so it wins.
   const newTxs = [await sendEth(ETH / BigInt(round + 2)), await sendUsdc(BigInt(round + 1) * 1_000_000n)]
+  const newSwap = await swapEth(3n * 10n ** 15n + BigInt(round))
   const since = Date.now()
   await rpc("anvil_mine", ["0x1"])
   await mineNow(oldHead - forkPoint)
@@ -247,26 +272,37 @@ async function reorg(depth: number, round: number) {
 
   const newHashes = new Map<number, string>()
   for (const n of [...probes, newHead]) newHashes.set(n, (await blockHash(n)).toLowerCase())
+  // What only the old chain had. A transaction the same on both chains, like a repeated swap, isn't orphaned.
+  const newChainTxs = await txsIn(first, newHead)
+  const orphaned = [...oldChainTxs].filter((tx) => !newChainTxs.has(tx))
+  const isOrphaned = new Set(orphaned)
+  log("orphaned", { label, transactions: orphaned.length, oldSwapRow: oldPriced !== null })
   const result: Record<string, number | null> = {}
   await Promise.all([
     until(`${label}: raw tables replaced`, since, async () => {
       const rows = await query<{ block_num: unknown; hash: unknown }>(`SELECT block_num, hash FROM "${RAW}".blocks WHERE block_num IN (${[...newHashes.keys()].join(", ")})`)
       const hashesMatch = [...newHashes].every(([n, h]) => rows.some((r) => Number(r.block_num) === n && hashOf(r.hash) === h))
       const total = await count(`SELECT count(*) AS n FROM "${RAW}".blocks WHERE block_num BETWEEN ${first} AND ${newHead}`)
-      return hashesMatch && total === newHead - forkPoint && (await count(`SELECT count(*) AS n FROM "${RAW}".transactions WHERE block_num >= ${first} AND tx_hash IN (${hashList(oldTxs)})`)) === 0
+      if (!hashesMatch || total !== newHead - forkPoint) return false
+      const txs = await txsOf(`"${RAW}".transactions`, first)
+      return ![...txs].some((tx) => isOrphaned.has(tx))
     }).then((s) => (result.raw = s)),
-    until(`${label}: legs and priced_legs replaced`, since, async () => {
-      const where = `block_num >= ${first} AND account = X'${WALLET.slice(2)}'`
-      const legs = (await query<{ tx_hash: unknown }>(`SELECT tx_hash FROM "${DATASET}".legs WHERE ${where}`)).map((r) => hashOf(r.tx_hash))
-      const orphanedPriced = await count(`SELECT count(*) AS n FROM "${DATASET}".priced_legs WHERE block_num >= ${first} AND tx_hash IN (${hashList(oldTxs)})`)
-      return orphanedPriced === 0 && !oldTxs.some((tx) => legs.includes(tx)) && newTxs.every((tx) => legs.includes(tx))
-    }).then((s) => (result.derived = s)),
+    // Every row from the replaced blocks gone, from any account, and the new chain's transfers there.
+    until(`${label}: legs replaced`, since, async () => {
+      const legs = await txsOf(`"${DATASET}".legs`, first)
+      return ![...legs].some((tx) => isOrphaned.has(tx)) && newTxs.every((tx) => hasTx(legs, tx))
+    }).then((s) => (result.legs = s)),
+    // The same for prices, with the new chain's swap priced, and only if the old one's price was there to remove.
+    until(`${label}: priced_legs replaced`, since, async () => {
+      const priced = await pricedTxs(first)
+      return oldPriced !== null && ![...priced].some((tx) => isOrphaned.has(tx)) && hasTx(priced, newSwap)
+    }).then((s) => (result.pricedLegs = s)),
     until(`${label}: raw stream rewound`, since, async () => rewinds.some((r) => r.table === "blocks" && r.at >= since && r.start <= first)).then((s) => (result.rawStream = s)),
     until(`${label}: priced_legs stream rewound`, since, async () => rewinds.some((r) => r.table === "priced_legs" && r.at >= since && r.start <= first)).then((s) => (result.pricedStream = s)),
     until(`${label}: stream wallet said reorg`, since, async () => watchers[0]!.updates.some((u) => u.at >= since && u.reorgFrom !== null && u.reorgFrom <= first)).then((s) => (result.walletReorg = s)),
     ...watchers.map((w) => until(`${label}: ${w.name} matches the new chain`, since, () => walletMatches(w, since, newTxs, oldTxs)).then((s) => (result[w.name] = s))),
   ])
-  if (result.raw === null || result.derived === null) await diagnose(first, newHead, probes, oldHashes, newHashes, oldTxs, newTxs)
+  if (result.raw === null || result.legs === null || result.pricedLegs === null) await diagnose(first, newHead, probes, oldHashes, newHashes, oldTxs, newTxs)
   const wallets = Object.fromEntries(watchers.map((w) => [w.name, describeWallet(w, oldTxs)]))
   log("result", { label, replaced, outsideWindow: forkPoint + 1 <= settledThrough(oldHead), seconds: result, wallets })
   return { replaced, result }
@@ -293,7 +329,7 @@ const summary = []
 for (const [round, depth] of (DEPTHS.length > 0 ? DEPTHS : [5, 100, 250, 350, 600]).entries()) {
   const { replaced, result } = await reorg(depth, round)
   summary.push({ depth, replaced, ...result })
-  if (result.derived === null) {
+  if (result.legs === null || result.pricedLegs === null) {
     log("stopping", { reason: "the dataset didn't recover, so a deeper reorg would say nothing new" })
     break
   }

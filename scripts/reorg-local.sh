@@ -12,10 +12,11 @@ FORK_URL="${BASE_RPC_URL:-https://mainnet.base.org}"
 ANVIL_PORT=18597
 FLIGHT_PORT=11602
 ADMIN_PORT=11610
-CONTAINER="pricetag-reorg-metadb"
 POSTGRES_IMAGE="postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
 
 WORK="$(mktemp -d /tmp/pricetag-reorg.XXXX)"
+# Its own name, so another run's container is never this one's.
+CONTAINER="pricetag-reorg-${WORK##*.}"
 ANVIL_URL="http://127.0.0.1:$ANVIL_PORT"
 ADMIN_URL="http://127.0.0.1:$ADMIN_PORT"
 say() { printf '%s\n' "$*" >&2; }
@@ -27,7 +28,8 @@ cleanup() {
   for pid in "$(cat "$WORK/ampd.pid" 2> /dev/null)" "$(cat "$WORK/anvil.pid" 2> /dev/null)"; do
     [ -n "$pid" ] && kill "$pid" 2> /dev/null || true
   done
-  docker rm -f -v "$CONTAINER" > /dev/null 2>&1 || true
+  # Only the container this run created, by the ID it got back.
+  if [ -s "$WORK/metadb.id" ]; then docker rm -f -v "$(cat "$WORK/metadb.id")" > /dev/null 2>&1 || true; fi
   # The logs are kept when asked, for evidence.
   if [ -n "${KEEP_LOGS:-}" ]; then
     mkdir -p "$KEEP_LOGS" && cp "$WORK"/*.log "$KEEP_LOGS"/ 2> /dev/null || true
@@ -47,9 +49,10 @@ rpc anvil_mine '["0x1"]' > /dev/null
 START_BLOCK=$(( $(rpc eth_blockNumber '[]' | jq -r .result) ))
 
 say "Starting a throwaway Postgres and ampd..."
-docker run -d --rm --name "$CONTAINER" -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1::5432 "$POSTGRES_IMAGE" > /dev/null
-for _ in $(seq 1 60); do docker exec "$CONTAINER" pg_isready -q -h 127.0.0.1 -U postgres && break; sleep 1; done
-metadb_port="$(docker port "$CONTAINER" 5432/tcp | sed 's/.*://' | head -n 1)"
+metadb_id="$(docker run -d --rm --name "$CONTAINER" -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1::5432 "$POSTGRES_IMAGE")"
+printf '%s' "$metadb_id" > "$WORK/metadb.id"
+for _ in $(seq 1 60); do docker exec "$metadb_id" pg_isready -q -h 127.0.0.1 -U postgres && break; sleep 1; done
+metadb_port="$(docker port "$metadb_id" 5432/tcp | sed 's/.*://' | head -n 1)"
 mkdir -p "$WORK/amp/providers"
 # The same worker settings as scripts/amp.
 cat > "$WORK/amp/config.toml" <<EOF
