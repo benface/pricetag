@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { formatSignedMoney, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
 import type { Book } from "../core/book.ts"
 import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
@@ -58,13 +58,25 @@ function methodNote(method: Method, overview: Method, country: TaxCountryCode): 
   return `Overview uses ${METHOD_LABELS[overview]}, and you chose ${METHOD_LABELS[method]} here, so its gains can differ from Overview's.`
 }
 
-function unknownSentence({ unresolvedCount: count, rowCount }: TaxReportResponse): string {
+/** Counts sales, fees and sends once each, like the numbers above it, rather than the file's rows. */
+function unknownSentence({ unknownCount: count, soldCount, feeCount, sentCount }: TaxReportResponse): string {
   const n = (value: number) => value.toLocaleString("en-US")
-  if (count === rowCount) return count === 1 ? "Its gain is unknown." : `All ${n(count)} have an unknown gain.`
-  return `${n(count)} of ${n(rowCount)} ${count === 1 ? "has an unknown gain, so it's" : "have an unknown gain, so they're"} left out of the total.`
+  const total = soldCount + feeCount + sentCount
+  if (count === total) return count === 1 ? "Its gain is unknown, in whole or in part." : `All ${n(count)} have an unknown gain, in whole or in part.`
+  return `${n(count)} of these ${n(total)} ${count === 1 ? "has" : "have"} an unknown gain, in whole or in part. What's unknown is left out of the total.`
 }
 
-export function TaxPanel({ address, currency, book, overviewMethod, questionCount, onResolve, onClose }: { address: string; currency: CurrencyCode; book: Book; overviewMethod: Method; questionCount: number; onResolve: () => void; onClose: () => void }) {
+export function TaxPanel({ address, currency, book, overviewMethod, questionCount, onResolve, onClose }: {
+  address: string
+  currency: CurrencyCode
+  book: Book
+  overviewMethod: Method
+  /** The questions about the wallet showing. */
+  questionCount: number
+  /** Opens a wallet's questions, which can be one added here rather than the one showing. */
+  onResolve: (wallet: string) => void
+  onClose: () => void
+}) {
   const dialog = useRef<HTMLDialogElement>(null)
   const close = useRef<HTMLButtonElement>(null)
   const [country, setCountry] = useState(() => readCountry(currency))
@@ -261,11 +273,17 @@ export function TaxPanel({ address, currency, book, overviewMethod, questionCoun
             {report.unresolvedCount > 0 ? (
               <p className="notice warn tax-unknown">
                 <span>⚠ {unknownSentence(report)}</span>
-                {questionCount > 0 ? (
-                  <button type="button" className="resolve-button" onClick={onResolve}>
-                    Resolve {questionCount}
-                  </button>
-                ) : null}
+                {report.unknownWallets.map((wallet) =>
+                  wallet !== address.toLowerCase() ? (
+                    <button key={wallet} type="button" className="resolve-button" onClick={() => onResolve(wallet)}>
+                      Answer for {shortHash(wallet)}
+                    </button>
+                  ) : questionCount > 0 ? (
+                    <button key={wallet} type="button" className="resolve-button" onClick={() => onResolve(wallet)}>
+                      Resolve {questionCount}
+                    </button>
+                  ) : null,
+                )}
               </p>
             ) : null}
             {report.warnings.map((warning) => (

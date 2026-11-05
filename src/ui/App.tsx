@@ -206,6 +206,10 @@ export function App() {
     return link ? { link } : null
   })
   const [resolving, setResolving] = useState<{ asset: string | null } | null>(null)
+  // Another wallet's questions, asked for from a tax report that includes it: they open once it's read, and closing them
+  // goes back to the report on the wallet that was showing.
+  const [pendingResolve, setPendingResolve] = useState<{ wallet: string; returnTo: string } | null>(null)
+  const [returnTo, setReturnTo] = useState<string | null>(null)
   const [cardSender, setCardSender] = useState<string | null>(null)
   const wanted = useMemo(() => [...new Set([...linkedWallets(book), ...(cardSender ? [cardSender] : [])])].filter((a) => a !== wallet?.address), [book, cardSender, wallet?.address])
   const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, wallet?.latest.blockNum ?? null, wallet)
@@ -213,6 +217,8 @@ export function App() {
 
   useEffect(() => {
     const onPop = () => {
+      setPendingResolve(null)
+      setReturnTo(null)
       setAddress(readAddress())
       setTarget(null)
       setTaxOpen(false)
@@ -241,6 +247,30 @@ export function App() {
   const chooseCurrency = (next: CurrencyCode) => {
     localStorage.setItem(CURRENCY_KEY, next)
     setChosenCurrency(next)
+  }
+
+  useEffect(() => {
+    if (!pendingResolve || wallet?.address.toLowerCase() !== pendingResolve.wallet) return
+    setReturnTo(pendingResolve.returnTo)
+    setPendingResolve(null)
+    setResolving({ asset: null })
+  }, [pendingResolve, wallet])
+
+  const resolveFromTax = (next: string) => {
+    if (next === wallet?.address.toLowerCase()) {
+      setTaxOpen(false)
+      setResolving({ asset: null })
+    } else if (address) {
+      setPendingResolve({ wallet: next, returnTo: address })
+      go(next)
+    }
+  }
+  const closeResolve = () => {
+    setResolving(null)
+    if (returnTo === null) return
+    setReturnTo(null)
+    go(returnTo)
+    setTaxOpen(true)
   }
 
   const fold = useMemo(() => (wallet ? foldBook(wallet, others, method, book) : null), [wallet, others, method, book])
@@ -415,7 +445,7 @@ export function App() {
       ) : null}
 
       {explanation && wallet ? <ExplainPanel explanation={explanation} address={wallet.address} rule={wallet.rule ?? null} onClose={close} /> : null}
-      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
+      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
       {device ? (
         <Suspense fallback={null}>
           <DevicePanel
@@ -441,10 +471,7 @@ export function App() {
           book={book}
           overviewMethod={method}
           questionCount={questions.length}
-          onResolve={() => {
-            setTaxOpen(false)
-            setResolving({ asset: null })
-          }}
+          onResolve={resolveFromTax}
           onClose={() => setTaxOpen(false)}
         /> : null}
     </div>
