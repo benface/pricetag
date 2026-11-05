@@ -136,7 +136,8 @@ struct CurrentRateTests {
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, rateRetryDelay: .milliseconds(10))
         store.start()
         defer { store.stop() }
-        while await source.asked.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        for _ in 0..<2000 where await source.asked.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(await !source.asked.isEmpty)
         #expect(!store.moneyDisplay.isConverted)
         await source.say(.success("1400000"))
         for _ in 0..<400 where !store.moneyDisplay.isConverted { try await Task.sleep(for: .milliseconds(5)) }

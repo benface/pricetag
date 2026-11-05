@@ -77,7 +77,7 @@ done
 
 # Without the sandbox, there's no container for macOS to stop the launch and ask about when a build's signature changes.
 # Fixtures come from the bundle and PNGs go to the run's folder, so this reads and writes nothing it wouldn't otherwise.
-xcodebuild -quiet \
+"$here/swift-queue.sh" xcodebuild -quiet \
   -project "$here/App.xcodeproj" -scheme App -configuration Debug \
   -derivedDataPath "$here/build/test-mode" -destination 'platform=macOS' \
   -onlyUsePackageVersionsFromResolvedFile ENABLE_APP_SANDBOX=NO build >&2
