@@ -258,9 +258,14 @@ struct MainWindow: View {
         }
     }
 
-    /// A section that shows a wallet, or says why there's nothing to show.
-    @ViewBuilder
+    /// A section that shows a wallet, or says why there's nothing to show. The first numbers fade in over the spinner rather than replacing it at once.
     private func walletPage(_ content: @escaping (Portfolio) -> some View) -> some View {
+        walletPageContent(content)
+            .motion(Motion.state, value: portfolio == nil)
+    }
+
+    @ViewBuilder
+    private func walletPageContent(_ content: @escaping (Portfolio) -> some View) -> some View {
         if store.feed == .noWallet {
             if navigation.section == .overview {
                 Welcome(store: store, hotWallet: hotWallet, navigation: navigation)
@@ -279,12 +284,14 @@ struct MainWindow: View {
             }
             // Another wallet starts from the top with nothing selected, and its numbers appear rather than rolling from these.
             .id(store.address)
+            .transition(.opacity)
         } else if store.feed == .reading {
             ContentUnavailableView {
                 ProgressView().controlSize(.large)
             } description: {
                 Text(Wording.reading)
             }
+            .transition(.opacity)
         } else {
             Unavailable(store: store)
         }
@@ -493,21 +500,6 @@ private struct HoldingsSection: View {
     }
 }
 
-extension View {
-    /// A cost that's just become known, lit softly and fading by itself. The number's already rolled to what's real by then.
-    fileprivate func justKnown(_ isOn: Bool) -> some View {
-        background {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Tone.gain.style)
-                .opacity(isOn ? 0.2 : 0)
-                .padding(.horizontal, -5)
-                .padding(.vertical, -2)
-                // It comes up quickly and goes slowly.
-                .animation(isOn ? Motion.feedback : .easeOut(duration: 0.8 * Motion.slowdown), value: isOn)
-        }
-    }
-}
-
 /// A holding in a narrow window: what it is and how much, then what it's worth and how it's done. The rest is in its details.
 private struct CompactHolding: View {
     let position: Position
@@ -603,6 +595,7 @@ private struct HoldingsTable: View {
                     balanceCheck(position)
                 }
                 .opacity(position.isHeld ? 1 : 0.6)
+                .tableCell()
             }
             .width(min: Column.asset, ideal: Column.assetRoom, max: limit(Column.assetRoom))
             .disabledCustomizationBehavior(.all)
@@ -690,7 +683,7 @@ private struct HoldingsTable: View {
     }
 
     private var dash: some View {
-        Text("—").foregroundStyle(.tertiary)
+        Text("—").foregroundStyle(.tertiary).tableCell()
     }
 
     private func balanceCheck(_ position: Position) -> some View {
@@ -716,6 +709,14 @@ private struct HoldingsTable: View {
         .buttonStyle(NumberButtonStyle())
         .help(metric.help ?? "")
         .accessibilityLabel("\(position.asset) \(metric.label), \(text)")
+        .tableCell()
+    }
+}
+
+extension View {
+    /// Lines a cell up with its column's title, which the header draws a couple of points in from each side.
+    fileprivate func tableCell() -> some View {
+        padding(.horizontal, 2)
     }
 }
 
@@ -736,6 +737,7 @@ private struct TransactionsTable: View {
         Table(transactions, selection: $selection) {
             TableColumn("Time") { point in
                 Text(point.date.map(Format.time) ?? point.timestamp)
+                    .tableCell()
             }
             // Only what they need, so the words get the rest, and a small window still has room for the last column.
             .width(min: 120, ideal: 120, max: 130)
@@ -744,8 +746,9 @@ private struct TransactionsTable: View {
                     Text(summary)
                         .lineLimit(1)
                         .help(summary)
+                        .tableCell()
                 } else {
-                    Text("—").foregroundStyle(.tertiary)
+                    Text("—").foregroundStyle(.tertiary).tableCell()
                 }
             }
             .width(min: 100)
@@ -754,14 +757,15 @@ private struct TransactionsTable: View {
                     .opacity(isLive ? 1 : 0.55)
                     .help(Wording.pnlHelp)
                     .updatingMark()
+                    .tableCell()
             }
             .width(min: 90, ideal: 90, max: 110)
             .alignment(.numeric)
             TableColumn("Left out") { point in
                 if point.excludedCount > 0 {
-                    LiveNumber("\(point.excludedCount) unknown", tone: .secondary)
+                    LiveNumber("\(point.excludedCount) unknown", tone: .secondary).tableCell()
                 } else {
-                    Text("—").foregroundStyle(.tertiary)
+                    Text("—").foregroundStyle(.tertiary).tableCell()
                 }
             }
             .width(min: 70, ideal: 70, max: 90)

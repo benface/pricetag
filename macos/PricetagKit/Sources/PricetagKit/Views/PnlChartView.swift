@@ -45,7 +45,7 @@ public struct PnlChartView: View {
         Chart {
             ForEach(Array(drawn.gaps.enumerated()), id: \.offset) { _, gap in
                 RectangleMark(xStart: .value("Unknown from", gap.lowerBound), xEnd: .value("Unknown to", gap.upperBound))
-                    .foregroundStyle(Color.secondary.opacity(contrast == .increased ? 0.22 : 0.1))
+                    .foregroundStyle(Color.secondary.opacity(Self.gapOpacity(contrast)))
             }
             RuleMark(y: .value("Zero", 0))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
@@ -72,7 +72,8 @@ public struct PnlChartView: View {
                 PointMark(x: .value("Time", hovered.date), y: .value("PnL", hovered.value ?? 0))
                     // Only there to carry the tooltip when the value is unknown, not to mark a place on the axis.
                     .foregroundStyle(hovered.value == nil ? Color.clear : lineColor)
-                    .annotation(position: .top, spacing: 6, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                    // Inside the plot sideways, so at either end it doesn't cover the axis's labels.
+                    .annotation(position: .top, spacing: 6, overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .chart))) {
                         VStack(spacing: 1) {
                             if let pnl = hovered.point.pnlMicros {
                                 LiveNumber(Format.signedMoney(pnl, currency)).font(.callout.weight(.medium))
@@ -158,6 +159,10 @@ public struct PnlChartView: View {
         .accessibilityLabel("Total PnL over time, ending at \(points.last?.pnlMicros.map { Format.signedMoney($0, currency) } ?? "unavailable")")
     }
 
+    static func gapOpacity(_ contrast: ColorSchemeContrast) -> Double {
+        contrast == .increased ? 0.22 : 0.1
+    }
+
     private static var overscan: CGFloat { 8 }
     private static var softEdge: CGFloat { 40 }
 
@@ -180,6 +185,7 @@ public struct PnlHistorySection: View {
     @Binding var range: ChartRange
     let scrubbedIndex: Int?
     let onSelect: (String) -> Void
+    @Environment(\.colorSchemeContrast) private var contrast
 
     public init(portfolio: Portfolio, isLive: Bool, range: Binding<ChartRange>, scrubbedIndex: Int? = nil, onSelect: @escaping (String) -> Void) {
         self.portfolio = portfolio
@@ -209,11 +215,11 @@ public struct PnlHistorySection: View {
                     HStack(alignment: .center) {
                         heading
                         Spacer(minLength: 12)
-                        picker
+                        controls
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         heading
-                        picker
+                        controls
                     }
                 }
                 DrawnPnlChart(wallet: portfolio.address, points: window.points, history: portfolio.points, currency: portfolio.currency, isLive: isLive, scrubbedIndex: scrubbedIndex, onSelect: onSelect)
@@ -234,6 +240,32 @@ public struct PnlHistorySection: View {
                 .contentTransition(.opacity)
                 .motion(Motion.state, value: shown)
                 .help(portfolio.historyLength)
+        }
+    }
+
+    private var controls: some View {
+        HStack(spacing: 14) {
+            unknownKey
+            picker
+        }
+    }
+
+    /// What the shaded stretches are, while one's in view. Too narrow a stretch has no room to say it inside.
+    @ViewBuilder
+    private var unknownKey: some View {
+        if !PnlSeries(points: window.points).gaps.isEmpty {
+            HStack(spacing: 5) {
+                // Upright like the band, and a little darker, since it's so much smaller. A square would look like a checkbox.
+                Rectangle()
+                    .fill(Color.secondary.opacity(PnlChartView.gapOpacity(contrast) * 2))
+                    .frame(width: 7, height: 13)
+                Text("PnL unknown")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize()
+            .help(Wording.chartGap)
+            .transition(.opacity)
         }
     }
 
