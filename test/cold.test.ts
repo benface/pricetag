@@ -8,7 +8,7 @@ import { TOKENS, USDC_ADDRESS, WETH_ADDRESS, encodeNote, normalizeAddress, parse
 import { encodeFunctionData, erc20Abi, parseTransaction, serializeTransaction, type Address, type EIP1193Provider, type Hex, type TransactionSerializable } from "viem"
 import { linkDeviceAccounts, emptyBook, isOwnWallet, linkedWallets } from "../src/core/book.ts"
 import { NOT_ALLOWED, NOT_LISTED, NOT_YOURS, readColdRequest, sendFromCold, signatureFromHex, toColdAccount, transferRequest, yParityOf, type ColdRequest, type WalletSigner } from "../src/core/cold.ts"
-import { accountsToLink, defaultAccount, isFresh, readCheckedAccounts, rememberCheckedAccount, type SeenAccount } from "../src/core/device-accounts.ts"
+import { accountsToLink, defaultAccount, isFresh, readCheckedAccounts, rememberCheckedAccount, selectedAccount, type SeenAccount } from "../src/core/device-accounts.ts"
 import { addToMacLink, noteLinkFor, parseDeviceLink, usdMicrosOf } from "../src/core/device-link.ts"
 import { FAKE_SIGNATURE, accountSigningWithFake, mockSigner } from "./support/mock-signer.ts"
 
@@ -230,6 +230,26 @@ describe("choosing an account", () => {
     assert.equal(defaultAccount([fresh], "send"), null)
   })
 
+  test("what's already selected stays, and otherwise it's the default, or the first", () => {
+    const options = { required: null, purpose: "receive" as const }
+    assert.equal(selectedAccount([used, fresh], { ...options, current: used.address }), used.address)
+    assert.equal(selectedAccount([used, fresh], { ...options, current: null }), fresh.address)
+    assert.equal(selectedAccount([used], { ...options, current: null }), used.address)
+    assert.equal(selectedAccount([], { ...options, current: null }), null)
+  })
+
+  test("a wallet that has to publish is the only choice, and nothing stands in for it", () => {
+    const options = { purpose: "send" as const, current: null }
+    const wanted = fresh.address
+    // A different device, which has every other account but that one.
+    assert.equal(selectedAccount([used, tokensOnly, unread], { ...options, required: wanted }), null)
+    // Something else selected earlier doesn't count either.
+    assert.equal(selectedAccount([used, tokensOnly], { ...options, current: used.address, required: wanted }), null)
+    // Past the first page, once it's been shown.
+    assert.equal(selectedAccount([used, tokensOnly, unread, fresh], { ...options, current: null, required: wanted }), wanted)
+    assert.equal(selectedAccount([used, fresh], { purpose: "send", current: used.address, required: wanted.toUpperCase().replace("0X", "0x") }), wanted)
+  })
+
   test("the ones in use and the chosen one get linked, and no others", () => {
     assert.deepEqual(accountsToLink([used, tokensOnly, unread, fresh], fresh.address), [used.address, tokensOnly.address, fresh.address])
     assert.deepEqual(accountsToLink([used, fresh], null), [used.address])
@@ -311,13 +331,20 @@ describe("links into the flow", () => {
   test("a note from Resolve, only when one can say the whole answer", () => {
     const arrival = { asset: "USDC", units: "1500000", decimals: 6 }
     const question = { wallet: COLD, noteAbout: TX, arrivals: [arrival], receipts: [{}] }
-    assert.deepEqual(noteLinkFor(question, "$250"), { kind: "publish", wallet: COLD, txHash: TX, asset: "USDC", usdMicros: "250000000", amount: { units: "1500000", decimals: 6 } })
-    assert.equal(noteLinkFor(question, null)?.usdMicros, null)
-    assert.equal(noteLinkFor({ ...question, noteAbout: null }, "1"), null)
-    assert.equal(noteLinkFor({ ...question, noteAbout: "opening" }, "1"), null)
-    assert.equal(noteLinkFor({ ...question, receipts: [{}, {}] }, "1"), null)
-    assert.equal(noteLinkFor({ ...question, arrivals: [arrival, arrival] }, "1"), null)
-    assert.equal(noteLinkFor({ ...question, arrivals: [{ ...arrival, asset: "US:DC" }] }, "1"), null)
+    assert.deepEqual(noteLinkFor(question, "$250", "USD"), { kind: "publish", wallet: COLD, txHash: TX, asset: "USDC", usdMicros: "250000000", amount: { units: "1500000", decimals: 6 } })
+    assert.equal(noteLinkFor(question, null, "USD")?.usdMicros, null)
+    assert.equal(noteLinkFor({ ...question, noteAbout: null }, "1", "USD"), null)
+    assert.equal(noteLinkFor({ ...question, noteAbout: "opening" }, "1", "USD"), null)
+    assert.equal(noteLinkFor({ ...question, receipts: [{}, {}] }, "1", "USD"), null)
+    assert.equal(noteLinkFor({ ...question, arrivals: [arrival, arrival] }, "1", "USD"), null)
+    assert.equal(noteLinkFor({ ...question, arrivals: [{ ...arrival, asset: "US:DC" }] }, "1", "USD"), null)
+  })
+
+  test("a cost typed in another currency isn't carried over as dollars", () => {
+    const question = { wallet: COLD, noteAbout: TX, arrivals: [{ asset: "USDC", units: "1500000", decimals: 6 }], receipts: [{}] }
+    const link = noteLinkFor(question, "250", "CAD")
+    assert.equal(link?.usdMicros, null, "the form has to ask for USD")
+    assert.equal(link?.txHash, TX, "publishing is still on offer")
   })
 
   test("the link to the Mac app", () => {
@@ -401,7 +428,13 @@ describe("on a local chain", { skip: hasAnvil() ? false : "needs Foundry's anvil
       await send("anvil_setBalance", [address, "0xde0b6b3a7640000"])
       const signed = await toColdAccount(mockSigner([]), { address, path: null }, OWN, () => {}).signTransaction(transaction)
       const hash = await send<Hex>("eth_sendRawTransaction", [signed])
-      const receipt = await send<{ status: string; from: string; to: string }>("eth_getTransactionReceipt", [hash])
+      // A local chain mines right after it answers, not before.
+      let receipt: { status: string; from: string; to: string } | null = null
+      for (let tries = 0; !receipt && tries < 50; tries++) {
+        receipt = await send("eth_getTransactionReceipt", [hash])
+        if (!receipt) await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      assert.ok(receipt, "it never landed")
       assert.equal(receipt.status, "0x1")
       assert.equal(normalizeAddress(receipt.from), normalizeAddress(address))
       assert.equal(normalizeAddress(receipt.to), HOT)

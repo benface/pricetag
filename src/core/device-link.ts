@@ -1,7 +1,7 @@
 // What a link can ask the hardware wallet flow to do. The Mac app has no device code, so its Top Up and Publish buttons open
 // these. Anyone can make a link, so a link only ever fills in a form: nothing here is treated as true until the person says so.
 
-import { isAddress, normalizeAddress } from "@pricetag/sdk/core"
+import { isAddress, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
 
 export type DeviceLink =
   | { kind: "top-up"; to: string; usdMicros: string | null }
@@ -39,11 +39,14 @@ export function parseDeviceLink(search: string): DeviceLink | null {
 
 type NoteQuestion = { wallet: string; noteAbout: string | null; arrivals: readonly { asset: string; units: string; decimals: number }[]; receipts: readonly unknown[] }
 
-/** What publishing this answer would be, if a note can say it. One that covered less than what it names would replace the cost of the rest. */
-export function noteLinkFor(question: NoteQuestion, typedUsd: string | null): Extract<DeviceLink, { kind: "publish" }> | null {
+/**
+ * What publishing this answer would be, if a note can say it. One that covered less than what it names would replace the cost of the rest.
+ * A note's always in USD, so what was typed only carries over if it was typed in USD. 250 in another currency isn't 250 dollars.
+ */
+export function noteLinkFor(question: NoteQuestion, typed: string | null, currency: CurrencyCode): Extract<DeviceLink, { kind: "publish" }> | null {
   const arrival = question.arrivals[0]
   if (!question.noteAbout || !TX_HASH.test(question.noteAbout) || !arrival || question.arrivals.length !== 1 || question.receipts.length !== 1 || !ASSET.test(arrival.asset)) return null
-  return { kind: "publish", wallet: normalizeAddress(question.wallet), txHash: question.noteAbout, asset: arrival.asset, usdMicros: usdMicrosOf(typedUsd), amount: { units: arrival.units, decimals: arrival.decimals } }
+  return { kind: "publish", wallet: normalizeAddress(question.wallet), txHash: question.noteAbout, asset: arrival.asset, usdMicros: currency === "USD" ? usdMicrosOf(typed) : null, amount: { units: arrival.units, decimals: arrival.decimals } }
 }
 
 /** How the page tells the Mac app about an account. The app still asks the person to check it on the device before anything's saved. */

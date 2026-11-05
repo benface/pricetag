@@ -420,10 +420,11 @@ private struct HotWalletDetails: View {
 }
 
 /// The Mac app has no device code, so the user is the one who checks the address against the device. That includes one the web app
-/// sent over, since anyone can make that link.
+/// sent over, and any other accounts it names, since anyone can make that link.
 struct AddColdWalletSheet: View {
     let wallet: HotWallet
-    private let alsoLinked: [String]
+    private let link: AddSavingsLink?
+    @State private var acceptedAccounts: Set<String> = []
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var address: String
@@ -432,14 +433,14 @@ struct AddColdWalletSheet: View {
 
     init(wallet: HotWallet, address: String = "") {
         self.wallet = wallet
-        alsoLinked = []
+        link = nil
         _name = State(initialValue: "")
         _address = State(initialValue: address)
     }
 
     init(wallet: HotWallet, link: AddSavingsLink) {
         self.wallet = wallet
-        alsoLinked = link.linked
+        self.link = link
         _name = State(initialValue: link.name)
         _address = State(initialValue: link.address)
     }
@@ -460,6 +461,7 @@ struct AddColdWalletSheet: View {
                 .onChange(of: address) {
                     matches = false
                     problem = nil
+                    acceptedAccounts = []
                 }
             if let parsed {
                 // In groups, because nobody really compares 40 characters in one run.
@@ -475,11 +477,23 @@ struct AddColdWalletSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if !alsoLinked.isEmpty {
-                Text(alsoLinked.count == 1 ? "1 other account on this device is in use. Costs will follow what moves to and from it, and no money is sent there." : "\(alsoLinked.count) other accounts on this device are in use. Costs will follow what moves to and from them, and no money is sent there.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            if !suggestedAccounts.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("This link also names other accounts. Tick the ones you know are yours.")
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(suggestedAccounts, id: \.self) { account in
+                        Toggle(isOn: accepted(account)) {
+                            Text(EthereumAddress(account).map { AddressText.grouped($0.checksummed) } ?? account)
+                                .font(.caption.monospaced())
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Text("Costs will follow what moves to and from the ones you tick, and no money is sent there. Leave out any you don't recognize.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             if let problem {
                 WarningText(problem).font(.callout)
@@ -497,10 +511,24 @@ struct AddColdWalletSheet: View {
         .frame(width: 460)
     }
 
+    /// Only while this is the wallet the link named, which is all it can be said to know about.
+    private var suggestedAccounts: [String] {
+        guard let link, address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == link.address.lowercased() else { return [] }
+        return link.linked
+    }
+
+    private func accepted(_ account: String) -> Binding<Bool> {
+        Binding {
+            acceptedAccounts.contains(account)
+        } set: { isAccepted in
+            if isAccepted { acceptedAccounts.insert(account) } else { acceptedAccounts.remove(account) }
+        }
+    }
+
     private func add() {
         do {
             try wallet.addColdWallet(address: address, name: name)
-            wallet.linkDeviceAccounts(alsoLinked)
+            wallet.linkDeviceAccounts(link?.accountsToLink(accepted: acceptedAccounts, adding: address) ?? [])
             dismiss()
         } catch {
             switch error {

@@ -43,6 +43,28 @@ import Testing
         #expect(link.linked == [hot])
     }
 
+    @Test func anAccountTheLinkNamesIsntLinkedUnlessItsAccepted() throws {
+        let forged = "0x" + String(repeating: "cc", count: 20)
+        let link = try #require(AddSavingsLink(url: URL(string: "patina://add-savings?address=\(cold)&linked=\(hot),\(forged)")!))
+        #expect(link.accountsToLink(accepted: [], adding: cold).isEmpty, "checking the main address says nothing about the others")
+        #expect(link.accountsToLink(accepted: [hot], adding: cold) == [hot], "the forged one stays out")
+        #expect(link.accountsToLink(accepted: [hot, forged], adding: cold) == [hot, forged])
+    }
+
+    @Test func editingTheAddressDropsWhatTheLinkNamed() throws {
+        let link = try #require(AddSavingsLink(url: URL(string: "patina://add-savings?address=\(cold)&linked=\(hot)")!))
+        let other = "0x" + String(repeating: "dd", count: 20)
+        #expect(link.accountsToLink(accepted: [hot], adding: other).isEmpty)
+        #expect(link.accountsToLink(accepted: [hot], adding: " \(cold.uppercased().replacing("0X", with: "0x")) ") == [hot], "the same address, tidied up, is still that wallet")
+    }
+
+    @Test func aLinkCantFillTheSheetWithAccounts() throws {
+        let many = (0..<50).map { String(format: "0x%040x", $0 + 1) }.joined(separator: ",")
+        let link = try #require(AddSavingsLink(url: URL(string: "patina://add-savings?address=\(cold)&linked=\(many),\(String(format: "0x%040x", 1))")!))
+        #expect(link.linked.count == 8)
+        #expect(Set(link.linked).count == 8)
+    }
+
     @Test func keepsAStrangersNameShort() throws {
         let link = try #require(AddSavingsLink(url: URL(string: "patina://add-savings?address=\(cold)&name=\(String(repeating: "x", count: 500))")!))
         #expect(link.name.count == 40)

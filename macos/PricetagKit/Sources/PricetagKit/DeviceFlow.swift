@@ -33,7 +33,8 @@ public enum DeviceFlow {
 public struct AddSavingsLink: Equatable, Identifiable, Sendable {
     public let address: String
     public let name: String
-    /// The device's other accounts that are in use. They only link costs, and money never goes to them by itself.
+    /// Other accounts the link says are on the same device. That's only a claim, and one wrong address here would change costs and PnL,
+    /// so each is a suggestion the person has to accept. They only link costs, and money never goes to them by itself.
     public let linked: [String]
 
     public var id: String { address }
@@ -46,8 +47,19 @@ public struct AddSavingsLink: Equatable, Identifiable, Sendable {
         guard let address = value("address"), Self.isAddress(address) else { return nil }
         self.address = address
         name = String((value("name") ?? "").prefix(40))
-        linked = (value("linked") ?? "").split(separator: ",").map(String.init).filter { Self.isAddress($0) && $0.lowercased() != address.lowercased() }
+        var seen = Set([address.lowercased()])
+        linked = Array((value("linked") ?? "").split(separator: ",").map(String.init).filter { Self.isAddress($0) && seen.insert($0.lowercased()).inserted }.prefix(Self.mostSuggestions))
     }
+
+    /// What to link once someone's answered: only what they accepted, and only while they're adding the wallet the link named. Edit
+    /// that address and it's a different wallet, which says nothing about what's on the same device.
+    public func accountsToLink(accepted: Set<String>, adding address: String) -> [String] {
+        guard address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == self.address.lowercased() else { return [] }
+        return linked.filter(accepted.contains)
+    }
+
+    /// More than anyone would have in use, and all of them have to fit on a sheet.
+    private static let mostSuggestions = 8
 
     private static func isAddress(_ text: String) -> Bool {
         text.wholeMatch(of: /0x[0-9a-fA-F]{40}/) != nil

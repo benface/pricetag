@@ -20,6 +20,8 @@ const accounts: SeenAccount[] = [
 ]
 
 const params = new URLSearchParams(window.location.search)
+// Past the first page, for a wallet that takes "Show more" to find.
+if (params.get("many")) accounts.push({ address: "0x2c4e6a8b0d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c", path: "44'/60'/4'/0/0", activity: null }, { address: "0x3d5f7a9c1e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f", path: "44'/60'/5'/0/0", activity: null })
 const scene = params.get("scene") ?? "route"
 const signer = mockSigner(accounts, { check: params.get("look") ? "look-on-device" : "shown-on-device" })
 

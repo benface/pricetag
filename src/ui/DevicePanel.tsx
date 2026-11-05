@@ -3,10 +3,10 @@ import { ETH_ADDRESS, TOKENS, encodeNote, formatAmount, formatMoney, isAddress, 
 import type { Hex, PublicClient } from "viem"
 import { linkedWallets, type Book } from "../core/book.ts"
 import { readColdRequest, transferRequest, type ColdAccount, type ColdRequest, type ColdSigner, type DevicePrompt } from "../core/cold.ts"
-import { accountsToLink, defaultAccount, isFresh, readCheckedAccounts, rememberCheckedAccount, type AccountActivity, type CheckedAccount, type SeenAccount } from "../core/device-accounts.ts"
+import { accountsToLink, isFresh, readCheckedAccounts, rememberCheckedAccount, selectedAccount, type AccountActivity, type CheckedAccount, type SeenAccount } from "../core/device-accounts.ts"
 import { addToMacLink, usdMicrosOf, type DeviceLink } from "../core/device-link.ts"
 import { amountForUsd, checkSend, parseAmount, readActivity, readEthPriceMicros, type SendCheck } from "../core/device-read.ts"
-import { CHECK_ADDRESS_WARNING, NEVER_ASKED, PROMPTS, PUBLISH_DETAIL, PUBLISH_DEVICE_NOTE, PUBLISH_WARNING, groupAddress } from "../core/device-wording.ts"
+import { CHECK_ADDRESS_WARNING, NEVER_ASKED, PROMPTS, PUBLISH_DETAIL, PUBLISH_DEVICE_NOTE, PUBLISH_WARNING, WRONG_PUBLISHER, groupAddress } from "../core/device-wording.ts"
 import type { BrowserWallet } from "./devices/browser.ts"
 import { realConnectors, type Connectors } from "./devices/connectors.ts"
 import type { ScannedCode } from "./devices/keystone.ts"
@@ -53,6 +53,8 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
   const [signer, setSigner] = useState<ColdSigner | null>(start?.signer ?? null)
   const [wallets, setWallets] = useState<BrowserWallet[]>([])
   const [accounts, setAccounts] = useState<SeenAccount[]>(start?.accounts ?? [])
+  // A browser wallet can run out of accounts, and a device can't.
+  const [more, setMore] = useState(true)
   const [chosen, setChosen] = useState<string | null>(start?.chosen ?? null)
   const [prompt, setPrompt] = useState<DevicePrompt | null>(null)
   const [busy, setBusy] = useState(false)
@@ -64,7 +66,9 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
   const [sent, setSent] = useState<{ hash: string; status: "pending" | "done" | "failed"; what: string } | null>(null)
 
   const purpose = link ? "send" : "receive"
-  const account = accounts.find((a) => a.address === chosen) ?? null
+  // A note counts for whoever sends it, so it can only ever come from the wallet it's about.
+  const required = link?.kind === "publish" ? link.wallet : null
+  const account = accounts.find((a) => a.address === chosen && (required === null || a.address === required)) ?? null
   // The scanner keeps reading a code for as long as it's held up.
   const scanned = useRef(false)
   const client = useRef<PublicClient | null>(null)
@@ -112,9 +116,8 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
     const read = await Promise.all(listed.map(async (one: ColdAccount): Promise<SeenAccount> => ({ ...one, activity: await readActivity(reader, one.address) })))
     const all = from === 0 ? read : [...accounts, ...read]
     setAccounts(all)
-    const wanted = link?.kind === "publish" ? (all.find((a) => a.address === link.wallet) ?? null) : defaultAccount(all, purpose)
-    const pick = chosen ?? wanted?.address ?? all[0]?.address ?? null
-    setChosen(pick)
+    setMore(listed.length === PAGE)
+    setChosen(selectedAccount(all, { required, current: chosen, purpose }))
     // Everything in use on this device is the user's. Whichever they pick gets added when they pick it.
     onLink(accountsToLink(all, null))
     setStep("accounts")
@@ -154,8 +157,18 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
 
   const exchangeCodes = (code: ScannedCode, expected: string) => new Promise<ScannedCode>((resolve, reject) => setExchange({ code, expected, resolve, reject }))
 
+  const useAnotherDevice = () => {
+    void signer?.close()
+    setSigner(null)
+    setAccounts([])
+    setChosen(null)
+    setProblem(null)
+    setStep("route")
+  }
+
   const send = (request: ColdRequest, what: string, own: ReadonlySet<string>) => {
     if (!signer || !account) return
+    if (required !== null && account.address !== required) return setProblem(WRONG_PUBLISHER)
     void attempt(async () => {
       const hash = await connectors.send({ signer, account, request, own, onPrompt: setPrompt })
       setExchange(null)
@@ -222,7 +235,7 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
 
         {step === "accounts" ? (
           <>
-            {link?.kind === "publish" && !account ? <p className="notice warn">⚠ The wallet that has to publish this, {shortHash(link.wallet)}, isn't among these. Connect the device that holds it.</p> : null}
+            {link?.kind === "publish" && !account ? <p className="notice warn">⚠ Only the wallet this arrived in, {shortHash(link.wallet)}, can publish its cost, and it isn't among these. Show more, or connect the device that holds it.</p> : null}
             <p className="small">{purpose === "receive" ? "Starting on one nothing's happened to keeps this money apart from anything else on the device." : "Choose the account to send from."}</p>
             <fieldset className="accounts">
               <legend className="muted small">Accounts on your {name}</legend>
@@ -239,9 +252,14 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
             </fieldset>
             {purpose === "receive" ? <p className="muted small">These aren't checked yet, so don't send anything to one until the next step.</p> : null}
             <div className="device-actions">
-              {signer?.kind !== "browser" ? (
+              {more ? (
                 <button type="button" disabled={busy} onClick={() => signer && void attempt(() => showAccounts(signer, accounts.length))}>
                   Show more
+                </button>
+              ) : null}
+              {required !== null && !account ? (
+                <button type="button" disabled={busy} onClick={useAnotherDevice}>
+                  Use another device
                 </button>
               ) : null}
               <button type="button" className="primary" disabled={busy || !account} onClick={pickAccount}>
@@ -297,7 +315,7 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
 
         {step === "send" && account && signer ? <SendForm link={link?.kind === "top-up" ? link : null} from={account} book={book} checked={checked} accounts={accounts} clientOf={clientOf} busy={busy} onLink={onLink} onSend={send} /> : null}
 
-        {step === "publish" && account && signer && link?.kind === "publish" ? <PublishForm link={link} busy={busy} onBack={() => setStep("accounts")} onSend={send} wallet={account.address} /> : null}
+        {step === "publish" && account && signer && link?.kind === "publish" ? <PublishForm link={link} busy={busy} onBack={() => setStep("accounts")} onSend={send} /> : null}
 
         {step === "sent" && sent ? (
           <>
@@ -452,13 +470,14 @@ function SendForm({ link, from, book, checked, accounts, clientOf, busy, onLink,
   )
 }
 
-function PublishForm({ link, wallet, busy, onBack, onSend }: { link: Extract<DeviceLink, { kind: "publish" }>; wallet: string; busy: boolean; onBack: () => void; onSend: (request: ColdRequest, what: string, own: ReadonlySet<string>) => void }) {
+function PublishForm({ link, busy, onBack, onSend }: { link: Extract<DeviceLink, { kind: "publish" }>; busy: boolean; onBack: () => void; onSend: (request: ColdRequest, what: string, own: ReadonlySet<string>) => void }) {
   const [usd, setUsd] = useState(() => (link.usdMicros ? (Number(link.usdMicros) / 1_000_000).toString() : ""))
   const micros = usdMicrosOf(usd)
   const amount = link.amount ? `${formatAmount(link.amount.units, link.amount.decimals)} ${link.asset}` : link.asset
   const go = () => {
     if (!micros) return
-    onSend({ to: wallet, value: 0n, data: encodeNote(link.txHash, link.asset, micros) as Hex }, `This wallet published that it paid ${formatMoney(micros, "USD")} for ${amount} in transaction ${shortHash(link.txHash)}.`, new Set())
+    // To the wallet the link names, so from any other this isn't a send to itself, and the rule refuses it.
+    onSend({ to: link.wallet, value: 0n, data: encodeNote(link.txHash, link.asset, micros) as Hex }, `This wallet published that it paid ${formatMoney(micros, "USD")} for ${amount} in transaction ${shortHash(link.txHash)}.`, new Set())
   }
   return (
     <>

@@ -22,6 +22,8 @@ export const PROMPTS: Record<DevicePrompt, string> = {
   working: "Talking to your device…",
 }
 
+export const WRONG_PUBLISHER = "Only the wallet this arrived in can publish its cost, so nothing was sent."
+
 export const PUBLISH_WARNING = "Anyone can read this, forever. It publicly ties what you paid to this wallet, and it can't be deleted or changed. Saving it in this browser keeps it private."
 
 export const PUBLISH_DETAIL = "It's a transaction from this wallet to itself, so it costs a small network fee and moves nothing else. Your device confirms it."

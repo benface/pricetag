@@ -93,7 +93,7 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
   const sender = current?.sender ?? null
   const takingCost = current !== null && (current.kind === "cost" || asking || current.needsCost)
   // Only for an account someone checked on a device from this browser, because that's who can sign it.
-  const publishable = current && readCheckedAccounts().some((account) => account.address === current.wallet) ? noteLinkFor(current, costs[current.arrivals[0]?.asset ?? ""] ?? null) : null
+  const publishable = current && readCheckedAccounts().some((account) => account.address === current.wallet) ? noteLinkFor(current, costs[current.arrivals[0]?.asset ?? ""] ?? null, currency) : null
   const linkedFailed = failed.filter((address) => walletsBehind(book, wallet).includes(address))
   const balanced = isBalanced(fold.meter) && linkedFailed.length === 0 && fold.withheld.length === 0
   const progress = fold.meter.open + fold.meter.answered === 0 ? 1 : fold.meter.answered / (fold.meter.open + fold.meter.answered)

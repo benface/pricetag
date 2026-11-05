@@ -28,7 +28,7 @@ The browser wallet is the fallback if a direct route misbehaves on demo day. Our
 
 Either way, the page shows an address as checked only after you say every character matched your device's screen. The accounts you choose between aren't checked yet, and the page says so.
 
-Accounts in use on the device, plus the one you pick, are linked: they go in the book as `mine` with no question, so costs follow what moves between them (`linkDeviceAccounts` in `src/core/book.ts`). A new account you've never used stays out until you pick it. **Add to the Mac app as savings** opens a `patina://` link with the account and the others in use. The Mac app shows its usual sheet, where you still check the address against the device, because anyone can make that link too. The others only link costs there. Nothing's ever swept to them.
+Accounts in use on the device, plus the one you pick, are linked: they go in the book as `mine` with no question, so costs follow what moves between them (`linkDeviceAccounts` in `src/core/book.ts`). A new account you've never used stays out until you pick it. **Add to the Mac app as savings** opens a `patina://` link with the account and the others in use. Anyone can make that link too, so the Mac app can't take its word for any of it. It shows its usual sheet, where you check the address against the device, and lists the others for you to tick the ones you know are yours. Those only link costs, and nothing's ever swept to them. Edit the address and they go away, since they came with the wallet the link named.
 
 ## What each device shows
 
@@ -51,7 +51,7 @@ Base's public RPC gets reads and the signed transaction. On a Ledger, Ledger's s
 
 `test/support/mock-signer.ts` stands in for one. It holds no key: its signature is two fixed numbers, and the test uses the account those recover to, so a local chain can run the real path with nobody having a key. It lives outside `src`, and a test checks that the app can't reach it. `test/devices.test.ts` also covers a Keystone's real QR formats.
 
-To look at the panel, run `pnpm dev` and open `/test/support/device-harness.html?scene=accounts`. The scenes are `route`, `accounts`, `check`, `ready`, `send`, `publish` and `code`, the code a Keystone scans, and `&look=1` shows the wording for a device the page can't reach. The build doesn't include it.
+To look at the panel, run `pnpm dev` and open `/test/support/device-harness.html?scene=accounts`. Add a `?publish=` link and `&many=1` to try a wallet past the first page. The scenes are `route`, `accounts`, `check`, `ready`, `send`, `publish` and `code`, the code a Keystone scans, and `&look=1` shows the wording for a device the page can't reach. The build doesn't include it.
 
 ## Checklist for a real device
 
@@ -81,5 +81,6 @@ Use a fresh account with a few dollars. **Stop at the first thing that doesn't m
 
 1. **Top Up from Savings**, then **Continue in Browser**. The page should open with the amount and hot wallet filled in, and ask you to say the address is yours. Compare it with the Mac app first. If your default browser is Safari, Ledger is disabled there, so open the link in Chrome.
 2. The extension's **Top up** button should get to the same sheet.
-3. On the web page, press **Add to the Mac app as savings**. The Mac app should show its sheet, filled in, and shouldn't add anything until you tick the box.
-4. In Resolve, on a savings wallet's cost, **Publish from Your Device…** should open the page with the cost filled in, and only let the wallet it arrived in publish it.
+3. On the web page, press **Add to the Mac app as savings**. The Mac app should show its sheet, filled in, and shouldn't add anything until you tick the box. Any other accounts should be listed with their own boxes, unticked.
+4. In Resolve, on a savings wallet's cost, **Publish from Your Device…** should open the page with the cost filled in. Connect a device or account that doesn't hold that wallet: **Continue** should stay off, and it should offer **Show more** and **Use another device**.
+5. In the web app, with CAD as your main currency, type a cost in Resolve and press **Publish from your device…**. The form should ask for USD, not carry over what you typed.

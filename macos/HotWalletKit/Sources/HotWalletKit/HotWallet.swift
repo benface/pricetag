@@ -502,7 +502,7 @@ public final class HotWallet {
         updateSettings { $0.add(ColdWallet(address: address, name: cleanName.isEmpty ? "Savings" : cleanName, confirmedOnDeviceAt: now())) }
     }
 
-    /// A device's other accounts, which are as much the user's as the one they added, so they go in the book with no question. They only link costs.
+    /// Other accounts on a device, which go in the book as the user's from here on. This can't tell whose they are, so the caller has to have asked. They only link costs.
     public func linkDeviceAccounts(_ addresses: [String]) {
         let accounts = addresses.compactMap(EthereumAddress.init).filter { $0 != .zero && $0 != address && !state.retired.contains($0) }
         guard !accounts.isEmpty else { return }

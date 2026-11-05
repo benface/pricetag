@@ -22,6 +22,15 @@ export function defaultAccount<Account extends SeenAccount>(accounts: readonly A
   return wanted ?? null
 }
 
+/**
+ * Which account is selected after reading a page of them. When something has to come from one particular wallet, because a note counts
+ * for whoever sent it, that's the only answer, and until it's found nothing is selected. Falling back on another would publish under the wrong name.
+ */
+export function selectedAccount(accounts: readonly SeenAccount[], { required, current, purpose }: { required: string | null; current: string | null; purpose: "receive" | "send" }): string | null {
+  if (required !== null) return accounts.find((a) => a.address === normalizeAddress(required))?.address ?? null
+  return current ?? defaultAccount(accounts, purpose)?.address ?? accounts[0]?.address ?? null
+}
+
 /** A device's accounts that belong in the book: the ones in use. A fresh one has nothing to say, and each one is another read. */
 export const accountsToLink = (accounts: readonly SeenAccount[], chosen: string | null) => accounts.filter((a) => hasActivity(a.activity) || (chosen !== null && normalizeAddress(a.address) === normalizeAddress(chosen))).map((a) => normalizeAddress(a.address))
 
