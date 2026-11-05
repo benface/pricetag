@@ -147,7 +147,7 @@ public struct RuleComparisonSheet: View {
             failure = message
         } catch {
             comparison = nil
-            failure = "Can't reach the server."
+            failure = failureMessage(for: error)
         }
     }
 }
