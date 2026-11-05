@@ -642,12 +642,23 @@ private struct TransactionsTable: View {
             TableColumn("Time") { point in
                 Text(point.date.map(Format.time) ?? point.timestamp)
             }
-            .width(min: 120)
+            // Only what they need, so the words get the rest, and a small window still has room for the last column.
+            .width(min: 120, ideal: 120, max: 130)
+            TableColumn("What happened") { point in
+                if let summary = point.summary {
+                    Text(summary)
+                        .lineLimit(1)
+                        .help(summary)
+                } else {
+                    Text("—").foregroundStyle(.tertiary)
+                }
+            }
+            .width(min: 100)
             TableColumn("Total PnL") { point in
                 LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: point.pnlMicros == nil ? .secondary : isLive ? Tone(signed: point.pnlMicros) : .neutral)
                     .help(Wording.pnlHelp)
             }
-            .width(min: 90)
+            .width(min: 90, ideal: 90, max: 110)
             .alignment(.numeric)
             TableColumn("Left out") { point in
                 if point.excludedCount > 0 {
@@ -656,7 +667,7 @@ private struct TransactionsTable: View {
                     Text("—").foregroundStyle(.tertiary)
                 }
             }
-            .width(min: 70)
+            .width(min: 70, ideal: 70, max: 90)
             .alignment(.numeric)
         }
         .tableStyle(.inset)

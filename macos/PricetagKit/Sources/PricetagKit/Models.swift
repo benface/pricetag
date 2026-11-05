@@ -194,6 +194,8 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     /// nil when nothing is known at this point, which isn't $0.
     public let pnlMicros: String?
     public let excludedCount: Int
+    /// What its transaction did, in words. The last point has no transaction.
+    public var summary: String? = nil
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
     public var date: Date? { parseTimestamp(timestamp) }
