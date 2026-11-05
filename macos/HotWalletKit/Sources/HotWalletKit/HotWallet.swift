@@ -1128,7 +1128,7 @@ public final class HotWallet {
                 sweepProblem = HotWalletWording.failedOnchain(record)
             case .site:
                 // The site's to answer for, so it doesn't hold up sweeps.
-                sweepProblem = "A transaction for \(record.site ?? "a site") failed onchain. Nothing moved, but its gas was spent."
+                sweepProblem = "A transaction for \(record.site.map(siteName) ?? "a site") failed onchain. Nothing moved, but its gas was spent."
             }
         }
         try persist()

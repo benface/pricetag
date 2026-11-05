@@ -45,6 +45,43 @@ import Testing
         #expect(choice.defaultThatCant == "Firefox")
     }
 
+    @Test func aChromiumDefaultIsAllItMentions() {
+        let brave = browser("com.brave.Browser", "Brave")
+        let choice = LedgerBrowserChoice(defaultBrowser: brave, installed: [brave])
+        #expect(choice.continueTitle == "Continue in Brave")
+        #expect(choice.opening("it happens.") == "This opens Brave, where it happens.")
+        #expect(choice.defaultForKeystone == nil)
+        #expect(choice.noLedgerBrowser == nil)
+    }
+
+    @Test func safariStaysOnOfferForAKeystone() {
+        let safari = browser("com.apple.Safari", "Safari")
+        let chrome = browser("com.google.Chrome", "Google Chrome")
+        let choice = LedgerBrowserChoice(defaultBrowser: safari, installed: [safari, chrome])
+        #expect(choice.continueTitle == "Continue in Google Chrome")
+        #expect(choice.opening("it happens.") == "This opens Google Chrome, where it happens. Safari can't reach a Ledger.")
+        #expect(choice.defaultForKeystone == "Safari")
+        #expect(choice.noLedgerBrowser == nil)
+    }
+
+    @Test func withNothingForALedgerTheDefaultStillOpens() {
+        let safari = browser("com.apple.Safari", "Safari")
+        let choice = LedgerBrowserChoice(defaultBrowser: safari, installed: [safari])
+        #expect(choice.browser == nil)
+        #expect(choice.continueTitle == "Continue in Safari")
+        #expect(choice.opening("it happens.") == "This opens Safari, where it happens.")
+        #expect(choice.defaultForKeystone == nil)
+        #expect(choice.noLedgerBrowser?.hasPrefix("Safari can't reach a Ledger") == true)
+    }
+
+    @Test func notKnowingAnyBrowserSaysWhatALedgerNeeds() {
+        let choice = LedgerBrowserChoice.unknown
+        #expect(choice.continueTitle == "Continue in Browser")
+        #expect(choice.opening("it happens.") == "This opens your browser, where it happens. A Ledger needs Chrome, Brave, Edge or another Chromium browser.")
+        #expect(choice.defaultForKeystone == nil)
+        #expect(choice.noLedgerBrowser == nil)
+    }
+
     @Test func aPublishLink() {
         let draft = CostNoteDraft(wallet: cold, txHash: tx, asset: "USDC", decimals: 6, units: "1500000")
         #expect(DeviceFlow.publish(server: server, draft: draft, usd: "250")?.absoluteString == "http://127.0.0.1:8787?publish=\(tx)&wallet=\(cold)&asset=USDC&units=1500000&decimals=6&usd=250")
