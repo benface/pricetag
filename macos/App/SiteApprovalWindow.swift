@@ -30,8 +30,7 @@ struct SiteApprovalWindow: View {
             }
         }
         .frame(width: 480)
-        // Under the title bar, which has nothing in it but the close button.
-        .ignoresSafeArea(edges: .top)
+        .environment(\.isBelowTitleBar, true)
         // Closing it answers what's on show. If that was a failure, what's waiting behind it comes up next, because nobody has seen it yet.
         .onDisappear {
             bridge.dismissFinished()
@@ -215,6 +214,8 @@ struct SiteFailureView: View {
     let failure: SiteFailure
     let dismiss: () -> Void
 
+    @Environment(\.isBelowTitleBar) private var isBelowTitleBar
+
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "xmark.octagon.fill")
@@ -239,7 +240,8 @@ struct SiteFailureView: View {
                     .controlSize(.large)
             }
         }
-        .padding(24)
+        .padding([.horizontal, .bottom], 24)
+        .padding(.top, isBelowTitleBar ? 0 : 24)
         .onExitCommand(perform: dismiss)
     }
 }
