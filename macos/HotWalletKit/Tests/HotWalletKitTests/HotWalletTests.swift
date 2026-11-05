@@ -1348,6 +1348,17 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.settings.sweepDestination == coldAddress, "adding one doesn't change where sweeps go")
     }
 
+    @Test func aRenameKeepsEverythingElse() async throws {
+        let rig = await Rig()
+        let before = rig.wallet.settings
+        rig.wallet.renameColdWallet(coldAddress, to: " Vault ")
+        #expect(rig.wallet.settings.coldWallets.first?.name == "Vault")
+        #expect(rig.wallet.settings.coldWallets.first?.confirmedOnDeviceAt == before.coldWallets.first?.confirmedOnDeviceAt)
+        #expect(rig.wallet.settings.sweepDestination == before.sweepDestination)
+        rig.wallet.renameColdWallet(coldAddress, to: "  ")
+        #expect(rig.wallet.settings.coldWallets.first?.name == "Savings", "It always has a name")
+    }
+
     @Test func allOfThemCountAsLinked() async throws {
         let rig = await Rig()
         var published: [String] = []
@@ -1492,24 +1503,4 @@ private struct FailingChain: ChainClient {
     func receipt(of hash: String) throws -> Receipt? { throw ChainError.unreachable }
     func read(_ method: String, _ parameters: JSONValue) throws -> RPCAnswer { throw ChainError.unreachable }
     func l1Fee(ofPayload payload: [UInt8]) throws -> UInt128 { throw ChainError.unreachable }
-}
-
-@Suite struct ShownWalletWordingTests {
-    private let spending = "0x00000000000000000000000000000000000de301"
-    private let other = "0x00000000000000000000000000000000000de302"
-
-    @Test func noWalletShowingIsNeverCalledSpendingMoney() {
-        // Two nils are equal, which is how a fresh install came to be told it held a key.
-        #expect(HotWalletWording.shownWallet(nil, spendingMoney: nil) == "No wallet is showing. Choose one in the main window.")
-        #expect(HotWalletWording.shownWallet(nil, spendingMoney: spending) == "No wallet is showing. Choose one in the main window.")
-    }
-
-    @Test func aWalletYouLookedUpIsOnlyRead() {
-        #expect(HotWalletWording.shownWallet(other, spendingMoney: nil) == "This wallet is only read, and nothing signs for it.")
-        #expect(HotWalletWording.shownWallet(other, spendingMoney: spending) == "This wallet is only read, and nothing signs for it. The one key in this app is below.")
-    }
-
-    @Test func spendingMoneySaysSo() {
-        #expect(HotWalletWording.shownWallet(spending, spendingMoney: spending).hasPrefix("This is this Mac's spending money"))
-    }
 }

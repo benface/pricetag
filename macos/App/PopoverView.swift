@@ -83,12 +83,11 @@ struct PopoverView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(portfolio.map { $0.mode == .demo ? "Demo wallet" : Format.shortHash($0.address) } ?? AppName.current)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
+                walletMenu
+                Spacer(minLength: 8)
                 if showsBadge {
                     FeedBadge(feed: store.feed, portfolio: portfolio)
+                        .fixedSize()
                 }
             }
             switch (store.feed, portfolio) {
@@ -131,6 +130,38 @@ struct PopoverView: View {
             }
         }
         .padding(14)
+    }
+
+    /// The same wallets as the window's toolbar, as a menu. Adding or naming one happens there, with room to do it.
+    private var walletMenu: some View {
+        let list = store.walletList(hotWallet: hotWallet)
+        let current = list.entry(for: store.address)
+        return Menu {
+            WalletPicker(store: store, list: list, navigation: navigation)
+            Divider()
+            Button("Add Wallet…") {
+                navigation.switchWallet()
+                open(nil)
+            }
+        } label: {
+            // A long name gives way, and what kind of wallet this is doesn't.
+            HStack(spacing: 4) {
+                Text(current?.title ?? AppName.current)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let badge = current?.badge {
+                    Text(badge)
+                        .fixedSize()
+                }
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
     }
 
     /// Not when the line beside it or under it already says the same: "Demo wallet", "No wallet yet", or "Reading this wallet…".
