@@ -83,7 +83,7 @@ public final class HotWallet {
     /// How long a sweep that didn't work waits before trying again.
     static let pauseAfterFailure: TimeInterval = 300
     /// How long a transaction can go unseen before its nonce counts as free again.
-    static let pendingTimeout: TimeInterval = 180
+    nonisolated static let pendingTimeout: TimeInterval = 180
     /// History from further back than this says nothing about what the key holds now.
     static let historyFreshnessMs = 60_000
     /// How long a rotation can wait for current history before it says so. A first read can take this long.
@@ -1119,7 +1119,7 @@ public final class HotWallet {
             } else if now().timeIntervalSince(record.createdAt) > Self.pendingTimeout {
                 updateRecord(hash: record.hash, address: address) { $0.status = .dropped }
                 try persist()
-                if let dropped = state.records[address]?.first(where: { $0.hash == record.hash }) { onNews?(.neverLanded(dropped)) }
+                if let dropped = state.records[address]?.first(where: { $0.hash == record.hash }) { onNews?(.unconfirmed(dropped)) }
             }
         }
     }
@@ -1149,7 +1149,10 @@ public final class HotWallet {
             }
         }
         try persist()
-        if let settled = state.records[address]?.first(where: { $0.hash == record.hash }) { onNews?(.settled(settled)) }
+        if let settled = state.records[address]?.first(where: { $0.hash == record.hash }) {
+            // Given up on, and it landed after all. A failure is a failure either way.
+            onNews?(record.status == .dropped && receipt.succeeded ? .landedLate(settled) : .settled(settled))
+        }
     }
 
     /// Given up on, but something has used its nonce, and nothing this app signed is known to be what did. It may have landed late,

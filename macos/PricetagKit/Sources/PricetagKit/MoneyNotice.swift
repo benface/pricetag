@@ -24,18 +24,62 @@ public struct MoneyNotice: Equatable, Sendable {
 
     /// Why a sweep didn't go out, which is a notice at the top rather than a row.
     public static let sweepProblemRow = "sweep-problem"
+    /// Spending Money's balance, at the top. Also where a row goes that's no longer shown, like one from a key that's been replaced.
+    public static let balanceRow = "balance"
     public static func purchaseRow(_ ref: String) -> String { "purchase-\(ref)" }
     public static func recordRow(_ hash: String) -> String { "record-\(hash)" }
 }
 
+/// How far the news of a purchase has got. A phase can step back, as when a wallet's numbers are reloading or another wallet is chosen
+/// and its cost waits to be matched again, but what's been told never does.
+public enum PurchaseMilestone: Int, Codable, Comparable, Sendable {
+    case started, delivered, finished
+
+    public init(_ phase: PurchasePhase) {
+        switch phase {
+        case .onProvidersPage, .onItsWay, .noOrderYet: self = .started
+        case .arriving: self = .delivered
+        case .recorded, .costUnknown, .costNotSaid, .noRateFor, .failed: self = .finished
+        }
+    }
+
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
+/// What's been told about each purchase, kept so a relaunch doesn't tell it again.
+public struct PurchaseNews: Codable, Equatable, Sendable {
+    public private(set) var told: [String: PurchaseMilestone] = [:]
+
+    public init() {}
+
+    /// What's new since what was told, which is then told. A purchase seen for the first time is only taken note of: one started here is
+    /// seen as it starts, so one that isn't is from before this kept track, and whatever its order already says isn't news.
+    public mutating func update(_ purchases: [(TrackedPurchase, PurchasePhase)], beside main: CurrencyCode) -> [MoneyNotice] {
+        var notices: [MoneyNotice] = []
+        var next: [String: PurchaseMilestone] = [:]
+        for (purchase, phase) in purchases {
+            let now = PurchaseMilestone(phase)
+            guard let earlier = told[purchase.ref] else {
+                let isSettled = purchase.order?.txHash != nil || purchase.order?.status == .failed
+                next[purchase.ref] = isSettled ? .finished : now
+                continue
+            }
+            if now > earlier, let notice = PurchaseWording.notice(for: purchase, phase: phase, after: earlier, beside: main) { notices.append(notice) }
+            next[purchase.ref] = max(earlier, now)
+        }
+        // What's no longer listed has nothing more to say.
+        told = next
+        return notices
+    }
+}
+
 extension PurchaseWording {
-    /// What's worth saying about a purchase that's moved on since `earlier`. Nothing for what the person does on the provider's page,
-    /// which they're looking at, or for a purchase this is the first look at.
-    public static func notice(for purchase: TrackedPurchase, from earlier: PurchasePhase?, to phase: PurchasePhase, beside main: CurrencyCode) -> MoneyNotice? {
-        guard let earlier, earlier != phase else { return nil }
+    /// What to say about a purchase that's got further than `told`. Nothing for what the person does on the provider's page, which they're looking at.
+    public static func notice(for purchase: TrackedPurchase, phase: PurchasePhase, after told: PurchaseMilestone, beside main: CurrencyCode) -> MoneyNotice? {
+        guard PurchaseMilestone(phase) > told else { return nil }
         let what = title(purchase, beside: main)
         // Delivered and then known is one story, and a phase can skip straight to the end of it.
-        let wasDelivered = earlier == .arriving
+        let wasDelivered = told == .delivered
         let (heading, body): (String, String)
         switch phase {
         case .onProvidersPage, .onItsWay, .noOrderYet:

@@ -54,7 +54,45 @@ private final class Heard {
         await rig.wallet.tick()
         let record = try #require(rig.wallet.records.first)
         #expect(record.status == .dropped)
-        #expect(heard.news == [.neverLanded(record)])
+        #expect(heard.news == [.unconfirmed(record)])
+    }
+
+    @Test func aSendGivenUpOnThatLandsLateIsNewsAgain() async throws {
+        let clock = NewsClock()
+        let rig = await Rig(snapshot(eth: oneEth / 100, tokens: [usdc: usdcUnits(20)]), now: { clock.now })
+        let heard = Heard(rig.wallet)
+        await rig.wallet.tick()
+        #expect(await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: coldAddress)))
+        clock.advance(HotWallet.pendingTimeout + 1)
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.chain.set(snapshot(eth: oneEth / 100, tokens: [usdc: usdcUnits(15)], nonce: 1))
+        await rig.wallet.tick()
+        let record = try #require(rig.wallet.records.first)
+        #expect(record.status == .confirmed)
+        #expect(heard.news.last == .landedLate(record))
+        let said = notices(heard.news)
+        #expect(said.map(\.title) == ["Send Not Confirmed Yet", "Sent"])
+        #expect(Set(said.map(\.id)).count == 1, "what it turned out to be replaces what was said first")
+    }
+
+    @Test func aNoteGivenUpOnThatLandsLateIsNewsAgain() async throws {
+        let clock = NewsClock()
+        let rig = await Rig(snapshot(eth: oneEth / 100, tokens: [usdc: usdcUnits(20)]), now: { clock.now })
+        let heard = Heard(rig.wallet)
+        await rig.wallet.tick()
+        let note = try #require(CostNote.calldata(txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", usdMicros: "1"))
+        #expect(await rig.wallet.writeNote(note, asset: "USDC", from: hotAddress.lowercased))
+        clock.advance(HotWallet.pendingTimeout + 1)
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.chain.set(snapshot(eth: oneEth / 100, tokens: [usdc: usdcUnits(20)], nonce: 1))
+        await rig.wallet.tick()
+        #expect(notices(heard.news).map(\.title) == ["Cost Not Published Yet", "Cost Published"])
+    }
+
+    private func notices(_ news: [HotWalletNews]) -> [MoneyNotice] {
+        HotWalletWording.notices(for: news, savingsName: { $0 == coldAddress ? "Ledger" : nil }, in: MoneyDisplay(main: .USD))
     }
 
     @Test func anAutomaticSweepThatCantGoOutSaysSoOnce() async throws {
@@ -104,7 +142,7 @@ private final class Heard {
             .settled(record("ETH", amount: "4000000000000000", decimals: 18, usd: "12000000", reason: .aboveCap, status: .confirmed)),
             .settled(record("USDC", amount: "5000000", decimals: 6, usd: "5000000", reason: .sent, status: .confirmed)),
             .settled(record("USDC", amount: "5000000", decimals: 6, usd: "5000000", reason: .site, status: .failed, site: "https://app.example.com")),
-            .neverLanded(record("ETH", amount: "1000000000000000", decimals: 18, usd: nil, reason: .sent, status: .dropped)),
+            .unconfirmed(record("ETH", amount: "1000000000000000", decimals: 18, usd: nil, reason: .sent, status: .dropped)),
         ]
         for notice in notices(all) {
             #expect(notice.title.allSatisfy { !$0.isNumber }, "\(notice.title)")
@@ -130,12 +168,37 @@ private final class Heard {
         let failed = notices([.settled(record("USDC", amount: "5000000", decimals: 6, usd: "5000000", reason: .sent, status: .failed))])
         #expect(failed.map(\.title) == ["Send Failed"])
         #expect(failed.map(\.body) == ["Sending USDC failed onchain. Nothing moved, but its gas was spent."])
-        let dropped = notices([.neverLanded(record("USDC", amount: "5000000", decimals: 6, usd: "5000000", reason: .sent, status: .dropped))])
-        #expect(dropped.map(\.title) == ["Send Didn't Go Through"])
-        #expect(dropped.map(\.body) == ["5 USDC to Ledger never landed, so nothing moved."])
+    }
+
+    /// It can still land, so nothing says it didn't, or that nothing moved.
+    @Test func oneGivenUpOnIsNotConfirmedRatherThanFailed() {
+        let site = record("USDC", amount: "5000000", decimals: 6, usd: "5000000", reason: .site, status: .dropped, site: "https://app.example.com")
+        let all = notices([
+            .unconfirmed(record("USDC", amount: "5000000", decimals: 6, usd: "5000000", reason: .sent, status: .dropped)),
+            .unconfirmed(site),
+            .unconfirmed(record("ETH", amount: "0", decimals: 18, usd: nil, reason: .note, status: .dropped)),
+        ])
+        #expect(all.map(\.title) == ["Send Not Confirmed Yet", "Transaction Not Confirmed Yet", "Cost Not Published Yet"])
+        #expect(all.first?.body == "5 USDC to Ledger hasn't landed after 3 minutes. It may still go through, so check Spending Money before sending it again.")
+        for notice in all {
+            #expect(!notice.body.contains("nothing moved") && !notice.body.contains("never landed"), "\(notice.body)")
+        }
+        var landed = site
+        landed.status = .confirmed
+        let late = notices([.landedLate(landed)])
+        #expect(late.map(\.body) == ["The transaction for app.example.com landed after all."])
+        #expect(late.first?.id == all[1].id)
     }
 
     @Test func aSweepThatDidntLandGoesAgainWithoutANotification() {
-        #expect(notices([.neverLanded(record("USDC", amount: "5000000", decimals: 6, usd: "5000000", reason: .aboveCap, status: .dropped))]).isEmpty)
+        #expect(notices([.unconfirmed(record("USDC", amount: "5000000", decimals: 6, usd: "5000000", reason: .aboveCap, status: .dropped))]).isEmpty)
+    }
+
+    /// The old key's records go with it, so the notification opens what the money's on now.
+    @Test func aReplacedKeysSweepOpensTheBalance() {
+        let moved = notices([.settled(record("USDC", amount: "5000000", decimals: 6, usd: "5000000", reason: .rotation, status: .confirmed, to: EthereumAddress("0x2222222222222222222222222222222222222222")!))])
+        #expect(moved.map(\.title) == ["Moved Off the Old Key"])
+        #expect(moved.map(\.body) == ["5 USDC moved to the new key."])
+        #expect(moved.map(\.row) == [MoneyNotice.balanceRow])
     }
 }

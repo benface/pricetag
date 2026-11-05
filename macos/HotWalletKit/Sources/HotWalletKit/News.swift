@@ -6,8 +6,10 @@ import PricetagKit
 public enum HotWalletNews: Equatable, Sendable {
     /// Its receipt came back, saying it landed or that it failed onchain.
     case settled(SignedRecord)
-    /// It never made it into a block, and nothing moved.
-    case neverLanded(SignedRecord)
+    /// It's been given up on after a wait, so its nonce is free again. It hasn't landed, but it still can, so this says nothing about whether money moved.
+    case unconfirmed(SignedRecord)
+    /// One that was given up on turned out to have landed.
+    case landedLate(SignedRecord)
     /// An automatic sweep couldn't go out. It tries again by itself.
     case sweepDidntGoOut(String)
 }
@@ -19,25 +21,35 @@ extension HotWalletWording {
         var notices: [MoneyNotice] = []
         var swept: [SignedRecord] = []
         var moved: [SignedRecord] = []
+        let waited = "hasn't landed after \(Int(HotWallet.pendingTimeout / 60)) minutes. It may still go through"
         for item in news {
             switch item {
             case .settled(let record) where record.status == .confirmed:
                 switch record.reason {
                 case .aboveCap, .manual: swept.append(record)
                 case .rotation: moved.append(record)
-                case .sent: notices.append(notice(record, "Sent", "\(amount(record)) went to \(savingsName(record.to) ?? Format.shortHash(record.to.checksummed))."))
+                case .sent: notices.append(notice(record, "Sent", "\(amount(record)) went to \(recipient(record, savingsName))."))
                 // The site shows what became of it, and a published cost is in the app the moment it lands.
                 case .site, .note: break
                 }
             case .settled(let record):
                 notices.append(notice(record, failedTitle(record), failedOnchainText(record)))
-            case .neverLanded(let record):
+            case .unconfirmed(let record):
+                // The same id as what it turns out to be, so that replaces this.
                 switch record.reason {
                 // A sweep that didn't land goes again by itself.
                 case .aboveCap, .manual, .rotation: break
-                case .sent: notices.append(notice(record, "Send Didn't Go Through", "\(amount(record)) to \(savingsName(record.to) ?? Format.shortHash(record.to.checksummed)) never landed, so nothing moved."))
-                case .site: notices.append(notice(record, "Transaction Didn't Go Through", "A transaction for \(record.site.map(siteName) ?? "a site") never landed, so nothing moved."))
-                case .note: notices.append(notice(record, "Cost Not Published", "Publishing the cost of \(record.symbol) never landed, so nothing was published."))
+                case .sent: notices.append(notice(record, "Send Not Confirmed Yet", "\(amount(record)) to \(recipient(record, savingsName)) \(waited), so check Spending Money before sending it again."))
+                case .site: notices.append(notice(record, "Transaction Not Confirmed Yet", "A transaction for \(record.site.map(siteName) ?? "a site") \(waited), so check before trying it again."))
+                case .note: notices.append(notice(record, "Cost Not Published Yet", "Publishing the cost of \(record.symbol) \(waited), so check before publishing it again."))
+                }
+            case .landedLate(let record):
+                switch record.reason {
+                case .aboveCap, .manual: swept.append(record)
+                case .rotation: moved.append(record)
+                case .sent: notices.append(notice(record, "Sent", "\(amount(record)) went to \(recipient(record, savingsName)) after all."))
+                case .site: notices.append(notice(record, "Transaction Confirmed", "The transaction for \(record.site.map(siteName) ?? "a site") landed after all."))
+                case .note: notices.append(notice(record, "Cost Published", "The cost of \(record.symbol) was published after all."))
                 }
             case .sweepDidntGoOut(let message):
                 notices.append(MoneyNotice(id: MoneyNotice.sweepProblemRow, title: "Sweep Didn't Go Out", body: "\(message) It tries again in a few minutes.", row: MoneyNotice.sweepProblemRow))
@@ -49,9 +61,15 @@ extension HotWalletWording {
             notices.insert(notice(first, "Swept to Savings", "\(amounts(swept))\(worth(swept, in: display)) moved to \(to)."), at: 0)
         }
         if let first = moved.first {
-            notices.insert(notice(first, "Moved to the New Key", "\(amounts(moved)) moved off the old key."), at: 0)
+            // Its records belong to a key that's about to be gone, so this opens what the money's on now.
+            let to = Set(moved.map(\.to)).count == 1 ? savingsName(first.to) ?? "the new key" : "the new key"
+            notices.insert(MoneyNotice(id: MoneyNotice.recordRow(first.hash), title: "Moved Off the Old Key", body: "\(amounts(moved)) moved to \(to).", row: MoneyNotice.balanceRow), at: 0)
         }
         return notices
+    }
+
+    private static func recipient(_ record: SignedRecord, _ savingsName: (EthereumAddress) -> String?) -> String {
+        savingsName(record.to) ?? Format.shortHash(record.to.checksummed)
     }
 
     private static func notice(_ record: SignedRecord, _ title: String, _ body: String) -> MoneyNotice {
