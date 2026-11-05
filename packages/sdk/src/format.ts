@@ -83,6 +83,18 @@ export function formatSignedAmount(units: string, decimals: number): string {
   return BigInt(units) > 0n ? `+${formatAmount(units, decimals)}` : formatAmount(units, decimals)
 }
 
+/** A return in basis points as a signed percentage, to a tenth, or whole once it's 1,000% or more. A return that rounds to nothing has no sign. */
+export function formatReturn(bps: string): string {
+  const value = BigInt(bps)
+  const size = value < 0n ? -value : value
+  const big = size >= 100_000n
+  const step = big ? 100n : 10n
+  const rounded = (size + step / 2n) / step
+  if (rounded === 0n) return big ? "0%" : "0.0%"
+  const sign = value < 0n ? "-" : "+"
+  return big ? `${sign}${rounded.toLocaleString("en-US")}%` : `${sign}${(rounded / 10n).toLocaleString("en-US")}.${rounded % 10n}%`
+}
+
 export function shortHash(hash: string): string {
   return `${hash.slice(0, 6)}…${hash.slice(-4)}`
 }

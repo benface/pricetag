@@ -149,7 +149,7 @@ struct WalletListTests {
         store.moveToYours(a)
         store.moveWallets(in: [a, b], from: [1], to: 0)
         let depth = store.undoStack.count
-        let before = store.changeWallet(a) { store.removeWallet(a, showing: b) }
+        let before = store.changeWallet(a, name: "Remove from List") { store.removeWallet(a, showing: b) }
         #expect(store.address == b)
         store.restore(before)
         #expect(store.address == a)
@@ -159,9 +159,88 @@ struct WalletListTests {
         #expect(store.undoStack.count == depth)
     }
 
+    @Test func editUndoPutsBackAllOfAWalletChangeAndRedoMakesItAgain() {
+        let (store, _) = makeStore()
+        store.setWallet(a)
+        store.renameWallet(a, to: "Laptop")
+        store.moveToYours(a)
+        store.moveWallets(in: [a, b], from: [1], to: 0)
+        var relinked = 0
+        store.changeWallet(a, name: "Remove from List", alsoUndo: { relinked += 1 }) { store.removeWallet(a, showing: b) }
+        #expect(store.undoNames.last == "Remove from List")
+        store.undo()
+        #expect(store.address == a, "the wallet that was showing is showing again")
+        #expect(store.book.linkedWallets == [a])
+        #expect(store.savedWallets.first { $0.address == a }?.name == "Laptop")
+        #expect(store.walletOrder == [b, a])
+        #expect(relinked == 1, "and what's outside the store comes back too")
+        #expect(store.redoNames == ["Remove from List"])
+        store.redo()
+        #expect(store.address == b)
+        #expect(store.book.linkedWallets.isEmpty)
+        #expect(!store.savedWallets.contains { $0.address == a })
+        #expect(store.undoNames.last == "Remove from List")
+        store.undo()
+        #expect(store.savedWallets.first { $0.address == a }?.name == "Laptop", "as often as it's undone")
+    }
+
+    @Test func theListsUndoStillFindsAChangeAfterEditUndoAndRedo() {
+        let (store, _) = makeStore()
+        let move = store.changeWallet(a, name: "Move to Yours") { store.moveToYours(a) }
+        store.undo()
+        store.redo()
+        #expect(store.book.linkedWallets == [a])
+        store.restore(move)
+        #expect(store.book.linkedWallets.isEmpty)
+        #expect(store.undoStack.isEmpty, "its entry goes with it, so the next Undo isn't one that does nothing")
+        #expect(store.redoStack.isEmpty)
+    }
+
+    @Test func editUndoTakesBackARemovalThatChangedNoAnswer() {
+        let (store, _) = makeStore()
+        store.renameWallet(b, to: "Friend")
+        store.setBook(store.book.answering(c, .someoneElse, focus: nil))
+        store.undo()
+        #expect(store.redoNames == ["Answer"])
+        store.setBook(store.book.answering(c, .someoneElse, focus: nil))
+        store.changeWallet(b, name: "Remove from List") { store.removeWallet(b, showing: nil) }
+        #expect(store.undoNames == ["Answer", "Remove from List"], "a watched wallet's removal is a step of its own")
+        #expect(store.redoStack.isEmpty)
+        store.undo()
+        #expect(store.savedWallets.first { $0.address == b }?.name == "Friend")
+        #expect(store.book.senders[c]?.kind == .someoneElse, "the answer before it stays")
+        #expect(store.undoNames == ["Answer"])
+        store.redo()
+        #expect(!store.savedWallets.contains { $0.address == b })
+        #expect(store.book.senders[c]?.kind == .someoneElse)
+        store.undo()
+        store.undo()
+        #expect(store.book.senders[c] == nil, "and the next Undo is that answer's")
+        #expect(store.savedWallets.first { $0.address == b }?.name == "Friend")
+    }
+
+    @Test func editUndoRelinksAnAccountMovedToWatching() {
+        let (store, _) = makeStore()
+        store.setLinkedWallets([a])
+        // As the list does it: the device's account is unlinked first, and no answer of the user's said it was theirs.
+        store.changeWallet(a, name: "Move to Watching", alsoUndo: { store.setLinkedWallets([a]) }) {
+            store.setLinkedWallets([])
+            store.moveToWatching(a)
+        }
+        #expect(store.undoNames == ["Move to Watching"])
+        store.undo()
+        #expect(store.linkedWallets == [a])
+        #expect(store.undoStack.isEmpty)
+        store.redo()
+        #expect(store.linkedWallets.isEmpty)
+        #expect(store.undoNames == ["Move to Watching"])
+        store.undo()
+        #expect(store.linkedWallets == [a])
+    }
+
     @Test func undoKeepsACostRecordedSince() throws {
         let (store, defaults) = makeStore()
-        let before = store.changeWallet(a) { store.moveToYours(a) }
+        let before = store.changeWallet(a, name: "Move to Yours") { store.moveToYours(a) }
         store.recordPurchase(Purchase(provider: "coinbase", order: "1", wallet: b, asset: "ETH", units: "1", txHash: "0x1", blockNum: 1, cost: Money(micros: "5000000", currency: .USD), costUsdMicros: "5000000"))
         store.restore(before)
         #expect(store.book.purchases.count == 1)
@@ -174,7 +253,7 @@ struct WalletListTests {
     @Test func undoKeepsAnythingElseChangedSince() {
         let (store, _) = makeStore()
         store.renameWallet(b, to: "Before")
-        let before = store.changeWallet(a) { store.moveToWatching(a) }
+        let before = store.changeWallet(a, name: "Move to Watching") { store.moveToWatching(a) }
         store.renameWallet(b, to: "After")
         store.moveToYours(c)
         store.renameWallet(a, to: "Named Since")
@@ -186,14 +265,14 @@ struct WalletListTests {
         #expect(store.book.linkedWallets.isEmpty)
         #expect(store.savedWallets.first { $0.address == a }?.name == "Named Since", "so does the wallet's own new name")
         #expect(store.savedWallets.first { $0.address == a }?.isKept == nil)
-        let unnamed = store.changeWallet(d) { store.moveToWatching(d) }
+        let unnamed = store.changeWallet(d, name: "Move to Watching") { store.moveToWatching(d) }
         store.restore(unnamed)
         #expect(!store.savedWallets.contains { $0.address == d }, "an entry only the move made goes with it")
     }
 
     @Test func undoingALaterAnswerDoesntBringBackAMoveThatWasUndone() {
         let (store, _) = makeStore()
-        let move = store.changeWallet(a) { store.moveToYours(a) }
+        let move = store.changeWallet(a, name: "Move to Yours") { store.moveToYours(a) }
         // Like an import that finishes while the list is still open: an answer of its own, saved for Undo with the move in it.
         store.setBook(store.book.answering(b, .someoneElse, focus: nil))
         store.restore(move)
@@ -208,7 +287,7 @@ struct WalletListTests {
     @Test func undoingAChangeThatSavedNoUndoLeavesAnotherAnswersUndoAlone() {
         let (store, _) = makeStore()
         store.setWallet(a)
-        let removal = store.changeWallet(a) { store.removeWallet(a, showing: nil) }
+        let removal = store.changeWallet(a, name: "Remove from List") { store.removeWallet(a, showing: nil) }
         store.setBook(store.book.answering(b, .mine, focus: nil))
         store.restore(removal)
         #expect(store.savedWallets.contains { $0.address == a })
@@ -220,7 +299,7 @@ struct WalletListTests {
 
     @Test func undoLeavesAnythingSaidAboutTheWalletSince() {
         let (store, _) = makeStore()
-        let move = store.changeWallet(a) { store.moveToYours(a) }
+        let move = store.changeWallet(a, name: "Move to Yours") { store.moveToYours(a) }
         store.setBook(store.book.answering(a, .someoneElse, focus: nil))
         store.restore(move)
         #expect(store.book.senders[a]?.kind == .someoneElse, "the user's latest word on it wins")

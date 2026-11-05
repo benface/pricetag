@@ -141,6 +141,9 @@ struct HotWalletDetails<Overview: View>: View {
     @State private var isSweeping = false
     @State private var isConfirmingRotation = false
     @State private var isConfirmingAbandon = false
+    /// The row a notification opened, lit up for a moment.
+    @State private var litRow: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isChangingCap = false
     /// What this Mac signed while the page was open, marked for a moment once its sheet has closed, so it's found.
     @State private var newRows = NewRowMarks()
@@ -150,11 +153,12 @@ struct HotWalletDetails<Overview: View>: View {
     /// The sheets here that can sign something.
     private var isCoveredBySheet: Bool { isSending || isSweeping || isAddingCold || isToppingUp }
 
-    var body: some View {
+    private var content: some View {
         VStack(alignment: .leading, spacing: 18) {
             if let alarm = wallet.alarm { alarmBanner(alarm) }
             ForEach(wallet.notices) { notice in
                 Notice(notice.kind == .warning ? .warning : .info, notice.text, actionTitle: notice.asksForSavings ? HotWalletWording.addSavingsButton : nil) { isAddingCold = true }
+                    .id(notice.text == wallet.sweepProblem ? MoneyNotice.sweepProblemRow : notice.id)
             }
             card
             if !shownPurchases.isEmpty { bought }
@@ -166,6 +170,13 @@ struct HotWalletDetails<Overview: View>: View {
             if !wallet.records.isEmpty { activity }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    var body: some View {
+        // Inside the page's scroll view, whichever page it's on, which is the one it scrolls.
+        ScrollViewReader { proxy in
+            content.onChange(of: navigation.shownRow, initial: true) { _, row in reveal(row, with: proxy) }
+        }
         .onChange(of: wallet.records.map(\.hash)) { old, new in
             newRows.rowsChanged(from: old, to: new, isCovered: isCoveredBySheet)
         }
@@ -283,6 +294,8 @@ struct HotWalletDetails<Overview: View>: View {
                 }
                 actions
             }
+            .lit(litRow == MoneyNotice.balanceRow)
+            .id(MoneyNotice.balanceRow)
         }
     }
 
@@ -309,8 +322,10 @@ struct HotWalletDetails<Overview: View>: View {
         return min(1, Double(value) / Double(wallet.settings.capUsdMicros))
     }
 
+    /// This Mac's, including what was bought for a key that's since been replaced, which may still be arriving.
     private var shownPurchases: [TrackedPurchase] {
-        address.map { purchases.purchases(of: $0.lowercased) } ?? []
+        guard let address else { return [] }
+        return purchases.purchases(of: Set(([address] + wallet.state.retired).map(\.lowercased)))
     }
 
     private var bought: some View {
@@ -320,6 +335,8 @@ struct HotWalletDetails<Overview: View>: View {
             }
             ForEach(shownPurchases) { purchase in
                 PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), main: wallet.display.main) { purchases.dismiss(purchase) }
+                    .lit(litRow == MoneyNotice.purchaseRow(purchase.ref))
+                    .id(MoneyNotice.purchaseRow(purchase.ref))
                     .arrives()
             }
         }
@@ -510,17 +527,37 @@ struct HotWalletDetails<Overview: View>: View {
                     }
                     Spacer()
                     RecordStatus(status: record.status, text: statusText(record))
-                    if let url = URL(string: "https://basescan.org/tx/\(record.hash)") {
+                    if let url = Basescan.transaction(record.hash) {
                         Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                             .foregroundStyle(.secondary)
                             .help("Open this transaction")
                     }
                 }
+                .contentShape(Rectangle())
+                .contextMenu { TransactionActions(hash: record.hash) }
                 .justAdded(newRows.lit.contains(record.hash))
+                .lit(litRow == MoneyNotice.recordRow(record.hash))
+                .id(MoneyNotice.recordRow(record.hash))
                 .arrives()
             }
         }
         .motion(Motion.state, value: wallet.records.map(\.hash))
+    }
+
+    /// Scrolls to what a notification was about, and lights it up long enough to find it. It's taken, so the same click works twice.
+    private func reveal(_ wanted: String?, with proxy: ScrollViewProxy) {
+        guard let wanted else { return }
+        navigation.shownRow = nil
+        // A row from a key that's been replaced isn't here anymore, so it opens what the money's on now.
+        let shown = Set(wallet.records.map { MoneyNotice.recordRow($0.hash) } + shownPurchases.map { MoneyNotice.purchaseRow($0.ref) } + (wallet.sweepProblem == nil ? [] : [MoneyNotice.sweepProblemRow]))
+        let row = shown.contains(wanted) ? wanted : MoneyNotice.balanceRow
+        withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(row, anchor: .center) }
+        litRow = row
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard litRow == row else { return }
+            withAnimation(.easeOut(duration: 0.6)) { litRow = nil }
+        }
     }
 
     private func reasonText(_ record: SignedRecord) -> String {
@@ -539,7 +576,8 @@ struct HotWalletDetails<Overview: View>: View {
         case .pending: "On its way"
         case .confirmed: "Done"
         case .failed: "Failed"
-        case .dropped: "Never landed"
+        // Given up on, it can still land, unless another transaction took its place.
+        case .dropped: wallet.records.contains { $0.nonce == record.nonce && ($0.status == .confirmed || $0.status == .failed) } ? "Never landed" : "Not confirmed"
         }
     }
 }
@@ -728,5 +766,19 @@ struct TopUpSheet: View {
         }
         if wallet.display.isConverted { tokens.append("\(Int(dollars)) USDC") }
         return tokens.isEmpty ? "" : " (about \(tokens.joined(separator: " or ")))"
+    }
+}
+
+private extension View {
+    /// The row a notification opened, in the system's selection color, so it's found at a glance. Behind the content, since a grouped form ignores a row's own background.
+    func lit(_ isLit: Bool) -> some View {
+        background {
+            if isLit {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.18))
+                    .padding(.horizontal, -6)
+                    .padding(.vertical, -4)
+            }
+        }
     }
 }

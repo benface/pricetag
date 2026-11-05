@@ -1,4 +1,5 @@
 import AppKit
+import PricetagKit
 
 /// The menu bar item's right-click menu. `MenuBarExtra` has no way to add one, so this catches the click before the item does.
 /// Everything else stays `MenuBarExtra`'s: the panel, how it closes, and the label that updates by itself.
@@ -8,11 +9,15 @@ final class StatusItemMenu: NSObject {
 
     /// Set while the panel is open, because a click this catches never reaches what would close it.
     var closePopover: (() -> Void)?
+    private var shows: () -> MenuBarShows = { .value }
+    private var setShows: (MenuBarShows) -> Void = { _ in }
     private var openApp: () -> Void = {}
     private var openSettings: () -> Void = {}
     private var monitor: Any?
 
-    func start(openApp: @escaping () -> Void, openSettings: @escaping () -> Void) {
+    func start(shows: @escaping () -> MenuBarShows, setShows: @escaping (MenuBarShows) -> Void, openApp: @escaping () -> Void, openSettings: @escaping () -> Void) {
+        self.shows = shows
+        self.setShows = setShows
         self.openApp = openApp
         self.openSettings = openSettings
         guard monitor == nil else { return }
@@ -50,6 +55,15 @@ final class StatusItemMenu: NSObject {
         menu.addItem(item("Open \(AppName.current)", #selector(openAppChosen), key: "o"))
         menu.addItem(item("Settings…", #selector(openSettingsChosen), key: ","))
         menu.addItem(.separator())
+        // The same choice as in Settings, here too because this is where someone sharing their screen would look for it.
+        menu.addItem(.sectionHeader(title: "Show in Menu Bar"))
+        for choice in MenuBarShows.allCases {
+            let entry = item(choice.label, #selector(showsChosen), key: "")
+            entry.representedObject = choice.rawValue
+            entry.state = choice == shows() ? .on : .off
+            menu.addItem(entry)
+        }
+        menu.addItem(.separator())
         menu.addItem(item("Quit \(AppName.current)", #selector(quitChosen), key: "q"))
         let button = NSApp.windows.lazy.compactMap { $0.contentView.flatMap(Self.statusButton) }.first
         button?.highlight(true)
@@ -66,5 +80,8 @@ final class StatusItemMenu: NSObject {
 
     @objc private func openAppChosen() { openApp() }
     @objc private func openSettingsChosen() { openSettings() }
+    @objc private func showsChosen(_ item: NSMenuItem) {
+        (item.representedObject as? String).flatMap(MenuBarShows.init(rawValue:)).map(setShows)
+    }
     @objc private func quitChosen() { NSApp.terminate(nil) }
 }

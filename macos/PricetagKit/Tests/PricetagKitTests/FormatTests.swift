@@ -53,9 +53,19 @@ struct FormatVectors: Decodable {
     let blockSpans: [BlockSpan]
     let blocksBefore: [BlocksBefore]
     let plainAmount: [PlainAmount]
+    struct Return: Decodable { let bps, text: String }
+    let returns: [Return]
 }
 
 @Suite struct FormatTests {
+    @Test func elapsedTimeTicksBySeconds() {
+        #expect(Format.elapsed(seconds: 0) == "0 s")
+        #expect(Format.elapsed(seconds: 42) == "42 s")
+        #expect(Format.elapsed(seconds: 60) == "1 min")
+        #expect(Format.elapsed(seconds: 72) == "1 min 12 s")
+        #expect(Format.elapsed(seconds: 3720) == "1 h 2 min")
+    }
+
     let vectors: FormatVectors
 
     init() throws {
@@ -73,6 +83,13 @@ struct FormatVectors: Decodable {
         for vector in vectors.cad {
             #expect(Format.money(vector.micros, .CAD) == vector.usd, "\(vector.micros)")
             #expect(Format.signedMoney(vector.micros, .CAD) == vector.signed, "\(vector.micros)")
+        }
+    }
+
+    @Test func returnsMatchTheWebApp() {
+        #expect(vectors.returns.contains { $0.bps == "1234" && $0.text == "+12.3%" })
+        for vector in vectors.returns {
+            #expect(Format.percent(bps: vector.bps) == vector.text, "\(vector.bps)")
         }
     }
 
