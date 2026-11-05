@@ -8,7 +8,7 @@ import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
 import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type ReadL1Fees, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
 import { resolvingSource, settledL1Fees, sharedReads } from "../server/source.ts"
-import { ETH_ADDRESS, encodeNote } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, encodeNote, marketPrice } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
 
 /** Sends the path exactly as written, which fetch wouldn't. */
@@ -143,6 +143,26 @@ describe("the balance read", () => {
   })
 })
 
+type MarketQueryRow = { block_num: number; sold_token: string; sold_amount: string; bought_token: string; bought_amount: string; priced: { usd_micros: string; source: string } }
+
+/** Applies the parts of a market read that decide which rows fit under its limit, as far as the SQL asks for them. */
+function answersLikeAmp(rows: readonly MarketQueryRow[]) {
+  return async <T>(sql: string) => {
+    const [, from, to] = sql.match(/BETWEEN (\d+) AND (\d+)/) as RegExpMatchArray
+    const swapsOnly = sql.includes("get_field(priced, 'source') = 'swap'")
+    const notBought = sql.match(/bought_token <> X'(\w+)'/)?.[1]
+    const size = sql.match(/TRY_CAST\(get_field\(priced, 'usd_micros'\) AS DOUBLE\) \* TRY_CAST\(CASE WHEN sold_token = X'(\w+)' THEN sold_amount ELSE bought_amount END AS DOUBLE\) >= (\d+) \* (1e\d+)/)
+    const limit = Number((sql.match(/LIMIT (\d+)/) as RegExpMatchArray)[1])
+    return rows
+      .filter((row) => row.block_num >= Number(from) && row.block_num <= Number(to))
+      .filter((row) => !swapsOnly || row.priced.source === "swap")
+      .filter((row) => row.bought_token !== notBought)
+      .filter((row) => !size || Number(row.priced.usd_micros) * Number(row.sold_token === size[1] ? row.sold_amount : row.bought_amount) >= Number(size[2]) * Number(size[3]))
+      .sort((a, b) => b.block_num - a.block_num)
+      .slice(0, limit) as T[]
+  }
+}
+
 describe("what a dataset adds to a wallet's rows", () => {
   const config = { baseDataset: "base", dataset: "ds", startBlock: 1, network: "base_mainnet" }
   const ME = "00000000000000000000000000000000000000cc"
@@ -184,11 +204,41 @@ describe("what a dataset adds to a wallet's rows", () => {
     const queries: string[] = []
     const row = (usd_micros: string) => ({ block_num: 9, tx_hash: "aa", sold_token: "833589fcd6edb6e08f4c7c32d4f71b54bda02913", sold_amount: "500000000", bought_token: "940181a94a35a4569e4529a3cdfb74e38fd98631", bought_amount: "400000000000000000000", priced: { token: "AERO", usd_micros, source: "swap" }, eth_usd: "240000000000" })
     const query = async <T>(sql: string) => (queries.push(sql), [row("1250000"), row("6600000000000")] as T[])
-    const trades = await resolvingSource(query, config).readMarketTrades!("AERO'; DROP", 100, 200)
+    const trades = await resolvingSource(query, config).readMarketTrades!("AERO", 100, 200)
     assert.deepEqual(trades, [{ blockNum: 9, txHash: "0xaa", asset: "AERO", usdMicros: "1250000", notionalUsdMicros: "500000000" }])
     assert.match(queries[0]!, /block_num BETWEEN 100 AND 200/)
-    assert.match(queries[0]!, /get_field\(priced, 'token'\) = 'AERODROP'/)
+    assert.match(queries[0]!, /get_field\(priced, 'token'\) = 'AERO'/)
     assert.match(queries[0]!, /ORDER BY block_num DESC LIMIT \d+/)
+  })
+
+  it("only asks about a token with a market price", async () => {
+    const queries: string[] = []
+    const source = resolvingSource(async <T>(sql: string) => (queries.push(sql), [] as T[]), config)
+    assert.deepEqual(await source.readMarketTrades!("AERO'; DROP", 100, 200), [])
+    assert.deepEqual(await source.readMarketTrades!("USDC", 100, 200), [])
+    assert.deepEqual(queries, [])
+  })
+
+  it("finds real trades behind more small ones than the limit holds", async () => {
+    const swap = (block_num: number, tx: string, usdc: bigint) => ({ block_num, tx_hash: tx, sold_token: "833589fcd6edb6e08f4c7c32d4f71b54bda02913", sold_amount: (usdc * 10n ** 6n).toString(), bought_token: "940181a94a35a4569e4529a3cdfb74e38fd98631", bought_amount: (usdc * 10n ** 18n).toString(), priced: { token: "AERO", usd_micros: "1000000", source: "swap" }, eth_usd: "240000000000" })
+    const real = [swap(100, "a1", 500n), swap(101, "a2", 500n), swap(102, "a3", 500n)]
+    const small = Array.from({ length: 600 }, (_, i) => swap(103 + i, `b${i}`, 5n))
+    const usable = await resolvingSource(answersLikeAmp([...real, ...small]), config).readMarketTrades!("AERO", 100, 702)
+    assert.equal(marketPrice(usable, "AERO", 702)?.usdMicros, "1000000")
+  })
+
+  it("leaves out what can't set a price before the limit, so it can't hide what can", async () => {
+    const row = (block_num: number, bought_token: string, source = "swap", usd_micros = "1000000") => ({ block_num, tx_hash: `t${block_num}`, sold_token: "940181a94a35a4569e4529a3cdfb74e38fd98631", sold_amount: (500n * 10n ** 18n).toString(), bought_token, bought_amount: "1", priced: { token: "AERO", usd_micros, source }, eth_usd: "240000000000" })
+    const usdc = "833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    const rows = [row(10, usdc), ...Array.from({ length: 400 }, (_, i) => row(11 + i, ETH_ADDRESS.slice(2))), ...Array.from({ length: 400 }, (_, i) => row(500 + i, usdc, "unknown", ""))]
+    const usable = await resolvingSource(answersLikeAmp(rows), config).readMarketTrades!("AERO", 1, 1_000)
+    assert.deepEqual(usable.map((t) => t.blockNum), [10])
+  })
+
+  it("keeps a trade right at the guard's size, for the guard to judge", async () => {
+    const at = (block_num: number, usdMicros: bigint) => ({ block_num, tx_hash: `t${block_num}`, sold_token: "833589fcd6edb6e08f4c7c32d4f71b54bda02913", sold_amount: usdMicros.toString(), bought_token: "940181a94a35a4569e4529a3cdfb74e38fd98631", bought_amount: (usdMicros * 10n ** 12n).toString(), priced: { token: "AERO", usd_micros: "1000000", source: "swap" }, eth_usd: "240000000000" })
+    const usable = await resolvingSource(answersLikeAmp([at(9, 98_000_000n), at(10, 100_000_000n)]), config).readMarketTrades!("AERO", 1, 1_000)
+    assert.deepEqual(usable.map((t) => t.blockNum), [10])
   })
 
   it("reads only this wallet's own notes, from zero-value transactions to itself", async () => {

@@ -3,7 +3,7 @@
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ERC20_ADDRESSES, ETH_USD_FEED, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type FeedRound, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
+import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type FeedRound, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
 import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, settledThrough, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRound, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
 
@@ -191,7 +191,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
 
 const isMissingTable = (error: unknown) => /table .*not found|not found.*table|does not exist|unknown table/i.test(describeError(error))
 
-/** Enough for the guards in market.ts, which only read the latest few. A busy pool repeats each trade per account. */
+/** Plenty for the guards in market.ts once small trades are left out, even though a busy pool repeats each trade per account. */
 const MARKET_ROWS = 300
 
 /** As many as `createWallets` keeps, so a wallet it still holds is here too. */
@@ -396,9 +396,15 @@ export function resolvingSource(query: Query, config: { baseDataset: string; dat
     },
 
     async readMarketTrades(asset, from, to) {
+      const token = TOKENS.find((t) => t.asset === asset && !t.oracle)
+      if (!token) return []
+      // Only rows `marketTrades` and the guards can use, or small trades fill the limit and hide real ones further back.
+      // Amounts as doubles are only close, so this stops just short of the guard, which then checks exactly.
       const rows = await query<Row>(
         `SELECT block_num, tx_hash, sold_token, sold_amount, bought_token, bought_amount, priced, eth_usd FROM ${prices}.priced_legs
-         WHERE block_num BETWEEN ${from} AND ${to} AND get_field(priced, 'token') = '${asset.replace(/[^A-Za-z0-9]/g, "")}'
+         WHERE block_num BETWEEN ${from} AND ${to} AND get_field(priced, 'token') = '${token.symbol}' AND get_field(priced, 'source') = 'swap'
+           AND bought_token <> X'${hexOf(ETH_ADDRESS)}'
+           AND TRY_CAST(get_field(priced, 'usd_micros') AS DOUBLE) * TRY_CAST(CASE WHEN sold_token = X'${hexOf(token.address)}' THEN sold_amount ELSE bought_amount END AS DOUBLE) >= ${(MIN_TRADE_USD_MICROS * 99n) / 100n} * 1e${token.decimals}
          ORDER BY block_num DESC LIMIT ${MARKET_ROWS}`,
       ).catch((error: unknown) => {
         if (isNotStarted(error)) return []

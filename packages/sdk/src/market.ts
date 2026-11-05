@@ -15,7 +15,7 @@ export type MarketRow = Pick<PricedRow, "block_num" | "tx_hash" | "sold_token" |
 /** Older than this, a trade doesn't say what a token's worth now. */
 export const MARKET_MAX_AGE_MS = 1_800_000
 /** No priced_legs row says how deep a pool is, so these stand in for it: real size, from several transactions. */
-const MIN_TRADE_USD_MICROS = 100_000_000n
+export const MIN_TRADE_USD_MICROS = 100_000_000n
 const MIN_TRADES = 3
 const MIN_VOLUME_USD_MICROS = 1_000_000_000n
 /** The median of the last few, so one odd trade can't set the price. */
