@@ -456,7 +456,11 @@ private struct CheckStep: View {
                     Notice(model.wouldStartSweeps ? .warning : .info, notice)
                 }
                 Toggle(AddSavingsWording.matches, isOn: $model.matches)
-                TextField("Name", text: $model.name, prompt: Text("Savings"))
+                // Outside a form, a text field doesn't show its label.
+                LabeledContent("Name") {
+                    TextField("Name", text: $model.name, prompt: Text("Savings"))
+                        .labelsHidden()
+                }
             }
             Text(AddSavingsWording.checkWarning)
                 .font(.caption)
