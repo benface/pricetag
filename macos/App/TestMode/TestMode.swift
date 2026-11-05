@@ -148,6 +148,8 @@ enum TestScene: String, CaseIterable {
     case hotWalletAddSavings = "hot-wallet-add-savings"
     case hotWalletAddSavingsFilled = "hot-wallet-add-savings-filled"
     case hotWalletTopUp = "hot-wallet-top-up"
+    case hotWalletTopUpFirstRead = "hot-wallet-top-up-first-read"
+    case hotWalletTopUpOneDollar = "hot-wallet-top-up-one-dollar"
     case hotWalletTopUpAtCap = "hot-wallet-top-up-at-cap"
     case hotWalletTopUpCAD = "hot-wallet-top-up-cad"
     case send
@@ -168,7 +170,7 @@ enum TestScene: String, CaseIterable {
     var chrome: Chrome {
         switch self {
         case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
-             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
+             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
              .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
@@ -215,8 +217,9 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .settingsShowingSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
+        case .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .settingsShowingSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
         case .sendWaiting: .waitingForTouchID
+        case .hotWalletTopUpOneDollar: .nearCap
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
         case .hotWalletNoPrice: .noPrice
         case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap: .overCap
@@ -243,15 +246,18 @@ enum TestScene: String, CaseIterable {
         let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method }, mainCurrency: { store.currency })
         // Before there's a view, which is how it'd be for anyone opening a sheet: a sheet works out what it offers when it appears.
         let hotWalletHasRead = ReadOnce()
-        Task {
+        let readHotWallet: @MainActor () async -> Void = {
             await hotWallet.tick()
             await hotWallet.readHistory()
             hotWalletHasRead.isDone = true
         }
-        let deadline = Date.now.addingTimeInterval(5)
-        while !hotWalletHasRead.isDone {
-            guard Date.now < deadline else { TestMode.fail("This scene's hot wallet never finished reading.") }
-            RunLoop.main.run(until: .now.addingTimeInterval(0.01))
+        if self != .hotWalletTopUpFirstRead {
+            Task { await readHotWallet() }
+            let deadline = Date.now.addingTimeInterval(5)
+            while !hotWalletHasRead.isDone {
+                guard Date.now < deadline else { TestMode.fail("This scene's hot wallet never finished reading.") }
+                RunLoop.main.run(until: .now.addingTimeInterval(0.01))
+            }
         }
         let navigation = Navigation()
         navigation.showsTransactions = self == .mainTransactions || self == .mainTransactionsCAD
@@ -299,8 +305,11 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet)), isReady: isReady)
         case .hotWalletAddSavingsFilled:
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet, address: HotWalletFixture.savings.lowercased)), isReady: isReady)
-        case .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD:
+        case .hotWalletTopUp, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD:
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet)), isReady: isReady)
+        case .hotWalletTopUpFirstRead:
+            // The sheet opens first here, so the read has to change what it worked out.
+            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet).task { await readHotWallet() }), isReady: { hotWalletHasRead.isDone })
         case .send, .sendCAD, .sendKnown, .sendWaiting:
             let model = SendModel(wallet: hotWallet, store: store)
             model.token = Base.tokens.first { $0.symbol == "USDC" }!
