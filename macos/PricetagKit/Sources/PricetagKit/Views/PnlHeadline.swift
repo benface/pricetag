@@ -40,7 +40,7 @@ public struct PortfolioSummary: View {
                 valueStat
                 pnlStat
                 ForEach(portfolio.totalStats, id: \.metric) { stat in
-                    TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { onOpen(stat.metric) }
+                    TotalStat(label: stat.label, help: stat.help, text: stat.text, isEstimate: stat.isEstimate, coverage: stat.coverage, isLive: isLive) { onOpen(stat.metric) }
                 }
             }
         }
@@ -56,7 +56,7 @@ public struct PortfolioSummary: View {
     private var sums: some View {
         HStack(alignment: .lastTextBaseline, spacing: 24) {
             ForEach(portfolio.totalStats, id: \.metric) { stat in
-                TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { onOpen(stat.metric) }
+                TotalStat(label: stat.label, help: stat.help, text: stat.text, isEstimate: stat.isEstimate, coverage: stat.coverage, isLive: isLive) { onOpen(stat.metric) }
             }
         }
     }
@@ -72,7 +72,7 @@ public struct PortfolioSummary: View {
                 big(value, size: size, tone: .neutral)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel(Spoken.number("Value", value, isPartial: portfolio.isValuePartial, isLive: isLive))
+            .accessibilityLabel(Spoken.number("Value", portfolio.spokenValueText, isPartial: portfolio.isValuePartial, isLive: isLive))
             .accessibilityHint("Shows the activity behind this number")
         }
     }
@@ -87,7 +87,7 @@ public struct PortfolioSummary: View {
                 big(pnl, size: size * 0.6, tone: isLive ? portfolio.totalPnlTone : .neutral)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel(Spoken.number("Total PnL", pnl, isPartial: portfolio.pnlStatus == .partial, isLive: isLive))
+            .accessibilityLabel(Spoken.number("Total PnL", portfolio.spokenPnlText, isPartial: portfolio.pnlStatus == .partial, isLive: isLive))
             .accessibilityHint("Shows the activity behind this number")
         }
     }
@@ -190,14 +190,17 @@ public struct TotalStat: View {
     let help: String?
     /// nil when nothing in the sum is known.
     let text: String?
+    /// Only read aloud. On screen, the line under the headline says it once.
+    let isEstimate: Bool
     let coverage: SumCoverage?
     let isLive: Bool
     let onOpen: () -> Void
 
-    public init(label: String, help: String? = nil, text: String?, coverage: SumCoverage? = nil, isLive: Bool, onOpen: @escaping () -> Void) {
+    public init(label: String, help: String? = nil, text: String?, isEstimate: Bool = false, coverage: SumCoverage? = nil, isLive: Bool, onOpen: @escaping () -> Void) {
         self.label = label
         self.help = help
         self.text = text
+        self.isEstimate = isEstimate
         self.coverage = coverage
         self.isLive = isLive
         self.onOpen = onOpen
@@ -223,7 +226,7 @@ public struct TotalStat: View {
                 .stale(!isLive)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel(Spoken.number(label, text, isPartial: coverage?.isPartial == true, isLive: isLive))
+            .accessibilityLabel(Spoken.number(label, text.map { Format.estimate($0, isEstimate) }, isPartial: coverage?.isPartial == true, isLive: isLive))
             .accessibilityHint(help ?? "")
         }
     }
@@ -239,6 +242,16 @@ extension Portfolio {
     public var totalPnlText: String? {
         guard pnlStatus != .unavailable else { return nil }
         return totals.pnlMicros.map { Format.signedMoney($0, currency) }
+    }
+
+    /// The value read aloud, which says it's an estimate. A number read alone doesn't have the line under it.
+    public var spokenValueText: String? {
+        totalValueText.map { Format.estimate($0, totals.estimated.value) }
+    }
+
+    /// The PnL read aloud, which says it's an estimate. A number read alone doesn't have the line under it.
+    public var spokenPnlText: String? {
+        totalPnlText.map { Format.estimate($0, isPositive(totals.estimatedMicros)) }
     }
 
     /// Whether the value leaves out something held, which changes what the number means.
@@ -306,13 +319,13 @@ extension Portfolio {
     }
 
     /// The sums beside the headline, in reading order.
-    public var totalStats: [(metric: TotalMetric, label: String, help: String?, text: String?, coverage: SumCoverage?)] {
+    public var totalStats: [(metric: TotalMetric, label: String, help: String?, text: String?, isEstimate: Bool, coverage: SumCoverage?)] {
         let money = { Format.money($0, currency) }
         let signed = { Format.signedMoney($0, currency) }
         return [
-            (.realized, "Realized", Wording.realizedHelp, totals.realizedMicros.map(signed), totals.coverage.realized),
-            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map(signed), totals.coverage.unrealized),
-            (.gas, Wording.networkFees, nil, totals.gasMicros.map(money), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
+            (.realized, "Realized", Wording.realizedHelp, totals.realizedMicros.map(signed), totals.estimated.realized, totals.coverage.realized),
+            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map(signed), totals.estimated.unrealized, totals.coverage.unrealized),
+            (.gas, Wording.networkFees, nil, totals.gasMicros.map(money), false, SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
     }
 

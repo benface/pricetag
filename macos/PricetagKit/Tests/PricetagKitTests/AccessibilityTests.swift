@@ -74,6 +74,9 @@ struct AccessibilityTreeTests {
         let portfolio = try demoPortfolio()
         let live = try lines(PortfolioSummary(portfolio: portfolio, isLive: true, size: 30) { _ in }.padding())
         #expect(live.contains("Total PnL, about +$149.30, partial"))
+        #expect(live.contains("Unrealized, about +$75.13, partial"), "\(live)")
+        // On screen, the line under the headline says this once. Read alone, each number says it.
+        #expect(portfolio.totalPnlText == "+$149.30")
         // The label above the number isn't read again on its own.
         #expect(!live.contains("Total PnL"))
         let old = try lines(PortfolioSummary(portfolio: portfolio, isLive: false, size: 30) { _ in }.padding())

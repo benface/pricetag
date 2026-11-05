@@ -241,7 +241,7 @@ struct PopoverView: View {
             }
             .buttonStyle(NumberButtonStyle())
             .help(portfolio.partialValueReason ?? "")
-            .accessibilityLabel(Spoken.number("Value", portfolio.totalValueText, isPartial: portfolio.isValuePartial, isLive: isLive))
+            .accessibilityLabel(Spoken.number("Value", portfolio.spokenValueText, isPartial: portfolio.isValuePartial, isLive: isLive))
             .accessibilityHint("Shows the activity behind this number")
             Button { open(.total(.pnl)) } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -256,7 +256,7 @@ struct PopoverView: View {
             }
             .buttonStyle(NumberButtonStyle())
             .help(Wording.pnlHelp)
-            .accessibilityLabel(Spoken.number("Total PnL", portfolio.totalPnlText, isPartial: portfolio.pnlStatus == .partial, isLive: isLive))
+            .accessibilityLabel(Spoken.number("Total PnL", portfolio.spokenPnlText, isPartial: portfolio.pnlStatus == .partial, isLive: isLive))
             .accessibilityHint("Shows the activity behind this number")
         }
         .stale(!isLive)
