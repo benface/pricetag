@@ -83,7 +83,8 @@ public struct PortfolioSummary: View {
     private func statLabel(_ text: String, isPartial: Bool) -> some View {
         HStack(spacing: 4) {
             Text(text)
-            if isPartial { Text("partial").foregroundStyle(.tertiary) }
+            // As readable as what it qualifies, because it changes what the number means.
+            if isPartial { Text("partial").fontWeight(.medium) }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -207,7 +208,7 @@ public struct TotalStat: View {
             HStack(spacing: 4) {
                 Text(label).foregroundStyle(.secondary).help(help ?? "")
                 if text != nil, coverage?.isPartial == true {
-                    Text("partial").foregroundStyle(.tertiary)
+                    Text("partial").foregroundStyle(.secondary).fontWeight(.medium)
                 }
             }
             .font(.caption)

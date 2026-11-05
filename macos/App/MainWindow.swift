@@ -427,6 +427,7 @@ private struct HoldingsTable: View {
                     HStack(spacing: 6) {
                         if position.resolvable {
                             Button("Fill In") { onResolve(position.asset) }
+                                .buttonStyle(.bordered)
                                 .controlSize(.mini)
                                 .accessibilityLabel("Fill in \(position.asset)'s cost")
                                 .help("Answer what the app can't work out about \(position.asset)")

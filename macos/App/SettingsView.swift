@@ -136,7 +136,7 @@ struct SettingsView: View {
         Section {
             LabeledContent("Cap") {
                 HStack {
-                    Slider(value: Binding(get: { Double(hotWallet.settings.capInDollars) }, set: { hotWallet.setCap(dollars: Int($0)) }), in: 1...Double(hotWallet.settings.capCeiling / Money.dollar), step: 1)
+                    Slider(value: Binding(get: { Double(hotWallet.settings.capInDollars) }, set: { hotWallet.setCap(dollars: Int($0)) }), in: 1...Double(hotWallet.settings.capCeiling / Money.dollar))
                     Text(hotWallet.usd(dollars: hotWallet.settings.capInDollars))
                         .monospacedDigit()
                         .frame(width: 56, alignment: .trailing)

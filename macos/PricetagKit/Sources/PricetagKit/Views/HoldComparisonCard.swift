@@ -79,7 +79,7 @@ public struct HoldComparisonCard: View {
             HStack(spacing: 4) {
                 Text(label).foregroundStyle(.secondary)
                 if text != nil, isPartial {
-                    Text("partial").foregroundStyle(.tertiary)
+                    Text("partial").foregroundStyle(.secondary).fontWeight(.medium)
                 }
             }
             .font(.caption)
