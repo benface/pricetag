@@ -1,25 +1,8 @@
 import { useEffect, useState } from "react"
-import { formatMoney, formatPrice, formatSignedMoney, formatTime, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { formatTime, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { Book } from "../core/book.ts"
-import type { PricingRule, RuleComparison, RuleRow } from "../core/rules.ts"
+import { showRuleDifference, showRuleValue, type PricingRule, type RuleComparison } from "../core/rules.ts"
 import { RULES_HELP, RULES_TITLE, shortManifestHash } from "../core/wording.ts"
-
-function show(micros: string | null, format: RuleRow["format"], currency: CurrencyCode, estimated = false): string {
-  if (micros === null) return "Unavailable"
-  if (estimated) return `≈${show(micros, format, currency)}`
-  if (format === "usdPrice") return formatPrice(micros, "USD")
-  return format === "money" ? formatMoney(micros, currency) : formatSignedMoney(micros, currency)
-}
-
-/** A difference is always signed, so which way it went can be read at a glance. A price's is small, so it keeps its digits. */
-function showDifference(micros: string | null, format: RuleRow["format"], currency: CurrencyCode, estimated = false): string {
-  if (micros === null) return "—"
-  if (BigInt(micros) === 0n) return "Same"
-  if (estimated) return `≈${showDifference(micros, format, currency)}`
-  if (format !== "usdPrice") return formatSignedMoney(micros, currency)
-  const size = micros.startsWith("-") ? micros.slice(1) : micros
-  return `${micros.startsWith("-") ? "-" : "+"}${formatPrice(size, "USD")}`
-}
 
 function Comparison({ address, method, currency, book }: { address: string; method: Method; currency: CurrencyCode; book: Book }) {
   const [attempt, setAttempt] = useState(0)
@@ -69,9 +52,9 @@ function Comparison({ address, method, currency, book }: { address: string; meth
           {comparison.rows.map((row) => (
             <tr key={row.label}>
               <th scope="row">{row.label}</th>
-              <td>{show(row.a, row.format, shownIn, row.aEstimated)}{row.aPartial ? <span className="partial">⚠ partial</span> : null}</td>
-              <td>{show(row.b, row.format, shownIn, row.bEstimated)}{row.bPartial ? <span className="partial">⚠ partial</span> : null}</td>
-              <td>{showDifference(row.difference, row.format, shownIn, row.aEstimated || row.bEstimated)}</td>
+              <td>{showRuleValue(row.a, row.format, shownIn, row.aEstimated)}{row.aPartial ? <span className="partial">⚠ partial</span> : null}</td>
+              <td>{showRuleValue(row.b, row.format, shownIn, row.bEstimated)}{row.bPartial ? <span className="partial">⚠ partial</span> : null}</td>
+              <td>{showRuleDifference(row.difference, row.format, shownIn, row.aEstimated || row.bEstimated)}</td>
             </tr>
           ))}
         </tbody>
@@ -86,9 +69,9 @@ function Comparison({ address, method, currency, book }: { address: string; meth
                   <th scope="row">
                     {tx.asset} {tx.label.toLowerCase()} <span className="muted small">{formatTime(tx.timestamp)}</span>
                   </th>
-                  <td>{show(tx.a, "money", shownIn, tx.aEstimated)}</td>
-                  <td>{show(tx.b, "money", shownIn, tx.bEstimated)}</td>
-                  <td>{showDifference(tx.difference, "signed", shownIn, tx.aEstimated || tx.bEstimated)}</td>
+                  <td>{showRuleValue(tx.a, "money", shownIn, tx.aEstimated)}</td>
+                  <td>{showRuleValue(tx.b, "money", shownIn, tx.bEstimated)}</td>
+                  <td>{showRuleDifference(tx.difference, "signed", shownIn, tx.aEstimated || tx.bEstimated)}</td>
                 </tr>
               ))}
             </tbody>

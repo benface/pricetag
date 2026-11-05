@@ -11,6 +11,7 @@ struct FormatVectors: Decodable {
         let decimals: Int
         let amount, signed: String
     }
+    struct LabeledUSD: Decodable { let text, usd, cad: String }
     struct Span: Decodable {
         let ms: Int
         let duration: String
@@ -24,6 +25,7 @@ struct FormatVectors: Decodable {
     let usd: [USD]
     let cad: [USD]
     let price: [Price]
+    let labeledUsd: [LabeledUSD]
     let amount: [Amount]
     let duration: [Span]
     let blockSpans: [BlockSpan]
@@ -55,6 +57,13 @@ struct FormatVectors: Decodable {
         for vector in vectors.price {
             #expect(Format.price(vector.micros, .USD) == vector.price, "\(vector.micros)")
             #expect(Format.price(vector.micros, .CAD) == vector.cad, "\(vector.micros)")
+        }
+    }
+
+    @Test func labeledUSDMatchesTheWebApp() {
+        for vector in vectors.labeledUsd {
+            #expect(Format.usd(vector.text, beside: .USD) == vector.usd, "\(vector.text)")
+            #expect(Format.usd(vector.text, beside: .CAD) == vector.cad, "\(vector.text)")
         }
     }
 

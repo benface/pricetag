@@ -1,6 +1,8 @@
 // The pricing rules a server can read a wallet through. Each is a dataset version, picked per request: the SQL stays
 // the same, so a rule can be forked without touching the app. Cost and PnL follow from whichever prices it publishes.
 
+import { formatMoney, formatPrice, formatSignedMoney, labelUsd, type CurrencyCode } from "@pricetag/sdk/core"
+
 /** `dataset` and `hash` say exactly what was read, because a query pinned to a hash can't read anything else. */
 export type PricingRule = { id: string; name: string; summary: string; dataset: string; hash: string }
 
@@ -57,3 +59,21 @@ export function whySentence(changedTxs: number): string {
 
 /** Said wherever a number is explained while a rule other than the first is on, since a label alone can't say it. */
 export const ruleNote = (rule: Pick<PricingRule, "name" | "summary">) => `Using the pricing rule "${rule.name}". ${rule.summary}`
+
+/** One side of a comparison. A null is unavailable, not zero. */
+export function showRuleValue(micros: string | null, format: RuleRow["format"], currency: CurrencyCode, estimated = false): string {
+  if (micros === null) return "Unavailable"
+  if (estimated) return `≈${showRuleValue(micros, format, currency)}`
+  if (format === "usdPrice") return labelUsd(formatPrice(micros, "USD"), currency)
+  return format === "money" ? formatMoney(micros, currency) : formatSignedMoney(micros, currency)
+}
+
+/** A difference is always signed, so which way it went can be read at a glance. A price's is small, so it keeps its digits. */
+export function showRuleDifference(micros: string | null, format: RuleRow["format"], currency: CurrencyCode, estimated = false): string {
+  if (micros === null) return "—"
+  if (BigInt(micros) === 0n) return "Same"
+  if (estimated) return `≈${showRuleDifference(micros, format, currency)}`
+  if (format !== "usdPrice") return formatSignedMoney(micros, currency)
+  const size = micros.startsWith("-") ? micros.slice(1) : micros
+  return labelUsd(`${micros.startsWith("-") ? "-" : "+"}${formatPrice(size, "USD")}`, currency)
+}
