@@ -255,7 +255,10 @@ struct MainWindow: View {
             }
         } else if let portfolio {
             Group {
-                if !portfolio.progress.started {
+                // A failure says what's wrong even before there's anything to show, rather than only that the data hasn't reached this wallet.
+                if !portfolio.progress.started, store.feed.isStale {
+                    Unavailable(store: store)
+                } else if !portfolio.progress.started {
                     ContentUnavailableView("Almost There", systemImage: "hourglass", description: Text(Wording.notStarted))
                 } else if portfolio.isEmpty {
                     NoActivity(portfolio: portfolio, entry: store.walletList(hotWallet: hotWallet).entry(for: store.address), hotWallet: hotWallet, navigation: navigation, notices: notices(portfolio))
@@ -337,11 +340,12 @@ struct MainWindow: View {
             Notice(.warning, notice)
                 .arrives()
         }
-        // Each number that may change has a spinner by it. This says how long it's been, once that's worth saying.
-        if store.feed == .reading, let since = store.readingSince {
+        // Each number that may change has a spinner by it. This says how long it's been, once that's worth saying. After a failure, the
+        // retry says so too, while the warning above still says how old these numbers are.
+        if store.feed == .reading || store.feed.isStale, let since = store.readingSince {
             ReadingClock(since: since) { seconds in
                 if seconds >= FeedState.longReadSeconds {
-                    Notice(.info, Wording.stillUpdating(seconds: seconds, lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp))
+                    Notice(.info, store.feed == .reading ? Wording.stillUpdating(seconds: seconds, lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp) : Wording.tryingAgain(seconds: seconds))
                 }
             }
         }
@@ -884,6 +888,14 @@ private struct Unavailable: View {
             Label(problem?.title ?? "Can't Show This Wallet", systemImage: "exclamationmark.triangle")
         } description: {
             Text(problem?.message ?? "")
+            if let since = store.readingSince {
+                ReadingClock(since: since) { seconds in
+                    if seconds >= FeedState.longReadSeconds {
+                        Label(Wording.tryingAgain(seconds: seconds), systemImage: "arrow.clockwise")
+                            .contentTransition(.numericText())
+                    }
+                }
+            }
         } actions: {
             Button("Try Again") { store.refresh() }
                 .buttonStyle(.borderedProminent)

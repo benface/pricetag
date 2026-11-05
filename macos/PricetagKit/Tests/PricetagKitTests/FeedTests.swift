@@ -161,7 +161,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     }
 
     @Test func knowsWhenAReadStartedUntilItsDone() async throws {
-        let clock = Clock(now)
+        let clock = TestClock(now)
         let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
         defaults.set("0xabc", forKey: "wallet")
         let source = ScriptedSource([.success(try realPortfolio(at: now)), .failure(.unreachable)])
@@ -1022,9 +1022,4 @@ final class FailingProtocol: URLProtocol, @unchecked Sendable {
             for try await _ in try #require(client().headEvents()) {}
         }
     }
-}
-
-private final class Clock: @unchecked Sendable {
-    var date: Date
-    init(_ date: Date) { self.date = date }
 }

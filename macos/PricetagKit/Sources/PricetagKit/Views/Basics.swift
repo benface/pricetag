@@ -346,7 +346,10 @@ public struct FeedBadge: View {
             if portfolio.mode == .demo { return Mode.demo.label }
             return "Live"
         case .catchingUp: return "Catching up"
-        default: return "Not updating"
+        default:
+            // A retry that's taking a while may be about to work, so it says it's trying rather than only that it's stopped.
+            guard let seconds, seconds >= FeedState.longReadSeconds else { return "Not updating" }
+            return "Trying again · \(Format.elapsed(seconds: seconds))"
         }
     }
 
@@ -361,7 +364,7 @@ public struct FeedBadge: View {
     public var body: some View {
         HStack(spacing: 5) {
             Circle().fill(color).frame(width: 7, height: 7).animation(Motion.state, value: color)
-            if let readingSince, feed == .reading {
+            if let readingSince, feed == .reading || feed.isStale {
                 ReadingClock(since: readingSince) { label(text(seconds: $0)) }
             } else {
                 label(text(seconds: nil))
@@ -375,6 +378,6 @@ public struct FeedBadge: View {
 
     /// A count that ticks rolls its digits. Anything else fades from one state to the next.
     private func label(_ text: String) -> some View {
-        Text(text).monospacedDigit().contentTransition(feed == .reading ? .numericText() : .opacity).animation(Motion.state, value: text)
+        Text(text).monospacedDigit().contentTransition(readingSince != nil ? .numericText() : .opacity).animation(Motion.state, value: text)
     }
 }

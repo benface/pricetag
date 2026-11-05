@@ -125,16 +125,12 @@ struct PopoverView: View {
                 EmptyView()
             }
             if let problem = store.feed.shortProblem(portfolio: portfolio) {
-                let full = store.feed.problem(serverURL: store.serverURL, portfolio: portfolio)
-                ProblemRow(
-                    problem,
-                    // With no numbers here, nothing says how old they are, so it says what matters most instead.
-                    detail: portfolio.flatMap(lastUpdate) ?? (full == nil ? nil : Wording.moneyUnaffected),
-                    help: full.map { [$0.message, $0.detail].compactMap { $0 }.joined(separator: "\n\n") } ?? store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) ?? problem,
-                    // Catching up is still updating, so there's nothing to retry.
-                    actionTitle: isCatchingUp ? nil : "Retry",
-                    action: store.refresh
-                )
+                // A retry that's taking a while says so in place of the second line, which comes back if it fails again.
+                if store.feed.isStale, let since = store.readingSince {
+                    ReadingClock(since: since) { problemRow(problem, retrying: $0 >= FeedState.longReadSeconds ? $0 : nil) }
+                } else {
+                    problemRow(problem, retrying: nil)
+                }
             }
             if let portfolio, portfolio.progress.started, !portfolio.isEmpty, let attention = portfolio.shortAttention {
                 attentionRow(attention, portfolio)
@@ -199,6 +195,22 @@ struct PopoverView: View {
 
     private var isCatchingUp: Bool {
         if case .catchingUp = store.feed { true } else { false }
+    }
+
+    private func problemRow(_ problem: String, retrying seconds: Int?) -> some View {
+        let full = store.feed.problem(serverURL: store.serverURL, portfolio: portfolio)
+        // With no numbers here, nothing says how old they are, so it says what matters most instead.
+        // A retry keeps how old the numbers are, and the badge above has its count.
+        let last = portfolio.flatMap(lastUpdate)
+        let detail = seconds.map { seconds in last.map { "\($0) · trying again" } ?? "Trying again · \(Format.elapsed(seconds: seconds))" } ?? last ?? (full == nil ? nil : Wording.moneyUnaffected)
+        return ProblemRow(
+            problem,
+            detail: detail,
+            help: full.map { [$0.message, $0.detail].compactMap { $0 }.joined(separator: "\n\n") } ?? store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) ?? problem,
+            // Catching up is still updating, so there's nothing to retry.
+            actionTitle: isCatchingUp ? nil : "Retry",
+            action: store.refresh
+        )
     }
 
     private func lastUpdate(_ portfolio: Portfolio) -> String? {

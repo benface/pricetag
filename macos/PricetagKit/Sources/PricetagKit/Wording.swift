@@ -213,6 +213,11 @@ public enum Wording {
         "Still updating, \(Format.elapsed(seconds: seconds)) so far. Until it's done, these numbers are from \(lastUpdate)."
     }
 
+    /// Another read after a failure, once it's gone on long enough to be worth saying. Whatever's wrong still stands until it answers.
+    public static func tryingAgain(seconds: Int) -> String {
+        "Trying again, \(Format.elapsed(seconds: seconds)) so far."
+    }
+
     public static func stale(lastUpdate: String) -> String {
         "These numbers aren't updating. Last update: \(lastUpdate)."
     }

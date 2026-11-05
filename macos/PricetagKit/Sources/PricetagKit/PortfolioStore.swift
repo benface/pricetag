@@ -57,13 +57,12 @@ public final class PortfolioStore {
     /// or rule's numbers are on their way, the feed is `.reading` and this holds the last ones known, so the screen doesn't go blank.
     /// They're always this wallet's, though they can be by the last method, currency or rule it was read in.
     public private(set) var portfolio: Portfolio?
-    public private(set) var feed: FeedState {
-        didSet {
-            if feed != .reading { readingSince = nil } else if oldValue != .reading { readingSince = now() }
-        }
-    }
-    /// When the feed started reading, so a long read can say how long it's been. nil unless it's reading.
+    public private(set) var feed: FeedState
+    /// When the read that's running now started, so a long one can say how long it's been, including a retry after a failure. nil between reads.
+    /// A change starts a new read, so it starts this over. A read that waits longer on the same request keeps it.
     public private(set) var readingSince: Date?
+    /// Which read `readingSince` belongs to, so one a change left behind can't clear it when it finally ends.
+    @ObservationIgnored private var readCount = 0
     public private(set) var updatedAt: Date?
     public private(set) var address: String?
     public private(set) var method: CostMethod
@@ -168,6 +167,8 @@ public final class PortfolioStore {
             }
         }
         guard address != nil else { return }
+        // In the same moment as whatever changed, so no frame shows the last read's time against the next one.
+        readingSince = now()
         eventsTask = Task { [weak self] in await self?.followEvents() }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -182,6 +183,8 @@ public final class PortfolioStore {
         rateTask = nil
         pollTask?.cancel()
         pollTask = nil
+        readCount += 1
+        readingSince = nil
         eventsTask?.cancel()
         eventsTask = nil
         isPushed = false
@@ -518,6 +521,10 @@ public final class PortfolioStore {
     /// One read. Returns how long to wait before the next one.
     func poll() async -> Duration {
         guard let address else { return unreachableDelay }
+        readCount += 1
+        let thisRead = readCount
+        readingSince = now()
+        defer { if thisRead == readCount { readingSince = nil } }
         let method = self.method
         let currency = self.currency
         let rule = selectedRule
