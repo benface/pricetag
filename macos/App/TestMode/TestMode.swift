@@ -172,7 +172,9 @@ enum TestScene: String, CaseIterable {
     case addSavingsKeystoneType = "add-savings-keystone-type"
     case addSavingsKeystoneCheck = "add-savings-keystone-check"
     case addSavingsOtherPaste = "add-savings-other-paste"
+    case addSavingsCheckStartsSweeps = "add-savings-check-starts-sweeps"
     case addSavingsFinished = "add-savings-finished"
+    case addSavingsFinishedSweeping = "add-savings-finished-sweeping"
     case addSavingsFinishedElsewhere = "add-savings-finished-elsewhere"
     case hotWalletTopUp = "hot-wallet-top-up"
     case hotWalletTopUpFirstRead = "hot-wallet-top-up-first-read"
@@ -202,7 +204,7 @@ enum TestScene: String, CaseIterable {
     var chrome: Chrome {
         switch self {
         case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
-             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsFinished, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
+             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsCheckStartsSweeps, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
              .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
@@ -259,7 +261,7 @@ enum TestScene: String, CaseIterable {
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD, .addSavingsFinished: .noSavings
         case .hotWalletNoPrice: .noPrice
         case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap: .overCap
-        case .hotWalletOverCapNoSavings: .overCapNoSavings
+        case .hotWalletOverCapNoSavings, .addSavingsCheckStartsSweeps, .addSavingsFinishedSweeping: .overCapNoSavings
         case .hotWalletKeyMissing: .keyMissing
         case .hotWalletAlarm, .popoverHotWalletAlarm: .alarm
         case .hotWalletReplacingKey: .replacingKey
@@ -322,7 +324,8 @@ enum TestScene: String, CaseIterable {
         case .addSavingsKeystoneType: model = AddSavingsModel(wallet: wallet, device: .keystone, step: .paste)
         case .addSavingsKeystoneCheck: model = AddSavingsModel(wallet: wallet, device: .keystone, step: .check, address: other)
         case .addSavingsOtherPaste: model = AddSavingsModel(wallet: wallet, device: .other, step: .paste)
-        case .addSavingsFinished, .addSavingsFinishedElsewhere:
+        case .addSavingsCheckStartsSweeps: model = AddSavingsModel(wallet: wallet, device: .ledger, step: .check, address: other)
+        case .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere:
             model = AddSavingsModel(wallet: wallet, device: .ledger, step: .check, address: other)
             model.matches = true
             do { try model.add() } catch { TestMode.fail("This scene's wallet couldn't be added.") }
@@ -407,7 +410,7 @@ enum TestScene: String, CaseIterable {
         case .hotWallet, .hotWalletCAD, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck:
             // Taller than it opens, because a screenshot can't scroll to the actions and the activity at the bottom.
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 1200), isReady: isReady)
-        case .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsFinished, .addSavingsFinishedElsewhere:
+        case .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsCheckStartsSweeps, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere:
             return TestScreen(view: addSavingsSheet(hotWallet), isReady: isReady)
         case .hotWalletTopUp, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD:
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!)), isReady: isReady)

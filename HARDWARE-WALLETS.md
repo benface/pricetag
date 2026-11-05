@@ -74,9 +74,11 @@ To look at the panel, run `pnpm dev` and open `/test/support/device-harness.html
 
 ## Checklist for a real device
 
-Start with **Adding from the Mac app**, which moves no money. Use a fresh account with a few dollars after that. **Stop at the first thing that doesn't match, and don't send anything.** Never type a recovery phrase into anything.
+Start with **Adding from the Mac app**. Use a fresh account with a few dollars after that. **Stop at the first thing that doesn't match, and don't send anything.** Never type a recovery phrase into anything.
 
-**Adding from the Mac app, with no money,** with `pnpm mac`. Press **Add a Savings Wallet…**. For each step, note any words that differ from what the device says.
+**Adding from the Mac app,** with `pnpm mac`. Press **Add a Savings Wallet…**. For each step, note any words that differ from what the device says.
+
+**This only moves no money if you stop before adding, or the spending wallet is empty.** The first savings wallet you add becomes where sweeps go, and the next check sends anything above the cap, and any realized gains, there by itself, with no prompt. So if your spending wallet holds money and you have no savings wallet yet, press **Cancel** instead of **Add Wallet**, at the steps marked below. The check step warns about this when it applies. A second savings wallet changes nothing, unless you press **Send It Here Instead**.
 
 Ledger Nano X:
 
@@ -85,16 +87,18 @@ Ledger Nano X:
 3. With Chrome as your default, **Open Google Chrome** should open the page on the Ledger's steps. With Safari as your default, it should say Safari can't, and open Chrome anyway.
 4. Press **Connect my Ledger**, pick it in the list, and pick an account. Press **Add to the Mac app**, and allow it to open.
 5. The Mac app should come forward at **Does your Ledger show this?**, while the device says **Verify Base address** and shows the same address. Compare every group, tick the box, and choose **Confirm** on the device. The page should say it's confirmed. Note the words the device really uses.
-6. Press **Add Wallet**. It should say where sweeps go. Start over and choose **Reject** on the device: the page should say so, and offer to try again.
+6. On the page, press **Open the Mac app again**. The device should show the address again, and the box in the Mac app should be unticked. Choose **Reject** on the device: the page should say so, and offer to try again.
+7. **If the warning above allows it,** try again, confirm, and press **Add Wallet**. It should say where sweeps go.
 
 Keystone:
 
 1. Pick **Keystone**. Check the steps against the device: **ETH** on the home screen, then **Receive ETH**. Note if **Attention** comes up.
-2. Allow the camera, and hold up the code. It should read it and show the same address. Compare every group, then add it.
+2. Allow the camera, and hold up the code. It should read it and show the same address. Compare every group, and press **Back**.
 3. Show it **Connect Software Wallet**'s code instead. It should say that's the wrong code, and show nothing of what's in it.
 4. Refuse the camera in System Settings, and try again. It should offer to open the setting, or let you type the address.
+5. Allow it again. **If the warning above allows it,** read the code once more and press **Add Wallet**.
 
-Then send a few dollars to what you added, and see them arrive.
+Once one's added, send a few dollars to it, and see them arrive. That's the first thing here that moves money on purpose.
 
 **Ledger, in Chrome:** close Ledger Wallet, then plug in and unlock. Have the Ethereum app installed.
 

@@ -470,6 +470,9 @@ private struct CheckStep: View {
             } else if let problem = model.problem {
                 WarningText(problem).font(.callout)
             } else {
+                if model.wouldStartSweeps {
+                    Notice(.warning, AddSavingsWording.startsSweeps)
+                }
                 Toggle(AddSavingsWording.matches, isOn: $model.matches)
                 TextField("Name", text: $model.name, prompt: Text("Savings"))
             }
@@ -522,7 +525,7 @@ private struct FinishedStep: View {
             Text(AddSavingsWording.page(.finished, device: model.device).title)
                 .font(.title2.bold())
             if model.sweepsGoHere {
-                Label("From now on, money above your cap goes here.", systemImage: "arrow.down.to.line")
+                Label(model.startedSweeps ? AddSavingsWording.sweepsStarted : "From now on, money above your cap goes here.", systemImage: "arrow.down.to.line")
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 Label("Money above your cap still goes to \(model.sweepDestinationName ?? "your other savings wallet").", systemImage: "arrow.down.to.line")

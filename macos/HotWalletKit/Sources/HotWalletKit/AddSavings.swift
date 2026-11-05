@@ -3,8 +3,9 @@ import KeyVault
 import Observation
 import PricetagKit
 
-/// What a camera read, or someone pasted. Only a plain address counts: a payment request names a contract rather than a wallet, and
-/// anything else is dropped without being shown, since a code on a hardware wallet's screen can be private.
+/// What a camera read, or someone pasted. Only a plain address counts, on its own or as `ethereum:<address>`, with a chain number at most.
+/// A payment request's address can be a token's contract rather than a wallet, so anything after that means it isn't one of these. It's
+/// all dropped without being shown, since a code on a hardware wallet's screen can be private.
 public enum ScannedAddress: Equatable, Sendable {
     case address(EthereumAddress)
     /// Keystone's code for connecting a wallet, which isn't the one on its receive screen.
@@ -19,7 +20,13 @@ public enum ScannedAddress: Equatable, Sendable {
         }
         if clean.lowercased().hasPrefix("ethereum:") {
             clean = String(clean.dropFirst("ethereum:".count))
-            if let chain = clean.firstIndex(of: "@") { clean = String(clean[..<chain]) }
+            if let at = clean.firstIndex(of: "@") {
+                guard clean[clean.index(after: at)...].wholeMatch(of: /[0-9]+/) != nil else {
+                    self = .somethingElse
+                    return
+                }
+                clean = String(clean[..<at])
+            }
         }
         self = EthereumAddress(clean).map(Self.address) ?? .somethingElse
     }
@@ -60,6 +67,8 @@ public final class AddSavingsModel {
     public private(set) var isWaitingForBrowser = false
     public private(set) var scanProblem: String?
     public private(set) var added: EthereumAddress?
+    /// Whether adding it gave what was waiting somewhere to go.
+    public private(set) var startedSweeps = false
     public var name = ""
     public var address = "" {
         didSet { if address != oldValue { takeBackAnswers() } }
@@ -100,6 +109,9 @@ public final class AddSavingsModel {
     }
 
     public var canAdd: Bool { parsed != nil && problem == nil && matches }
+
+    /// The first savings wallet becomes where sweeps go, and they run by themselves. This wallet already has something it wants to sweep.
+    public var wouldStartSweeps: Bool { wallet.settings.sweepDestination == nil && wallet.plan?.blockers.contains(.noDestination) == true }
     public var canGoBack: Bool { !earlier.isEmpty && step != .finished }
 
     /// Where this is among the device's steps, for the dots.
@@ -175,15 +187,18 @@ public final class AddSavingsModel {
         name = link.name.isEmpty ? device?.defaultName ?? "" : link.name
         scanProblem = nil
         added = nil
+        startedSweeps = false
         isWaitingForBrowser = false
         step = .check
     }
 
     public func add() throws(HotWallet.ColdWalletProblem) {
         guard canAdd, let parsed else { return }
+        let startsSweeps = wouldStartSweeps
         try wallet.addColdWallet(address: parsed.checksummed, name: name)
         wallet.linkDeviceAccounts(link?.accountsToLink(accepted: acceptedAccounts, adding: address) ?? [])
         added = parsed
+        startedSweeps = startsSweeps
         earlier = []
         step = .finished
     }
@@ -234,6 +249,8 @@ public enum AddSavingsWording {
     public static let checkWarning = "Sweeps send real money here, and a compromised computer could show you the wrong address. The device's screen is the only one to trust."
     public static let camera = "Your camera's picture stays on this Mac, and nothing's saved."
     public static let matches = "Every character matches what my device's screen shows"
+    public static let startsSweeps = "This Mac's spending money has more than its cap. Once you add this, what's above the cap can move here by itself, right away."
+    public static let sweepsStarted = "What's above your cap may already be on its way here. From now on, it goes here by itself."
     public static let testFirst = "Send a few dollars here first, and make sure they arrive before trusting it with more."
 
     public static func deviceSubtitle(_ device: AddSavingsModel.Device) -> String {
@@ -289,7 +306,7 @@ public enum AddSavingsWording {
             case .ledger:
                 Page(title: "Does your Ledger show this?", body: "It should say Verify Base address, then show the address. Compare every group, then choose Confirm on your Ledger.", troubles: [
                     Trouble(when: "It doesn't match", then: "Stop. Choose Reject on your Ledger, press Cancel here, and don't send anything."),
-                    Trouble(when: "Your Ledger shows nothing", then: "Go back to your browser, and press Add to the Mac app again."),
+                    Trouble(when: "Your Ledger shows nothing", then: "Go back to your browser, and press Open the Mac app again. That shows it on your Ledger again too."),
                     Trouble(when: "It just says Verify address", then: "That's an older Ethereum app. The address is the same."),
                 ])
             case .keystone:

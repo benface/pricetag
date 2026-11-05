@@ -31,6 +31,12 @@ import Testing
         // A payment request names the token's contract, which isn't anyone's wallet.
         #expect(ScannedAddress(text: "ethereum:\(address)/transfer?address=\(another)") == .somethingElse)
         #expect(ScannedAddress(text: "ethereum:\(address)?value=1") == .somethingElse)
+        // Naming the chain doesn't change what comes after it, and its contract isn't the one getting paid.
+        #expect(ScannedAddress(text: "ethereum:\(address)@8453/transfer?address=\(another)&uint256=1000000") == .somethingElse)
+        #expect(ScannedAddress(text: "ethereum:\(address)@8453?value=1") == .somethingElse)
+        #expect(ScannedAddress(text: "ethereum:\(address)@not-a-chain") == .somethingElse)
+        #expect(ScannedAddress(text: "ethereum:\(address)@") == .somethingElse)
+        #expect(ScannedAddress(text: "ethereum:pay-\(address)") == .somethingElse)
         #expect(ScannedAddress(text: "some words that are not an address") == .somethingElse)
         // A wrong checksum is a mistyped address.
         #expect(ScannedAddress(text: "0x52908400098527886E0F7030069857D2E4169Ee7") == .somethingElse)
@@ -202,6 +208,30 @@ import Testing
         #expect(flow.sweepsGoHere)
     }
 
+    @Test func theFirstWalletSaysItCanStartSweeps() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(100)]), withCold: false)
+        await rig.wallet.tick()
+        let flow = AddSavingsModel(wallet: rig.wallet)
+        flow.address = address
+        #expect(flow.wouldStartSweeps)
+        flow.matches = true
+        try flow.add()
+        #expect(flow.startedSweeps)
+        #expect(flow.sweepsGoHere)
+        #expect(!flow.wouldStartSweeps)
+    }
+
+    @Test func anEmptyWalletOrASecondOneStartsNothing() async throws {
+        let (empty, _) = await model()
+        empty.address = address
+        #expect(!empty.wouldStartSweeps)
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(100)]), withCold: true)
+        await rig.wallet.tick()
+        let second = AddSavingsModel(wallet: rig.wallet)
+        second.address = address
+        #expect(!second.wouldStartSweeps)
+    }
+
     // MARK: Wording
 
     @Test func everyPageSaysItPlainly() {
@@ -224,6 +254,8 @@ import Testing
         #expect(AddSavingsWording.page(.ledgerApp, device: .ledger).body.contains("Ethereum"))
         #expect(AddSavingsWording.page(.ledgerApp, device: .ledger).troubles[0].then.contains("My Ledger"))
         #expect(AddSavingsWording.page(.check, device: .ledger).body.contains("Verify Base address"))
+        // The button that's really on the page by then.
+        #expect(AddSavingsWording.page(.check, device: .ledger).troubles.contains { $0.then.contains("Open the Mac app again") })
         #expect(AddSavingsWording.page(.keystoneReceive, device: .keystone).body.contains("Receive ETH"))
         // Neither device has a receive screen "for Base".
         #expect(!AddSavingsWording.page(.keystoneReceive, device: .keystone).body.contains("for Base"))

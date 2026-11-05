@@ -159,6 +159,11 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
     checkOnDevice()
   }
 
+  /** A device only shows it once, so opening the Mac app again means asking again. Unless it's still showing, since it does one thing at a time. */
+  const handOffAgain = () => {
+    if (!busy) checkOnDevice()
+  }
+
   const confirmChecked = () => {
     if (!signer || !account) return
     setChecked(rememberCheckedAccount({ address: account.address, path: account.path, ...(account.deviceId ? { deviceId: account.deviceId } : {}), deviceName: signer.name, kind: signer.kind }))
@@ -312,7 +317,7 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
             {handingOff ? (
               <>
                 {lookOnDevice ? <p className="small">{LOOK_HANDED_OFF}</p> : !busy && !problem ? <p className="notice">{LEDGER_HANDED_OFF}</p> : null}
-                <p className="muted small">If nothing opened, your browser may have asked first.</p>
+                <p className="muted small">If nothing opened, your browser may have asked first. {signer?.kind === "ledger" ? "Opening it again shows the address on your Ledger again too." : ""}</p>
               </>
             ) : (
               <>
@@ -328,7 +333,7 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
                 Back
               </button>
               {handingOff ? (
-                <a className="button-link" href={toMac}>
+                <a className="button-link" href={toMac} onClick={handOffAgain}>
                   Open the Mac app again
                 </a>
               ) : (

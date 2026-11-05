@@ -25,6 +25,10 @@ if (params.get("many")) accounts.push({ address: "0x2c4e6a8b0d1f3a5c7e9b1d3f5a7c
 const scene = params.get("scene") ?? "route"
 const signer = mockSigner(accounts, { check: params.get("look") ? "look-on-device" : "shown-on-device" })
 
+// For checking what the device was asked, and `&holds=1` is a device that keeps showing an address until someone answers.
+Object.assign(window, { deviceHarnessShown: signer.shown })
+if (params.get("holds")) signer.showAddress = (account) => (signer.shown.push(account.address), new Promise(() => {}))
+
 const connectors: Connectors = {
   canUseUsb: () => params.get("usb") !== "no",
   preloadLedger: () => {},
