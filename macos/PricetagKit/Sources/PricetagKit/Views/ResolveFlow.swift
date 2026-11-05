@@ -176,7 +176,7 @@ public struct ResolveFlow: View {
             DragGesture(minimumDistance: 12)
                 .onChanged { drag = $0.translation }
                 .onEnded { value in
-                    defer { withAnimation(.snappy) { drag = .zero } }
+                    defer { withAnimation(reduceMotion ? nil : Motion.state) { drag = .zero } }
                     if value.translation.width > Self.swipeDistance { model.answer(.mine) }
                     else if value.translation.width < -Self.swipeDistance { model.answer(.someoneElse) }
                     else if value.translation.height < -Self.swipeDistance { model.answer(.myExchange) }
@@ -185,7 +185,7 @@ public struct ResolveFlow: View {
         )
         .id(question.id)
         .transition(reduceMotion ? .opacity : .asymmetric(insertion: .scale(scale: 0.96).combined(with: .opacity), removal: .opacity))
-        .animation(.snappy, value: question.id)
+        .motion(Motion.state, value: question.id)
     }
 
     @ViewBuilder

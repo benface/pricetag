@@ -47,6 +47,7 @@ struct ConfirmationView<Footer: View>: View {
 
     @Environment(\.confirmationHeightLimit) private var heightLimit
     @Environment(\.isBelowTitleBar) private var isBelowTitleBar
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showsDetails = false
     @State private var pinnedHeight: CGFloat = 0
     @State private var hasMoreBelow = false
@@ -189,7 +190,7 @@ struct ConfirmationView<Footer: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             // Its own button and not a DisclosureGroup, whose focus ring gets cut off at the edge of a window this narrow.
             Button {
-                withAnimation(.snappy) { showsDetails.toggle() }
+                withAnimation(reduceMotion ? nil : Motion.state) { showsDetails.toggle() }
             } label: {
                 Label("Details", systemImage: "chevron.right")
                     .labelStyle(DetailsLabelStyle(isOpen: showsDetails))
@@ -341,7 +342,7 @@ struct TouchIDFooter: View {
             try? await Task.sleep(for: SiteApprovalView.armingDelay)
             isArmed = true
         }
-        .animation(.snappy, value: gate.phase)
+        .motion(Motion.state, value: gate.phase)
     }
 
     @ViewBuilder
