@@ -278,7 +278,7 @@ public struct TaxReportView: View {
         Section {
             if report.preview.isEmpty {
                 Text(report.year.map { "Nothing to report in \(String($0))." } ?? "Nothing to report.")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
             ForEach(Array(report.preview.enumerated()), id: \.offset) { _, row in
                 previewRow(row, currency: report.currency)
@@ -296,6 +296,8 @@ public struct TaxReportView: View {
 
     private func previewRow(_ row: TaxPreviewRow, currency: CurrencyCode) -> some View {
         let amount = "\(Format.amount(row.amount, decimals: row.decimals)) \(row.asset)"
+        let title = row.type == "Network fee" ? "Network fee, \(amount)" : "\(row.type) \(amount)"
+        let date = parseTimestamp(row.timestamp).map { Format.utcDateTime($0) }
         return LabeledContent {
             if let gain = row.gainMicros {
                 Text(Format.signedMoney(gain, currency))
@@ -305,11 +307,13 @@ public struct TaxReportView: View {
                 WarningText("Unknown gain")
             }
         } label: {
-            Text(row.type == "Network fee" ? "Network fee, \(amount)" : "\(row.type) \(amount)")
-            if let date = parseTimestamp(row.timestamp) {
-                Text(Format.utcDateTime(date))
+            Text(title)
+            if let date {
+                Text(date)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Spoken.number([title, date, "gain"].compactMap(\.self).joined(separator: ", "), row.gainMicros.map { Format.signedMoney($0, currency) }))
     }
 }
 
