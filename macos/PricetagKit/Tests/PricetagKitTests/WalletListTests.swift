@@ -21,6 +21,17 @@ struct WalletListTests {
         return (PortfolioStore(defaults: defaults, makeSource: { _ in ScriptedSource(Array(repeating: .failure(.unreachable), count: 50)) }), defaults)
     }
 
+    @Test func pickableLeavesOutTheDemo() {
+        let list = WalletList(spending: NamedWallet(address: a, name: "Spending Money"), savings: [NamedWallet(address: b, name: "Savings")], linked: [c, "0x00000000000000000000000000000000000de300"], saved: [SavedWallet(address: d, name: "Treasury", lastSeen: date(1))], current: WalletAddress.demo)
+        #expect(list.pickable.map(\.address) == [a, b, c, d])
+    }
+
+    @Test func aPickSaysWhatKindItIsWithNoSectionToSaySo() {
+        #expect(WalletEntry(address: a, name: "Treasury", kind: .watching).pickDetail == "Watching · \(Format.shortHash(a))")
+        #expect(WalletEntry(address: a, name: nil, kind: .watching).pickDetail == "Watching")
+        #expect(WalletEntry(address: a, name: "Savings", kind: .savings).pickDetail == Format.shortHash(a))
+    }
+
     @Test func eachAddressAppearsOnceAsTheMostItIs() {
         let list = WalletList(
             spending: NamedWallet(address: a, name: "Spending Money"),

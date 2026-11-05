@@ -748,8 +748,19 @@ public enum WalletAddress {
     /// The one address in whatever was pasted, which is often more than the address: `base:0x…`, or a link to an explorer's page.
     /// Nil if there's none, or several to choose between. A transaction hash is longer, so it never counts.
     public static func find(in text: String) -> String? {
-        let found = Set(text.matches(of: /(?:^|[^0-9a-zA-Z])(0x[0-9a-fA-F]{40})(?=$|[^0-9a-zA-Z])/).map { $0.output.1.lowercased() })
+        pasted(in: text)?.lowercased()
+    }
+
+    /// The same, with its case as it was, because mixed case is a checksum that can still be checked.
+    public static func pasted(in text: String) -> String? {
+        let found = all(in: text)
         return found.count == 1 ? found.first : nil
+    }
+
+    /// Every different address in the text, in the order they came. The same one twice only counts once, whatever its case.
+    public static func all(in text: String) -> [String] {
+        var seen = Set<String>()
+        return text.matches(of: /(?:^|[^0-9a-zA-Z])(0x[0-9a-fA-F]{40})(?=$|[^0-9a-zA-Z])/).map { String($0.output.1) }.filter { seen.insert($0.lowercased()).inserted }
     }
 
     /// Too long to still be on its way to being an address, so there's no point waiting to say so.

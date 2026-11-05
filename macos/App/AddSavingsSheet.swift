@@ -25,16 +25,19 @@ struct AddColdWalletSheet: View {
     let mac: AddSavingsMac
     let showsTrouble: Bool
     var onSendTest: (EthereumAddress) -> Void = { _ in }
+    /// Every saved wallet. The paste step offers the ones that could become savings.
+    var wallets: [WalletEntry] = []
     @State private var model: AddSavingsModel
     @Environment(\.dismiss) private var dismiss
 
-    init(wallet: HotWallet, navigation: Navigation?, server: URL, onSendTest: @escaping (EthereumAddress) -> Void) {
-        self.init(model: AddSavingsModel(wallet: wallet), navigation: navigation, server: server, mac: .real)
+    init(wallet: HotWallet, wallets: [WalletEntry], navigation: Navigation?, server: URL, onSendTest: @escaping (EthereumAddress) -> Void) {
+        self.init(model: AddSavingsModel(wallet: wallet), navigation: navigation, server: server, mac: .real, wallets: wallets)
         self.onSendTest = onSendTest
     }
 
-    init(model: AddSavingsModel, navigation: Navigation? = nil, server: URL, mac: AddSavingsMac, showsTrouble: Bool = false) {
+    init(model: AddSavingsModel, navigation: Navigation? = nil, server: URL, mac: AddSavingsMac, showsTrouble: Bool = false, wallets: [WalletEntry] = []) {
         _model = State(initialValue: model)
+        self.wallets = wallets
         self.navigation = navigation
         self.server = server
         self.mac = mac
@@ -72,7 +75,7 @@ struct AddColdWalletSheet: View {
         case .keystoneUnlock: StepPage(page: page, picture: .keystone(showsCode: false), model: model, showsTrouble: showsTrouble)
         case .keystoneReceive: StepPage(page: page, picture: .keystone(showsCode: true), model: model, showsTrouble: showsTrouble)
         case .keystoneScan: KeystoneScanStep(page: page, model: model, scanner: mac.scanner, showsTrouble: showsTrouble)
-        case .paste: PasteStep(page: page, model: model)
+        case .paste: PasteStep(page: page, model: model, wallets: wallets.filter(model.offers))
         case .check: CheckStep(page: page, model: model, showsTrouble: showsTrouble)
         case .finished: FinishedStep(model: model)
         }
@@ -412,15 +415,12 @@ private struct KeystoneScanStep: View {
 private struct PasteStep: View {
     let page: AddSavingsWording.Page
     @Bindable var model: AddSavingsModel
+    let wallets: [WalletEntry]
 
     var body: some View {
         StepPage(page: page, picture: model.device?.picture, model: model) {
-            TextField("Address", text: $model.address, prompt: Text("0x…"))
-                .font(.body.monospaced())
-                .autocorrectionDisabled()
-            if model.parsed == nil, !model.address.isEmpty {
-                WarningText("That isn't a valid address.").font(.callout)
-            }
+            // Picking only fills this in. The next page still has the user check it against the device, whatever it's called here.
+            AddressField(prompt: "0x…", text: $model.address, wallets: wallets, read: AddressText.read)
         }
     }
 }

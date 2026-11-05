@@ -73,6 +73,38 @@ import Testing
         #expect(second.otherWallets.count == 1)
     }
 
+    @Test func addsAndRemovesWalletsOneAtATime() {
+        let a = "0x\(String(repeating: "a", count: 40))"
+        let b = "0x\(String(repeating: "b", count: 40))"
+        let model = model()
+        model.addOtherWallet(a.uppercased().replacingOccurrences(of: "0X", with: "0x"))
+        model.addOtherWallet(b)
+        model.addOtherWallet(a)
+        #expect(model.otherWallets == [a, b])
+        model.removeOtherWallet(a)
+        #expect(model.otherWallets == [b])
+    }
+
+    @Test func aTypoCanBeRemovedOnItsOwn() {
+        let a = "0x\(String(repeating: "a", count: 40))"
+        let model = model()
+        model.setOtherWalletsText("0xnope\n\(a)")
+        model.removeOtherWallet("0xnope")
+        #expect(model.otherWallets == [a])
+        #expect(model.badWallet(for: a) == nil)
+    }
+
+    @Test func offersOnlyWhatWouldChangeTheReport() {
+        let showing = "0x\(String(repeating: "a", count: 40))"
+        let linked = "0x\(String(repeating: "b", count: 40))"
+        let added = "0x\(String(repeating: "c", count: 40))"
+        let other = "0x\(String(repeating: "d", count: 40))"
+        let model = model()
+        model.addOtherWallet(added)
+        let offered = [showing, linked, added, other].filter { model.offers(WalletEntry(address: $0, name: nil, kind: .watching), showing: showing, linked: [linked]) }
+        #expect(offered == [other])
+    }
+
     @Test func aBadWalletAsksTheServerNothing() {
         let model = model()
         model.setOtherWalletsText("0xnope")

@@ -114,6 +114,13 @@ public struct WalletEntry: Identifiable, Equatable, Sendable {
         return [kindText, addressText].compactMap(\.self).joined(separator: " · ")
     }
 
+    /// The same in a list with no sections to say what kind it is.
+    public var pickDetail: String {
+        let kindText = kindLabel == title ? nil : kindLabel
+        let addressText = shortAddress == title ? nil : shortAddress
+        return [kindText, addressText].compactMap(\.self).joined(separator: " · ")
+    }
+
     public var canRename: Bool { kind != .spendingMoney && kind != .demo }
     /// Spending money holds a key and a savings wallet takes sweeps, so neither is only an entry in a list.
     public var canRemove: Bool { (kind == .yours && !isNewKey) || kind == .watching }
@@ -161,6 +168,11 @@ public struct WalletList: Equatable, Sendable {
     }
 
     public var all: [WalletEntry] { yours + watching + recent + (demo.map { [$0] } ?? []) }
+
+    /// What an address field can offer, before a flow takes out what it doesn't permit. The demo has no real address, and its wallets aren't anyone's.
+    public var pickable: [WalletEntry] {
+        (yours + watching + recent).filter { !WalletAddress.isDemo($0.address) }
+    }
 
     public func entry(for address: String?) -> WalletEntry? {
         address.flatMap { address in all.first { $0.address == address } }

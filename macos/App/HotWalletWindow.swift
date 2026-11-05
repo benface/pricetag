@@ -162,7 +162,7 @@ struct HotWalletDetails<Overview: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .sheet(isPresented: $isAddingCold, onDismiss: { if testingSavings != nil { isSending = true } }) {
-            AddColdWalletSheet(wallet: wallet, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
+            AddColdWalletSheet(wallet: wallet, wallets: store.walletList(hotWallet: wallet).pickable, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
         }
         .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet, server: store.serverURL) }
         .onChange(of: navigation.addingSavings, initial: true) { _, link in
@@ -189,7 +189,7 @@ struct HotWalletDetails<Overview: View>: View {
                 let model = SendModel(wallet: wallet, store: store)
                 model.addressText = testingSavings?.checksummed ?? ""
                 return model
-            }())
+            }(), wallets: store.walletList(hotWallet: wallet).pickable)
         }
         .sheet(isPresented: $isSweeping) { SweepSheet(wallet: wallet) }
     }
