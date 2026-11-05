@@ -38,6 +38,7 @@ struct HotWalletFixture {
     static let connectedToSite = HotWalletFixture(isConnectedToSite: true)
     static let noSavings = HotWalletFixture(hasSavings: false, balances: ["ETH": 1_000_000_000_000_000, "USDC": 10_000_000])
     static let noPrice = HotWalletFixture(balances: ["ETH": 5_000_000_000_000_000, "USDC": 20_000_000, "AERO": 12_000_000_000_000_000_000])
+    static let nearCap = HotWalletFixture(balances: ["ETH": 5_000_000_000_000_000, "USDC": 36_000_000])
     static let overCap = HotWalletFixture(balances: ["ETH": 10_000_000_000_000_000, "USDC": 80_000_000])
     static let overCapNoSavings = HotWalletFixture(hasSavings: false, balances: ["ETH": 10_000_000_000_000_000, "USDC": 80_000_000])
     static let keyMissing = HotWalletFixture(keys: .isMissing)
