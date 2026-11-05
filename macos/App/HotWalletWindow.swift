@@ -9,6 +9,7 @@ struct HotWalletWindow: View {
     let store: PortfolioStore
     let siteBridge: SiteBridge
     let navigation: Navigation
+    let purchases: PurchaseTracker
 
     var body: some View {
         Group {
@@ -29,7 +30,7 @@ struct HotWalletWindow: View {
                 if wallet.address == nil {
                     HotWalletSetup(wallet: wallet, store: store)
                 } else {
-                    HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation)
+                    HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases)
                 }
             }
         }
@@ -101,6 +102,7 @@ private struct HotWalletDetails: View {
     let store: PortfolioStore
     let siteBridge: SiteBridge
     let navigation: Navigation
+    let purchases: PurchaseTracker
     @State private var isAddingCold = false
     @State private var isToppingUp = false
     @State private var isSending = false
@@ -124,6 +126,7 @@ private struct HotWalletDetails: View {
             }
             balance
             actions
+            if !shownPurchases.isEmpty { bought }
             holdings
             if !wallet.unlisted.isEmpty { untouched }
             savings
@@ -143,6 +146,11 @@ private struct HotWalletDetails: View {
             guard wants else { return }
             navigation.wantsTopUp = false
             if wallet.canTopUp { isToppingUp = true }
+        }
+        .onChange(of: navigation.wantsAddSavings, initial: true) { _, wants in
+            guard wants else { return }
+            navigation.wantsAddSavings = false
+            isAddingCold = true
         }
         .onChange(of: navigation.wantsSend, initial: true) { _, wants in
             guard wants else { return }
@@ -247,6 +255,21 @@ private struct HotWalletDetails: View {
     private var gaugeValue: Double {
         guard let value = wallet.plan?.valueUsdMicros else { return 0 }
         return min(1, Double(value) / Double(wallet.settings.capUsdMicros))
+    }
+
+    private var shownPurchases: [TrackedPurchase] {
+        address.map { purchases.purchases(of: $0.lowercased) } ?? []
+    }
+
+    private var bought: some View {
+        Section("Purchases") {
+            if let problem = purchases.problem {
+                WarningText(problem).font(.callout)
+            }
+            ForEach(shownPurchases) { purchase in
+                PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), usd: { wallet.usd(dollars: $0) }) { purchases.dismiss(purchase) }
+            }
+        }
     }
 
     private var holdings: some View {
@@ -367,6 +390,7 @@ private struct HotWalletDetails: View {
             ViewThatFits(in: .horizontal) {
                 HStack {
                     send
+                    buy
                     topUp
                     sweep
                     Spacer()
@@ -375,6 +399,7 @@ private struct HotWalletDetails: View {
                 VStack(alignment: .leading) {
                     HStack {
                         send
+                        buy
                         topUp
                     }
                     HStack {
@@ -384,6 +409,7 @@ private struct HotWalletDetails: View {
                 }
                 VStack(alignment: .leading) {
                     send
+                    buy
                     topUp
                     sweep
                     replaceKey
@@ -412,6 +438,11 @@ private struct HotWalletDetails: View {
         Button("Send…") { isSending = true }
             .buttonStyle(.borderedProminent)
             .disabled(!wallet.canSend)
+    }
+
+    private var buy: some View {
+        Button("Buy…") { navigation.isBuying = true }
+            .disabled(!wallet.canTopUp)
     }
 
     private var topUp: some View {

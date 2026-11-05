@@ -3,15 +3,19 @@ import SwiftUI
 /// Where a row's price comes from, the datasets behind it, and a check of its block that says plainly what it doesn't cover.
 struct ProofPanel: View {
     @State private var model: ProofModel
+    /// Where its cost comes from, when it isn't the chain. That's on this device, so the server's proof can't say.
+    private let costNote: String?
 
-    init(leg: String, address: String, store: PortfolioStore) {
+    init(leg: String, address: String, store: PortfolioStore, costNote: String? = nil) {
+        self.costNote = costNote
         _model = State(initialValue: ProofModel(
             fetch: { try await store.proof(leg: leg, address: address) },
             verify: { try await store.verification(leg: leg, address: address) }
         ))
     }
 
-    init(model: ProofModel) {
+    init(model: ProofModel, costNote: String? = nil) {
+        self.costNote = costNote
         _model = State(initialValue: model)
     }
 
@@ -43,6 +47,11 @@ struct ProofPanel: View {
                             Label(link.title, systemImage: "arrow.up.right.square")
                         }
                     }
+                }
+            }
+            if let costNote {
+                section("Where its cost comes from") {
+                    lines([costNote])
                 }
             }
             if !proof.datasets.isEmpty {
