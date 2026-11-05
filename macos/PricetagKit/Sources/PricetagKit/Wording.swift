@@ -203,6 +203,21 @@ public enum Wording {
         "Updating. These numbers are from \(lastUpdate)."
     }
 
+    /// A read with no numbers on screen yet, once it's gone on long enough to be worth saying.
+    public static func stillReading(seconds: Int) -> String {
+        "Reading this wallet, \(Format.elapsed(seconds: seconds)) so far. A wallet with a lot of history can take a few minutes the first time."
+    }
+
+    /// A read with numbers on screen, once it's gone on long enough to be worth saying.
+    public static func stillUpdating(seconds: Int, lastUpdate: String) -> String {
+        "Still updating, \(Format.elapsed(seconds: seconds)) so far. Until it's done, these numbers are from \(lastUpdate)."
+    }
+
+    /// Another read after a failure, once it's gone on long enough to be worth saying. Whatever's wrong still stands until it answers.
+    public static func tryingAgain(seconds: Int) -> String {
+        "Trying again, \(Format.elapsed(seconds: seconds)) so far."
+    }
+
     public static func stale(lastUpdate: String) -> String {
         "These numbers aren't updating. Last update: \(lastUpdate)."
     }
@@ -314,13 +329,16 @@ public enum Wording {
 
     public static let demo = "Demo data, not a real wallet."
     public static let pnlUnavailable = "PnL unavailable"
+    public static let valueUnavailable = "Value unavailable"
     public static let unknown = "Unknown"
     public static let noPrice = "No price"
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
     public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet. The first read can take a minute."
-    public static let readTooSlow = "The server is answering, but this wallet is taking too long to read."
-    public static let serverTooSlow = "The server took too long to answer."
+    /// A failed read never touches what's onchain, so this is true of every problem the feed has.
+    public static let moneyUnaffected = "Your money isn't affected."
+    public static let serverTooSlow = "The price service took too long to answer."
+    public static let cantReachServer = "Can't reach the price service. Your money isn't affected."
     /// What moving a wallet on the list changes. They're in the numbers right away, so it's said right away, next to the way back.
     public static let movedToYours = "Costs now follow money between this wallet and your others."
     public static let movedToWatching = "Costs no longer follow money from this wallet."

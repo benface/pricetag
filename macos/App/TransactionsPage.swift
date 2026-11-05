@@ -257,14 +257,16 @@ private struct TransactionsTable: View {
         }
         .contextMenu(forSelectionType: TransactionItem.ID.self) { ids in
             if let id = ids.first, let item = item(id) {
-                Button("Copy Transaction ID") { copy(item.txHash) }
+                // What the server hasn't read has no details to show yet.
+                TransactionActions(hash: item.txHash, onShow: item.isRead ? { target = .transaction(id) } : nil)
                 if let counterparty = item.counterparty {
-                    Button("Copy Address") { copy(counterparty) }
-                }
-                if let url = URL(string: "https://basescan.org/tx/\(item.txHash)") {
-                    Link("Open in Basescan", destination: url)
+                    Button("Copy Address") { Clipboard.copy(counterparty) }
                 }
             }
+        }
+        .onCopyCommand {
+            guard let hash = selection.flatMap(item)?.txHash else { return [] }
+            return [NSItemProvider(object: hash as NSString)]
         }
         .accessibilityLabel("Transactions")
     }
@@ -330,10 +332,5 @@ private struct TransactionsTable: View {
 
     private var dash: some View {
         Text("—").foregroundStyle(.tertiary)
-    }
-
-    private func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
     }
 }

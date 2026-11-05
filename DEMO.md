@@ -29,7 +29,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 
 About 5 minutes. **Before you start:**
 - The server has been running for at least 5 minutes, with the wallet already read once under each rule, so nothing's a cold read.
-- USD, Average cost, and the Market price rule.
+- USD, Average cost, and the Market price rule. The menu bar shows Value, the default: right-click it to check.
 - The Coinbase question is **unanswered**, and what you paid is on a sticky note.
 - The main window and Settings are arranged side by side.
 
@@ -70,7 +70,7 @@ WORK-452 rewrites the steps for whatever has merged by Thursday at 13:45.
 | **Thu by 9:30** | Withdraw **$40 of ETH from Coinbase** on Base. Write down the total you paid for both withdrawals, this one and Wednesday's | This is what makes WORK-424 visible, see below. Earlier is better: the chart's one-day change needs a known point from before the range starts, so this has to be at least 24 h before the demo |
 | **Once it shows in the app** | With the extension on `app.uniswap.org`, swap **$12 of ETH to cbBTC**, then **$12 of ETH to AERO**. Don't answer the Coinbase question | Costs that are really paid, and prices that move. Waiting avoids landing in the payout's block, which would leave costs unknown. Each row should show a dollar cost. If one says unknown, see below |
 | **Thu after 14:00** | In Settings, turn off **Sweep realized gains to savings**. Then swap **half the AERO to USDC** | Gives Realized a number, adds a transaction after the block switch, and won't sweep on stage. Sell into USDC rather than ETH, because ETH paid out through a contract is the hardest case |
-| **Fri morning** | **Undo Last Answer** if Coinbase was the last thing you answered. Otherwise Settings > **Forget All My Answers**, then re-enter any other answers | Puts steps 5 and 6 back on stage |
+| **Fri morning** | **Edit > Undo Answer** (⌘Z) if Coinbase was the last thing you answered. Otherwise Settings > **Forget All My Answers**, then re-enter any other answers | Puts steps 5 and 6 back on stage |
 
 **If a swap's cost says unknown, don't buy again.** A later purchase doesn't repair the earlier one, and answering Coinbase doesn't either. Click the row and read its reason, then:
 - **It says a contract's ETH couldn't be confirmed:** wait a few minutes, because this can clear by itself.
@@ -111,9 +111,9 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 | **Staging dataset behind** | The app says "Catching up", and the 8:00 health checks report it | A few seconds is fine: keep going, it's the honest behavior. If it's stuck, use the recording. Don't run `pnpm amp:start`: it starts with empty history, so this wallet would have none |
 | **Only the fork fails** | The rule switch or Compare errors | Stay on Market price and skip steps 7 and 8 |
 | **Admin token** expires Fri 12:46 | Only a write fails | Reads don't use it. The read token lasts until April 2027 (*checked*, not printed). So no `dataset/` merges after Thursday 18:00. A replacement or stopping the jobs after 12:46 needs a new token |
-| **Slow reads** | A cold read took 19–22 s, warm 3–4 s (*measured*). They may grow by Friday, and the app's query timeout is 60 s | Don't restart the server on stage, since a restart means a cold read. Read the wallet before you go on. The health checks measure this |
-| **Wifi** | Everything real stops, with "Couldn't read this wallet's data" | Phone hotspot, tested in rehearsal. If that fails, the demo wallet or the recording |
-| **Server on 8787 not running** | The app says the server's gone | In the repo: `pnpm start`, then wait for the first read. Keep it in its own terminal, not the one you'd close |
+| **Slow reads** | A cold read took 19–22 s, warm 3–4 s (*measured*). They may grow by Friday, and the app's query timeout is 60 s. A read past 5 s shows how long it's been going | Don't restart the server on stage, since a restart means a cold read. Read the wallet before you go on. The health checks measure this |
+| **Wifi** | Everything real stops, with "Prices Aren't Available Right Now" (the web app still says "Couldn't read this wallet's data") | Phone hotspot, tested in rehearsal. If that fails, the demo wallet or the recording |
+| **Server on 8787 not running** | The app says "The Price Service Isn't Running" | In the repo: `pnpm start`, then wait for the first read. Keep it in its own terminal, not the one you'd close |
 | **Ledger or Keystone misbehaves** | Anything off in [the checklist](HARDWARE-WALLETS.md#checklist-for-a-real-device) | Nothing in the main flow needs one. Fallback is a browser wallet like Rabby. Ledger needs Chrome, the Ethereum app open and Ledger Wallet closed. Leave devices off stage unless they pass twice |
 | **Everything's down** | | Open `http://localhost:8787/?address=demo`. The server still sent the page and its data with Amp unreachable (*measured*): 8 holdings and 13 chart points. Check it in a browser during rehearsal. Say it's demo data. It has no Verify or Compare. After WORK-426 it's web only |
 
@@ -130,7 +130,7 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 **Morning**
 - [ ] Read the 8:00 health check on this issue.
 - [ ] Fund and buy, as above.
-- [ ] Right after the buys, answer the Coinbase card. There should be no other question and PnL shouldn't say partial. If it does, read what it leaves out, and see above. Then **Undo Last Answer**.
+- [ ] Right after the buys, answer the Coinbase card. There should be no other question and PnL shouldn't say partial. If it does, read what it leaves out, and see above. Then **Edit > Undo Answer** (⌘Z).
 - [ ] Review WORK-426, then 431 and 432. Merging 426 starts WORK-449's test on real data, so read its results if they're in by 14:00.
 - [ ] Say on WORK-448 what time the demo is.
 - [ ] Make one small real purchase with **Buy…** (steps on WORK-462), and check its cost shows with no question.

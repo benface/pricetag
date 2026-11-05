@@ -169,6 +169,14 @@ public enum Format {
         return date.formatted(withYear ? style.year() : style)
     }
 
+    /// How long something's been going, to the second, for a count that ticks.
+    public static func elapsed(seconds: Int) -> String {
+        let seconds = max(0, seconds)
+        if seconds < 60 { return "\(seconds) s" }
+        if seconds < 3600 { return seconds % 60 == 0 ? "\(seconds / 60) min" : "\(seconds / 60) min \(seconds % 60) s" }
+        return "\(seconds / 3600) h \(seconds % 3600 / 60) min"
+    }
+
     public static func duration(ms: Int) -> String {
         let minutes = Int((Double(ms) / 60_000).rounded())
         if minutes < 120 { return "\(minutes) min" }
