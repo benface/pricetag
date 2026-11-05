@@ -215,6 +215,35 @@ describe("the cost of an incoming leg", () => {
       assert.equal(position(wallet(A, rows, { notes: [note] }), [wallet(STRANGER, rows)], linked).effects[0]?.leg.costLabel, "self-reported")
     })
 
+    describe("what a note can answer", () => {
+      const NOTE_TX = `0x${"ab".repeat(32)}`
+      const questionFrom = (moved: LegRow[], sender: string, answers: Book) => foldBook(wallet(A, moved), [], "average", answers).questions.find((q) => q.sender === sender)
+      const entered = (answers: Book, sender: string, micros: string, moved: LegRow[]) => enterExchangeCosts(answers, A, sender, questionFrom(moved, sender, answers)!.receipts, { USDC: usd(micros) })
+      const asked = book({ [COINBASE]: { kind: "my-exchange" } })
+
+      it("is one token's whole movement in one transaction, and the cost is the same once it's read back", () => {
+        const moved = send(10, NOTE_TX, COINBASE, A, 100n * E6)
+        assert.equal(questionFrom(moved, COINBASE, asked)?.noteAbout, NOTE_TX)
+        const answered = entered(asked, COINBASE, "90000000", moved)
+        const before = position(wallet(A, moved), [], answered).values.costMicros
+        const published = wallet(A, moved, { notes: [{ noteTx: "0xn", blockNum: 20, txHash: NOTE_TX, asset: "USDC", usdMicros: "90000000" }] })
+        assert.equal(before, "90000000")
+        assert.equal(position(published, [], answered).values.costMicros, before)
+        assert.equal(position(published, [], emptyBook()).values.costMicros, before)
+      })
+
+      it("isn't part of what arrived, because a note would replace the cost of the rest", () => {
+        const moved = [...send(10, NOTE_TX, COINBASE, A, 100n * E6), ...send(10, NOTE_TX, ACROSS, A, 200n * E6)]
+        assert.equal(questionFrom(moved, COINBASE, asked)?.receipts.length, 1)
+        assert.equal(questionFrom(moved, COINBASE, asked)?.noteAbout, null)
+      })
+
+      it("isn't several transfers", () => {
+        const moved = [...send(10, NOTE_TX, COINBASE, A, 100n * E6), ...send(11, `0x${"cd".repeat(32)}`, COINBASE, A, 200n * E6)]
+        assert.equal(questionFrom(moved, COINBASE, asked)?.noteAbout, null)
+      })
+    })
+
     it("reads a note, and refuses anything else", () => {
       const hash = `0x${"ab".repeat(32)}`
       assert.deepEqual(parseNote(encodeNote(hash, "USDC", "80000000")), { txHash: hash, asset: "USDC", usdMicros: "80000000" })

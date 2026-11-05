@@ -8,10 +8,6 @@ import KeyVault
 nonisolated enum HotWalletDebug {
     private static let service = "com.benface.pricetag.hot-wallet.self-test"
 
-    static let opensWindow = CommandLine.arguments.contains("--open-spending-money")
-
-    static let sheet = value(after: "--sheet")
-
     private static func value(after flag: String) -> String? {
         CommandLine.arguments.firstIndex(of: flag).flatMap { CommandLine.arguments.indices.contains($0 + 1) ? CommandLine.arguments[$0 + 1] : nil }
     }

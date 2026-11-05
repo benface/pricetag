@@ -50,6 +50,26 @@ public enum HotWalletWording {
 
     public static let rotationCantCheck = "Everything this app tracks has moved, but it can't check the old key for other tokens right now. It keeps the old key until it can, or until you choose to delete it."
 
+    public static let notEnoughToSend = "That's more than this wallet holds."
+    public static func keptForGas(_ reserve: UInt128) -> String {
+        "That would use the \(Format.amount(String(reserve), decimals: 18)) ETH this wallet keeps for gas."
+    }
+
+    public static let noGasToSend = "This wallet doesn't have enough ETH to pay the network fee."
+    public static let sendingToItself = "That's this wallet."
+    public static let sendingToARetiredKey = "That's an old key from this Mac, whose private key is gone. Nothing could ever move what's sent there."
+    public static let sendingToNobody = "Nobody can use that address. What's sent there is gone."
+    public static let sendingToAToken = "That's a token's contract, not a wallet. What's sent there is usually gone for good."
+    public static let lastOneStillShowingUp = "The last transaction is still showing up. Try again in a moment."
+    public static let lastOneOnItsWay = "The last transaction is still on its way. Try again in a moment."
+    public static let changedWhileWaiting = "This wallet changed while that was waiting, so nothing was signed."
+
+    public static func failedOnchain(_ record: SignedRecord) -> String {
+        record.reason == .note
+            ? "Publishing the cost of \(record.symbol) failed onchain. Nothing was published, but its gas was spent."
+            : "Sending \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
+    }
+
     public static func alarm(_ alarm: StolenKeyAlarm) -> String {
         alarm.findings.map {
             switch $0 {
@@ -61,5 +81,5 @@ public enum HotWalletWording {
     }
 
     public static let alarmHeadline = "This wallet's key may be stolen"
-    public static let alarmAdvice = "Top-ups are stopped. Move what's left and replace the key now. Anything sent here can be taken."
+    public static let alarmAdvice = "Top-ups and sends are stopped. Move what's left and replace the key now. Anything sent here can be taken."
 }

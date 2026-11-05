@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import type { LegPart, PricedLeg } from "@pricetag/sdk/core"
-import type { Query } from "@pricetag/sdk/internal"
-import { createDepositReader, readBlock } from "../server/block.ts"
+import { ETH_ADDRESS, PRICE_FEEDS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, settleUnwraps, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { hexOf, type Query } from "@pricetag/sdk/internal"
+import { createDepositReader, readBlock, type BlockData } from "../server/block.ts"
 import { createManifestReader, createProofs, proofOf, verificationOf } from "../server/proof.ts"
-import { checkHeader, checkReceipts, checkTransactions, encodeTransaction, keccak, rlp, trieRoot, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "../server/verify.ts"
+import { ANSWER_UPDATED_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC } from "../server/raw.ts"
+import { DEPOSIT_TX_TYPE, checkHeader, checkReceipts, checkTransactions, encodeReceipt, encodeTransaction, headerHash, keccak, rlp, trieRoot, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "../server/verify.ts"
 
 /** Real rows from Amp's Base dataset: a whole block, a current header, and one transaction of each kind. */
 const FIXTURES = JSON.parse(readFileSync(new URL("./support/base-blocks.json", import.meta.url), "utf8")) as {
@@ -179,6 +180,23 @@ const legOf = (changes: Partial<PricedLeg>): PricedLeg => ({
 })
 
 const activity = (leg: PricedLeg, legs: PricedLeg[] = []) => verificationOf(leg, legs, { block, txs, logs: [...logs, transferLog] }, deposits).checks.at(-1)!
+
+describe("a block from after the 200 ms upgrade", () => {
+  // A real Base Sepolia block, read through Amp. Every block now has a second deposit at index 1, setting its milliseconds.
+  const fast = JSON.parse(readFileSync(new URL("./support/base-sepolia-200ms-block.json", import.meta.url), "utf8")) as { block: BlockData; deposits: Record<string, DepositDetails> }
+  const { block: fastBlock, txs: fastTxs, logs: fastLogs } = fast.block
+
+  it("has the second deposit, and passes every check", () => {
+    assert.deepEqual(fastTxs.slice(0, 2).map((tx) => [tx.type, tx.to]), [[DEPOSIT_TX_TYPE, "4200000000000000000000000000000000000015"], [DEPOSIT_TX_TYPE, "4200000000000000000000000000000000000030"]])
+    assert.deepEqual(checkHeader(fastBlock), { status: "passed" })
+    assert.deepEqual(checkTransactions(fastBlock, fastTxs, new Map(Object.entries(fast.deposits))), { status: "passed" })
+    assert.deepEqual(checkReceipts(fastBlock, fastTxs, fastLogs), { status: "passed" })
+  })
+
+  it("won't pass with the second deposit missing", () => {
+    assert.equal(checkTransactions(fastBlock, fastTxs.filter((tx) => tx.tx_index !== 1), new Map(Object.entries(fast.deposits))).status, "failed")
+  })
+})
 
 describe("a leg against its checked block", () => {
   it("passes the whole check and says so", () => {
@@ -357,6 +375,206 @@ describe("what the proof says", () => {
     const verification = verificationOf(leg, [], data, deposits)
     const words = [...proof.source, ...proof.movements, ...proof.scope, ...proof.links.map((l) => l.title), verification.summary, ...verification.checks.flatMap((c) => [c.title, c.detail])].join(" ")
     assert.doesNotMatch(words, /\b(oracle|legs?|FIFO|Merkle|RLP|trie)\b/i)
+  })
+})
+
+describe("ETH a wallet received from unwrapping", () => {
+  const E18 = 10n ** 18n
+  const CBBTC = "cbb7c0000ab88b473b1f5afd9ef808440eed33bf"
+  const WETH = hexOf(WETH_ADDRESS)
+  const blockNum = Number(block.block_num)
+  const txHash = `0x${user.tx_hash}`
+  const ANSWER = 2420n * 10n ** 8n
+  const SOLD = 2884455n
+  const feed = PRICE_FEEDS.find(({ name }) => name === "eth")!
+  const references = [{ blockNum, ethUsd: ANSWER.toString(), usdcUsd: "100000000" }]
+  const word = (amount: bigint) => amount.toString(16).padStart(64, "0")
+  const me = (user.from as string).padStart(64, "0")
+  const pool = BOB.padStart(64, "0")
+
+  /** The fixture block with these logs after its own, and its summaries rebuilt around them, so only what's said about them can fail. */
+  function withLogs(added: LogRow[]) {
+    const logsOf = (tx: TxRow) => [...logs, ...added].filter((log) => log.tx_index === tx.tx_index)
+    const receipt_root = trieRoot(txs.map((tx, index) => [rlp(index === 0 ? Buffer.alloc(0) : Buffer.from([index])), encodeReceipt(tx, logsOf(tx))] as const))
+    const rebuilt = { ...block, receipt_root }
+    return { block: { ...rebuilt, hash: headerHash(rebuilt) }, txs, logs: [...logs, ...added] }
+  }
+
+  /** The same real path a wallet takes: a sale of cbBTC, rows from its logs, settled against this balance change, and then the block they're from. */
+  function sale({ withdrawn, received, wethBack = 0n }: { withdrawn: bigint[]; received: bigint | null; wethBack?: bigint }) {
+    const log = (log_index: number, address: string, topics: string[], amount: bigint): LogRow => ({ tx_index: user.tx_index, log_index, address, topics, data: word(amount) })
+    const row = (log_index: number, token: string, side: LegRow["side"], amount: bigint, kind: LegRow["kind"]): LegRow => ({ block_num: blockNum, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: txHash, tx_index: user.tx_index, log_index, token, account, side, amount: amount.toString(), kind })
+    const first = logs.length
+    const withdrawals = withdrawn.map((amount, i) => log(first + 2 + i, WETH, [WITHDRAWAL_TOPIC, pool], amount))
+    const updateIndex = first + 2 + withdrawn.length
+    const added = [
+      log(first, CBBTC, [TRANSFER_TOPIC, me, pool], SOLD),
+      log(first + 1, WETH, [TRANSFER_TOPIC, pool, me], wethBack),
+      ...withdrawals,
+      log(updateIndex, hexOf(feed.aggregators[0]!), [ANSWER_UPDATED_TOPIC, word(ANSWER), word(1n)], 0n),
+    ]
+    const rows = [
+      row(0, ETH_ADDRESS, "debit", paidForGas, "gas"),
+      row(first, `0x${CBBTC}`, "debit", SOLD, "erc20"),
+      ...(wethBack > 0n ? [row(first + 1, WETH_ADDRESS, "credit", wethBack, "erc20")] : []),
+      ...withdrawals.map(({ log_index }, i) => row(log_index, ETH_ADDRESS, "credit", withdrawn[i]!, "unwrap")),
+    ]
+    const start = 5n * E18
+    const ethBalances = new Map(received === null ? [] : [[blockNum - 1, start.toString()], [blockNum, (start - paidForGas + received).toString()]])
+    const settled = settleUnwraps({ rows, priced: derivePricedRows(rows, references), references, ethBalances, feeUnknownTxs: [], gasUnknownBlocks: [] })
+    const legs = buildPricedLegs({ account, rows: settled.rows, references, priced: settled.priced })
+    const read = withLogs(added)
+    const update = { block_num: blockNum, tx_hash: txHash, log_index: updateIndex, answer: ANSWER.toString() }
+    const check = (leg: PricedLeg, data: BlockData = read) => verificationOf(leg, legs, data, deposits, { behind: { feed, update }, read: { data, deposits } })
+    const proof = (leg: PricedLeg) => proofOf(leg, legs, "USD", [], null, { feed, update })
+    return { legs, read, added, check, proof, eth: legs.find((leg) => leg.asset === "ETH" && leg.kind !== "gas"), cbBtc: legs.find((leg) => leg.asset === "cbBTC")!, gas: legs.find((leg) => leg.kind === "gas")! }
+  }
+  const statuses = (verification: ReturnType<typeof verificationOf>) => verification.checks.map((check) => check.status)
+  const ALL_PASS = ["passed", "passed", "passed", "passed", "passed"]
+
+  describe("when less than the withdrawal arrived", () => {
+    const { eth, cbBtc, gas, check, proof } = sale({ withdrawn: [E18], received: (9n * E18) / 10n })
+
+    it("keeps the settlement's numbers", () => {
+      assert.equal(eth!.delta, ((9n * E18) / 10n).toString())
+      assert.equal(eth!.unsettledCredit, undefined)
+      assert.equal(cbBtc.priceSource, "swap")
+    })
+
+    it("passes on both sides of the exchange, with the price checked from what arrived", () => {
+      for (const leg of [eth!, cbBtc]) {
+        const verification = check(leg)
+        assert.deepEqual(statuses(verification), ALL_PASS, verification.checks.map((c) => c.detail).join(" | "))
+      }
+      assert.match(check(cbBtc).checks.at(-1)!.detail, /works out to the price shown here/)
+    })
+
+    it("says which amount came from the log and which from the balance", () => {
+      for (const leg of [eth!, cbBtc]) {
+        const { movements } = proof(leg)
+        assert.ok(movements.includes("Log #5: 1 ETH unwrapped"), movements.join(" | "))
+        assert.ok(movements.some((line) => /^ETH received: 0\.9 ETH, worked out from this wallet's balance/.test(line)), movements.join(" | "))
+        assert.ok(!movements.some((line) => /Log #\d+: 0\.9 ETH/.test(line)), movements.join(" | "))
+      }
+    })
+
+    it("doesn't call what arrived checked, or say all the amounts are covered", () => {
+      for (const leg of [eth!, cbBtc]) {
+        const scope = proof(leg).scope.join(" ")
+        assert.match(scope, /That 0\.9 ETH reached this wallet comes from its balance before and after this block, which this check doesn't read/)
+        assert.match(scope, /It covers (this price, the transaction and )?what the logs record/)
+        assert.doesNotMatch(scope, /the amounts/)
+        assert.match(check(leg).checks[3]!.detail, /That 0\.9 ETH reached this wallet comes from its balance/)
+      }
+      assert.match(proof(cbBtc).scope.join(" "), /This price is worked out using that amount/)
+    })
+
+    it("leaves the fee out of it", () => {
+      assert.equal(gas.settledCredit, undefined)
+      assert.doesNotMatch(proof(gas).scope.join(" "), /unwrapped/)
+      assert.ok(!proof(gas).movements.some((line) => /unwrapped|ETH received/.test(line)))
+    })
+  })
+
+  it("says the same of a credit the balance confirmed in full, which a log alone couldn't show", () => {
+    const { eth, cbBtc, check, proof } = sale({ withdrawn: [E18], received: E18 })
+    for (const leg of [eth!, cbBtc]) {
+      assert.deepEqual(statuses(check(leg)), ALL_PASS)
+      assert.deepEqual(proof(leg).movements.filter((line) => /unwrapped|ETH received/.test(line)), ["Log #5: 1 ETH unwrapped", "ETH received: 1 ETH, worked out from this wallet's balance before and after this block"])
+      assert.match(proof(leg).scope.join(" "), /That 1 ETH reached this wallet comes from its balance/)
+    }
+  })
+
+  it("lists every withdrawal combined into one credit, and checks each one", () => {
+    const { eth, cbBtc, read, added, check, proof } = sale({ withdrawn: [(6n * E18) / 10n, (4n * E18) / 10n], received: (9n * E18) / 10n })
+    assert.deepEqual(eth!.parts.filter((part) => part.kind === "unwrap").map((part) => part.amount), [((9n * E18) / 10n).toString()])
+    for (const leg of [eth!, cbBtc]) {
+      assert.deepEqual(statuses(check(leg)), ALL_PASS)
+      assert.deepEqual(proof(leg).movements.filter((line) => /unwrapped|ETH received/.test(line)), ["Log #5: 0.6 ETH unwrapped", "Log #6: 0.4 ETH unwrapped", "ETH received: 0.9 ETH, worked out from this wallet's balance before and after this block"])
+    }
+    assert.match(check(eth!).checks[3]!.detail, /its 2 movements match/)
+    const second = added[3]!
+    const changed = { ...read, logs: read.logs.map((log) => (log.log_index === second.log_index ? { ...log, data: word(1n) } : log)) }
+    const activity = verificationOf(eth!, [eth!], changed, deposits).checks.at(-1)!
+    assert.equal(activity.status, "failed")
+    assert.match(activity.detail, /disagrees with Log #6: 0\.4 ETH unwrapped/)
+  })
+
+  describe("when none of it arrived", () => {
+    it("still shows the log on a plain send, which has no credit left", () => {
+      const { eth, cbBtc, check, proof } = sale({ withdrawn: [E18], received: 0n })
+      assert.equal(eth, undefined)
+      assert.equal(cbBtc.kind, "transfer")
+      assert.equal(check(cbBtc).checks[3]!.status, "passed")
+      assert.match(check(cbBtc).checks[3]!.detail, /That none of it reached this wallet comes from its balance/)
+      assert.deepEqual(proof(cbBtc).movements.filter((line) => /unwrapped|ETH received/.test(line)), ["Log #5: 1 ETH unwrapped", "ETH received: 0 ETH, worked out from this wallet's balance before and after this block"])
+      assert.doesNotMatch(proof(cbBtc).scope.join(" "), /who sent/)
+    })
+
+    it("prices the exchange from what did arrive, as wrapped ETH", () => {
+      const { eth, cbBtc, check, proof } = sale({ withdrawn: [E18], received: 0n, wethBack: (95n * E18) / 100n })
+      assert.equal(eth!.delta, ((95n * E18) / 100n).toString())
+      assert.equal(cbBtc.priceSource, "swap")
+      for (const leg of [eth!, cbBtc]) {
+        assert.deepEqual(statuses(check(leg)), ALL_PASS)
+        assert.ok(proof(leg).movements.includes("Log #5: 1 ETH unwrapped"))
+        assert.match(proof(leg).scope.join(" "), /That none of it reached this wallet/)
+      }
+      assert.match(proof(cbBtc).scope.join(" "), /This price counts none of it/)
+      assert.doesNotMatch(proof(cbBtc).scope.join(" "), /worked out using that amount/)
+      assert.ok(proof(cbBtc).movements.includes("Log #4: 0.95 wrapped ETH received"), proof(cbBtc).movements.join(" | "))
+    })
+  })
+
+  it("says how much arrived isn't confirmed while the balance can't settle it, and still checks the log", () => {
+    const { eth, read, added, check, proof } = sale({ withdrawn: [E18], received: null })
+    assert.equal(eth!.unsettledCredit, true)
+    assert.equal(eth!.settledCredit, undefined)
+    assert.equal(check(eth!).checks[3]!.status, "passed")
+    assert.match(check(eth!).checks[3]!.detail, /How much of it reached this wallet isn't confirmed/)
+    assert.match(proof(eth!).scope.join(" "), /How much of it reached this wallet isn't confirmed/)
+    assert.deepEqual(proof(eth!).movements, ["Log #5: 1 ETH unwrapped"])
+    const changed = { ...read, logs: read.logs.map((log) => (log.log_index === added[2]!.log_index ? { ...log, data: word(1n) } : log)) }
+    assert.equal(verificationOf(eth!, [eth!], changed, deposits).checks.at(-1)!.status, "failed")
+  })
+
+  describe("still fails", () => {
+    const { eth, read, added } = sale({ withdrawn: [E18], received: (9n * E18) / 10n })
+    const activity = (leg: PricedLeg, data = read) => verificationOf(leg, [leg], data, deposits).checks.at(-1)!
+    const withdrawal = added[2]!
+
+    it("a log that says a different amount", () => {
+      const changed = { ...read, logs: read.logs.map((log) => (log === withdrawal ? { ...log, data: word(1n) } : log)) }
+      assert.match(activity(eth!, changed).detail, /disagrees with Log #5: 1 ETH unwrapped/)
+    })
+
+    it("a log that isn't a withdrawal from WETH", () => {
+      const changes = [{ address: USDC }, { topics: [TRANSFER_TOPIC, pool, me] }]
+      for (const change of changes) assert.equal(activity(eth!, { ...read, logs: read.logs.map((log) => (log === withdrawal ? { ...log, ...change } : log)) }).status, "failed")
+    })
+
+    it("a log that isn't there", () => {
+      assert.equal(activity(eth!, { ...read, logs: read.logs.filter((log) => log !== withdrawal) }).status, "failed")
+    })
+
+    it("more arriving than the logs record, which settling never gives", () => {
+      const more = activity({ ...eth!, settledCredit: { ...eth!.settledCredit!, received: (2n * E18).toString() } })
+      assert.equal(more.status, "failed")
+      assert.match(more.detail, /disagrees with ETH received: 2 ETH/)
+    })
+
+    it("a credit to someone other than the transaction's sender", () => {
+      const parts = eth!.parts.map((part) => (part.kind === "unwrap" ? { ...part, account: `0x${ALICE}` } : part))
+      const wrong = activity({ ...eth!, parts })
+      assert.equal(wrong.status, "failed")
+      assert.match(wrong.detail, /disagrees with ETH received: 0\.9 ETH/)
+    })
+  })
+
+  it("uses plain language", () => {
+    const { eth, cbBtc, check, proof } = sale({ withdrawn: [E18], received: (9n * E18) / 10n })
+    const words = [eth!, cbBtc].flatMap((leg) => [...proof(leg).movements, ...proof(leg).scope, ...check(leg).checks.map((c) => c.detail)]).join(" ")
+    assert.doesNotMatch(words, /\b(oracle|legs?|FIFO|settle[ds]?)\b/i)
   })
 })
 

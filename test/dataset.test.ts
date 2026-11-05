@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { describe, it } from "node:test"
 import { cautiousEthTablesSql, ptCautiousSource, ptGasSource, ptNetSource, ptPriceSource, tablesSql } from "../dataset/build.ts"
 import { gasPaid, type RawTx } from "../server/raw.ts"
-import { ETH_ADDRESS, PRICE_FEEDS, SEED_TX, TOKENS, USDC_ADDRESS, WETH_ADDRESS, blocksWithin, ptNet, ptPrice } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, PRICE_FEEDS, SEED_TX, TOKENS, USDC_ADDRESS, WETH_ADDRESS, blockBefore, ptNet, ptPrice } from "@pricetag/sdk/core"
 import { LATEST_ROUND_SELECTOR, localManifest, readFeedSeeds } from "../dataset/local.ts"
 import { keccak } from "../server/verify.ts"
 
@@ -95,6 +95,7 @@ describe("prices from logs", () => {
 
   it("counts the blocks a time window spans on both sides of the 200ms upgrade", () => {
     const upgrade = 53_556_127
+    const blocksWithin = (seconds: number, block: number) => block - blockBefore(block, seconds * 1000)
     assert.equal(blocksWithin(90_000, 53_515_446), 45_000)
     assert.equal(blocksWithin(90_000, upgrade), 45_000)
     assert.equal(blocksWithin(90_000, upgrade + 450_000), 450_000)

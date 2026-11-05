@@ -137,23 +137,23 @@
   ],
   "behind": [
     {
-      "blocks": 6,
+      "ms": 12000,
       "text": "The data is still catching up, less than a minute behind the network. Anything newer isn't in these numbers yet."
     },
     {
-      "blocks": 14,
+      "ms": 28000,
       "text": "The data is still catching up, less than a minute behind the network. Anything newer isn't in these numbers yet."
     },
     {
-      "blocks": 15,
+      "ms": 30000,
       "text": "The data is still catching up, about 1 min behind the network. Anything newer isn't in these numbers yet."
     },
     {
-      "blocks": 50,
+      "ms": 100000,
       "text": "The data is still catching up, about 2 min behind the network. Anything newer isn't in these numbers yet."
     },
     {
-      "blocks": 5400,
+      "ms": 10800000,
       "text": "The data is still catching up, about 3 h behind the network. Anything newer isn't in these numbers yet."
     }
   ],

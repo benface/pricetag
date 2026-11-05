@@ -269,6 +269,8 @@ export type Question = {
   receipts: Receipt[]
   /** The cost to enter, for a `cost` question. */
   costKey: string | null
+  /** The transaction a note could answer this about. A note says what all of one token cost in one transaction, so this is null unless that's what's being asked. */
+  noteAbout: string | null
   /** They said it's their exchange account, and it still needs a cost. */
   needsCost: boolean
   arrivals: Arrival[]
@@ -307,7 +309,7 @@ function evidenceFor(sender: string, sides: readonly Side[], known: KnownSender 
 /** One card per address, however many transfers it covers. A token with no price anywhere isn't worth asking about. */
 export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], book: Book): Question[] {
   const sideOf = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
-  const questions = new Map<string, Question & { arrived: Map<string, Arrival>; value: bigint; priced: boolean }>()
+  const questions = new Map<string, Omit<Question, "noteAbout"> & { arrived: Map<string, Arrival>; value: bigint; priced: boolean; first: { leg: PricedLeg; units: bigint } }>()
   for (const { wallet, leg, sender, units } of open) {
     const owner = sideOf.get(wallet) as Side
     // A missing exchange rate takes the price away in this currency, but it's still a real token worth asking about.
@@ -329,6 +331,7 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
       lastAt: leg.timestamp,
       evidence: sender ? evidenceFor(sender, sides, known) : [],
       valueMicros: null,
+      first: { leg, units },
       arrived: new Map<string, Arrival>(),
       value: 0n,
       priced: false,
@@ -347,7 +350,12 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
     questions.set(id, question)
   }
   return [...questions.values()]
-    .map(({ arrived, value, priced, ...question }) => ({ ...question, arrivals: [...arrived.values()], valueMicros: priced ? value.toString() : null }))
+    .map(({ arrived, value, priced, first, ...question }) => ({
+      ...question,
+      arrivals: [...arrived.values()],
+      valueMicros: priced ? value.toString() : null,
+      noteAbout: question.receipts.length === 1 && !first.leg.opening && first.units === BigInt(first.leg.delta) ? first.leg.txHash : null,
+    }))
     .sort((a, b) => {
       const [x, y] = [BigInt(a.valueMicros ?? "0"), BigInt(b.valueMicros ?? "0")]
       return x === y ? a.id.localeCompare(b.id) : x > y ? -1 : 1
