@@ -102,19 +102,20 @@ enum TestMode {
     }
 }
 
-/// Every kind of thing the menu bar item says, on a light, a dark and a tinted bar. These are stand-ins for the real menu bar, which only macOS can draw:
-/// the system picks the item's color, so this shows the words and their lengths, not the real thing.
+/// Every kind of thing the menu bar item says, for each choice of what it shows, on a light, a dark and a tinted bar. These are stand-ins for the real menu bar,
+/// which only macOS can draw: the system picks the item's color, so this shows the words and their lengths, not the real thing.
 private struct MenuBarLabelScene: View {
     let portfolio: () -> Portfolio?
 
-    private var summaries: [FeedSummary] {
+    private func summaries(_ shows: MenuBarShows) -> [FeedSummary] {
         let states: [FeedState] = [.noWallet, .reading, .live, .behind(seconds: 600), .serverUnreachable]
-        return states.map { FeedSummary(feed: $0, portfolio: portfolio()) }
+        return states.map { FeedSummary(feed: $0, portfolio: portfolio(), shows: shows) }
     }
 
-    private func bar(_ background: Color, _ foreground: Color) -> some View {
-        HStack(spacing: 16) {
-            ForEach(summaries, id: \.text) { MenuBarLabelContent(summary: $0, isAlarm: false) }
+    private func bar(_ shows: MenuBarShows, _ background: Color, _ foreground: Color) -> some View {
+        let summaries = summaries(shows)
+        return HStack(spacing: 16) {
+            ForEach(Array(summaries.enumerated()), id: \.offset) { MenuBarLabelContent(summary: $0.element, isAlarm: false) }
             MenuBarLabelContent(summary: summaries[0], isAlarm: true)
         }
         .font(.system(size: 13))
@@ -125,10 +126,17 @@ private struct MenuBarLabelScene: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            bar(Color(white: 0.92), .black)
-            bar(Color(white: 0.14), .white)
-            bar(Color(red: 0.1, green: 0.32, blue: 0.62), .white)
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+            ForEach(MenuBarShows.allCases) { shows in
+                GridRow {
+                    Text(shows.label).font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        bar(shows, Color(white: 0.92), .black)
+                        bar(shows, Color(white: 0.14), .white)
+                        bar(shows, Color(red: 0.1, green: 0.32, blue: 0.62), .white)
+                    }
+                }
+            }
         }
         .padding(8)
     }

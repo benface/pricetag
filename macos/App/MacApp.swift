@@ -83,7 +83,7 @@ struct MacApp: App {
         MenuBarExtra {
             PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)
         } label: {
-            MenuBarLabel(summary: FeedSummary(feed: store.feed, portfolio: store.portfolio), alarm: hotWallet.alarm, siteBridge: siteBridge, navigation: navigation)
+            MenuBarLabel(store: store, alarm: hotWallet.alarm, siteBridge: siteBridge, navigation: navigation)
         }
         .menuBarExtraStyle(.window)
 
@@ -196,7 +196,7 @@ private struct OpenSectionCommand: View {
 }
 
 struct MenuBarLabel: View {
-    let summary: FeedSummary
+    let store: PortfolioStore
     let alarm: StolenKeyAlarm?
     let siteBridge: SiteBridge
     let navigation: Navigation
@@ -205,9 +205,11 @@ struct MenuBarLabel: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        MenuBarLabelContent(summary: summary, isAlarm: alarm != nil)
+        MenuBarLabelContent(summary: FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: store.menuBarShows), isAlarm: alarm != nil)
             .onAppear {
                 StatusItemMenu.shared.start(
+                    shows: { store.menuBarShows },
+                    setShows: { store.setMenuBarShows($0) },
                     openApp: {
                         openWindow(id: WindowID.main)
                         DockPresence.bringForward()
