@@ -59,23 +59,26 @@ extension PortfolioSource {
 
 public struct PricetagClient: PortfolioSource {
     public let serverURL: URL
+    /// What a shared server knows this person by. It only goes over HTTPS, so a server on this Mac, or any other plain address, never gets it.
+    private let invite: String?
     private let session: URLSession
 
     /// A block every 2 s means the events are never quiet for this long, unless something's wrong.
     private static let eventsIdleTimeout: TimeInterval = 30
 
-    public init(serverURL: URL) {
-        self.init(serverURL: serverURL, configuration: .ephemeral)
+    public init(serverURL: URL, invite: String? = nil) {
+        self.init(serverURL: serverURL, invite: invite, configuration: .ephemeral)
     }
 
-    init(serverURL: URL, configuration: URLSessionConfiguration) {
+    init(serverURL: URL, invite: String? = nil, configuration: URLSessionConfiguration) {
         self.serverURL = serverURL
+        self.invite = serverURL.scheme == "https" ? invite.flatMap { $0.isEmpty ? nil : $0 } : nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         session = URLSession(configuration: configuration)
     }
 
     public func headEvents() -> AsyncThrowingStream<Void, any Error>? {
-        let request = URLRequest(url: serverURL.appending(path: "/api/events"), timeoutInterval: Self.eventsIdleTimeout)
+        let request = authorized(URLRequest(url: serverURL.appending(path: "/api/events"), timeoutInterval: Self.eventsIdleTimeout))
         let session = session
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -198,11 +201,18 @@ public struct PricetagClient: PortfolioSource {
         return try await send(request)
     }
 
+    private func authorized(_ request: URLRequest) -> URLRequest {
+        guard let invite else { return request }
+        var request = request
+        request.setValue("Bearer \(invite)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
     private func send(_ request: URLRequest) async throws -> Data {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await session.data(for: authorized(request))
         } catch let error as URLError where error.code == .cancelled {
             throw CancellationError()
         } catch let error as URLError where error.code == .timedOut {

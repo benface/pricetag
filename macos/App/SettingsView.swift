@@ -10,6 +10,7 @@ struct SettingsView: View {
     @Binding var tab: Pane
     @State var server = ""
     @State var serverError: String?
+    @State var invite = ""
     @State private var isComparing = false
     @State var rpc = ""
     @State var rpcError: String?
@@ -43,6 +44,7 @@ struct SettingsView: View {
         .onAppear {
             // What didn't save stays, next to what's wrong with it.
             if serverError == nil { server = store.serverURL.absoluteString }
+            invite = store.invite ?? ""
             if rpcError == nil { rpc = hotWallet.settings.rpcURL.absoluteString }
         }
         .task { await store.refreshRules() }
@@ -119,6 +121,10 @@ struct SettingsView: View {
                 if let serverError {
                     WarningText(serverError).font(.callout)
                 }
+                SecureField("Invite", text: $invite, prompt: Text("Only for a shared server"))
+                    .onSubmit { store.setInvite(invite) }
+                    .onDisappear { store.setInvite(invite) }
+                    .help("Only sent over HTTPS, to the server above.")
             } footer: {
                 Text("\(AppName.current) only talks to this server.")
                     .font(.caption)
