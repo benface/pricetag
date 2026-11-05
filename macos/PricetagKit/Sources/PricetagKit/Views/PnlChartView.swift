@@ -15,7 +15,8 @@ public struct PnlChartView: View {
     let reveal: CGFloat
     /// Which transaction a scene holds the pointer on, since a test can't point at anything.
     let scrubbedIndex: Int?
-    @State private var hovered: PnlSeries.Plotted?
+    /// Which transaction is pointed at. Only its ID, so what's shown for it is always what the points say now, after a refresh or an answer too.
+    @State private var hoveredID: String?
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -38,6 +39,7 @@ public struct PnlChartView: View {
     public var body: some View {
         let series = PnlSeries(points: points)
         let drawn = PnlSeries(points: history)
+        let hovered = series.transaction(id: hoveredID)
         let moneyTicks = ChartAxis.moneyTicks(series.plotted.compactMap(\.value), currency)
         let timeAxis = ChartAxis.TimeAxis(dates: series.plotted.map(\.date))
         Chart {
@@ -129,14 +131,14 @@ public struct PnlChartView: View {
                     .onContinuousHover { phase in
                         switch phase {
                         case .active(let location):
-                            hover(date(at: location, proxy: proxy, geometry: geometry).flatMap(series.nearestTransaction))
+                            hover(date(at: location, proxy: proxy, geometry: geometry).flatMap(series.nearestTransaction)?.id)
                         case .ended:
-                            hovered = nil
+                            hoveredID = nil
                         }
                     }
                     // Pressing and dragging does the same as pointing, because hover stops while a button is down.
                     .gesture(DragGesture(minimumDistance: 3).onChanged { drag in
-                        hover(date(at: drag.location, proxy: proxy, geometry: geometry).flatMap(series.nearestTransaction))
+                        hover(date(at: drag.location, proxy: proxy, geometry: geometry).flatMap(series.nearestTransaction)?.id)
                     })
                     .onTapGesture { location in
                         if let hash = date(at: location, proxy: proxy, geometry: geometry).flatMap(series.nearestTransaction)?.point.txHash {
@@ -149,7 +151,7 @@ public struct PnlChartView: View {
         .sensoryFeedback(.alignment, trigger: hovered?.id) { _, id in id != nil }
         .onChange(of: scrubbedIndex, initial: true) { _, index in
             let plotted = series.plotted.filter { $0.point.txHash != nil }
-            hover(index.flatMap { plotted.indices.contains($0) ? plotted[$0] : nil })
+            hover(index.flatMap { plotted.indices.contains($0) ? plotted[$0].id : nil })
         }
         .opacity(isLive ? 1 : 0.6)
         .animation(Motion.state, value: isLive)
@@ -160,9 +162,9 @@ public struct PnlChartView: View {
     private static var softEdge: CGFloat { 40 }
 
     /// From one transaction to the next it glides, quickly enough to feel attached to the pointer. Arriving and leaving are immediate, so the resting point never flies across to where the pointer is.
-    private func hover(_ next: PnlSeries.Plotted?) {
-        guard next?.id != hovered?.id else { return }
-        withAnimation(hovered == nil || next == nil || reduceMotion ? nil : Motion.scrub) { hovered = next }
+    private func hover(_ next: String?) {
+        guard next != hoveredID else { return }
+        withAnimation(hoveredID == nil || next == nil || reduceMotion ? nil : Motion.scrub) { hoveredID = next }
     }
 
     private func date(at location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy) -> Date? {
