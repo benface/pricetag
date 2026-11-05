@@ -71,6 +71,13 @@ public struct WalletEntry: Identifiable, Equatable, Sendable {
     /// Yours because this Mac's wallet holds it, like a spending key that's been replaced, and not because of anything the user said.
     public var isAccount = false
 
+    public init(address: String, name: String?, kind: WalletKind, isAccount: Bool = false) {
+        self.address = address
+        self.name = name
+        self.kind = kind
+        self.isAccount = isAccount
+    }
+
     public var id: String { address }
 
     public var shortAddress: String? {
@@ -90,6 +97,13 @@ public struct WalletEntry: Identifiable, Equatable, Sendable {
     public var detail: String {
         let isUnderWatching = kind == .watching && name != nil
         let kindText = kind.label == title || isUnderWatching ? nil : kind.label
+        let addressText = shortAddress == title ? nil : shortAddress
+        return [kindText, addressText].compactMap(\.self).joined(separator: " · ")
+    }
+
+    /// The same in a list with no sections to say what kind it is.
+    public var pickDetail: String {
+        let kindText = kind.label == title ? nil : kind.label
         let addressText = shortAddress == title ? nil : shortAddress
         return [kindText, addressText].compactMap(\.self).joined(separator: " · ")
     }
@@ -156,6 +170,11 @@ public struct WalletList: Equatable, Sendable {
     }
 
     public var all: [WalletEntry] { yours + watching + recent + (demo.map { [$0] } ?? []) }
+
+    /// What an address field can offer, before a flow takes out what it doesn't permit. The demo has no real address, and its wallets aren't anyone's.
+    public var pickable: [WalletEntry] {
+        (yours + watching + recent).filter { !WalletAddress.isDemo($0.address) }
+    }
 
     public func entry(for address: String?) -> WalletEntry? {
         address.flatMap { address in all.first { $0.address == address } }

@@ -4,6 +4,21 @@ import SwiftUI
 import Testing
 @testable import PricetagKit
 
+@MainActor
+@Observable
+private final class PastedWallets {
+    var text = ""
+    var added: [String] = []
+}
+
+private struct PasteHost: View {
+    @Bindable var paste: PastedWallets
+
+    var body: some View {
+        AddressField(prompt: "", text: $paste.text, takesSeveral: true, onAddress: { paste.added.append($0) })
+    }
+}
+
 /// Views drawn from fixtures with `OffscreenRenderer`, which never takes focus. Interaction belongs in the logic tests, not here.
 @MainActor
 @Suite(.serialized)
@@ -45,6 +60,32 @@ struct RenderTests {
         #expect(dark.colors > 20)
         #expect(light.brightness > 0.7)
         #expect(dark.brightness < 0.3)
+    }
+
+    /// The real field, because this is about what it does with a paste, and a wallet missing from a report doesn't show.
+    @Test func aPasteOfSeveralLeavesWhatItCouldntAdd() async throws {
+        let good = "0x\(String(repeating: "1", count: 40))"
+        let another = "0x\(String(repeating: "3", count: 40))"
+        for (pasted, added, left) in [
+            ("\(good)\n0x2222", [good], "0x2222"),
+            ("\(good)\n0x22zz", [good], "0x22zz"),
+            ("\(good) \(another) 0x2222", [good, another], "0x2222"),
+            ("\(good)\n\(another)", [good, another], ""),
+        ] {
+            let paste = PastedWallets()
+            let host = NSHostingView(rootView: PasteHost(paste: paste))
+            host.frame = CGRect(x: 0, y: 0, width: 400, height: 200)
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            paste.text = pasted
+            let deadline = Date.now.addingTimeInterval(5)
+            while paste.text != left || paste.added != added, Date.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(paste.added == added)
+            #expect(paste.text == left)
+        }
     }
 
     @Test func sizesToTheViewUnlessToldOtherwise() throws {

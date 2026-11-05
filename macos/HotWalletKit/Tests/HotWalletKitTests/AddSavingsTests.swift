@@ -18,6 +18,36 @@ import Testing
         return (AddSavingsModel(wallet: rig.wallet), rig.wallet)
     }
 
+    // MARK: Picking a saved wallet
+
+    @Test func offersOnlyWhatCouldBecomeSavings() async throws {
+        let (model, wallet) = await model(withCold: true)
+        let saved = WalletEntry(address: address.lowercased(), name: "Treasury", kind: .watching)
+        let spending = WalletEntry(address: try #require(wallet.address).lowercased, name: "Spending Money", kind: .spendingMoney)
+        let cold = WalletEntry(address: try #require(wallet.settings.coldWallets.first).address.lowercased, name: "Savings", kind: .savings)
+        #expect(model.offers(saved))
+        #expect(!model.offers(spending))
+        #expect(!model.offers(cold))
+    }
+
+    /// A saved name proves nothing, so a picked wallet goes through the same check as a pasted one.
+    @Test func pickingStillNeedsTheDeviceCheck() async throws {
+        let (model, _) = await model()
+        model.choose(.other)
+        model.address = address
+        #expect(model.parsed == EthereumAddress(address))
+        #expect(!model.canAdd)
+        #expect(!model.matches)
+        try model.add()
+        #expect(model.added == nil)
+        model.matches = true
+        #expect(model.canAdd)
+        // A different address takes back having said it matches.
+        model.address = another
+        #expect(!model.matches)
+        #expect(!model.canAdd)
+    }
+
     // MARK: Reading an address
 
     @Test func onlyAPlainAddressCounts() {
