@@ -379,41 +379,61 @@ describe("reading rates", () => {
 
   describe("from the rates dataset", () => {
     const update = (block: number, currency: string, answer: string) => ({ block_num: String(block), currency, answer, updated_at: String(1_800_000_000 + block) })
-    const reader = (rows: object[] | Error) => {
+    /** A table whose rows can change between reads, and a contract that answers `onchain` at the blocks it's asked about. */
+    const reader = (table: { rows: object[] | Error }, onchain: (block: number) => string | null = () => null) => {
       const sql: string[] = []
+      const exactly: number[][] = []
+      const exact: RoundReader = async (_currency, blocks) => {
+        exactly.push([...blocks])
+        return new Map(blocks.flatMap((block) => {
+          const answer = onchain(block)
+          return answer ? [[block, { answer, updatedAt: 1_800_000_000 + block }]] : []
+        }))
+      }
       const read = updateRounds((async <T>(text: string) => {
         sql.push(text)
-        if (rows instanceof Error) throw rows
-        return rows as T[]
-      }) as never, "benface/pricetag_rates@0.1.0")
-      return { sql, read }
+        if (table.rows instanceof Error) throw table.rows
+        return table.rows as T[]
+      }) as never, "benface/pricetag_rates@0.1.0", exact)
+      return { sql, exactly, read }
     }
 
     it("takes each block's latest update of that currency at or before it, and leaves out a block before any", async () => {
-      const { sql, read } = reader([update(90, "CAD", "71000000"), update(95, "EUR", "112000000"), update(100, "CAD", "72000000"), update(100, "CAD", "73000000"), update(150, "EUR", "113000000")])
+      const { sql, exactly, read } = reader({ rows: [update(90, "CAD", "71000000"), update(95, "EUR", "112000000"), update(100, "CAD", "72000000"), update(100, "CAD", "73000000"), update(150, "EUR", "113000000")] })
       const rounds = await read("CAD", [120, 80, 100, 99])
       assert.deepEqual(Object.fromEntries(rounds), { 99: { answer: "71000000", updatedAt: 1_800_000_090 }, 100: { answer: "73000000", updatedAt: 1_800_000_100 }, 120: { answer: "73000000", updatedAt: 1_800_000_100 } })
+      assert.deepEqual(exactly, [], "every block is before the table's newest row")
       assert.match(sql[0] as string, /FROM "benface\/pricetag_rates@0\.1\.0"\.rate_updates WHERE block_num >= \d+ ORDER BY block_num, log_index$/)
     })
 
-    it("says a rate past the table's newest row could still change, since an update for it may not be in yet", async () => {
-      const { read } = reader([update(90, "CAD", "71000000"), update(150, "EUR", "113000000")])
-      const rounds = await read("CAD", [140, 150, 160])
-      assert.equal(rounds.get(150)?.unconfirmed, undefined)
-      assert.equal(rounds.get(160)?.unconfirmed, true)
-      assert.equal(rounds.get(160)?.answer, "71000000")
+    it("reads the contract from the table's newest row on, so a lagging table never gives an old rate, and stops once it catches up", async () => {
+      // The table has reached 900. CAD changed at 950, which is onchain but not in the table yet.
+      const table = { rows: [update(800, "CAD", "71000000"), update(900, "EUR", "113000000")] as object[] }
+      const { exactly, read } = reader(table, (block) => (block >= 950 ? "72000000" : "71000000"))
+      const lagging = await read("CAD", [850, 900, 1000])
+      assert.equal(lagging.get(850)?.answer, "71000000")
+      assert.equal(lagging.get(1000)?.answer, "72000000", "not the table's older answer")
+      assert.deepEqual(exactly, [[900, 1000]])
+      table.rows = [...table.rows, update(950, "CAD", "72000000"), update(1010, "EUR", "114000000")]
+      const caughtUp = await read("CAD", [850, 900, 1000])
+      assert.deepEqual([caughtUp.get(900)?.answer, caughtUp.get(1000)?.answer], ["71000000", "72000000"])
+      assert.deepEqual(exactly, [[900, 1000]], "nothing more from the contract")
     })
 
-    it("has no rate rather than an old one when the table has stopped", async () => {
-      const { read } = reader([update(90, "CAD", "71000000")])
-      const rounds = await read("CAD", [100, 90 + 2 * 60 * 30 + 10])
-      assert.ok(rounds.has(100))
-      assert.equal(rounds.size, 1)
+    it("reads the contract for everything before the table's job has written, and passes on other failures", async () => {
+      const notStarted = reader({ rows: new Error("no common canonical watermark") }, () => "71000000")
+      assert.equal((await notStarted.read("CAD", [100])).get(100)?.answer, "71000000")
+      assert.deepEqual(notStarted.exactly, [[100]])
+      await assert.rejects(reader({ rows: new Error("connection reset") }).read("CAD", [100]), /connection reset/)
     })
 
-    it("has nothing before the table's job has written, and passes on other failures", async () => {
-      assert.equal((await reader(new Error("no common canonical watermark")).read("CAD", [100])).size, 0)
-      await assert.rejects(reader(new Error("connection reset")).read("CAD", [100]), /connection reset/)
+    it("gives the current rate at a head the table hasn't reached, on the first read and the next one at the same head", async () => {
+      let onchain = "71000000"
+      const ratesFor = createRates(reader({ rows: [update(800, "CAD", "70000000")] }, () => onchain).read)
+      const wallet = { legs: [], latest: { blockNum: 1000, timestamp: time(1000) } }
+      assert.equal((await ratesFor("CAD", wallet))?.latest?.round.answer, "71000000")
+      onchain = "72000000"
+      assert.equal((await ratesFor("CAD", wallet))?.latest?.round.answer, "71000000", "the same block's answer doesn't change")
     })
   })
 
@@ -470,18 +490,6 @@ describe("reading rates", () => {
     assert.deepEqual(asked.at(-1), [100, 1000])
     assert.ok(second?.byBlock[100])
     assert.equal(second?.latest?.blockNum, 1000)
-  })
-
-  it("doesn't keep a rate that a newer update could still change", async () => {
-    const asked: number[][] = []
-    const read: RoundReader = async (_currency, blocks) => {
-      asked.push([...blocks])
-      return new Map(blocks.map((b) => [b, b === 100 ? { ...round(b, 1.4), unconfirmed: true as const } : round(b, 1.4)]))
-    }
-    const ratesFor = createRates(read)
-    await ratesFor("CAD", walletAt(1000, [100, 200]))
-    await ratesFor("CAD", walletAt(1002, [100, 200]))
-    assert.deepEqual(asked, [[100, 200, 1000], [100, 1002]])
   })
 
   it("reads nothing for USD", async () => {

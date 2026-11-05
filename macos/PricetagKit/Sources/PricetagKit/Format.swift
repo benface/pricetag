@@ -107,7 +107,8 @@ public enum Format {
     /// A cost as someone typed it, without the main currency's own symbol or code, before or after. Any other symbol stays, so it isn't read as an amount in this currency.
     static func withoutCurrency(_ text: String, _ currency: CurrencyCode) -> String {
         let clean = text.trimmingCharacters(in: .whitespaces)
-        for mark in [currency.label, currency.symbol, currency.rawValue].map({ $0.trimmingCharacters(in: .whitespaces) }) {
+        // Longest first, so "46 ZAR" isn't read as "46 ZA" and an R.
+        for mark in [currency.label, currency.symbol, currency.rawValue].map({ $0.trimmingCharacters(in: .whitespaces) }).sorted(by: { $0.count > $1.count }) {
             if clean.hasPrefix(mark) { return String(clean.dropFirst(mark.count)) }
             if clean.hasSuffix(mark) { return String(clean.dropLast(mark.count)) }
         }

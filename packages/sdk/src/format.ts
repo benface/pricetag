@@ -65,7 +65,8 @@ export function formatPaid(micros: string, currency: CurrencyCode): string {
 export function withoutCurrency(text: string, currency: CurrencyCode): string {
   const { code, symbol, label } = CURRENCIES[currency]
   const clean = text.trim()
-  for (const mark of [label.trim(), symbol.trim(), code]) {
+  // Longest first, so "46 ZAR" isn't read as "46 ZA" and an R.
+  for (const mark of [label.trim(), symbol.trim(), code].sort((a, b) => b.length - a.length)) {
     if (clean.startsWith(mark)) return clean.slice(mark.length)
     if (clean.endsWith(mark)) return clean.slice(0, -mark.length)
   }

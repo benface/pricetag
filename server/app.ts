@@ -58,7 +58,8 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
   if (!query) return null
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
-  const readRates = createRates(env.PRICETAG_RATES_DATASET ? updateRounds(query, env.PRICETAG_RATES_DATASET) : feedRounds(query, { baseDataset, network }))
+  const calls = feedRounds(query, { baseDataset, network })
+  const readRates = createRates(env.PRICETAG_RATES_DATASET ? updateRounds(query, env.PRICETAG_RATES_DATASET, calls) : calls)
   if (env.PRICETAG_RATES_DATASET) void warnOfNewRateAggregators(env.BASE_RPC_URL || DEFAULT_RPC_URL)
   // How the server hears about new blocks. Amp's block ranges name a network with a dash, and its RPC functions with an underscore.
   const followOf = (sql: string): FollowConfig => ({ stream: env.AMP_QUERY_URL ? createRangeStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")) : null, sql, readMark: (after) => readHeadMark(query, baseDataset, after) })
