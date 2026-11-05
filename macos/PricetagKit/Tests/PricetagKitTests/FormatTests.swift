@@ -151,6 +151,9 @@ struct FormatVectors: Decodable {
 
     @Test func shortensHashes() {
         #expect(Format.shortHash("0x1234567890abcdef") == "0x1234…cdef")
+        #expect(Format.groupedAddress("0x52908400098527886E0F7030069857D2E4169EE7") == ["0x5290 8400 0985 2788 6E0F", "7030 0698 57D2 E416 9EE7"])
+        // Every character is still there, in order, so nothing is lost by grouping.
+        #expect(Format.groupedAddress("0x52908400098527886E0F7030069857D2E4169EE7").joined().filter { !$0.isWhitespace } == "0x52908400098527886E0F7030069857D2E4169EE7")
     }
 }
 

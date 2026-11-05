@@ -28,7 +28,7 @@ struct HotWalletWindow: View {
                 ContentUnavailableView("Can't Open This Wallet", systemImage: "exclamationmark.triangle", description: Text(message))
             case .ready:
                 if wallet.address == nil {
-                    HotWalletSetup(wallet: wallet, store: store)
+                    HotWalletSetup(wallet: wallet, store: store, navigation: navigation)
                 } else {
                     HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases)
                 }
@@ -42,6 +42,7 @@ struct HotWalletWindow: View {
 private struct HotWalletSetup: View {
     let wallet: HotWallet
     let store: PortfolioStore
+    let navigation: Navigation
     @State private var understands = false
     @State private var showsHowItWorks = false
 
@@ -81,7 +82,11 @@ private struct HotWalletSetup: View {
                 Button("Create Spending Money") {
                     Task {
                         await wallet.createWallet()
-                        if let address = wallet.address { store.showNewWallet(address.lowercased) }
+                        // Straight to the new wallet, where Receive and Buy are the next step.
+                        if let address = wallet.address {
+                            store.setWallet(address.lowercased)
+                            navigation.section = .overview
+                        }
                     }
                 }
                     .buttonStyle(.borderedProminent)
@@ -383,6 +388,7 @@ private struct HotWalletDetails: View {
             ViewThatFits(in: .horizontal) {
                 HStack {
                     send
+                    receive
                     buy
                     topUp
                     sweep
@@ -392,6 +398,7 @@ private struct HotWalletDetails: View {
                 VStack(alignment: .leading) {
                     HStack {
                         send
+                        receive
                         buy
                         topUp
                     }
@@ -402,6 +409,7 @@ private struct HotWalletDetails: View {
                 }
                 VStack(alignment: .leading) {
                     send
+                    receive
                     buy
                     topUp
                     sweep
@@ -431,6 +439,11 @@ private struct HotWalletDetails: View {
         Button("Send…") { isSending = true }
             .buttonStyle(.borderedProminent)
             .disabled(!wallet.canSend)
+    }
+
+    private var receive: some View {
+        Button("Receive…") { navigation.isReceiving = true }
+            .disabled(!wallet.canTopUp)
     }
 
     private var buy: some View {

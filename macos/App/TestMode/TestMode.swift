@@ -296,6 +296,9 @@ enum TestScene: String, CaseIterable {
     case proveWalletProblem = "prove-wallet-problem"
     case mainShowingSpendingMoney = "main-showing-spending-money"
     case mainSavings = "main-savings"
+    case mainEmptySpendingMoney = "main-empty-spending-money"
+    case mainEmptySpendingMoneySmallest = "main-empty-spending-money-smallest"
+    case mainEmptySavings = "main-empty-savings"
     case mainWatching = "main-watching"
     case mainWatchingNamed = "main-watching-named"
     case mainWatchingNamedSmallest = "main-watching-named-smallest"
@@ -328,6 +331,8 @@ enum TestScene: String, CaseIterable {
     case routeTopUpOpen = "route-top-up-open"
     case routeBuy = "route-buy"
     case routeBuyOpen = "route-buy-open"
+    case routeReceive = "route-receive"
+    case routeReceiveOpen = "route-receive-open"
     case routeAddSavings = "route-add-savings"
     /// The menu bar's other destinations, starting from another section. Each fails unless it gets there and stays.
     case routeHoldings = "route-holdings"
@@ -405,6 +410,11 @@ enum TestScene: String, CaseIterable {
     case hotWalletPurchases = "hot-wallet-purchases"
     case hotWalletPurchasesCAD = "hot-wallet-purchases-cad"
     case hotWalletPurchasesCantCheck = "hot-wallet-purchases-cant-check"
+    case receive
+    case receiveNoSavings = "receive-no-savings"
+    case receiveCAD = "receive-cad"
+    case receiveNotSetUp = "receive-not-set-up"
+    case receiveAlarm = "receive-alarm"
     case buy
     case buyCAD = "buy-cad"
     case buyCADAboveRoom = "buy-cad-above-room"
@@ -505,7 +515,7 @@ enum TestScene: String, CaseIterable {
         case .motionChartDraw, .motionChartRange, .motionChartScrub, .motionSend, .chartHover:
             .none
         case .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .proveWallet, .proveWalletProblem, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
-             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
+             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .receive, .receiveNoSavings, .receiveCAD, .receiveNotSetUp, .receiveAlarm, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
              .publishFromDevice, .publishFromDeviceSafari, .publishFromDeviceNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         case .siteConnect, .siteTransaction, .siteTransactionCAD, .sitePreview, .sitePreviewUnknown, .sitePreviewLong, .siteUnlimitedApproval, .siteTypedPermit:
@@ -529,7 +539,7 @@ enum TestScene: String, CaseIterable {
         case .mainLongHistory, .mainChartWeek, .motionChartRange: .longHistory
         case .motionCostKnown: .costBecomesKnown
         case .resolveAnsweredWallet: .answeredWallet
-        case .mainEmpty, .mainEmptySmallest, .popoverEmpty: .empty
+        case .mainEmpty, .mainEmptySmallest, .popoverEmpty, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest, .mainEmptySavings: .empty
         case .mainEmptyNotice: .emptyReadingLinked
         case .mainNotStarted, .popoverNotStarted: .notStarted
         case .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunSmall, .mainFirstRunDetails, .popoverFirstRun, .popoverLongName, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest: .firstRun
@@ -555,8 +565,8 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading: TestScene.namedWallet
         case .walletSwitcherLong: TestScene.manyWallets.last?.address
-        case .mainShowingSpendingMoney: HotWalletFixture.spending.lowercased
-        case .mainSavings: HotWalletFixture.savings.lowercased
+        case .mainShowingSpendingMoney, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest: HotWalletFixture.spending.lowercased
+        case .mainSavings, .mainEmptySavings: HotWalletFixture.savings.lowercased
         case .mainWatching: TestScene.recentWallet
         default: nil
         }
@@ -571,7 +581,7 @@ enum TestScene: String, CaseIterable {
 
     private var currency: CurrencyCode {
         switch self {
-        case .mainCAD, .mainUpdatingCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .settingsHotWalletNoRate, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .hotWalletCAD, .hotWalletNoRate, .hotWalletPurchasesCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD, .sweepCAD, .publishCAD, .ruleComparisonCAD, .siteTransactionCAD: .CAD
+        case .mainCAD, .mainUpdatingCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .settingsHotWalletNoRate, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .receiveCAD, .hotWalletCAD, .hotWalletNoRate, .hotWalletPurchasesCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD, .sweepCAD, .publishCAD, .ruleComparisonCAD, .siteTransactionCAD: .CAD
         default: .USD
         }
     }
@@ -586,7 +596,9 @@ enum TestScene: String, CaseIterable {
         case .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .routeBuy, .routeBuyOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletProblem, .settingsHotWalletCAD, .settingsHotWalletNoRate, .hotWalletNoRate, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped: .funded
         case .siteConnect, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .hotWalletPurchasesCAD, .buyAboveRoom, .buyLarge, .buyTooLittle, .buyNegative, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletPurchases, .hotWalletPurchasesCantCheck: .funded
         case .buyUSDCNoGas: .noGas
-        case .buyNoSavings: .noSavings
+        case .buyNoSavings, .receiveNoSavings, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest: .noSavings
+        case .receive, .receiveCAD, .mainEmptySavings, .routeReceive, .routeReceiveOpen: .funded
+        case .receiveAlarm: .alarm
         case .siteTransaction, .siteTransactionCAD, .sitePreview, .sitePreviewUnknown, .sitePreviewLong, .siteUnlimitedApproval, .siteTypedPermit: .connectedToSite
         case .hotWalletTopUpOneDollar: .nearCap
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD, .popoverHotWalletNoSavings, .hotWalletTopUpNoSavings, .addSavingsFinished, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet: .noSavings
@@ -818,7 +830,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(ResolveFlow(store: store, noteWriter: SavingsNoteWriter()) { AnyView(PublishFromDeviceButton(link: $0, browsers: deviceBrowsers)) }), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .holdComparison:
             return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
-        case .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed:
+        case .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainEmptySpendingMoney, .mainEmptySavings:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainWatchingNamedSmallest:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: MainWindow.minimumSize, isReady: isReady)
@@ -829,7 +841,7 @@ enum TestScene: String, CaseIterable {
         case .mainSmallestEnd:
             // Starts at the end of the page, because a screenshot can't scroll to it.
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)
-        case .mainEmptySmallest, .mainSmallest, .mainFirstRunSmallest:
+        case .mainEmptySmallest, .mainSmallest, .mainFirstRunSmallest, .mainEmptySpendingMoneySmallest:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .mainNarrow, .mainSmallAmountsNarrow, .mainUpdatingNarrow:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 780, height: 760), isReady: isReady)
@@ -844,7 +856,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 2200, height: 1300), isReady: isReady)
         case .mainMissingPrice:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .routeBuy, .routeBuyOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .routeHoldings, .routeHoldingsOpen, .routeAddWallet, .routeAddWalletOpen, .routeDetails, .routeDetailsOpen, .routeAnswer, .routeAnswerOpen, .routeProveWalletOpen:
+        case .routeBuy, .routeBuyOpen, .routeReceive, .routeReceiveOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .routeHoldings, .routeHoldingsOpen, .routeAddWallet, .routeAddWalletOpen, .routeDetails, .routeDetailsOpen, .routeAnswer, .routeAnswerOpen, .routeProveWalletOpen:
             let press: () -> Void
             let hasArrived: () -> Bool
             let hasSheet = { NSApp.windows.contains { $0.attachedSheet != nil } }
@@ -858,6 +870,9 @@ enum TestScene: String, CaseIterable {
             case .routeBuy, .routeBuyOpen:
                 press = { navigation.isBuying = true }
                 hasArrived = { navigation.isBuying && hasSheet() }
+            case .routeReceive, .routeReceiveOpen:
+                press = { navigation.isReceiving = true }
+                hasArrived = { navigation.isReceiving && hasSheet() }
             case .routeAddSavings:
                 press = navigation.addSavings
                 hasArrived = { !navigation.wantsAddSavings && navigation.section == .spendingMoney && hasSheet() }
@@ -939,6 +954,8 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation, purchases: purchases)), size: CGSize(width: 560, height: 1200), isReady: isReady)
         case .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere:
             return TestScreen(view: addSavingsSheet(hotWallet, wallets: store.walletList(hotWallet: hotWallet).pickable), isReady: isReady)
+        case .receive, .receiveNoSavings, .receiveCAD, .receiveNotSetUp, .receiveAlarm:
+            return TestScreen(view: AnyView(ReceiveSheet(wallet: hotWallet) {}), isReady: isReady)
         case .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNotSetUp, .buyCantReachProvider, .buyRefused:
             let typed: Int? = switch self {
             case .buyAboveRoom, .buyCADAboveRoom: 100

@@ -75,6 +75,9 @@ struct MainWindow: View {
         .sheet(isPresented: $navigation.isBuying) {
             BuySheet(wallet: hotWallet, purchases: purchases) { navigation.section = .spendingMoney } addSavings: { navigation.addSavings() }
         }
+        .sheet(isPresented: $navigation.isReceiving) {
+            ReceiveSheet(wallet: hotWallet) { navigation.section = .spendingMoney }
+        }
         .sheet(isPresented: $navigation.isResolving) {
             ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet) { AnyView(PublishFromDeviceButton(link: $0, browsers: .real)) }
         }
@@ -255,7 +258,7 @@ struct MainWindow: View {
                 if !portfolio.progress.started {
                     ContentUnavailableView("Almost There", systemImage: "hourglass", description: Text(Wording.notStarted))
                 } else if portfolio.isEmpty {
-                    NoActivity(portfolio: portfolio, navigation: navigation, notices: notices(portfolio))
+                    NoActivity(portfolio: portfolio, entry: store.walletList(hotWallet: hotWallet).entry(for: store.address), hotWallet: hotWallet, navigation: navigation, notices: notices(portfolio))
                 } else {
                     content(portfolio)
                 }
@@ -756,11 +759,21 @@ private struct NoWalletYet: View {
     }
 }
 
-/// A wallet with nothing to show. It says how far back it looked, because nothing moving lately doesn't mean it's empty.
+/// A wallet with nothing to show. One of yours offers ways to fund it. A watched one says how far back it looked, because nothing
+/// moving lately doesn't mean it's empty.
 private struct NoActivity<Notices: View>: View {
     let portfolio: Portfolio
+    let entry: WalletEntry?
+    let hotWallet: HotWallet
     let navigation: Navigation
     let notices: Notices
+
+    /// This Mac's wallet, while it can still take money.
+    private var isSpendingMoney: Bool { entry?.kind == .spendingMoney && hotWallet.canSend }
+    /// Buying lands in Spending Money, whichever wallet of yours this is.
+    private var canBuy: Bool { entry?.kind.isOwn == true && hotWallet.canSend }
+    /// A wallet of yours whose key is somewhere else. A replaced spending key's is nowhere, so nothing should go to it.
+    private var isHeldElsewhere: Bool { (entry?.kind == .savings || entry?.kind == .yours) && entry?.isAccount == false }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -768,13 +781,34 @@ private struct NoActivity<Notices: View>: View {
             ContentUnavailableView {
                 Label("Nothing Here Yet", systemImage: "tray")
             } description: {
-                Text("Nothing has moved for this wallet in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
-                    .help(Wording.coverage(portfolio))
+                description
             } actions: {
-                Button("Switch Wallet") { navigation.switchWallet() }
+                if isSpendingMoney {
+                    Button("Receive…") { navigation.isReceiving = true }
+                        .buttonStyle(.borderedProminent)
+                }
+                if canBuy {
+                    Button("Buy…") { navigation.isBuying = true }
+                }
+                if !isSpendingMoney, !canBuy {
+                    Button("Switch Wallet") { navigation.switchWallet() }
+                }
             }
             // Fills what's left, so a notice stays at the top instead of floating over it.
             .frame(maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private var description: some View {
+        if isSpendingMoney {
+            Text("Receive from another wallet or an exchange, or buy some with a card.")
+        } else if isHeldElsewhere {
+            // Never shown here: what holds the key is the only place to trust it, since a tampered page could show another.
+            Text("To receive here, copy the address from the device or app that holds its key, and check it there.")
+        } else {
+            Text("Nothing has moved for this wallet in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
+                .help(Wording.coverage(portfolio))
         }
     }
 }
