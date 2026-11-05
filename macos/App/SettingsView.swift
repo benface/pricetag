@@ -171,6 +171,7 @@ struct SettingsView: View {
                 }
                 if hotWallet.address != nil {
                     Button("Delete This Mac's Spending Money…", role: .destructive) { isConfirmingDelete = true }
+                        .disabled(!hotWallet.canDelete)
                         .confirmationDialog("Delete this wallet's key?", isPresented: $isConfirmingDelete) {
                             if hotWallet.settings.sweepDestination != nil {
                                 Button("Sweep Everything to Savings First") { Task { await hotWallet.sweepEverything() } }
@@ -179,6 +180,11 @@ struct SettingsView: View {
                         } message: {
                             Text("There's no recovery phrase and no backup. Whatever is still on this wallet is lost for good.")
                         }
+                    if !hotWallet.canDelete {
+                        Text(HotWalletWording.deleteWaitsForRotation)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             } footer: {
                 Text("The cap is \(hotWallet.usd(dollars: Int(hotWallet.settings.capCeiling / Money.dollar))) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build").")

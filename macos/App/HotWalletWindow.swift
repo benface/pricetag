@@ -380,7 +380,7 @@ private struct HotWalletDetails: View {
                     replaceKey
                 }
             }
-            if wallet.rotationHold != nil {
+            if wallet.canLeaveOldKeyBehind {
                 Button("Delete the Old Key and Leave What's on It…", role: .destructive) { isConfirmingAbandon = true }
             }
         }
@@ -423,6 +423,7 @@ private struct HotWalletDetails: View {
 
     private var abandonMessage: String {
         let lost = "What's still on the old address can never be moved again."
+        if wallet.isKeyMissing { return "This device no longer has it. \(lost)" }
         return switch wallet.rotationHold {
         case .otherTokens(let count): "It holds \(count) \(count == 1 ? "token" : "tokens") this app doesn't track. \(lost)"
         case .cantCheckOtherTokens: "This app can't check right now whether it holds other tokens. \(lost)"
