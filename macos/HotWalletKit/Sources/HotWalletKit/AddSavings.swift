@@ -108,6 +108,12 @@ public final class AddSavingsModel {
         }
     }
 
+    /// Whether a saved wallet could become a savings wallet, so the list only offers what would work. Offering it says nothing about whose it is.
+    public func offers(_ entry: WalletEntry) -> Bool {
+        guard let address = EthereumAddress(entry.address) else { return false }
+        return !wallet.settings.coldWallets.contains { $0.address == address } && wallet.problem(addingColdWallet: address) == nil
+    }
+
     public var canAdd: Bool { parsed != nil && problem == nil && matches }
 
     /// The first savings wallet becomes where sweeps go, and they run by themselves. This wallet already has something it wants to sweep,
