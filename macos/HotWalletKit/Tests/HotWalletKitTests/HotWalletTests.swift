@@ -409,7 +409,11 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.chain.setReceipt(hash, succeeded: false)
         await rig.wallet.lookBetweenTicks()
         #expect(rig.wallet.records.first?.status == .failed)
-        #expect(rig.wallet.sweepProblem != nil)
+        #expect(rig.wallet.sweepProblem?.hasPrefix("A sweep of USDC") == true)
+
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1))
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.count == 1, "and waits before trying again")
     }
 
     @Test func aMissedCheckIsntAProblemToReportButAFailedTickStopsTheChecks() async throws {
