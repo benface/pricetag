@@ -1,6 +1,12 @@
 // Where a chart's two times go along its bottom edge, from how wide they really are. A time zone's name can be long, so no fixed width is safe.
 
 const GAP = 12
+export const TICK_GAP = 8
+
+/** The left margin that fits a chart's money labels and the gap beside them. Very small amounts need more than the usual room, and their sign comes first. */
+export function chartLeftMargin(tickWidths: number[], least: number): number {
+  return Math.max(least, Math.ceil(Math.max(0, ...tickWidths)) + TICK_GAP)
+}
 
 export type PlacedTime = { x: number; row: number }
 

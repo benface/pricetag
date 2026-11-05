@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
-import { placeChartTimes } from "../src/core/chart-times.ts"
+import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import * as wording from "../src/core/wording.ts"
@@ -446,6 +446,12 @@ describe("a chart's axes", () => {
     assert.deepEqual(placeChartTimes([100, 110], { start: 64, end: 158, width: 242 }), [{ x: 20, row: 0 }, { x: 132, row: 0 }])
     assert.deepEqual(placeChartTimes([100, 110], { start: 64, end: 118, width: 202 }), [{ x: 64, row: 0 }, { x: 92, row: 1 }])
     assert.deepEqual(placeChartTimes([60], { start: 64, end: 158, width: 242 }), [{ x: 98, row: 0 }])
+  })
+
+  it("leaves room for the widest money label", () => {
+    assert.equal(chartLeftMargin([], 64), 64)
+    assert.equal(chartLeftMargin([30, 40], 64), 64)
+    assert.equal(chartLeftMargin([71.53, 66.28], 64), 72 + TICK_GAP)
   })
 
   it("says one moment once", () => {
