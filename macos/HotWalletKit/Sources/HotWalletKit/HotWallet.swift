@@ -546,6 +546,7 @@ public final class HotWallet {
     public func sweepEverything() async {
         guard let address, let destination = settings.sweepDestination else { return }
         await work(confirming: "sweep everything to your savings") { [self] in
+            guard self.address == address else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
             let snapshot = try await patientSnapshot(of: address)
             self.snapshot = snapshot
             guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
@@ -578,6 +579,8 @@ public final class HotWallet {
     public func finishRotationLeavingFundsBehind() async {
         guard let rotation else { return }
         await work(confirming: "delete the old key and leave what's on it behind") { [self] in
+            // The rotation can finish while the prompt's open, and the new key can be deleted after that. This mustn't undo either.
+            guard state.rotation == rotation, self.address == rotation.from else { return }
             try await finishRotation(rotation)
         }
     }
@@ -594,7 +597,8 @@ public final class HotWallet {
         guard canDelete, let address else { return }
         await work(confirming: "delete this wallet's key, which can't be undone") { [self] in
             // A rotation can start or finish while the prompt's open, and then this key isn't all there is.
-            guard canDelete, self.address == address else { throw ChainError.rejected(HotWalletWording.deleteWaitsForRotation) }
+            guard self.address == address else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
+            guard canDelete else { throw ChainError.rejected(HotWalletWording.deleteWaitsForRotation) }
             try await signer.deleteKey(address)
             retire(address, activating: nil)
             try persist()
