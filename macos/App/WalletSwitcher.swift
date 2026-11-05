@@ -450,9 +450,8 @@ struct WalletSwitcher: View {
 
     /// Does it, and says what changed right away, because the numbers change with it. An account from a device comes back with Undo too.
     private func change(_ entry: WalletEntry, to text: String, _ action: () -> Void) {
-        let before = store.walletListSnapshot(of: entry.address)
         let account = hotWallet?.settings.deviceAccounts.first { $0.lowercased == entry.address }
-        action()
+        let before = store.changeWallet(entry.address, action)
         note = WalletListNote(text: text) { [store, hotWallet] in
             if let account { hotWallet?.linkDeviceAccounts([account.lowercased]) }
             store.restore(before)

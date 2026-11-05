@@ -9,6 +9,9 @@ public struct WalletListSnapshot: Sendable {
     let address: String
     let answer: SenderAnswer?
     let undoDepth: Int
+    /// The answer the change gave, and the undo entry it made, if it made one.
+    var changedAnswer: SenderAnswer?
+    var undoEntry: UUID?
     let saved: SavedWallet?
     let orderIndex: Int?
     let wasHidden: Bool
@@ -77,6 +80,8 @@ public final class PortfolioStore {
     private var answers: Book
     /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
     public private(set) var undoStack: [Book] = []
+    /// Which change made each entry of `undoStack`, so one can be found again whatever's been added above it.
+    @ObservationIgnored private var undoIDs: [UUID] = []
     /// The server's pricing rules. Empty when it has only one, so there's nothing to choose.
     public private(set) var rules: [PricingRule] = []
     /// What to ask the server for, or nil for its default.
@@ -291,9 +296,9 @@ public final class PortfolioStore {
         saveOrder(walletOrder.filter { !addresses.contains($0) } + arranged)
     }
 
-    /// What Undo needs to put this one wallet back. It's about nothing else, so whatever else has changed since stays changed.
-    public func walletListSnapshot(of address: String) -> WalletListSnapshot {
-        WalletListSnapshot(
+    /// Makes a change to one wallet, and returns what Undo needs to take back that change and nothing else.
+    public func changeWallet(_ address: String, _ change: () -> Void) -> WalletListSnapshot {
+        var snapshot = WalletListSnapshot(
             address: address,
             answer: answers.senders[address],
             undoDepth: undoStack.count,
@@ -302,17 +307,33 @@ public final class PortfolioStore {
             wasHidden: hiddenWallets.contains(address),
             wasShowing: self.address == address
         )
+        let entriesBefore = undoIDs
+        change()
+        snapshot.changedAnswer = answers.senders[address]
+        snapshot.undoEntry = undoIDs.last.flatMap { entriesBefore.contains($0) ? nil : $0 }
+        return snapshot
     }
 
+    /// Takes back one change to one wallet. Whatever else has changed since stays changed, and so does anything said about this wallet since.
     public func restore(_ snapshot: WalletListSnapshot) {
         let address = snapshot.address
-        if answers.senders[address] != snapshot.answer {
+        let isUnchanged = { (book: Book) in book.senders[address] == snapshot.changedAnswer }
+        if isUnchanged(answers), answers.senders[address] != snapshot.answer {
             var next = answers
             next.senders[address] = snapshot.answer
             store(next)
         }
-        // Only when the change's own entry is on top. Anything said since keeps its place.
-        if undoStack.count == snapshot.undoDepth + 1 { undoStack.removeLast() }
+        // The change's own entry goes with it, wherever it is now.
+        var since = snapshot.undoDepth
+        if let entry = snapshot.undoEntry, let index = undoIDs.firstIndex(of: entry) {
+            undoStack.remove(at: index)
+            undoIDs.remove(at: index)
+            since = index
+        }
+        // What was saved for Undo since then has the change in it. Undoing something else mustn't bring it back.
+        for index in undoStack.indices where index >= since && isUnchanged(undoStack[index]) {
+            undoStack[index].senders[address] = snapshot.answer
+        }
         var wallets = savedWallets
         if let index = wallets.firstIndex(where: { $0.address == address }) {
             // A name given since is the user's latest word on it. Without one, an entry the change made goes with the change.
@@ -466,6 +487,7 @@ public final class PortfolioStore {
         let nextAnswers = answers(in: next)
         guard nextAnswers != answers else { return }
         undoStack.append(answers)
+        undoIDs.append(UUID())
         store(nextAnswers)
     }
 
@@ -479,6 +501,7 @@ public final class PortfolioStore {
 
     public func undo() {
         guard let previous = undoStack.popLast() else { return }
+        undoIDs.removeLast()
         store(previous)
     }
 
