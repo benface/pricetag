@@ -245,7 +245,7 @@ public enum Wording {
         return isPositive(preview.unresolvedMicros) ? "\(number) · \(Format.money(preview.unresolvedMicros, currency)) cost unknown" : number
     }
 
-    public static let notStarted = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."
+    public static let notStarted = "Numbers appear once the data reaches this wallet."
     public static let unpricedFees = "Some network fees had no price at the time, and aren't in this total."
 
     /// Balances with no row, because nothing could be read about them. nil when there are none.
@@ -279,12 +279,12 @@ public enum Wording {
         return lines
     }
 
-    public static let demo = "Demo data, not a real wallet. Every case the app has to get right is in here."
+    public static let demo = "Demo data, not a real wallet."
     public static let pnlUnavailable = "PnL unavailable"
     public static let unknown = "Unknown"
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
     public static let tooNewToChart = "Not enough history for a chart yet."
-    public static let reading = "Reading this wallet's history. The first read can take a minute, then only new activity is read."
+    public static let reading = "Reading this wallet. The first read can take a minute."
     public static let notAnAddress = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 }
 

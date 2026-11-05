@@ -37,6 +37,7 @@ struct MainWindow: View {
     /// How small the window can get, with the sidebar closed. It closes by itself below `sidebarWidth`.
     static let minimumSize = CGSize(width: 480, height: 400)
     private static let sidebarWidth: CGFloat = 640
+    private static let titleWidth: CGFloat = 560
     /// Below this the details open over the window, because there's no room beside the section.
     private static let inspectorWidth: CGFloat = 900
 
@@ -51,8 +52,8 @@ struct MainWindow: View {
             page
                 .frame(minWidth: 320, minHeight: 320)
                 .navigationTitle(navigation.section.title)
-                // The wallet needs that room when the window's narrow, and the wallet's what the toolbar can't do without.
-                .toolbar(removing: width < Self.sidebarWidth ? .title : nil)
+                // The wallet comes first when there's only room for one of them.
+                .toolbar(removing: width < Self.titleWidth ? .title : nil)
                 .toolbar { toolbar }
                 .inspector(isPresented: inspectorBinding) { inspector }
         }
@@ -91,10 +92,6 @@ struct MainWindow: View {
         }
         // What's open belongs to the wallet it was opened on.
         .onChange(of: store.address) {
-            navigation.target = nil
-        }
-        // Details belong to the section they were opened from.
-        .onChange(of: navigation.section) {
             navigation.target = nil
         }
     }
@@ -143,12 +140,11 @@ struct MainWindow: View {
                 WalletButton(store: store, hotWallet: hotWallet, navigation: navigation, maxWidth: width < Self.sidebarWidth ? 230 : 300)
             }
         }
-        // With no title, nothing else would hold what follows at the far end.
-        if width < Self.sidebarWidth { ToolbarSpacer(.flexible) }
-        if navigation.section == .overview || navigation.section == .transactions {
+        // With no title in a small window, nothing else would hold the rest at the far end.
+        ToolbarSpacer(.flexible)
+        if store.address != nil, navigation.section == .overview || navigation.section == .transactions {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh", systemImage: "arrow.clockwise") { store.start() }
-                    .disabled(store.address == nil)
                     .help("Refresh (⌘R)")
             }
         }
@@ -272,7 +268,7 @@ struct MainWindow: View {
     }
 
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
-        let rest = 300 + CGFloat(rows) * HoldingsTable.rowHeight
+        let rest = 430 + CGFloat(rows) * HoldingsTable.rowHeight
         return min(max(pageHeight - rest, 200), 460)
     }
 
@@ -701,53 +697,11 @@ private struct Welcome: View {
         ContentUnavailableView {
             Label("See What a Wallet Is Worth", systemImage: "wallet.bifold")
         } description: {
-            Text("See the holdings, cost and PnL of any Base wallet.")
+            Text("Paste a Base address to see its holdings, cost and PnL.")
                 .help(Wording.pnlHelp)
         } actions: {
-            VStack(spacing: 16) {
-                spendingMoney
-                VStack(alignment: .leading, spacing: 6) {
-                    WalletAddressField(prompt: "Paste an address to watch it", problem: $problem) { store.setWallet($0) }
-                        .textFieldStyle(.roundedBorder)
-                    if let problem {
-                        WarningText(problem).font(.callout)
-                    }
-                }
-                if WalletList.offersDemo {
-                    Button("Try the Demo Wallet") { store.setWallet(WalletAddress.demo) }
-                        .buttonStyle(.link)
-                }
-            }
-            .frame(width: 360)
-        }
-    }
-
-    /// Nothing to offer on a build that can't hold a key. The rest of this screen still works there.
-    @ViewBuilder
-    private var spendingMoney: some View {
-        if hotWallet.availability == .ready {
-            VStack(spacing: 6) {
-                if let address = hotWallet.address {
-                    Button("Show \(HotWalletWording.title)") { store.setWallet(address.lowercased) }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                } else {
-                    // That section says what this is and what can go wrong, and only it makes the key.
-                    Button("Create \(HotWalletWording.title)…") { navigation.section = .spendingMoney }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                    Text(HotWalletWording.summary)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize()
-                }
-            }
-            HStack {
-                VStack { Divider() }
-                Text("or").font(.callout).foregroundStyle(.secondary)
-                VStack { Divider() }
-            }
+            WalletForm(store: store, onDone: {})
+                .frame(width: 340)
         }
     }
 }
@@ -764,5 +718,79 @@ private struct Unavailable: View {
             Button("Try Again") { store.start() }
                 .buttonStyle(.borderedProminent)
         }
+    }
+}
+
+struct WalletSheet: View {
+    let store: PortfolioStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Change Wallet").font(.headline)
+            WalletForm(store: store) { dismiss() }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(18)
+        .frame(width: 480)
+    }
+}
+
+/// Addresses only. Nothing in this app ever asks for a key or a recovery phrase.
+struct WalletForm: View {
+    let store: PortfolioStore
+    let onDone: () -> Void
+    @State private var input = ""
+    @State private var error: String?
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack {
+                TextField("Paste a Base address, 0x…", text: $input)
+                    .textFieldStyle(.roundedBorder)
+                    // Only what's typed: a prompt in a code font reads as a command.
+                    .font(input.isEmpty ? .body : .body.monospaced())
+                    .autocorrectionDisabled()
+                    .focused($isFocused)
+                    .onSubmit(submit)
+                Button("Look Up", action: submit)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(input.isEmpty)
+                    .fixedSize()
+            }
+            if let error {
+                WarningText(error)
+                    .font(.callout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            #if DEBUG
+            // For trying things while building the app. A fixture has no place in a release build, and scenes show what one looks like.
+            if !TestMode.isRunning {
+                Button("Try the demo wallet") {
+                    store.setWallet(WalletAddress.demo)
+                    onDone()
+                }
+                .buttonStyle(.link)
+            }
+            #endif
+        }
+        .onAppear { isFocused = true }
+    }
+
+    private func submit() {
+        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard WalletAddress.isValid(value) else {
+            error = Wording.notAnAddress
+            return
+        }
+        error = nil
+        store.setWallet(value)
+        onDone()
     }
 }
