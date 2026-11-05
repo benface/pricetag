@@ -75,6 +75,21 @@ private func client(retries: [Duration] = [.zero, .zero, .zero], pacer: NodePace
     return RPCChainClient(url: URL(string: "https://node.test")!, session: URLSession(configuration: configuration), pacer: pacer, retryDelays: retries)
 }
 
+/// The real transport for the broadcast and nothing else, since that's what's being tested.
+private struct BroadcastsForReal: ChainClient {
+    let fake: FakeChain
+    let node: RPCChainClient
+
+    func snapshot(of address: EthereumAddress) async throws -> ChainSnapshot { try await fake.snapshot(of: address) }
+    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64 {
+        try await fake.estimateGas(from: from, to: to, value: value, data: data)
+    }
+    func send(_ transaction: SignedTransaction) async throws { try await node.send(transaction) }
+    func receipt(of hash: String) async throws -> Receipt? { try await fake.receipt(of: hash) }
+    func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer { await fake.read(method, parameters) }
+    func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128 { await fake.l1Fee(ofPayload: payload) }
+}
+
 /// The public node's own habits, as seen on Base: part of a batch refused inside an HTTP 200, or a 429 for the whole thing.
 @Suite(.serialized) struct NodeTests {
     @Test func callsRefusedInsideA200AreAskedAgainAndOnlyThose() async throws {
@@ -154,6 +169,73 @@ private func client(retries: [Duration] = [.zero, .zero, .zero], pacer: NodePace
         }
         StubNode.script { _, _ in StubNode.Reply(status: 200, body: Data("<html>".utf8)) }
         await #expect(throws: ChainError.unreachable) { try await client().send(SignedTransaction(raw: [1, 2, 3])) }
+    }
+
+    /// A refusal is only about the attempt it answered. The next one may have been taken, so its silence can't count as another refusal.
+    @Test func noAnswerAfterARefusalIsStillUncertain() async {
+        let refusals: [([[String: Any]]) -> StubNode.Reply] = [
+            { _ in json(limit, status: 429) },
+            { _ in json(limit) },
+            { calls in json(calls.map { ["jsonrpc": "2.0", "id": $0["id"] ?? 0, "error": limit] }) },
+        ]
+        let silences: [StubNode.Reply] = [
+            json([Any]()),
+            json([["jsonrpc": "2.0", "id": 99, "result": "0xabc"]]),
+            StubNode.Reply(status: 200, body: Data("<html>".utf8)),
+        ]
+        for refusal in refusals {
+            for silence in silences {
+                StubNode.script { calls, count in count == 1 ? refusal(calls) : silence }
+                await #expect(throws: ChainError.unreachable) { try await client().send(SignedTransaction(raw: [1, 2, 3])) }
+                #expect(StubNode.asked.count == 2)
+            }
+        }
+    }
+
+    @Test func aReadThatGoesMissingAfterARefusalIsntCalledARefusal() async {
+        StubNode.script { calls, count in
+            count == 1 ? json(calls.map { ["jsonrpc": "2.0", "id": $0["id"] ?? 0, "error": limit] }) : json([Any]())
+        }
+        await #expect(throws: ChainError.unreadable) {
+            _ = try await client().estimateGas(from: wallet, to: wallet, value: 0, data: [])
+        }
+    }
+
+    /// The whole way through: one signature, two broadcasts, and the money may have gone, so it mustn't say it didn't.
+    @MainActor @Test func aWalletKeepsWaitingOnASendThatWentMissingAfterARefusal() async throws {
+        let (hotWallet, bridge, signer) = try await sitePath { _, count in count == 1 ? json(limit, status: 429) : json([Any]()) }
+        let record = try #require(hotWallet.records.first)
+        #expect(StubNode.asked.count == 2)
+        #expect(await signer.signed.count == 1)
+        #expect(record.status == .pending)
+        #expect(bridge.failure == nil)
+    }
+
+    /// Every attempt refused means the node never looked at it, so this one really is certain.
+    @MainActor @Test func aWalletDropsASendThatWasRefusedEveryTime() async throws {
+        let (hotWallet, bridge, _) = try await sitePath { _, _ in json(limit, status: 429) }
+        #expect(hotWallet.records.first?.status == .dropped)
+        #expect(bridge.failure?.reason == HotWalletWording.networkBusy)
+    }
+
+    @MainActor private func sitePath(_ answer: @escaping ([[String: Any]], Int) -> StubNode.Reply) async throws -> (HotWallet, SiteBridge, FakeSigner) {
+        StubNode.script(answer)
+        let chain = BroadcastsForReal(fake: FakeChain(snapshot()), node: client())
+        let signer = FakeSigner(keys: [hotAddress])
+        let stateStore = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hotAddress
+        state.connectedSites = ["https://a.example.com"]
+        try stateStore.save(state)
+        let portfolios = ScriptedPortfolios(.failure(.unreachable))
+        let hotWallet = HotWallet(signer: signer, settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { portfolios }, makeChain: { _ in chain }, readRetryDelay: .zero)
+        let bridge = SiteBridge(wallet: hotWallet)
+        let parameters: JSONValue = .array([.object(["from": .string(hotAddress.lowercased), "to": .string(coldAddress.lowercased), "value": .string("0x10")])])
+        let task = bridge.begin(SiteRequest(connection: UUID(), id: "1", origin: "https://a.example.com", method: "eth_sendTransaction", parameters: parameters))
+        for _ in 0..<5000 where bridge.current == nil { try await Task.sleep(for: .milliseconds(1)) }
+        await bridge.approve(try #require(bridge.current).id)
+        _ = await task.value
+        return (hotWallet, bridge, signer)
     }
 
     @Test func aSiteReadIsAskedAgainAndKeepsTheNodesOwnAnswers() async throws {

@@ -277,6 +277,8 @@ public struct RPCChainClient: ChainClient {
 
     /// Returns which of these the node wouldn't answer because of its rate limit. It can say so for the whole batch or for each call in it.
     private func ask(_ indices: [Int], of calls: [(String, [Any])], into results: inout [Result<Any?, ChainError>]) async throws -> [Int] {
+        // An earlier refusal says nothing about this attempt. If this one gets no answer, that's all that's known.
+        for index in indices { results[index] = .failure(.unreadable) }
         let body = indices.map { index in
             ["jsonrpc": "2.0", "id": index, "method": calls[index].0, "params": calls[index].1] as [String: Any]
         }
