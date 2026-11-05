@@ -236,7 +236,9 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
       value = values.realizedMicros && signed(values.realizedMicros)
       if (values.realizedMicros === null) {
         const known = BigInt(state.resolvedDisposedQty) > 0n ? ` ${signed(state.realizedMicros)} is the part that is known.` : ""
-        lines.push(`${formatAmount(state.unresolvedDisposedQty, decimals)} ${asset} was sold or spent with an unknown cost or no price, so its gain can't be known.${known}`)
+        const soldAt = (units: string, what: string) => (BigInt(units) > 0n ? [`${formatAmount(units, decimals)} ${asset} was sold or spent at ${what}`] : [])
+        const unknowns = [...soldAt(state.unknownCostDisposedQty, "an unknown cost"), ...soldAt(state.unknownProceedsQty, "an unknown price")]
+        lines.push(`${unknowns.join(", and ")}, so its gain can't be known.${known}`)
       } else lines.push("What you received minus what it cost, on what was sold or spent on network fees. The fees themselves are a separate cost in the total.")
       break
     case "unrealized":
@@ -303,8 +305,8 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
   if (totals.unpricedGas && (metric === "gas" || metric === "pnl")) lines.push("Some network fees had no price at the time, so they aren't included.")
   const relevant = totals.excluded.filter(({ reason }) => {
     if (metric === "value") return reason === "no current price" || reason === "incomplete history" || reason === "balance couldn't be read"
-    if (metric === "realized") return reason === "sold at an unknown cost" || reason === "doesn't match its actual balance" || reason === "not checked against its actual balance"
-    if (metric === "unrealized") return reason !== "sold at an unknown cost"
+    if (metric === "realized") return reason === "sold at an unknown cost" || reason === "sold or spent at an unknown price" || reason === "doesn't match its actual balance" || reason === "not checked against its actual balance"
+    if (metric === "unrealized") return reason !== "sold at an unknown cost" && reason !== "sold or spent at an unknown price"
     return metric === "pnl"
   })
   for (const { asset, reason } of relevant) lines.push(`Not included: ${asset} (${reason}).`)

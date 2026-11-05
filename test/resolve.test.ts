@@ -67,6 +67,7 @@ function wallet(address: string, rows: LegRow[], changes: Partial<WalletResponse
     unseenEth: [],
     notes: [],
     marketChecked: true,
+    marketMarks: {},
     unlisted: [],
     ...changes,
     legs,

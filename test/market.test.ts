@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { ETH_ADDRESS, TOKEN_FEEDS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, LAST_2S_BLOCK, marketPrice, marketTrades, type LegRow, type MarketRow, type MarketTrade, type Reference } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, TOKEN_FEEDS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, LAST_2S_BLOCK, markNeeds, marketPrice, marketTrades, pnlOverTime, referenceMarks, type LegRow, type MarketRow, type MarketTrade, type Reference } from "@pricetag/sdk/core"
 import type { Query } from "@pricetag/sdk/internal"
 import { resolvingSource } from "../server/source.ts"
 
@@ -161,6 +161,53 @@ describe("a trade in a transaction with an unconfirmed credit", () => {
     const rows = [at(AERO, "debit", (5n * E18).toString()), at(DEGEN, "credit", (5n * E18).toString()), at(ETH_ADDRESS, "credit", E18.toString(), "unwrap")]
     const legs = buildPricedLegs({ account: ME, rows, references: [{ blockNum: 5, ethUsd: "200000000000", usdcUsd: "100000000" }], priced: [], market: () => "1300000" })
     assert.deepEqual(legs.map((l) => [l.asset, l.kind, l.costMicros, l.proceedsMicros, l.estimated ?? false]), [["AERO", "swap", null, null, false], ["DEGEN", "swap", null, null, false], ["ETH", "swap", null, null, false]])
+  })
+})
+
+describe("what a chart needs marked", () => {
+  const moved = (block_num: number, token: string, side: LegRow["side"], amount: bigint, account = ME, tx_index = 1): LegRow => ({ block_num, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: `0x${block_num}${tx_index}`, tx_index, log_index: 0, token, account, side, amount: amount.toString(), kind: "erc20" })
+  const gas = (block_num: number) => ({ ...moved(block_num, ETH_ADDRESS, "debit", 1n), kind: "gas" as const })
+  const blocksOf = (needs: { asset: string; block: number }[], asset = "AERO") => needs.filter((n) => n.asset === asset).map((n) => n.block)
+
+  it("is each block with a transaction that leaves the token held, newest first", () => {
+    const rows = [gas(5), moved(10, AERO, "credit", E18), gas(20), moved(30, AERO, "debit", E18), gas(40)]
+    assert.deepEqual(blocksOf(markNeeds(ME, rows, null)), [20, 10])
+  })
+
+  it("starts from what was held before the first block", () => {
+    assert.deepEqual(markNeeds(ME, [gas(5)], { amounts: { AERO: E18.toString() } }), [{ asset: "AERO", block: 5 }])
+  })
+
+  it("has nothing to mark for a token that comes and goes within one transaction, which only gets a point after it", () => {
+    assert.deepEqual(blocksOf(markNeeds(ME, [moved(10, AERO, "credit", E18), moved(10, AERO, "debit", E18), gas(20)], null)), [])
+  })
+
+  it("keeps a token bought and sold in different transactions of one block, in the order they ran", () => {
+    const bought = moved(10, AERO, "credit", E18, ME, 1)
+    const sold = moved(10, AERO, "debit", E18, ME, 2)
+    assert.deepEqual(blocksOf(markNeeds(ME, [bought, sold, gas(20)], null)), [10])
+    assert.deepEqual(blocksOf(markNeeds(ME, [sold, bought, gas(20)], null)), [10], "whatever order the rows came in")
+    const soldFirst = [moved(10, AERO, "debit", E18, ME, 1), moved(10, AERO, "credit", E18, ME, 2), gas(20)]
+    assert.deepEqual(blocksOf(markNeeds(ME, soldFirst, { amounts: { AERO: E18.toString() } })), [20, 10], "and one sold then bought back is held after it")
+  })
+
+  it("marks the chart at each of those transactions", () => {
+    const usdc = (amount: bigint, side: LegRow["side"], index: number) => moved(10, USDC_ADDRESS, side, amount * E6, ME, index)
+    // Buys 100 AERO for $100, then sells them for $200 in the same block, with AERO trading at $2.
+    const rows = [moved(10, AERO, "credit", 100n * E18, ME, 1), usdc(100n, "debit", 1), moved(10, AERO, "debit", 100n * E18, ME, 2), usdc(200n, "credit", 2)]
+    const references = [{ blockNum: 10, ethUsd: "200000000000", usdcUsd: "100000000" }]
+    const legs = buildPricedLegs({ account: ME, rows, references, priced: derivePricedRows(rows, references) }).filter((l) => l.asset === "AERO")
+    const marks = Object.fromEntries(markNeeds(ME, rows, null).map(({ asset, block }) => [block, { [asset]: "2000000" }]))
+    assert.deepEqual(pnlOverTime(legs, "average", {}, referenceMarks(references, marks), null).map((p) => p.pnlMicros), ["100000000", "100000000"])
+  })
+
+  it("doesn't count more leaving than arrived against what comes later", () => {
+    const rows = [moved(10, AERO, "debit", 5n * E18), gas(20), moved(30, AERO, "credit", E18), gas(40)]
+    assert.deepEqual(blocksOf(markNeeds(ME, rows, null)), [40, 30])
+  })
+
+  it("leaves out tokens with a feed, and other accounts' rows", () => {
+    assert.deepEqual(markNeeds(ME, [moved(10, USDC_ADDRESS, "credit", E6), moved(20, AERO, "credit", E18, "0x00000000000000000000000000000000000000bb")], null), [])
   })
 })
 

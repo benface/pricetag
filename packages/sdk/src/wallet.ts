@@ -5,6 +5,7 @@ import { viewWallet, type CurrencyCode, type Rates, type WalletView } from "./cu
 import type { Method } from "./fold.ts"
 import { compareWithHoldingEth, type HoldComparison } from "./hold.ts"
 import type { PricedLeg, Reference, UnseenEth } from "./legs.ts"
+import type { MarketMarks } from "./market.ts"
 import type { CostNote } from "./notes.ts"
 import { foldPositions, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type Head, type LatestPrices, type PnlPoint, type PnlStatus, type Position, type Totals } from "./portfolio.ts"
 import type { BalanceSnapshot } from "./reconcile.ts"
@@ -56,6 +57,8 @@ export type WalletData = {
   notes: CostNote[]
   /** Whether market prices were read successfully, so a token without one really has no market. */
   marketChecked: boolean
+  /** What this wallet's tokens without a feed traded at, at the blocks of its transactions, for a chart. Some can still be unread. */
+  marketMarks: MarketMarks
 }
 
 export const hasStarted = ({ coverage }: Pick<WalletData, "coverage">) => coverage.toBlock >= coverage.fromBlock

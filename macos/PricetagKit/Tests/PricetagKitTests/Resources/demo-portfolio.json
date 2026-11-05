@@ -365,6 +365,10 @@
       },
       {
         "asset": "USDC",
+        "reason": "sold or spent at an unknown price"
+      },
+      {
+        "asset": "USDC",
         "reason": "unknown cost"
       },
       {
@@ -441,64 +445,64 @@
       "blockNum": 53500900,
       "timestamp": "2026-11-04T08:30:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
-      "pnlMicros": "-193440",
-      "excludedCount": 7
+      "pnlMicros": "6560",
+      "excludedCount": 6
     },
     {
       "blockNum": 53501200,
       "timestamp": "2026-11-04T08:40:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000005",
-      "pnlMicros": "-193440",
-      "excludedCount": 8
+      "pnlMicros": "48006560",
+      "excludedCount": 6
     },
     {
       "blockNum": 53501500,
       "timestamp": "2026-11-04T08:50:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
-      "pnlMicros": "-292040",
-      "excludedCount": 8
+      "pnlMicros": "87907960",
+      "excludedCount": 6
     },
     {
       "blockNum": 53502400,
       "timestamp": "2026-11-04T09:20:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000007",
-      "pnlMicros": "74592560",
-      "excludedCount": 8
+      "pnlMicros": "199717560",
+      "excludedCount": 6
     },
     {
       "blockNum": 53503000,
       "timestamp": "2026-11-04T09:40:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000008",
-      "pnlMicros": "74592560",
-      "excludedCount": 8
+      "pnlMicros": "184717560",
+      "excludedCount": 6
     },
     {
       "blockNum": 53503600,
       "timestamp": "2026-11-04T10:00:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
-      "pnlMicros": "74489240",
-      "excludedCount": 8
+      "pnlMicros": "174614240",
+      "excludedCount": 6
     },
     {
       "blockNum": 53504200,
       "timestamp": "2026-11-04T10:20:00.000Z",
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
-      "pnlMicros": "74385640",
-      "excludedCount": 9
+      "pnlMicros": "164510640",
+      "excludedCount": 7
     },
     {
       "blockNum": 53504800,
       "timestamp": "2026-11-04T10:40:00.000Z",
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000b",
-      "pnlMicros": "74281640",
-      "excludedCount": 9
+      "pnlMicros": "154406640",
+      "excludedCount": 7
     },
     {
       "blockNum": 53505000,
       "timestamp": "2026-11-04T10:46:40.000Z",
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000c",
-      "pnlMicros": "74176840",
-      "excludedCount": 9
+      "pnlMicros": "149301840",
+      "excludedCount": 7
     },
     {
       "blockNum": 53505400,

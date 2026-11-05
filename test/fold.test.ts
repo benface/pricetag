@@ -171,6 +171,17 @@ describe("unknown is never $0", () => {
     assert.equal(valuePosition(s, null).realizedMicros, null)
   })
 
+  both("says which side of a sale is unknown", (method) => {
+    const sides = (s: ReturnType<typeof run>) => [s.unresolvedDisposedQty, s.unknownCostDisposedQty, s.unknownProceedsQty]
+    const half = ETH / 2n
+    assert.deepEqual(sides(run(method, [buy(ETH, 100n), leg({ delta: -ETH })])), [ETH.toString(), "0", ETH.toString()], "known cost, no proceeds")
+    assert.deepEqual(sides(run(method, [receive(ETH), sell(ETH, 300n)])), [ETH.toString(), ETH.toString(), "0"], "unknown cost, known proceeds")
+    assert.deepEqual(sides(run(method, [receive(ETH), leg({ delta: -ETH })])), [ETH.toString(), ETH.toString(), ETH.toString()], "neither known")
+    assert.deepEqual(sides(run(method, [buy(half, 100n), sell(ETH, 300n)])), [half.toString(), half.toString(), "0"], "more left than arrived")
+    assert.deepEqual(sides(run(method, [buy(ETH, 100n), gas(ETH, null)])), [ETH.toString(), "0", ETH.toString()], "a network fee with no price")
+    assert.deepEqual(sides(run(method, [buy(ETH, 100n), sell(ETH, 300n)])), ["0", "0", "0"], "both known")
+  })
+
   both("no current price leaves value and unrealized PnL unavailable, never 0", (method) => {
     const v = valuePosition(run(method, [buy(ETH, 100n)]), null)
     assert.equal(v.valueMicros, null)
