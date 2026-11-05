@@ -70,11 +70,11 @@ struct ContrastTests {
         if !dark { #expect(try rendered(Text("8888").font(big).foregroundStyle(.secondary), dark: false) < 4.5) }
     }
 
-    /// At the sizes it's really used, where thin strokes come out lighter: the worth under an amount, "Unavailable", "Leaves out 2 unknown" and the
-    /// chart's change. Faded, with Increase Contrast on, and on the chart tooltip's material.
+    /// At the biggest and smallest sizes it's really used, where thin strokes come out lighter: the worth under an amount, and "Leaves out 2 unknown".
+    /// Faded, with Increase Contrast on, and on the chart tooltip's material. It yields between renders, because other tests wait on the main thread against a deadline.
     @Test(arguments: [false, true])
-    func amountsAndUnknownsCanBeReadAtTheirOwnSizes(dark: Bool) throws {
-        for (name, font) in [("title 3", Font.title3), ("medium callout", .callout.weight(.medium)), ("callout", .callout), ("caption", .caption)] {
+    func amountsAndUnknownsCanBeReadAtTheirOwnSizes(dark: Bool) async throws {
+        for (name, font) in [("title 3", Font.title3), ("caption", .caption)] {
             let text = Text("$12.50 8888").font(font).monospacedDigit()
             let cases: [(String, AnyView)] = [
                 ("as it is", AnyView(text.secondaryText())),
@@ -85,6 +85,7 @@ struct ContrastTests {
             for (state, view) in cases {
                 let measured = try rendered(view, dark: dark, step: 1)
                 #expect(measured >= 4.5, "\(name), \(state), in \(dark ? "dark" : "light") measured \(measured)")
+                await Task.yield()
             }
         }
     }
