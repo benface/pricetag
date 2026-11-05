@@ -38,6 +38,18 @@ public final class HotWallet {
     public private(set) var ampProblem = false
     /// Why the last sweep didn't go out. Automatic sweeps wait a while before trying again.
     public private(set) var sweepProblem: String?
+    /// Every transaction the last send or sweep asked for put on its way, in order, a rebroadcast of one it had before included.
+    /// What's shown about it follows these receipts and nothing else, so an earlier attempt or one made by itself can't stand in for it.
+    public private(set) var lastSubmitted: [String] = []
+    /// While a send or sweep is in its turn, what it's put on its way so far.
+    private var submitting: [String]?
+
+    /// What's become of these transactions, from their records. One this wallet has no record of yet hasn't landed.
+    public func landing(of hashes: [String]) -> Landing {
+        let records = self.records
+        let tracked = Set(hashes).map { hash in records.first { $0.hash == hash } }
+        return tracked.contains { $0 == nil } ? .onItsWay : Landing(tracked.compactMap(\.self))
+    }
     public private(set) var isWorking = false
     /// What's keeping a rotation from deleting the old key. The user can still choose to leave it behind.
     public private(set) var rotationHold: RotationHold?
@@ -589,7 +601,13 @@ public final class HotWallet {
         guard let address, let destination = settings.sweepDestination else { return false }
         var isOnItsWay = false
         let name = settings.coldWallets.first { $0.address == destination }?.name ?? "your savings"
+        lastSubmitted = []
         await work(confirming: "sweep everything to \(name)", in: prompt) { [self] in
+            submitting = []
+            defer {
+                lastSubmitted = submitting ?? []
+                submitting = nil
+            }
             guard self.address == address else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
             let snapshot = try await patientSnapshot(of: address)
             self.snapshot = snapshot
@@ -951,7 +969,13 @@ public final class HotWallet {
     public func send(_ request: SendRequest, in prompt: PresencePrompt? = nil) async -> Bool {
         guard let address, canSend else { return false }
         var isOnItsWay = false
+        lastSubmitted = []
         await work(confirming: "send \(Money.text(ofUnits: request.amount, decimals: request.token.decimals)) \(request.token.symbol) to \(request.to.checksummed)", in: prompt) { [self] in
+            submitting = []
+            defer {
+                lastSubmitted = submitting ?? []
+                submitting = nil
+            }
             let snapshot = try await readToSign(address)
             if let problem = self.problem(sendingTo: request.to) ?? SendPlanner.problem(with: request, snapshot: snapshot) { throw ChainError.rejected(problem.message) }
             let price = self.price(of: request.token, snapshot: snapshot)
@@ -1075,6 +1099,7 @@ public final class HotWallet {
 
     /// On disk before it leaves, so a crash in between can't make this look like someone else's transaction.
     private func recordAndSend(_ signed: SignedTransaction, from address: EthereumAddress, record: SignedRecord) async throws {
+        submitting?.append(record.hash)
         // Signing the same thing again gives the same hash, and that's one transaction, however many times it's sent.
         if let index = state.records[address]?.firstIndex(where: { $0.hash == record.hash }) {
             state.records[address]?[index] = record

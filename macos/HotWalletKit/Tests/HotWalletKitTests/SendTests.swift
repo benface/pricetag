@@ -856,3 +856,18 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         #expect(await rig.chain.sent.count == 2, "the next deposit still sweeps")
     }
 }
+
+struct LandingTests {
+    private func record(_ nonce: UInt64, _ status: SignedRecord.Status) -> SignedRecord {
+        SignedRecord(hash: "0x\(nonce)", nonce: nonce, to: EthereumAddress("0x00000000000000000000000000000000000de302")!, symbol: "USDC", decimals: 6, amount: "1", usdMicros: nil, gainUsdMicros: "0", reason: .sent, createdAt: .distantPast, status: status)
+    }
+
+    @Test func nothingHasLandedUntilEveryReceiptSaysSo() {
+        #expect(Landing([]) == .onItsWay)
+        #expect(Landing([record(1, .pending)]) == .onItsWay)
+        #expect(Landing([record(1, .confirmed), record(2, .pending)]) == .onItsWay)
+        #expect(Landing([record(1, .confirmed), record(2, .confirmed)]) == .landed)
+        #expect(Landing([record(1, .confirmed), record(2, .failed)]) == .didntLand)
+        #expect(Landing([record(1, .pending), record(2, .dropped)]) == .didntLand)
+    }
+}

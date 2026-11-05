@@ -9,6 +9,20 @@ import Testing
         return PnlPoint(blockNum: second, timestamp: timestamp, txHash: tx ? "0x\(second)" : nil, pnlMicros: pnl, excludedCount: pnl == nil ? 1 : 0)
     }
 
+    @Test func aPointedAtTransactionIsWhatThePointsSayNow() {
+        let before = PnlSeries(points: [point(0, "10000000"), point(1, "20000000")])
+        let id = try! #require(before.transaction(id: point(0, nil).id))
+        #expect(id.value == 10)
+        // After an answer or a refresh, the same transaction has a new PnL, and that's what's shown for it.
+        let after = PnlSeries(points: [point(-1, "30000000"), point(0, "40000000"), point(1, "60000000")])
+        #expect(after.transaction(id: id.id)?.value == 40)
+        #expect(after.transaction(id: id.id)?.point.excludedCount == 0)
+        // Out of view, nothing's pointed at.
+        #expect(PnlSeries(points: [point(1, "60000000")]).transaction(id: id.id) == nil)
+        // The last point isn't a transaction.
+        #expect(before.transaction(id: point(2, "1", tx: false).id) == nil)
+    }
+
     @Test func aLeadingUnknownIsAGapAndNotAZero() {
         let series = PnlSeries(points: [point(0, nil), point(1, nil), point(2, "1000000")])
         #expect(series.segments.count == 1)

@@ -50,6 +50,7 @@ struct MainWindow: View {
             sidebar
         } detail: {
             page
+                .environment(\.updatingNote, store.updatingNote)
                 .frame(minWidth: 320, minHeight: 320)
                 .navigationTitle(navigation.section.title)
                 // The wallet comes first when there's only room for one of them.
@@ -58,6 +59,8 @@ struct MainWindow: View {
                 .inspector(isPresented: inspectorBinding) { inspector }
         }
         .frame(minWidth: Self.minimumSize.width, minHeight: Self.minimumSize.height)
+        // Only for the details opening and closing. It doesn't reach anything else that changes at another moment.
+        .motion(Motion.panel, value: navigation.target == nil)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { newWidth in
             let wasWide = width >= Self.sidebarWidth
             let isWide = newWidth >= Self.sidebarWidth
@@ -173,7 +176,7 @@ struct MainWindow: View {
         // In a narrow window Buy's label takes its room, and pushing either into the overflow menu would hide Buy. ⌘R and the View menu still refresh.
         if store.address != nil, navigation.section == .overview || navigation.section == .transactions, width >= Self.sidebarWidth || hotWallet.availability != .ready {
             ToolbarItem(placement: .primaryAction) {
-                Button("Refresh", systemImage: "arrow.clockwise") { store.start() }
+                Button("Refresh", systemImage: "arrow.clockwise") { store.refresh() }
                     .help("Refresh (⌘R)")
             }
         }
@@ -184,7 +187,7 @@ struct MainWindow: View {
         if let target = navigation.target {
             ExplanationPane(target: target, store: store)
                 .safeAreaBar(edge: .top) { metricPicker(target) }
-                .inspectorColumnWidth(min: 300, ideal: 360, max: 520)
+                .inspectorColumnWidth(min: 300, ideal: 330, max: 520)
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button("Close Details", systemImage: "xmark") { navigation.target = nil }
@@ -262,13 +265,17 @@ struct MainWindow: View {
                 NoWalletYet(navigation: navigation)
             }
         } else if let portfolio {
-            if !portfolio.progress.started {
-                ContentUnavailableView("Almost There", systemImage: "hourglass", description: Text(Wording.notStarted))
-            } else if portfolio.isEmpty {
-                NoActivity(portfolio: portfolio, navigation: navigation, notices: notices(portfolio))
-            } else {
-                content(portfolio)
+            Group {
+                if !portfolio.progress.started {
+                    ContentUnavailableView("Almost There", systemImage: "hourglass", description: Text(Wording.notStarted))
+                } else if portfolio.isEmpty {
+                    NoActivity(portfolio: portfolio, navigation: navigation, notices: notices(portfolio))
+                } else {
+                    content(portfolio)
+                }
             }
+            // Another wallet starts from the top with nothing selected, and its numbers appear rather than rolling from these.
+            .id(store.address)
         } else if store.feed == .reading {
             ContentUnavailableView {
                 ProgressView().controlSize(.large)
@@ -322,11 +329,19 @@ struct MainWindow: View {
                 // Short of height, its amounts would shrink and cut off instead of the page scrolling.
                 .fixedSize(horizontal: false, vertical: true)
             PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
+                .arrives()
             PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange) { navigation.target = .transaction($0) }
                 .frame(height: portfolio.hasChartableData && !portfolio.isTooNewToChart ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
             HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
             HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
         }
+        // A notice, the attention box or the chart coming or going, without the page below it jumping.
+        .motion(Motion.state, value: pageShape(portfolio))
+    }
+
+    /// What can add or remove a whole block of the page.
+    private func pageShape(_ portfolio: Portfolio) -> [Bool] {
+        [portfolio.attention == nil, portfolio.hasChartableData && !portfolio.isTooNewToChart, store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
     }
 
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
@@ -350,6 +365,7 @@ struct MainWindow: View {
     private func notices(_ portfolio: Portfolio) -> some View {
         if let notice = store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) {
             Notice(.warning, notice)
+                .arrives()
         }
         if portfolio.mode == .demo {
             Notice(.info, Wording.demo)
@@ -357,11 +373,13 @@ struct MainWindow: View {
         if !portfolio.linkedFailed.isEmpty {
             HStack(spacing: 8) {
                 Notice(.warning, Wording.linkedFailed(portfolio.linkedFailed.count))
-                Button("Try Again") { store.start() }
+                Button("Try Again") { store.refresh() }
             }
+            .arrives()
         }
         if !portfolio.linkedReading.isEmpty {
             Notice(.info, "Reading your other \(portfolio.linkedReading.count == 1 ? "wallet" : "wallets"). Until then, what came from \(portfolio.linkedReading.count == 1 ? "it" : "them") has an unknown cost.")
+                .arrives()
         }
     }
 }
@@ -396,6 +414,8 @@ private struct HoldingsSection: View {
     let onResolve: (String) -> Void
     @State private var width: CGFloat = 800
     @State private var showsAbout = false
+    /// Costs that were unknown until this last read. They're lit for a moment, and only ever after the server's said so.
+    @State private var justKnown: Set<String> = []
 
     private static let tableWidth: CGFloat = 560
 
@@ -425,13 +445,22 @@ private struct HoldingsSection: View {
                     .popover(isPresented: $showsAbout, arrowEdge: .bottom) { about }
             }
             if width >= Self.tableWidth {
-                HoldingsTable(portfolio: portfolio, isLive: isLive, width: width, target: $target, onResolve: onResolve)
+                HoldingsTable(portfolio: portfolio, isLive: isLive, width: width, justKnown: justKnown, target: $target, onResolve: onResolve)
                     .frame(height: HoldingsTable.height(rows: portfolio.listedPositions.count))
             } else {
                 rows
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .onChange(of: portfolio.costWatch) { old, new in
+            let arrived = new.arrivals(since: old)
+            if !arrived.isEmpty { justKnown.formUnion(arrived) }
+        }
+        .task(id: justKnown) {
+            guard !justKnown.isEmpty else { return }
+            try? await Task.sleep(for: Motion.highlight)
+            if !Task.isCancelled { justKnown = [] }
+        }
     }
 
     /// The fine print, for whoever wants it.
@@ -451,10 +480,27 @@ private struct HoldingsSection: View {
             ForEach(portfolio.listedPositions) { position in
                 Button { target = .asset(position.asset, .amount) } label: {
                     CompactHolding(position: position, currency: portfolio.currency, isLive: isLive)
+                        .padding(.horizontal, 4)
+                        .justKnown(justKnown.contains(position.asset))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(RowButtonStyle())
                 Divider()
             }
+        }
+    }
+}
+
+extension View {
+    /// A cost that's just become known, lit softly and fading by itself. The number's already rolled to what's real by then.
+    fileprivate func justKnown(_ isOn: Bool) -> some View {
+        background {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Tone.gain.style)
+                .opacity(isOn ? 0.2 : 0)
+                .padding(.horizontal, -5)
+                .padding(.vertical, -2)
+                // It comes up quickly and goes slowly.
+                .animation(isOn ? Motion.feedback : .easeOut(duration: 0.8 * Motion.slowdown), value: isOn)
         }
     }
 }
@@ -477,7 +523,8 @@ private struct CompactHolding: View {
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
                 LiveNumber(position.isHeld ? position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price" : "—", tone: position.values.valueMicros == nil ? .secondary : .neutral)
-                LiveNumber(position.pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized || position.estimates.unrealized) } ?? Wording.pnlUnavailable, tone: position.pnlMicros == nil ? .secondary : Tone(signed: position.pnlMicros))
+                    .updatingMark()
+                LiveNumber(position.pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized || position.estimates.unrealized) } ?? Wording.pnlUnavailable, tone: position.pnlMicros == nil ? .secondary : isLive ? Tone(signed: position.pnlMicros) : .neutral)
                     .font(.caption)
             }
         }
@@ -495,6 +542,7 @@ private struct HoldingsTable: View {
     let isLive: Bool
     /// As much as there is, because a hidden column doesn't give its width to the others.
     let width: CGFloat
+    let justKnown: Set<String>
     @Binding var target: ExplainTarget?
     let onResolve: (String) -> Void
     @State private var selection: Position.ID?
@@ -576,8 +624,9 @@ private struct HoldingsTable: View {
                 if position.isHeld {
                     let value = position.values.valueMicros
                     number(position, .value, value.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price", tone: value == nil ? .secondary : .neutral)
+                        .updatingMark()
                 } else {
-                    dash
+                    dash.updatingMark()
                 }
             }
             .width(min: Column.value, ideal: Column.value, max: limit(Column.value))
@@ -659,6 +708,7 @@ private struct HoldingsTable: View {
                 // A long amount gets smaller rather than losing digits.
                 .minimumScaleFactor(0.7)
                 .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
+                .justKnown(justKnown.contains(position.asset) && (metric == .average || metric == .unrealized))
         }
         .buttonStyle(NumberButtonStyle())
         .help(metric.help ?? "")
@@ -698,7 +748,9 @@ private struct TransactionsTable: View {
             .width(min: 100)
             TableColumn("Total PnL") { point in
                 LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: point.pnlMicros == nil ? .secondary : isLive ? Tone(signed: point.pnlMicros) : .neutral)
+                    .opacity(isLive ? 1 : 0.55)
                     .help(Wording.pnlHelp)
+                    .updatingMark()
             }
             .width(min: 90, ideal: 90, max: 110)
             .alignment(.numeric)
@@ -823,7 +875,7 @@ private struct Unavailable: View {
         } description: {
             Text(store.feed.staleNotice(serverURL: store.serverURL, portfolio: nil) ?? "")
         } actions: {
-            Button("Try Again") { store.start() }
+            Button("Try Again") { store.refresh() }
                 .buttonStyle(.borderedProminent)
         }
     }

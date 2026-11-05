@@ -27,7 +27,7 @@ struct MacApp: App {
         TestMode.runIfAsked()
         HotWalletDebug.runSelfTestIfAsked()
         #endif
-        let store = PortfolioStore()
+        let store = PortfolioStore(cacheDirectory: .portfolioCache)
         let hotWallet = HotWalletFactory.make(store: store)
         let navigation = Navigation(store: store, hotWallet: hotWallet)
         let siteBridge = SiteBridge(wallet: hotWallet)
@@ -110,7 +110,7 @@ struct MacApp: App {
                 Picker("Cost", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
                     ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
                 }
-                Button("Refresh") { store.start() }
+                Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
             }
             CommandMenu("Wallet") {

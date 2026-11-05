@@ -121,6 +121,29 @@ public enum Format {
         "\(hash.prefix(6))…\(hash.suffix(4))"
     }
 
+    /// An address in groups of four, for reading, after its "0x".
+    public static func addressGroups(_ address: String) -> [String] {
+        let hasPrefix = address.hasPrefix("0x")
+        let digits = Array(hasPrefix ? address.dropFirst(2) : Substring(address))
+        let groups = stride(from: 0, to: digits.count, by: 4).map { String(digits[$0..<min($0 + 4, digits.count)]) }
+        return (hasPrefix ? ["0x"] : []) + groups
+    }
+
+    /// What's already formatted, as the parts a big amount shows differently. Together they're always exactly what went in.
+    /// Only two decimals count as cents: on a small amount like $0.0023, the decimals are the amount.
+    public static func amountParts(_ text: String) -> (mark: String, main: String, cents: String) {
+        let mark = text.hasPrefix("≈") ? "≈" : ""
+        let rest = text.dropFirst(mark.count)
+        guard let cents = rest.firstMatch(of: /[.,]\d\d$/) else { return (mark, String(rest), "") }
+        return (mark, String(rest[..<cents.range.lowerBound]), String(rest[cents.range]))
+    }
+
+    /// Roughly what a formatted amount says, only to know which way a number's rolling. nil when it isn't one.
+    public static func direction(of text: String) -> Double? {
+        let digits = text.filter { $0.isNumber || $0 == "." || $0 == "-" }
+        return digits.contains(where: \.isNumber) ? Double(digits) : nil
+    }
+
     public static func time(_ date: Date) -> String {
         date.formatted(.dateTime.month(.abbreviated).day().hour().minute().locale(locale))
     }
