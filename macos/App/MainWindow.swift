@@ -37,17 +37,15 @@ struct MainWindow: View {
     var body: some View {
         content
             .frame(minWidth: 780, minHeight: 560)
-            .navigationTitle(AppName.current)
-            .navigationSubtitle(subtitle)
+            // The window's name in the Window menu and Mission Control. In the window itself, the wallet button says it.
+            .navigationTitle(walletTitle ?? AppName.current)
+            .toolbar(removing: .title)
             .toolbar { toolbar }
             .inspector(isPresented: inspectorBinding) { inspector }
-            .sheet(isPresented: $navigation.isChangingWallet) {
-                WalletSheet(store: store)
-            }
             .sheet(isPresented: $navigation.isResolving) {
                 ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet)
             }
-            .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: "\(AppName.current) \(subtitle)") { result in
+            .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: exportName) { result in
                 if case .failure(let error) = result { exportError = error.localizedDescription }
                 exportDocument = nil
             }
@@ -79,10 +77,14 @@ struct MainWindow: View {
             }
     }
 
-    private var subtitle: String {
-        guard let address = store.address else { return "" }
-        let wallet = address == WalletAddress.demo ? "Demo wallet" : Format.shortHash(address)
-        return store.activeRuleName.map { "\(wallet) · \($0)" } ?? wallet
+    private var walletTitle: String? {
+        store.walletList(hotWallet: hotWallet).entry(for: store.address)?.title
+    }
+
+    /// A name can hold what a file's name can't.
+    private var exportName: String {
+        [AppName.current, walletTitle, store.activeRuleName].compactMap(\.self).joined(separator: " ")
+            .replacing(/[\/:]/, with: "-")
     }
 
     private var inspectorBinding: Binding<Bool> {
@@ -92,16 +94,20 @@ struct MainWindow: View {
     /// Named, because two lone icons didn't say what they did. The status doesn't look like a button, because it isn't one.
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            WalletButton(store: store, hotWallet: hotWallet, navigation: navigation)
+        }
+        // With no title, nothing else would hold the rest at the far end.
+        ToolbarSpacer(.flexible)
         ToolbarItem(placement: .primaryAction) {
-            FeedBadge(feed: store.feed, portfolio: portfolio)
-                .padding(.horizontal, 6)
+            if store.feed != .noWallet {
+                FeedBadge(feed: store.feed, portfolio: portfolio)
+                    .padding(.horizontal, 6)
+            }
         }
         .sharedBackgroundVisibility(.hidden)
         ToolbarSpacer(.fixed, placement: .primaryAction)
         ToolbarItemGroup(placement: .primaryAction) {
-            Button("Change Wallet", systemImage: "wallet.bifold") { navigation.isChangingWallet = true }
-                .labelStyle(.titleAndIcon)
-                .help("Look at another wallet (⌘L)")
             Button("Spending Money", systemImage: "banknote") { openWindow(id: WindowID.hotWallet) }
                 .labelStyle(.titleAndIcon)
                 .help("This Mac's spending money (⇧⌘M)")
@@ -185,6 +191,11 @@ struct MainWindow: View {
                                 HStack {
                                     Text("Holdings").font(.headline)
                                     Spacer()
+                                    if let rule = store.activeRuleName {
+                                        Text("\(Wording.rulesTitle): \(rule)")
+                                            .font(.callout)
+                                            .foregroundStyle(.secondary)
+                                    }
                                     CostMethodMenu(store: store)
                                 }
                                 HoldingsTable(portfolio: portfolio, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
@@ -542,20 +553,29 @@ private struct TransactionsTable: View {
 private struct Welcome: View {
     let store: PortfolioStore
     let hotWallet: HotWallet?
+    @State private var problem: String?
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ContentUnavailableView {
             Label("Every transfer gets a price", systemImage: "tag")
         } description: {
-            Text("See the holdings, cost and PnL of any Base wallet, with every number explained. A wallet you look up is only read, and nothing signs for it.")
+            Text("See the holdings, cost and PnL of any Base wallet.")
                 .help(Wording.pnlHelp)
         } actions: {
-            VStack(spacing: 20) {
+            VStack(spacing: 16) {
                 spendingMoney
-                WalletForm(store: store, onDone: {})
+                VStack(alignment: .leading, spacing: 6) {
+                    WalletAddressField(prompt: "Paste an address to watch it", problem: $problem) { store.setWallet($0) }
+                        .textFieldStyle(.roundedBorder)
+                    if let problem {
+                        WarningText(problem).font(.callout)
+                    }
+                }
+                Button("Try the Demo Wallet") { store.setWallet(WalletAddress.demo) }
+                    .buttonStyle(.link)
             }
-            .frame(width: 440)
+            .frame(width: 360)
         }
     }
 
@@ -565,18 +585,19 @@ private struct Welcome: View {
         if let hotWallet, hotWallet.availability == .ready {
             VStack(spacing: 6) {
                 if let address = hotWallet.address {
-                    Button("Show Spending Money") { store.setWallet(address.lowercased) }
+                    Button("Show \(HotWalletWording.title)") { store.setWallet(address.lowercased) }
                         .buttonStyle(.borderedProminent)
-                    Text("This Mac already has spending money.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .controlSize(.large)
                 } else {
                     // The window says what this is and what can go wrong, and only it makes the key.
-                    Button("Create Spending Money…") { openWindow(id: WindowID.hotWallet) }
+                    Button("Create \(HotWalletWording.title)…") { openWindow(id: WindowID.hotWallet) }
                         .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
                     Text(HotWalletWording.summary)
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize()
                 }
             }
             HStack {
@@ -603,74 +624,5 @@ private struct Unavailable: View {
                 Button("Use the Demo Wallet") { store.setWallet(WalletAddress.demo) }
             }
         }
-    }
-}
-
-struct WalletSheet: View {
-    let store: PortfolioStore
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Change Wallet").font(.headline)
-            WalletForm(store: store) { dismiss() }
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-            }
-        }
-        .padding(18)
-        .frame(width: 480)
-    }
-}
-
-/// Addresses only. Nothing in this app ever asks for a key or a recovery phrase.
-struct WalletForm: View {
-    let store: PortfolioStore
-    let onDone: () -> Void
-    @State private var input = ""
-    @State private var error: String?
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        VStack(spacing: 10) {
-            HStack {
-                TextField("Paste any Base address, 0x…", text: $input)
-                    .textFieldStyle(.roundedBorder)
-                    // Only what's typed: a prompt in a code font reads as a command.
-                    .font(input.isEmpty ? .body : .body.monospaced())
-                    .autocorrectionDisabled()
-                    .focused($isFocused)
-                    .onSubmit(submit)
-                Button("Look Up", action: submit)
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(input.isEmpty)
-                    .fixedSize()
-            }
-            if let error {
-                WarningText(error)
-                    .font(.callout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            Button("Try the demo wallet") {
-                store.setWallet(WalletAddress.demo)
-                onDone()
-            }
-            .buttonStyle(.link)
-        }
-        .onAppear { isFocused = true }
-    }
-
-    private func submit() {
-        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard WalletAddress.isValid(value) else {
-            error = Wording.notAnAddress
-            return
-        }
-        error = nil
-        store.setWallet(value)
-        onDone()
     }
 }

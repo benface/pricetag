@@ -45,9 +45,7 @@ struct PopoverView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text(portfolio.map { $0.mode == .demo ? "Demo wallet" : Format.shortHash($0.address) } ?? AppName.current)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                walletMenu
                 Spacer()
                 FeedBadge(feed: store.feed, portfolio: portfolio)
             }
@@ -56,7 +54,7 @@ struct PopoverView: View {
             }
             switch (store.feed, portfolio) {
             case (.noWallet, _):
-                Text("No wallet yet. Open the window to add one.").foregroundStyle(.secondary)
+                Text("No wallet yet.").foregroundStyle(.secondary)
             case (_, let portfolio?) where !portfolio.progress.started:
                 Text(Wording.notStarted).foregroundStyle(.secondary)
             case (_, let portfolio?) where portfolio.isEmpty:
@@ -79,6 +77,26 @@ struct PopoverView: View {
             }
         }
         .padding(14)
+    }
+
+    /// The same wallets as the window's toolbar, as a menu. Adding or naming one happens there, with room to do it.
+    private var walletMenu: some View {
+        let list = store.walletList(hotWallet: hotWallet)
+        let current = list.entry(for: store.address)
+        return Menu {
+            WalletPicker(store: store, list: list)
+            Divider()
+            Button("Add Wallet…") {
+                navigation.isSwitchingWallet = true
+                open(nil)
+            }
+        } label: {
+            Text(current.map { [$0.title, $0.badge].compactMap(\.self).joined(separator: " · ") } ?? AppName.current)
+        }
+        .menuStyle(.borderlessButton)
+        .controlSize(.small)
+        .fixedSize()
+        .foregroundStyle(.secondary)
     }
 
     private func holdings(_ portfolio: Portfolio) -> some View {

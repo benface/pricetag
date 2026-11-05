@@ -1186,6 +1186,17 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.settings.sweepDestination == coldAddress, "adding one doesn't change where sweeps go")
     }
 
+    @Test func aRenameKeepsEverythingElse() async throws {
+        let rig = await Rig()
+        let before = rig.wallet.settings
+        rig.wallet.renameColdWallet(coldAddress, to: " Vault ")
+        #expect(rig.wallet.settings.coldWallets.first?.name == "Vault")
+        #expect(rig.wallet.settings.coldWallets.first?.confirmedOnDeviceAt == before.coldWallets.first?.confirmedOnDeviceAt)
+        #expect(rig.wallet.settings.sweepDestination == before.sweepDestination)
+        rig.wallet.renameColdWallet(coldAddress, to: "  ")
+        #expect(rig.wallet.settings.coldWallets.first?.name == "Savings", "It always has a name")
+    }
+
     @Test func allOfThemCountAsLinked() async throws {
         let rig = await Rig()
         var published: [String] = []

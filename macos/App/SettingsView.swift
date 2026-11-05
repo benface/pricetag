@@ -37,22 +37,6 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Section {
-                LabeledContent("Wallet") {
-                    HStack {
-                        Text(store.address.map { $0 == WalletAddress.demo ? "Demo wallet" : Format.shortHash($0) } ?? "None")
-                            .textSelection(.enabled)
-                            .help(store.address ?? "")
-                        Button("Forget") { store.setWallet(nil) }
-                            .controlSize(.small)
-                            .disabled(store.address == nil)
-                    }
-                }
-            } footer: {
-                Text(store.address == hotWallet.address?.lowercased ? "This is this Mac's spending money, the one wallet this app holds a key for. Its settings are below." : "This wallet is only read, and nothing signs for it. The one key in this app is below.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
             Section("Your Other Wallets") {
                 ForEach(store.book.linkedWallets.filter { $0 != store.address }, id: \.self) { wallet in
                     LabeledContent(Format.shortHash(wallet)) {

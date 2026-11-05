@@ -660,6 +660,18 @@ public enum WalletAddress {
     public static func isValid(_ value: String) -> Bool {
         value.wholeMatch(of: /0x[0-9a-fA-F]{40}/) != nil
     }
+
+    /// The one address in whatever was pasted, which is often more than the address: `base:0x…`, or a link to an explorer's page.
+    /// Nil if there's none, or several to choose between. A transaction hash is longer, so it never counts.
+    public static func find(in text: String) -> String? {
+        let found = Set(text.matches(of: /(?:^|[^0-9a-zA-Z])(0x[0-9a-fA-F]{40})(?=$|[^0-9a-zA-Z])/).map { $0.output.1.lowercased() })
+        return found.count == 1 ? found.first : nil
+    }
+
+    /// Too long to still be on its way to being an address, so there's no point waiting to say so.
+    public static func isTooLong(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).count >= 42 && find(in: text) == nil
+    }
 }
 
 func isPositive(_ units: String) -> Bool {

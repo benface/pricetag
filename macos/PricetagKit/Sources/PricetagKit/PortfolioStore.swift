@@ -68,6 +68,8 @@ public final class PortfolioStore {
     public private(set) var selectedRule: String?
     /// The user's own wallets. Transfers between them carry their cost, and aren't new purchases.
     public private(set) var linkedWallets: [String] = []
+    /// Wallets the user has looked at, for the switcher. Addresses and names only.
+    public private(set) var savedWallets: [SavedWallet]
 
     @ObservationIgnored private var source: any PortfolioSource
     @ObservationIgnored private let makeSource: @Sendable (URL) -> any PortfolioSource
@@ -107,6 +109,12 @@ public final class PortfolioStore {
         self.serverURL = serverURL
         self.answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.selectedRule = defaults.string(forKey: Keys.rule)
+        var saved = defaults.data(forKey: Keys.savedWallets).flatMap { try? JSONDecoder().decode([SavedWallet].self, from: $0) } ?? []
+        // From before there was a list, the wallet being shown is all there is to remember.
+        if let address, address != WalletAddress.demo, !saved.contains(where: { $0.address == address }) {
+            saved.append(SavedWallet(address: address, lastSeen: now()))
+        }
+        self.savedWallets = saved
         self.feed = address == nil ? .noWallet : .reading
         self.source = makeSource(serverURL)
     }
@@ -176,6 +184,9 @@ public final class PortfolioStore {
         guard next != self.address else { return }
         self.address = next
         defaults.set(next, forKey: Keys.wallet)
+        if let next, next != WalletAddress.demo {
+            saveWallets(SavedWallet.seeing(next, at: now(), in: savedWallets, own: book.linkedWallets))
+        }
         portfolio = nil
         updatedAt = nil
         feed = next == nil ? .noWallet : .reading
@@ -186,6 +197,29 @@ public final class PortfolioStore {
     public func showNewWallet(_ address: String) {
         guard self.address == nil || self.address == WalletAddress.demo else { return }
         setWallet(address)
+    }
+
+    /// Keeps it in the list under this name, or makes it a recent one again with an empty name.
+    public func renameWallet(_ address: String, to name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var next = savedWallets
+        if let index = next.firstIndex(where: { $0.address == address }) {
+            next[index].name = clean.isEmpty ? nil : clean
+        } else if !clean.isEmpty {
+            next.append(SavedWallet(address: address, name: clean, lastSeen: now()))
+        }
+        saveWallets(next)
+    }
+
+    /// Takes it off the list, and shows `next` if it was the one showing.
+    public func removeWallet(_ address: String, showing next: String?) {
+        saveWallets(savedWallets.filter { $0.address != address })
+        if self.address == address { setWallet(next) }
+    }
+
+    private func saveWallets(_ wallets: [SavedWallet]) {
+        savedWallets = wallets
+        defaults.set(try? JSONEncoder().encode(wallets), forKey: Keys.savedWallets)
     }
 
     public func setMethod(_ method: CostMethod) {
@@ -416,5 +450,6 @@ public final class PortfolioStore {
         static let server = "serverURL"
         static let book = "answers"
         static let rule = "pricingRule"
+        static let savedWallets = "savedWallets"
     }
 }

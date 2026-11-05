@@ -89,11 +89,14 @@ struct MacApp: App {
                     .keyboardShortcut("t", modifiers: .command)
                 Button("Refresh") { store.start() }
                     .keyboardShortcut("r", modifiers: .command)
-                Button("Change Wallet…") { navigation.isChangingWallet = true }
-                    .keyboardShortcut("l", modifiers: .command)
                 Button("Export Tax Report…") { navigation.isExportingTaxReport = true }
                     .keyboardShortcut("e", modifiers: .command)
                     .disabled(store.address == nil)
+            }
+            CommandMenu("Wallet") {
+                SwitchWalletCommand(navigation: navigation)
+                Divider()
+                WalletPicker(store: store, list: store.walletList(hotWallet: hotWallet))
             }
             CommandGroup(before: .windowList) {
                 OpenHotWalletCommand()
@@ -139,6 +142,21 @@ enum WindowID {
     static let main = "main"
     static let hotWallet = "hot-wallet"
     static let siteApproval = "site-approval"
+}
+
+/// The window may be closed, so this opens it too.
+private struct SwitchWalletCommand: View {
+    let navigation: Navigation
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Switch Wallet…") {
+            openWindow(id: WindowID.main)
+            DockPresence.bringForward()
+            navigation.isSwitchingWallet = true
+        }
+        .keyboardShortcut("l", modifiers: .command)
+    }
 }
 
 private struct OpenHotWalletCommand: View {
