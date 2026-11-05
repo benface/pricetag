@@ -1578,6 +1578,116 @@
       "before": 0
     }
   ],
+  "plainAmount": [
+    {
+      "text": "46,20",
+      "plain": "46.20"
+    },
+    {
+      "text": "46,2",
+      "plain": "46.2"
+    },
+    {
+      "text": "0,5",
+      "plain": "0.5"
+    },
+    {
+      "text": "1 234,50",
+      "plain": "1234.50"
+    },
+    {
+      "text": "1 234,50",
+      "plain": "1234.50"
+    },
+    {
+      "text": "1 234,50",
+      "plain": "1234.50"
+    },
+    {
+      "text": "1,234",
+      "plain": "1234"
+    },
+    {
+      "text": "1,234,567.50",
+      "plain": "1234567.50"
+    },
+    {
+      "text": "1,000.",
+      "plain": "1000."
+    },
+    {
+      "text": "12.50",
+      "plain": "12.50"
+    },
+    {
+      "text": "46",
+      "plain": "46"
+    },
+    {
+      "text": ".5",
+      "plain": ".5"
+    },
+    {
+      "text": "",
+      "plain": ""
+    },
+    {
+      "text": "abc",
+      "plain": "abc"
+    },
+    {
+      "text": "1.234,50",
+      "plain": null
+    },
+    {
+      "text": "12,3456",
+      "plain": null
+    },
+    {
+      "text": "1,23,456",
+      "plain": null
+    },
+    {
+      "text": "1,234,50",
+      "plain": null
+    },
+    {
+      "text": "1234,567",
+      "plain": null
+    },
+    {
+      "text": "0,125",
+      "plain": null
+    },
+    {
+      "text": "012,345",
+      "plain": null
+    },
+    {
+      "text": ",5",
+      "plain": null
+    },
+    {
+      "text": "5,",
+      "plain": null
+    },
+    {
+      "text": "1,,5",
+      "plain": null
+    },
+    {
+      "text": "46,20.5",
+      "plain": null
+    },
+    {
+      "text": "abc,5",
+      "plain": null
+    },
+    {
+      "text": "٤٦,٢٠",
+      "plain": null
+    }
+  ],
   "linkMessage": {
     "owner": "0x00000000000000000000000000000000000de300",
     "address": "0x00000000000000000000000000000000000DE301",

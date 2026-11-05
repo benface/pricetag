@@ -112,6 +112,12 @@ describe("amounts", () => {
     assert.equal(parseAmount(".000001", 6), 1n)
   })
 
+  test("a decimal comma isn't thousands, and a comma that can't be told apart is refused", () => {
+    assert.equal(parseAmount("1,5", 6), 1_500_000n)
+    assert.equal(parseAmount("46,20", 6), 46_200_000n)
+    for (const bad of ["$5", "1.234,50", "12,3456", "1,23,456", "0,125"]) assert.equal(parseAmount(bad, 18), null, bad)
+  })
+
   test("never rounded, and never nothing", () => {
     assert.equal(parseAmount("0.0000001", 6), null)
     assert.equal(parseAmount("0", 18), null)

@@ -5,7 +5,7 @@ import { answerSender, enterExchangeCosts, linkMessage, proofOwner, walletsBehin
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
 import { parseCoinbaseCsv } from "../core/exchange-import.ts"
-import { foldBook, isBalanced, previewBook, type Question } from "../core/resolve.ts"
+import { foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
 import { linkedFailedSentence } from "../core/wording.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
@@ -17,14 +17,6 @@ const OWNERSHIP: readonly { kind: Ownership; title: string; swipe: string }[] = 
 ]
 
 const SWIPE_PX = 110
-
-/** Dollars as typed, as micro-USD. Null when it isn't an amount. */
-function microsOf(text: string): string | null {
-  const clean = text.replace(/[$,\s]/g, "")
-  if (!/^(\d+(\.\d*)?|\.\d+)$/.test(clean)) return null
-  const [whole = "", fraction = ""] = clean.split(".")
-  return BigInt(`${whole || "0"}${fraction.slice(0, 6).padEnd(6, "0")}`).toString()
-}
 
 const pnlWords = (pnl: string | null, estimated: string, unresolved: string, currency: CurrencyCode) => {
   if (pnl === null) return "PnL unavailable"
