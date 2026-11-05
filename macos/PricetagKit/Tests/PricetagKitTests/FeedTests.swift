@@ -350,6 +350,48 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(!summary.text.contains("$"))
     }
 
+    @Test func aProblemFitsInAFewWords() throws {
+        let portfolio = try demoPortfolio()
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x")]
+        for state in states {
+            let problem = try #require(state.shortProblem(portfolio: portfolio))
+            #expect(problem.count <= 26, "\(state)")
+            #expect(!problem.contains("."), "\(state)")
+        }
+        #expect(FeedState.behind(seconds: 600).shortProblem(portfolio: portfolio) == "Data is 10 min old")
+    }
+
+    @Test func nothingWrongHasNoProblem() throws {
+        let portfolio = try demoPortfolio()
+        for state in [FeedState.noWallet, .reading, .live] { #expect(state.shortProblem(portfolio: portfolio) == nil) }
+    }
+
+    @Test func theGlanceListsWhatsHeldLargestFirst() throws {
+        let portfolio = try demoPortfolio()
+        let top = portfolio.largestHoldings(3)
+        #expect(top.map(\.asset) == ["USDC", "cbBTC", "ETH"])
+        #expect(portfolio.largestHoldings(100).allSatisfy { $0.isHeld })
+    }
+
+    @Test func aPositionWithNoPriceRanksLastInsteadOfAsNothing() throws {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
+        var positions = object["positions"] as! [[String: Any]]
+        let index = try #require(positions.firstIndex { $0["asset"] as? String == "USDC" })
+        var values = positions[index]["values"] as! [String: Any]
+        values["valueMicros"] = NSNull()
+        positions[index]["values"] = values
+        object["positions"] = positions
+        let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        let all = portfolio.largestHoldings(100)
+        #expect(all.last?.asset == "USDC")
+        #expect(all.first?.asset == "cbBTC")
+    }
+
+    @Test func attentionFitsInAFewWords() throws {
+        #expect(try demoPortfolio().shortAttention == "$3,603.42 has an unknown cost")
+        #expect(try realPortfolio(at: Date(), status: .complete).shortAttention?.contains("\n") != true)
+    }
+
     @Test func aCompleteTotalDoesntWarn() throws {
         let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .complete))
         #expect(!summary.isWarning)

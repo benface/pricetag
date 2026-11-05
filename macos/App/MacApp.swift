@@ -162,7 +162,7 @@ struct MenuBarLabel: View {
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
-        label
+        MenuBarLabelContent(summary: summary, isAlarm: alarm != nil)
             // In the label because it's the one view that's always there. A possibly stolen key can't wait for someone to look.
             .onChange(of: alarm?.findings.count) { _, count in
                 guard count != nil else { return }
@@ -195,11 +195,16 @@ struct MenuBarLabel: View {
                 DockPresence.bringForward()
             }
     }
+}
 
-    @ViewBuilder
-    private var label: some View {
-        if alarm != nil {
-            Text("\u{26A0}\u{FE0E} Key may be stolen")
+/// What the menu bar item says. It has no colors of its own, so the system draws it to suit any menu bar: light, dark or tinted.
+struct MenuBarLabelContent: View {
+    let summary: FeedSummary
+    let isAlarm: Bool
+
+    var body: some View {
+        if isAlarm {
+            Text("\u{26A0}\u{FE0E} \(HotWalletWording.alarmShort)")
         } else if summary.text.isEmpty {
             Image(systemName: "tag")
                 .accessibilityLabel(AppName.current)

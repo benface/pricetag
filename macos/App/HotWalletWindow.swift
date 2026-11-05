@@ -113,6 +113,11 @@ private struct HotWalletDetails: View {
             navigation.wantsTopUp = false
             if wallet.canTopUp { isToppingUp = true }
         }
+        .onChange(of: navigation.wantsSend, initial: true) { _, wants in
+            guard wants else { return }
+            navigation.wantsSend = false
+            if wallet.canSend { isSending = true }
+        }
         .sheet(isPresented: $isSending) { SendSheet(model: SendModel(wallet: wallet, store: store)) }
     }
 

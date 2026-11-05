@@ -79,6 +79,38 @@ enum TestMode {
     }
 }
 
+/// Every kind of thing the menu bar item says, on a light, a dark and a tinted bar. These are stand-ins for the real menu bar, which only macOS can draw:
+/// the system picks the item's color, so this shows the words and their lengths, not the real thing.
+private struct MenuBarLabelScene: View {
+    let portfolio: () -> Portfolio?
+
+    private var summaries: [FeedSummary] {
+        let states: [FeedState] = [.noWallet, .reading, .live, .behind(seconds: 600), .serverUnreachable]
+        return states.map { FeedSummary(feed: $0, portfolio: portfolio()) }
+    }
+
+    private func bar(_ background: Color, _ foreground: Color) -> some View {
+        HStack(spacing: 16) {
+            ForEach(summaries, id: \.text) { MenuBarLabelContent(summary: $0, isAlarm: false) }
+            MenuBarLabelContent(summary: summaries[0], isAlarm: true)
+        }
+        .font(.system(size: 13))
+        .foregroundStyle(foreground)
+        .padding(.horizontal, 12)
+        .frame(height: 24)
+        .background(background)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            bar(Color(white: 0.92), .black)
+            bar(Color(white: 0.14), .white)
+            bar(Color(red: 0.1, green: 0.32, blue: 0.62), .white)
+        }
+        .padding(8)
+    }
+}
+
 /// A scene's view, and how to tell its fixtures have arrived.
 struct TestScreen {
     let view: AnyView
@@ -126,6 +158,13 @@ enum TestScene: String, CaseIterable {
     case popoverHotWalletOverCap = "popover-hot-wallet-over-cap"
     case popoverHotWalletAlarm = "popover-hot-wallet-alarm"
     case popoverHotWalletCAD = "popover-hot-wallet-cad"
+    case popoverReading = "popover-reading"
+    case popoverServerDown = "popover-server-down"
+    case popoverEmpty = "popover-empty"
+    case popoverHotWalletNoSavings = "popover-hot-wallet-no-savings"
+    case popoverHotWalletKeyMissing = "popover-hot-wallet-key-missing"
+    case popoverNotProvisioned = "popover-not-provisioned"
+    case menuBarLabel = "menu-bar-label"
     case settings
     case settingsHotWallet = "settings-hot-wallet"
     case settingsCAD = "settings-cad"
@@ -169,7 +208,7 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
+        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
              .send, .sendCAD, .sendKnown, .sendWaiting, .siteConnect, .siteUnlimited, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
@@ -179,13 +218,13 @@ enum TestScene: String, CaseIterable {
 
     private var feed: FixtureSource.Feed {
         switch self {
-        case .mainReading: .neverAnswers
-        case .mainServerDown: .serverDown
+        case .mainReading, .popoverReading: .neverAnswers
+        case .mainServerDown, .popoverServerDown: .serverDown
         case .mainNotUpdating, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
         case .mainCostWithheld, .resolveCostWithheld: .costWithheld
         case .resolveAnsweredWallet: .answeredWallet
-        case .mainEmpty, .mainEmptySmallest: .empty
+        case .mainEmpty, .mainEmptySmallest, .popoverEmpty: .empty
         case .mainEmptyNotice: .emptyReadingLinked
         case .mainNotStarted, .popoverNotStarted: .notStarted
         case .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunDetails, .popoverFirstRun: .firstRun
@@ -199,7 +238,7 @@ enum TestScene: String, CaseIterable {
 
     private var usesDemoWallet: Bool {
         switch self {
-        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .mainNotStarted, .popoverNotStarted, .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunDetails, .popoverFirstRun: false
+        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .popoverEmpty, .mainNotStarted, .popoverNotStarted, .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunDetails, .popoverFirstRun: false
         default: true
         }
     }
@@ -213,15 +252,15 @@ enum TestScene: String, CaseIterable {
 
     private var hotWalletFixture: HotWalletFixture {
         switch self {
-        case .hotWalletNotProvisioned: .notProvisioned
+        case .hotWalletNotProvisioned, .popoverNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
         case .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
         case .sendWaiting: .waitingForTouchID
-        case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
+        case .hotWalletNoSavings, .hotWalletNoSavingsCAD, .popoverHotWalletNoSavings: .noSavings
         case .hotWalletNoPrice: .noPrice
         case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap: .overCap
         case .hotWalletOverCapNoSavings: .overCapNoSavings
-        case .hotWalletKeyMissing: .keyMissing
+        case .hotWalletKeyMissing, .popoverHotWalletKeyMissing: .keyMissing
         case .hotWalletAlarm, .popoverHotWalletAlarm: .alarm
         case .hotWalletReplacingKey: .replacingKey
         case .hotWalletReplacingKeyStuck: .replacingKeyStuck
@@ -283,8 +322,10 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 760), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
-        case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
+        case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
+        case .menuBarLabel:
+            return TestScreen(view: AnyView(MenuBarLabelScene(portfolio: { store.portfolio })), isReady: isReady)
         case .settings, .settingsHotWallet, .settingsCAD, .settingsHotWalletCAD:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:

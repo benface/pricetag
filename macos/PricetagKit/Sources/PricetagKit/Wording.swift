@@ -177,6 +177,14 @@ public enum Wording {
         return behind(ms: BlockTime.msBetween(head - portfolio.progress.behindBlocks, head))
     }
 
+    /// `catchingUp` in a few words.
+    public static func shortCatchingUp(_ portfolio: Portfolio) -> String? {
+        if !portfolio.progress.started || portfolio.progress.behindBlocks == 0 { return nil }
+        let head = portfolio.latest.blockNum
+        let ms = BlockTime.msBetween(head - portfolio.progress.behindBlocks, head)
+        return ms < 30_000 ? "Less than a minute behind" : "About \(Format.duration(ms: ms)) behind"
+    }
+
     static func behind(ms: Int) -> String {
         // Under half a minute would round to "0 min", which reads as not behind at all.
         "The data is still catching up, \(ms < 30_000 ? "less than a minute" : "about \(Format.duration(ms: ms))") behind the network. Anything newer isn't in these numbers yet."
@@ -210,6 +218,13 @@ public enum Wording {
     /// What answering takes, on the button that starts it.
     public static func answerQuestions(_ count: Int) -> String {
         count == 1 ? "Answer 1 Question" : "Answer \(Format.block(count)) Questions"
+    }
+
+    /// `leavesOut` in a few words. The biggest thing it leaves out, because the rest is a click away.
+    public static func shortLeavesOut(_ totals: Totals, _ currency: CurrencyCode) -> String? {
+        if isPositive(totals.unresolvedMicros) { return "\(Format.money(totals.unresolvedMicros, currency)) has an unknown cost" }
+        if isPositive(totals.estimatedMicros) { return "\(Format.money(totals.estimatedMicros, currency)) is estimated" }
+        return nil
     }
 
     /// What isn't listed with the holdings, and why it doesn't matter to the numbers. nil when there's nothing.

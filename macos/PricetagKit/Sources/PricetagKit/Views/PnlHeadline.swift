@@ -15,16 +15,8 @@ public struct PortfolioSummary: View {
         self.onOpen = onOpen
     }
 
-    private var isEstimate: Bool { isPositive(portfolio.totals.estimatedMicros) }
-
-    /// nil when there's no number to show, and that says so instead of showing $0.
-    private var pnl: String? {
-        portfolio.pnlStatus == .unavailable ? nil : portfolio.totals.pnlMicros
-    }
-
-    private var value: String? {
-        portfolio.totals.valueMicros.map { Format.estimate(Format.money($0, portfolio.currency), portfolio.totals.estimated.value) }
-    }
+    private var pnl: String? { portfolio.totalPnlText }
+    private var value: String? { portfolio.totalValueText }
 
     public var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -72,10 +64,10 @@ public struct PortfolioSummary: View {
             statLabel("Total PnL", isPartial: portfolio.pnlStatus == .partial)
                 .help(Wording.pnlHelp)
             Button { onOpen(.pnl) } label: {
-                big(pnl.map { Format.estimate(Format.signedMoney($0, portfolio.currency), isEstimate) }, size: size * 0.62, tone: isLive ? Tone(signed: pnl) : .neutral)
+                big(pnl, size: size * 0.62, tone: isLive ? portfolio.totalPnlTone : .neutral)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("Total PnL, \(pnl.map { Format.estimate(Format.signedMoney($0, portfolio.currency), isEstimate) } ?? Wording.pnlUnavailable)\(portfolio.pnlStatus == .partial ? ", partial" : "")")
+            .accessibilityLabel("Total PnL, \(pnl ?? Wording.pnlUnavailable)\(portfolio.pnlStatus == .partial ? ", partial" : "")")
             .accessibilityHint("Shows the activity behind this number")
         }
     }
@@ -113,34 +105,22 @@ public struct PortfolioSummary: View {
 /// Calm on purpose: it's usually a fact to know rather than something wrong, and a warning that never stops shouting stops being read.
 public struct PortfolioAttention: View {
     let portfolio: Portfolio
-    /// Leaves out the list of what's excluded when the headline already says how much, because the holdings just below show which.
-    let isCompact: Bool
     let onOpen: (ExplainTarget) -> Void
     let onResolve: () -> Void
 
-    public init(portfolio: Portfolio, isCompact: Bool = false, onOpen: @escaping (ExplainTarget) -> Void, onResolve: @escaping () -> Void) {
+    public init(portfolio: Portfolio, onOpen: @escaping (ExplainTarget) -> Void, onResolve: @escaping () -> Void) {
         self.portfolio = portfolio
-        self.isCompact = isCompact
         self.onOpen = onOpen
         self.onResolve = onResolve
     }
 
     public var body: some View {
         if let attention = portfolio.attention {
-            Group {
-                if isCompact {
-                    VStack(alignment: .leading, spacing: 8) {
-                        message(attention)
-                        action
-                    }
-                } else {
-                    HStack(alignment: .center, spacing: 12) {
-                        message(attention)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        action
-                            .fixedSize()
-                    }
-                }
+            HStack(alignment: .center, spacing: 12) {
+                message(attention)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                action
+                    .fixedSize()
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -161,7 +141,7 @@ public struct PortfolioAttention: View {
                 Text(attention.title)
                     .font(.callout.weight(.medium))
                     .monospacedDigit()
-                ForEach(attention.details.filter { !isCompact || $0 != Wording.excluded(portfolio.totals.excluded) }, id: \.self) { line in
+                ForEach(attention.details, id: \.self) { line in
                     Text(line)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -232,6 +212,27 @@ public struct TotalStat: View {
 }
 
 extension Portfolio {
+    /// nil when there's no number to show, and that says so instead of showing $0.
+    public var totalValueText: String? {
+        totals.valueMicros.map { Format.estimate(Format.money($0, currency), totals.estimated.value) }
+    }
+
+    /// nil when there's no number to show, and that says so instead of showing $0.
+    public var totalPnlText: String? {
+        guard pnlStatus != .unavailable else { return nil }
+        return totals.pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), isPositive(totals.estimatedMicros)) }
+    }
+
+    public var totalPnlTone: Tone {
+        Tone(signed: pnlStatus == .unavailable ? nil : totals.pnlMicros)
+    }
+
+    /// `attention` in a few words. The full version belongs in a tooltip beside this, and in the window.
+    public var shortAttention: String? {
+        guard attention != nil else { return nil }
+        return Wording.shortLeavesOut(totals, currency) ?? "Some numbers are incomplete"
+    }
+
     /// The sums beside the headline, in reading order.
     public var totalStats: [(metric: TotalMetric, label: String, help: String?, text: String?, coverage: SumCoverage?)] {
         let money = { Format.money($0, currency) }
