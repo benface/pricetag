@@ -20,41 +20,23 @@ public struct PortfolioSummary: View {
     private var value: String? { portfolio.totalValueText }
 
     public var body: some View {
-        // From one line down to a narrow column, so nothing is ever cut off.
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .lastTextBaseline, spacing: 28) {
-                headline
-                Spacer(minLength: 0)
-                sums
-            }
-            VStack(alignment: .leading, spacing: 12) {
-                headline
-                sums
-            }
-            VStack(alignment: .leading, spacing: 12) {
+        // From one line down to a narrow column, so nothing is ever cut off. Each change moves what wraps, rather than swapping layouts.
+        WrappingRow(spacing: 28, lineSpacing: 12) {
+            WrappingRow(spacing: 28, lineSpacing: 12, fills: false) {
                 valueStat
+            } trailing: {
                 pnlStat
-                sums
             }
-            VStack(alignment: .leading, spacing: 12) {
-                valueStat
-                pnlStat
-                ForEach(portfolio.totalStats, id: \.metric) { stat in
-                    TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { onOpen(stat.metric) }
-                }
+        } trailing: {
+            ViewThatFits(in: .horizontal) {
+                sums(HStackLayout(alignment: .lastTextBaseline, spacing: 24))
+                sums(VStackLayout(alignment: .leading, spacing: 12))
             }
         }
     }
 
-    private var headline: some View {
-        HStack(alignment: .lastTextBaseline, spacing: 28) {
-            valueStat
-            pnlStat
-        }
-    }
-
-    private var sums: some View {
-        HStack(alignment: .lastTextBaseline, spacing: 24) {
+    private func sums(_ layout: some Layout) -> some View {
+        layout {
             ForEach(portfolio.totalStats, id: \.metric) { stat in
                 TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { onOpen(stat.metric) }
             }
@@ -128,16 +110,10 @@ public struct PortfolioAttention: View {
 
     public var body: some View {
         if let attention = portfolio.attention {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    message(attention)
-                    Spacer(minLength: 0)
-                    action
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    message(attention)
-                    action
-                }
+            WrappingRow(alignment: .center, spacing: 12, lineSpacing: 8) {
+                message(attention)
+            } trailing: {
+                action
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)

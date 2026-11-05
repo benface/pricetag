@@ -247,3 +247,45 @@ struct CostArrivalTests {
         #expect(other.arrivals(since: before).isEmpty)
     }
 }
+
+@Suite struct NewRowMarkTests {
+    @Test func aRowThatArrivesInViewIsMarkedAtOnce() {
+        var marks = NewRowMarks()
+        marks.rowsChanged(from: ["a"], to: ["b", "a"], isCovered: false)
+        #expect(marks.lit == ["b"])
+        marks.fade()
+        #expect(marks.lit.isEmpty)
+    }
+
+    @Test func aSendWaitingForItsReceiptIsMarkedOnlyOnceItsSheetCloses() {
+        var marks = NewRowMarks()
+        // Signed under the sheet, which stays until the receipt, then a moment more.
+        marks.rowsChanged(from: [], to: ["sent"], isCovered: true)
+        #expect(marks.lit.isEmpty)
+        // Fading while it's covered has nothing to fade.
+        marks.fade()
+        // The receipt only changes the row's status, so nothing about the rows changes here.
+        marks.rowsChanged(from: ["sent"], to: ["sent"], isCovered: true)
+        marks.uncovered()
+        #expect(marks.lit == ["sent"])
+        // And only once.
+        marks.fade()
+        marks.uncovered()
+        #expect(marks.lit.isEmpty)
+    }
+
+    @Test func closingTheSheetBeforeTheReceiptStillMarksIt() {
+        var marks = NewRowMarks()
+        marks.rowsChanged(from: [], to: ["sent"], isCovered: true)
+        marks.uncovered()
+        #expect(marks.lit == ["sent"])
+    }
+
+    @Test func aSweepOfSeveralIsMarkedTogether() {
+        var marks = NewRowMarks()
+        marks.rowsChanged(from: ["old"], to: ["old", "eth"], isCovered: true)
+        marks.rowsChanged(from: ["old", "eth"], to: ["old", "eth", "usdc"], isCovered: true)
+        marks.uncovered()
+        #expect(marks.lit == ["eth", "usdc"])
+    }
+}

@@ -169,6 +169,7 @@ final class MotionCue {
     var range = ChartRange.all
     var scrubbed: Int?
     var stage = ProgressFooter.Stage.working("Sending…")
+    var purchase = PurchasePhase.onItsWay
     var costIsKnown = false
 }
 
@@ -222,6 +223,23 @@ private struct MotionSendScene: View {
         }
         .frame(width: 460)
         .background(.background)
+    }
+}
+
+/// A purchase going from on its way to arrived, with its cost.
+private struct MotionPurchaseScene: View {
+    let cue: MotionCue
+
+    private static let purchase = TrackedPurchase(
+        ref: "arriving", wallet: HotWalletFixture.spending.lowercased, asset: "ETH", dollars: 25, startedAt: .now,
+        order: OnrampOrder(id: "arriving", status: .succeeded, asset: "ETH", units: "8000000000000000", wallet: HotWalletFixture.spending.lowercased, network: "base", txHash: "0x" + String(repeating: "ab", count: 32), blockNum: 50)
+    )
+
+    var body: some View {
+        PurchaseRow(purchase: Self.purchase, phase: cue.purchase, main: .USD) {}
+            .padding(20)
+            .frame(width: 420)
+            .background(.background)
     }
 }
 
@@ -302,6 +320,8 @@ enum TestScene: String, CaseIterable {
     case mainTransactionsCAD = "main-transactions-cad"
     case mainDetailsCAD = "main-details-cad"
     case resolve
+    /// Every question answered: what it was all for.
+    case resolveFinished = "resolve-finished"
     case resolveCostWithheld = "resolve-cost-withheld"
     case resolvePublishFromDevice = "resolve-publish-from-device"
     case resolveAnsweredWallet = "resolve-answered-wallet"
@@ -529,6 +549,7 @@ enum TestScene: String, CaseIterable {
     case motionChartRange = "motion-chart-range"
     case motionChartScrub = "motion-chart-scrub"
     case motionSend = "motion-send"
+    case motionPurchase = "motion-purchase"
     case motionCostKnown = "motion-cost-known"
     case motionDetails = "motion-details"
 
@@ -541,7 +562,7 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .motionChartDraw, .motionChartRange, .motionChartScrub, .motionSend, .chartHover:
+        case .motionChartDraw, .motionChartRange, .motionChartScrub, .motionSend, .motionPurchase, .chartHover:
             .none
         case .walletSwitcherNote, .walletSwitcherNewKey, .spendingMoneySetupSheet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverPricesDown, .popoverRetrying, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .receive, .receiveNoSavings, .receiveCAD, .receiveNotSetUp, .receiveAlarm, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
@@ -574,6 +595,7 @@ enum TestScene: String, CaseIterable {
         case .mainLongHistory, .mainChartWeek, .motionChartRange: .longHistory
         case .motionCostKnown: .costBecomesKnown
         case .resolveAnsweredWallet: .answeredWallet
+        case .resolveFinished: .allAnswered
         case .mainEmpty, .mainEmptySmallest, .popoverEmpty, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest, .mainEmptySavings: .empty
         case .mainEmptyNotice: .emptyReadingLinked
         case .mainNotStarted, .popoverNotStarted: .notStarted
@@ -817,7 +839,7 @@ enum TestScene: String, CaseIterable {
         let isReady: () -> Bool = { [feed] in
             if TestMode.live != nil { return store.feed == .noWallet || store.portfolio != nil }
             return switch feed {
-            case .demo, .costBecomesKnown, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .costOnSavings, .smallAmounts, .longHistory, .answeredWallet, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .costBecomesKnown, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .costOnSavings, .smallAmounts, .longHistory, .answeredWallet, .allAnswered, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
             case .updating: store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
@@ -859,6 +881,15 @@ enum TestScene: String, CaseIterable {
                     cue.stage = .finished("Sent")
                 }
             })
+        case .motionPurchase:
+            return TestScreen(view: AnyView(MotionPurchaseScene(cue: cue)), isReady: { true }, play: {
+                Task {
+                    try? await Task.sleep(for: .seconds(0.4))
+                    cue.purchase = .arriving
+                    try? await Task.sleep(for: .seconds(0.8))
+                    cue.purchase = .recorded(Money(micros: "25810000", currency: .USD))
+                }
+            })
         case .motionCostKnown:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 820), isReady: isReady, play: {
                 FixtureSource.costIsKnown.withLock { $0 = true }
@@ -870,7 +901,7 @@ enum TestScene: String, CaseIterable {
             })
         case .increasedContrast:
             return TestScreen(view: AnyView(ContrastScene(store: store)), isReady: isReady)
-        case .resolve, .resolveCostWithheld, .resolveAnsweredWallet:
+        case .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .resolveFinished:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .resolvePublishFromDevice:
             return TestScreen(view: AnyView(ResolveFlow(store: store, noteWriter: SavingsNoteWriter()) { AnyView(PublishFromDeviceButton(link: $0, browsers: deviceBrowsers)) }), size: CGSize(width: 520, height: 560), isReady: isReady)
@@ -1256,7 +1287,7 @@ private final class ReadOnce {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, costBecomesKnown, missingPrice, unreadBalance, neverAnswers, updating, serverDown, stopsAnswering, pricesDown, pricesStop, tooSlow, retrying, retryingWithNumbers, notStartedFails, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, answeredWallet, empty, emptyReadingLinked, notStarted, firstRun }
+    enum Feed { case demo, costBecomesKnown, missingPrice, unreadBalance, neverAnswers, updating, serverDown, stopsAnswering, pricesDown, pricesStop, tooSlow, retrying, retryingWithNumbers, notStartedFails, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, answeredWallet, allAnswered, empty, emptyReadingLinked, notStarted, firstRun }
 
     private let feed: Feed
     private let hasRate: Bool
@@ -1382,6 +1413,7 @@ final class FixtureSource: PortfolioSource {
                 questions[0] = first
                 object["questions"] = questions
             }
+        case .allAnswered: return try demo { $0["questions"] = [Any]() }
         case .empty: return try newWallet(started: true, readingLinked: false, address: address)
         case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: address)
         case .notStarted: return try newWallet(started: false, readingLinked: false, address: address)

@@ -163,7 +163,7 @@ struct SendConfirmation: View {
     }
 
     var body: some View {
-        ConfirmationView(asker: .spendingMoney, hero: .amount(Money.text(ofUnits: model.amount ?? 0, decimals: model.token.decimals), symbol: model.token.symbol), worth: model.worthText, rows: rows) {
+        ConfirmationView(asker: .spendingMoney, hero: .amount(model.amountShown ?? "0", symbol: model.token.symbol), worth: model.worthText, rows: rows) {
             if model.stage == .sent || gate.phase == .done {
                 ProgressFooter(stage: stage, close: done)
                     // Only once it's landed. Up to then it stays, and there's a way to close it.
@@ -201,6 +201,8 @@ struct SendConfirmation: View {
 struct SweepSheet: View {
     let wallet: HotWallet
     @State var gate: ApprovalPrompt
+    /// What Touch ID said yes to. Once it's going, the wallet empties and its own preview would turn into "Everything", so this stays until the sheet closes.
+    @State private var approved: SweepPreview?
     @Environment(\.dismiss) private var dismiss
 
     init(wallet: HotWallet, gate: ApprovalPrompt? = nil) {
@@ -229,6 +231,18 @@ struct SweepSheet: View {
         }
         .frame(width: 460)
         .interactiveDismissDisabled(wallet.isWorking)
+        .onChange(of: gate.phase, initial: true) { _, phase in
+            switch phase {
+            case .working, .done: if approved == nil { approved = wallet.sweepPreview }
+            // Asking again is about what it would move now.
+            case .needsAcknowledgment, .waiting, .asking: approved = nil
+            case .stopped: break
+            }
+        }
+    }
+
+    private var preview: SweepPreview? {
+        approved ?? wallet.sweepPreview
     }
 
     /// Only what this sweep put on its way. An earlier attempt that didn't go out isn't part of it.
@@ -251,13 +265,13 @@ struct SweepSheet: View {
     }
 
     private var hero: ConfirmationHero {
-        guard let value = wallet.sweepPreview?.valueUsdMicros, wallet.sweepPreview?.transfers.isEmpty == false else { return .words("Everything") }
+        guard let value = preview?.valueUsdMicros, preview?.transfers.isEmpty == false else { return .words("Everything") }
         return .amount(wallet.money(value), symbol: "")
     }
 
     /// Exactly what goes, to the last digit, under what it's worth.
     private var worth: String? {
-        let transfers = wallet.sweepPreview?.transfers ?? []
+        let transfers = preview?.transfers ?? []
         return transfers.isEmpty ? nil : transfers.map { "\(Money.text(ofUnits: $0.amount, decimals: $0.token.decimals)) \($0.token.symbol)" }.joined(separator: " · ")
     }
 
@@ -266,7 +280,7 @@ struct SweepSheet: View {
         if let destination {
             rows.append(ConfirmationRow(label: "To", value: destination.address.checksummed, isAddress: true, name: destination.name))
         }
-        if let preview = wallet.sweepPreview, !preview.transfers.isEmpty {
+        if let preview, !preview.transfers.isEmpty {
             rows.append(ConfirmationRow(label: "Network fee", value: "About \(preview.feeUsdMicros.map(wallet.money) ?? "\(Format.amount(String(preview.feeWei), decimals: 18)) ETH")"))
         }
         return rows
