@@ -1,7 +1,7 @@
 import PricetagKit
 import SwiftUI
 
-/// Everything the user has said about where things came from, newest first. Each one can be changed or taken back, and Undo Last Answer
+/// Everything the user has said about where things came from, newest first. Each one can be changed or taken back, and Edit's Undo
 /// works on these changes too. Forgetting all of them is the rare thing, so it comes last.
 struct AnswersList: View {
     let store: PortfolioStore
@@ -23,7 +23,7 @@ struct AnswersList: View {
         } header: {
             Text("Your Answers")
         } footer: {
-            Text("They stay on this Mac. They're only sent to your server to work out your numbers, and it doesn't keep them.")
+            Text("They stay on this Mac. They're only sent to your price service to work out your numbers, and it doesn't keep them.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -31,9 +31,9 @@ struct AnswersList: View {
             Button("Forget All My Answers…", role: .destructive) { isConfirmingForget = true }
                 .disabled(!store.hasAnswers)
                 .confirmationDialog("Forget all your answers?", isPresented: $isConfirmingForget) {
-                    Button("Forget All", role: .destructive) { store.setBook(Book()) }
+                    Button("Forget All", role: .destructive) { store.setBook(Book(), action: "Forget All Answers") }
                 } message: {
-                    Text("Every question comes back, and what you paid is unknown again until you answer. Undo Last Answer brings them back.")
+                    Text("Every question comes back, and what you paid is unknown again until you answer. Edit > Undo brings them back.")
                 }
         }
     }

@@ -18,6 +18,25 @@ public struct WalletListSnapshot: Sendable {
     let wasShowing: Bool
 }
 
+/// One step Undo can take back: the answers before it, what the Edit menu calls it, and for a change to one wallet, the rest of what it changed.
+private struct HistoryEntry {
+    /// Kept through Undo and Redo, so the wallet list's own Undo can still find the change it made.
+    let id: UUID
+    let name: String
+    /// Before the step while it's in the undo history, and after it while it's in the redo history.
+    var book: Book
+    /// When the answers in `book` were given, and what they were about, so Undo and Redo put back each answer's own date.
+    var details: AnswerDetails
+    var wallet: WalletStep?
+}
+
+/// A change to one wallet as the wallet list makes it. Undo puts all of it back, and Redo makes it again.
+private struct WalletStep {
+    var snapshot: WalletListSnapshot
+    let change: () -> Void
+    let alsoUndo: (() -> Void)?
+}
+
 public enum FeedState: Equatable, Sendable {
     case noWallet
     /// Waiting on an answer, which the first time for a wallet can take a minute. Numbers on screen are the last answer, and may be old.
@@ -28,6 +47,8 @@ public enum FeedState: Equatable, Sendable {
     /// The chain is current, but the dataset hasn't processed up to it yet.
     case catchingUp
     case serverUnreachable
+    /// The server answers, but this wallet's read didn't finish in as long as a first read gets.
+    case tooSlow
     case ampUnavailable(String)
     case noAmpConfigured(String)
     case rejected(String)
@@ -39,7 +60,7 @@ public enum FeedState: Equatable, Sendable {
     public var isStale: Bool {
         switch self {
         case .noWallet, .reading, .live, .catchingUp: false
-        case .behind, .serverUnreachable, .ampUnavailable, .noAmpConfigured, .rejected: true
+        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected: true
         }
     }
 }
@@ -63,30 +84,43 @@ public final class PortfolioStore {
     /// Past this, the newest block is too old to call live.
     static let behindAfterSeconds = 120
     /// As long as a read of a wallet the server hasn't read yet can take.
-    static let firstReadTimeout: Duration = .seconds(180)
+    nonisolated static let firstReadTimeout: Duration = .seconds(180)
 
     /// What the store holds, which may not be current: read `feed` before calling it live. While a new wallet's, method's, currency's
     /// or rule's numbers are on their way, the feed is `.reading` and this holds the last ones known, so the screen doesn't go blank.
     /// They're always this wallet's, though they can be by the last method, currency or rule it was read in.
     public private(set) var portfolio: Portfolio?
     public private(set) var feed: FeedState
+    /// When the read that's running now started, so a long one can say how long it's been, including a retry after a failure. nil between reads.
+    /// A change starts a new read, so it starts this over. A read that waits longer on the same request keeps it.
+    public private(set) var readingSince: Date?
+    /// Which read `readingSince` belongs to, so one a change left behind can't clear it when it finally ends.
+    @ObservationIgnored private var readCount = 0
     public private(set) var updatedAt: Date?
     public private(set) var address: String?
     public private(set) var method: CostMethod
     public private(set) var currency: CurrencyCode
+    /// How the holdings are ordered. It's the same for every wallet, and it's remembered.
+    public var holdingsSort: HoldingsSort {
+        didSet { defaults.set(holdingsSort.rawValue, forKey: Keys.holdingsSort) }
+    }
+    public private(set) var menuBarShows: MenuBarShows
     /// What one USD buys right now in `currency`, for what isn't part of a wallet's own read. Nil in USD, or with no current rate.
     private var currentRate: CurrentRate?
     public private(set) var serverURL: URL
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
     /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
-    public private(set) var undoStack: [Book] = []
     /// When each answer was given and what it was about, for the list of answers. Never sent anywhere.
     public private(set) var answerDetails: AnswerDetails
-    /// What `answerDetails` was before each change, by its entry in `undoIDs`, so Undo puts back each answer's own date.
-    @ObservationIgnored private var undoDetails: [UUID: AnswerDetails] = [:]
-    /// Which change made each entry of `undoStack`, so one can be found again whatever's been added above it.
-    @ObservationIgnored private var undoIDs: [UUID] = []
+    private var history: [HistoryEntry] = []
+    /// What Undo took back, newest last, until something else changes.
+    private var future: [HistoryEntry] = []
+    public var undoStack: [Book] { history.map(\.book) }
+    /// What each entry of `undoStack` takes back, in a menu's words, as in "Undo Answer".
+    public var undoNames: [String] { history.map(\.name) }
+    public var redoStack: [Book] { future.map(\.book) }
+    public var redoNames: [String] { future.map(\.name) }
     /// The server's pricing rules. Empty when it has only one, so there's nothing to choose.
     public private(set) var rules: [PricingRule] = []
     /// What to ask the server for, or nil for its default.
@@ -151,6 +185,8 @@ public final class PortfolioStore {
         self.address = address
         self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
         self.currency = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
+        self.holdingsSort = defaults.string(forKey: Keys.holdingsSort).flatMap(HoldingsSort.init(rawValue:)) ?? .largestFirst
+        self.menuBarShows = defaults.string(forKey: Keys.menuBar).flatMap(MenuBarShows.init(rawValue:)) ?? .value
         self.serverURL = serverURL
         let answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.answers = answers
@@ -165,6 +201,7 @@ public final class PortfolioStore {
         self.walletOrder = defaults.stringArray(forKey: Keys.walletOrder) ?? []
         self.hiddenWallets = defaults.stringArray(forKey: Keys.hiddenWallets) ?? []
         self.feed = address == nil ? .noWallet : .reading
+        if address != nil { readingSince = now() }
         self.source = makeSource(serverURL)
         self.cache = PortfolioCache(directory: cacheDirectory, now: now())
         if address != nil { portfolio = lastKnown() }
@@ -187,6 +224,8 @@ public final class PortfolioStore {
             }
         }
         guard address != nil else { return }
+        // In the same moment as whatever changed, so no frame shows the last read's time against the next one.
+        readingSince = now()
         eventsTask = Task { [weak self] in await self?.followEvents() }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -201,6 +240,8 @@ public final class PortfolioStore {
         rateTask = nil
         pollTask?.cancel()
         pollTask = nil
+        readCount += 1
+        readingSince = nil
         eventsTask?.cancel()
         eventsTask = nil
         isPushed = false
@@ -282,7 +323,7 @@ public final class PortfolioStore {
         } else if book.senders[address]?.kind == .mine {
             var answers = book
             answers.senders[address] = nil
-            setBook(answers)
+            setBook(answers, action: "Remove from List")
         }
         saveWallets(savedWallets.filter { $0.address != address })
         saveOrder(walletOrder.filter { $0 != address })
@@ -293,14 +334,14 @@ public final class PortfolioStore {
     /// The user says it's theirs, which is what answering "My wallet" says: from now on costs follow money between it and their other wallets.
     /// This is only ever about costs. It can't sign, and it isn't a savings wallet, which takes the device check.
     public func moveToYours(_ address: String) {
-        setBook(book.answering(address, .mine, focus: nil))
+        setBook(book.answering(address, .mine, focus: nil), action: "Move to Yours")
     }
 
     /// It's not the user's after all, so costs stop following its money. It stays listed under Watching, so a slip is easy to put right.
     public func moveToWatching(_ address: String) {
         var answers = book
         answers.senders[address] = nil
-        setBook(answers)
+        setBook(answers, action: "Move to Watching")
         keepWallet(address)
     }
 
@@ -319,8 +360,11 @@ public final class PortfolioStore {
         saveOrder(walletOrder.filter { !addresses.contains($0) } + arranged)
     }
 
-    /// Makes a change to one wallet, and returns what Undo needs to take back that change and nothing else.
-    public func changeWallet(_ address: String, _ change: () -> Void) -> WalletListSnapshot {
+    /// Makes a change to one wallet, and returns what Undo needs to take back that change and nothing else. It's one step in Edit's history,
+    /// called `name`, whatever it did to the answers: a watched wallet's removal or an account's unlinking changes none. Edit's Undo takes back
+    /// the same, with `alsoUndo` for what's outside the store, and Redo makes the change again.
+    @discardableResult
+    public func changeWallet(_ address: String, name: String, alsoUndo: (() -> Void)? = nil, _ change: @escaping () -> Void) -> WalletListSnapshot {
         var snapshot = WalletListSnapshot(
             address: address,
             answer: answers.senders[address],
@@ -330,43 +374,53 @@ public final class PortfolioStore {
             wasHidden: hiddenWallets.contains(address),
             wasShowing: self.address == address
         )
-        let entriesBefore = undoIDs
+        let entriesBefore = Set(history.map(\.id))
+        let bookBefore = answers
+        let detailsBefore = answerDetails
         change()
         snapshot.changedAnswer = answers.senders[address]
-        snapshot.undoEntry = undoIDs.last.flatMap { entriesBefore.contains($0) ? nil : $0 }
+        // An answer the change gave is part of it, so it's this entry and not one of its own.
+        history.removeAll { !entriesBefore.contains($0.id) }
+        let id = UUID()
+        snapshot.undoEntry = id
+        history.append(HistoryEntry(id: id, name: name, book: bookBefore, details: detailsBefore, wallet: WalletStep(snapshot: snapshot, change: change, alsoUndo: alsoUndo)))
+        future = []
         return snapshot
     }
 
     /// Takes back one change to one wallet. Whatever else has changed since stays changed, and so does anything said about this wallet since.
     public func restore(_ snapshot: WalletListSnapshot) {
+        putBack(snapshot)
+        // What Undo took back may have the change in it or not, so Redo can't know what it would bring back.
+        future = []
+    }
+
+    private func putBack(_ snapshot: WalletListSnapshot) {
         let address = snapshot.address
         let isUnchanged = { (book: Book) in book.senders[address] == snapshot.changedAnswer }
+        let before = snapshot.undoEntry.flatMap { entry in history.first { $0.id == entry }?.details }
         if isUnchanged(answers), answers.senders[address] != snapshot.answer {
             var next = answers
             next.senders[address] = snapshot.answer
             // The wallet's answer goes back to what it was, date included, and every other answer keeps its own.
             var details = answerDetails
-            if let entry = snapshot.undoEntry, let before = undoDetails[entry] {
+            if let before {
                 for id in Set(([answers, next]).flatMap(\.answerEntries).filter { $0.isAbout(address) }.map(\.id)) { details.restore(id, from: before) }
             }
             store(next, details: details)
         }
         // The change's own entry goes with it, wherever it is now.
         var since = snapshot.undoDepth
-        let before = snapshot.undoEntry.flatMap { undoDetails[$0] }
-        if let entry = snapshot.undoEntry, let index = undoIDs.firstIndex(of: entry) {
-            undoStack.remove(at: index)
-            undoIDs.remove(at: index)
-            undoDetails[entry] = nil
+        if let entry = snapshot.undoEntry, let index = history.firstIndex(where: { $0.id == entry }) {
+            history.remove(at: index)
             since = index
         }
         // What was saved for Undo since then has the change in it. Undoing something else mustn't bring it back, or its date.
-        for index in undoStack.indices where index >= since && isUnchanged(undoStack[index]) {
-            let ids = undoStack[index].answerEntries.filter { $0.isAbout(address) }.map(\.id)
-            undoStack[index].senders[address] = snapshot.answer
-            if let before, var details = undoDetails[undoIDs[index]] {
-                for id in ids + undoStack[index].answerEntries.filter({ $0.isAbout(address) }).map(\.id) { details.restore(id, from: before) }
-                undoDetails[undoIDs[index]] = details
+        for index in history.indices where index >= since && isUnchanged(history[index].book) {
+            let ids = history[index].book.answerEntries.filter { $0.isAbout(address) }.map(\.id)
+            history[index].book.senders[address] = snapshot.answer
+            if let before {
+                for id in ids + history[index].book.answerEntries.filter({ $0.isAbout(address) }).map(\.id) { history[index].details.restore(id, from: before) }
             }
         }
         var wallets = savedWallets
@@ -466,18 +520,18 @@ public final class PortfolioStore {
 
     /// Takes back one answer, wherever it is in the list, so its question comes back. Undo brings it back.
     public func removeAnswer(_ entry: AnswerEntry) {
-        setBook(answers.removing(entry))
+        setBook(answers.removing(entry), action: "Remove Answer")
     }
 
     /// A different answer about who a sender is.
     public func changeAnswer(_ entry: AnswerEntry, to kind: SenderAnswer.Kind) {
         guard case .sender(let address, _) = entry.said else { return }
-        setBook(answers.changing(address, to: kind))
+        setBook(answers.changing(address, to: kind), action: "Change Answer")
     }
 
     /// A different amount for what was paid, in the currency it was given in.
     public func changeCost(_ entry: AnswerEntry, to micros: String) {
-        setBook(answers.changingCost(of: entry, to: micros))
+        setBook(answers.changingCost(of: entry, to: micros), action: "Change Answer")
     }
 
     /// USD amounts as they should read right now.
@@ -513,6 +567,12 @@ public final class PortfolioStore {
         self.currency = currency
         defaults.set(currency.rawValue, forKey: Keys.currency)
         settingsChanged()
+    }
+
+    /// Only the menu bar changes, so there's nothing to read again.
+    public func setMenuBarShows(_ shows: MenuBarShows) {
+        menuBarShows = shows
+        defaults.set(shows.rawValue, forKey: Keys.menuBar)
     }
 
     public func setRule(_ id: String) {
@@ -584,19 +644,17 @@ public final class PortfolioStore {
         answersChanged()
     }
 
-    /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced.
-    /// Each answer this says something new for is dated now. `about` is what a question was about, in its own words, by answer.
-    public func setBook(_ next: Book, about: [String: String] = [:]) {
+    /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced,
+    /// and the Edit menu calls it `action`. Each answer this says something new for is dated now. `about` is what a question was about, in its own words, by answer.
+    public func setBook(_ next: Book, about: [String: String] = [:], action: String = "Answer") {
         let nextAnswers = answers(in: next)
         guard nextAnswers != answers else { return }
         let given = answers.answerEntries
         var details = answerDetails
         for entry in nextAnswers.answerEntries where !given.contains(where: { $0.id == entry.id && $0.says(entry) }) { details.dates[entry.id] = now() }
         details.about.merge(about) { _, new in new }
-        let id = UUID()
-        undoDetails[id] = answerDetails
-        undoStack.append(answers)
-        undoIDs.append(id)
+        history.append(HistoryEntry(id: UUID(), name: action, book: answers, details: answerDetails))
+        future = []
         store(nextAnswers, details: details)
     }
 
@@ -604,14 +662,52 @@ public final class PortfolioStore {
     public func recordPurchase(_ purchase: Purchase) {
         let next = answers.recording(purchase)
         guard next != answers else { return }
-        undoStack = undoStack.map { $0.recording(purchase) }
+        for index in history.indices { history[index].book = history[index].book.recording(purchase) }
+        for index in future.indices { future[index].book = future[index].book.recording(purchase) }
         store(next)
     }
 
     public func undo() {
-        guard let previous = undoStack.popLast() else { return }
-        let id = undoIDs.removeLast()
-        store(previous, details: undoDetails.removeValue(forKey: id))
+        guard var entry = history.last else { return }
+        let detailsBefore = entry.details
+        entry.details = answerDetails
+        if let wallet = entry.wallet {
+            // All of it, as the wallet list's own Undo does: its name, its place in the list, and whether it was showing.
+            wallet.alsoUndo?()
+            putBack(wallet.snapshot)
+        } else {
+            history.removeLast()
+            let previous = entry.book
+            entry.book = answers
+            store(previous, details: detailsBefore)
+        }
+        future.append(entry)
+    }
+
+    public func redo() {
+        guard let entry = future.popLast() else { return }
+        if let wallet = entry.wallet {
+            // Making it again clears what's left to redo, which is still there to redo after it.
+            let rest = future
+            changeWallet(wallet.snapshot.address, name: entry.name, alsoUndo: wallet.alsoUndo, wallet.change)
+            future = rest
+            // The same change as before, so the wallet list's Undo, which knows it by its first snapshot, still finds it.
+            if let last = history.popLast() {
+                var step = last.wallet
+                step?.snapshot.undoEntry = entry.id
+                history.append(HistoryEntry(id: entry.id, name: last.name, book: last.book, details: last.details, wallet: step))
+            }
+            // The same answer as before too, so it keeps the date it had, not today's.
+            var details = answerDetails
+            for answer in answers.answerEntries where answer.isAbout(wallet.snapshot.address) { details.restore(answer.id, from: entry.details) }
+            if details != answerDetails {
+                answerDetails = details
+                saveDetails()
+            }
+        } else {
+            history.append(HistoryEntry(id: entry.id, name: entry.name, book: answers, details: answerDetails))
+            store(entry.book, details: entry.details)
+        }
     }
 
     /// `details` goes with `next`, or what's there now stays for whatever `next` still says.
@@ -619,7 +715,6 @@ public final class PortfolioStore {
         answers = next
         defaults.set(try? JSONEncoder().encode(next), forKey: Keys.book)
         answerDetails = (details ?? answerDetails).keeping(next)
-        undoDetails = undoDetails.filter { undoIDs.contains($0.key) }
         saveDetails()
         answersChanged()
     }
@@ -653,7 +748,7 @@ public final class PortfolioStore {
         let imported = try await source.importCoinbase(csv: csv)
         var next = book
         next.withdrawals = imported.withdrawals
-        setBook(next)
+        setBook(next, action: "Import")
         return imported
     }
 
@@ -695,6 +790,10 @@ public final class PortfolioStore {
     /// One read. Returns how long to wait before the next one.
     func poll() async -> Duration {
         guard let address else { return unreachableDelay }
+        readCount += 1
+        let thisRead = readCount
+        readingSince = now()
+        defer { if thisRead == readCount { readingSince = nil } }
         let method = self.method
         let currency = self.currency
         let rule = selectedRule
@@ -763,7 +862,7 @@ public final class PortfolioStore {
             return try await read(timeout)
         } catch FetchError.timedOut {
             guard await serverAnswers() else { throw FetchError.unreachable }
-            guard timeout < Self.firstReadTimeout else { throw FetchError.ampUnavailable(Wording.readTooSlow) }
+            guard timeout < Self.firstReadTimeout else { throw ReadTooSlow() }
             guard isCurrent() else { throw CancellationError() }
             feed = .reading
             return try await patiently(read, timeout: Self.firstReadTimeout, isCurrent: isCurrent)
@@ -790,7 +889,8 @@ public final class PortfolioStore {
     }
 
     private func state(of error: any Error) -> FeedState {
-        switch error as? FetchError {
+        if error is ReadTooSlow { return .tooSlow }
+        return switch error as? FetchError {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
         case .rejected(let message): .rejected(message)
@@ -802,6 +902,7 @@ public final class PortfolioStore {
         static let wallet = "wallet"
         static let method = "method"
         static let currency = "currency"
+        static let menuBar = "menuBarShows"
         static let server = "serverURL"
         static let book = "answers"
         static let answerDetails = "answerDetails"
@@ -809,8 +910,11 @@ public final class PortfolioStore {
         static let savedWallets = "savedWallets"
         static let walletOrder = "walletOrder"
         static let hiddenWallets = "hiddenWallets"
+        static let holdingsSort = "holdingsSort"
     }
 }
+
+private struct ReadTooSlow: Error {}
 
 private struct CurrentRate {
     let currency: CurrencyCode

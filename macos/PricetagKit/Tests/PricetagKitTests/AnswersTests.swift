@@ -3,7 +3,7 @@ import Testing
 @testable import PricetagKit
 
 /// A clock a test moves by hand.
-private final class TestClock: @unchecked Sendable {
+private final class AnswerClock: @unchecked Sendable {
     var date = Date(timeIntervalSince1970: 1_793_750_400)
 }
 
@@ -14,7 +14,7 @@ private final class TestClock: @unchecked Sendable {
     let other = "0x00000000000000000000000000000000000000cc"
     let costKey = "0x00000000000000000000000000000000000000aa:0x7d1c0e5a9b3f2e4d6c8a0b1f3e5d7c9a1b3d5f7e9c1a3b5d7f9e1c3a5b7d9f1e:AERO"
 
-    private func makeStore(clock: TestClock = TestClock()) throws -> (PortfolioStore, UserDefaults) {
+    private func makeStore(clock: AnswerClock = AnswerClock()) throws -> (PortfolioStore, UserDefaults) {
         let defaults = UserDefaults(suiteName: "answers-tests-\(UUID().uuidString)")!
         defaults.set(wallet, forKey: "wallet")
         let source = BookSource([try demoPortfolio()])
@@ -26,7 +26,7 @@ private final class TestClock: @unchecked Sendable {
     }
 
     @Test func eachAnswerIsListedWithItsDateNewestFirst() throws {
-        let clock = TestClock()
+        let clock = AnswerClock()
         let (store, _) = try makeStore(clock: clock)
         store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
         clock.date += 60
@@ -37,7 +37,7 @@ private final class TestClock: @unchecked Sendable {
     }
 
     @Test func anAnswerKeepsItsDateUntilItChanges() throws {
-        let clock = TestClock()
+        let clock = AnswerClock()
         let (store, _) = try makeStore(clock: clock)
         store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
         clock.date += 60
@@ -143,7 +143,7 @@ private final class TestClock: @unchecked Sendable {
     }
 
     // Two withdrawals of ETH from one exchange account, in different blocks, each asked about and answered on its own.
-    private func twoWithdrawals(_ store: PortfolioStore, clock: TestClock) -> (first: CostReceipt, second: CostReceipt) {
+    private func twoWithdrawals(_ store: PortfolioStore, clock: AnswerClock) -> (first: CostReceipt, second: CostReceipt) {
         let first = CostReceipt(wallet: wallet, legId: "unseen:53500120:ETH", asset: "ETH", units: "2100000000000000")
         let second = CostReceipt(wallet: wallet, legId: "unseen:53521400:ETH", asset: "ETH", units: "1850000000000000")
         store.setBook(store.book.answering(other, SenderAnswer(kind: .myExchange), focus: nil))
@@ -156,7 +156,7 @@ private final class TestClock: @unchecked Sendable {
     }
 
     @Test func eachTimeAnExchangeAccountWasPaidForIsItsOwnAnswer() throws {
-        let clock = TestClock()
+        let clock = AnswerClock()
         let (store, _) = try makeStore(clock: clock)
         let (first, second) = twoWithdrawals(store, clock: clock)
         let ids = [first, second].map { AnswerEntry.exchangeCostID(sender: other, asset: "ETH", receipts: [$0]) }
@@ -171,7 +171,7 @@ private final class TestClock: @unchecked Sendable {
     }
 
     @Test(arguments: [0, 1]) func takingBackOneCostKeepsTheAccountAndTheOther(_ removed: Int) throws {
-        let clock = TestClock()
+        let clock = AnswerClock()
         let (store, _) = try makeStore(clock: clock)
         let receipts = twoWithdrawals(store, clock: clock)
         let both = [receipts.first, receipts.second]
@@ -199,7 +199,7 @@ private final class TestClock: @unchecked Sendable {
     }
 
     @Test func changingOneCostLeavesTheOtherAlone() throws {
-        let clock = TestClock()
+        let clock = AnswerClock()
         let (store, _) = try makeStore(clock: clock)
         let (first, second) = twoWithdrawals(store, clock: clock)
         store.changeCost(try entry(store, AnswerEntry.exchangeCostID(sender: other, asset: "ETH", receipts: [second])), to: "4000000")
@@ -208,7 +208,7 @@ private final class TestClock: @unchecked Sendable {
     }
 
     @Test func undoPutsBackTheDateOfARepeatedAnswer() throws {
-        let clock = TestClock()
+        let clock = AnswerClock()
         let (store, _) = try makeStore(clock: clock)
         store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
         clock.date += 60
@@ -224,7 +224,7 @@ private final class TestClock: @unchecked Sendable {
     }
 
     @Test func undoPutsBackTheDateOfAnAnswerGivenAgain() throws {
-        let clock = TestClock()
+        let clock = AnswerClock()
         let (store, _) = try makeStore(clock: clock)
         store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
         clock.date += 60
@@ -252,15 +252,58 @@ private final class TestClock: @unchecked Sendable {
     }
 
     @Test func takingBackAWalletMoveKeepsItsDate() throws {
-        let clock = TestClock()
+        let clock = AnswerClock()
         let (store, _) = try makeStore(clock: clock)
         store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
         clock.date += 60
-        let snapshot = store.changeWallet(sender) { store.moveToYours(sender) }
+        let snapshot = store.changeWallet(sender, name: "Move to Yours") { store.moveToYours(sender) }
         #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_460))
         store.restore(snapshot)
         #expect(store.book.senders[sender] == .someoneElse)
         #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_400))
+    }
+
+    @Test func redoPutsBackTheDateTheAnswerHad() throws {
+        let clock = AnswerClock()
+        let (store, _) = try makeStore(clock: clock)
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        clock.date += 60
+        store.changeAnswer(try entry(store, AnswerEntry.senderID(sender)), to: .mine)
+        clock.date += 60
+        store.undo()
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_400))
+        clock.date += 60
+        store.redo()
+        #expect(store.book.senders[sender]?.kind == .mine)
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_460))
+        store.undo()
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_400))
+    }
+
+    @Test func undoAndRedoOfAWalletMoveKeepItsDates() throws {
+        let clock = AnswerClock()
+        let (store, _) = try makeStore(clock: clock)
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        clock.date += 60
+        store.changeWallet(sender, name: "Move to Yours") { store.moveToYours(sender) }
+        clock.date += 60
+        store.undo()
+        #expect(store.book.senders[sender] == .someoneElse)
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_400))
+        clock.date += 60
+        store.redo()
+        #expect(store.book.senders[sender]?.kind == .mine)
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_460))
+        store.undo()
+        #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_400))
+    }
+
+    @Test func undoNamesWhatWasDoneToAnAnswer() throws {
+        let (store, _) = try makeStore()
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        store.changeAnswer(try entry(store, AnswerEntry.senderID(sender)), to: .mine)
+        store.removeAnswer(try entry(store, AnswerEntry.senderID(sender)))
+        #expect(store.undoNames == ["Answer", "Change Answer", "Remove Answer"])
     }
 
     @Test func aCostKeySaysWhatItsAbout() throws {

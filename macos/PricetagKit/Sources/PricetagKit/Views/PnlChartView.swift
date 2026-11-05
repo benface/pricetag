@@ -145,6 +145,12 @@ public struct PnlChartView: View {
                             onSelect(hash)
                         }
                     }
+                    // For the transaction under the pointer, the one a click would open.
+                    .contextMenu {
+                        if let hash = hovered?.point.txHash {
+                            TransactionActions(hash: hash) { onSelect(hash) }
+                        }
+                    }
             }
         }
         // A tick under the finger for each transaction passed, on a trackpad that can.

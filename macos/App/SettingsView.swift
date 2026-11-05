@@ -7,6 +7,7 @@ struct SettingsView: View {
 
     let store: PortfolioStore
     let hotWallet: HotWallet
+    let notifications: MoneyNotifications
     @Binding var tab: Pane
     @State var server = ""
     @State var serverError: String?
@@ -39,7 +40,7 @@ struct SettingsView: View {
             Tab("General", systemImage: "gearshape", value: Pane.general) { general }
             Tab("Answers", systemImage: "checklist", value: Pane.answers) { pane(.answers) { AnswersList(store: store) } }
             Tab(HotWalletWording.title, systemImage: "banknote", value: Pane.spendingMoney) { spendingMoney }
-            Tab("Server", systemImage: "server.rack", value: Pane.server) { connection }
+            Tab("Price Service", systemImage: "server.rack", value: Pane.server) { connection }
         }
         .onAppear {
             // What didn't save stays, next to what's wrong with it.
@@ -47,6 +48,9 @@ struct SettingsView: View {
             if rpcError == nil { rpc = hotWallet.settings.rpcURL.absoluteString }
         }
         .task { await store.refreshRules() }
+        // The person may have just changed it in System Settings.
+        .task { await notifications.refreshAuthorization() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await notifications.refreshAuthorization() } }
         .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
         // It read one wallet's numbers once, and replacing a key can change the wallet behind it.
         .onChange(of: store.address) { isComparing = false }
@@ -88,6 +92,10 @@ struct SettingsView: View {
                     ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
                 }
                 .help(Wording.methodHelp)
+                Picker("Menu bar shows", selection: Binding(get: { store.menuBarShows }, set: { store.setMenuBarShows($0) })) {
+                    ForEach(MenuBarShows.allCases) { Text($0.label).tag($0) }
+                }
+                .help("Also in the menu bar item's right-click menu. Problems with the data show whichever you choose.")
             }
             if store.rules.count > 1 {
                 Section {
@@ -97,13 +105,30 @@ struct SettingsView: View {
                         .disabled(store.address == nil || store.address == WalletAddress.demo)
                 }
             }
+            Section {
+                Toggle("Notify me when money moves", isOn: Binding(get: { notifications.isOn }, set: { notifications.setOn($0) }))
+                if notifications.isOn, notifications.authorization == .denied {
+                    LabeledContent {
+                        Button("Open System Settings…") { notifications.openSystemSettings() }
+                            .controlSize(.small)
+                    } label: {
+                        WarningText("They're turned off for \(AppName.current) in System Settings.")
+                    }
+                }
+            } header: {
+                Text("Notifications")
+            } footer: {
+                Text("Sweeps, purchases, and sends that didn't go through. Never prices.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
     private var connection: some View {
         pane(.server) {
             Section {
-                TextField("Server", text: $server, prompt: Text(PortfolioStore.defaultServerURL.absoluteString))
+                TextField("Address", text: $server, prompt: Text(PortfolioStore.defaultServerURL.absoluteString))
                     .onSubmit(applyServer)
                     // Leaving the tab or closing the window counts as being done, because there's no Save button to say otherwise.
                     .onDisappear(perform: applyServer)
@@ -111,7 +136,7 @@ struct SettingsView: View {
                     WarningText(serverError).font(.callout)
                 }
             } footer: {
-                Text("\(AppName.current) only talks to this server.")
+                Text("Where \(AppName.current) gets prices and history. It runs on this Mac unless you change this.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -175,7 +200,7 @@ struct SettingsView: View {
     private func applyServer() {
         let value = server.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https", url.host() != nil else {
-            serverError = "That isn't a server address. It should look like \(PortfolioStore.defaultServerURL.absoluteString)."
+            serverError = "That isn't a web address. It should look like \(PortfolioStore.defaultServerURL.absoluteString)."
             return
         }
         serverError = nil
