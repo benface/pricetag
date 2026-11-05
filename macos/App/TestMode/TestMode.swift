@@ -175,6 +175,7 @@ enum TestScene: String, CaseIterable {
     case hotWalletReplacingKeyStuck = "hot-wallet-replacing-key-stuck"
     case hotWalletAddSavings = "hot-wallet-add-savings"
     case hotWalletAddSavingsFilled = "hot-wallet-add-savings-filled"
+    case hotWalletAddSavingsFromDevice = "hot-wallet-add-savings-from-device"
     case hotWalletTopUp = "hot-wallet-top-up"
     case hotWalletTopUpFirstRead = "hot-wallet-top-up-first-read"
     case hotWalletTopUpOneDollar = "hot-wallet-top-up-one-dollar"
@@ -184,13 +185,16 @@ enum TestScene: String, CaseIterable {
     case sendCAD = "send-cad"
     case sendKnown = "send-known"
     case sendWaiting = "send-waiting"
-    case siteConnect = "site-connect"
-    case siteUnlimited = "site-unlimited"
     case publishCost = "publish-cost"
     case publishCAD = "publish-cost-cad"
     case publishWaiting = "publish-cost-waiting"
     case ruleComparison = "rule-comparison"
     case ruleComparisonCAD = "rule-comparison-cad"
+    case siteConnect = "site-connect"
+    case siteTransaction = "site-transaction"
+    case siteTransactionCAD = "site-transaction-cad"
+    case siteUnlimitedApproval = "site-unlimited-approval"
+    case siteTypedPermit = "site-typed-permit"
 
     enum Chrome { case titled, none }
 
@@ -200,8 +204,8 @@ enum TestScene: String, CaseIterable {
     var chrome: Chrome {
         switch self {
         case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
-             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
-             .send, .sendCAD, .sendKnown, .sendWaiting, .siteConnect, .siteUnlimited, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
+             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
+             .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
         }
@@ -241,7 +245,7 @@ enum TestScene: String, CaseIterable {
 
     private var currency: CurrencyCode {
         switch self {
-        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .hotWalletCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD, .publishCAD, .ruleComparisonCAD: .CAD
+        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .hotWalletCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD, .publishCAD, .ruleComparisonCAD, .siteTransactionCAD: .CAD
         default: .USD
         }
     }
@@ -250,7 +254,9 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .mainSpendingMoney, .mainSpendingMoneySmall, .mainNoWalletHasSpendingMoney, .settingsShowingSpendingMoney, .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
+        case .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .settingsShowingSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
+        case .siteConnect: .funded
+        case .siteTransaction, .siteTransactionCAD, .siteUnlimitedApproval, .siteTypedPermit: .connectedToSite
         case .sendWaiting: .waitingForTouchID
         case .hotWalletTopUpOneDollar: .nearCap
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
@@ -358,11 +364,14 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet)), isReady: isReady)
         case .hotWalletAddSavingsFilled:
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet, address: HotWalletFixture.savings.lowercased)), isReady: isReady)
+        case .hotWalletAddSavingsFromDevice:
+            let url = "patina://add-savings?address=\(HotWalletFixture.savings.lowercased)&name=Ledger&linked=0x\(String(repeating: "ab", count: 20))"
+            return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet, link: AddSavingsLink(url: URL(string: url)!)!)), isReady: isReady)
         case .hotWalletTopUp, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD:
-            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet)), isReady: isReady)
+            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!)), isReady: isReady)
         case .hotWalletTopUpFirstRead:
             // The sheet opens first here, so the read has to change what it worked out.
-            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet).task { await readHotWallet() }), isReady: { hotWalletHasRead.isDone })
+            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!).task { await readHotWallet() }), isReady: { hotWalletHasRead.isDone })
         case .send, .sendCAD, .sendKnown, .sendWaiting:
             let model = SendModel(wallet: hotWallet, store: store)
             model.token = Base.tokens.first { $0.symbol == "USDC" }!
@@ -372,18 +381,40 @@ enum TestScene: String, CaseIterable {
             // It never gets past the prompt, and there's no key behind it anyway.
             if isWaiting { Task { _ = await model.send() } }
             return TestScreen(view: AnyView(SendSheet(model: model)), isReady: { !isWaiting || model.isSending })
-        case .siteConnect, .siteUnlimited:
-            let approval: SiteApproval = self == .siteConnect
-                ? .sceneConnect(origin: "https://app.uniswap.org")
-                : .sceneUnlimitedApproval(origin: "https://app.uniswap.org", token: EthereumAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")!, spender: EthereumAddress("0x0000000000000000000000000000000000c0ffee")!)
-            // Its buttons answer nothing, so nothing can get as far as a key.
-            return TestScreen(view: AnyView(SiteApprovalView(approval: approval, waitingBehind: 0, usd: { hotWallet.usd($0) }, approve: { _ in }, reject: {}).frame(width: 480)), isReady: isReady)
         case .publishCost, .publishCAD, .publishWaiting:
             let draft = CostNoteDraft(wallet: "0x00000000000000000000000000000000000de301", txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
             return TestScreen(view: AnyView(PublishCostSheet(draft: draft, currency: currency, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
         case .ruleComparison, .ruleComparisonCAD:
             guard let comparison: RuleComparison = try? FixtureSource.decode(self == .ruleComparison ? "demo-rule-comparison" : "demo-rule-comparison-cad") else { TestMode.fail("There's no comparison fixture.") }
             return TestScreen(view: AnyView(RuleComparisonTable(comparison: comparison).padding(20).frame(width: 720).background(.background)), isReady: { true })
+        case .siteConnect, .siteTransaction, .siteTransactionCAD, .siteUnlimitedApproval, .siteTypedPermit:
+            guard let wallet = hotWallet.address?.lowercased else { TestMode.fail("This scene's hot wallet has no address.") }
+            let bridge = SiteBridge(wallet: hotWallet)
+            let request = siteRequest(from: wallet)
+            // Through the real checks and wording, up to the window. Nothing answers it there, so it goes no further.
+            _ = bridge.begin(SiteRequest(connection: UUID(), id: "1", origin: HotWalletFixture.site, method: request.method, parameters: request.parameters))
+            let armed = ContinuousClock.now + SiteApprovalView.armingDelay
+            return TestScreen(view: AnyView(SiteApprovalWindow(bridge: bridge).navigationTitle(SiteApprovalWindow.title)), isReady: { bridge.current != nil && ContinuousClock.now >= armed })
+        }
+    }
+
+    /// What a site asks for in each of its scenes.
+    private func siteRequest(from wallet: String) -> (method: String, parameters: JSONValue?) {
+        let spender = "4444444444444444444444444444444444444444"
+        guard let usdc = Base.tokens.first(where: { $0.symbol == "USDC" })?.contract?.lowercased else { TestMode.fail("There's no USDC.") }
+        func transaction(to: String, value: String, data: String) -> (String, JSONValue?) {
+            ("eth_sendTransaction", .array([.object(["from": .string(wallet), "to": .string(to), "value": .string(value), "data": .string(data)])]))
+        }
+        switch self {
+        case .siteTransaction, .siteTransactionCAD:
+            return transaction(to: "0x3333333333333333333333333333333333333333", value: "0x71afd498d0000", data: "0x12345678" + String(repeating: "0", count: 24) + spender)
+        case .siteUnlimitedApproval:
+            return transaction(to: usdc, value: "0x0", data: "0x095ea7b3" + String(repeating: "0", count: 24) + spender + String(repeating: "f", count: 64))
+        case .siteTypedPermit:
+            let permit = #"{"domain":{"name":"USD Coin","version":"2","chainId":8453,"verifyingContract":"\#(usdc)"},"types":{"Permit":[{"name":"owner","type":"address"},{"name":"spender","type":"address"},{"name":"value","type":"uint256"},{"name":"nonce","type":"uint256"},{"name":"deadline","type":"uint256"}]},"primaryType":"Permit","message":{"owner":"\#(wallet)","spender":"0x\#(spender)","value":"115792089237316195423570985008687907853269984665640564039457584007913129639935","nonce":"0","deadline":"1793836800"}}"#
+            return ("eth_signTypedData_v4", .array([.string(wallet), .string(permit)]))
+        default:
+            return ("eth_requestAccounts", nil)
         }
     }
 

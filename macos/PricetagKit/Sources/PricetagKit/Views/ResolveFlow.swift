@@ -268,6 +268,10 @@ public struct ResolveFlow: View {
                     Button("Publish Onchain…") { publishing = draft }
                         .help("Writes what you paid on Base, where anyone can read it")
                 }
+                if let draft = model.deviceNoteDraft(for: question), let url = DeviceFlow.publish(server: store.serverURL, draft: draft, usd: store.currency == .USD ? costs[draft.asset] : nil) {
+                    Link("Publish from Your Device…", destination: url)
+                        .help("Opens your browser, where your hardware wallet signs it. Anyone can read it after that")
+                }
             }
             Text("This stays on this Mac.")
                 .font(.caption)

@@ -101,6 +101,8 @@ function describePart(part: LegPart): string {
       return `Log #${part.logIndex}: ${amount} ETH wrapped`
     case "unwrap":
       return `Log #${part.logIndex}: ${amount} ETH unwrapped`
+    case "unseen_eth":
+      return `ETH received: ${amount} ETH, worked out from this wallet's balance before and after this block`
     default:
       return `Log #${part.logIndex}: ${amount} ${symbol} ${direction}`
   }
@@ -111,19 +113,24 @@ const isFee = (part: LegPart) => part.kind === "gas" || part.kind === "l1_fee"
 /** ETH this transaction says reached its sender from unwrapping. No log says that: `Withdrawal` only names who unwrapped. */
 const isUnwrapCredit = (part: LegPart) => part.kind === "unwrap" && part.side === "credit"
 
+/** ETH the balance says arrived, with no log or value to record it. See `creditUnseenEth`. */
+const isUnseenEth = (part: LegPart) => part.kind === "unseen_eth"
+
 const describeWithdrawal = ({ logIndex, amount }: SettledCredit["withdrawals"][number]) => `Log #${logIndex}: ${formatAmount(amount, 18)} ETH unwrapped`
 
 const describeReceived = ({ received }: SettledCredit) => `ETH received: ${formatAmount(received, 18)} ETH, worked out from this wallet's balance before and after this block`
 
 /** What the logs behind this leg record. A settled credit's own row isn't one, since the balance can have changed its amount. */
 function loggedLines(leg: PricedLeg, legs: readonly PricedLeg[]): string[] {
-  const parts = partsBehind(leg, legs).filter((part) => !isFee(part) && !(leg.settledCredit && isUnwrapCredit(part)))
+  const parts = partsBehind(leg, legs).filter((part) => !isFee(part) && !isUnseenEth(part) && !(leg.settledCredit && isUnwrapCredit(part)))
   // A wallet unwrapping for itself has a row on each side of one log.
   return [...new Set([...parts.map(describePart), ...(leg.settledCredit?.withdrawals.map(describeWithdrawal) ?? [])])]
 }
 
 /** What checking the block can't say about the ETH this leg's unwrapping brought in, or null when it brought in none. */
 function creditNote(leg: PricedLeg, legs: readonly PricedLeg[]): string | null {
+  const unseen = leg.parts.find(isUnseenEth)
+  if (unseen) return `No log or transaction value records this ETH. That ${formatAmount(unseen.amount, 18)} ETH reached this wallet comes from its balance before and after this block, which this check doesn't read. This transaction is only the likeliest source.`
   const limit = "A log records what was unwrapped, not who ended up with the ETH."
   if (leg.settledCredit) {
     const { received } = leg.settledCredit
@@ -174,7 +181,7 @@ export function proofOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: Cu
     blockNum: leg.blockNum,
     txHash: leg.txHash,
     source: ruleNote ? [...source, ruleNote] : source,
-    movements: [...partsBehind(leg, legs).filter(isFee).map(describePart), ...loggedLines(leg, legs), ...(leg.settledCredit ? [describeReceived(leg.settledCredit)] : [])],
+    movements: [...partsBehind(leg, legs).filter(isFee).map(describePart), ...loggedLines(leg, legs), ...(leg.settledCredit ? [describeReceived(leg.settledCredit)] : []), ...leg.parts.filter(isUnseenEth).map(describePart)],
     links: [{ title: "This transaction's logs on Basescan", url: `${BASESCAN}/tx/${leg.txHash}#eventlog` }, ...links],
     datasets,
     scope: scopeOf(leg, legs, currency, behind),
@@ -215,6 +222,8 @@ const isWithdrawal = (log: LogRow) => hexOf(log.address) === hexOf(WETH_ADDRESS)
 /** Whether the checked rows say what a row of this leg says they do. An Ethereum fee can't be compared, because no checked row has it. */
 function partMatches(part: LegPart, tx: TxRow, data: BlockData): boolean {
   const account = hexOf(part.account)
+  // Its amount is the balance's, which no checked row has. All that can be compared is that this transaction went through.
+  if (isUnseenEth(part)) return tx.status
   if (part.kind === "gas") return hexOf(tx.from) === account && gasFrom(tx, data) === BigInt(part.amount || "-1")
   if (part.kind === "l1_fee") return hexOf(tx.from) === account
   if (part.kind === "eth") return tx.status && tx.value === part.amount && hexOf((part.side === "debit" ? tx.from : tx.to) ?? "") === account

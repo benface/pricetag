@@ -389,6 +389,7 @@ public final class HotWallet {
         if let rotation { wallets.append(rotation.to.lowercased) }
         wallets += state.retired.map(\.lowercased)
         wallets += settings.coldWallets.map(\.address.lowercased)
+        wallets += settings.deviceAccounts.map(\.lowercased)
         return wallets
     }
 
@@ -499,6 +500,13 @@ public final class HotWallet {
         guard !state.retired.contains(address) else { throw .isARetiredKey }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         updateSettings { $0.add(ColdWallet(address: address, name: cleanName.isEmpty ? "Savings" : cleanName, confirmedOnDeviceAt: now())) }
+    }
+
+    /// Other accounts on a device, which go in the book as the user's from here on. This can't tell whose they are, so the caller has to have asked. They only link costs.
+    public func linkDeviceAccounts(_ addresses: [String]) {
+        let accounts = addresses.compactMap(EthereumAddress.init).filter { $0 != .zero && $0 != address && !state.retired.contains($0) }
+        guard !accounts.isEmpty else { return }
+        updateSettings { $0.addDeviceAccounts(accounts) }
     }
 
     public func removeColdWallet(_ address: EthereumAddress) {
@@ -1046,6 +1054,10 @@ public final class HotWallet {
 }
 
 extension HotWallet: CostNoteWriter {
+    public func canWriteNoteOnDevice(from wallet: String) -> Bool {
+        settings.coldWallets.contains { $0.address.lowercased == wallet.lowercased() }
+    }
+
     public var noteProblem: String? { sweepProblem }
 
     public func canWriteNote(from wallet: String) -> Bool {

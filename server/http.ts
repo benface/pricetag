@@ -12,8 +12,10 @@ const TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
   ".map": "application/json",
 }
-// No scripts from anywhere but this server.
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+// No scripts from anywhere but this server. Hardware wallets send to Base's RPC themselves, and a Ledger asks Ledger's servers what a token
+// is so it can show its name. Ledger's kit can also report what's signed and have a transaction checked, which these leave out on purpose.
+const CONNECT = ["'self'", "https://mainnet.base.org", "https://global.api.prd.ledger.com/cal/", "https://nft.api.live.ledger.com"]
+export const CSP = `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ${CONNECT.join(" ")}; frame-ancestors 'none'; base-uri 'none'`
 
 function sendText(res: ServerResponse, status: number, text: string) {
   res.writeHead(status, { "content-type": "text/plain" })

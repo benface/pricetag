@@ -111,7 +111,7 @@ public struct LegRow: View {
                         Label("\(Format.shortHash(leg.txHash)) on Basescan", systemImage: "arrow.up.right.square")
                     }
                 }
-                if !leg.opening {
+                if leg.hasTransaction {
                     Button {
                         showsProof.toggle()
                     } label: {
@@ -152,8 +152,8 @@ public struct LegRow: View {
             .lineLimit(1)
             .buttonStyle(.plain)
             .foregroundStyle(.tint)
-            .disabled(leg.opening)
-            .help(leg.opening ? "" : "See where this price comes from")
+            .disabled(!leg.hasTransaction)
+            .help(leg.hasTransaction ? "See where this price comes from" : "")
         } else {
             Tag("No price", isWarning: true)
         }

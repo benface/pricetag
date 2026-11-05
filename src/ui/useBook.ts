@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../core/api.ts"
-import { emptyBook, parseBook, type Book } from "../core/book.ts"
+import { emptyBook, linkDeviceAccounts, parseBook, type Book } from "../core/book.ts"
 import { readKey, readsMatching } from "../core/resolve.ts"
 
 const KEY = "patina.book"
@@ -35,7 +35,13 @@ export function useBook() {
     setBook(previous)
   }, [history])
 
-  return { book, change, undo, canUndo: history.length > 0 }
+  // Not an answer, so undo doesn't take it back, whichever answers came before it.
+  const linkAccounts = useCallback((addresses: readonly string[]) => {
+    setBook((current) => linkDeviceAccounts(current, addresses))
+    setHistory((earlier) => earlier.map((one) => linkDeviceAccounts(one, addresses)))
+  }, [])
+
+  return { book, change, undo, canUndo: history.length > 0, linkAccounts }
 }
 
 /**

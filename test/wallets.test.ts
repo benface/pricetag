@@ -1197,7 +1197,7 @@ describe("marking the chart from the token feeds", () => {
       })
 
       it("stops at a feed that never answers, and only reads again when it's time to ask", async () => {
-        const { source, feedReads, marketReads } = thin([holding(150), row(300)], { readBalances, readFeedRounds: async (assets, block) => (feedReads.push([assets, block]), {}) })
+        const { source, feedReads, marketReads } = thin([holding(150), row(300)], { readBalances, readEthBalances: async (_, blocks) => new Map(blocks.map((block) => [block, "0"])), readFeedRounds: async (assets, block) => (feedReads.push([assets, block]), {}) })
         const asked = () => feedReads.filter(([, block]) => block === 300).length
         let head = HEAD + 1000
         const wallets = createWallets(source, async () => headAt(head)(), noFees)
@@ -1246,23 +1246,26 @@ describe("looking for ETH a token's sale brought in", () => {
     const wallet = await createWallets(source, headAt(1000), allFees).get(ME)
     assert.deepEqual(ethReads, [[949, 950, 959, 960]])
     assert.deepEqual(wallet.unseenEth, [{ blockNum: 960, amount: "800", txHashes: [`0x${(960).toString(16)}`] }])
-    assert.deepEqual(wallet.legs.map((l) => l.kind), ["transfer", "swap"])
-    const eth = portfolioOf({ ...wallet }, "average").positions.find((p) => p.asset === "ETH")!
-    assert.deepEqual(eth.reconciliation?.status === "incomplete" && eth.reconciliation.unseenEth, wallet.unseenEth)
+    // The ETH counts, for the rise, and the sale it may have come from still has no value.
+    assert.deepEqual(wallet.legs.map((l) => [l.kind, l.asset]), [["transfer", "USDC"], ["transfer", "ETH"], ["swap", "USDC"]])
+    assert.equal(portfolioOf({ ...wallet }, "average").positions.find((p) => p.asset === "ETH")!.reconciliation?.status, "reconciled")
   })
 
-  describe("when ETH's balance matches, but more of it left than arrived", () => {
+  describe("when ETH arrives with a sale, and later leaves unseen", () => {
     const E18 = 10n ** 18n
     const ethRow = (block: number, side: LegRow["side"]): LegRow => ({ ...row(block, E18.toString()), side })
     // 1 ETH arrives unseen at 950 as a token leaves, and leaves visibly at 960. Another arrives visibly at 970, and leaves unseen at 980.
     const chain = () => new Map([[950, [send(950)]], [960, [ethRow(960, "debit")]], [970, [ethRow(970, "credit")]]])
+    const onchain = async (blocks: readonly number[]) => new Map(blocks.map((b) => [b, (b >= 950 && b < 960) || (b >= 970 && b < 980) ? E18.toString() : "0"]))
     const ranges: [string, { from: number; to: number } | undefined, number][] = [["a live read", undefined, 1000], ["a read as of a fixed block", { from: 900, to: 990 }, 2000]]
 
     for (const [name, range, head] of ranges) {
       it(`${name} still looks, marks the send and names it`, async () => {
-        const { source, ethReads } = fake(chain(), () => reference(head), undefined, held("0"), rises(950, E18))
+        const { source, ethReads } = fake(chain(), () => reference(head), undefined, held("0"), onchain)
         const wallet = await createWallets(source, headAt(head), allFees).get(ME, range)
-        assert.deepEqual(ethReads, [[949, 950]])
+        // The sale's block first, because more ETH left than arrived. Then what's still off is searched for.
+        assert.deepEqual(ethReads[0], [949, 950])
+        assert.ok(ethReads.length > 1)
         const tx = `0x${(950).toString(16)}`
         assert.deepEqual(wallet.unseenEth, [{ blockNum: 950, amount: E18.toString(), txHashes: [tx] }])
         const sale = wallet.legs.find((l) => l.txHash === tx)!
@@ -1270,8 +1273,8 @@ describe("looking for ETH a token's sale brought in", () => {
         for (const method of ["average", "fifo"] as const) {
           const { positions } = foldWallet(wallet, method)
           const eth = positions.find((p) => p.asset === "ETH")!
-          assert.equal(eth.state.shortfallQty, E18.toString())
-          assert.ok(eth.reconciliation?.status === "incomplete" && eth.reconciliation.differenceQty === "0")
+          assert.equal(eth.state.shortfallQty, "0")
+          assert.ok(eth.reconciliation?.status === "incomplete" && eth.reconciliation.differenceQty === (-E18).toString())
           assert.ok(explainMetric(eth, "onchain", USD_CONTEXT).lines.some((line) => line.startsWith("It lines up") && line.includes(shortHash(tx))))
           assert.equal(positions.find((p) => p.asset === "USDC")!.values.realizedMicros, null)
         }
@@ -1296,10 +1299,11 @@ describe("looking for ETH a token's sale brought in", () => {
     head = 1001
     await wallets.get(ME)
     assert.equal(ethReads[1]!.length, 200)
+    const read = ethReads.length
     head = 1002
     await wallets.get(ME)
     // Only what's still re-read for reorgs.
-    assert.ok(ethReads[2]!.every((block) => block >= 1002 - 31))
+    assert.ok(ethReads.slice(read).flat().every((block) => block >= 1002 - 31))
   })
 
   it("keeps the wallet up when the read fails, and tries again", async () => {
