@@ -25,7 +25,7 @@ public struct HoldComparisonCard: View {
                     .monospacedDigit()
                     .multilineTextAlignment(.trailing)
                 Image(systemName: "chevron.right")
-                    .font(.caption2.bold())
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
             .font(.callout)

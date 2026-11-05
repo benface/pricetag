@@ -20,6 +20,15 @@ public enum Tone {
         }
     }
 
+    /// With Increase Contrast on, the color stays but moves closer to the text's.
+    func style(_ contrast: ColorSchemeContrast) -> AnyShapeStyle {
+        guard contrast == .increased else { return style }
+        return switch self {
+        case .neutral, .secondary: style
+        case .gain, .loss, .warning: AnyShapeStyle(color.mix(with: .primary, by: 0.25))
+        }
+    }
+
     var color: Color {
         switch self {
         case .neutral: .primary
@@ -32,46 +41,127 @@ public enum Tone {
     }
 }
 
-/// A number that rolls to its new value and never changes width because of which digits it has.
+/// A number that rolls to its new value and never changes width because of which digits it has. It rolls up when the number went up,
+/// and what it lands on is exactly what it's given. Words like "Unknown" aren't numbers, so they cross-fade.
 public struct LiveNumber: View {
+    let styled: AttributedString
     let text: String
     let tone: Tone
     /// On a selected row's accent color, a tone would lose its contrast.
     @Environment(\.backgroundProminence) private var prominence
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
 
     public init(_ text: String, tone: Tone = .neutral) {
-        self.text = text
+        self.init(AttributedString(text), plain: text, tone: tone)
+    }
+
+    init(_ styled: AttributedString, plain: String, tone: Tone) {
+        self.styled = styled
+        text = plain
         self.tone = tone
     }
 
+    private var transition: ContentTransition {
+        if reduceMotion { return .opacity }
+        return Format.direction(of: text).map { .numericText(value: $0) } ?? .opacity
+    }
+
     public var body: some View {
-        Text(text)
+        Text(styled)
             .monospacedDigit()
-            .foregroundStyle(prominence == .increased ? Tone.neutral.style : tone.style)
-            .contentTransition(.numericText())
-            .animation(.snappy, value: text)
+            .foregroundStyle(prominence == .increased ? Tone.neutral.style : tone.style(contrast))
+            .contentTransition(transition)
+            .animation(Motion.number, value: text)
     }
 }
 
 /// A number you can click to read what's behind it. It looks like a number until you point at it.
 public struct NumberButtonStyle: ButtonStyle {
-    @State private var isHovered = false
-    @Environment(\.isFocused) private var isFocused
-
     public init() {}
 
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
-            .background {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(.primary.opacity(configuration.isPressed ? 0.14 : isHovered ? 0.07 : 0))
-            }
+            .background(PointedAt(isPressed: configuration.isPressed, cornerRadius: 5))
             .padding(.horizontal, -5)
             .contentShape(Rectangle())
+    }
+}
+
+/// A row in a list you can click. `isHighlighted` is for whatever else can pick it out, like the arrow keys.
+public struct RowButtonStyle: ButtonStyle {
+    let isHighlighted: Bool
+
+    public init(isHighlighted: Bool = false) {
+        self.isHighlighted = isHighlighted
+    }
+
+    public func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(PointedAt(isPressed: configuration.isPressed, isHighlighted: isHighlighted, cornerRadius: 6))
+            .contentShape(Rectangle())
+    }
+}
+
+/// The wash behind something clickable that doesn't look like a button until you point at it: on hover, and darker while pressed.
+private struct PointedAt: View {
+    let isPressed: Bool
+    var isHighlighted = false
+    let cornerRadius: CGFloat
+    @State private var isHovered = false
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var strength: Double {
+        let base = isPressed ? 0.14 : isHovered || isHighlighted ? 0.07 : 0
+        return contrast == .increased ? base * 2 : base
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(.primary.opacity(strength))
             .onHover { isHovered = $0 }
-            .animation(.easeOut(duration: 0.12), value: isHovered)
+            // Right away on the way in, because it's answering a press.
+            .animation(isPressed ? nil : Motion.feedback, value: strength)
+    }
+}
+
+/// A button in its own solid colors, for the alarm's red, where a tint fades into the banner when the window isn't in front. An alarm usually finds it that way.
+public struct AlarmButtonStyle: ButtonStyle {
+    public init() {}
+
+    public func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .fontWeight(.semibold)
+            .foregroundStyle(.black)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(.white.opacity(configuration.isPressed ? 0.75 : 1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(Rectangle())
+    }
+}
+
+/// The soft box behind a note. With Increase Contrast on, it also gets an edge, because the fill alone can disappear.
+extension View {
+    public func softBox(cornerRadius: CGFloat = 10, opacity: Double = 0.5) -> some View {
+        modifier(SoftBox(cornerRadius: cornerRadius, opacity: opacity))
+    }
+}
+
+private struct SoftBox: ViewModifier {
+    let cornerRadius: CGFloat
+    let opacity: Double
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content
+            .background(.quaternary.opacity(opacity), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                if contrast == .increased {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).strokeBorder(.secondary, lineWidth: 1)
+                }
+            }
     }
 }
 
@@ -102,6 +192,7 @@ public struct Notice: View {
     let text: String
     let actionTitle: String?
     let action: () -> Void
+    @Environment(\.colorSchemeContrast) private var contrast
 
     public init(_ kind: Kind, _ text: String, actionTitle: String? = nil, action: @escaping () -> Void = {}) {
         self.kind = kind
@@ -130,6 +221,11 @@ public struct Notice: View {
         .background {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(kind == .warning ? AnyShapeStyle(Color.orange.opacity(0.14)) : AnyShapeStyle(.quaternary.opacity(0.6)))
+        }
+        .overlay {
+            if contrast == .increased {
+                RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(kind == .warning ? Tone.warning.style : AnyShapeStyle(.secondary), lineWidth: 1)
+            }
         }
     }
 }
@@ -168,8 +264,8 @@ public struct FeedBadge: View {
 
     public var body: some View {
         HStack(spacing: 5) {
-            Circle().fill(color).frame(width: 7, height: 7)
-            Text(text).monospacedDigit().contentTransition(.numericText()).animation(.snappy, value: text)
+            Circle().fill(color).frame(width: 7, height: 7).animation(Motion.state, value: text)
+            Text(text).monospacedDigit().contentTransition(.opacity).animation(Motion.state, value: text)
         }
         .font(.caption)
         .foregroundStyle(.secondary)

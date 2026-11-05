@@ -78,7 +78,7 @@ public struct PortfolioSummary: View {
             statLabel("Total PnL", isPartial: portfolio.pnlStatus == .partial)
                 .help(Wording.pnlHelp)
             Button { onOpen(.pnl) } label: {
-                big(pnl, size: size * 0.62, tone: isLive ? portfolio.totalPnlTone : .neutral)
+                big(pnl, size: size * 0.6, tone: isLive ? portfolio.totalPnlTone : .neutral)
             }
             .buttonStyle(NumberButtonStyle())
             .accessibilityLabel("Total PnL, \(pnl ?? Wording.pnlUnavailable)\(portfolio.pnlStatus == .partial ? ", partial" : "")")
@@ -90,28 +90,28 @@ public struct PortfolioSummary: View {
         HStack(spacing: 4) {
             Text(text)
             // As readable as what it qualifies, because it changes what the number means.
-            if isPartial { Text("partial").fontWeight(.medium) }
+            if isPartial { Text("partial").fontWeight(.medium).transition(.opacity) }
         }
-        .font(.caption)
+        .font(.subheadline)
         .foregroundStyle(.secondary)
+        .motion(Motion.state, value: isPartial)
     }
 
     /// One line whatever it says: a big number shrinks to fit instead of pushing everything down. What's unknown stays a word, never $0.
     private func big(_ text: String?, size: CGFloat, tone: Tone) -> some View {
         Group {
             if let text {
-                LiveNumber(text, tone: tone)
-                    .font(.system(size: size, weight: .semibold))
+                DisplayNumber(text, size: size, tone: tone)
             } else {
                 Text("Unavailable")
-                    .font(.system(size: max(size * 0.62, 17), weight: .semibold))
+                    .font(.display(max(size * 0.6, 17)))
                     .foregroundStyle(.secondary)
             }
         }
         .lineLimit(1)
         .minimumScaleFactor(0.5)
         .opacity(isLive ? 1 : 0.55)
-        .animation(.easeOut(duration: 0.15), value: isLive)
+        .animation(Motion.state, value: isLive)
     }
 }
 
@@ -143,7 +143,7 @@ public struct PortfolioAttention: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .softBox()
             .help(attention.fullList ?? "")
         }
     }
@@ -207,10 +207,11 @@ public struct TotalStat: View {
             HStack(spacing: 4) {
                 Text(label).foregroundStyle(.secondary).help(help ?? "")
                 if text != nil, coverage?.isPartial == true {
-                    Text("partial").foregroundStyle(.secondary).fontWeight(.medium)
+                    Text("partial").foregroundStyle(.secondary).fontWeight(.medium).transition(.opacity)
                 }
             }
-            .font(.caption)
+            .font(.subheadline)
+            .motion(Motion.state, value: coverage?.isPartial == true)
             Button(action: onOpen) {
                 Group {
                     if let text {
@@ -222,7 +223,7 @@ public struct TotalStat: View {
                 .font(.body.weight(.medium))
                 .lineLimit(1)
                 .opacity(isLive ? 1 : 0.55)
-                .animation(.easeOut(duration: 0.15), value: isLive)
+                .animation(Motion.state, value: isLive)
             }
             .buttonStyle(NumberButtonStyle())
             .accessibilityLabel("\(label), \(text ?? "unavailable")\(text != nil && coverage?.isPartial == true ? ", partial" : "")")

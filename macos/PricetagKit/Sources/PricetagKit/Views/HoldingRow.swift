@@ -64,7 +64,7 @@ public struct OnchainCheck: View {
     public var body: some View {
         if let label {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.caption2)
+                .font(.caption)
                 .foregroundStyle(prominence == .increased ? Tone.neutral.style : Tone.warning.style)
                 .help(help)
                 .accessibilityElement(children: .ignore)
