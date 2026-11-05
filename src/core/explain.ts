@@ -1,6 +1,6 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
 import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unseenEthCause } from "./wording.ts"
 
@@ -127,6 +127,46 @@ export function describeEffect({ leg, before, after }: LegEffect, currency: Curr
   if (shortfall > 0n) parts.push(`${formatAmount(shortfall, leg.decimals)} ${leg.asset} more than we saw arrive`)
   if (leg.orderUnknown && orderMatters(leg, before.method)) return `${parts.join(", ")}. ${ORDER_UNKNOWN[leg.orderUnknown]}`
   return parts.join(", ")
+}
+
+/** What a leg did, in one plain sentence led by its amount in money, and what about it isn't known. `describeEffect` has the rest. */
+export function summarizeEffect({ leg, before, after }: LegEffect, currency: CurrencyCode): { summary: string; unknown: string | null } {
+  const money = (micros: string | bigint) => formatMoney(micros, currency)
+  const qty = BigInt(leg.delta.replace("-", ""))
+  const amount = (units: bigint) => `${formatAmount(units, leg.decimals)} ${leg.asset}`
+  const value = leg.priceMicros === null ? null : worth(qty, BigInt(leg.priceMicros), leg.decimals)
+  // Money first, as people count it. Without a price, the amount is all there is to say.
+  const what = (micros: bigint | string | null, about = false) => (micros === null ? amount(qty) : `${about ? "about " : ""}${money(micros)} of ${leg.asset}`)
+  if (BigInt(leg.delta) > 0n) {
+    const unknown = leg.costMicros !== null ? null : leg.pieces?.some((p) => p.costMicros !== null) ? "What part of this cost isn't known yet." : "What this cost isn't known yet."
+    if (leg.opening) return { summary: `Already held ${what(value)} when this history starts.`, unknown }
+    if (leg.kind === "swap" || leg.purchaseSource) {
+      // Money after "Bought" reads as what was paid, so a price's worth says so when that's all there is.
+      if (leg.costMicros === null) return { summary: `Bought ${amount(qty)}${value === null ? "" : `, worth ${money(value)}`}.`, unknown }
+      return { summary: `Bought ${what(leg.costMicros, leg.estimated)}${leg.purchaseSource ? ", fees included" : ""}.`, unknown }
+    }
+    return { summary: `Received ${what(value)}${leg.costLabel === "inherited" ? " from your other wallet" : ""}.`, unknown }
+  }
+  const realized = diff(after.realizedMicros, before.realizedMicros)
+  const unresolved = diff(after.unresolvedDisposedQty, before.unresolvedDisposedQty)
+  const shortfall = diff(after.shortfallQty, before.shortfallQty)
+  const unknown =
+    shortfall > 0n
+      ? `${amount(shortfall)} more left than we saw arrive, so its gain isn't known.`
+      : unresolved > 0n && leg.kind !== "transfer"
+        ? `The gain on ${amount(unresolved)} isn't known, because what it cost isn't known yet.`
+        : null
+  if (leg.kind === "gas") {
+    const fee = diff(after.gasMicros, before.gasMicros)
+    return { summary: leg.priceMicros === null ? `Paid ${amount(qty)} in network fees.` : `Paid ${money(fee)} in network fees.`, unknown }
+  }
+  if (leg.kind === "transfer") return { summary: `Sent ${what(value)}, with no gain or loss.`, unknown }
+  if (leg.proceedsMicros === null) return { summary: `Sold ${amount(qty)}, for something with no usable value.`, unknown }
+  const sold = `Sold ${what(leg.proceedsMicros, leg.estimated)}`
+  const gain = `a ${money(realized < 0n ? -realized : realized)} ${realized < 0n ? "loss" : "gain"}`
+  if (unknown) return { summary: realized === 0n ? `${sold}.` : `${sold}, ${gain} on part of it.`, unknown }
+  if (realized === 0n) return { summary: `${sold}, with no gain or loss.`, unknown }
+  return { summary: `${sold}, ${gain}.`, unknown }
 }
 
 /** Why what we saw and the chain might disagree, by which way they do. */
