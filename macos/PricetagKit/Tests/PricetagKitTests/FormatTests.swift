@@ -16,6 +16,11 @@ struct FormatVectors: Decodable {
         let ms: Int
         let duration: String
     }
+    struct ChartTick: Decodable { let value: Double; let label: String }
+    struct ChartTicks: Decodable {
+        let values: [Double]
+        let usd, cad: [ChartTick]
+    }
     struct BlockSpan: Decodable {
         let from, to, ms: Int
     }
@@ -27,6 +32,7 @@ struct FormatVectors: Decodable {
     let price: [Price]
     let labeledUsd: [LabeledUSD]
     let amount: [Amount]
+    let chartTicks: [ChartTicks]
     let duration: [Span]
     let blockSpans: [BlockSpan]
     let blocksBefore: [BlocksBefore]
@@ -71,6 +77,16 @@ struct FormatVectors: Decodable {
         for vector in vectors.amount {
             #expect(Format.amount(vector.units, decimals: vector.decimals) == vector.amount, "\(vector.units)")
             #expect(Format.signedAmount(vector.units, decimals: vector.decimals) == vector.signed, "\(vector.units)")
+        }
+    }
+
+    @Test func chartTicksMatchTheWebApp() {
+        for vector in vectors.chartTicks {
+            for (currency, expected) in [(CurrencyCode.USD, vector.usd), (.CAD, vector.cad)] {
+                let ticks = ChartAxis.moneyTicks(vector.values, currency)
+                #expect(ticks.map(\.label) == expected.map(\.label), "\(vector.values)")
+                #expect(ticks.map(\.value).elementsEqual(expected.map(\.value)) { abs($0 - $1) < 1e-9 }, "\(vector.values)")
+            }
         }
     }
 

@@ -92,6 +92,9 @@ enum TestScene: String, CaseIterable {
     case mainDetails = "main-details"
     case mainNarrow = "main-narrow"
     case mainNoWallet = "main-no-wallet"
+    case mainNoWalletSmallest = "main-no-wallet-smallest"
+    case mainNoWalletHasSpendingMoney = "main-no-wallet-has-spending-money"
+    case mainNoWalletNotProvisioned = "main-no-wallet-not-provisioned"
     case mainReading = "main-reading"
     case mainServerDown = "main-server-down"
     case mainNotUpdating = "main-not-updating"
@@ -105,6 +108,9 @@ enum TestScene: String, CaseIterable {
     case holdComparison = "hold-comparison"
     case mainHoldDetails = "main-hold-details"
     case mainCostWithheld = "main-cost-withheld"
+    case mainSmallAmounts = "main-small-amounts"
+    case mainSmallAmountsNarrow = "main-small-amounts-narrow"
+    case mainLongHistory = "main-long-history"
     case mainCAD = "main-cad"
     case mainTransactionsCAD = "main-transactions-cad"
     case mainDetailsCAD = "main-details-cad"
@@ -123,6 +129,8 @@ enum TestScene: String, CaseIterable {
     case popoverHotWalletCAD = "popover-hot-wallet-cad"
     case settings
     case settingsHotWallet = "settings-hot-wallet"
+    case settingsShowingSpendingMoney = "settings-showing-spending-money"
+    case settingsNoWallet = "settings-no-wallet"
     case settingsCAD = "settings-cad"
     case settingsHotWalletCAD = "settings-hot-wallet-cad"
     case hotWalletSetup = "hot-wallet-setup"
@@ -144,6 +152,8 @@ enum TestScene: String, CaseIterable {
     case hotWalletAddSavingsFilled = "hot-wallet-add-savings-filled"
     case hotWalletAddSavingsFromDevice = "hot-wallet-add-savings-from-device"
     case hotWalletTopUp = "hot-wallet-top-up"
+    case hotWalletTopUpFirstRead = "hot-wallet-top-up-first-read"
+    case hotWalletTopUpOneDollar = "hot-wallet-top-up-one-dollar"
     case hotWalletTopUpAtCap = "hot-wallet-top-up-at-cap"
     case hotWalletTopUpCAD = "hot-wallet-top-up-cad"
     case send
@@ -164,7 +174,7 @@ enum TestScene: String, CaseIterable {
     var chrome: Chrome {
         switch self {
         case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
-             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
+             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
              .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
@@ -178,6 +188,8 @@ enum TestScene: String, CaseIterable {
         case .mainNotUpdating, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
         case .mainCostWithheld, .resolveCostWithheld: .costWithheld
+        case .mainSmallAmounts, .mainSmallAmountsNarrow: .smallAmounts
+        case .mainLongHistory: .longHistory
         case .resolveAnsweredWallet: .answeredWallet
         case .mainEmpty, .mainEmptySmallest: .empty
         case .mainEmptyNotice: .emptyReadingLinked
@@ -187,12 +199,15 @@ enum TestScene: String, CaseIterable {
     }
 
     private var hasWallet: Bool {
-        self != .mainNoWallet && self != .popoverNoWallet
+        switch self {
+        case .mainNoWallet, .mainNoWalletSmallest, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .popoverNoWallet, .settingsNoWallet: false
+        default: true
+        }
     }
 
     private var usesDemoWallet: Bool {
         switch self {
-        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .mainNotStarted, .popoverNotStarted: false
+        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .mainNotStarted, .popoverNotStarted, .settingsShowingSpendingMoney: false
         default: true
         }
     }
@@ -206,10 +221,11 @@ enum TestScene: String, CaseIterable {
 
     private var hotWalletFixture: HotWalletFixture {
         switch self {
-        case .hotWalletNotProvisioned: .notProvisioned
+        case .hotWalletNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
+        case .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .settingsShowingSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
         case .sendWaiting: .waitingForTouchID
+        case .hotWalletTopUpOneDollar: .nearCap
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
         case .hotWalletNoPrice: .noPrice
         case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap: .overCap
@@ -236,15 +252,18 @@ enum TestScene: String, CaseIterable {
         let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method }, mainCurrency: { store.currency })
         // Before there's a view, which is how it'd be for anyone opening a sheet: a sheet works out what it offers when it appears.
         let hotWalletHasRead = ReadOnce()
-        Task {
+        let readHotWallet: @MainActor () async -> Void = {
             await hotWallet.tick()
             await hotWallet.readHistory()
             hotWalletHasRead.isDone = true
         }
-        let deadline = Date.now.addingTimeInterval(5)
-        while !hotWalletHasRead.isDone {
-            guard Date.now < deadline else { TestMode.fail("This scene's hot wallet never finished reading.") }
-            RunLoop.main.run(until: .now.addingTimeInterval(0.01))
+        if self != .hotWalletTopUpFirstRead {
+            Task { await readHotWallet() }
+            let deadline = Date.now.addingTimeInterval(5)
+            while !hotWalletHasRead.isDone {
+                guard Date.now < deadline else { TestMode.fail("This scene's hot wallet never finished reading.") }
+                RunLoop.main.run(until: .now.addingTimeInterval(0.01))
+            }
         }
         let navigation = Navigation()
         navigation.showsTransactions = self == .mainTransactions || self == .mainTransactionsCAD
@@ -253,7 +272,7 @@ enum TestScene: String, CaseIterable {
 
         let isReady: () -> Bool = { [feed] in
             switch feed {
-            case .demo, .linkedFails, .costWithheld, .answeredWallet, .empty, .emptyReadingLinked, .notStarted: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .linkedFails, .costWithheld, .smallAmounts, .longHistory, .answeredWallet, .empty, .emptyReadingLinked, .notStarted: store.feed == .noWallet || store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
             case .stopsAnswering: store.feed == .serverUnreachable && store.portfolio != nil
@@ -264,20 +283,24 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .holdComparison:
             return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
-        case .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+        case .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
+        case .mainNoWallet, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet)), size: CGSize(width: 1120, height: 760), isReady: isReady)
+        case .mainNoWalletSmallest:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet)), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .mainSmallestEnd:
             // Starts at the end of the page, because a screenshot can't scroll to it.
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .mainEmptySmallest, .mainSmallest:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 560), isReady: isReady)
-        case .mainNarrow:
+        case .mainNarrow, .mainSmallAmountsNarrow:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 760), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
         case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
-        case .settings, .settingsHotWallet, .settingsCAD, .settingsHotWalletCAD:
+        case .settings, .settingsHotWallet, .settingsShowingSpendingMoney, .settingsNoWallet, .settingsCAD, .settingsHotWalletCAD:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 720), isReady: isReady)
@@ -291,8 +314,11 @@ enum TestScene: String, CaseIterable {
         case .hotWalletAddSavingsFromDevice:
             let url = "patina://add-savings?address=\(HotWalletFixture.savings.lowercased)&name=Ledger&linked=0x\(String(repeating: "ab", count: 20))"
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet, link: AddSavingsLink(url: URL(string: url)!)!)), isReady: isReady)
-        case .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD:
+        case .hotWalletTopUp, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD:
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!)), isReady: isReady)
+        case .hotWalletTopUpFirstRead:
+            // The sheet opens first here, so the read has to change what it worked out.
+            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!).task { await readHotWallet() }), isReady: { hotWalletHasRead.isDone })
         case .send, .sendCAD, .sendKnown, .sendWaiting:
             let model = SendModel(wallet: hotWallet, store: store)
             model.token = Base.tokens.first { $0.symbol == "USDC" }!
@@ -346,7 +372,7 @@ private final class ReadOnce {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, answeredWallet, empty, emptyReadingLinked, notStarted }
+    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, smallAmounts, longHistory, answeredWallet, empty, emptyReadingLinked, notStarted }
 
     private let feed: Feed
     private let reads = Mutex(0)
@@ -372,6 +398,24 @@ final class FixtureSource: PortfolioSource {
                 let asked: [String: Any] = ["id": "cost:0xdemo:0xwithheld:USDC", "kind": "cost", "wallet": object["address"] ?? "", "receipts": [["wallet": object["address"] ?? "", "legId": "0xwithheld:USDC", "asset": "USDC", "units": "500000000"]], "costKey": "0xdemo:0xwithheld:USDC", "noteAbout": NSNull(), "needsCost": false, "arrivals": [["asset": "USDC", "decimals": 6, "units": "500000000"]], "transfers": 1, "firstAt": "2026-11-04T12:00:00.000Z", "lastAt": "2026-11-04T12:00:00.000Z", "evidence": ["0x0000…e301, your wallet, sent this, and its USDC history can't be confirmed"], "valueMicros": "500000000"]
                 object["questions"] = [asked] + (object["questions"] as? [[String: Any]] ?? [])
             }
+        case .smallAmounts:
+            // A wallet's first minute: fractions of a cent in PnL, and the longest amounts a warning can sit beside.
+            return try demo { object in
+                object["points"] = Self.points(every: 15, pnl: [-1500, -2300, -2300, -2300, -2300])
+                let amounts = ["ETH": "1648710000000000", "cbBTC": "123", "USDC": "1234567890000", "AERO": "123000000"]
+                var positions = object["positions"] as? [[String: Any]] ?? []
+                for index in positions.indices {
+                    guard let asset = positions[index]["asset"] as? String, let amount = amounts[asset] else { continue }
+                    var values = positions[index]["values"] as? [String: Any] ?? [:]
+                    values["qty"] = amount
+                    positions[index]["values"] = values
+                    positions[index]["shortfallQty"] = "1"
+                }
+                object["positions"] = positions
+            }
+        case .longHistory:
+            // Weeks of history, where a time of day on the axis would say nothing.
+            return try demo { $0["points"] = Self.points(every: 3 * 86_400, pnl: [1_000_000, 250_000_000, 1_250_000_000, 900_000_000, 400_000_000, 1_100_000_000, 800_000_000]) }
         case .answeredWallet:
             // What a wallet being read gets asked about one of the user's own wallets, which isn't what the demo itself would ask.
             return try demo { object in
@@ -389,6 +433,21 @@ final class FixtureSource: PortfolioSource {
         case .stopsAnswering: if read > 1 { throw FetchError.unreachable }
         }
         return try Self.decode(fixture("demo-portfolio", currency))
+    }
+
+    /// Chart points this many seconds apart, the last one being now.
+    private static func points(every seconds: Int, pnl: [Int]) -> [[String: Any]] {
+        let start = Date(timeIntervalSince1970: 1_793_800_000)
+        return pnl.enumerated().map { index, micros in
+            let isLast = index == pnl.count - 1
+            return [
+                "blockNum": 53_500_000 + index,
+                "timestamp": start.addingTimeInterval(Double(index * seconds)).formatted(.iso8601),
+                "txHash": isLast ? NSNull() : "0xde3\(String(repeating: "0", count: 60))\(index)",
+                "pnlMicros": String(micros),
+                "excludedCount": 0,
+            ] as [String: Any]
+        }
     }
 
     /// The demo, changed a little.

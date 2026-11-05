@@ -23,7 +23,7 @@ struct HotWalletWindow: View {
                 ContentUnavailableView("Can't Open This Wallet", systemImage: "exclamationmark.triangle", description: Text(message))
             case .ready:
                 if wallet.address == nil {
-                    HotWalletSetup(wallet: wallet)
+                    HotWalletSetup(wallet: wallet, store: store)
                 } else {
                     HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation)
                 }
@@ -37,6 +37,7 @@ struct HotWalletWindow: View {
 /// Says what this is before there's anything to lose.
 private struct HotWalletSetup: View {
     let wallet: HotWallet
+    let store: PortfolioStore
     @State private var understands = false
 
     var body: some View {
@@ -46,7 +47,7 @@ private struct HotWalletSetup: View {
                 .foregroundStyle(.secondary)
             Text("This Mac's spending money")
                 .font(.title.bold())
-            Text("A small balance for everyday use, with no recovery phrase to write down. Your savings stay on a hardware wallet, and anything here above the cap goes to them by itself.")
+            Text("\(HotWalletWording.summary) Your savings stay on a hardware wallet, and anything here above the cap goes to them by itself.")
                 .fixedSize(horizontal: false, vertical: true)
             Notice(.warning, HotWalletWording.cannotBeRestored)
             VStack(alignment: .leading, spacing: 6) {
@@ -60,7 +61,12 @@ private struct HotWalletSetup: View {
             Toggle("I understand this money can't be restored if this Mac is lost", isOn: $understands)
             HStack {
                 Spacer()
-                Button("Create Spending Money") { Task { await wallet.createWallet() } }
+                Button("Create Spending Money") {
+                    Task {
+                        await wallet.createWallet()
+                        if let address = wallet.address { store.showNewWallet(address.lowercased) }
+                    }
+                }
                     .buttonStyle(.borderedProminent)
                     .disabled(!understands || wallet.isWorking)
             }
@@ -568,7 +574,9 @@ struct TopUpSheet: View {
             } else {
                 LabeledContent("Amount") {
                     HStack {
+                        // A slider needs two ends, and with room for one dollar, the other end is too much.
                         Slider(value: $dollars, in: 1...Double(max(room, 2)), step: 1)
+                            .disabled(room < 2)
                         Text(wallet.usd(dollars: Int(dollars)))
                             .monospacedDigit()
                             .frame(width: 56, alignment: .trailing)
@@ -624,6 +632,8 @@ struct TopUpSheet: View {
         .padding(20)
         .frame(width: 460)
         .onAppear { dollars = Double(max(1, min(room, 20))) }
+        // A read can leave less room than there was when this opened. What's chosen stays if it still fits.
+        .onChange(of: room) { dollars = min(dollars, Double(max(room, 1))) }
     }
 
     private var ethHint: String {

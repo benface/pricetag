@@ -1,3 +1,4 @@
+import HotWalletKit
 import PricetagKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -24,7 +25,7 @@ struct CSVDocument: FileDocument {
 struct MainWindow: View {
     let store: PortfolioStore
     @Bindable var navigation: Navigation
-    var noteWriter: (any CostNoteWriter)?
+    var hotWallet: HotWallet?
     @State private var exporting = false
     @State private var exportDocument: CSVDocument?
     @State private var exportError: String?
@@ -44,7 +45,7 @@ struct MainWindow: View {
                 WalletSheet(store: store)
             }
             .sheet(isPresented: $navigation.isResolving) {
-                ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: noteWriter)
+                ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet)
             }
             .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: "\(AppName.current) \(subtitle)") { result in
                 if case .failure(let error) = result { exportError = error.localizedDescription }
@@ -155,7 +156,7 @@ struct MainWindow: View {
     @ViewBuilder
     private var content: some View {
         if store.feed == .noWallet {
-            Welcome(store: store)
+            Welcome(store: store, hotWallet: hotWallet)
         } else if let portfolio {
             details(portfolio)
         } else if store.feed == .reading {
@@ -320,7 +321,7 @@ private struct HoldingsTable: View {
     private enum Column {
         static let asset: CGFloat = 160
         static let balanceCheck: CGFloat = 100
-        static let amount: CGFloat = 85
+        static let amount: CGFloat = 100
         static let averagePrice: CGFloat = 130
         static let value: CGFloat = 85
         static let realized: CGFloat = 120
@@ -469,6 +470,8 @@ private struct HoldingsTable: View {
                 if warn { WarningIcon() }
                 LiveNumber(text, tone: isLive ? tone : (warn ? .warning : .neutral))
                     .lineLimit(1)
+                    // A long amount gets smaller rather than losing digits.
+                    .minimumScaleFactor(0.7)
             }
             .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
         }
@@ -540,16 +543,49 @@ private struct WarningIcon: View {
 
 private struct Welcome: View {
     let store: PortfolioStore
+    let hotWallet: HotWallet?
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ContentUnavailableView {
             Label("Every transfer gets a price", systemImage: "tag")
         } description: {
-            Text("Add a Base address to see its holdings, cost and PnL, with every number explained. This is view-only: there are no keys here, and it can't send anything.")
+            Text("See the holdings, cost and PnL of any Base wallet, with every number explained. A wallet you look up is only read, and nothing signs for it.")
                 .help(Wording.pnlHelp)
         } actions: {
-            WalletForm(store: store, onDone: {})
-                .frame(width: 440)
+            VStack(spacing: 20) {
+                spendingMoney
+                WalletForm(store: store, onDone: {})
+            }
+            .frame(width: 440)
+        }
+    }
+
+    /// Nothing to offer on a build that can't hold a key. The rest of this screen still works there.
+    @ViewBuilder
+    private var spendingMoney: some View {
+        if let hotWallet, hotWallet.availability == .ready {
+            VStack(spacing: 6) {
+                if let address = hotWallet.address {
+                    Button("Show Spending Money") { store.setWallet(address.lowercased) }
+                        .buttonStyle(.borderedProminent)
+                    Text("This Mac already has spending money.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    // The window says what this is and what can go wrong, and only it makes the key.
+                    Button("Create Spending Money…") { openWindow(id: WindowID.hotWallet) }
+                        .buttonStyle(.borderedProminent)
+                    Text(HotWalletWording.summary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            HStack {
+                VStack { Divider() }
+                Text("or").font(.callout).foregroundStyle(.secondary)
+                VStack { Divider() }
+            }
         }
     }
 }

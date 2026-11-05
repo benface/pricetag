@@ -70,8 +70,43 @@ export function formatTime(iso: string): string {
   return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
 }
 
-export function formatClock(iso: string): string {
-  return new Date(iso).toLocaleString("en-US", { hour: "numeric", minute: "2-digit" })
+/** Marks for a chart of these values and zero, each as precise as the distance between them, so a chart of fractions of a cent doesn't label every line $0. */
+export function chartMoneyTicks(values: number[], currency: CurrencyCode = "USD"): { value: number; label: string }[] {
+  const low = Math.min(0, ...values)
+  const high = Math.max(0, ...values)
+  const raw = (high - low || 1) / 4
+  const magnitude = 10 ** Math.floor(Math.log10(raw))
+  // PnL comes in millionths of a dollar, so nothing's finer than that.
+  const step = Math.max(1e-6, [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((s) => s >= raw) ?? raw)
+  const digits = [0, 1, 2, 3, 4, 5, 6, 7, 8].find((d) => Math.abs(step * 10 ** d - Math.round(step * 10 ** d)) < 1e-6) ?? 8
+  const { locale } = CURRENCIES[currency]
+  const format = new Intl.NumberFormat(
+    locale,
+    step >= 1000
+      ? { style: "currency", currency, notation: "compact", minimumFractionDigits: 0, maximumFractionDigits: 2 }
+      : // Money doesn't read right with one decimal.
+        { style: "currency", currency, minimumFractionDigits: digits === 1 ? 2 : digits, maximumFractionDigits: digits === 1 ? 2 : digits },
+  ).format
+  const ticks = []
+  const last = Math.ceil(high / step)
+  for (let i = Math.floor(low / step); i <= last; i++) {
+    const value = Number((i * step).toFixed(9))
+    ticks.push({ value, label: format(value) })
+  }
+  return ticks
+}
+
+/** A chart's first and last times, with as much of them as it takes to read differently. Narrow charts only say the date or the time, whichever tells them apart. */
+export function formatChartSpan(startIso: string, endIso: string, narrow = false): [string, string] {
+  const span = new Date(endIso).getTime() - new Date(startIso).getTime()
+  const date = { month: "short", day: "numeric" } as const
+  const clock = { hour: "numeric", minute: "2-digit" } as const
+  const options = !narrow ? { ...date, ...clock } : span >= 86_400_000 ? date : clock
+  const show = (iso: string, extra = {}) => new Date(iso).toLocaleString("en-US", { ...options, ...extra })
+  if (span === 0 || show(startIso) !== show(endIso)) return [show(startIso), show(endIso)]
+  // The same minute, or the hour that repeats when the clocks go back.
+  const extra = span < 60_000 ? { second: "2-digit" } : { timeZoneName: "short" }
+  return [show(startIso, extra), show(endIso, extra)]
 }
 
 export function formatDuration(ms: number): string {
