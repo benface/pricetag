@@ -122,7 +122,7 @@
   ],
   "checkLabels": {
     "reconciled": "Matches",
-    "incomplete": "Incomplete",
+    "incomplete": "Doesn't match",
     "unchecked": "Not checked"
   },
   "feesUnknown": [
@@ -180,11 +180,11 @@
   "linkedFailed": [
     {
       "count": 1,
-      "text": "Couldn't read your other wallet, so what came from it may show as unresolved."
+      "text": "Couldn't read your other wallet, so what came from it may show an unknown cost."
     },
     {
       "count": 2,
-      "text": "Couldn't read 2 of your other wallets, so what came from them may show as unresolved."
+      "text": "Couldn't read 2 of your other wallets, so what came from them may show an unknown cost."
     }
   ],
   "withheld": "0x1234…5678's ETH history can't be confirmed, so what it sent has an unknown cost where it arrived.",

@@ -27,7 +27,7 @@ function microsOf(text: string): string | null {
 const pnlWords = (pnl: string | null, estimated: string, unresolved: string, currency: CurrencyCode) => {
   if (pnl === null) return "PnL unavailable"
   const number = `${BigInt(estimated) > 0n ? "≈" : ""}${formatSignedMoney(pnl, currency)}`
-  return BigInt(unresolved) > 0n ? `${number} · ${formatMoney(unresolved, currency)} unresolved` : number
+  return BigInt(unresolved) > 0n ? `${number} · ${formatMoney(unresolved, currency)} cost unknown` : number
 }
 
 const consequence = (preview: BookPreview, currency: CurrencyCode) => (preview.failed ? "Couldn't read that wallet" : preview.pending ? "Reading that wallet…" : preview.pnlMicros === null ? "PnL still unavailable" : pnlWords(preview.pnlMicros, preview.estimatedMicros, preview.unresolvedMicros, currency))
@@ -177,7 +177,7 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
         <h2>{current ? (takingCost ? "What did this cost?" : "Who's this?") : balanced ? "Books balanced" : "That's all for now"}</h2>
         {fold.meter.open > 0 ? <span className="muted small">{fold.meter.open} left</span> : null}
       </header>
-      <div className="meter" role="progressbar" aria-label="Unresolved" aria-valuenow={Math.round(progress * 100)}>
+      <div className="meter" role="progressbar" aria-label="Questions left" aria-valuenow={Math.round(progress * 100)}>
         <div className={balanced ? "meter-fill done" : "meter-fill"} style={{ width: `${progress * 100}%` }} />
       </div>
       <p className="small">
@@ -267,7 +267,7 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
               </button>
             </>
           ) : null}
-          {fold.meter.waiting > linkedFailed.length ? <p className="small muted">Still reading your other {fold.meter.waiting === 1 ? "wallet" : "wallets"}. What came from {fold.meter.waiting === 1 ? "it" : "them"} stays unresolved until that's done.</p> : null}
+          {fold.meter.waiting > linkedFailed.length ? <p className="small muted">Still reading your other {fold.meter.waiting === 1 ? "wallet" : "wallets"}. What came from {fold.meter.waiting === 1 ? "it" : "them"} has an unknown cost until that's done.</p> : null}
           {fold.totals.excluded.length > 0 ? <p className="small muted">Every question's answered. What's left isn't a question, like a balance that doesn't match the chain.</p> : null}
           {skipped.size > 0 ? (
             <>

@@ -108,7 +108,7 @@ public struct ResolveFlow: View {
             ProgressView(value: model.meter?.progress ?? 0)
                 .tint(model.isBalanced ? Tone.gain.style : Tone.warning.style)
                 .animation(reduceMotion ? nil : .snappy, value: model.meter)
-                .accessibilityLabel("Unresolved, \(model.meter?.open ?? 0) left")
+                .accessibilityLabel("Questions, \(model.meter?.open ?? 0) left")
             HStack(spacing: 6) {
                 Text("Now").foregroundStyle(.secondary)
                 if let portfolio = store.portfolio {
@@ -314,7 +314,7 @@ public struct ResolveFlow: View {
             }
             if let portfolio = store.portfolio, !portfolio.linkedReading.isEmpty {
                 let waiting = portfolio.linkedReading.count
-                Text("Still reading your other \(waiting == 1 ? "wallet" : "wallets"). What came from \(waiting == 1 ? "it" : "them") stays unresolved until that's done.")
+                Text("Still reading your other \(waiting == 1 ? "wallet" : "wallets"). What came from \(waiting == 1 ? "it" : "them") has an unknown cost until that's done.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

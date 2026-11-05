@@ -263,7 +263,7 @@ struct MainWindow: View {
             }
         }
         if !portfolio.linkedReading.isEmpty {
-            Notice(.info, "Reading your other \(portfolio.linkedReading.count == 1 ? "wallet" : "wallets"). What came from \(portfolio.linkedReading.count == 1 ? "it" : "them") shows as unresolved until that's done.")
+            Notice(.info, "Reading your other \(portfolio.linkedReading.count == 1 ? "wallet" : "wallets"). What came from \(portfolio.linkedReading.count == 1 ? "it" : "them") has an unknown cost until that's done.")
         }
     }
 

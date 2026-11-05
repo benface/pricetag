@@ -129,7 +129,7 @@ public enum Wording {
     public static func checkLabel(_ status: Reconciliation.Status) -> String {
         switch status {
         case .reconciled: "Matches"
-        case .incomplete: "Incomplete"
+        case .incomplete: "Doesn't match"
         case .unchecked: "Not checked"
         }
     }
@@ -183,7 +183,7 @@ public enum Wording {
     /// What sits right next to a total, so it never appears bare. nil when it's exact and whole.
     public static func headlineCaveat(_ totals: Totals, _ currency: CurrencyCode) -> String? {
         var parts: [String] = []
-        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) unresolved") }
+        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) cost unknown") }
         if isPositive(totals.estimatedMicros) { parts.append("\(Format.money(totals.estimatedMicros, currency)) estimated") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
@@ -203,7 +203,7 @@ public enum Wording {
     }
 
     public static func linkedFailed(_ count: Int) -> String {
-        count == 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : "Couldn't read \(count) of your other wallets, so what came from them may show as unresolved."
+        count == 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : "Couldn't read \(count) of your other wallets, so what came from them may show an unknown cost."
     }
 
     /// A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent.
@@ -217,7 +217,7 @@ public enum Wording {
         if preview.pending { return "Reading that wallet…" }
         guard let pnl = preview.pnlMicros else { return "PnL still unavailable" }
         let number = Format.estimate(Format.signedMoney(pnl, currency), isPositive(preview.estimatedMicros))
-        return isPositive(preview.unresolvedMicros) ? "\(number) · \(Format.money(preview.unresolvedMicros, currency)) unresolved" : number
+        return isPositive(preview.unresolvedMicros) ? "\(number) · \(Format.money(preview.unresolvedMicros, currency)) cost unknown" : number
     }
 
     public static let notStarted = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."
