@@ -1,5 +1,6 @@
 import Foundation
 import KeyVault
+import LocalAuthentication
 import Observation
 import os
 
@@ -31,12 +32,18 @@ public struct SiteApproval: Identifiable, Equatable, Sendable {
         if case .transaction = action { true } else { false }
     }
 
+    /// Without https://, which is the only scheme a site can have here apart from this Mac's own.
+    public var site: String {
+        origin.hasPrefix("https://") ? String(origin.dropFirst(8)) : origin
+    }
+
     /// Signing asks for Touch ID too, like every other time money can leave. Connecting only shows an address.
+    /// It names the site and what leaves, because macOS's own dialog shows this over the window that does.
     var presenceReason: String? {
         switch action {
         case .connect: nil
-        case .transaction: "send a transaction for \(origin)"
-        case .message: "sign a message for \(origin)"
+        case .transaction(let review): "\(review.promptWords) for \(site)"
+        case .message(let review): "\(review.headline.lowercasedFirst) for \(site)"
         }
     }
 }
@@ -77,7 +84,9 @@ public struct SiteWork: Identifiable, Equatable, Sendable {
     public let id = UUID()
     public let origin: String
     public let isTransaction: Bool
-    fileprivate let approvalID: UUID
+    /// What was approved, so the window can keep showing it.
+    public let approval: SiteApproval
+    fileprivate var approvalID: UUID { approval.id }
 }
 
 /// Why something approved didn't happen. A site's own message about it can say anything, so the app says what really went wrong.
@@ -120,6 +129,8 @@ public final class SiteBridge {
     public var current: SiteApproval? { pending.first }
     public var working: SiteWork? { allWork.first }
     public var failure: SiteFailure? { failures.first }
+    /// The last thing to go through, for the window to say so before it closes. It doesn't keep the window open by itself.
+    public private(set) var finished: SiteWork?
 
     /// What the window is showing, or nil when there's no reason for it to be open.
     public var windowID: UUID? { failure?.id ?? current?.id ?? working?.id }
@@ -225,23 +236,39 @@ public final class SiteBridge {
     // MARK: - Answers from the app's window
 
     /// Doesn't answer until a strong warning has been acknowledged and Touch ID says yes. A cancelled prompt leaves it waiting.
-    public func approve(_ id: UUID, acknowledged: Bool = false) async {
-        guard let approval = pending.first(where: { $0.id == id }), !approval.needsAcknowledgment || acknowledged else { return }
+    /// With a prompt, Touch ID asks inside the window that's showing it.
+    @discardableResult
+    public func approve(_ id: UUID, acknowledged: Bool = false, in prompt: PresencePrompt? = nil) async -> ApprovalResult {
+        guard let approval = pending.first(where: { $0.id == id }), !approval.needsAcknowledgment || acknowledged else { return .cancelled }
         if let reason = approval.presenceReason {
-            guard (try? await wallet.confirmPresence(reason: reason)) != nil else { return }
+            do {
+                try await wallet.confirmPresence(reason: reason, in: prompt)
+            } catch let error as LAError where [.userCancel, .appCancel, .systemCancel].contains(error.code) {
+                return .cancelled
+            } catch {
+                return .failed(HotWalletWording.touchIDDidNotConfirm)
+            }
         }
-        guard pending.contains(where: { $0.id == id }) else { return }
+        guard pending.contains(where: { $0.id == id }) else { return .cancelled }
         // Before it's taken off the list, so the window has something to show the whole way through.
         if approval.presenceReason != nil {
-            allWork.append(SiteWork(origin: approval.origin, isTransaction: approval.isTransaction, approvalID: approval.id))
+            allWork.append(SiteWork(origin: approval.origin, isTransaction: approval.isTransaction, approval: approval))
         }
+        wallet.noteAnswer()
         finish(id, approved: true)
+        return .done
+    }
+
+    public func dismissFinished() {
+        finished = nil
     }
 
     /// The one on show. If there's another, it's next.
     public func dismissFailure() {
         if !failures.isEmpty { failures.removeFirst() }
     }
+
+    public var nextPromptAt: Date? { wallet.nextPromptAt }
 
     /// In the main currency when that isn't USD, like the rest of the wallet.
     public func usd(_ micros: UInt128) -> String {
@@ -251,6 +278,7 @@ public final class SiteBridge {
     public func reject(_ id: UUID) {
         guard let approval = pending.first(where: { $0.id == id }) else { return }
         rejections[approval.origin, default: []].append(now())
+        wallet.noteAnswer()
         finish(id, approved: false)
     }
 
@@ -432,6 +460,7 @@ public final class SiteBridge {
         switch answer {
         case .success:
             Self.log.notice("\(request.method, privacy: .public) for \(request.origin, privacy: .public) went through")
+            if let work { finished = work }
         case .failure(let error):
             let stage = work == nil ? "before approval" : "after approval"
             Self.log.error("\(request.method, privacy: .public) for \(request.origin, privacy: .public) failed \(stage, privacy: .public): \(error.code, privacy: .public) \(Self.loggableReason(error), privacy: .public)")
@@ -479,6 +508,7 @@ public final class SiteBridge {
 
         let approval = SiteApproval(id: UUID(), origin: request.origin, action: action, requester: request.requester)
         request.approvalID = approval.id
+        finished = nil
         pending.append(approval)
         let approved = await withCheckedContinuation { waiting[approval.id] = $0 }
         return approved && !request.isCancelled ? .success(.null) : .failure(.rejected)
@@ -508,3 +538,45 @@ public final class SiteBridge {
         chain.lowercased() == baseChainHex
     }
 }
+
+#if DEBUG
+extension SiteWork {
+    public init(origin: String, isTransaction: Bool, sceneApproval approval: SiteApproval) {
+        self.init(origin: origin, isTransaction: isTransaction, approval: approval)
+    }
+}
+
+extension SiteFailure {
+    public init(sceneOrigin origin: String, isTransaction: Bool, reason: String) {
+        self.init(origin: origin, isTransaction: isTransaction, reason: reason)
+    }
+}
+
+extension SiteApproval {
+    /// For `macos/shot.sh`. Nothing answers these: the scene's buttons do nothing, and they never reach the bridge or a key.
+    /// What a real request becomes, through the same code that reads one.
+    public static func sceneTransaction(origin: String, to: EthereumAddress, value: UInt128 = 0, data: [UInt8] = []) -> SiteApproval {
+        let quote = SiteQuote(gasLimit: 60000, maxFeePerGas: 10_000_000, feeWei: 3_000_000_000_000, ethUsdMicros: 2_640_000_000, ethBalance: 5_000_000_000_000_000, tokenUsdMicros: 999_800)
+        let review = TransactionReview(SiteTransaction(to: to, value: value, data: data), quote: quote)
+        return SiteApproval(id: UUID(), origin: origin, action: .transaction(review), requester: Requester(connection: UUID(), id: "scene"))
+    }
+
+    public static func sceneMessage(origin: String, text: String) -> SiteApproval {
+        SiteApproval(id: UUID(), origin: origin, action: .message(MessageReview(personal: Array(text.utf8), origin: origin)), requester: Requester(connection: UUID(), id: "scene"))
+    }
+
+    public static func sceneUnreadableMessage(origin: String) -> SiteApproval {
+        SiteApproval(id: UUID(), origin: origin, action: .message(MessageReview(personal: [0xFF, 0x00, 0xDE, 0xAD, 0xBE, 0xEF], origin: origin)), requester: Requester(connection: UUID(), id: "scene"))
+    }
+
+    public static func sceneUnlimitedApproval(origin: String, token: EthereumAddress, spender: EthereumAddress) -> SiteApproval {
+        let review = TransactionReview(
+            headline: "Lets \(SiteWording.address(spender)) spend your USDC, with no limit",
+            to: token, toName: "USDC", value: 0, valueUsdMicros: 0, data: [0x09, 0x5e, 0xa7, 0xb3], feeWei: 3_000_000_000_000, feeUsdMicros: 8_000,
+            warnings: [SiteWarning(SiteWording.unlimited(spender: SiteWording.address(spender), asset: "USDC"), isStrong: true)],
+            symbol: "USDC", decimals: 6, amount: "0", usdMicros: nil, spender: spender
+        )
+        return SiteApproval(id: UUID(), origin: origin, action: .transaction(review), requester: Requester(connection: UUID(), id: "scene"))
+    }
+}
+#endif
