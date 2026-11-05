@@ -706,6 +706,71 @@ describe("exchange rates after a reorg", () => {
   })
 })
 
+describe("an exchange rate read that crosses a reorg", () => {
+  const WALLET = (blockNum: number) => ({ latest: { blockNum, timestamp: new Date(1_800_000_000_000).toISOString() }, legs: [{ blockNum: 150 }] }) as Parameters<ReturnType<typeof createRates>>[1]
+
+  /** Rates that answer with what `answer` is now, and hold their first read until the test lets it finish. */
+  function heldRates() {
+    const state = { answer: "1", calls: 0 }
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const rates = createRates(async (_feed, blocks) => {
+      state.calls += 1
+      const result = new Map(blocks.map((block) => [block, { answer: state.answer, updatedAt: block } satisfies RateRound]))
+      if (state.calls === 1) {
+        started.resolve()
+        await release.promise
+      }
+      return result
+    })
+    return { state, started, release, rates }
+  }
+
+  it("doesn't keep a settled block's rate it read from the replaced chain", async () => {
+    const { state, started, release, rates } = heldRates()
+    const before = rates("CAD", WALLET(200))
+    await started.promise
+    rates.rewind!(120)
+    state.answer = "2"
+    release.resolve()
+    await before
+
+    const after = await rates("CAD", WALLET(201))
+    assert.equal(after?.byBlock[150]?.answer, "2")
+    assert.equal(after?.latest?.round.answer, "2")
+    assert.equal(state.calls, 2)
+
+    // And what that read gets is kept again, since no reorg crossed it.
+    await rates("CAD", WALLET(201))
+    assert.equal(state.calls, 2)
+  })
+
+  it("doesn't keep the head's rate it read from the replaced chain", async () => {
+    const { state, started, release, rates } = heldRates()
+    const before = rates("CAD", WALLET(200))
+    await started.promise
+    rates.rewind!(200)
+    state.answer = "2"
+    release.resolve()
+    await before
+
+    // The same height, so a head's rate that was kept would answer with no read.
+    const after = await rates("CAD", WALLET(200))
+    assert.equal(after?.latest?.round.answer, "2")
+  })
+
+  it("keeps what a read gets when the reorg came before it started", async () => {
+    const { state, started, release, rates } = heldRates()
+    rates.rewind!(120)
+    release.resolve()
+    const read = rates("CAD", WALLET(200))
+    await started.promise
+    await read
+    await rates("CAD", WALLET(200))
+    assert.equal(state.calls, 1)
+  })
+})
+
 describe("the server after a reorg the tables haven't rewritten yet", () => {
   const hand = handStream()
   const state: { head: number; through: number; tables: Tables } = { head: 150, through: 150, tables: { legs: [creditAt(100, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(200, "5") } }
