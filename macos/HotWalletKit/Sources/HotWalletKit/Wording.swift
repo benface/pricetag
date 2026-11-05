@@ -75,6 +75,8 @@ public enum HotWalletWording {
     public static let sendingToAToken = "That's a token's contract, not a wallet. What's sent there is usually gone for good."
     public static let lastOneStillShowingUp = "The last transaction is still showing up. Try again in a moment."
     public static let lastOneOnItsWay = "The last transaction is still on its way. Try again in a moment."
+    public static let networkBusy = "The network is limiting how often this app can ask it things. Try again in a moment, or set a dedicated network address in Settings."
+    public static let unreadableAnswer = "The network sent an answer this app can't read, so nothing was signed. Try again in a moment."
     public static let changedWhileWaiting = "This wallet changed while that was waiting, so nothing was signed."
 
     public static func failedOnchain(_ record: SignedRecord) -> String {

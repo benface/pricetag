@@ -10,23 +10,31 @@ struct SiteApprovalWindow: View {
 
     var body: some View {
         Group {
-            if let approval = bridge.current {
-                SiteApprovalView(approval: approval, waitingBehind: bridge.pending.count - 1) { acknowledged in
+            if let failure = bridge.failure {
+                SiteFailureView(failure: failure) { bridge.dismissFailure() }
+            } else if let approval = bridge.current {
+                SiteApprovalView(approval: approval, waitingBehind: bridge.pending.count - 1, usd: bridge.usd) { acknowledged in
                     await bridge.approve(approval.id, acknowledged: acknowledged)
                 } reject: {
                     bridge.reject(approval.id)
                 }
                 .id(approval.id)
+            } else if let working = bridge.working {
+                SiteWorkingView(work: working)
             }
         }
         .frame(width: 480)
-        .onDisappear { bridge.rejectAll() }
+        .onDisappear {
+            bridge.rejectAll()
+            bridge.dismissFailure()
+        }
     }
 }
 
 struct SiteApprovalView: View {
     let approval: SiteApproval
     let waitingBehind: Int
+    let usd: (UInt128) -> String
     let approve: (_ acknowledged: Bool) async -> Void
     let reject: () -> Void
 
@@ -34,6 +42,7 @@ struct SiteApprovalView: View {
     @State private var isArmed = false
     @State private var acknowledged = false
     @State private var isApproving = false
+    @State private var showsData = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -127,11 +136,12 @@ struct SiteApprovalView: View {
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
                 GridRow {
                     Text("Sends").foregroundStyle(.secondary)
-                    Text(amount(review.value, usd: review.valueUsdMicros))
+                    // To the last digit, because this is what's being approved.
+                    Text(amount(Money.text(ofUnits: review.value, decimals: 18), usdMicros: review.valueUsdMicros))
                 }
                 GridRow {
                     Text("Fee, about").foregroundStyle(.secondary)
-                    Text(amount(review.feeWei, usd: review.feeUsdMicros))
+                    Text(amount(Format.amount(String(review.feeWei), decimals: 18), usdMicros: review.feeUsdMicros))
                 }
                 GridRow {
                     Text("To").foregroundStyle(.secondary)
@@ -142,10 +152,21 @@ struct SiteApprovalView: View {
             }
             .monospacedDigit()
             if !review.data.isEmpty {
-                DisclosureGroup("What it sends to the contract") {
+                // Its own button and not a DisclosureGroup, whose focus ring gets cut off at the edge of a window this narrow.
+                Button {
+                    showsData.toggle()
+                } label: {
+                    Label("What it sends to the contract", systemImage: showsData ? "chevron.down" : "chevron.right")
+                        .font(.callout)
+                        .padding(.vertical, 2)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(showsData ? "Showing" : "Hidden")
+                if showsData {
                     longText("0x" + Hex.encode(review.data))
                 }
-                .font(.callout)
             }
         }
     }
@@ -177,9 +198,53 @@ struct SiteApprovalView: View {
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    private func amount(_ wei: UInt128, usd: UInt128?) -> String {
-        let eth = "\(Format.amount(String(wei), decimals: 18)) ETH"
-        return usd.map { "\(eth) (\(HotWalletWording.usd($0)))" } ?? eth
+    private func amount(_ text: String, usdMicros: UInt128?) -> String {
+        usdMicros.map { "\(text) ETH (\(usd($0)))" } ?? "\(text) ETH"
+    }
+}
+
+/// Between approving and the transaction going out, which can take a few seconds when the network is busy.
+private struct SiteWorkingView: View {
+    let work: SiteWork
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text(work.isTransaction ? "Sending for \(work.origin)…" : "Signing for \(work.origin)…")
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(20)
+    }
+}
+
+/// It's approved, and it didn't happen. The site will say something too, but only this knows why.
+private struct SiteFailureView: View {
+    let failure: SiteFailure
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(failure.isTransaction ? "This Transaction Didn't Go Out" : "This Wasn't Signed")
+                    .font(.title2.bold())
+                Text(failure.origin)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Notice(.warning, failure.reason)
+                .textSelection(.enabled)
+            if failure.isTransaction {
+                Text("Nothing was sent, so no money moved.")
+            }
+            HStack {
+                Spacer()
+                Button("OK", action: dismiss)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .onExitCommand(perform: dismiss)
     }
 }
 

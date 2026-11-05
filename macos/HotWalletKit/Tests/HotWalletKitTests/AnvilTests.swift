@@ -56,6 +56,26 @@ struct LiveBaseTests {
         #expect(reserve == SweepPlanner.minimumGasReserveWei, "fees on Base should be nowhere near the minimum reserve")
     }
 
+    /// What failed a real $1 swap: a site's reads on top of the wallet's own, which go over the public node's 25 a second. It says so
+    /// for some of the calls in a batch, inside an HTTP 200.
+    @Test func aRealReadSurvivesASitesReads() async throws {
+        let client = RPCChainClient(url: liveRPC!)
+        let address = EthereumAddress("0x4200000000000000000000000000000000000006")!
+        let reads = Task {
+            while !Task.isCancelled {
+                for _ in 0..<SiteBridge.readsPerSecond {
+                    Task { _ = try? await client.read("eth_blockNumber", .array([])) }
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+        defer { reads.cancel() }
+        for _ in 0..<4 {
+            let snapshot = try await client.snapshot(of: address)
+            #expect(snapshot.chainID == Base.chainID)
+        }
+    }
+
     @Test func aRealL1FeeGoesBySize() async throws {
         let client = RPCChainClient(url: liveRPC!)
         // Hashes, since the chain compresses this before pricing it, and a repeating pattern would hardly cost more.

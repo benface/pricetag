@@ -60,6 +60,7 @@ public final class HotWallet {
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let tickDelay: Duration
     @ObservationIgnored private let readDelay: Duration
+    @ObservationIgnored private let readRetryDelay: Duration
     @ObservationIgnored private let receiptDelay: Duration
     @ObservationIgnored private var chain: any ChainClient
     @ObservationIgnored private var tickTask: Task<Void, Never>?
@@ -84,6 +85,7 @@ public final class HotWallet {
     static let historyGrace: TimeInterval = 180
     /// Nodes behind a load balancer can disagree for a moment, so these have to hold for a few reads before they count.
     static let readsBeforeAlarm = 3
+    static let patientReadRetries = 2
     /// A receipt can come back a second or so before a node's latest block includes it. A node further behind than this can wait for the next tick.
     static let readsToCatchUp = 5
 
@@ -99,6 +101,7 @@ public final class HotWallet {
         now: @escaping @Sendable () -> Date = { Date() },
         tickDelay: Duration = .seconds(15),
         readDelay: Duration = .seconds(20),
+        readRetryDelay: Duration = .seconds(1),
         receiptDelay: Duration = .seconds(1)
     ) {
         self.signer = signer
@@ -112,6 +115,7 @@ public final class HotWallet {
         self.now = now
         self.tickDelay = tickDelay
         self.readDelay = readDelay
+        self.readRetryDelay = readRetryDelay
         self.receiptDelay = receiptDelay
         let settings = settingsStore.load()
         self.settings = settings
@@ -412,7 +416,7 @@ public final class HotWallet {
         case .notEnoughGas, nil:
             if rotation != nil { notices.append(.init(.info, HotWalletWording.rotating)) }
         }
-        if chainProblem != nil { notices.append(.init(.warning, HotWalletWording.cantReachChain)) }
+        if let chainProblem { notices.append(.init(.warning, chainProblem == .rateLimited ? HotWalletWording.networkBusy : HotWalletWording.cantReachChain)) }
         if let snapshot, snapshot.chainID != Base.chainID { notices.append(.init(.warning, HotWalletWording.wrongChain)) }
         if let sweepProblem { notices.append(.init(.warning, sweepProblem)) }
         if let plan {
@@ -526,7 +530,7 @@ public final class HotWallet {
     public func sweepEverything() async {
         guard let address, let destination = settings.sweepDestination else { return }
         await work(confirming: "sweep everything to your savings") { [self] in
-            let snapshot = try await chain.snapshot(of: address)
+            let snapshot = try await patientSnapshot(of: address)
             self.snapshot = snapshot
             guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
             guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected("The last sweep is still showing up. Try again in a moment.") }
@@ -633,7 +637,11 @@ public final class HotWallet {
         } catch let error as LAError where [.userCancel, .appCancel, .systemCancel].contains(error.code) {
             // They changed their mind, which isn't a problem to report.
         } catch let error as ChainError {
-            if case .rejected(let message) = error { sweepProblem = message } else { sweepProblem = HotWalletWording.cantReachChain }
+            switch error {
+            case .rejected(let message): sweepProblem = message
+            case .rateLimited: sweepProblem = HotWalletWording.networkBusy
+            case .unreachable, .unreadable: sweepProblem = HotWalletWording.cantReachChain
+            }
         } catch let error as KeychainSealedKeyStore.Failure where error == .notProvisioned {
             availability = .notProvisioned
         } catch {
@@ -684,7 +692,7 @@ public final class HotWallet {
     /// which a site's data can make far bigger than a sweep.
     func quoteForSite(_ transaction: SiteTransaction) async throws -> SiteQuote {
         guard let address else { throw ChainError.unreadable }
-        let snapshot = try await chain.snapshot(of: address)
+        let snapshot = try await patientSnapshot(of: address)
         guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
         guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
         let estimate: UInt64
@@ -735,20 +743,21 @@ public final class HotWallet {
     private func signAndSendForSite(_ transaction: SiteTransaction, from address: EthereumAddress, quote: SiteQuote, review: TransactionReview, origin: String, isWanted: @MainActor () -> Bool) async throws -> String {
         guard isWanted() else { throw CancellationError() }
         guard address == self.address, siteProblem == nil else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
-        let snapshot = try await chain.snapshot(of: address)
+        let snapshot = try await patientSnapshot(of: address)
         self.snapshot = snapshot
         guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
         guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected("The last transaction is still showing up. Try again in a moment.") }
         guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
-        // What was approved is a limit, so a small rise doesn't change what's signed. It has room to land anyway, since a quote allows
-        // twice the base fee. Past that it wouldn't land, and it needs another look.
-        guard snapshot.fees.maxFeePerGas <= 2 * quote.maxFeePerGas else { throw ChainError.rejected("Fees rose a lot since you approved this, so nothing was signed. Try again.") }
+        // What was approved is a limit, so a rise doesn't change what's signed. It has room to land anyway, since a quote allows twice the
+        // base fee. Only the base fee can stop it landing: the tip is whatever the node suggests just now, and it gets what's left.
+        let baseFee = (snapshot.fees.maxFeePerGas - min(snapshot.fees.maxPriorityFeePerGas, snapshot.fees.maxFeePerGas)) / 2
+        guard baseFee < quote.maxFeePerGas else { throw ChainError.rejected("Fees rose a lot since you approved this, so nothing was signed. Try again.") }
         let maxFeePerGas = min(snapshot.fees.maxFeePerGas, quote.maxFeePerGas)
         let nonce = AlarmCheck.nextNonce(records: state.records[address] ?? [], onchainNonce: snapshot.nonce)
         let unsigned = UnsignedTransaction(
             chainID: Base.chainID,
             nonce: nonce,
-            maxPriorityFeePerGas: min(snapshot.fees.maxPriorityFeePerGas, maxFeePerGas),
+            maxPriorityFeePerGas: min(snapshot.fees.maxPriorityFeePerGas, maxFeePerGas - min(baseFee, maxFeePerGas)),
             maxFeePerGas: maxFeePerGas,
             gasLimit: quote.gasLimit,
             to: transaction.to,
@@ -821,7 +830,7 @@ public final class HotWallet {
     /// A transaction asked for by hand, with everything before it settled, because it's checked against what this read says.
     private func readToSign(_ address: EthereumAddress) async throws -> ChainSnapshot {
         try checkStillAllowed(address)
-        let snapshot = try await chain.snapshot(of: address)
+        let snapshot = try await patientSnapshot(of: address)
         self.snapshot = snapshot
         guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
         guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
@@ -830,6 +839,19 @@ public final class HotWallet {
         guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected(HotWalletWording.lastOneStillShowingUp) }
         guard !(state.records[address] ?? []).contains(where: { $0.status == .pending }) else { throw ChainError.rejected(HotWalletWording.lastOneOnItsWay) }
         return snapshot
+    }
+
+    /// For what someone is waiting on, usually having just approved it with Touch ID. Nothing's been signed, so a read that fails can be
+    /// asked again, and failing the whole thing over one bad moment on the network would make them start over.
+    private func patientSnapshot(of address: EthereumAddress) async throws -> ChainSnapshot {
+        for _ in 0..<Self.patientReadRetries {
+            do {
+                return try await chain.snapshot(of: address)
+            } catch let error as ChainError where error.isWorthRetrying {
+                try await Task.sleep(for: readRetryDelay)
+            }
+        }
+        return try await chain.snapshot(of: address)
     }
 
     private func checkStillAllowed(_ address: EthereumAddress) throws {
@@ -920,6 +942,10 @@ public final class HotWallet {
             updateRecord(hash: signed.hash, address: address) { $0.status = .dropped }
             try persist()
             throw ChainError.rejected(message)
+        } catch ChainError.rateLimited {
+            updateRecord(hash: signed.hash, address: address) { $0.status = .dropped }
+            try persist()
+            throw ChainError.rateLimited
         } catch ChainError.unreachable {
             // It may have got through, so it stays pending. The receipt check settles it.
             throw ChainError.unreachable

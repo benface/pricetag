@@ -158,7 +158,7 @@ extension TransactionReview {
 
         func asset(_ token: Token?) -> String { token?.symbol ?? "this token" }
         func amountText(_ amount: UInt128, _ token: Token?) -> String {
-            token.map { "\(Format.amount(String(amount), decimals: $0.decimals)) \($0.symbol)" } ?? "\(amount) units of this token"
+            token.map { "\(Money.text(ofUnits: amount, decimals: $0.decimals)) \($0.symbol)" } ?? "\(amount) units of this token"
         }
 
         switch selector {
@@ -224,10 +224,10 @@ extension TransactionReview {
         }
 
         if transaction.data.isEmpty {
-            headline = "Send \(Format.amount(String(transaction.value), decimals: 18)) ETH to \(SiteWording.address(transaction.to))"
+            headline = "Send \(Money.text(ofUnits: transaction.value, decimals: 18)) ETH to \(SiteWording.address(transaction.to))"
         }
         if headline == nil {
-            headline = transaction.value > 0 ? "Send \(Format.amount(String(transaction.value), decimals: 18)) ETH in a contract call" : "Make a contract call"
+            headline = transaction.value > 0 ? "Send \(Money.text(ofUnits: transaction.value, decimals: 18)) ETH in a contract call" : "Make a contract call"
             warnings.append(SiteWarning(SiteWording.unreadableCall))
         }
         if transaction.to == .zero { warnings.append(SiteWarning(SiteWording.burn, isStrong: true)) }

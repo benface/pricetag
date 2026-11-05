@@ -172,7 +172,7 @@ struct MenuBarLabel: View {
                 NSApp.requestUserAttention(.criticalRequest)
             }
             // Here for the same reason. A site asked for something, and it's the app's window that answers.
-            .onChange(of: siteBridge.current?.id) { _, id in
+            .onChange(of: siteBridge.windowID) { _, id in
                 #if DEBUG
                 if HotWalletDebug.isQuiet { return }
                 #endif

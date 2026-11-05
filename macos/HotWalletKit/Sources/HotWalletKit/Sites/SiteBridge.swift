@@ -1,6 +1,7 @@
 import Foundation
 import KeyVault
 import Observation
+import os
 
 /// One thing a site wants, waiting in the app for an answer. Nothing outside the app's own window can answer it: the bridge's
 /// wire protocol has no message for that, and pages only ever reach `handle`.
@@ -25,6 +26,10 @@ public struct SiteApproval: Identifiable, Equatable, Sendable {
     }
 
     public var needsAcknowledgment: Bool { warnings.contains(where: \.isStrong) }
+
+    fileprivate var isTransaction: Bool {
+        if case .transaction = action { true } else { false }
+    }
 
     /// Signing asks for Touch ID too, like every other time money can leave. Connecting only shows an address.
     var presenceReason: String? {
@@ -66,6 +71,22 @@ private final class LiveRequest {
     }
 }
 
+/// Something approved that's on its way. The window stays open for it, so a failure has somewhere to appear.
+public struct SiteWork: Identifiable, Equatable, Sendable {
+    public let id = UUID()
+    public let origin: String
+    public let isTransaction: Bool
+    fileprivate let requester: Requester
+}
+
+/// Why something approved didn't happen. A site's own message about it can say anything, so the app says what really went wrong.
+public struct SiteFailure: Identifiable, Equatable, Sendable {
+    public let id = UUID()
+    public let origin: String
+    public let isTransaction: Bool
+    public let reason: String
+}
+
 public struct SiteRequest: Sendable {
     public let connection: UUID
     public let id: String
@@ -87,11 +108,20 @@ public struct SiteRequest: Sendable {
 @Observable
 public final class SiteBridge {
     public private(set) var pending: [SiteApproval] = []
+    public private(set) var working: SiteWork?
+    public private(set) var failure: SiteFailure?
     /// Tells every tab on an origin something changed: `accountsChanged` with its accounts.
     @ObservationIgnored public var onAccountsChanged: ((_ origin: String, _ accounts: [String]) -> Void)?
     @ObservationIgnored public var onTopUp: (() -> Void)?
 
     public var current: SiteApproval? { pending.first }
+
+    /// What the window is showing, or nil when there's no reason for it to be open.
+    public var windowID: UUID? { failure?.id ?? current?.id ?? working?.id }
+
+    /// Only for what went wrong, never what was being sent: no calldata, no message and no key. Read it with
+    /// `log show --predicate 'subsystem == "com.benface.pricetag" AND category == "sites"' --info`.
+    nonisolated private static let log = Logger(subsystem: "com.benface.pricetag", category: "sites")
 
     private let wallet: HotWallet
     private let now: @Sendable () -> Date
@@ -107,8 +137,8 @@ public final class SiteBridge {
     /// Rejecting this many times in `rejectionWindow` stops a site asking for a while, so it can't wear someone down until they click yes.
     static let rejectionsBeforeCooldown = 3
     static let rejectionWindow: TimeInterval = 60
-    /// Reads share the node with the wallet's own, and the public node allows 25 a second per IP.
-    static let readsPerSecond = 15
+    /// Reads share the node with the wallet's own, and the public node allows 25 a second per IP. See `NodePacer`.
+    nonisolated static let readsPerSecond = 10
 
     /// What a site can read from the node. Anything else that isn't handled here is refused, not passed along.
     static let reads: Set<String> = [
@@ -118,6 +148,8 @@ public final class SiteBridge {
     ]
 
     static let baseChainHex = "0x2105"
+
+    private static let signingMethods: Set<String> = ["eth_sendTransaction", "personal_sign", "eth_signTypedData_v4"]
 
     public init(wallet: HotWallet, now: @escaping @Sendable () -> Date = { Date() }) {
         self.wallet = wallet
@@ -138,6 +170,7 @@ public final class SiteBridge {
         let task = Task {
             let answer = await answer(request)
             live.removeAll { $0 === request }
+            finishWork(for: request, with: answer)
             return answer
         }
         request.task = task
@@ -191,7 +224,21 @@ public final class SiteBridge {
         if let reason = approval.presenceReason {
             guard (try? await wallet.confirmPresence(reason: reason)) != nil else { return }
         }
+        guard pending.contains(where: { $0.id == id }) else { return }
+        // Before it's taken off the list, so the window has something to show the whole way through.
+        if approval.presenceReason != nil {
+            working = SiteWork(origin: approval.origin, isTransaction: approval.isTransaction, requester: approval.requester)
+        }
         finish(id, approved: true)
+    }
+
+    public func dismissFailure() {
+        failure = nil
+    }
+
+    /// In the main currency when that isn't USD, like the rest of the wallet.
+    public func usd(_ micros: UInt128) -> String {
+        wallet.usd(micros)
     }
 
     public func reject(_ id: UUID) {
@@ -239,8 +286,8 @@ public final class SiteBridge {
         var status: [String: JSONValue] = ["appName": .string(SiteWording.appName), "canTopUp": .bool(wallet.canTopUp)]
         if let problem = wallet.siteProblem { status["problem"] = .string(problem.message) }
         if let address = wallet.address { status["address"] = .string(address.checksummed) }
-        if let plan = wallet.plan { status["value"] = .string(HotWalletWording.usd(plan.valueUsdMicros)) }
-        status["cap"] = .string(HotWalletWording.usd(wallet.settings.capUsdMicros))
+        if let plan = wallet.plan { status["value"] = .string(wallet.usd(plan.valueUsdMicros)) }
+        status["cap"] = .string(wallet.usd(wallet.settings.capUsdMicros))
         status["sites"] = .number(Double(wallet.connectedSites.count))
         return .object(status)
     }
@@ -289,24 +336,16 @@ public final class SiteBridge {
         }
         do {
             quote = try await wallet.quoteForSite(transaction)
-        } catch is CancellationError {
-            return .failure(.rejected)
-        } catch ChainError.rejected(let message) {
-            return .failure(SiteError(code: -32000, message: message))
         } catch {
-            return .failure(SiteError(code: 4900, message: HotWalletWording.cantReachChain))
+            return .failure(Self.siteError(error))
         }
         let review = TransactionReview(transaction, quote: quote)
         if case .failure(let error) = await ask(request, .transaction(review)) { return .failure(error) }
         if let problem = walletProblem(for: request.origin) { return .failure(problem) }
         do {
             return .success(.string(try await wallet.sendForSite(transaction, quote: quote, review: review, origin: request.origin, isWanted: { !request.isCancelled })))
-        } catch is CancellationError {
-            return .failure(.rejected)
-        } catch ChainError.rejected(let message) {
-            return .failure(SiteError(code: -32000, message: message))
         } catch {
-            return .failure(SiteError(code: 4900, message: HotWalletWording.cantReachChain))
+            return .failure(Self.siteError(error))
         }
     }
 
@@ -346,7 +385,7 @@ public final class SiteBridge {
         do {
             return .success(.string(try await wallet.signForSite(review.signable).hex))
         } catch {
-            return .failure(SiteError(code: -32603, message: "This couldn't be signed."))
+            return .failure(Self.siteError(error))
         }
     }
 
@@ -357,10 +396,38 @@ public final class SiteBridge {
         readsThisSecond.count += 1
         do {
             return try await wallet.readForSite(request.method, request.parameters ?? .array([]))
-        } catch is CancellationError {
-            return .failure(.rejected)
         } catch {
-            return .failure(SiteError(code: 4900, message: HotWalletWording.cantReachChain))
+            return .failure(Self.siteError(error))
+        }
+    }
+
+    /// What really happened, for the site and for the window. Only a network that can't be reached says it can't be reached.
+    private static func siteError(_ error: any Error) -> SiteError {
+        switch error {
+        case is CancellationError: .rejected
+        case ChainError.rejected(let message): SiteError(code: -32000, message: message)
+        case ChainError.rateLimited: SiteError(code: -32005, message: HotWalletWording.networkBusy)
+        case ChainError.unreachable: SiteError(code: 4900, message: HotWalletWording.cantReachChain)
+        case ChainError.unreadable: SiteError(code: 4900, message: HotWalletWording.unreadableAnswer)
+        default: SiteError(code: -32603, message: "This wallet couldn't sign this: \(error).")
+        }
+    }
+
+    /// Anything a site asked to send or sign that didn't happen goes in the log, and in the window if the user had approved it.
+    private func finishWork(for request: LiveRequest, with answer: RPCAnswer) {
+        let wasApproved = working?.requester == request.requester
+        let work = wasApproved ? working : nil
+        if wasApproved { working = nil }
+        guard Self.signingMethods.contains(request.method) else { return }
+        switch answer {
+        case .success:
+            Self.log.notice("\(request.method, privacy: .public) for \(request.origin, privacy: .public) went through")
+        case .failure(let error):
+            let stage = wasApproved ? "after approval" : "before approval"
+            Self.log.error("\(request.method, privacy: .public) for \(request.origin, privacy: .public) failed \(stage, privacy: .public): \(error.code, privacy: .public) \(String(error.message.prefix(300)), privacy: .public)")
+            if let work, !request.isCancelled {
+                failure = SiteFailure(origin: work.origin, isTransaction: work.isTransaction, reason: error.message)
+            }
         }
     }
 

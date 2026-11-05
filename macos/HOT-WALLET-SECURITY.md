@@ -51,7 +51,9 @@ A browser extension lets websites use this wallet. A site can do real damage wit
 - [x] Only Base. Other chains are refused for switching, sending and typed data, and what's signed always carries chain ID 8453. A signature with no chain in its data gets a strong warning.
 - [x] `eth_sign` is refused outright, and the vault has no way to sign a bare hash: every message's digest starts with 0x19, which can't begin a transaction. So is anything else not on a short list, including EIP-7702 authorizations and contract creation.
 - [x] Unlimited token approvals, approve-for-all, typed-data permits and orders, unreadable messages, and sign-ins for a different site all get a strong warning, and approving takes ticking that you understand. It looks for what these have in common, so a contract call it can't read just says it can't read it.
-- [x] The site doesn't choose the fee, gas or nonce. What's signed keeps to the gas and fee per gas that were approved. If fees rise, it keeps that limit, and if they more than double, nothing's signed.
+- [x] The site doesn't choose the fee, gas or nonce. What's signed keeps to the gas and fee per gas that were approved. If fees rise, it keeps that limit, and if the base fee passes it, the transaction couldn't land, so nothing's signed.
+- [x] The amount being sent is shown to the last digit, so a margin a site adds can't be rounded out of sight.
+- [x] If something approved doesn't happen, the app's window says why, and so does the log, with no calldata, message or key: `log show --predicate 'subsystem == "com.benface.pricetag" AND category == "sites"' --info`. A site's own message about it can say anything.
 - [x] Typed data only shows what's signed. A domain or message field that its type doesn't list is refused, and so is a domain whose chain or contract isn't signed or isn't the standard type. Otherwise a site could show Base and a trusted contract with neither one in the signature.
 - [x] A site that goes away takes its request with it, at any point before signing: while the node's working out the fee, while it's waiting for approval, or after approval while it's waiting its turn. Once it's been sent, it's been sent.
 - [x] Each transaction is on disk before it's broadcast, so the stolen key alarm knows it. While an alarm is up or a key is being replaced, sites can't sign or connect.
@@ -70,6 +72,7 @@ A browser extension lets websites use this wallet. A site can do real damage wit
 The RPC is configurable and untrusted.
 
 - [x] It can't change where money goes, since destinations are local and go into what's signed.
+- [x] Calls to the public node are held to 20 a second, under its limit of 25, and what it refuses for going over is asked again. It says that inside an HTTP 200 for part of a batch, or with a 429. It's never taken as an answer.
 - [x] It can't get an absurd fee signed: quotes above 100 gwei are refused.
 - [x] A failed read fails the whole tick, so it can't look like an empty wallet.
 - [x] Every read in a tick is pinned to one block, and nothing is signed from a read older than the last receipt, so a slow node can't cause the same excess to be swept twice.

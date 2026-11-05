@@ -55,7 +55,7 @@ private struct SiteRig {
         self.stateStore = stateStore
         self.presence = presence
         self.portfolios = portfolios
-        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: presence, portfolioSource: { portfolios }, makeChain: { _ in chain }, now: now)
+        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: presence, portfolioSource: { portfolios }, makeChain: { _ in chain }, now: now, readRetryDelay: .zero)
         bridge = SiteBridge(wallet: wallet, now: now)
     }
 
@@ -377,6 +377,150 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         await rig.bridge.approve(approval.id)
         #expect(code(await task.value) == -32000)
         #expect(await rig.signer.signed.isEmpty)
+    }
+
+    /// The $1 Uniswap swap: approved with Touch ID, then the public node refused part of the read, and the whole thing was thrown away.
+    @Test func aReadThatFailsAfterApprovingIsAskedAgain() async throws {
+        for failure in [ChainError.unreachable, .unreadable, .rateLimited] {
+            let rig = SiteRig()
+            await rig.connect()
+            let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+            await rig.chain.failSnapshots(HotWallet.patientReadRetries, with: failure)
+            await rig.bridge.approve(approval.id)
+            _ = try await task.value.get()
+            #expect(await rig.signer.signed.count == 1, "\(failure)")
+            #expect(rig.bridge.failure == nil)
+            #expect(rig.bridge.windowID == nil)
+        }
+    }
+
+    @Test func aRefusalIsntAskedAgain() async {
+        let rig = SiteRig()
+        await rig.connect()
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        await rig.chain.failSnapshots(1, with: .rejected("execution reverted"))
+        let reads = await rig.chain.snapshotReads
+        await rig.bridge.approve(approval.id)
+        #expect(code(await task.value) == -32000)
+        #expect(await rig.chain.snapshotReads == reads + 1)
+    }
+
+    /// Each says what it is, and only a network that can't be reached says so. It's in the window too, since a site's message can be anything.
+    @Test func whatFailedAfterApprovingIsToldAsItIs() async throws {
+        let cases: [(ChainError, Int, String)] = [
+            (.unreachable, 4900, HotWalletWording.cantReachChain),
+            (.unreadable, 4900, HotWalletWording.unreadableAnswer),
+            (.rateLimited, -32005, HotWalletWording.networkBusy),
+            (.rejected("nonce too low"), -32000, "nonce too low"),
+        ]
+        for (failure, expectedCode, reason) in cases {
+            let rig = SiteRig()
+            await rig.connect()
+            let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters(data: "0xabcdef"))
+            await rig.chain.failSnapshots(99, with: failure)
+            await rig.bridge.approve(approval.id)
+            let answer = await task.value
+            guard case .failure(let error) = answer else { Issue.record("It went through: \(failure)"); continue }
+            #expect(error.code == expectedCode)
+            #expect(error.message == reason)
+            #expect(await rig.signer.signed.isEmpty)
+
+            let shown = try #require(rig.bridge.failure)
+            #expect(shown.reason == reason)
+            #expect(shown.origin == site)
+            #expect(shown.isTransaction)
+            #expect(!shown.reason.contains("abcdef"))
+            #expect(rig.bridge.working == nil)
+            #expect(rig.bridge.windowID == shown.id)
+
+            rig.bridge.dismissFailure()
+            #expect(rig.bridge.windowID == nil)
+        }
+    }
+
+    @Test func aSigningFailureDoesntBlameTheNetwork() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        await rig.signer.setSignFailure(KeyVault.Failure.noSuchKey)
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        await rig.bridge.approve(approval.id)
+        #expect(code(await task.value) == -32603)
+        let shown = try #require(rig.bridge.failure)
+        #expect(!shown.reason.contains("reach"))
+        #expect(shown.reason.contains("noSuchKey"))
+
+        rig.bridge.dismissFailure()
+        let (message, messageApproval) = await rig.start("personal_sign", .array([.string("hello"), .string(hot)]))
+        await rig.bridge.approve(messageApproval.id)
+        #expect(code(await message.value) == -32603)
+        #expect(rig.bridge.failure?.isTransaction == false)
+    }
+
+    /// Nothing was approved, so nothing should open by itself. A site could do that as often as it liked.
+    @Test func aFailureBeforeApprovingOnlyGoesToTheSite() async {
+        let rig = SiteRig()
+        await rig.connect()
+        await rig.chain.failSnapshots(99, with: .rateLimited)
+        #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters())) == -32005)
+        #expect(rig.bridge.failure == nil)
+        #expect(rig.bridge.windowID == nil)
+    }
+
+    @Test func aClosedTabDoesntReportAFailure() async {
+        let rig = SiteRig()
+        await rig.connect()
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        await rig.chain.hold(snapshots: true)
+        await rig.bridge.approve(approval.id)
+        await waitForHeldCall(rig)
+        rig.bridge.cancelAll(connection: rig.connection)
+        await rig.chain.release()
+        _ = await task.value
+        #expect(rig.bridge.failure == nil)
+        #expect(rig.bridge.windowID == nil)
+    }
+
+    @Test func theWindowStaysOpenUntilItsKnownHowItWent() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        #expect(rig.bridge.windowID == approval.id)
+        await rig.chain.hold(snapshots: true)
+        await rig.bridge.approve(approval.id)
+        #expect(rig.bridge.current == nil)
+        #expect(rig.bridge.working?.origin == site)
+        #expect(rig.bridge.windowID == rig.bridge.working?.id)
+        await waitForHeldCall(rig)
+        await rig.chain.release()
+        _ = try await task.value.get()
+        #expect(rig.bridge.working == nil)
+        #expect(rig.bridge.windowID == nil)
+    }
+
+    /// The node's suggested tip moves around, and says nothing about whether this can land.
+    @Test func aBigTipSuggestionDoesntStopIt() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        let base = (cheapFees.maxFeePerGas - cheapFees.maxPriorityFeePerGas) / 2
+        let tip = cheapFees.maxFeePerGas * 10
+        await rig.chain.set(snapshot(fees: FeeQuote(maxFeePerGas: 2 * base + tip, maxPriorityFeePerGas: tip, l1FeeWei: 1)))
+        await rig.bridge.approve(approval.id)
+        _ = try await task.value.get()
+        let signed = try #require(await rig.signer.signed.first)
+        #expect(signed.maxFeePerGas == cheapFees.maxFeePerGas)
+        #expect(signed.maxPriorityFeePerGas == cheapFees.maxFeePerGas - base)
+    }
+
+    /// What's approved is shown to the last digit, so a margin a site adds can't be rounded out of sight.
+    @Test func anAmountIsShownInFull() async {
+        let rig = SiteRig()
+        await rig.connect()
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters(value: "0x" + String(422_553_175_000_000 as UInt64, radix: 16), data: "0x12345678"))
+        guard case .transaction(let review) = approval.action else { Issue.record("Not a transaction"); return }
+        #expect(review.headline.contains("0.000422553175 ETH"))
+        rig.bridge.cancelAll(connection: rig.connection)
+        _ = await task.value
     }
 
     @Test func aSmallFeeRiseDoesntGoPastWhatWasApproved() async throws {
