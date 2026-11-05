@@ -387,30 +387,37 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     }
     await settleSome(addresses.map(job), () => done.size > 0)
 
+    // What's done by now is the answer. A job that finishes later comes too late to be taken back to the block below, so it stays out, as still reading.
+    const answer = new Map(done)
+
     // One block for all of them, the oldest any of them reached, so a move between them is in both or neither.
-    const started = [...done.values()].filter(hasStarted)
+    const started = [...answer.values()].filter(hasStarted)
     const blockNum = Math.min(...started.map((wallet) => wallet.coverage.toBlock))
     const ahead = started.filter((wallet) => wallet.coverage.toBlock > blockNum)
     if (ahead.length > 0) {
-      for (const wallet of ahead) done.delete(wallet.address.toLowerCase())
-      const prices = latestPrices(await chain.readLatestReference(blockNum).catch(() => null))
+      for (const wallet of ahead) answer.delete(wallet.address.toLowerCase())
+      const reference = chain.readLatestReference(blockNum)
       await settleSome(
         ahead.map(async ({ address }) => {
           const account = address.toLowerCase()
           try {
+            const prices = latestPrices(await reference)
             const facts = await from.factsAt(account, blockNum, { withBalances: true })
-            const at = facts && from.pricedOn(account, facts, prices, await from.marketOn(account, facts, prices))
-            if (at) done.set(account, await convert(ruled(at), currency, books))
+            // A history that starts after this block can't say what the wallet held at it.
+            const at = facts && facts.fromBlock <= blockNum ? from.pricedOn(account, facts, prices, await from.marketOn(account, facts, prices)) : null
+            if (!at) throw new Error(`It can't be read at block ${blockNum}.`)
+            answer.set(account, await convert(ruled(at), currency, books))
           } catch (error) {
             console.error("Wallet read at an earlier block failed:", describeError(error))
+            failed.add(account)
           }
         }),
         () => true,
       )
     }
 
-    const read = addresses.flatMap((address) => done.get(address) ?? [])
-    const unread = { reading: addresses.filter((address) => !done.has(address) && !failed.has(address)), failed: addresses.filter((address) => !done.has(address) && failed.has(address)) }
+    const read = addresses.flatMap((address) => answer.get(address) ?? [])
+    const unread = { reading: addresses.filter((address) => !answer.has(address) && !failed.has(address)), failed: addresses.filter((address) => !answer.has(address) && failed.has(address)) }
     if (read.length === 0 && fresh && unread.reading.length === 0) {
       sendJson(res, 502, { error: "None of your wallets could be read." })
       return null

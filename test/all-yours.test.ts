@@ -258,13 +258,13 @@ describe("all your wallets, when one of them can't keep up", () => {
   const before: Record<string, LegRow[]> = { [HOT]: [], [COLD]: [row(5, "0x1", COLD, "credit", ONE, STRANGER)] }
   const move = { [HOT]: [row(15, "0x2", HOT, "credit", ONE, COLD)], [COLD]: [row(15, "0x2", COLD, "debit", ONE, HOT)] }
 
-  /** A server over wallets whose rows and head the test moves on, with `trouble` for what one wallet's read or rates run into. */
-  function serve(trouble: { read?: (address: string) => Promise<void>; rates?: (address: string) => Promise<void> }) {
+  /** A server over wallets whose rows and head the test moves on, with `trouble` for what one wallet's read or rates, or the price at a block, run into. */
+  function serve(trouble: { read?: (address: string) => Promise<void>; rates?: (address: string, block: number) => Promise<void>; reference?: () => Promise<void>; rollingHistory?: boolean }) {
     const state = { head: 10, rows: structuredClone(before) as Record<string, LegRow[]>, troubled: false }
     const source: Source = {
       mode: "raw",
-      startBlock: 1,
-      historyFrom: null,
+      startBlock: trouble.rollingHistory ? null : 1,
+      historyFrom: trouble.rollingHistory ? (head) => head : null,
       head: async () => ({ blockNum: state.head, timestamp: "2026-11-04T00:00:00.000Z" }),
       processedThrough: async (_, head) => head,
       readWindow: async (address, from, to) => {
@@ -272,7 +272,10 @@ describe("all your wallets, when one of them can't keep up", () => {
         return { rows: (state.rows[address] ?? []).filter((r) => r.block_num >= from && r.block_num <= to), priced: null, gasUnknown: [] }
       },
       readReferences: async (blocks) => blocks.map((block_num) => ({ blockNum: block_num, ethUsd: "300000000000", usdcUsd: "100000000" })),
-      readLatestReference: async (head) => ({ blockNum: head, ethUsd: "300000000000", usdcUsd: "100000000" }),
+      readLatestReference: async (head) => {
+        if (state.troubled) await trouble.reference?.()
+        return { blockNum: head, ethUsd: "300000000000", usdcUsd: "100000000" }
+      },
       readEthBalances: async () => new Map(),
       readBalances: async (address, block) => {
         const amounts: Record<string, string> = Object.fromEntries(ASSETS.map((asset) => [asset, "0"]))
@@ -280,9 +283,9 @@ describe("all your wallets, when one of them can't keep up", () => {
         return { blockNum: block, amounts }
       },
     }
-    // Rates are read for a wallet's legs, and only savings has the first transaction.
+    // Rates are read for one wallet at a time, which the server doesn't say here, so it's told apart by its transactions.
     const readRates: RatesReader = async (_currency, wallet) => {
-      if (state.troubled) await trouble.rates?.(wallet.legs.some((leg) => leg.txHash === "0x1") ? COLD : HOT)
+      if (state.troubled) await trouble.rates?.(wallet.legs.some((leg) => leg.txHash === "0x1") ? COLD : wallet.legs.some((leg) => leg.txHash === "0x2") ? HOT : THIRD, wallet.latest.blockNum)
       return { byBlock: {}, latest: null }
     }
     const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
@@ -353,5 +356,78 @@ describe("all your wallets, when one of them can't keep up", () => {
     assert.ok(Date.now() - started < 10_000)
     assert.deepEqual([waiting.linkedReading, waiting.linkedFailed], [[COLD], []])
     slow.close()
+  })
+
+  /** Spending money and any others have read past the move, in their own requests, and savings was last read before it. Only then does `trouble` start. */
+  async function behindTheMove(trouble: Parameters<typeof serve>[0], others: readonly string[], arm: () => void) {
+    const api = serve(trouble)
+    await api.post("/api/portfolio/all", body)
+    api.moveOn()
+    for (const address of [HOT, ...others]) await api.post(`/api/portfolio/${address}`, { method: "average" })
+    arm()
+    return api
+  }
+
+  it("keeps out a wallet that finishes while the others are being taken to the same block", async () => {
+    let armed = false
+    const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+    const api = await behindTheMove(
+      {
+        // The third wallet is what's being taken back to block 10, for as long as spending money's rates are still coming.
+        reference: async () => (armed ? wait(700) : undefined),
+        rates: async (address) => (armed && address === HOT ? wait(2_700) : undefined),
+      },
+      [THIRD],
+      () => (armed = true),
+    )
+    const last = await api.post("/api/portfolio/all/last", { ...body, currency: "CAD", linked: [HOT, COLD, THIRD] })
+    // Spending money at block 20 has the ETH that savings still has at block 10.
+    assert.equal(ethOf(last), ONE.toString())
+    assert.deepEqual([last.linkedReading, last.linkedFailed], [[HOT], []])
+    assert.deepEqual(last.wallets.map((w) => [w.address, w.state]), [[COLD, "read"], [THIRD, "read"], [HOT, "reading"]])
+    api.close()
+  })
+
+  it("answers with the oldest wallet when the price at its block takes too long", async () => {
+    let armed = false
+    const api = await behindTheMove({ reference: async () => (armed ? stuck() : undefined) }, [], () => (armed = true))
+    const started = Date.now()
+    const last = await api.post("/api/portfolio/all/last", body)
+    assert.ok(Date.now() - started < 10_000)
+    assert.equal(ethOf(last), ONE.toString())
+    assert.deepEqual([last.linkedReading, last.linkedFailed], [[HOT], []])
+    api.close()
+  })
+
+  it("says a wallet failed when it can't be taken to the same block", async () => {
+    let failing: "price" | "rates" | null = null
+    const api = await behindTheMove(
+      {
+        reference: async () => (failing === "price" ? Promise.reject(new Error("no price")) : undefined),
+        // Spending money's rates are fine at the block it's at, and only fail at the one it's taken back to.
+        rates: async (address, block) => (failing === "rates" && address !== COLD && block === 10 ? Promise.reject(new Error("no rate")) : undefined),
+      },
+      [],
+      () => {},
+    )
+    for (const trouble of ["price", "rates"] as const) {
+      failing = trouble
+      const last = await api.post("/api/portfolio/all/last", { ...body, currency: "CAD" })
+      assert.equal(ethOf(last), ONE.toString())
+      assert.deepEqual([last.linkedFailed, last.linkedReading], [[HOT], []], trouble)
+    }
+    api.close()
+  })
+
+  it("says a wallet failed when its history starts after that block", async () => {
+    const api = serve({ rollingHistory: true })
+    await api.post(`/api/portfolio/${COLD}`, { method: "average" })
+    api.moveOn()
+    // Spending money's first read is after the move, so its history starts there.
+    await api.post(`/api/portfolio/${HOT}`, { method: "average" })
+    const last = await api.post("/api/portfolio/all/last", body)
+    assert.equal(ethOf(last), ONE.toString())
+    assert.deepEqual([last.linkedFailed, last.linkedReading], [[HOT], []])
+    api.close()
   })
 })
