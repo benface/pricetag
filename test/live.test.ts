@@ -49,7 +49,7 @@ const MARK: BlockMark = { blockNum: 100, hash: "0x100" }
 
 function following(overrides: Partial<FollowConfig>) {
   const stop = new AbortController()
-  const ticks = followChain({ stream: null, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET, pollMs: 1, ...overrides }, stop.signal)
+  const ticks = followChain({ stream: null, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET, pollMs: 1, tickMs: 0, ...overrides }, stop.signal)
   return {
     next: async () => (await ticks.next()).value as ChainTick,
     stop: async () => {
@@ -182,6 +182,21 @@ describe("following the chain", () => {
     assert.match(warnings.join(), /went back to block/)
   })
 
+  it("doesn't tick faster than it's asked to, however fast the blocks come, and keeps what it merged", async () => {
+    const hand = handStream()
+    const chain = following({ stream: hand.stream, tickMs: 50 })
+    const first = chain.next()
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    hand.send(blockOf(101))
+    await first
+    const started = Date.now()
+    const second = chain.next()
+    hand.send(blockOf(102), blockOf(101, 101, "0xnew"), blockOf(102, 102, "0xnew2"), blockOf(103))
+    assert.deepEqual(await second, { kind: "block", blockNum: 103, reorgFrom: 101, via: "stream" })
+    assert.ok(Date.now() - started >= 45)
+    await chain.stop()
+  })
+
   it("sees a block replaced at the head while polling, and says when Amp is down", async () => {
     const answers: (BlockMark | Error)[] = [{ blockNum: 101, hash: "0xa" }, { blockNum: 101, hash: "0xb" }, new Error("down")]
     const chain = following({ readMark: async () => {
@@ -270,7 +285,7 @@ function chainAt(block: number, tables: Tables, onQuery: (sql: string) => void =
     return fakeAmp(chain.tables, chain.through ?? chain.block).query<T>(sql)
   }
   const hand = handStream()
-  const client = pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 50, stream: hand.stream, logger: QUIET, readL1Fees: async (txs) => new Map(txs.map((t) => [t.txHash, "0"])), follow: { pollMs: 1 } })
+  const client = pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 50, stream: hand.stream, logger: QUIET, readL1Fees: async (txs) => new Map(txs.map((t) => [t.txHash, "0"])), follow: { pollMs: 1, tickMs: 0 } })
   return { chain, hand, client }
 }
 
@@ -615,7 +630,7 @@ describe("watchWallet", () => {
       return fakeAmp(chain.tables, chain.block).query<T>(sql)
     }
     const hand = handStream()
-    const client = pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 50, stream: hand.stream, logger: { warn: (message) => warnings.push(message) } })
+    const client = pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 50, stream: hand.stream, logger: { warn: (message) => warnings.push(message) }, follow: { tickMs: 0 } })
     const updates = client.watchWallet(ADDRESS)
     await updates.next()
 
@@ -688,7 +703,7 @@ describe("the server's live events while the dataset catches up", () => {
       source,
       readRates: async () => ({ byBlock: {}, latest: null }),
       proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
-      follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET },
+      follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET, tickMs: 0 },
     })
     server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -829,7 +844,7 @@ describe("the server after a reorg the tables haven't rewritten yet", () => {
       source,
       readRates: async () => ({ byBlock: {}, latest: null }),
       proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
-      follow: { stream: hand.stream, sql: "SELECT 1", readMark, logger: QUIET, pollMs: 1, retryMs: 60_000 },
+      follow: { stream: hand.stream, sql: "SELECT 1", readMark, logger: QUIET, pollMs: 1, retryMs: 60_000, tickMs: 0 },
     })
     server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -878,7 +893,7 @@ describe("the server's live events", () => {
       source: headAt100,
       readRates: async () => ({ byBlock: {}, latest: null }),
       proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
-      follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET },
+      follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET, tickMs: 0 },
     })
     server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))

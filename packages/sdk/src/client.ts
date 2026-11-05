@@ -149,7 +149,7 @@ type ClientConfig = Pick<PricetagConfig, "dataset" | "baseDataset" | "startBlock
   /** Without one, `watchWallet` polls. */
   stream?: StreamRanges | undefined
   /** The timing of `watchWallet`'s stream and polling, for tests. */
-  follow?: Pick<FollowConfig, "pollMs" | "retryMs" | "stallMs"> | undefined
+  follow?: Pick<FollowConfig, "pollMs" | "retryMs" | "stallMs" | "tickMs"> | undefined
 }
 
 export function pricetagClient(query: Query, config: ClientConfig) {

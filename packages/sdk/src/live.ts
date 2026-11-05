@@ -25,11 +25,14 @@ export type FollowConfig = {
   retryMs?: number | undefined
   /** A stream with no new block for this long counts as lost. A keepalive doesn't count. */
   stallMs?: number | undefined
+  /** The least time between ticks. Base makes 5 blocks a second, and each tick is at least one read of a shared Amp. */
+  tickMs?: number | undefined
 }
 
 const POLL_MS = 2000
 const RETRY_MS = 30_000
 const STALL_MS = 60_000
+const TICK_MS = 2000
 /** Further back than any reorg on Base. A stream that goes this far has ignored where it was asked to resume, so it would replay the chain. */
 const MAX_REWIND_BLOCKS = 1000
 
@@ -109,7 +112,8 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
 
 /**
  * Ticks as the chain moves, until `signal` aborts or the caller stops reading. Following starts on the first `next()`.
- * A slow reader doesn't fall behind: it gets the newest tick, with any reorg it missed.
+ * A slow reader doesn't fall behind, and neither does a fast one with more blocks than it needs: each gets the newest tick,
+ * with any reorg it missed.
  */
 export async function* followChain(config: FollowConfig, signal?: AbortSignal): AsyncGenerator<ChainTick, void, void> {
   const stop = new AbortController()
@@ -128,12 +132,16 @@ export async function* followChain(config: FollowConfig, signal?: AbortSignal): 
     finished = true
     wake()
   })
+  const { tickMs = TICK_MS } = config
   try {
     while (true) {
       if (pending) {
         const tick: ChainTick = pending
         pending = null
+        const yieldedAt = Date.now()
         yield tick
+        // Anything that comes in during this is merged into the next tick, including a reorg.
+        await sleep(Math.max(0, tickMs - (Date.now() - yieldedAt)), undefined, { signal: stopping }).catch(() => {})
       } else if (finished) return
       else await new Promise<void>((resolve) => (wake = resolve))
     }

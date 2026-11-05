@@ -3,7 +3,7 @@
 
 import type { WalletResponse } from "../src/core/api.ts"
 import { CURRENCIES, type CurrencyCode, type Rates, type RateRound } from "@pricetag/sdk/core"
-import { REORG_BLOCKS } from "@pricetag/sdk/internal"
+import { settledThrough } from "@pricetag/sdk/internal"
 import type { RoundReader } from "./source.ts"
 
 type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletResponse, "legs" | "latest">) => Promise<Rates | null>
@@ -31,7 +31,7 @@ export function createRates(readRounds: RoundReader): RatesReader {
     const startedAt = rewinds
     const read = wanted.length > 0 ? await readRounds(feed.address, wanted) : new Map<number, RateRound>()
     const isSameChain = startedAt === rewinds
-    if (isSameChain) for (const [block, round] of read) if (block <= head - REORG_BLOCKS) known.set(block, round)
+    if (isSameChain) for (const [block, round] of read) if (block <= settledThrough(head)) known.set(block, round)
 
     const byBlock: Rates["byBlock"] = {}
     for (const block of blocks) {

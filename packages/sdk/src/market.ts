@@ -1,5 +1,6 @@
 // A token's `market` price: what it recently traded at, from `priced_legs`, with guards so a thin pool can't set it.
 
+import { msBetweenBlocks } from "./chain.ts"
 import { worth } from "./fold.ts"
 import { answerToMicros, isSanePrice, type PricedRow } from "./legs.ts"
 import { ETH_ADDRESS, TOKENS, normalizeAddress, tokenByAddress } from "./tokens.ts"
@@ -10,8 +11,8 @@ export type MarketTrade = { blockNum: number; txHash: string; asset: string; usd
 /** `priced_legs`' pool and router rows are as good as a trader's here: they all imply the same price. */
 export type MarketRow = Pick<PricedRow, "block_num" | "tx_hash" | "sold_token" | "sold_amount" | "bought_token" | "bought_amount" | "priced"> & { eth_usd: string }
 
-/** About 30 minutes. Older than this, a trade doesn't say what a token's worth now. */
-export const MARKET_MAX_AGE_BLOCKS = 900
+/** Older than this, a trade doesn't say what a token's worth now. */
+export const MARKET_MAX_AGE_MS = 1_800_000
 /** No priced_legs row says how deep a pool is, so these stand in for it: real size, from several transactions. */
 const MIN_TRADE_USD_MICROS = 100_000_000n
 const MIN_TRADES = 3
@@ -46,7 +47,7 @@ export function marketTrades(rows: readonly MarketRow[]): MarketTrade[] {
 export function marketPrice(trades: readonly MarketTrade[], asset: string, block: number): MarketPrice | null {
   const byTx = new Map<string, { blockNum: number; prices: bigint[]; notional: bigint }>()
   for (const trade of trades) {
-    if (trade.asset !== asset || trade.blockNum > block || block - trade.blockNum > MARKET_MAX_AGE_BLOCKS) continue
+    if (trade.asset !== asset || trade.blockNum > block || msBetweenBlocks(trade.blockNum, block) > MARKET_MAX_AGE_MS) continue
     const notional = BigInt(trade.notionalUsdMicros)
     const tx = byTx.get(trade.txHash) ?? { blockNum: trade.blockNum, prices: [], notional: 0n }
     tx.prices.push(BigInt(trade.usdMicros))
