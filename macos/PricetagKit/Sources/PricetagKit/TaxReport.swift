@@ -176,6 +176,20 @@ public final class TaxReportModel {
         defaults.set(next, forKey: Keys.otherWallets)
     }
 
+    public func addOtherWallet(_ address: String) {
+        let address = address.lowercased()
+        if !otherWallets.contains(address) { setOtherWalletsText((otherWallets + [address]).joined(separator: "\n")) }
+    }
+
+    public func removeOtherWallet(_ address: String) {
+        setOtherWalletsText(otherWallets.filter { $0 != address }.joined(separator: "\n"))
+    }
+
+    /// Whether adding this one would change anything. The wallet showing and the ones linked to it are already in the report.
+    public func offers(_ wallet: WalletEntry, showing: String?, linked: [String]) -> Bool {
+        wallet.address != showing && !linked.contains(wallet.address) && !otherWallets.contains(wallet.address)
+    }
+
     /// nil with no wallet, or while what's typed can't be sent.
     public func request(address: String?, currency: CurrencyCode, serverURL: URL, book: Book = Book(), linked: [String] = []) -> TaxReportRequest? {
         guard let address, badWallet(for: address) == nil else { return nil }
