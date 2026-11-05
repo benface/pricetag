@@ -403,6 +403,8 @@ struct PurchaseBookTests {
 
     @Test func anUnknownCostSaysSo() {
         #expect(notice(.delivered, .costUnknown)?.title == "Purchase Cost Unknown")
+        #expect(notice(.costUnknown, .costUnknown) == nil)
+        #expect(notice(.costUnknown, .recorded(paid))?.title == "Purchase Cost Recorded", "and saying it's known later still is news")
         #expect(notice(.started, .noRateFor("SEK"))?.body == "0.008 ETH arrived, but its cost is unknown: there's no exchange rate for SEK.")
     }
 
@@ -417,12 +419,45 @@ struct PurchaseBookTests {
 struct PurchaseNewsTests {
     private final class Shown { var match: PurchaseMatch.State? }
 
-    private func rig() -> (PurchaseTracker, Orders, Shown) {
+    private final class Clock: @unchecked Sendable { var now = Date.now }
+
+    private func rig(clock: Clock = Clock()) -> (PurchaseTracker, Orders, Shown) {
         let defaults = UserDefaults(suiteName: "purchases-\(UUID())")!
         let source = Orders()
         let shown = Shown()
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source })
-        return (PurchaseTracker(store: store, defaults: defaults, matchOf: { _ in shown.match }), source, shown)
+        return (PurchaseTracker(store: store, defaults: defaults, now: { clock.now }, matchOf: { _ in shown.match }), source, shown)
+    }
+
+    /// A delivery whose block takes hours to show is called unknown, and a late block and match can still record its cost.
+    @Test func anUnknownCostThatBecomesKnownIsToldOnce() async throws {
+        let clock = Clock()
+        let (tracker, source, shown) = rig(clock: clock)
+        var news = PurchaseNews()
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        _ = news.update(phases(tracker), beside: .USD)
+        clock.now += 3 * 60 * 60
+        await source.say([delivered(id: "ref", blockNum: nil)])
+        await tracker.check()
+        #expect(tracker.phase(of: tracker.purchases[0]) == .costUnknown)
+        let unknown = news.update(phases(tracker), beside: .USD)
+        #expect(unknown.map(\.title) == ["Purchase Delivered"])
+        #expect(unknown.first?.body.contains("its cost is unknown") == true)
+
+        // A relaunch, and then its block and its match arrive.
+        var relaunched = try JSONDecoder().decode(PurchaseNews.self, from: JSONEncoder().encode(news))
+        await source.say([delivered(id: "ref")])
+        await tracker.check()
+        shown.match = .recorded
+        let known = relaunched.update(phases(tracker), beside: .USD)
+        #expect(known.map(\.title) == ["Purchase Cost Recorded"])
+        #expect(known.first?.id == unknown.first?.id, "it replaces what was said")
+
+        // Then another wallet is chosen and the hot wallet again, which says nothing more.
+        shown.match = nil
+        #expect(relaunched.update(phases(tracker), beside: .USD).isEmpty)
+        shown.match = .recorded
+        #expect(relaunched.update(phases(tracker), beside: .USD).isEmpty)
     }
 
     private func phases(_ tracker: PurchaseTracker) -> [(TrackedPurchase, PurchasePhase)] {

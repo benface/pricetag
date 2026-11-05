@@ -31,15 +31,17 @@ public struct MoneyNotice: Equatable, Sendable {
 }
 
 /// How far the news of a purchase has got. A phase can step back, as when a wallet's numbers are reloading or another wallet is chosen
-/// and its cost waits to be matched again, but what's been told never does.
+/// and its cost waits to be matched again, but what's been told never does. An unknown cost isn't the end: a late block or match can still
+/// record it, and that's news too.
 public enum PurchaseMilestone: Int, Codable, Comparable, Sendable {
-    case started, delivered, finished
+    case started, delivered, costUnknown, finished
 
     public init(_ phase: PurchasePhase) {
         switch phase {
         case .onProvidersPage, .onItsWay, .noOrderYet: self = .started
         case .arriving: self = .delivered
-        case .recorded, .costUnknown, .costNotSaid, .noRateFor, .failed: self = .finished
+        case .costUnknown, .costNotSaid, .noRateFor: self = .costUnknown
+        case .recorded, .failed: self = .finished
         }
     }
 
@@ -79,7 +81,7 @@ extension PurchaseWording {
         guard PurchaseMilestone(phase) > told else { return nil }
         let what = title(purchase, beside: main)
         // Delivered and then known is one story, and a phase can skip straight to the end of it.
-        let wasDelivered = told == .delivered
+        let wasDelivered = told == .delivered || told == .costUnknown
         let (heading, body): (String, String)
         switch phase {
         case .onProvidersPage, .onItsWay, .noOrderYet:
