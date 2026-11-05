@@ -163,9 +163,6 @@ const pollingOnly = (source: Source): FollowConfig => ({
 
 type Created = Omit<NonNullable<ReturnType<typeof createSource>>, "follow"> & { follow?: FollowConfig | undefined }
 
-/** What a client on this machine's address is, which says nothing a provider could use. */
-const isLocal = (ip: string) => ip === "::1" || ip === "::ffff:127.0.0.1" || ip.startsWith("127.")
-
 const NO_ONRAMP = "Buying isn't set up on this server."
 
 /** An amount typed in a currency, or undefined when it isn't one. */
@@ -175,7 +172,14 @@ function fiatOf(value: unknown): FiatAmount | undefined {
   return typeof currency === "string" && isMainCurrency(currency) ? { amount, currency } : undefined
 }
 
-export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env)) {
+export type ApiOptions = {
+  /** The client's address, for a provider to check where a purchase is made from, or null when it's this machine or isn't known. */
+  clientIp?: (req: IncomingMessage) => string | null
+  /** How many wallets each rule keeps read. A shared server has more people's wallets than one Mac, and one pushed out is read again in full. */
+  maxWallets?: number
+}
+
+export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env), { clientIp = () => null, maxWallets }: ApiOptions = {}) {
   const source = created?.source ?? null
 
   let head: Head | null = null
@@ -230,9 +234,9 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL), () => head?.blockNum ?? null)
-  const wallets = source ? createWallets(source, pollHead, readL1Fees) : null
+  const wallets = source ? createWallets(source, pollHead, readL1Fees, console, { maxWallets }) : null
   // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
-  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, pollHead, readL1Fees) }))
+  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, pollHead, readL1Fees, console, { maxWallets }) }))
 
   /**
    * Reads a wallet, or answers the request with why it can't.
@@ -357,8 +361,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       if (typeof cryptoAmount !== "string" || !/^\d{1,12}(\.\d{1,18})?$/.test(cryptoAmount) || !/[1-9]/.test(cryptoAmount)) return sendJson(res, 400, { error: "That isn't an amount." })
       const typed = fiat === undefined || fiat === null ? null : fiatOf(fiat)
       if (typed === undefined) return sendJson(res, 400, { error: "That isn't an amount." })
-      const ip = req.socket.remoteAddress
-      return onrampAnswer(res, () => onramp.checkout({ address, asset, cryptoAmount, fiat: typed, clientIp: ip && !isLocal(ip) ? ip : null }))
+      return onrampAnswer(res, () => onramp.checkout({ address, asset, cryptoAmount, fiat: typed, clientIp: clientIp(req) }))
     }
 
     const taxMatch = /^\/api\/tax-report\/([^/]+)$/.exec(path)
