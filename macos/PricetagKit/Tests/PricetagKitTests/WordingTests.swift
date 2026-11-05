@@ -148,8 +148,15 @@ struct WordingVectors: Decodable {
     @Test func aDifferenceIsSigned() {
         #expect(Format.ruleDifference("0", format: "money", currency: .USD) == "Same")
         #expect(Format.ruleDifference("1500000", format: "money", currency: .USD) == "+$1.50")
-        #expect(Format.ruleDifference("-24000000", format: "usdPrice", currency: .CAD) == "-$24.00")
-        #expect(Format.ruleValue("2376000000", format: "usdPrice", currency: .CAD) == "$2,376.00")
+        // ETH's price is always in USD, so beside another kind of dollar it says which.
+        #expect(Format.ruleDifference("-24000000", format: "usdPrice", currency: .USD) == "-$24.00")
+        #expect(Format.ruleValue("2376000000", format: "usdPrice", currency: .USD) == "$2,376.00")
+        #expect(Format.ruleDifference("-24000000", format: "usdPrice", currency: .CAD) == "-US$24.00")
+        #expect(Format.ruleDifference("24000000", format: "usdPrice", currency: .CAD) == "+US$24.00")
+        #expect(Format.ruleDifference("24000000", format: "usdPrice", currency: .CAD, isEstimate: true) == "≈+US$24.00")
+        #expect(Format.ruleValue("2376000000", format: "usdPrice", currency: .CAD) == "US$2,376.00")
+        #expect(Format.ruleValue("2376000000", format: "usdPrice", currency: .CAD, isEstimate: true) == "≈US$2,376.00")
+        #expect(Format.ruleValue("1500000", format: "money", currency: .CAD) == "$1.50")
         // An estimate looks like one, and so does a difference from it. What isn't a number stays as it is.
         #expect(Format.ruleValue("1500000", format: "money", currency: .USD, isEstimate: true) == "≈$1.50")
         #expect(Format.ruleValue("1500000", format: "signed", currency: .USD, isEstimate: true) == "≈+$1.50")

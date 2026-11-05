@@ -146,7 +146,10 @@ enum TestScene: String, CaseIterable {
     case sendKnown = "send-known"
     case sendWaiting = "send-waiting"
     case publishCost = "publish-cost"
+    case publishCAD = "publish-cost-cad"
     case publishWaiting = "publish-cost-waiting"
+    case ruleComparison = "rule-comparison"
+    case ruleComparisonCAD = "rule-comparison-cad"
 
     enum Chrome { case titled, none }
 
@@ -157,7 +160,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
-             .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishWaiting:
+             .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
         }
@@ -190,7 +193,7 @@ enum TestScene: String, CaseIterable {
 
     private var currency: CurrencyCode {
         switch self {
-        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .hotWalletCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD: .CAD
+        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .hotWalletCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD, .publishCAD, .ruleComparisonCAD: .CAD
         default: .USD
         }
     }
@@ -284,9 +287,12 @@ enum TestScene: String, CaseIterable {
             // It never gets past the prompt, and there's no key behind it anyway.
             if isWaiting { Task { _ = await model.send() } }
             return TestScreen(view: AnyView(SendSheet(model: model)), isReady: { !isWaiting || model.isSending })
-        case .publishCost, .publishWaiting:
+        case .publishCost, .publishCAD, .publishWaiting:
             let draft = CostNoteDraft(wallet: "0x00000000000000000000000000000000000de301", txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
-            return TestScreen(view: AnyView(PublishCostSheet(draft: draft, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
+            return TestScreen(view: AnyView(PublishCostSheet(draft: draft, currency: currency, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
+        case .ruleComparison, .ruleComparisonCAD:
+            guard let comparison: RuleComparison = try? FixtureSource.decode(self == .ruleComparison ? "demo-rule-comparison" : "demo-rule-comparison-cad") else { TestMode.fail("There's no comparison fixture.") }
+            return TestScreen(view: AnyView(RuleComparisonTable(comparison: comparison).padding(20).frame(width: 720).background(.background)), isReady: { true })
         }
     }
 

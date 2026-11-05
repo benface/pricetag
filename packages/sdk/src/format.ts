@@ -34,6 +34,11 @@ export function formatSignedMoney(micros: string | bigint | null, currency: Curr
   return value > 0n ? `+${formatMoney(value, currency)}` : formatMoney(value, currency)
 }
 
+/** USD beside amounts in the main currency. If that's another kind of dollar, a bare "$" doesn't say which. Takes what's already formatted, sign and all. */
+export function labelUsd(text: string, main: CurrencyCode): string {
+  return main === "USD" ? text : text.replace("$", "US$")
+}
+
 /** What one USD buys, to four decimals, which is how far exchange rates are usually quoted. */
 export function formatRate(rateMicros: string, currency: CurrencyCode): string {
   const { locale, symbol } = CURRENCIES[currency]
