@@ -181,7 +181,10 @@ enum TestScene: String, CaseIterable {
     case siteRefocused = "site-refocused"
     case siteSending = "site-sending"
     case siteSent = "site-sent"
+    case siteSigning = "site-signing"
+    case siteSigned = "site-signed"
     case siteFailure = "site-failure"
+    case siteFailureMessage = "site-failure-message"
     case publishCost = "publish-cost"
     case publishCAD = "publish-cost-cad"
     case publishWaiting = "publish-cost-waiting"
@@ -202,7 +205,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
-             .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteFailure, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
+             .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
         }
@@ -362,7 +365,7 @@ enum TestScene: String, CaseIterable {
             }
         case .sweep, .sweepCAD:
             return TestScreen(view: AnyView(SweepSheet(wallet: hotWallet, gate: .scene(.asking))), isReady: isReady)
-        case .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteFailure:
+        case .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage:
             return siteScreen(hotWallet: hotWallet, isReady: isReady)
         case .publishCost, .publishCAD, .publishWaiting:
             let draft = CostNoteDraft(wallet: "0x00000000000000000000000000000000000de301", txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
@@ -419,7 +422,7 @@ enum TestScene: String, CaseIterable {
         case .siteCall: approval = .sceneTransaction(origin: site, to: friend, value: 1_000_000_000_000_000, data: [0xDE, 0xAD, 0xBE, 0xEF] + address)
         case .siteApprove: approval = .sceneTransaction(origin: site, to: usdc, data: limited)
         case .siteUnlimited, .siteUnlimitedAcknowledged: approval = .sceneUnlimitedApproval(origin: site, token: usdc, spender: friend)
-        case .siteMessage: approval = .sceneMessage(origin: site, text: "Sign in to Uniswap\n\nThis doesn't cost anything.\nNonce: 8f2a91c4")
+        case .siteMessage, .siteSigning, .siteSigned: approval = .sceneMessage(origin: site, text: "Sign in to Uniswap\n\nThis doesn't cost anything.\nNonce: 8f2a91c4")
         case .siteMessageUnreadable: approval = .sceneUnreadableMessage(origin: site)
         default: approval = .sceneTransaction(origin: site, to: friend, value: 2_000_000_000_000_000)
         }
@@ -446,10 +449,12 @@ enum TestScene: String, CaseIterable {
         }
         let view: AnyView
         switch self {
-        case .siteSending, .siteSent:
-            view = AnyView(SiteProgressView(work: SiteWork(origin: site, isTransaction: true, sceneApproval: approval), usd: { hotWallet.usd($0) }, isDone: self == .siteSent))
+        case .siteSending, .siteSent, .siteSigning, .siteSigned:
+            view = AnyView(SiteProgressView(work: SiteWork(origin: site, isTransaction: self == .siteSending || self == .siteSent, sceneApproval: approval), usd: { hotWallet.usd($0) }, isDone: self == .siteSent || self == .siteSigned))
         case .siteFailure:
             view = AnyView(SiteFailureView(failure: SiteFailure(sceneOrigin: site, isTransaction: true, reason: HotWalletWording.feesRoseAfterApproval), dismiss: {}))
+        case .siteFailureMessage:
+            view = AnyView(SiteFailureView(failure: SiteFailure(sceneOrigin: site, isTransaction: false, reason: HotWalletWording.keyMissing), dismiss: {}))
         default:
             view = AnyView(SiteApprovalView(approval: approval, waitingBehind: waitingBehind, usd: { hotWallet.usd($0) }, gate: .scene(phase, isInFront: self != .siteBehind), connect: {}, reject: {}))
         }
