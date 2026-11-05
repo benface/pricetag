@@ -90,6 +90,7 @@ enum TestScene: String, CaseIterable {
     case main
     case mainTransactions = "main-transactions"
     case mainDetails = "main-details"
+    case mainNarrow = "main-narrow"
     case mainNoWallet = "main-no-wallet"
     case mainReading = "main-reading"
     case mainServerDown = "main-server-down"
@@ -257,6 +258,8 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainEmptySmallest:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 560), isReady: isReady)
+        case .mainNarrow:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 760), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
         case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
