@@ -9,7 +9,7 @@ import PricetagKit
 struct HotWalletFixture {
     enum KeyAnswer { case hasIt, isMissing, notProvisioned }
 
-    private static let spending = EthereumAddress("0x00000000000000000000000000000000000de301")!
+    private static let spending = TestMode.live.flatMap { EthereumAddress($0.wallet) } ?? EthereumAddress("0x00000000000000000000000000000000000de301")!
     private static let replacement = EthereumAddress("0x00000000000000000000000000000000000de303")!
     private static let block: UInt64 = 53_505_400
     /// Fixed, so a scene looks the same whenever it's taken.
@@ -46,7 +46,7 @@ struct HotWalletFixture {
     static let replacingKeyStuck = HotWalletFixture(balances: ["USDC": 20_000_000], rotation: Rotation(from: spending, to: replacement, destination: replacement), canActOnChain: true)
     static let replacingKeyMissing = HotWalletFixture(keys: .isMissing, rotation: Rotation(from: spending, to: replacement, destination: replacement))
 
-    func make(source: FixtureSource, costMethod: @escaping @MainActor () -> CostMethod, mainCurrency: @escaping @MainActor () -> CurrencyCode) -> HotWallet {
+    func make(source: any PortfolioSource, costMethod: @escaping @MainActor () -> CostMethod, mainCurrency: @escaping @MainActor () -> CurrencyCode) -> HotWallet {
         HotWallet(
             signer: NoKeys(answer: keys),
             settingsStore: FixedSettings(settings: settings),
@@ -55,8 +55,11 @@ struct HotWalletFixture {
             portfolioSource: { source },
             costMethod: costMethod,
             mainCurrency: mainCurrency,
-            makeChain: { [snapshot, isConnectedToSite] _ in FixtureChain(snapshot: snapshot, canQuote: isConnectedToSite) },
-            now: { Self.today }
+            makeChain: { [snapshot, isConnectedToSite] url -> any ChainClient in
+                if TestMode.live != nil { return ReadOnlyChain(node: RPCChainClient(url: url)) }
+                return FixtureChain(snapshot: snapshot, canQuote: isConnectedToSite)
+            },
+            now: { TestMode.live == nil ? Self.today : .now }
         )
     }
 
@@ -72,12 +75,12 @@ struct HotWalletFixture {
         state.active = Self.spending
         state.rotation = rotation
         if isConnectedToSite { state.connectedSites = [Self.site] }
-        if hasRecords { state.records[Self.spending] = records }
+        if hasRecords, TestMode.live == nil { state.records[Self.spending] = records }
         // The demo portfolio is another wallet's history, so what it spent is news to this one unless it's been looked at.
-        let history: Portfolio? = try? FixtureSource.decode("demo-portfolio")
+        let history: Portfolio? = TestMode.live == nil ? try? FixtureSource.decode("demo-portfolio") : Self.liveHistory
         state.acknowledged = (history?.outgoingTxs ?? []).dropFirst(unexplainedTransactions).map { .unknownTransaction(hash: $0) }
         // Reads as older than its last sweep, which is what makes a wallet wait instead of signing. A plan to sweep still shows.
-        if !canActOnChain { state.settledThroughBlock = Self.block + 1 }
+        if !canActOnChain { state.settledThroughBlock = TestMode.live == nil ? Self.block + 1 : .max }
         return state
     }
 
@@ -91,6 +94,16 @@ struct HotWalletFixture {
             usdcUsdMicros: 999_800,
             fees: FeeQuote(maxFeePerGas: 10_000_000, maxPriorityFeePerGas: 1_000_000, l1FeeWei: 100_000_000_000)
         )
+    }
+
+    /// What the wallet has spent, which this has no records of, so it isn't taken for a stolen key. Blocks until it's read, because a scene needs it before it starts.
+    private static var liveHistory: Portfolio? {
+        guard let live = TestMode.live else { return nil }
+        // A first read can outlast one request, and the server keeps going, so another picks it up. Without this, everything it ever spent would raise the alarm.
+        for _ in 0..<4 {
+            if let data = try? Data(contentsOf: live.server.appending(path: "/api/portfolio/\(live.wallet)")), let history = try? JSONDecoder().decode(Portfolio.self, from: data) { return history }
+        }
+        TestMode.fail("Couldn't read this wallet's history from the server.")
     }
 
     /// One of each way a transaction can end up, and each reason to send one.
@@ -150,6 +163,18 @@ private nonisolated struct FixedState: DeviceStateStore {
 
 private nonisolated struct NoOneThere: UserPresence {
     func confirm(reason: String) async throws { TestMode.fail("A scene asked for Touch ID: \(reason).") }
+}
+
+/// The real node, for `shot.sh --live`, with everything that isn't a read taken away.
+private nonisolated struct ReadOnlyChain: ChainClient {
+    let node: RPCChainClient
+
+    func snapshot(of address: EthereumAddress) async throws -> ChainSnapshot { try await node.snapshot(of: address) }
+    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64 { try await node.estimateGas(from: from, to: to, value: value, data: data) }
+    func send(_ transaction: SignedTransaction) async throws { TestMode.fail("A scene tried to send a transaction.") }
+    func receipt(of hash: String) async throws -> Receipt? { try await node.receipt(of: hash) }
+    func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer { TestMode.fail("A scene tried to read for a site.") }
+    func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128 { try await node.l1Fee(ofPayload: payload) }
 }
 
 /// Stands in for the node. It only ever answers reads, and what a transaction would cost only for a site's scenes, which need it to show one.

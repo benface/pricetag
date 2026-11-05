@@ -272,8 +272,8 @@ private struct HotWalletDetails: View {
                     }
                 }
             }
-            if let plan = wallet.plan, plan.gasReserveWei > 0 {
-                Text("\(Format.amount(String(plan.gasReserveWei), decimals: 18)) ETH is kept for gas.")
+            if let plan = wallet.plan, plan.gasKeptWei > 0 {
+                Text(HotWalletWording.keptOutOfCap(plan.gasKeptWei))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
