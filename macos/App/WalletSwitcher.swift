@@ -10,10 +10,13 @@ extension PortfolioStore {
             spending: hotWallet?.address.map { NamedWallet(address: $0.lowercased, name: HotWalletWording.title) },
             savings: hotWallet?.settings.coldWallets.map { NamedWallet(address: $0.address.lowercased, name: $0.name) } ?? [],
             linked: book.linkedWallets,
-            accounts: linkedWallets,
+            replacedKeys: hotWallet?.replacedKeys ?? [],
+            newKey: hotWallet?.rotation?.to.lowercased,
             saved: savedWallets,
             current: address,
-            offersDemo: WalletList.offersDemo
+            offersDemo: WalletList.offersDemo,
+            order: walletOrder,
+            hidden: hiddenWallets
         )
     }
 }
@@ -40,6 +43,36 @@ extension PortfolioStore {
         } else {
             renameWallet(address, to: pending.text)
         }
+    }
+
+    /// It's still the user's, and what's on it hasn't gone anywhere, so it stays in Yours under its name, and costs keep following its money.
+    func removeFromSavings(_ entry: WalletEntry, hotWallet: HotWallet) {
+        guard let savings = EthereumAddress(entry.address) else { return }
+        hotWallet.removeColdWallet(savings)
+        if let name = entry.name { renameWallet(entry.address, to: name) }
+        moveToYours(entry.address)
+    }
+
+    /// Accounts from a device are only here for their costs, so they go as easily as anything else on the list. Says how to put it back.
+    func moveToWatching(_ entry: WalletEntry, hotWallet: HotWallet?) {
+        unlinkDeviceAccount(entry, hotWallet: hotWallet)
+        moveToWatching(entry.address)
+    }
+
+    func remove(_ entry: WalletEntry, showing next: String?, hotWallet: HotWallet?) {
+        unlinkDeviceAccount(entry, hotWallet: hotWallet)
+        removeWallet(entry.address, showing: next)
+    }
+
+    private func unlinkDeviceAccount(_ entry: WalletEntry, hotWallet: HotWallet?) {
+        if let account = EthereumAddress(entry.address) { hotWallet?.unlinkDeviceAccount(account) }
+    }
+}
+
+extension HotWallet {
+    func removingFromSavingsMessage(_ address: String) -> String {
+        let others = settings.coldWallets.filter { $0.address.lowercased != address }
+        return HotWalletWording.removingFromSavings(sweepsNowGoTo: others.first?.name, wasDestination: settings.sweepDestination?.lowercased == address, cap: display.whole(WalletSettings.capCeilingWithoutCold))
     }
 }
 
@@ -90,7 +123,7 @@ struct WalletButton: View {
         .accessibilityLabel(current.map { [$0.title, $0.badge].compactMap(\.self).joined(separator: ", ") } ?? "Add Wallet")
         .accessibilityHint("Switches wallet")
         .popover(isPresented: $navigation.isSwitchingWallet, arrowEdge: .bottom) {
-            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: navigation.pendingWalletName, onOpenSpendingMoney: { navigation.section = .spendingMoney }, onProve: { navigation.provingWallet = $0 }) { navigation.isSwitchingWallet = false }
+            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: navigation.pendingWalletName, onOpenSpendingMoney: navigation.showSpendingMoney, onRemoveFromSavings: { navigation.removingFromSavings = $0 }, onDeleteSpendingMoney: { navigation.settingsPane = .spendingMoney }) { navigation.isSwitchingWallet = false }
         }
     }
 }
@@ -101,24 +134,37 @@ struct WalletSwitcher: View {
     let hotWallet: HotWallet?
     @Bindable var pendingName: PendingWalletName
     let onOpenSpendingMoney: () -> Void
-    let onProve: (WalletProof) -> Void
+    let onRemoveFromSavings: (WalletEntry) -> Void
+    let onDeleteSpendingMoney: () -> Void
     let onDone: () -> Void
     @State var input = ""
+    /// What the last change did, in words, and the way back. The list stays open for it.
+    @State var note: WalletListNote?
     @State private var highlighted: String?
     /// Where the pointer was when the arrows last moved. Rows scrolling under a still pointer report a hover that nobody made.
     @State private var pointerAtLastKey: CGPoint?
     @FocusState private var focus: Field?
+    @Environment(\.openSettings) private var openSettings
 
     private enum Field: Hashable {
         case add, rename
     }
 
-    private static let top = "top"
+    private static let rowHeight: CGFloat = 40
+    private static let titleHeight: CGFloat = 28
 
     private var list: WalletList { store.walletList(hotWallet: hotWallet) }
     private var offersSpendingMoney: Bool {
         guard let hotWallet else { return false }
         return hotWallet.availability == .ready && hotWallet.address == nil
+    }
+    private var cantOpenSpendingMoney: Bool {
+        if case .unavailable = hotWallet?.availability { true } else { false }
+    }
+    /// The list is as tall as its rows, until it scrolls.
+    private var listHeight: CGFloat {
+        let titles = [list.yours, list.watching, list.recent].filter { !$0.isEmpty }.count
+        return min(CGFloat(list.all.count) * Self.rowHeight + CGFloat(titles) * Self.titleHeight + 8, 440)
     }
 
     var body: some View {
@@ -127,7 +173,13 @@ struct WalletSwitcher: View {
                 .onKeyPress(.downArrow) { moveHighlight(by: 1, proxy) }
                 .onKeyPress(.upArrow) { moveHighlight(by: -1, proxy) }
                 // Opens where the wallet showing is, however long the list.
-                .task { if let shown = pendingName.address ?? store.address { proxy.scrollTo(shown) } }
+                .task {
+                    guard let shown = pendingName.address ?? store.address else { return }
+                    // A list only knows where a far row is once it has laid out the rows before it, so this takes a second try.
+                    proxy.scrollTo(shown, anchor: .center)
+                    await Task.yield()
+                    proxy.scrollTo(shown, anchor: .center)
+                }
         }
     }
 
@@ -135,23 +187,26 @@ struct WalletSwitcher: View {
         VStack(alignment: .leading, spacing: 0) {
             // With nothing to list, there's nothing for the rest to sit below.
             if !list.all.isEmpty {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        section("Yours", list.yours)
-                        section("Watching", list.watching)
-                        section("Recent", list.recent)
-                        section(nil, list.demo.map { [$0] } ?? [])
-                    }
-                    .padding(6)
-                    .id(Self.top)
+                // A list, so dragging a row is what it is everywhere else on a Mac. Sections keep their own order, because moving to another section
+                // changes what a wallet is, and that isn't something to do by a slip of the mouse.
+                List {
+                    section("Yours", list.yours, canReorder: true)
+                    section("Watching", list.watching, canReorder: true)
+                    section("Recent", list.recent)
+                    section(nil, list.demo.map { [$0] } ?? [])
                 }
-                .frame(maxHeight: 440)
-                .fixedSize(horizontal: false, vertical: true)
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+                .alternatingRowBackgrounds(.disabled)
+                .contentMargins(.horizontal, 0, for: .scrollContent)
+                .environment(\.defaultMinListRowHeight, Self.rowHeight)
+                .frame(height: listHeight)
                 Divider()
             }
             VStack(alignment: .leading, spacing: 0) {
-                if offersSpendingMoney { createSpendingMoney }
+                if offersSpendingMoney || cantOpenSpendingMoney { createSpendingMoney }
                 addRow
+                if let note { noteRow(note) }
             }
             .padding(6)
         }
@@ -166,23 +221,49 @@ struct WalletSwitcher: View {
         }
     }
 
+    private func noteRow(_ note: WalletListNote) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(note.text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if let undo = note.undo {
+                Button("Undo") {
+                    undo()
+                    self.note = nil
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
     @ViewBuilder
-    private func section(_ title: String?, _ entries: [WalletEntry]) -> some View {
+    private func section(_ title: String?, _ entries: [WalletEntry], canReorder: Bool = false) -> some View {
         if !entries.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
+            Section {
+                ForEach(entries) { entry in
+                    Group {
+                        if pendingName.address == entry.address {
+                            renameRow(entry)
+                        } else {
+                            row(entry)
+                        }
+                    }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 6))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                }
+                .onMove(perform: canReorder && entries.count > 1 ? { store.moveWallets(in: entries.map(\.address), from: $0, to: $1) } : nil)
+            } header: {
                 if let title {
                     Text(title)
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 10)
-                        .padding(.vertical, 3)
-                }
-                ForEach(entries) { entry in
-                    if pendingName.address == entry.address {
-                        renameRow(entry)
-                    } else {
-                        row(entry)
-                    }
                 }
             }
         }
@@ -191,25 +272,26 @@ struct WalletSwitcher: View {
     private func row(_ entry: WalletEntry) -> some View {
         let isHighlighted = highlighted == entry.address
         return HStack(spacing: 4) {
-            Button { choose(entry.address) } label: {
-                HStack(spacing: 10) {
-                    WalletIcon(kind: entry.kind)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(entry.title)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Text(entry.detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
+            HStack(spacing: 10) {
+                WalletIcon(kind: entry.kind)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.title)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(entry.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                .contentShape(Rectangle())
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            // A tap and not a button, because a button keeps the mouse to itself, and then the row can't be dragged.
+            .onTapGesture { choose(entry.address) }
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel([entry.title, entry.detail].joined(separator: ", "))
-            .accessibilityAddTraits(entry.address == store.address ? .isSelected : [])
+            .accessibilityAddTraits(entry.address == store.address ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { choose(entry.address) }
             if isHighlighted, entry.kind != .demo {
                 Menu {
                     actions(entry)
@@ -268,12 +350,6 @@ struct WalletSwitcher: View {
 
     @ViewBuilder
     private func actions(_ entry: WalletEntry) -> some View {
-        if entry.kind == .spendingMoney {
-            Button("Open \(HotWalletWording.title)") {
-                onDone()
-                onOpenSpendingMoney()
-            }
-        }
         if entry.canRename {
             Button(entry.name == nil ? "Name…" : "Rename…") {
                 store.save(pendingName, hotWallet: hotWallet)
@@ -286,21 +362,60 @@ struct WalletSwitcher: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(EthereumAddress(entry.address)?.checksummed ?? entry.address, forType: .string)
         }
-        if entry.canProve {
-            Button("This Is My Wallet…") {
-                onDone()
-                onProve(list.proof(of: entry, current: store.address))
+        if let arranged = [list.yours, list.watching].first(where: { $0.contains(entry) && $0.count > 1 }), let index = arranged.firstIndex(of: entry) {
+            // For the keyboard and VoiceOver, which can't drag.
+            Button("Move Up") { store.moveWallets(in: arranged.map(\.address), from: [index], to: index - 1) }
+                .disabled(index == 0)
+            Button("Move Down") { store.moveWallets(in: arranged.map(\.address), from: [index], to: index + 2) }
+                .disabled(index == arranged.count - 1)
+        }
+        if entry.canKeep {
+            Button("Keep in Watching") { store.keepWallet(entry.address) }
+        }
+        if entry.canMoveToYours {
+            Button("Move to Yours") {
+                change(entry, to: Wording.movedToYours) { store.moveToYours(entry.address) }
+            }
+        }
+        if entry.canMoveToWatching {
+            Button("Move to Watching") {
+                change(entry, to: Wording.movedToWatching) { store.moveToWatching(entry, hotWallet: hotWallet) }
             }
         }
         if entry.canRemove {
             Divider()
             Button("Remove from List", role: .destructive) {
-                store.removeWallet(entry.address, showing: list.next(afterRemoving: entry.address))
+                let text = entry.isReplacedKey ? Wording.removedReplacedKey : entry.kind == .yours ? Wording.removedYours : Wording.removedWatching
+                change(entry, to: text) { store.remove(entry, showing: list.next(afterRemoving: entry.address), hotWallet: hotWallet) }
             }
         }
-        if entry.canUnlink {
+        if entry.canStopBeingSavings {
             Divider()
-            Button("Not My Wallet", role: .destructive) { store.unlinkWallet(entry.address) }
+            Button("Remove from Savings…", role: .destructive) {
+                onDone()
+                onRemoveFromSavings(entry)
+            }
+            .disabled(hotWallet?.isWorking == true)
+        }
+        if entry.kind == .spendingMoney {
+            Divider()
+            // It holds a key, so deleting it is never one click away, and only Settings does it.
+            Button("Delete in Settings…") {
+                onDeleteSpendingMoney()
+                onDone()
+                openSettings()
+                DockPresence.bringForward()
+            }
+        }
+    }
+
+    /// Does it, and says what changed right away, because the numbers change with it. An account from a device comes back with Undo too.
+    private func change(_ entry: WalletEntry, to text: String, _ action: () -> Void) {
+        let account = hotWallet?.settings.deviceAccounts.first { $0.lowercased == entry.address }
+        let before = store.changeWallet(entry.address, action)
+        note = WalletListNote(text: text) { [store, hotWallet] in
+            if let account { hotWallet?.linkDeviceAccounts([account.lowercased]) }
+            store.restore(before)
         }
     }
 
@@ -312,7 +427,7 @@ struct WalletSwitcher: View {
         } label: {
             HStack(spacing: 10) {
                 WalletIcon(kind: .spendingMoney)
-                Text("Create \(HotWalletWording.title)…")
+                Text(cantOpenSpendingMoney ? "Can't Open \(HotWalletWording.title)…" : "Create \(HotWalletWording.title)…")
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
@@ -353,23 +468,25 @@ struct WalletSwitcher: View {
         let next = current.map { min(max($0 + step, 0), addresses.count - 1) } ?? (step > 0 ? 0 : addresses.count - 1)
         highlighted = addresses[next]
         pointerAtLastKey = NSEvent.mouseLocation
-        // The first row goes all the way up, to show its section's title too.
-        if next == 0 { proxy.scrollTo(Self.top, anchor: .top) } else { proxy.scrollTo(addresses[next]) }
+        proxy.scrollTo(addresses[next])
         return .handled
     }
+}
+
+/// What a change to the list did.
+struct WalletListNote {
+    let text: String
+    var undo: (() -> Void)?
 }
 
 /// The same choice, for the menu bar's popover and the Wallet menu, which can't hold a text field or a row's actions.
 struct WalletPicker: View {
     let store: PortfolioStore
     let list: WalletList
-    let navigation: Navigation
     var onChoose: () -> Void = {}
 
-    /// Spending Money shows this Mac's wallet whichever one is chosen, so choosing another leaves that section, or nothing would seem to happen.
     func choose(_ address: String?) {
         store.setWallet(address)
-        navigation.showChosenWallet()
         onChoose()
     }
 

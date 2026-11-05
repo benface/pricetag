@@ -22,6 +22,7 @@ struct HotWalletFixture {
     static let longRouter = "0x00000000000000000000000000000000000de307"
 
     private var hasWallet = true
+    private var wasDeleted = false
     private var hasSavings = true
     private var balances: [String: UInt128] = ["ETH": 5_000_000_000_000_000, "USDC": 20_000_000]
     private var keys = KeyAnswer.hasIt
@@ -49,6 +50,8 @@ struct HotWalletFixture {
     static let overCapNoSavings = HotWalletFixture(hasSavings: false, balances: ["ETH": 10_000_000_000_000_000, "USDC": 80_000_000])
     static let noGas = HotWalletFixture(balances: ["USDC": 20_000_000])
     static let keyMissing = HotWalletFixture(keys: .isMissing)
+    /// Spending money was deleted, which leaves its old address behind and no other.
+    static let deleted = HotWalletFixture(hasWallet: false, wasDeleted: true, hasSavings: false, balances: [:])
     static let alarm = HotWalletFixture(unexplainedTransactions: 1)
     static let replacingKey = HotWalletFixture(rotation: Rotation(from: spending, to: replacement, destination: replacement))
     /// Tokens and no ETH, so the old key can't be emptied, and there's nothing it could sign.
@@ -82,6 +85,7 @@ struct HotWalletFixture {
 
     private var state: DeviceWalletState {
         var state = DeviceWalletState()
+        if wasDeleted { state.retired = [Self.spending] }
         guard hasWallet else { return state }
         state.active = isReplaced ? Self.replacement : Self.spending
         if isReplaced { state.retired = [Self.spending] }
