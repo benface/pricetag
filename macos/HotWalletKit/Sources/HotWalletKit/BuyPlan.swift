@@ -1,13 +1,11 @@
 import Foundation
 import KeyVault
 
-/// Where a purchase ends up. It all lands here, and what's above the cap sweeps to savings, so this says how much of each, and whether that can work.
+/// Where a purchase ends up. It all lands here, and what's above the cap sweeps to savings, or stays here until there's a savings wallet, so this says how much of each, and whether that can work.
 public struct BuyPlan: Equatable, Sendable {
     public enum Problem: Equatable, Sendable {
         /// Below what the provider takes for some ways to pay. Its page has the last word.
         case belowMinimum
-        /// No savings wallet. The provider's page can raise the amount, so nothing can keep a purchase to the room, and what's above it would have nowhere to go.
-        case needsSavings
         /// Not enough ETH to move this token at today's fees, so what's above the cap would be stuck.
         case noGasToSweep
         /// There's no knowing whether it could be moved until the chain's been read.
@@ -18,20 +16,22 @@ public struct BuyPlan: Equatable, Sendable {
     public static let minimumDollars = 3
     public static let minimumUsdMicros = UInt128(minimumDollars) * Money.dollar
 
-    public let stays: UInt128
-    public let sweeps: UInt128
+    /// What fits under the cap.
+    public let fits: UInt128
+    /// What's above it. With a savings wallet it sweeps there. Without one it stays here, over the cap, until there is one, since
+    /// the provider's page can raise the amount and nothing here can turn money away.
+    public let aboveCap: UInt128
     public let problem: Problem?
 
     /// Nothing above the room and the minimum is this app's to limit. The provider applies its own limits to the account.
     public init(usdMicros amount: UInt128, token: Token, priceUsdMicros: UInt128?, holdings: [Holding], capUsdMicros: UInt128, roomUsdMicros: UInt128, fees: FeeQuote?, destination: EthereumAddress?) {
-        stays = min(amount, roomUsdMicros)
-        sweeps = amount.subtractingClamped(roomUsdMicros)
-        if destination == nil {
-            problem = .needsSavings
-        } else if amount < Self.minimumUsdMicros {
+        fits = min(amount, roomUsdMicros)
+        aboveCap = amount.subtractingClamped(roomUsdMicros)
+        if amount < Self.minimumUsdMicros {
             problem = .belowMinimum
         } else if let fees, let priceUsdMicros, let after = Self.holdings(holdings, buying: amount, of: token, priceUsdMicros: priceUsdMicros) {
             // What a sweep would make of it, whatever the amount: the provider's page can change it, so a token that can't move at all is a problem even if this much would fit.
+            // Without a savings wallet nothing sweeps yet, but a token with no ETH beside it can't be moved by anyone, so that's still a problem.
             let sweep = SweepPlanner.automatic(holdings: after, capUsdMicros: capUsdMicros, fees: fees, destination: destination, pendingGainUsdMicros: 0)
             problem = sweep.blockers.contains(.notEnoughGas) ? .noGasToSweep : nil
         } else {
