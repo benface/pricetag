@@ -269,7 +269,7 @@ struct PopoverView: View {
         return ProblemRow(
             text,
             help: portfolio.attention.map { ([$0.title] + $0.details).joined(separator: "\n") } ?? text,
-            actionTitle: count > 0 ? "Answer \(count)" : "See Why"
+            actionTitle: count > 0 ? Wording.answerQuestions(count) : Wording.showMissing
         ) {
             if count > 0 {
                 navigation.resolve()
@@ -456,31 +456,55 @@ private struct ProblemRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(Tone.warning.style)
-                .accessibilityLabel("Warning")
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                if let detail {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
+        // Beside the words when both fit, and under them when they don't, so a button's whole name never costs the warning its own.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                icon
+                words
+                Spacer(minLength: 0)
+                button
             }
-            Spacer(minLength: 0)
-            if let actionTitle {
-                Button(actionTitle, action: action)
-                    .controlSize(.small)
-                    .fixedSize()
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    icon
+                    words
+                    Spacer(minLength: 0)
+                }
+                button.padding(.leading, 24)
             }
         }
         .font(.callout)
         .help(help)
+    }
+
+    private var icon: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .foregroundStyle(Tone.warning.style)
+            .accessibilityLabel("Warning")
+    }
+
+    private var words: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            if let detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var button: some View {
+        if let actionTitle {
+            Button(actionTitle, action: action)
+                .controlSize(.small)
+                .fixedSize()
+        }
     }
 }

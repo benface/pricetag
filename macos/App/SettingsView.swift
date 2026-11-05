@@ -3,7 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     /// What applies to the whole app. What belongs to one wallet, like Spending Money's cap, is on that wallet's page.
-    enum Pane: Hashable { case general, server }
+    enum Pane: Hashable { case general, answers, server }
 
     let store: PortfolioStore
     let notifications: MoneyNotifications
@@ -34,6 +34,7 @@ struct SettingsView: View {
     var body: some View {
         TabView(selection: $tab) {
             Tab("General", systemImage: "gearshape", value: Pane.general) { general }
+            Tab("Answers", systemImage: "checklist", value: Pane.answers) { pane(.answers) { AnswersList(store: store) } }
             Tab("Price Service", systemImage: "server.rack", value: Pane.server) { connection }
         }
         .onAppear {
@@ -53,7 +54,7 @@ struct SettingsView: View {
             if shownHeight == nil || reduceMotion {
                 shownHeight = height
             } else {
-                withAnimation(.easeInOut(duration: 0.25)) { shownHeight = height }
+                withAnimation(Motion.panel) { shownHeight = height }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeScreenNotification)) { _ in room = Self.roomOnDisplay }
@@ -114,16 +115,6 @@ struct SettingsView: View {
                 Text("Sweeps, purchases, and sends that didn't go through. Never prices.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-            Section {
-                LabeledContent("Who sent what") {
-                    Button("Forget All My Answers", role: .destructive) { store.setBook(Book(), action: "Forget All Answers") }
-                        .controlSize(.small)
-                        .disabled(!store.hasAnswers)
-                }
-                .help("They stay on this Mac. They're only sent to your price service to work out your numbers, and it doesn't keep them.")
-            } header: {
-                Text("Your Answers")
             }
         }
     }

@@ -20,41 +20,23 @@ public struct PortfolioSummary: View {
     private var value: String? { portfolio.totalValueText }
 
     public var body: some View {
-        // From one line down to a narrow column, so nothing is ever cut off.
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .lastTextBaseline, spacing: 28) {
-                headline
-                Spacer(minLength: 0)
-                sums
-            }
-            VStack(alignment: .leading, spacing: 12) {
-                headline
-                sums
-            }
-            VStack(alignment: .leading, spacing: 12) {
+        // From one line down to a narrow column, so nothing is ever cut off. Each change moves what wraps, rather than swapping layouts.
+        WrappingRow(spacing: 28, lineSpacing: 12) {
+            WrappingRow(spacing: 28, lineSpacing: 12, fills: false) {
                 valueStat
+            } trailing: {
                 pnlStat
-                sums
             }
-            VStack(alignment: .leading, spacing: 12) {
-                valueStat
-                pnlStat
-                ForEach(portfolio.totalStats, id: \.metric) { stat in
-                    TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { onOpen(stat.metric) }
-                }
+        } trailing: {
+            ViewThatFits(in: .horizontal) {
+                sums(HStackLayout(alignment: .lastTextBaseline, spacing: 24))
+                sums(VStackLayout(alignment: .leading, spacing: 12))
             }
         }
     }
 
-    private var headline: some View {
-        HStack(alignment: .lastTextBaseline, spacing: 28) {
-            valueStat
-            pnlStat
-        }
-    }
-
-    private var sums: some View {
-        HStack(alignment: .lastTextBaseline, spacing: 24) {
+    private func sums(_ layout: some Layout) -> some View {
+        layout {
             ForEach(portfolio.totalStats, id: \.metric) { stat in
                 TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { onOpen(stat.metric) }
             }
@@ -128,16 +110,10 @@ public struct PortfolioAttention: View {
 
     public var body: some View {
         if let attention = portfolio.attention {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    message(attention)
-                    Spacer(minLength: 0)
-                    action
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    message(attention)
-                    action
-                }
+            WrappingRow(alignment: .center, spacing: 12, lineSpacing: 8) {
+                message(attention)
+            } trailing: {
+                action
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -173,9 +149,9 @@ public struct PortfolioAttention: View {
             Button(Wording.answerQuestions(portfolio.questions.count), action: onResolve)
                 .controlSize(.small)
                 .fixedSize()
-                .help("Answer what the app can't work out by itself (⇧⌘R)")
+                .help("Say what the app can't work out by itself, so what you paid is known (⇧⌘R)")
         } else {
-            Button("See Why") { onOpen(portfolio.attentionTarget) }
+            Button(Wording.showMissing) { onOpen(portfolio.attentionTarget) }
                 .controlSize(.small)
                 .fixedSize()
         }
@@ -355,7 +331,7 @@ extension Portfolio {
         return Attention(title: first, details: Array(lines.dropFirst()), fullList: nil)
     }
 
-    /// Where "See Why" goes: the balance that doesn't match when that's the reason, or else what the total is made of.
+    /// Where "Show What's Missing" goes: the balance that doesn't match when that's the reason, or else what the total is made of.
     public var attentionTarget: ExplainTarget {
         if let position = listedPositions.first(where: { $0.isIncomplete || $0.hasShortfall || $0.reconciliation?.status == .unchecked }) {
             return .asset(position.asset, .onchain)

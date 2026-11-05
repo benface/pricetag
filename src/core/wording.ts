@@ -24,6 +24,19 @@ export const HOLD_WALLET = "This wallet, after network fees"
 export const HOLD_ETH = "If you'd held ETH instead"
 export const HOLD_PAST = "Past results don't predict future ones."
 
+/** Fixing an unknown cost is answering questions, wherever it's offered, so it has one name. A count always says what it counts. */
+export const ANSWER_QUESTIONS = "Answer Questions"
+export const answerQuestionsLabel = (count: number) => (count === 1 ? "Answer 1 Question" : `Answer ${count.toLocaleString("en-US")} Questions`)
+/** When there's nothing to answer, but something's still left out. */
+export const SHOW_MISSING = "Show What's Missing"
+export const SENDER_QUESTION = "Who sent you this?"
+export const SENDER_WHY = "What you paid for it is unknown until you say where it came from, so PnL leaves it out."
+export const COST_QUESTION = "What did you pay for this?"
+export const COST_WHY = "Nothing shows what this cost, so PnL leaves it out until you say."
+export const EXCHANGE_COST_WHY = "You said it came from your exchange account, which knows what you paid. Until you say, PnL leaves it out."
+export const ALL_ANSWERED = "All answered"
+export const NOTHING_LEFT = "That's all for now"
+
 /** The tooltip for a title or sentence that says PnL, or nothing when it doesn't. */
 export const pnlHelp = (text: string): string | undefined => (text.includes("PnL") ? PNL_HELP : undefined)
 

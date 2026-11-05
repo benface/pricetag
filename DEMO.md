@@ -39,7 +39,7 @@ About 5 minutes. **Before you start:**
 | 2 | Open the main window | "It only has what I've done since Wednesday at 14:24, when the dataset starts. Every position is checked against the chain to the smallest unit." | Holdings, largest first, with price, return and check marks, and a warning that ETH's cost is unknown |
 | 3 | Click cbBTC's number in the holdings | "Any number opens what's behind it: what moved, at what price, and where that price came from." | Details on the right, with each row's price source and cost |
 | 4 | On a swap's row, click **Proof**, then **Verify block …** | "This recomputes the block's hashes from what Amp returned. It doesn't prove my SQL or Chainlink's number, and it says so." | About 11 s (*measured* on the $1 swap), then "The data Amp stored for this block matches its header, and so does Chainlink's update behind this price" and 5 passed checks |
-| 5 | Click **Resolve** in the toolbar | "My ETH came from Coinbase inside a batched payout. No transaction points at my wallet, and this data has no traces. We found it from the balance. So it asks, instead of guessing." | "Who's this?" with "From a Coinbase address" |
+| 5 | On Overview, click **Answer 1 Question** beside the warning (the count is whatever's open), or press ⇧⌘R | "My ETH came from Coinbase inside a batched payout. No transaction points at my wallet, and this data has no traces. We found it from the balance. So it asks, instead of guessing." | "Who sent you this?", a line saying why it asks, and "From a Coinbase address" |
 | 6 | **My exchange account**, type what you paid, **Save**, **Done** | "That stays on this Mac. Now everything adds up." | The line saying what PnL leaves out is gone, and ETH has PnL and a return. "Compared with holding ETH" and a full chart appear |
 | 7 | In Settings, pick **Cautious ETH** | "Same transactions, different recipe. It counts ETH 1% lower. That's a second dataset version, two tables, with no app code for it. Here's its fingerprint." | The numbers change on their own |
 | 8 | **Compare Side by Side…** | "Same block, same facts. The only difference is the rule." | ETH price differs by 1% and Value by 1% of the ETH held. About 11 s (*measured*) |
@@ -55,7 +55,7 @@ WORK-452 rewrites the steps for whatever has merged by Thursday at 13:45.
 | Issue | State at writing | Change to the steps |
 |---|---|---|
 | WORK-429 | Merged | Nothing: Send asks for Touch ID in the same window |
-| WORK-426 | Reviewed, PR #65 | Sidebar with Overview, Transactions and Tax Report. Spending Money is chosen in the wallet button (⌘4), with Send, Top Up and Sweep above its numbers on Overview. **Resolve** becomes **Fill In** on the holding, or Answer Questions… (⇧⌘R). The rule is in Settings > General, and the RPC and sweep settings are in Settings > Spending Money. The chart gets ranges, and waits for 3 known transactions over 5 minutes. A change only shows when nothing's left out at either end. **The Mac app no longer has a demo wallet in Release builds** |
+| WORK-426 | Reviewed, PR #65 | Sidebar with Overview, Transactions and Tax Report. Spending Money is chosen in the wallet button (⌘4), with Send, Top Up and Sweep above its numbers on Overview. **Resolve** becomes **Answer N Questions** on Overview and in the popover, the question icon on a holding, or Answer Questions… (⇧⌘R). The rule is in Settings > General, and the RPC and sweep settings are in Settings > Spending Money. The chart gets ranges, and waits for 3 known transactions over 5 minutes. A change only shows when nothing's left out at either end. **The Mac app no longer has a demo wallet in Release builds** |
 | WORK-431 | In review, needs 426 | Wallet button in the toolbar instead of Change Wallet. ⌘L still works |
 | WORK-432 | In review, needs 426 | New popover, with Send and Top Up in it. Step 9 can start there |
 | WORK-442 | Handed off, not merged | Guided Add a Savings Wallet for Ledger and Keystone. Only affects setup, and the optional device moment |
@@ -70,7 +70,7 @@ WORK-452 rewrites the steps for whatever has merged by Thursday at 13:45.
 | **Thu by 9:30** | Withdraw **$40 of ETH from Coinbase** on Base. Write down the total you paid for both withdrawals, this one and Wednesday's | This is what makes WORK-424 visible, see below. Earlier is better: the chart's one-day change needs a known point from before the range starts, so this has to be at least 24 h before the demo |
 | **Once it shows in the app** | With the extension on `app.uniswap.org`, swap **$12 of ETH to cbBTC**, then **$12 of ETH to AERO**. Don't answer the Coinbase question | Costs that are really paid, and prices that move. Waiting avoids landing in the payout's block, which would leave costs unknown. Each row should show a dollar cost. If one says unknown, see below |
 | **Thu after 14:00** | At the bottom of Spending Money's page, turn off **Sweep realized gains to savings**. Then swap **half the AERO to USDC** | Gives Realized a number, adds a transaction after the block switch, and won't sweep on stage. Sell into USDC rather than ETH, because ETH paid out through a contract is the hardest case |
-| **Fri morning** | **Edit > Undo Answer** (⌘Z) if Coinbase was the last thing you answered. Otherwise Settings > **Forget All My Answers**, then re-enter any other answers | Puts steps 5 and 6 back on stage |
+| **Fri morning** | In Settings > **Answers** (or File > **Your Answers…**), remove the Coinbase answer with the ⊖ beside it. Every other answer stays | Puts steps 5 and 6 back on stage |
 
 **If a swap's cost says unknown, don't buy again.** A later purchase doesn't repair the earlier one, and answering Coinbase doesn't either. Click the row and read its reason, then:
 - **It says a contract's ETH couldn't be confirmed:** wait a few minutes, because this can clear by itself.
@@ -83,7 +83,7 @@ WORK-452 rewrites the steps for whatever has merged by Thursday at 13:45.
 
 | Funding | What the app does | Result |
 |---|---|---|
-| **Coinbase withdrawal** | Finds ETH with no transaction to the wallet, and asks "Who's this?" with "From a Coinbase address". **My exchange account** then takes what you paid | **Exact PnL** (*measured:* typing $5.10 gave a complete PnL of −$0.10), and the best moment in the demo |
+| **Coinbase withdrawal** | Finds ETH with no transaction to the wallet, and asks "Who sent you this?" with "From a Coinbase address". **My exchange account** then takes what you paid | **Exact PnL** (*measured:* typing $5.10 gave a complete PnL of −$0.10), and the best moment in the demo |
 | Plain send from your own wallet, answered **My wallet** | Its cost comes from that wallet, so anything it held before Wednesday 14:24 stays unknown | **PnL stays unavailable** |
 | Plain send, answered **Someone else** | Uses the price when it arrived | Complete, but marked as an estimate (*measured*). This is the fallback if Coinbase is slow |
 
@@ -130,7 +130,7 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 **Morning**
 - [ ] Read the 8:00 health check on this issue.
 - [ ] Fund and buy, as above.
-- [ ] Right after the buys, answer the Coinbase card. There should be no other question and no line saying what PnL leaves out. If it does, read what it leaves out, and see above. Then **Edit > Undo Answer** (⌘Z).
+- [ ] Right after the buys, answer the Coinbase card. There should be no other question and no line saying what PnL leaves out. If it does, read what it leaves out, and see above. Then remove the Coinbase answer in Settings > **Answers**.
 - [ ] Review WORK-426, then 431 and 432. Merging 426 starts WORK-449's test on real data, so read its results if they're in by 14:00.
 - [ ] Say on WORK-448 what time the demo is.
 - [ ] Make one small real purchase with **Buy…** (steps on WORK-462), and check its cost shows with no question.
