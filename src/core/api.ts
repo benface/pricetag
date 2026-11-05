@@ -181,9 +181,14 @@ export type TaxReportResponse = {
   /** When `year`'s history isn't all here, why, in a sentence. It's also the first warning. */
   partialYear: string | null
   rowCount: number
+  /** Sales, fees and sends, each counted once, where `rowCount` counts one split into a known and an unknown part twice. */
   soldCount: number
   feeCount: number
   sentCount: number
+  /** Of those, how many have an unknown gain, in whole or in part. `unresolvedCount` counts the file's rows instead. */
+  unknownCount: number
+  /** The wallets with something unknown, in the order of `wallets`, so a client can open the right one's questions. */
+  unknownWallets: string[]
   unresolvedCount: number
   estimatedCount: number
   /** Rows with a known gain that partly rests on a cost the user gave. */

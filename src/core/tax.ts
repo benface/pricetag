@@ -353,6 +353,23 @@ function partialYearNote(year: number, start: string): string | null {
   return null
 }
 
+/**
+ * A sale, fee or send split into a known and an unknown part is two rows in the file, and still one thing that happened.
+ * The same leg is always the same wallet, transaction, kind and asset.
+ */
+const eventKey = (row: TaxRow) => `${row.wallet}:${row.txHash}:${row.type}:${row.asset}`
+
+/** What happened, counted once each, with whether any part of it has an unknown gain. */
+function eventsOf(rows: readonly TaxRow[]): Map<string, { type: TaxRow["type"]; wallet: string; unknown: boolean }> {
+  const events = new Map<string, { type: TaxRow["type"]; wallet: string; unknown: boolean }>()
+  for (const row of rows) {
+    const event = events.get(eventKey(row)) ?? { type: row.type, wallet: row.wallet, unknown: false }
+    event.unknown ||= row.gainMicros === null
+    events.set(eventKey(row), event)
+  }
+  return events
+}
+
 /** What the app shows of the file before it's saved. */
 export type TaxPreviewRow = Pick<TaxRow, "timestamp" | "type" | "asset" | "amount" | "decimals" | "gainMicros" | "status">
 
@@ -488,6 +505,8 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const selfReported = count("self-reported")
   const given = rows.filter((row) => row.givenCost).length
   const counted = rows.filter((row) => row.gainMicros !== null)
+  const events = [...eventsOf(rows).values()]
+  const unknownIn = new Set(events.filter((event) => event.unknown).map((event) => event.wallet.toLowerCase()))
 
   const warnings: string[] = partialYear === null ? [] : [partialYear]
   if (unresolved > 0) warnings.push(`${plural(unresolved, "row")} of ${rows.length.toLocaleString("en-US")} ${unresolved === 1 ? "is" : "are"} unresolved. What can't be worked out says "unknown". It's never counted as 0, and it isn't in the gain total.`)
@@ -527,9 +546,11 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     years,
     partialYear,
     rowCount: rows.length,
-    soldCount: rows.filter((row) => row.type === "Sold").length,
-    feeCount: rows.filter((row) => row.type === "Network fee").length,
-    sentCount: rows.filter((row) => row.type === "Sent").length,
+    soldCount: events.filter((event) => event.type === "Sold").length,
+    feeCount: events.filter((event) => event.type === "Network fee").length,
+    sentCount: events.filter((event) => event.type === "Sent").length,
+    unknownCount: events.filter((event) => event.unknown).length,
+    unknownWallets: wallets.map((wallet) => wallet.address.toLowerCase()).filter((address) => unknownIn.has(address)),
     unresolvedCount: unresolved,
     estimatedCount: estimated,
     selfReportedCount: selfReported,

@@ -440,12 +440,38 @@ describe("taxReportOf", () => {
     })
   })
 
-  it("counts each kind of row, and previews the first few", () => {
+  it("counts what happened once, even when the file splits it into a known and an unknown part", () => {
+    const gas = (block: number, units: bigint) => leg(block, -units, { kind: "gas" })
+    // Oldest first: a fee from the known ETH, a sale of the known half and the unknown half, then a fee from both.
+    const half = E18 / 2n
+    const legs = [buy(10, 1n, 1000), leg(20, E18), gas(25, half), sell(30, 1n, 2000), buy(35, 1n, 2000), gas(40, E18)]
+    const report = taxReportOf([walletOf(A, legs)], { country: "US", method: "fifo", scope: "per-wallet" })
+    assert.deepEqual(eventsOf(report).map((row) => [row.Type, row.Status]), [
+      ["Network fee", "OK"],
+      ["Sold", "OK"],
+      ["Sold", "UNRESOLVED"],
+      ["Network fee", "OK"],
+      ["Network fee", "UNRESOLVED"],
+    ])
+    assert.deepEqual([report.soldCount, report.feeCount, report.sentCount, report.unknownCount], [1, 2, 0, 2])
+    assert.deepEqual([report.rowCount, report.unresolvedCount], [5, 2], "The file's own counts are still by row")
+    // $500 on the first fee, $500 on the known half of the sale, and $0 on the known half of the last fee.
+    assert.equal(report.gainMicros, usd(1000), "Known parts are in the total")
+  })
+
+  it("names the wallets with something unknown, even when only an added one has it", () => {
+    const known = walletOf(A, [buy(10, 1n, 1000), sell(20, 1n, 2000)])
+    const unknown = walletOf(B, [leg(30, E18), sell(40, 1n, 2000)])
+    const report = taxReportOf([known, unknown], { country: "US", method: "fifo", scope: "per-wallet" })
+    assert.deepEqual([report.unknownCount, report.unknownWallets], [1, [B]])
+    assert.deepEqual(taxReportOf([known], { country: "US", method: "fifo", scope: "per-wallet" }).unknownWallets, [])
+  })
+
+  it("previews the file's first rows", () => {
     const report = taxReportOf([DEMO_WALLET], { country: "US", method: "fifo", scope: "per-wallet" })
-    assert.equal(report.soldCount + report.feeCount + report.sentCount, report.rowCount)
-    assert.ok(report.soldCount > 0 && report.feeCount > 0)
     assert.equal(report.preview.length, Math.min(5, report.rowCount))
     assert.deepEqual(report.preview.map((row) => row.type), eventsOf(report).slice(0, 5).map((row) => row.Type))
+    assert.deepEqual(report.unknownWallets, [DEMO_WALLET.address.toLowerCase()])
   })
 
   it("keeps the words people read plain", () => {

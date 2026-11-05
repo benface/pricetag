@@ -16,9 +16,13 @@
   ],
   "partialYear": "Records start on November 4, 2026, so 2026 is missing everything before then.",
   "rowCount": 23,
-  "soldCount": 7,
-  "feeCount": 15,
+  "soldCount": 6,
+  "feeCount": 8,
   "sentCount": 1,
+  "unknownCount": 14,
+  "unknownWallets": [
+    "0x00000000000000000000000000000000000de300"
+  ],
   "unresolvedCount": 14,
   "estimatedCount": 0,
   "selfReportedCount": 0,
