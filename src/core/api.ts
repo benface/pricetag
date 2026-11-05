@@ -4,7 +4,7 @@
 import { hasStarted, msBetweenBlocks, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type UnlistedToken, type WalletData } from "@pricetag/sdk/core"
 import type { Estimates, HoldComparison } from "@pricetag/sdk/core"
 import type { Meter, Question } from "./resolve.ts"
-import type { TaxCountryCode, TaxScope } from "./tax.ts"
+import type { TaxCountryCode, TaxPreviewRow, TaxScope } from "./tax.ts"
 
 export { hasStarted }
 
@@ -174,7 +174,16 @@ export type TaxReportResponse = {
   currency: CurrencyCode
   /** What this country calls for, so a client can tell an override. */
   defaults: { method: Method; scope: TaxScope }
+  /** The calendar year listed, in UTC, or null for everything. */
+  year: number | null
+  /** Every year with some history, newest first. */
+  years: number[]
+  /** When `year`'s history isn't all here, why, in a sentence. It's also the first warning. */
+  partialYear: string | null
   rowCount: number
+  soldCount: number
+  feeCount: number
+  sentCount: number
   unresolvedCount: number
   estimatedCount: number
   /** Rows with a known gain that partly rests on a cost the user gave. */
@@ -186,6 +195,8 @@ export type TaxReportResponse = {
   warnings: string[]
   /** What this report never does, and what it covers. */
   notes: string[]
+  /** The first few rows, oldest first. */
+  preview: TaxPreviewRow[]
   filename: string
   csv: string
 }

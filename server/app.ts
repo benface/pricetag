@@ -20,7 +20,7 @@ import { createDepositReader } from "./block.ts"
 import { warnOfNewAggregators } from "./feeds.ts"
 import { createManifestReader, createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
 import { feedRounds, rawSource, resolvingSource, settledL1Fees, sharedReads, type SharedReads } from "./source.ts"
-import { TAX_COUNTRIES, isTaxCountryCode, taxReportOf, type TaxScope } from "../src/core/tax.ts"
+import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 
 type Env = Record<string, string | undefined>
 
@@ -369,7 +369,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       if (!book) return sendJson(res, 400, { error: "Those answers can't be read." })
       const also: unknown = body.also ?? []
       if (!Array.isArray(also) || !also.every((address) => typeof address === "string")) return sendJson(res, 400, { error: "Other wallets are a list of Base addresses." })
-      return taxReport(taxMatch[1] as string, { country: body.country, method: body.method, scope: body.scope }, also as string[], currency, book, res)
+      return taxReport(taxMatch[1] as string, { country: body.country, method: body.method, scope: body.scope, year: body.year }, also as string[], currency, book, res)
     }
 
     const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last))?$/.exec(path)
@@ -431,7 +431,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
    * those are in what the apps show. A wallet nobody's said is theirs, like one being watched, takes no costs from them, so
    * they aren't read or listed. The demo's own wallets are read for its costs without being listed. Demo data and real data never mix.
    */
-  async function taxReport(address: string, choices: { country: unknown; method: unknown; scope: unknown }, also: readonly string[], currency: CurrencyCode, book: Book, res: ServerResponse): Promise<void> {
+  async function taxReport(address: string, choices: { country: unknown; method: unknown; scope: unknown; year: unknown }, also: readonly string[], currency: CurrencyCode, book: Book, res: ServerResponse): Promise<void> {
     const { country } = choices
     if (typeof country !== "string" || !isTaxCountryCode(country)) return sendJson(res, 400, { error: "That country isn't supported." })
     const defaults = TAX_COUNTRIES[country]
@@ -439,6 +439,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
     const scope = choices.scope === null || choices.scope === undefined ? defaults.scope : parseScope(typeof choices.scope === "string" ? choices.scope : "")
     if (!scope) return sendJson(res, 400, { error: "The calculation is either pooled or per-wallet." })
+    const year = parseTaxYear(choices.year)
+    if (year === null) return sendJson(res, 400, { error: "The year is a year, latest or all." })
 
     const focus = address.toLowerCase()
     const others = also.map((other) => other.trim().toLowerCase()).filter(Boolean)
@@ -470,7 +472,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const wallets = await readAll(listed)
     const context = wallets && (await readAll(costsFrom))
     if (!wallets || !context) return
-    sendJson(res, 200, taxReportOf(wallets, { country, method, scope }, { book, costsFrom: context }))
+    sendJson(res, 200, taxReportOf(wallets, { country, method, scope, year }, { book, costsFrom: context }))
   }
 
   /**
@@ -708,7 +710,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const taxMatch = /^\/api\/tax-report\/([^/]+)$/.exec(path)
     if (taxMatch) {
       const also = (params.get("also") ?? "").split(",")
-      await taxReport(taxMatch[1] as string, { country: params.get("country"), method: params.get("method"), scope: params.get("scope") }, also, currency, emptyBook(), res)
+      await taxReport(taxMatch[1] as string, { country: params.get("country"), method: params.get("method"), scope: params.get("scope"), year: params.get("year") }, also, currency, emptyBook(), res)
       return true
     }
 

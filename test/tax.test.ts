@@ -9,7 +9,7 @@ import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../sr
 import { costKey, emptyBook, type Book } from "../src/core/book.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { foldBook } from "../src/core/resolve.ts"
-import { TAX_COUNTRIES, readOtherWallets, taxReportOf, taxRows } from "../src/core/tax.ts"
+import { TAX_COUNTRIES, parseTaxYear, readOtherWallets, taxReportOf, taxRows, type TaxYear } from "../src/core/tax.ts"
 import { createApi } from "../server/app.ts"
 
 const E18 = 10n ** 18n
@@ -400,6 +400,52 @@ describe("taxReportOf", () => {
     assert.ok(report.warnings.some((warning) => /no known cost to carry over/.test(warning)))
     assert.equal(report.rowCount, 0)
     assert.equal(report.gainMicros, null)
+  })
+
+  describe("a year", () => {
+    // History from August 2025: a buy in December 2025 and a sale in March 2026.
+    const head = 20_000_000
+    const spanning = walletOf(A, [buy(10, 1n, 1000), sell(30, 1n, 2000)].map((l, i) => ({ ...l, timestamp: ["2025-12-01T00:00:00.000Z", "2026-03-01T00:00:00.000Z"][i] as string })), {
+      coverage: { fromBlock: 1, toBlock: head },
+      latest: { blockNum: head, timestamp: "2026-11-27T00:00:00.000Z" },
+    })
+    const report = (year: TaxYear) => taxReportOf([spanning], { country: "US", method: "fifo", scope: "per-wallet", year })
+
+    it("lists only that year, with costs from the years before it", () => {
+      const year = report(2026)
+      assert.deepEqual([year.year, year.years, year.rowCount, year.gainMicros, year.partialYear], [2026, [2026, 2025], 1, usd(1000), null])
+      assert.equal(eventsOf(year).length, 1)
+      assert.match(year.filename, /-2026-US-/)
+      const before = report(2025)
+      assert.deepEqual([before.rowCount, before.gainMicros, before.preview], [0, null, []])
+    })
+
+    it("says when a year's history isn't all there", () => {
+      assert.match(report(2025).partialYear ?? "", /^Records start on August \d+, 2025, so 2025 is missing everything before then\.$/)
+      assert.equal(report(2025).warnings[0], report(2025).partialYear)
+      assert.match(report(2024).partialYear ?? "", /so nothing from 2024 is here/)
+      const recent = taxReportOf([wallet], { country: "US", method: "fifo", scope: "per-wallet", year: "latest" })
+      assert.deepEqual([recent.year, recent.partialYear], [2026, "Records start on November 4, 2026, so 2026 is missing everything before then."])
+    })
+
+    it("is everything without one, as before", () => {
+      const all = report("all")
+      assert.deepEqual([all.year, all.partialYear, all.rowCount], [null, null, 1])
+      assert.equal(taxReportOf([spanning], { country: "US", method: "fifo", scope: "per-wallet" }).csv, all.csv)
+    })
+
+    it("reads what's asked for", () => {
+      assert.deepEqual([parseTaxYear(undefined), parseTaxYear("all"), parseTaxYear("latest"), parseTaxYear("2026"), parseTaxYear(2025)], ["all", "all", "latest", 2026, 2025])
+      for (const bad of ["26", "nope", 1999, 2026.5, "2026a"]) assert.equal(parseTaxYear(bad), null, String(bad))
+    })
+  })
+
+  it("counts each kind of row, and previews the first few", () => {
+    const report = taxReportOf([DEMO_WALLET], { country: "US", method: "fifo", scope: "per-wallet" })
+    assert.equal(report.soldCount + report.feeCount + report.sentCount, report.rowCount)
+    assert.ok(report.soldCount > 0 && report.feeCount > 0)
+    assert.equal(report.preview.length, Math.min(5, report.rowCount))
+    assert.deepEqual(report.preview.map((row) => row.type), eventsOf(report).slice(0, 5).map((row) => row.Type))
   })
 
   it("keeps the words people read plain", () => {
@@ -936,8 +982,16 @@ describe("GET /api/tax-report", () => {
     assert.deepEqual([override.body.method, override.body.scope, override.body.defaults.method], ["average", "pooled", "fifo"])
   })
 
+  it("lists a year when asked", async () => {
+    const latest = await get("demo?country=US&year=latest")
+    assert.deepEqual([latest.status, latest.body.year], [200, 2026])
+    assert.equal((await get("demo?country=US&year=2026")).body.year, 2026)
+    assert.equal((await get("demo?country=US")).body.year, null)
+  })
+
   it("turns down what it can't do", async () => {
     assert.equal((await get("demo")).status, 400)
+    assert.equal((await get("demo?country=CA&year=last")).status, 400)
     assert.equal((await get("demo?country=FR")).status, 400)
     assert.equal((await get("demo?country=CA&method=lifo")).status, 400)
     assert.equal((await get("demo?country=CA&scope=everything")).status, 400)
