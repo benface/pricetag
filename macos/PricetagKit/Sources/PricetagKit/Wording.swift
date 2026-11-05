@@ -259,6 +259,11 @@ extension AssetMetric {
         }
     }
 
+    /// The same, on its own, as in a menu.
+    public var title: String {
+        label.prefix(1).uppercased() + label.dropFirst()
+    }
+
     public var help: String? {
         switch self {
         case .realized: Wording.realizedHelp

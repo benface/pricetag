@@ -125,6 +125,7 @@ struct MainWindow: View {
     private var inspector: some View {
         if let target = navigation.target {
             ExplanationPane(target: target, store: store)
+                .safeAreaBar(edge: .top) { metricPicker(target) }
                 .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
@@ -133,6 +134,21 @@ struct MainWindow: View {
                             .help("Close (Esc)")
                     }
                 }
+        }
+    }
+
+    /// Every number in the asset's row, including those the holdings table has no room for when it's narrow.
+    @ViewBuilder
+    private func metricPicker(_ target: ExplainTarget) -> some View {
+        if case .asset(let asset, let metric) = target, let position = portfolio?.positions.first(where: { $0.asset == asset }) {
+            Picker("Show", selection: Binding(get: { metric }, set: { navigation.target = .asset(asset, $0) })) {
+                ForEach(position.explainableMetrics, id: \.self) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.menu)
+            .fixedSize()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
         }
     }
 
@@ -292,7 +308,7 @@ private struct HoldingsTable: View {
     }
 
     /// Below the width all seven need, which is the default window with the details open and the smallest window without them,
-    /// two columns give way. The balance check moves next to the asset, and the average price paid is in the details.
+    /// two columns give way. The balance check moves next to the asset, and the average price paid is in the details' menu.
     private var isNarrow: Bool { width < Column.allWidth }
 
     /// Hiding a column doesn't give its width to the others, so when narrow, each stops at what it needs, and the five always fit.

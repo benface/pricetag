@@ -86,6 +86,13 @@ describe("portfolioOf", () => {
     assert.deepEqual(dai.legs.map((l) => [l.opening, l.txHash]), [[true, ""]])
   })
 
+  it("explains an average price that isn't known, instead of leaving it out", () => {
+    const dai = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "DAI", metric: "average" })!
+    assert.equal(dai.title, "DAI: Average price paid")
+    assert.equal(dai.value, null)
+    assert.match(dai.lines.join(" "), /unknown cost, so there's no average/)
+  })
+
   it("says the total is partial when it leaves something out", () => {
     const portfolio = portfolioOf(DEMO_WALLET, "average")
     assert.equal(portfolio.pnlStatus, "partial")
