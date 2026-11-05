@@ -40,14 +40,7 @@ private struct SendForm: View {
                 .font(.headline)
                 .foregroundStyle(.secondary)
             VStack(spacing: 6) {
-                TextField("Amount", text: $model.amountText, prompt: Text("0"))
-                    .labelsHidden()
-                    .textFieldStyle(.plain)
-                    .font(.displayLarge)
-                    .monospacedDigit()
-                    .multilineTextAlignment(.center)
-                    .focused($focus, equals: .amount)
-                    .onSubmit(next)
+                amountField
                 HStack(spacing: 10) {
                     Picker("Token", selection: $model.token) {
                         ForEach(model.tokens) { Text($0.symbol).tag($0) }
@@ -56,13 +49,25 @@ private struct SendForm: View {
                     .fixedSize()
                     Button("Max") { model.useMaximum() }
                         .disabled(model.maximum == 0)
+                    if let available = model.availableText {
+                        Text("\(available) available")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
                 }
-                worth
+                otherUnit
+                if let problem = model.amountProblem {
+                    WarningText(problem.message).font(.callout).fixedSize(horizontal: false, vertical: true)
+                }
             }
             VStack(alignment: .leading, spacing: 8) {
-                AddressField("To", prompt: wallets.isEmpty ? "To: 0x…" : "To: 0x…, or a wallet's name", text: $model.addressText, wallets: wallets, read: AddressText.read, focus: $focus, equals: .address, onSubmit: next)
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.large)
+                if let address = model.recipient {
+                    recipientCard(address)
+                } else {
+                    AddressField("To", prompt: wallets.isEmpty ? "To: 0x…" : "To: 0x…, or a wallet's name", text: $model.addressText, wallets: wallets, read: AddressText.read, focus: $focus, equals: .address, onSubmit: next)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.large)
+                }
                 recipient
             }
             if let failure = model.failure {
@@ -90,15 +95,55 @@ private struct SendForm: View {
     private func next() {
         if model.canSend {
             model.confirm()
-        } else if focus == .amount {
+        } else if focus == .amount, model.recipient == nil {
             focus = .address
         }
     }
 
+    private var amountField: some View {
+        @Bindable var model = model
+        return TextField("Amount", text: $model.amountText, prompt: Text("0"))
+            .labelsHidden()
+            .textFieldStyle(.plain)
+            .font(.displayLarge)
+            .monospacedDigit()
+            .multilineTextAlignment(.center)
+            .focused($focus, equals: .amount)
+            .onSubmit(next)
+            .overlay {
+                // The symbol sits just before the centered digits: a hidden copy of them on each side keeps them where the field draws them.
+                if model.unit == .money {
+                    HStack(spacing: 0) {
+                        Text(model.moneySymbol).foregroundStyle(.secondary)
+                        Text(model.amountText.isEmpty ? "0" : model.amountText).hidden()
+                        Text(model.moneySymbol).hidden()
+                    }
+                    .font(.displayLarge)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
+            }
+    }
+
+    /// What's typed, in the other unit, and the way to type in it instead. In money, this is the exact amount that's signed.
     @ViewBuilder
-    private var worth: some View {
-        if let problem = model.amountProblem {
-            WarningText(problem.message).font(.callout).fixedSize(horizontal: false, vertical: true)
+    private var otherUnit: some View {
+        let other = model.unit == .token ? model.worthText : model.tokenAmountText
+        if model.canTypeMoney || model.unit == .money {
+            Button {
+                model.switchUnit()
+                focus = .amount
+            } label: {
+                Label(other ?? "Type in \(model.unit == .token ? model.moneySymbol : model.token.symbol)", systemImage: "arrow.up.arrow.down")
+            }
+            .buttonStyle(.plain)
+            .font(.title3)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .help(model.unit == .token ? "Type the amount in money" : "Type the amount in \(model.token.symbol)")
+            .accessibilityHint(model.unit == .token ? "Types the amount in money instead" : "Types the amount in \(model.token.symbol) instead")
         } else if let worth = model.worthText {
             Text(worth)
                 .font(.title3)
@@ -107,19 +152,39 @@ private struct SendForm: View {
         }
     }
 
+    /// The address, once, whole and in groups, however it got here, because a saved name doesn't say the address behind it is still the right one.
+    private func recipientCard(_ address: EthereumAddress) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.recipientName.map { "To \($0)" } ?? "To")
+                    .fontWeight(.medium)
+                AddressLine(address.checksummed, marked: model.lookalike.map { Lookalike.differences(between: address.checksummed, and: $0.address.checksummed) } ?? [])
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            Button("Change Address", systemImage: "xmark.circle.fill") {
+                model.addressText = ""
+                focus = .address
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Change address")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .softBox()
+    }
+
     @ViewBuilder
     private var recipient: some View {
-        if let address = model.recipient {
-            if let name = model.recipientName {
-                Text(name).fontWeight(.medium)
-            }
-            // In groups, and however it got here, because a saved name doesn't say the address behind it is still the right one.
-            AddressLine(address.checksummed)
-                .font(.callout)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+        if model.recipient != nil {
             if let problem = model.recipientProblem {
                 WarningText(problem.message).font(.callout).fixedSize(horizontal: false, vertical: true)
+            } else if let match = model.lookalike {
+                lookalike(match)
             } else if let known = model.knownAs {
                 Label(known.title, systemImage: known == .someoneElse ? "person" : "checkmark.circle")
                     .font(.callout)
@@ -128,6 +193,34 @@ private struct SendForm: View {
                 isThisYours
             }
         }
+    }
+
+    /// Address poisoning: an address made to start and end like one they know. It's shown under the one typed, in the same place, so
+    /// they line up, and sending anyway takes ticking a box.
+    private func lookalike(_ match: LookalikeMatch) -> some View {
+        @Bindable var model = model
+        let typed = model.recipient?.checksummed ?? ""
+        return VStack(alignment: .leading, spacing: 8) {
+            Label("This only looks like \(match.name)", systemImage: "exclamationmark.triangle.fill")
+                .fontWeight(.semibold)
+                .foregroundStyle(Tone.warning.style)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(match.name.prefix(1).uppercased() + match.name.dropFirst())
+                    .foregroundStyle(.secondary)
+                AddressLine(match.address.checksummed, marked: Lookalike.differences(between: match.address.checksummed, and: typed))
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("Its start and end are the same, which is a common trick to steal money. Check every character.")
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle("I've checked, and this is the address I mean", isOn: $model.acceptsLookalike)
+                .toggleStyle(.checkbox)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .softBox()
     }
 
     private var isThisYours: some View {
@@ -173,7 +266,7 @@ struct SendConfirmation: View {
                         if !Task.isCancelled { done() }
                     }
             } else {
-                TouchIDFooter(gate: gate, verb: "send", doing: "Sending…", leaveTitle: "Edit") { model.backToEditing() }
+                TouchIDFooter(gate: gate, verb: "send", doing: "Sending…", leaveTitle: "Edit", cancelled: "Touch ID was cancelled, so nothing was sent.") { model.backToEditing() }
             }
         }
         .onExitCommand { if gate.backOut() { model.backToEditing() } }
@@ -224,7 +317,7 @@ struct SweepSheet: View {
                         if !Task.isCancelled { dismiss() }
                     }
             } else {
-                TouchIDFooter(gate: gate, verb: "sweep", doing: "Sweeping…", leaveTitle: hasFailed ? "Close" : "Cancel") { dismiss() }
+                TouchIDFooter(gate: gate, verb: "sweep", doing: "Sweeping…", leaveTitle: hasFailed ? "Close" : "Cancel", cancelled: "Touch ID was cancelled, so nothing moved.") { dismiss() }
             }
         }
         .frame(width: 460)
