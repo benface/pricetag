@@ -153,7 +153,7 @@ struct WalletListTests {
         let (store, defaults) = makeStore()
         let before = store.walletListSnapshot(of: a)
         store.moveToYours(a)
-        store.recordPurchase(Purchase(provider: "coinbase", order: "1", wallet: b, asset: "ETH", units: "1", txHash: "0x1", blockNum: 1, cost: Money(micros: "5000000", currency: "USD"), costUsdMicros: "5000000"))
+        store.recordPurchase(Purchase(provider: "coinbase", order: "1", wallet: b, asset: "ETH", units: "1", txHash: "0x1", blockNum: 1, cost: Money(micros: "5000000", currency: .USD), costUsdMicros: "5000000"))
         store.restore(before)
         #expect(store.book.purchases.count == 1)
         #expect(store.book.linkedWallets.isEmpty, "only the move is undone")

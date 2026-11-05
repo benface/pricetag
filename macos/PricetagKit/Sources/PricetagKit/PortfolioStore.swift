@@ -300,11 +300,8 @@ public final class PortfolioStore {
         var wallets = savedWallets
         if let index = wallets.firstIndex(where: { $0.address == address }) {
             // A name given since is the user's latest word on it. Without one, an entry the change made goes with the change.
-            if let saved = snapshot.saved {
-                wallets[index].isKept = saved.isKept
-            } else if wallets[index].name == nil {
-                wallets.remove(at: index)
-            }
+            wallets[index].isKept = snapshot.saved?.isKept
+            if snapshot.saved == nil, wallets[index].name == nil { wallets.remove(at: index) }
         } else if let saved = snapshot.saved {
             wallets.append(saved)
         }
