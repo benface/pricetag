@@ -503,6 +503,52 @@ describe("a position total PnL leaves out", () => {
     assert.equal(holdComparison.walletLeavesOut, true)
   })
 
+  describe("when holding has no answer", () => {
+    const sentAtTwice = () => [deposit("ETH", 1, 1000, 100, "self-reported"), leg("ETH", -E18, 200, { priceMicros: usd(2000), priceSource: "oracle" })]
+
+    it("still counts the gain that left, which today's price can't change", () => {
+      const result = compare(sentAtTwice(), prices(null))
+      assert.equal(result.status, "unavailable")
+      assert.equal(result.unavailable, "no current eth price")
+      assert.equal(result.holdMicros, null)
+      assert.equal(result.gainThatLeftMicros, usd(1000))
+      assert.equal(result.walletMicros, usd(1000))
+      assert.equal(result.walletLeavesOut, false)
+    })
+
+    it("gives the wallet's side the same number in every state", () => {
+      // Nothing it's put in has a known ETH price, and the same wallet with one says the same about itself.
+      const noMoment = [deposit("ETH", 1, 1000, 150, "self-reported"), leg("ETH", -E18, 200, { priceMicros: usd(2000), priceSource: "oracle" })]
+      const unavailable = compare(noMoment, prices(2000))
+      assert.equal(unavailable.unavailable, "nothing known put in")
+      assert.equal(unavailable.walletMicros, compare(sentAtTwice(), prices(2000)).walletMicros)
+      assert.equal(unavailable.gainThatLeftMicros, usd(1000))
+    })
+
+    it("keeps saying the wallet's side is an estimate", () => {
+      const result = compare([deposit("ETH", 1, 1000, 100), leg("ETH", -E18, 200, { priceMicros: usd(2000), priceSource: "oracle" })], prices(null))
+      assert.equal(result.status, "unavailable")
+      assert.equal(result.walletEstimated, true)
+    })
+  })
+
+  it("says the wallet's side leaves something out when what left has no price, rather than counting its gain as nothing", () => {
+    // Its cost is known, so total PnL counts it as gone with no gain or loss, but what it was worth when it left isn't known.
+    const result = compare([deposit("ETH", 1, 1000, 100, "self-reported"), leg("ETH", -E18, 200)], prices(2000))
+    assert.equal(result.status, "unavailable")
+    assert.equal(result.unavailable, "left with no known value")
+    assert.equal(result.walletLeavesOut, true)
+    assert.equal(result.walletMicros, usd(0))
+    assert.equal(result.gainThatLeftMicros, usd(0))
+  })
+
+  it("keeps a send with no price from an amount that was never in the ETH from making it complete", () => {
+    const skipped = deposit("USDC", 1000, 1000, 150, "self-reported")
+    const result = compare([deposit("ETH", 1, 1000, 100, "self-reported"), skipped, leg("USDC", -1000n * E6, 200)], prices(2000))
+    assert.equal(result.status, "partial")
+    assert.equal(result.walletLeavesOut, true)
+  })
+
   it("still adds the gain that left a position it includes", () => {
     const result = compare([deposit("ETH", 1, 1000, 100), leg("ETH", -E18 / 2n, 200, { priceMicros: usd(2000), priceSource: "oracle" })], prices(2000))
     assert.equal(result.gainThatLeftMicros, usd(500))

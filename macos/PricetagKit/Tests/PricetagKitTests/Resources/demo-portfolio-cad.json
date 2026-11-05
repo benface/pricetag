@@ -520,7 +520,10 @@
     }
   ],
   "holdComparison": {
+    "walletMicros": "240285367",
+    "gainThatLeftMicros": "0",
     "walletLeavesOut": true,
+    "walletEstimated": true,
     "putInMicros": "273196600",
     "takenOutMicros": "0",
     "ethPriceMicros": "3692307692",
@@ -528,9 +531,6 @@
     "ranOut": false,
     "status": "partial",
     "unavailable": null,
-    "walletMicros": "240285367",
-    "gainThatLeftMicros": "0",
-    "walletEstimated": true,
     "holdMicros": "28185997",
     "differenceMicros": null,
     "ethQty": "81624453563680527",

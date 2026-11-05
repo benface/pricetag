@@ -98,22 +98,30 @@ const isInTotal = (position: Position) => {
   return !noMarket && !isUnconfirmed(position) && values.realizedMicros !== null && BigInt(state.shortfallQty) === 0n && (BigInt(values.qty) === 0n || values.unrealizedMicros !== null)
 }
 
-/** The gain that left with what the wallet sent out, on what total PnL includes, and whether a market price says so. */
-function gainThatLeft(positions: readonly Position[]): { micros: bigint; estimated: boolean } {
+/**
+ * The gain that left with what the wallet sent out, on what total PnL includes, and whether it rests on an estimate.
+ * It's already happened, so it doesn't depend on today's prices. `unvalued` says some of it can't be known.
+ */
+function gainThatLeft(positions: readonly Position[]): { micros: bigint; estimated: boolean; unvalued: boolean } {
   let micros = 0n
   let estimated = false
+  let unvalued = false
   for (const position of positions.filter(isInTotal)) {
     for (const { leg, before, after } of position.effects) {
       const delta = BigInt(leg.delta)
-      if (leg.kind !== "transfer" || delta >= 0n || leg.priceMicros === null) continue
+      if (leg.kind !== "transfer" || delta >= 0n) continue
       const known = -delta - (BigInt(after.transferredOutUnknownQty) - BigInt(before.transferredOutUnknownQty))
       if (known === 0n) continue
+      if (leg.priceMicros === null) {
+        unvalued = true
+        continue
+      }
       micros += worth(known, BigInt(leg.priceMicros), leg.decimals) - (BigInt(after.transferredOutCostMicros) - BigInt(before.transferredOutCostMicros))
       // Either end of the gain can be an estimate: what it left at, or the cost it carried.
       estimated ||= leg.priceSource === "market" || BigInt(after.transferredOutEstimatedMicros) > BigInt(before.transferredOutEstimatedMicros)
     }
   }
-  return { micros, estimated }
+  return { micros, estimated, unvalued }
 }
 
 /** A leg for the second fold, where a known cost only means "this came from an amount in the ETH". */
@@ -219,23 +227,30 @@ export function compareWithHoldingEth(positions: readonly Position[], totals: To
   }
 
   const unavailable: HoldUnavailable | null = ethPrice === null ? "no current eth price" : unvalued ? "left with no known value" : unshared ? "left with no known share" : knownAmounts === 0 ? "nothing known put in" : null
-  const walletLeavesOut = pnlStatus !== "complete"
-  const pnlEstimated = BigInt(totals.estimatedMicros) > 0n
-  const facts = { walletLeavesOut, putInMicros: putIn.toString(), takenOutMicros: takenOut.toString(), ethPriceMicros: ethPrice, unknownAmounts, ranOut: beyond > 0n }
-  if (unavailable !== null || ethPrice === null) return { ...facts, status: "unavailable", unavailable, walletMicros: totals.pnlMicros, gainThatLeftMicros: "0", walletEstimated: pnlEstimated, holdMicros: null, differenceMicros: null, ethQty: "0", ethValueMicros: null, estimated: false }
-
-  const value = worth(eth, BigInt(ethPrice), ETH_DECIMALS)
   const gain = gainThatLeft(positions)
   const wallet = totals.pnlMicros === null ? null : BigInt(totals.pnlMicros) + gain.micros
+  const walletLeavesOut = pnlStatus !== "complete" || gain.unvalued
+  // The wallet's side doesn't depend on the ETH, so it's the same whatever holding can say.
+  const facts = {
+    walletMicros: wallet === null ? null : wallet.toString(),
+    gainThatLeftMicros: gain.micros.toString(),
+    walletLeavesOut,
+    walletEstimated: BigInt(totals.estimatedMicros) > 0n || gain.estimated,
+    putInMicros: putIn.toString(),
+    takenOutMicros: takenOut.toString(),
+    ethPriceMicros: ethPrice,
+    unknownAmounts,
+    ranOut: beyond > 0n,
+  }
+  if (unavailable !== null || ethPrice === null) return { ...facts, status: "unavailable", unavailable, holdMicros: null, differenceMicros: null, ethQty: "0", ethValueMicros: null, estimated: false }
+
+  const value = worth(eth, BigInt(ethPrice), ETH_DECIMALS)
   const hold = value + takenOut - beyond - putIn
   const complete = !walletLeavesOut && unknownAmounts === 0 && wallet !== null
   return {
     ...facts,
     status: complete ? "complete" : "partial",
     unavailable: null,
-    walletMicros: wallet === null ? null : wallet.toString(),
-    gainThatLeftMicros: gain.micros.toString(),
-    walletEstimated: pnlEstimated || gain.estimated,
     holdMicros: hold.toString(),
     differenceMicros: complete ? (wallet - hold).toString() : null,
     ethQty: eth.toString(),
