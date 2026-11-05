@@ -158,8 +158,14 @@ struct MainWindow: View {
             notices(portfolio)
             if !portfolio.progress.started {
                 ContentUnavailableView("Nothing to show yet", systemImage: "hourglass", description: Text(Wording.notStarted))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if portfolio.isEmpty {
-                ContentUnavailableView("No activity", systemImage: "tray", description: Text("Nothing moved for \(portfolio.address) in this time."))
+                VStack(spacing: 14) {
+                    ContentUnavailableView("No activity", systemImage: "tray", description: Text("Nothing moved for \(Format.shortHash(portfolio.address)) in this time."))
+                    coverageNote(portfolio)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 summary(portfolio)
                 HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
@@ -172,15 +178,17 @@ struct MainWindow: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            if portfolio.progress.started {
-                Text(Wording.coverage(portfolio))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                coverageNote(portfolio)
             }
         }
         .padding(16)
+    }
+
+    private func coverageNote(_ portfolio: Portfolio) -> some View {
+        Text(Wording.coverage(portfolio))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// The same size whichever it shows, so switching moves nothing else.
