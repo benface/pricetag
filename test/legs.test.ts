@@ -542,6 +542,26 @@ describe("an entirely unknown result stays unavailable", () => {
     assert.equal(totals.realizedMicros, "0")
   })
 
+  describe("a sale's reason names what's unknown", () => {
+    const bought = [row("0x1", USDC_ADDRESS, "debit", 100n * E6), row("0x1", AERO, "credit", 200n * E18)]
+    const absurdSale = (qty: bigint) => [{ ...row("0x2", AERO, "debit", qty), block_num: 101 }, { ...row("0x2", USDC_ADDRESS, "credit", 1n), block_num: 101 }]
+    const received = { ...row("0x3", AERO, "credit", 200n * E18), block_num: 99 }
+    const references = [REF, { ...REF, blockNum: 101 }, { ...REF, blockNum: 99 }]
+    const reasons = (rows: LegRow[]) => sumTotals(foldPositions(legsOf(rows, references).filter((l) => l.asset === "AERO"), "fifo", {})).excluded.filter((e) => e.reason.startsWith("sold")).map((e) => e.reason)
+
+    it("the price, when a swap's value is rejected", () => {
+      assert.deepEqual(reasons([...bought, ...absurdSale(200n * E18)]), ["sold or spent at an unknown price"])
+    })
+
+    it("the cost, when what's sold arrived from elsewhere", () => {
+      assert.deepEqual(reasons([received, { ...row("0x2", AERO, "debit", 200n * E18), block_num: 101 }, { ...row("0x2", USDC_ADDRESS, "credit", 100n * E6), block_num: 101 }]), ["sold at an unknown cost"])
+    })
+
+    it("both, when neither is known", () => {
+      assert.deepEqual(reasons([received, ...absurdSale(200n * E18)]), ["sold at an unknown cost", "sold or spent at an unknown price"])
+    })
+  })
+
   it("the chart agrees, at every point", () => {
     const points = pnlOverTime(unknownHolding, "average", {}, marks([REF]), { blockNum: 101, timestamp: "2026-11-04T00:00:00.000Z" })
     assert.ok(points.length > 0)
@@ -649,6 +669,26 @@ describe("totals", () => {
       assert.equal(points.at(-1)!.pnlMicros, headline.pnlMicros)
       assert.equal(points.at(-1)!.txHash, null)
     }
+  })
+
+  it("the chart doesn't jump at its last point when a token has a market price, because it's marked all along", () => {
+    const points = pnlOverTime(DEMO_WALLET.legs, "average", prices, usdView(DEMO_WALLET).markPrice, DEMO_WALLET.latest)
+    assert.equal(points.at(-2)!.pnlMicros, points.at(-1)!.pnlMicros, "nothing the chart counts changed price after the last transaction")
+    assert.ok(points.some((p, i) => BigInt(p.pnlMicros ?? 0) > BigInt(points.at(-1)!.pnlMicros!) && i < points.length - 1), "AERO was worth more when it was sold")
+    const unmarked = pnlOverTime(DEMO_WALLET.legs, "average", prices, usdView({ ...DEMO_WALLET, marketMarks: {} }).markPrice, DEMO_WALLET.latest)
+    assert.ok(BigInt(unmarked.at(-1)!.pnlMicros!) - BigInt(unmarked.at(-2)!.pnlMicros!) > 70_000_000n, "without them, it would jump")
+    assert.ok(points.at(-2)!.excludedCount < unmarked.at(-2)!.excludedCount, "and what has a price is no longer left out")
+    assert.equal(points.at(-2)!.excludedCount, unmarked.at(-1)!.excludedCount)
+  })
+
+  it("leaves a token out of a point with no price at that block, as it does with no market", () => {
+    const { marketMarks } = DEMO_WALLET
+    const block = Number(Object.keys(marketMarks).find((b) => marketMarks[b]?.AERO))
+    const points = pnlOverTime(DEMO_WALLET.legs, "average", prices, usdView({ ...DEMO_WALLET, marketMarks: { ...marketMarks, [block]: {} } }).markPrice, DEMO_WALLET.latest)
+    const marked = pnlOverTime(DEMO_WALLET.legs, "average", prices, usdView(DEMO_WALLET).markPrice, DEMO_WALLET.latest)
+    const at = (from: typeof points) => from.find((p) => p.blockNum === block)!
+    assert.equal(at(points).excludedCount, at(marked).excludedCount + 1)
+    assert.equal(points.at(-2)!.pnlMicros, marked.at(-2)!.pnlMicros, "and it's back at the next point")
   })
 
   it("the demo wallet shows the hand-worked numbers", () => {

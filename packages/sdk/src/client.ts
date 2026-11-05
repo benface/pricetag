@@ -1,10 +1,11 @@
 // What another app builds on: a wallet's portfolio, its priced legs and a token's prices, read from the Pricetag dataset.
 // Everything keeps its price source and transaction, and what can't be priced stays unknown.
 
-import { createQuery, type Logger, type Query } from "./amp.ts"
-import { ORACLE_TABLES, SWAP_TABLES, WALLET_TABLES, datasetReader, datasetSource } from "./dataset.ts"
+import { createQuery, createRangeStream, describeError, type Logger, type Query, type StreamRanges } from "./amp.ts"
+import { ORACLE_TABLES, SWAP_TABLES, WALLET_TABLES, datasetReader, datasetSource, followSql, readHeadMark } from "./dataset.ts"
 import type { Method } from "./fold.ts"
 import { answerToMicros, buildPricedLegs, type LegRow, type PricedLeg, type PriceSource, type Reference } from "./legs.ts"
+import { followChain, type FollowConfig, type Via } from "./live.ts"
 import { latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
 import { createL1FeeReader, type ReadL1Fees } from "./receipts.ts"
 import { ASSETS, TOKENS, isAddress, normalizeAddress, tokenByAddress, type Token } from "./tokens.ts"
@@ -41,6 +42,11 @@ export type BlockRange = { from?: number | undefined; to?: number | undefined }
 export type PortfolioOptions = BlockRange & {
   /** How to work out the cost of what's sold. It defaults to `average`. */
   method?: Method | undefined
+}
+
+export type WatchOptions = Omit<PortfolioOptions, "to"> & {
+  /** Stops watching. Leaving a `for await` does too. */
+  signal?: AbortSignal | undefined
 }
 
 /**
@@ -85,6 +91,19 @@ export type WalletPortfolio = Omit<FoldedWallet, "view"> & {
   l1FeeUnknownTxs: string[]
   /** Assets whose balance before `blocks.fromBlock` couldn't be read, so they can't be compared yet. */
   openingUnread: string[]
+  /**
+   * The first block a reorg replaced that the dataset may not have rewritten yet, or null. These numbers can still hold the
+   * old blocks from here on, and the next reads replace them.
+   */
+  unsettledFrom: number | null
+}
+
+/** A wallet's portfolio, after a block, in full. Replace the last one with it. Nothing in it adds to what came before. */
+export type WalletUpdate = WalletPortfolio & {
+  /** What said there was a new block, or null for the first update, which is what the wallet already was. */
+  via: Via | null
+  /** The first block a reorg replaced since the last update, or null when none did. */
+  reorgFrom: number | null
 }
 
 export type PricePoint = {
@@ -108,6 +127,8 @@ export type TokenPrices = {
   prices: PricePoint[]
 }
 
+const DEFAULT_NETWORK = "base_mainnet"
+
 const isBlock = (block: number) => Number.isSafeInteger(block) && block > 0
 
 function findToken(token: string): Token {
@@ -119,17 +140,24 @@ function findToken(token: string): Token {
 export function createPricetag(config: PricetagConfig) {
   if (!config.url) throw new Error("Pricetag needs Amp's query URL")
   const { timeoutMs, logger, rpcUrl } = config
-  return pricetagClient(createQuery(config.url, config.token || undefined, { timeoutMs, logger }), { ...config, readL1Fees: rpcUrl ? createL1FeeReader(rpcUrl, fetch, undefined, logger) : undefined })
+  const stream = createRangeStream(config.url, config.token || undefined, (config.network ?? DEFAULT_NETWORK).replaceAll("_", "-"))
+  return pricetagClient(createQuery(config.url, config.token || undefined, { timeoutMs, logger }), { ...config, stream, readL1Fees: rpcUrl ? createL1FeeReader(rpcUrl, fetch, undefined, logger) : undefined })
 }
 
-type ClientConfig = Pick<PricetagConfig, "dataset" | "baseDataset" | "startBlock" | "network" | "logger"> & { readL1Fees?: ReadL1Fees | undefined }
+type ClientConfig = Pick<PricetagConfig, "dataset" | "baseDataset" | "startBlock" | "network" | "logger"> & {
+  readL1Fees?: ReadL1Fees | undefined
+  /** Without one, `watchWallet` polls. */
+  stream?: StreamRanges | undefined
+  /** The timing of `watchWallet`'s stream and polling, for tests. */
+  follow?: Pick<FollowConfig, "pollMs" | "retryMs" | "stallMs" | "tickMs"> | undefined
+}
 
 export function pricetagClient(query: Query, config: ClientConfig) {
   if (!config.dataset) throw new Error("Pricetag needs a dataset, like benface/pricetag@0.0.1")
-  const { startBlock, readL1Fees } = config
+  const { startBlock, readL1Fees, logger = console } = config
   if (startBlock !== undefined && !isBlock(startBlock)) throw new Error(`Bad start block: ${startBlock}. It's the block number the dataset starts from.`)
   const baseDataset = config.baseDataset ?? "edgeandnode/base_mainnet@0.0.2"
-  const source = datasetSource(query, { dataset: config.dataset, baseDataset, startBlock: startBlock ?? null, network: config.network ?? "base_mainnet" })
+  const source = datasetSource(query, { dataset: config.dataset, baseDataset, startBlock: startBlock ?? null, network: config.network ?? DEFAULT_NETWORK })
   const reader = datasetReader(query, { dataset: config.dataset, baseDataset })
 
   // Read just before a wallet is. A wallet's history stays in memory between calls, so each call only reads what's new.
@@ -159,32 +187,89 @@ export function pricetagClient(query: Query, config: ClientConfig) {
     return processed === null ? nothing : { fromBlock: from, toBlock: processed }
   }
 
+  async function getPortfolio(address: string, { method = "average", ...range }: PortfolioOptions = {}): Promise<WalletPortfolio> {
+    if (!isAddress(address)) throw new Error(`${address} isn't a Base address`)
+    const account = normalizeAddress(address)
+    const { from, to } = resolveRange(range)
+    const wallet = await readWallet(account, from, to)
+    const { coverage, legs, gasUnknownTxs, l1FeeUnknownTxs, openingUnread } = wallet
+    const { view: _, ...folded } = foldWallet(wallet, method)
+    const started = hasStarted(wallet)
+    return {
+      ...folded,
+      address: account,
+      method,
+      blocks: coverage,
+      started,
+      missing: started ? describeMissing({ totals: folded.totals, gasUnknownTxs, l1FeeUnknownTxs }) : [`everything, because the dataset hasn't processed block ${from}`],
+      legs,
+      gasUnknownTxs,
+      l1Fees: l1FeeStatus(l1FeeUnknownTxs),
+      l1FeeUnknownTxs,
+      openingUnread,
+      unsettledFrom: wallets.unsettledFrom(account, { from, to }),
+    }
+  }
+
   return {
     /**
      * A wallet's holdings, cost and PnL, the same way the app works them out: what it held before the range, its L1 fees,
      * and every position checked against the chain. Check `started`, and show `pnlStatus` and `missing` next to any total.
      * With a `to`, it's the wallet as of that block, valued at that block's prices.
      */
-    async getPortfolio(address: string, { method = "average", ...range }: PortfolioOptions = {}): Promise<WalletPortfolio> {
+    getPortfolio,
+
+    /**
+     * A wallet's portfolio now, then again after each new block, for as long as it's read. Each update is the whole wallet,
+     * so a reorg replaces what it changed instead of adding to it. Amp's stream says when there's a block, and polling takes
+     * over when it can't. A read that fails goes to the logger, and the next block tries again.
+     */
+    async *watchWallet(address: string, { signal, method, from }: WatchOptions = {}): AsyncGenerator<WalletUpdate, void, void> {
       if (!isAddress(address)) throw new Error(`${address} isn't a Base address`)
-      const account = normalizeAddress(address)
-      const { from, to } = resolveRange(range)
-      const wallet = await readWallet(account, from, to)
-      const { coverage, legs, gasUnknownTxs, l1FeeUnknownTxs, openingUnread } = wallet
-      const { view: _, ...folded } = foldWallet(wallet, method)
-      const started = hasStarted(wallet)
-      return {
-        ...folded,
-        address: account,
-        method,
-        blocks: coverage,
-        started,
-        missing: started ? describeMissing({ totals: folded.totals, gasUnknownTxs, l1FeeUnknownTxs }) : [`everything, because the dataset hasn't processed block ${from}`],
-        legs,
-        gasUnknownTxs,
-        l1Fees: l1FeeStatus(l1FeeUnknownTxs),
-        l1FeeUnknownTxs,
-        openingUnread,
+      resolveRange({ from })
+      const stop = new AbortController()
+      const stopping = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal
+      const ticks = followChain({ stream: config.stream ?? null, sql: followSql(config.dataset), readMark: (after) => readHeadMark(query, baseDataset, after), logger, ...config.follow }, stopping)
+      // Following starts before the first read, which can take a while, so no block or reorg goes by unseen.
+      let next = ticks.next()
+      let via: Via | null = null
+      let reorgFrom: number | null = null
+      let shown: number | null = null
+      try {
+        while (!stopping.aborted) {
+          try {
+            const portfolio = await getPortfolio(address, { method, from })
+            if (portfolio.blocks.toBlock !== shown || reorgFrom !== null) {
+              shown = portfolio.blocks.toBlock
+              const update: WalletUpdate = { ...portfolio, via, reorgFrom }
+              reorgFrom = null
+              yield update
+            }
+          } catch (error) {
+            logger.warn(`Couldn't read ${address}, and will try again on the next block: ${describeError(error)}`)
+          }
+          let tick = await next
+          while (!tick.done && tick.value.kind === "down") {
+            logger.warn(`Can't reach Amp: ${tick.value.message}`)
+            next = ticks.next()
+            tick = await next
+          }
+          if (tick.done) return
+          next = ticks.next()
+          const { value } = tick
+          if (value.kind === "block") {
+            via = value.via
+            if (value.reorgFrom !== null) {
+              reorgFrom = Math.min(reorgFrom ?? value.reorgFrom, value.reorgFrom)
+              await wallets.rewind(value.reorgFrom, Math.max(chainHead?.blockNum ?? 0, value.blockNum))
+              // The new chain can be shorter, and the head is only read from the last one on.
+              if (chainHead && chainHead.blockNum >= value.reorgFrom) chainHead = { ...chainHead, blockNum: value.reorgFrom - 1 }
+            }
+          }
+        }
+      } finally {
+        stop.abort()
+        await ticks.return()
       }
     },
 
@@ -267,16 +352,19 @@ function emptyWallet(address: string, from: number): WalletData {
     coverage: { fromBlock: from, toBlock: from - 1 },
     notes: [],
     marketChecked: false,
+    marketMarks: {},
     legs: [],
     references: [],
     prices: {},
     latest: { blockNum: from - 1, timestamp: new Date(0).toISOString() },
     gasUnknownTxs: [],
+    gasUnknownBlocks: [],
     unlisted: [],
     l1FeeUnknownTxs: [],
     balances: null,
     openingUnread: [...ASSETS],
     lastBalances: {},
+    lastCheckableEth: null,
     unreadBalances: [],
     unseenEth: [],
   }

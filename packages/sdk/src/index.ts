@@ -8,8 +8,9 @@ export { buildPortfolio, pnlOverTime, pnlStatus, referenceMarks } from "./portfo
 export { ASSETS, TOKENS, isAddress } from "./tokens.ts"
 
 export type { Logger } from "./amp.ts"
-export type { BlockRange, BlocksRead, L1FeeStatus, PortfolioOptions, Pricetag, PricetagConfig, PricePoint, TokenPrices, WalletLegs, WalletPortfolio } from "./client.ts"
+export type { BlockRange, BlocksRead, L1FeeStatus, PortfolioOptions, Pricetag, PricetagConfig, PricePoint, TokenPrices, WalletLegs, WalletPortfolio, WalletUpdate, WatchOptions } from "./client.ts"
 export type { CostLabel, Method, PositionState, PositionValues } from "./fold.ts"
+export type { HoldComparison, HoldStatus, HoldUnavailable } from "./hold.ts"
 export type { LegConversion, LegPart, PricedLeg, PriceSource, Reference, SettledCredit } from "./legs.ts"
 export type { Coverage, Exclusion, LatestPrice, LatestPrices, LegEffect, MarkPrice, PnlPoint, PnlStatus, Portfolio, Position, Totals } from "./portfolio.ts"
 export type { Reconciliation } from "./reconcile.ts"

@@ -2,7 +2,7 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import { formatAmount, formatDuration, formatMoney, shortHash, type CostLabel, type CurrencyCode, type FoldLeg, type Method, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
+import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
@@ -17,6 +17,11 @@ export const STARTING_BALANCE = "Starting balance"
 export const PNL_HELP = "PnL is profit and loss: what you've gained or lost so far."
 export const REALIZED_HELP = "Gain or loss on what you've sold or spent."
 export const UNREALIZED_HELP = "Gain or loss on what you still hold, at the current price."
+
+export const HOLD_TITLE = "Compared with holding ETH"
+export const HOLD_WALLET = "This wallet, after network fees"
+export const HOLD_ETH = "If you'd held ETH instead"
+export const HOLD_PAST = "Past results don't predict future ones."
 
 /** The tooltip for a title or sentence that says PnL, or nothing when it doesn't. */
 export const pnlHelp = (text: string): string | undefined => (text.includes("PnL") ? PNL_HELP : undefined)
@@ -93,9 +98,28 @@ export function excludedSentence(excluded: readonly { asset: string; reason: str
   return `Excludes ${[...byReason.entries()].map(([reason, assets]) => `${assets.join(", ")} (${reason})`).join("; ")}.`
 }
 
+/** How this wallet did next to holding, when the two cover the same money. */
+export function holdDifferenceSentence(micros: string, currency: CurrencyCode, estimated = false): string {
+  const difference = BigInt(micros)
+  const about = estimated ? "About " : ""
+  if (difference === 0n) return `${about}${estimated ? "the" : "The"} same as holding ETH.`
+  return `${about}${formatMoney(difference < 0n ? -difference : difference, currency)} ${difference > 0n ? "more" : "less"} than holding ETH.`
+}
+
+/** What keeps the two from being set against each other, or null when nothing does. */
+export function holdCaveatSentence({ status, unavailable, putInMicros, unknownAmounts, walletLeavesOut }: Pick<HoldComparison, "status" | "unavailable" | "putInMicros" | "unknownAmounts" | "walletLeavesOut">, currency: CurrencyCode): string | null {
+  if (status === "complete") return null
+  if (unavailable === "no current eth price") return "Unavailable, because there's no current ETH price to compare with."
+  if (unavailable === "left with no known value") return "Unavailable, because something left this wallet with no known value, so what holding ETH would have left can't be worked out."
+  if (unavailable === "left with no known share") return "Unavailable, because something left this wallet after an exchange of several tokens at once, so how much of it came from what was put in can't be worked out."
+  if (unavailable === "nothing known put in") return "Unavailable, because nothing put in this wallet has a known value yet."
+  const amounts = unknownAmounts === 1 ? "1 other amount has no known value, and isn't counted." : `${unknownAmounts.toLocaleString("en-US")} other amounts have no known value, and aren't counted.`
+  return [`Partial, so the two don't cover the same money. Holding ETH counts the ${formatMoney(putInMicros, currency)} put in with a known value.`, unknownAmounts > 0 ? amounts : null, walletLeavesOut ? "This wallet's total leaves some things out." : null].filter((part) => part !== null).join(" ")
+}
+
 export function coverageSentence(coverage: { fromBlock: number; toBlock: number }, trackedTokens: number, openingUnread: boolean): string {
   const opening = openingUnread ? "What the wallet held before that couldn't all be read yet, so some amounts may not be full balances." : "What the wallet held before that is included, at an unknown cost."
-  return `Covers about ${formatDuration(coverage.toBlock - coverage.fromBlock)} of history and ${trackedTokens} tokens plus ETH. ${opening} Other tokens aren't counted.`
+  return `Covers about ${formatDuration(msBetweenBlocks(coverage.fromBlock, coverage.toBlock))} of history and ${trackedTokens} tokens plus ETH. ${opening} Other tokens aren't counted.`
 }
 
 export function networkFeeUnknownSentence(count: number): string {
@@ -106,15 +130,20 @@ export function linkedFailedSentence(count: number): string {
   return count === 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : `Couldn't read ${count} of your other wallets, so what came from them may show as unresolved.`
 }
 
+/** A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent. */
+export function withheldSentence(wallet: string, asset: string): string {
+  return `${shortHash(wallet)}'s ${asset} history can't be confirmed, so what it sent has an unknown cost where it arrived.`
+}
+
 export function feesUnknownSentence(count: number): string {
   return `Network fees couldn't be worked out for ${count} ${count === 1 ? "transaction" : "transactions"}, so the network fees shown are too low.`
 }
 
 export const NOT_STARTED = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."
 
-export function behindSentence(blocks: number): string {
+export function behindSentence(ms: number): string {
   // Under half a minute would round to "0 min", which reads as not behind at all.
-  return `The data is still catching up, ${blocks < 15 ? "less than a minute" : `about ${formatDuration(blocks)}`} behind the network. Anything newer isn't in these numbers yet.`
+  return `The data is still catching up, ${ms < 30_000 ? "less than a minute" : `about ${formatDuration(ms)}`} behind the network. Anything newer isn't in these numbers yet.`
 }
 
 export function staleSentence(lastUpdate: string): string {

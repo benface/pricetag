@@ -263,6 +263,34 @@ struct AnvilTests {
         #expect(others.filter { (saved.balances[$0] ?? 0) > 0 }.count >= others.count - 1, "all but what's left under the cap")
     }
 
+    @Test func aRunningWalletShowsASendLandingWithoutWaitingForATick() async throws {
+        let vault = KeyVault(store: MemoryKeys())
+        let hot = try await vault.createKey()
+        let cold = try await vault.createKey()
+        let client = RPCChainClient(url: rpc!)
+        let stateStore = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hot
+        try stateStore.save(state)
+        let unreachable = ScriptedPortfolios(.failure(.unreachable))
+        let wallet = HotWallet(signer: vault, settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { unreachable }, makeChain: { _ in client }, tickDelay: .seconds(3600))
+        try wallet.addColdWallet(address: cold.lowercased, name: "Fork")
+        wallet.setCap(dollars: 50)
+        _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth / 1000)])
+        _ = try await anvil("anvil_dealERC20", [hot.lowercased, usdc.contract!.lowercased, hex(usdcUnits(500))])
+
+        wallet.start()
+        defer { wallet.stop() }
+        let clock = ContinuousClock()
+        let started = clock.now
+        for _ in 0..<300 where wallet.snapshot?.nonce != 1 { try await Task.sleep(for: .milliseconds(100)) }
+        let waited = clock.now - started
+        #expect(wallet.records.first?.status == .confirmed)
+        #expect(wallet.snapshot?.nonce == 1)
+        #expect((wallet.snapshot?.balances[usdc] ?? 0) < usdcUnits(100))
+        #expect(waited < .seconds(15), "the one tick here sent it, and the next is an hour away")
+    }
+
     @Test func sweepsEverythingIncludingEth() async throws {
         let vault = KeyVault(store: MemoryKeys())
         let hot = try await vault.createKey()

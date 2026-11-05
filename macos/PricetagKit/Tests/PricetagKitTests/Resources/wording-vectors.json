@@ -137,23 +137,23 @@
   ],
   "behind": [
     {
-      "blocks": 6,
+      "ms": 12000,
       "text": "The data is still catching up, less than a minute behind the network. Anything newer isn't in these numbers yet."
     },
     {
-      "blocks": 14,
+      "ms": 28000,
       "text": "The data is still catching up, less than a minute behind the network. Anything newer isn't in these numbers yet."
     },
     {
-      "blocks": 15,
+      "ms": 30000,
       "text": "The data is still catching up, about 1 min behind the network. Anything newer isn't in these numbers yet."
     },
     {
-      "blocks": 50,
+      "ms": 100000,
       "text": "The data is still catching up, about 2 min behind the network. Anything newer isn't in these numbers yet."
     },
     {
-      "blocks": 5400,
+      "ms": 10800000,
       "text": "The data is still catching up, about 3 h behind the network. Anything newer isn't in these numbers yet."
     }
   ],
@@ -187,6 +187,7 @@
       "text": "Couldn't read 2 of your other wallets, so what came from them may show as unresolved."
     }
   ],
+  "withheld": "0x1234…5678's ETH history can't be confirmed, so what it sent has an unknown cost where it arrived.",
   "sentences": {
     "methodName": "How cost is worked out",
     "methodHelp": "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest.",
@@ -205,7 +206,11 @@
     "reading": "Reading this wallet's history. The first read can take a minute, then only new activity is read.",
     "notAnAddress": "That isn't a Base address. It should start with 0x, then 40 letters and numbers.",
     "rulesTitle": "Pricing rule",
-    "rulesHelp": "Prices come from a public recipe anyone can copy and change. Each rule here is one version of it, named by its fingerprint. Switching only changes which one this wallet is read through."
+    "rulesHelp": "Prices come from a public recipe anyone can copy and change. Each rule here is one version of it, named by its fingerprint. Switching only changes which one this wallet is read through.",
+    "holdTitle": "Compared with holding ETH",
+    "holdWallet": "This wallet, after network fees",
+    "holdEth": "If you'd held ETH instead",
+    "holdPast": "Past results don't predict future ones."
   },
   "unseenEth": [
     {

@@ -43,7 +43,7 @@ struct HotWalletFixture {
     /// Tokens and no ETH, so the old key can't be emptied, and there's nothing it could sign.
     static let replacingKeyStuck = HotWalletFixture(balances: ["USDC": 20_000_000], rotation: Rotation(from: spending, to: replacement, destination: replacement), canActOnChain: true)
 
-    func make(source: FixtureSource, costMethod: @escaping @MainActor () -> CostMethod) -> HotWallet {
+    func make(source: FixtureSource, costMethod: @escaping @MainActor () -> CostMethod, mainCurrency: @escaping @MainActor () -> CurrencyCode) -> HotWallet {
         HotWallet(
             signer: NoKeys(answer: keys),
             settingsStore: FixedSettings(settings: settings),
@@ -51,6 +51,7 @@ struct HotWalletFixture {
             presence: promptNeverAnswers ? StillAsking() : NoOneThere(),
             portfolioSource: { source },
             costMethod: costMethod,
+            mainCurrency: mainCurrency,
             makeChain: { [snapshot] _ in FixtureChain(snapshot: snapshot) },
             now: { Self.today }
         )

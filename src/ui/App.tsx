@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { CURRENCIES, CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isCurrencyCode, sumTotals, type Coverage, type CurrencyCode, type Method, type Position } from "@pricetag/sdk/core"
+import { CURRENCIES, CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isCurrencyCode, msBetweenBlocks, sumTotals, type Coverage, type CurrencyCode, type HoldComparison, type Method, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { explainTarget, missingRatesLine, mismatchCause, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
@@ -9,6 +9,10 @@ import {
   CHECK_LABELS,
   DEMO_NOTICE,
   ETH_NOTE,
+  HOLD_ETH,
+  HOLD_PAST,
+  HOLD_TITLE,
+  HOLD_WALLET,
   METHOD_HELP,
   METHOD_LABELS,
   METHOD_NAME,
@@ -26,8 +30,11 @@ import {
   excludedSentence,
   feedDetail,
   feesUnknownSentence,
+  holdCaveatSentence,
+  holdDifferenceSentence,
   linkedFailedSentence,
   networkFeeUnknownSentence,
+  withheldSentence,
   staleSentence,
   unseenEthCause,
 } from "../core/wording.ts"
@@ -252,7 +259,7 @@ export function App() {
   const explanation = useMemo(() => {
     if (!target || !fold || !wallet) return null
     const usd = fold.view.currency === "USD" ? null : foldBook(wallet, others, method, book, { usd: true })
-    return explainTarget(target, fold, { view: fold.view, ruleNote: wallet.ruleNote ?? null, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points } })
+    return explainTarget(target, fold, { view: fold.view, ruleNote: wallet.ruleNote ?? null, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points, holdComparison: usd.holdComparison } })
   }, [target, fold, wallet, others, method, book])
   const close = useCallback(() => setTarget(null), [])
   const openTotal = (metric: TotalMetric) => setTarget({ kind: "total", metric })
@@ -311,7 +318,7 @@ export function App() {
         <main>
           {error ? <p className="notice warn">⚠ {error} {staleSentence(formatTime(wallet.latest.timestamp))}</p> : null}
           {isBehind(wallet) ? (
-            <p className="notice warn">⚠ {hasStarted(wallet) ? behindSentence(wallet.latest.blockNum - wallet.coverage.toBlock) : NOT_STARTED}</p>
+            <p className="notice warn">⚠ {hasStarted(wallet) ? behindSentence(msBetweenBlocks(wallet.coverage.toBlock, wallet.latest.blockNum)) : NOT_STARTED}</p>
           ) : null}
           {wallet.mode === "demo" ? <p className="notice">{DEMO_NOTICE}</p> : null}
           {hasStarted(wallet) ? <p className="notice">{coverageSentence(wallet.coverage, TOKENS.length - 1, wallet.openingUnread.length > 0)}</p> : null}
@@ -324,6 +331,7 @@ export function App() {
               </button>
             </p>
           ) : null}
+          {fold?.withheld.map(({ wallet: from, asset }) => <p className="notice warn" key={`${from}:${asset}`}>⚠ {withheldSentence(from, asset)}</p>)}
           {view && view.missingRateTxs.length > 0 ? <p className="notice warn">⚠ {missingRatesLine(view.missingRateTxs.length, currency)}</p> : null}
           {currency !== "USD" && view && !view.latestRate ? <p className="notice warn">⚠ There's no current USD to {currency} rate, so what's held has no current value.</p> : null}
           {wallet.l1FeeUnknownTxs.length > 0 ? <p className="notice warn" title={PNL_HELP}>⚠ {networkFeeUnknownSentence(wallet.l1FeeUnknownTxs.length)}</p> : null}
@@ -376,6 +384,7 @@ export function App() {
                   Export a tax report…
                 </button>
               </p>
+              {fold ? <HoldCard comparison={fold.holdComparison} currency={currency} onOpen={() => setTarget({ kind: "hold" })} /> : null}
               <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
               {listed.length > 0 ? <Holdings positions={listed} currency={currency} resolvable={resolvable} explain={setTarget} onResolve={(asset) => setResolving({ asset })} /> : null}
               {noMarketCount > 0 ? (
@@ -398,6 +407,35 @@ export function App() {
       {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
       {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} book={book} onClose={() => setTaxOpen(false)} /> : null}
     </div>
+  )
+}
+
+/** Calm on purpose: no colors for ahead or behind, and it asks nothing of anyone. Clicking it says how it's worked out. */
+function HoldCard({ comparison, currency, onOpen }: { comparison: HoldComparison; currency: CurrencyCode; onOpen: () => void }) {
+  const { walletMicros, walletLeavesOut, walletEstimated, holdMicros, differenceMicros, status, estimated } = comparison
+  const caveat = holdCaveatSentence(comparison, currency)
+  const signed = (micros: string | null, isEstimate: boolean) => (micros === null ? "⚠ Unavailable" : est(formatSignedMoney(micros, currency), isEstimate))
+  return (
+    <section className="card hold">
+      <div className="card-head">
+        <h2 className="muted small">{HOLD_TITLE} · {currency}</h2>
+        <span className="muted small">{HOLD_PAST}</span>
+      </div>
+      <button type="button" className="hold-numbers" onClick={onOpen} aria-label={`${HOLD_TITLE}. Shows how this is worked out`}>
+        <span>
+          <span className="muted small">{HOLD_WALLET}</span>
+          <strong>{signed(walletMicros, walletEstimated)}</strong>
+          {walletMicros !== null && walletLeavesOut ? <span className="partial">⚠ partial</span> : null}
+        </span>
+        <span>
+          <span className="muted small">{HOLD_ETH}</span>
+          <strong>{signed(holdMicros, estimated)}</strong>
+          {status === "partial" ? <span className="partial">⚠ partial</span> : null}
+        </span>
+        {differenceMicros !== null ? <span className="hold-difference">{holdDifferenceSentence(differenceMicros, currency, walletEstimated || estimated)}</span> : null}
+      </button>
+      {caveat ? <p className="caveat">⚠ {caveat}</p> : null}
+    </section>
   )
 }
 

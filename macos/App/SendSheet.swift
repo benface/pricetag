@@ -29,8 +29,8 @@ struct SendSheet: View {
             }
             if let problem = model.amountProblem {
                 WarningText(problem.message).font(.callout).fixedSize(horizontal: false, vertical: true)
-            } else if let usd = model.usdMicros {
-                Text("About \(HotWalletWording.usd(usd))")
+            } else if let usd = model.usdText {
+                Text("About \(usd)")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

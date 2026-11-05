@@ -89,7 +89,7 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
   const sender = current?.sender ?? null
   const takingCost = current !== null && (current.kind === "cost" || asking || current.needsCost)
   const linkedFailed = failed.filter((address) => linkedWallets(book).includes(address))
-  const balanced = isBalanced(fold.meter) && linkedFailed.length === 0
+  const balanced = isBalanced(fold.meter) && linkedFailed.length === 0 && fold.withheld.length === 0
   const progress = fold.meter.open + fold.meter.answered === 0 ? 1 : fold.meter.answered / (fold.meter.open + fold.meter.answered)
 
   useEffect(() => onCurrentSender(sender), [sender, onCurrentSender])

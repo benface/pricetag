@@ -21,12 +21,12 @@
 // elsewhere, and CRA's crypto guide doesn't count moving between your own wallets as a disposition, so that keeps what they
 // first paid, which we can't see. Those stay estimates in every country, and the report says why.
 
-import { foldPositions, formatDuration, isAddress, normalizeAddress, shortHash, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
+import { foldPositions, formatDuration, isAddress, msBetweenBlocks, normalizeAddress, shortHash, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { rateSource } from "./explain.ts"
-import { resolveLegs, type Resolved } from "./resolve.ts"
-import { METHOD_LABELS } from "./wording.ts"
+import { resolveLegs, withheldIn } from "./resolve.ts"
+import { METHOD_LABELS, withheldSentence } from "./wording.ts"
 
 export type TaxCountryCode = "CA" | "US"
 /** Whether cost is worked out across all of a person's wallets, or separately in each. */
@@ -236,17 +236,14 @@ export type TaxContext = { book?: Book; costsFrom?: readonly WalletResponse[] }
  * Each wallet with what the user has said filled in, the same way the apps do it. The wallets in a report are the user's
  * own, because that's what asking for them together says, so costs carry between them whatever else has been answered.
  */
-function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = emptyBook(), costsFrom = [] }: TaxContext): { sources: Source[]; withheld: Resolved["withheld"] } {
+function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = emptyBook(), costsFrom = [] }: TaxContext): Source[] {
   const sides = [...wallets, ...costsFrom].map((wallet) => {
     const view = viewWallet(wallet)
     return { wallet, view, ...checksOf(wallet, view, method) }
   })
-  const checks = new Map(sides.map(({ wallet, unconfirmed }) => [normalizeAddress(wallet.address), unconfirmed]))
   const linking = wallets.length > 1 ? { ...book, linked: [...(book.linked ?? []), ...wallets.map((wallet) => wallet.address.toLowerCase())] } : book
-  // A cost the chain can't back up where it came from can't be known where it went, however well that wallet adds up.
-  const { legs, withheld } = resolveLegs(sides, method, linking, (wallet, asset) => checks.get(wallet)?.has(asset) === true)
-  const sources = sides.slice(0, wallets.length).map((side) => ({ ...side, view: { ...side.view, legs: legs.get(normalizeAddress(side.wallet.address)) as PricedLeg[] } }))
-  return { sources, withheld }
+  const { legs } = resolveLegs(sides, method, linking)
+  return sides.slice(0, wallets.length).map((side) => ({ ...side, view: { ...side.view, legs: legs.get(normalizeAddress(side.wallet.address)) as PricedLeg[] } }))
 }
 
 const moveKey = (leg: PricedLeg) => `${leg.txHash}:${leg.asset}`
@@ -335,7 +332,7 @@ function rowsFrom(sources: readonly Source[], method: Method, scope: TaxScope, c
 
 /** Every row, oldest first, with a transaction's fee before what it did, the way the fold reads them. */
 export function taxRows(wallets: readonly WalletResponse[], { method, scope, country }: Pick<TaxSettings, "method" | "scope"> & { country?: TaxCountryCode }, context: TaxContext = {}): TaxRow[] {
-  return rowsFrom(sourcesOf(wallets, method, context).sources, method, scope, country ? TAX_COUNTRIES[country] : null)
+  return rowsFrom(sourcesOf(wallets, method, context), method, scope, country ? TAX_COUNTRIES[country] : null)
 }
 
 /**
@@ -367,7 +364,7 @@ function walletWarnings(source: Source, named: boolean): string[] {
 
 function coverageNote({ wallet }: Source, named: boolean): string {
   const { fromBlock, toBlock } = wallet.coverage
-  const span = toBlock >= fromBlock ? ` (about ${formatDuration(toBlock - fromBlock)})` : ""
+  const span = toBlock >= fromBlock ? ` (about ${formatDuration(msBetweenBlocks(fromBlock, toBlock))})` : ""
   return `${named ? `${shortHash(wallet.address)} covers` : "Covers"} blocks ${fromBlock.toLocaleString("en-US")} to ${toBlock.toLocaleString("en-US")}${span}. Anything earlier isn't here, and tokens off the tracked list aren't counted.`
 }
 
@@ -421,7 +418,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const country = TAX_COUNTRIES[code]
   const first = wallets[0] as WalletResponse
   const { currency } = first
-  const { sources, withheld } = sourcesOf(wallets, method, context)
+  const sources = sourcesOf(wallets, method, context)
   const named = wallets.length > 1
   const rows = rowsFrom(sources, method, scope, country)
   const count = (status: TaxRowStatus) => rows.filter((row) => row.status === status).length
@@ -436,7 +433,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   if (estimated > 0) warnings.push(`${plural(estimated, "row")} of ${rows.length.toLocaleString("en-US")} ${estimated === 1 ? "rests" : "rest"} on an estimate.`)
   if (selfReported > 0) warnings.push(`${plural(selfReported, "row")} of ${rows.length.toLocaleString("en-US")} ${selfReported === 1 ? "uses" : "use"} a cost you entered or imported, which the chain can't confirm, so keep your records for it.`)
   if (given > 0) warnings.push(`${plural(given, "row")} of ${rows.length.toLocaleString("en-US")} ${given === 1 ? "uses" : "use"} a market price from when something you said came from someone else arrived. ${country.marketWarning}`)
-  for (const { wallet, asset } of withheld) warnings.push(`${shortHash(wallet)}'s ${asset} history can't be confirmed, so what it sent has an unknown cost where it arrived.`)
+  for (const { wallet, asset } of withheldIn(sources.flatMap(({ view }) => view.legs))) warnings.push(withheldSentence(wallet, asset))
   for (const source of sources) warnings.push(...walletWarnings(source, named))
   if (method !== country.method) warnings.push(country.methodWarning)
   if (scope !== country.scope) warnings.push(country.scopeWarning)

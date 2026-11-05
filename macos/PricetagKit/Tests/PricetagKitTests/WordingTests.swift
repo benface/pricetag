@@ -29,7 +29,7 @@ struct WordingVectors: Decodable {
         let text: String
     }
     struct Behind: Decodable {
-        let blocks: Int
+        let ms: Int
         let text: String
     }
     struct PnlHelp: Decodable {
@@ -39,6 +39,7 @@ struct WordingVectors: Decodable {
     struct Sentences: Decodable {
         let methodName, methodHelp, averagePricePaid, networkFees, balanceCheck, startingBalance, pnlHelp, realizedHelp, unrealizedHelp: String
         let notStarted, unpricedFees, demo, pnlUnavailable, nothingToChart, reading, notAnAddress, rulesTitle, rulesHelp: String
+        let holdTitle, holdWallet, holdEth, holdPast: String
     }
     let manifestHash: String
     let methods: [String: String]
@@ -58,6 +59,7 @@ struct WordingVectors: Decodable {
     let feedDetail: [String]
     let pnlHelp: [PnlHelp]
     let linkedFailed: [FeesUnknown]
+    let withheld: String
     let sentences: Sentences
 }
 
@@ -87,16 +89,21 @@ struct WordingVectors: Decodable {
         for vector in vectors.networkFeeUnknown { #expect(Wording.networkFeeUnknown(vector.count) == vector.text) }
         for status in [Reconciliation.Status.reconciled, .incomplete, .unchecked] { #expect(Wording.checkLabel(status) == vectors.checkLabels[status.rawValue]) }
         for vector in vectors.feesUnknown { #expect(Wording.feesUnknown(vector.count) == vector.text) }
-        for vector in vectors.behind { #expect(Wording.behind(blocks: vector.blocks) == vector.text) }
+        for vector in vectors.behind { #expect(Wording.behind(ms: vector.ms) == vector.text) }
         #expect(Wording.stale(lastUpdate: "Nov 4 at 5:40 AM") == vectors.stale)
         for vector in vectors.unseenEth { #expect(Wording.unseenEthCause(vector.unseen) == vector.text) }
         #expect([Mode.demo, .raw, .dataset].map { Wording.feedDetail($0, block: 1000) } == vectors.feedDetail)
         for vector in vectors.pnlHelp { #expect(Wording.pnlHelp(for: vector.text) == vector.help) }
         let sentences = vectors.sentences
         for vector in vectors.linkedFailed { #expect(Wording.linkedFailed(vector.count) == vector.text) }
+        #expect(Wording.withheld(wallet: "0x1234567890abcdef1234567890abcdef12345678", asset: "ETH") == vectors.withheld)
         #expect(Wording.methodName == sentences.methodName)
         #expect(Wording.rulesTitle == sentences.rulesTitle)
         #expect(Wording.rulesHelp == sentences.rulesHelp)
+        #expect(Wording.holdTitle == sentences.holdTitle)
+        #expect(Wording.holdWallet == sentences.holdWallet)
+        #expect(Wording.holdEth == sentences.holdEth)
+        #expect(Wording.holdPast == sentences.holdPast)
         #expect(Wording.methodHelp == sentences.methodHelp)
         #expect(Wording.averagePricePaid == sentences.averagePricePaid)
         #expect(Wording.networkFees == sentences.networkFees)
@@ -150,5 +157,33 @@ struct WordingVectors: Decodable {
         #expect(Format.ruleDifference("1500000", format: "money", currency: .USD, isEstimate: true) == "≈+$1.50")
         #expect(Format.ruleDifference("0", format: "money", currency: .USD, isEstimate: true) == "Same")
         #expect(Format.ruleDifference(nil, format: "money", currency: .USD, isEstimate: true) == "—")
+    }
+}
+
+/// `test/hold.test.ts` writes these from the same comparison the server sends.
+struct HoldComparisonTests {
+    private struct Vector: Decodable {
+        let currency: CurrencyCode
+        let comparison: HoldComparison
+        let difference: String?
+        let aboutDifference: String?
+        let caveat: String?
+    }
+
+    @Test func saysTheSameAsTheWeb() throws {
+        let vectors = try resource("hold-vectors", as: [Vector].self)
+        #expect(vectors.count == 9)
+        for vector in vectors {
+            #expect(Wording.holdCaveat(vector.comparison, vector.currency) == vector.caveat)
+            #expect(vector.comparison.differenceMicros.map { Wording.holdDifference($0, vector.currency) } == vector.difference)
+            #expect(vector.comparison.differenceMicros.map { Wording.holdDifference($0, vector.currency, estimated: true) } == vector.aboutDifference)
+        }
+    }
+
+    @Test func neverShowsADifferenceUnlessItCoversTheSameMoney() throws {
+        for vector in try resource("hold-vectors", as: [Vector].self) {
+            #expect((vector.comparison.differenceMicros != nil) == (vector.comparison.status == .complete))
+            if vector.comparison.status == .unavailable { #expect(vector.comparison.holdMicros == nil) }
+        }
     }
 }

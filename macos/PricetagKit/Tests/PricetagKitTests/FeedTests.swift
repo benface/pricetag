@@ -470,3 +470,142 @@ actor RuledSource: PortfolioSource {
         #expect(await source.askedAboutProof == [nil, RuledSource.cautious.id, RuledSource.cautious.id])
     }
 }
+
+/// Answers every read the same way, counts them, and reports new blocks when a test says so.
+actor PushedSource: PortfolioSource {
+    nonisolated let events: AsyncThrowingStream<Void, any Error>?
+    nonisolated let push: AsyncThrowingStream<Void, any Error>.Continuation?
+    private let answer: Portfolio
+    private(set) var reads = 0
+
+    init(answer: Portfolio, pushes: Bool) {
+        self.answer = answer
+        if pushes {
+            let (events, push) = AsyncThrowingStream.makeStream(of: Void.self, throwing: (any Error).self)
+            self.events = events
+            self.push = push
+        } else {
+            events = nil
+            push = nil
+        }
+    }
+
+    nonisolated func headEvents() -> AsyncThrowingStream<Void, any Error>? { events }
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+        reads += 1
+        return answer
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
+}
+
+@MainActor
+@Suite struct PushedFeedTests {
+    let now = Date(timeIntervalSince1970: 1_800_000_100)
+
+    func makeStore(_ source: PushedSource, reachableDelay: Duration, pushedDelay: Duration) -> PortfolioStore {
+        let defaults = UserDefaults(suiteName: "pushed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let now = now
+        return PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now }, reachableDelay: reachableDelay, unreachableDelay: .milliseconds(5), pushedDelay: pushedDelay)
+    }
+
+    private func waitForReads(_ source: PushedSource, _ count: Int) async throws {
+        for _ in 0..<2000 {
+            if await source.reads >= count { return }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        Issue.record("Only \(await source.reads) reads, not \(count)")
+    }
+
+    @Test func readsAsSoonAsTheServerSaysThereIsABlock() async throws {
+        let source = PushedSource(answer: try realPortfolio(at: now), pushes: true)
+        let store = makeStore(source, reachableDelay: .seconds(600), pushedDelay: .seconds(600))
+        store.start()
+        defer { store.stop() }
+        try await waitForReads(source, 1)
+        source.push?.yield()
+        try await waitForReads(source, 2)
+        source.push?.yield()
+        try await waitForReads(source, 3)
+    }
+
+    @Test func doesNotPollWhileTheServerIsReportingBlocks() async throws {
+        let source = PushedSource(answer: try realPortfolio(at: now), pushes: true)
+        let store = makeStore(source, reachableDelay: .milliseconds(5), pushedDelay: .seconds(600))
+        store.start()
+        defer { store.stop() }
+        try await waitForReads(source, 1)
+        source.push?.yield()
+        try await waitForReads(source, 2)
+        // Let the read that the block woke finish, then nothing should read until there's another.
+        try await Task.sleep(for: .milliseconds(50))
+        let settled = await source.reads
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await source.reads == settled)
+    }
+
+    @Test func goesBackToPollingStraightAwayWhenTheEventsStop() async throws {
+        let source = PushedSource(answer: try realPortfolio(at: now), pushes: true)
+        let store = makeStore(source, reachableDelay: .milliseconds(5), pushedDelay: .seconds(600))
+        store.start()
+        defer { store.stop() }
+        try await waitForReads(source, 1)
+        source.push?.yield()
+        try await waitForReads(source, 2)
+        try await Task.sleep(for: .milliseconds(50))
+        let settled = await source.reads
+        source.push?.finish(throwing: FetchError.unreachable)
+        try await waitForReads(source, settled + 5)
+    }
+
+    @Test func pollsASourceThatCanNotReportBlocks() async throws {
+        let source = PushedSource(answer: try realPortfolio(at: now), pushes: false)
+        let store = makeStore(source, reachableDelay: .milliseconds(5), pushedDelay: .seconds(600))
+        store.start()
+        defer { store.stop() }
+        try await waitForReads(source, 5)
+    }
+}
+
+/// Answers `/api/events` with what a test gives it, without opening a socket.
+final class EventsProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var body = ""
+    nonisolated(unsafe) static var status = 200
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+
+    override func startLoading() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: ["content-type": "text/event-stream"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(Self.body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+@Suite(.serialized) struct HeadEventsTests {
+    private func client() -> PricetagClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [EventsProtocol.self]
+        return PricetagClient(serverURL: URL(string: "http://127.0.0.1:8787")!, configuration: configuration)
+    }
+
+    @Test func countsHeadsAndIgnoresEverythingElse() async throws {
+        EventsProtocol.status = 200
+        EventsProtocol.body = ": connected\n\nevent: head\ndata: {\"blockNum\":1}\n\nevent: down\ndata: {}\n\nevent: head\ndata: {\"blockNum\":2}\n\n"
+        var heads = 0
+        for try await _ in try #require(client().headEvents()) { heads += 1 }
+        #expect(heads == 2)
+    }
+
+    @Test func failsOnAnErrorResponse() async throws {
+        EventsProtocol.status = 500
+        EventsProtocol.body = ""
+        await #expect(throws: (any Error).self) {
+            for try await _ in try #require(client().headEvents()) {}
+        }
+    }
+}

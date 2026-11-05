@@ -95,10 +95,18 @@ enum TestScene: String, CaseIterable {
     case mainServerDown = "main-server-down"
     case mainNotUpdating = "main-not-updating"
     case mainLinkedFailed = "main-linked-failed"
+    case mainEmpty = "main-empty"
+    case mainEmptySmallest = "main-empty-smallest"
+    case mainEmptyNotice = "main-empty-notice"
+    case mainNotStarted = "main-not-started"
+    case holdComparison = "hold-comparison"
+    case mainHoldDetails = "main-hold-details"
+    case mainCostWithheld = "main-cost-withheld"
     case mainCAD = "main-cad"
     case mainTransactionsCAD = "main-transactions-cad"
     case mainDetailsCAD = "main-details-cad"
     case resolve
+    case resolveCostWithheld = "resolve-cost-withheld"
     case changeWallet = "change-wallet"
     case popover
     case popoverNoWallet = "popover-no-wallet"
@@ -107,16 +115,21 @@ enum TestScene: String, CaseIterable {
     case popoverHotWallet = "popover-hot-wallet"
     case popoverHotWalletOverCap = "popover-hot-wallet-over-cap"
     case popoverHotWalletAlarm = "popover-hot-wallet-alarm"
+    case popoverHotWalletCAD = "popover-hot-wallet-cad"
     case settings
     case settingsHotWallet = "settings-hot-wallet"
     case settingsCAD = "settings-cad"
+    case settingsHotWalletCAD = "settings-hot-wallet-cad"
     case hotWalletSetup = "hot-wallet-setup"
     case hotWalletNotProvisioned = "hot-wallet-not-provisioned"
     case hotWalletUnreadable = "hot-wallet-unreadable"
     case hotWallet = "hot-wallet"
+    case hotWalletCAD = "hot-wallet-cad"
     case hotWalletNoSavings = "hot-wallet-no-savings"
+    case hotWalletNoSavingsCAD = "hot-wallet-no-savings-cad"
     case hotWalletNoPrice = "hot-wallet-no-price"
     case hotWalletOverCap = "hot-wallet-over-cap"
+    case hotWalletOverCapCAD = "hot-wallet-over-cap-cad"
     case hotWalletOverCapNoSavings = "hot-wallet-over-cap-no-savings"
     case hotWalletKeyMissing = "hot-wallet-key-missing"
     case hotWalletAlarm = "hot-wallet-alarm"
@@ -126,7 +139,9 @@ enum TestScene: String, CaseIterable {
     case hotWalletAddSavingsFilled = "hot-wallet-add-savings-filled"
     case hotWalletTopUp = "hot-wallet-top-up"
     case hotWalletTopUpAtCap = "hot-wallet-top-up-at-cap"
+    case hotWalletTopUpCAD = "hot-wallet-top-up-cad"
     case send
+    case sendCAD = "send-cad"
     case sendKnown = "send-known"
     case sendWaiting = "send-waiting"
     case publishCost = "publish-cost"
@@ -135,13 +150,13 @@ enum TestScene: String, CaseIterable {
     enum Chrome { case titled, none }
 
     /// Rendering draws the inspector's text in the wrong color in dark mode, so these only come from a real window.
-    var needsRealWindow: Bool { self == .mainDetails || self == .mainDetailsCAD }
+    var needsRealWindow: Bool { self == .mainDetails || self == .mainDetailsCAD || self == .mainHoldDetails }
 
     var chrome: Chrome {
         switch self {
-        case .changeWallet, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm,
-             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap,
-             .send, .sendKnown, .sendWaiting, .publishCost, .publishWaiting:
+        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve, .resolveCostWithheld, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
+             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
+             .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishWaiting:
             .none
         default: .titled
         }
@@ -153,6 +168,10 @@ enum TestScene: String, CaseIterable {
         case .mainServerDown: .serverDown
         case .mainNotUpdating, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
+        case .mainCostWithheld, .resolveCostWithheld: .costWithheld
+        case .mainEmpty, .mainEmptySmallest: .empty
+        case .mainEmptyNotice: .emptyReadingLinked
+        case .mainNotStarted: .notStarted
         default: .demo
         }
     }
@@ -161,9 +180,16 @@ enum TestScene: String, CaseIterable {
         self != .mainNoWallet && self != .popoverNoWallet
     }
 
+    private var usesDemoWallet: Bool {
+        switch self {
+        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .mainNotStarted: false
+        default: true
+        }
+    }
+
     private var currency: CurrencyCode {
         switch self {
-        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD: .CAD
+        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .hotWalletCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD: .CAD
         default: .USD
         }
     }
@@ -172,11 +198,11 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .hotWallet, .popoverHotWallet, .settingsHotWallet, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .send, .sendKnown: .funded
+        case .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
         case .sendWaiting: .waitingForTouchID
-        case .hotWalletNoSavings: .noSavings
+        case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
         case .hotWalletNoPrice: .noPrice
-        case .hotWalletOverCap, .popoverHotWalletOverCap, .hotWalletTopUpAtCap: .overCap
+        case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap: .overCap
         case .hotWalletOverCapNoSavings: .overCapNoSavings
         case .hotWalletKeyMissing: .keyMissing
         case .hotWalletAlarm, .popoverHotWalletAlarm: .alarm
@@ -190,13 +216,13 @@ enum TestScene: String, CaseIterable {
         // Registered values stay in memory, so this never reads or writes anyone's settings, as long as nothing here changes one.
         let defaults = UserDefaults(suiteName: "com.benface.pricetag.mac.test-mode")!
         var registered: [String: Any] = ["currency": currency.rawValue]
-        if hasWallet { registered["wallet"] = WalletAddress.demo }
+        if hasWallet { registered["wallet"] = usesDemoWallet ? WalletAddress.demo : TestScene.emptyWallet }
         if self == .sendKnown, let book = try? JSONEncoder().encode(Book().answering(TestScene.recipient, .someoneElse, focus: nil)) { registered["answers"] = book }
         defaults.register(defaults: registered)
         let source = FixtureSource(feed: feed)
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: .milliseconds(50), unreachableDelay: .seconds(30))
         store.start()
-        let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method })
+        let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method }, mainCurrency: { store.currency })
         // Before there's a view, which is how it'd be for anyone opening a sheet: a sheet works out what it offers when it appears.
         let hotWalletHasRead = ReadOnce()
         Task {
@@ -212,38 +238,43 @@ enum TestScene: String, CaseIterable {
         let navigation = Navigation()
         navigation.showsTransactions = self == .mainTransactions || self == .mainTransactionsCAD
         if self == .mainDetails || self == .mainDetailsCAD { navigation.target = .asset("AERO", .realized) }
+        if self == .mainHoldDetails { navigation.target = .holdComparison }
 
         let isReady: () -> Bool = { [feed] in
             switch feed {
-            case .demo, .linkedFails: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .linkedFails, .costWithheld, .empty, .emptyReadingLinked, .notStarted: store.feed == .noWallet || store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
             case .stopsAnswering: store.feed == .serverUnreachable && store.portfolio != nil
             }
         }
         switch self {
-        case .resolve:
+        case .resolve, .resolveCostWithheld:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
-        case .main, .mainTransactions, .mainDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+        case .holdComparison:
+            return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
+        case .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
+        case .mainEmptySmallest:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
-        case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm:
+        case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
-        case .settings, .settingsHotWallet, .settingsCAD:
+        case .settings, .settingsHotWallet, .settingsCAD, .settingsHotWalletCAD:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 720), isReady: isReady)
-        case .hotWallet, .hotWalletNoSavings, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck:
+        case .hotWallet, .hotWalletCAD, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck:
             // Taller than it opens, because a screenshot can't scroll to the actions and the activity at the bottom.
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 1200), isReady: isReady)
         case .hotWalletAddSavings:
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet)), isReady: isReady)
         case .hotWalletAddSavingsFilled:
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet, address: HotWalletFixture.savings.lowercased)), isReady: isReady)
-        case .hotWalletTopUp, .hotWalletTopUpAtCap:
+        case .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD:
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet)), isReady: isReady)
-        case .send, .sendKnown, .sendWaiting:
+        case .send, .sendCAD, .sendKnown, .sendWaiting:
             let model = SendModel(wallet: hotWallet, store: store)
             model.token = Base.tokens.first { $0.symbol == "USDC" }!
             model.amountText = "12.50"
@@ -259,6 +290,31 @@ enum TestScene: String, CaseIterable {
     }
 
     private static let recipient = "0x0000000000000000000000000000000000c0ffee"
+    private static let emptyWallet = "0x00000000000000000000000000000000000de301"
+}
+
+/// The card in each state it can be in, from what `test/hold.test.ts` wrote.
+private struct HoldComparisonScene: View {
+    private struct Vector: Decodable {
+        let currency: CurrencyCode
+        let comparison: HoldComparison
+    }
+
+    private let vectors: [Vector] = {
+        guard let url = Bundle.main.url(forResource: "hold-vectors", withExtension: "json"), let data = try? Data(contentsOf: url), let vectors = try? JSONDecoder().decode([Vector].self, from: data) else { TestMode.fail("There's no fixture called hold-vectors.") }
+        return vectors
+    }()
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ForEach(vectors.indices, id: \.self) { index in
+                HoldComparisonCard(comparison: vectors[index].comparison, currency: vectors[index].currency, isLive: true) {}
+            }
+        }
+        .padding(16)
+        .frame(width: 800)
+        .background(.background)
+    }
 }
 
 private final class ReadOnce {
@@ -267,7 +323,7 @@ private final class ReadOnce {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails }
+    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, empty, emptyReadingLinked, notStarted }
 
     private let feed: Feed
     private let reads = Mutex(0)
@@ -285,9 +341,17 @@ final class FixtureSource: PortfolioSource {
         case .demo: break
         case .linkedFails:
             // The demo, with one of its linked wallets unreadable.
-            guard let url = Bundle.main.url(forResource: "demo-portfolio", withExtension: "json"), var object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else { throw FetchError.rejected("There's no fixture called demo-portfolio.") }
-            object["linkedFailed"] = ["0x00000000000000000000000000000000000de301"]
-            return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+            return try demo { $0["linkedFailed"] = ["0x00000000000000000000000000000000000de301"] }
+        case .costWithheld:
+            // The demo, with what one of its linked wallets sent left unknown.
+            return try demo { object in
+                object["withheld"] = [["wallet": "0x00000000000000000000000000000000000de301", "asset": "USDC"]]
+                let asked: [String: Any] = ["id": "cost:0xdemo:0xwithheld:USDC", "kind": "cost", "wallet": object["address"] ?? "", "receipts": [["wallet": object["address"] ?? "", "legId": "0xwithheld:USDC", "asset": "USDC", "units": "500000000"]], "costKey": "0xdemo:0xwithheld:USDC", "noteAbout": NSNull(), "needsCost": false, "arrivals": [["asset": "USDC", "decimals": 6, "units": "500000000"]], "transfers": 1, "firstAt": "2026-11-04T12:00:00.000Z", "lastAt": "2026-11-04T12:00:00.000Z", "evidence": ["0x0000…e301, your wallet, sent this, and its USDC history can't be confirmed"], "valueMicros": "500000000"]
+                object["questions"] = [asked] + (object["questions"] as? [[String: Any]] ?? [])
+            }
+        case .empty: return try newWallet(started: true, readingLinked: false, address: address)
+        case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: address)
+        case .notStarted: return try newWallet(started: false, readingLinked: false, address: address)
         case .neverAnswers: try await Task.sleep(for: .seconds(600))
         case .serverDown: throw FetchError.unreachable
         case .stopsAnswering: if read > 1 { throw FetchError.unreachable }
@@ -295,8 +359,32 @@ final class FixtureSource: PortfolioSource {
         return try Self.decode(fixture("demo-portfolio", currency))
     }
 
+    /// The demo, changed a little.
+    private func demo(_ change: (inout [String: Any]) -> Void) throws -> Portfolio {
+        guard let url = Bundle.main.url(forResource: "demo-portfolio", withExtension: "json"), var object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else { throw FetchError.rejected("There's no fixture called demo-portfolio.") }
+        change(&object)
+        return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    /// A real wallet with nothing in it yet, optionally waiting on another one, which is a notice above the empty state.
+    private func newWallet(started: Bool, readingLinked: Bool, address: String) throws -> Portfolio {
+        try demo {
+            $0["address"] = address
+            $0["mode"] = "dataset"
+            $0["positions"] = [Any]()
+            $0["points"] = [Any]()
+            $0["questions"] = [Any]()
+            $0["outgoingTxs"] = [Any]()
+            $0["unlisted"] = [Any]()
+            $0["progress"] = ["started": started, "behindBlocks": 0]
+            // Up to date, so the only notice is the one asked for.
+            $0["latest"] = ["blockNum": 53505400, "timestamp": Date.now.formatted(.iso8601)]
+            if readingLinked { $0["linkedReading"] = ["0x00000000000000000000000000000000000de302"] }
+        }
+    }
+
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
-        try Self.decode(fixture("demo-explanation", currency))
+        try Self.decode(target == .holdComparison ? "demo-hold-explanation" : fixture("demo-explanation", currency))
     }
 
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {

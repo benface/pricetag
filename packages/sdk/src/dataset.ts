@@ -2,11 +2,12 @@
 //
 // Every query is bounded by block, because a hosted Amp is shared.
 
-import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type Query } from "./amp.ts"
+import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type BlockMark, type Query } from "./amp.ts"
+import { blockBefore } from "./chain.ts"
 import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
 import type { LegRow, PricedRow, Reference } from "./legs.ts"
 import type { Head } from "./portfolio.ts"
-import { blocksWithin, type PriceFeed } from "./tokens.ts"
+import type { PriceFeed } from "./tokens.ts"
 import type { Source } from "./wallets.ts"
 
 export type Row = Record<string, unknown>
@@ -46,8 +47,25 @@ export async function readHead(query: Query, dataset: string, after: number | nu
   return row ? { blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) } : null
 }
 
-/** About 2 minutes. A derived table runs a block or two behind the head, and older than this isn't a current price. */
-const MAX_PRICE_AGE_BLOCKS = 60
+/** The head with its hash, which a stream resumes from. */
+export async function readHeadMark(query: Query, dataset: string, after: number | null): Promise<BlockMark | null> {
+  const where = after === null ? "" : `WHERE block_num >= ${after}`
+  const rows = await query<Row>(`SELECT block_num, hash FROM "${dataset}".blocks ${where} ORDER BY block_num DESC LIMIT 1`, 15_000)
+  const row = rows[0]
+  return row ? { blockNum: asNumber(row.block_num), hash: prefixed(hexOf(String(row.hash))) } : null
+}
+
+/**
+ * What to stream to know a block has been processed. `priced_legs` is the last table to finish one, so a wallet read can
+ * reach that block by then. No row matches: rows come from bounded queries, and a stream's progress is in its metadata.
+ */
+export const followSql = (dataset: string) => `SELECT block_num FROM "${dataset}".priced_legs WHERE block_num < 0`
+
+/** The same for reading the raw dataset, which has no tables to wait for. */
+export const followRawSql = (baseDataset: string) => `SELECT block_num FROM "${baseDataset}".blocks WHERE block_num < 0`
+
+/** A derived table runs a few seconds behind the head, and older than this isn't a current price. */
+const MAX_PRICE_AGE_MS = 120_000
 
 const LEG_COLUMNS = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
 const PRICED_COLUMNS = "block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced"
@@ -111,6 +129,28 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
       if (isNotStarted(error)) return []
       throw error
     })
+
+  /** What moved in a wallet, which no pricing rule changes. */
+  async function readLegs(address: string, from: number, to: number) {
+    const me = hexOf(address)
+    const range = `block_num BETWEEN ${from} AND ${to}`
+    const legRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
+    const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
+    const rows = legRows.map(toLegRow)
+    return {
+      // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
+      // An unlisted row stays either way, because it's evidence that something moved.
+      rows: [...rows.filter((r) => r.amount !== "" && r.amount !== "0"), ...unlistedRows.map(toLegRow)],
+      gasUnknown: rows.filter((r) => r.kind === "gas" && r.amount === "").map(({ tx_hash, block_num }) => ({ tx_hash, block_num })),
+    }
+  }
+
+  /** What this rule's `priced_legs` says about a wallet. */
+  async function readPriced(address: string, from: number, to: number) {
+    const pricedRows = await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${prices}.priced_legs WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${hexOf(address)}'`)
+    return pricedRows.map(toPricedRow)
+  }
+
   return {
     head: (after: number | null) => readHead(query, config.baseDataset, after),
 
@@ -128,20 +168,12 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
       return through
     },
 
+    readLegs,
+
+    readPriced,
+
     async readWindow(address: string, from: number, to: number) {
-      const me = hexOf(address)
-      const range = `block_num BETWEEN ${from} AND ${to}`
-      const legRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
-      const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
-      const pricedRows = await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${prices}.priced_legs WHERE ${range} AND account = X'${me}'`)
-      const rows = legRows.map(toLegRow)
-      return {
-        // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
-        // An unlisted row stays either way, because it's evidence that something moved.
-        rows: [...rows.filter((r) => r.amount !== "" && r.amount !== "0"), ...unlistedRows.map(toLegRow)],
-        gasUnknown: rows.filter((r) => r.kind === "gas" && r.amount === "").map(({ tx_hash, block_num }) => ({ tx_hash, block_num })),
-        priced: pricedRows.map(toPricedRow),
-      }
+      return { ...(await readLegs(address, from, to)), priced: await readPriced(address, from, to) }
     },
 
     async readReferences(blocks: readonly number[]): Promise<Reference[]> {
@@ -155,7 +187,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
 
     /** The newest oracle read at or just before `head`, or null if there's none recent enough to call current. */
     async readLatestReference(head: number): Promise<Reference | null> {
-      const rows = await readOrEmpty(`SELECT ${REFERENCE_COLUMNS} FROM ${prices}.reference_prices WHERE block_num BETWEEN ${head - MAX_PRICE_AGE_BLOCKS} AND ${head} ORDER BY block_num DESC LIMIT 1`)
+      const rows = await readOrEmpty(`SELECT ${REFERENCE_COLUMNS} FROM ${prices}.reference_prices WHERE block_num BETWEEN ${blockBefore(head, MAX_PRICE_AGE_MS)} AND ${head} ORDER BY block_num DESC LIMIT 1`)
       return rows[0] ? toReference(rows[0]) : null
     },
 
@@ -167,7 +199,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
     /** The update a `reference_prices` row at `block` names, or null if the feed's window doesn't reach it. */
     async readPriceUpdate(feed: PriceFeed, txHash: string, block: number): Promise<PriceUpdate | null> {
       const rows = await query<Row>(
-        `SELECT block_num, tx_hash, log_index, answer FROM ${ds}.price_updates WHERE block_num BETWEEN ${block - blocksWithin(feed.validSeconds, block)} AND ${block} AND feed = '${feed.name}' AND tx_hash = X'${hexOf(txHash)}' ORDER BY block_num DESC, log_index DESC LIMIT 1`,
+        `SELECT block_num, tx_hash, log_index, answer FROM ${ds}.price_updates WHERE block_num BETWEEN ${blockBefore(block, feed.validSeconds * 1000)} AND ${block} AND feed = '${feed.name}' AND tx_hash = X'${hexOf(txHash)}' ORDER BY block_num DESC, log_index DESC LIMIT 1`,
       )
       const row = rows[0]
       return row ? { block_num: asNumber(row.block_num), tx_hash: prefixed(String(row.tx_hash)), log_index: asNumber(row.log_index), answer: decimalString(row.answer) ?? "" } : null
@@ -225,7 +257,7 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
   return {
     mode: "dataset",
     startBlock: config.startBlock,
-    historyBlocks: null,
+    historyFrom: null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     ...datasetReader(query, config),

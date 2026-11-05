@@ -78,7 +78,7 @@ export type WalletView = {
 
 /** The wallet as its own USD facts, whatever its currency. */
 export function usdView(wallet: WalletData): WalletView {
-  return { currency: "USD", legs: wallet.legs, prices: wallet.prices, markPrice: referenceMarks(wallet.references), latestRate: null, missingRateTxs: [] }
+  return { currency: "USD", legs: wallet.legs, prices: wallet.prices, markPrice: referenceMarks(wallet.references, wallet.marketMarks), latestRate: null, missingRateTxs: [] }
 }
 
 export function viewWallet(wallet: WalletData): WalletView {
@@ -115,7 +115,7 @@ export function viewWallet(wallet: WalletData): WalletView {
     }
   }
 
-  const usdMark = referenceMarks(wallet.references)
+  const usdMark = referenceMarks(wallet.references, wallet.marketMarks)
   return {
     currency: wallet.currency,
     legs,

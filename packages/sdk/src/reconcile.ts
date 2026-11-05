@@ -16,6 +16,10 @@ export type Onchain = {
   openingUnread?: readonly string[]
   /** The last balance read for each asset missing from `balances`, so a failed read can't make a holding disappear. */
   lastBalances?: Readonly<Record<string, { blockNum: number; amount: string }>>
+  /** The last ETH balance read with everything before it known, every fee and claim, which is the last one its legs can be compared with while one of those is unread. */
+  lastCheckableEth?: { blockNum: number; amount: string } | null
+  /** The blocks of transactions whose gas couldn't be worked out, which leaves ETH's legs wrong from there on. */
+  gasUnknownBlocks?: readonly number[]
   /** Assets missing from `balances`. Without a read, we can't say they're zero. */
   unreadBalances?: readonly string[]
   /** Where ETH arrived that no row explains, as `settleUnwraps` found. */
