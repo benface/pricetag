@@ -122,8 +122,8 @@ Once one's added, send a few dollars to it, and see them arrive. That's the firs
 
 **Mac app:** with `pnpm mac`:
 
-1. **Top Up from Savings**, then **Continue in Browser**. The page should open with the amount and hot wallet filled in, and ask you to say the address is yours. Compare it with the Mac app first. If your default browser is Safari, Ledger is disabled there, so open the link in Chrome.
+1. **Top Up from Savings**. With Chrome as your default, it should say **Continue in Google Chrome**. With Safari as your default, it should say the same, say Safari can't reach a Ledger, and offer **Use Safari Instead, for a Keystone**. Each should open that browser. The page should open with the amount and hot wallet filled in, and ask you to say the address is yours. Compare it with the Mac app first. In Safari, Ledger should be disabled and Keystone should work.
 2. The extension's **Top Up…** button should get to the same sheet.
 3. On the web page, press **Add to the Mac app as savings**. The Mac app should show its check step, filled in, and shouldn't add anything until you tick the box. Any other accounts should be listed with their own boxes, unticked.
-4. In Resolve, on a savings wallet's cost, **Publish from Your Device…** should open the page with the cost filled in. Connect a device or account that doesn't hold that wallet: **Continue** should stay off, and it should offer **Show more** and **Use another device**.
+4. In Resolve, on a savings wallet's cost, **Publish from Your Device…** should say which browser it opens, with the same choices, then open the page with the cost filled in. Connect a device or account that doesn't hold that wallet: **Continue** should stay off, and it should offer **Show more** and **Use another device**.
 5. In the web app, with CAD as your main currency, type a cost in Resolve and press **Publish from your device…**. The form should ask for USD, not carry over what you typed.
