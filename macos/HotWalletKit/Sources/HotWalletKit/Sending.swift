@@ -90,7 +90,10 @@ public final class SendModel {
         didSet { if token != oldValue { tokenChanged() } }
     }
     public private(set) var unit = Unit.token
-    public var amountText = ""
+    public var amountText = "" {
+        // Any edit is ordinary input, even one that types Max's amount again.
+        didSet { if amountText != pinnedMaximum?.text { pinnedMaximum = nil } }
+    }
     public var addressText = "" {
         didSet {
             guard addressText != oldValue else { return }
@@ -102,8 +105,9 @@ public final class SendModel {
     public var acceptsLookalike = false
     /// Fixed when it's confirmed, so a price or a rate that moves while Touch ID asks can't change what it signs.
     private var confirmedAmount: UInt128?
-    /// What Max put in the field, in money, which stands for exactly the most that can be sent until it's changed.
-    private var maximumText: String?
+    /// What Max put in the field, in money, and the exact token amount it stood for then. Until the field changes, that's the amount,
+    /// rather than what the rounded money would buy, and never a different maximum that a new balance makes.
+    private var pinnedMaximum: (text: String, units: UInt128)?
     /// The answer to "Is this yours?", if they've given one.
     public var ownership: Ownership?
     public private(set) var failure: String?
@@ -135,7 +139,7 @@ public final class SendModel {
         case .token:
             return Money.units(fromText: amountText, decimals: token.decimals)
         case .money:
-            if amountText == maximumText { return maximum }
+            if let pinnedMaximum, amountText == pinnedMaximum.text { return pinnedMaximum.units }
             guard let price, let shown = Money.units(fromText: amountText, decimals: 6) else { return nil }
             let units = Money.amount(ofUsdMicros: wallet.display.usdMicros(ofShown: shown), priceMicros: price, decimals: token.decimals)
             // Digits past these are worth nothing anyone would count, and only make the amount harder to check.
@@ -162,19 +166,19 @@ public final class SendModel {
         let current = typedAmount
         let wasMaximum = current != nil && current == maximum && maximum > 0
         unit = unit == .token ? .money : .token
-        maximumText = nil
-        guard let current, !amountText.isEmpty else { return }
-        switch unit {
-        case .token:
-            amountText = Money.text(ofUnits: current, decimals: token.decimals)
-        case .money:
-            amountText = moneyText(of: current) ?? ""
-            if wasMaximum { maximumText = amountText }
+        pinnedMaximum = nil
+        guard !amountText.isEmpty else { return }
+        // Without an amount to carry over, say because the price is gone, the digits mean nothing in the other unit.
+        guard let current, let text = unit == .token ? Money.text(ofUnits: current, decimals: token.decimals) : moneyText(of: current) else {
+            amountText = ""
+            return
         }
+        amountText = text
+        if wasMaximum, unit == .money { pinnedMaximum = (text, current) }
     }
 
     private func tokenChanged() {
-        maximumText = nil
+        pinnedMaximum = nil
         if unit == .money, !canTypeMoney {
             unit = .token
             amountText = ""
@@ -279,12 +283,13 @@ public final class SendModel {
     public var maximum: UInt128 { wallet.maximumSend(of: token) }
 
     public func useMaximum() {
+        let most = maximum
         switch unit {
         case .token:
-            amountText = Money.text(ofUnits: maximum, decimals: token.decimals)
+            amountText = Money.text(ofUnits: most, decimals: token.decimals)
         case .money:
-            amountText = moneyText(of: maximum) ?? ""
-            maximumText = amountText
+            amountText = moneyText(of: most) ?? ""
+            pinnedMaximum = (amountText, most)
         }
     }
 

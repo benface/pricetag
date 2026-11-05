@@ -940,6 +940,47 @@ private final class Display {
         #expect(model.amount == usdcUnits(7), "editing again uses the rate as it is now")
     }
 
+    /// Max stands for what it showed. A deposit afterwards doesn't make it more, and an edit makes it ordinary money again.
+    @Test func maxStaysWhatItShowed() async {
+        let rig = await Rig(snapshot(tokens: [usdc: usdcUnits(20)]), withCold: false)
+        await rig.wallet.tick()
+        let store = makeStore()
+        defer { store.stop() }
+        let model = SendModel(wallet: rig.wallet, store: store)
+        model.token = usdc
+        model.addressText = coldAddress.lowercased
+        model.switchUnit()
+        model.useMaximum()
+        #expect(model.amountText == "20.00")
+        await rig.chain.set(snapshot(tokens: [usdc: usdcUnits(40)]))
+        await rig.wallet.tick()
+        #expect(model.amount == usdcUnits(20), "what $20.00 showed, not the new balance")
+        model.amountText = "1"
+        model.amountText = "20.00"
+        #expect(model.amount == usdcUnits(20), "typed again, it's $20 of USDC")
+    }
+
+    @Test func aMoneyAmountWithNoPriceLeftIsntReadAsTokens() async {
+        let aero = token("AERO")
+        let rig = await Rig(snapshot(tokens: [aero: oneEth * 20], prices: ["AERO": 2 * Money.dollar]), withCold: false)
+        await rig.wallet.tick()
+        let store = makeStore()
+        defer { store.stop() }
+        let model = SendModel(wallet: rig.wallet, store: store)
+        model.token = aero
+        model.addressText = coldAddress.lowercased
+        model.switchUnit()
+        model.amountText = "10"
+        #expect(model.amount == oneEth * 5)
+        await rig.chain.set(snapshot(tokens: [aero: oneEth * 20], prices: [:]))
+        await rig.wallet.tick()
+        #expect(model.amount == nil)
+        model.switchUnit()
+        #expect(model.unit == .token)
+        #expect(model.amountText.isEmpty, "$10 isn't 10 AERO")
+        #expect(!model.canSend)
+    }
+
     @Test func aTokenWithNoPriceIsTypedInItself() async {
         let rig = await Rig(snapshot(eth: oneEth / 200, tokens: [usdc: usdcUnits(20), dai: oneEth]))
         await rig.wallet.tick()
