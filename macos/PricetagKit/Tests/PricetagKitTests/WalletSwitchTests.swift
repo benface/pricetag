@@ -127,7 +127,7 @@ actor HeldSource: PortfolioSource {
         #expect(store.feed == .reading)
         #expect(!store.feed.isLive)
         #expect(store.updatingNote?.hasPrefix("Updating.") == true)
-        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Updating…")
+        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: $0).text == "Updating…" })
         let newer = try numbers(walletA, block: 53_505_500)
         await answer(store, source, walletA, with: newer)
         #expect(store.feed == .live)

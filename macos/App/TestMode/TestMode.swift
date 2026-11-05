@@ -112,19 +112,20 @@ enum TestMode {
     }
 }
 
-/// Every kind of thing the menu bar item says, on a light, a dark and a tinted bar. These are stand-ins for the real menu bar, which only macOS can draw:
-/// the system picks the item's color, so this shows the words and their lengths, not the real thing.
+/// Every kind of thing the menu bar item says, for each choice of what it shows, on a light, a dark and a tinted bar. These are stand-ins for the real menu bar,
+/// which only macOS can draw: the system picks the item's color, so this shows the words and their lengths, not the real thing.
 private struct MenuBarLabelScene: View {
     let portfolio: () -> Portfolio?
 
-    private var summaries: [FeedSummary] {
+    private func summaries(_ shows: MenuBarShows) -> [FeedSummary] {
         let states: [FeedState] = [.noWallet, .reading, .live, .behind(seconds: 600), .serverUnreachable]
-        return states.map { FeedSummary(feed: $0, portfolio: portfolio()) }
+        return states.map { FeedSummary(feed: $0, portfolio: portfolio(), shows: shows) }
     }
 
-    private func bar(_ background: Color, _ foreground: Color) -> some View {
-        HStack(spacing: 16) {
-            ForEach(summaries, id: \.text) { MenuBarLabelContent(summary: $0, isAlarm: false) }
+    private func bar(_ shows: MenuBarShows, _ background: Color, _ foreground: Color) -> some View {
+        let summaries = summaries(shows)
+        return HStack(spacing: 16) {
+            ForEach(Array(summaries.enumerated()), id: \.offset) { MenuBarLabelContent(summary: $0.element, isAlarm: false) }
             MenuBarLabelContent(summary: summaries[0], isAlarm: true)
         }
         .font(.system(size: 13))
@@ -135,10 +136,17 @@ private struct MenuBarLabelScene: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            bar(Color(white: 0.92), .black)
-            bar(Color(white: 0.14), .white)
-            bar(Color(red: 0.1, green: 0.32, blue: 0.62), .white)
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+            ForEach(MenuBarShows.allCases) { shows in
+                GridRow {
+                    Text(shows.label).font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        bar(shows, Color(white: 0.92), .black)
+                        bar(shows, Color(white: 0.14), .white)
+                        bar(shows, Color(red: 0.1, green: 0.32, blue: 0.62), .white)
+                    }
+                }
+            }
         }
         .padding(8)
     }
@@ -354,6 +362,7 @@ enum TestScene: String, CaseIterable {
     case settingsServer = "settings-server"
     case settingsServerProblem = "settings-server-problem"
     case settingsCAD = "settings-cad"
+    case settingsNotificationsOff = "settings-notifications-off"
     case hotWalletSetup = "hot-wallet-setup"
     case hotWalletNotProvisioned = "hot-wallet-not-provisioned"
     case hotWalletUnreadable = "hot-wallet-unreadable"
@@ -408,6 +417,11 @@ enum TestScene: String, CaseIterable {
     case hotWalletPurchases = "hot-wallet-purchases"
     case hotWalletPurchasesCAD = "hot-wallet-purchases-cad"
     case hotWalletPurchasesCantCheck = "hot-wallet-purchases-cant-check"
+    /// What clicking a notification opens: its row, lit up.
+    case hotWalletPurchaseShown = "hot-wallet-purchase-shown"
+    case hotWalletRecordShown = "hot-wallet-record-shown"
+    /// A notification from before the key was replaced, whose row went with the old key.
+    case hotWalletReplacedKeyShown = "hot-wallet-replaced-key-shown"
     case receive
     case receiveNoSavings = "receive-no-savings"
     case receiveCAD = "receive-cad"
@@ -591,8 +605,8 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned, .popoverNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .routeRemoveFromSavingsOpen, .mainSpendingMoneyServerDown, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .routeBuy, .routeBuyOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .hotWalletNetworkProblem, .hotWalletNoRate, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped: .funded
-        case .siteConnect, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .hotWalletPurchasesCAD, .buyAboveRoom, .buyLarge, .buyTooLittle, .buyNegative, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletPurchases, .hotWalletPurchasesCantCheck: .funded
+        case .routeRemoveFromSavingsOpen, .mainSpendingMoneyServerDown, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .routeBuy, .routeBuyOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletRecordShown, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .hotWalletNetworkProblem, .hotWalletNoRate, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped: .funded
+        case .siteConnect, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .hotWalletPurchasesCAD, .buyAboveRoom, .buyLarge, .buyTooLittle, .buyNegative, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletPurchases, .hotWalletPurchaseShown, .hotWalletPurchasesCantCheck: .funded
         case .buyUSDCNoGas: .noGas
         case .buyNoSavings, .receiveNoSavings, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest: .noSavings
         case .receive, .receiveCAD, .mainEmptySavings, .routeReceive, .routeReceiveOpen: .funded
@@ -606,6 +620,7 @@ enum TestScene: String, CaseIterable {
         case .hotWalletKeyMissing, .popoverHotWalletKeyMissing: .keyMissing
         case .hotWalletAlarm, .popoverHotWalletAlarm: .alarm
         case .hotWalletReplacingKey: .replacingKey
+        case .hotWalletReplacedKeyShown: .replaced
         case .hotWalletReplacingKeyStuck, .walletSwitcherNewKey: .replacingKeyStuck
         case .mainNoWalletAfterDeleting: .deleted
         case .hotWalletReplacingKeyMissing: .replacingKeyMissing
@@ -732,7 +747,7 @@ enum TestScene: String, CaseIterable {
         if self == .taxReportOtherWallets || self == .taxReportLeftOver { registered["taxOtherWallets"] = "\(TestScene.recentWallet)\n0x0000000000000000000000000000000000c0ffee\n0xnope" }
         if self == .sendKnown, let book = try? JSONEncoder().encode(Book().answering(TestScene.recipient, .someoneElse, focus: nil)) { registered["answers"] = book }
         if self == .resolveAnsweredWallet, let book = try? JSONEncoder().encode(Book().answering(TestScene.answeredWallet, .mine, focus: nil)) { registered["answers"] = book }
-        if self == .hotWalletPurchases || self == .hotWalletPurchasesCAD || self == .hotWalletPurchasesCantCheck, let saved = try? JSONEncoder().encode(self != .hotWalletPurchasesCantCheck ? TestScene.purchases(inCAD: self == .hotWalletPurchasesCAD) : Array(TestScene.purchases().suffix(3))) { registered["purchases"] = saved }
+        if self == .hotWalletPurchases || self == .hotWalletPurchaseShown || self == .hotWalletReplacedKeyShown || self == .hotWalletPurchasesCAD || self == .hotWalletPurchasesCantCheck, let saved = try? JSONEncoder().encode(self != .hotWalletPurchasesCantCheck ? TestScene.purchases(inCAD: self == .hotWalletPurchasesCAD) : Array(TestScene.purchases().suffix(3))) { registered["purchases"] = saved }
         defaults.register(defaults: registered)
         let cue = MotionCue()
         let source: any PortfolioSource = TestMode.live.map { PricetagClient(serverURL: $0.server) } ?? FixtureSource(feed: feed, hasRate: !hasNoRate, rules: self == .settingsRules || self == .settingsSmallDisplay ? TestScene.twoRules : [])
@@ -930,13 +945,14 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
         case .menuBarLabel:
             return TestScreen(view: AnyView(MenuBarLabelScene(portfolio: { store.portfolio })), isReady: isReady)
-        case .settings, .settingsRules, .settingsSmallDisplay, .settingsServer, .settingsServerProblem, .settingsCAD:
+        case .settings, .settingsRules, .settingsSmallDisplay, .settingsServer, .settingsServerProblem, .settingsCAD, .settingsNotificationsOff:
             let pane: SettingsView.Pane = switch self {
             case .settingsServer, .settingsServerProblem: .server
             default: .general
             }
             let view = SettingsView(
                 store: store,
+                notifications: MoneyNotifications(center: nil, defaults: defaults, authorization: self == .settingsNotificationsOff ? .denied : .authorized),
                 tab: .constant(pane),
                 server: self == .settingsServerProblem ? "localhost 8787" : "",
                 serverError: self == .settingsServerProblem ? "That isn't a server address. It should look like \(PortfolioStore.defaultServerURL.absoluteString)." : nil,
@@ -945,7 +961,9 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(view), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation, purchases: purchases)), size: CGSize(width: 560, height: 720), isReady: isReady)
-        case .hotWallet, .hotWalletCAD, .hotWalletNoRate, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck, .hotWalletReplacingKeyMissing, .hotWalletSites:
+        case .hotWallet, .hotWalletRecordShown, .hotWalletCAD, .hotWalletNoRate, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck, .hotWalletReplacingKeyMissing, .hotWalletSites:
+            // The manual sweep, which is a row in the middle of the activity.
+            if self == .hotWalletRecordShown { navigation.show(row: MoneyNotice.recordRow("0xde4" + String(repeating: "0", count: 59) + "20")) }
             // Taller than it opens, because a screenshot can't scroll to the activity and the settings at the bottom.
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation, purchases: purchases)), size: CGSize(width: 560, height: 1800), isReady: isReady)
         case .hotWalletNetworkProblem:
@@ -971,7 +989,10 @@ enum TestScene: String, CaseIterable {
             default: nil
             }
             return TestScreen(view: AnyView(BuySheet(wallet: hotWallet, purchases: purchases, typed: typed, asset: self == .buyUSDCNoGas ? .usdc : .eth, failure: failure) {} addSavings: {}), isReady: isReady)
-        case .hotWalletPurchases, .hotWalletPurchasesCAD, .hotWalletPurchasesCantCheck:
+        case .hotWalletPurchases, .hotWalletPurchaseShown, .hotWalletReplacedKeyShown, .hotWalletPurchasesCAD, .hotWalletPurchasesCantCheck:
+            if self == .hotWalletPurchaseShown { navigation.show(row: MoneyNotice.purchaseRow("recorded")) }
+            // The old key's manual sweep, which isn't shown anymore.
+            if self == .hotWalletReplacedKeyShown { navigation.show(row: MoneyNotice.recordRow("0xde4" + String(repeating: "0", count: 59) + "20")) }
             // It keeps few enough that checking has nothing to trim, because that would save over what's registered here.
             if purchases.purchases.isEmpty { TestMode.fail("This scene's purchases weren't read. Something saved over them.") }
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation, purchases: purchases).task { if self == .hotWalletPurchasesCantCheck { await purchases.check() } }), size: CGSize(width: 780, height: 900), isReady: isReady)

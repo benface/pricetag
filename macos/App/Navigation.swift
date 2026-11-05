@@ -76,6 +76,8 @@ final class Navigation {
     /// Which holding Fill In was clicked on, so its questions come first.
     var resolvingAsset: String?
     var isExporting = false
+    /// A notification was clicked. Spending Money scrolls to its row and lights it up, and the window opens if it's closed.
+    var shownRow: String?
 
     func switchWallet() {
         isSwitchingWallet = true
@@ -124,6 +126,18 @@ final class Navigation {
     func deleteSpendingMoney() {
         showSpendingMoney()
         wantsDelete = true
+    }
+
+    /// Goes to spending money and shows one of its rows, which it scrolls to once the page is on screen.
+    func show(row: String) {
+        showSpendingMoney()
+        shownRow = row
+    }
+
+    /// Spending Money's page is the one chosen, whether or not the window's open.
+    var isShowingSpendingMoney: Bool {
+        guard section == .overview, let address = hotWallet.address else { return false }
+        return store.address == address.lowercased
     }
 
     func resolve(_ asset: String? = nil) {

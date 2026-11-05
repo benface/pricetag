@@ -206,7 +206,13 @@ public final class PurchaseTracker {
     public static func message(for error: any Error) -> String { failureMessage(for: error) }
 
     public func purchases(of wallet: String) -> [TrackedPurchase] {
-        purchases.filter { $0.wallet == wallet.lowercased() }.reversed()
+        purchases(of: [wallet])
+    }
+
+    /// Newest first, across all of them.
+    public func purchases(of wallets: Set<String>) -> [TrackedPurchase] {
+        let wallets = Set(wallets.map { $0.lowercased() })
+        return purchases.filter { wallets.contains($0.wallet) }.reversed()
     }
 
     public func phase(of purchase: TrackedPurchase) -> PurchasePhase {

@@ -6,6 +6,7 @@ struct SettingsView: View {
     enum Pane: Hashable { case general, server }
 
     let store: PortfolioStore
+    let notifications: MoneyNotifications
     @Binding var tab: Pane
     @State var server = ""
     @State var serverError: String?
@@ -40,6 +41,9 @@ struct SettingsView: View {
             if serverError == nil { server = store.serverURL.absoluteString }
         }
         .task { await store.refreshRules() }
+        // The person may have just changed it in System Settings.
+        .task { await notifications.refreshAuthorization() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await notifications.refreshAuthorization() } }
         .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
         // It read one wallet's numbers once, and replacing a key can change the wallet behind it.
         .onChange(of: store.address) { isComparing = false }
@@ -81,6 +85,10 @@ struct SettingsView: View {
                     ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
                 }
                 .help(Wording.methodHelp)
+                Picker("Menu bar shows", selection: Binding(get: { store.menuBarShows }, set: { store.setMenuBarShows($0) })) {
+                    ForEach(MenuBarShows.allCases) { Text($0.label).tag($0) }
+                }
+                .help("Also in the menu bar item's right-click menu. Problems with the data show whichever you choose.")
             }
             if store.rules.count > 1 {
                 Section {
@@ -89,6 +97,23 @@ struct SettingsView: View {
                     Button("Compare Side by Side…") { isComparing = true }
                         .disabled(store.address == nil || store.address == WalletAddress.demo)
                 }
+            }
+            Section {
+                Toggle("Notify me when money moves", isOn: Binding(get: { notifications.isOn }, set: { notifications.setOn($0) }))
+                if notifications.isOn, notifications.authorization == .denied {
+                    LabeledContent {
+                        Button("Open System Settings…") { notifications.openSystemSettings() }
+                            .controlSize(.small)
+                    } label: {
+                        WarningText("They're turned off for \(AppName.current) in System Settings.")
+                    }
+                }
+            } header: {
+                Text("Notifications")
+            } footer: {
+                Text("Sweeps, purchases, and sends that didn't go through. Never prices.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section {
                 LabeledContent("Who sent what") {

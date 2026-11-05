@@ -20,6 +20,7 @@ struct MacApp: App {
     @State private var navigation: Navigation
     @State private var siteBridge: SiteBridge
     @State private var purchases: PurchaseTracker
+    @State private var notifications: MoneyNotifications
     @State private var bridgeServer: BridgeServer?
 
     init() {
@@ -55,6 +56,11 @@ struct MacApp: App {
         let purchases = PurchaseTracker(store: store)
         purchases.start()
         _purchases = State(initialValue: purchases)
+        let notifications = MoneyNotifications(center: Self.postsNotifications ? .current() : nil)
+        notifications.isLookingAtSpendingMoney = { NSApp.isActive && navigation.isShowingSpendingMoney && MainWindowState.isOnScreen }
+        notifications.onOpen = { navigation.show(row: $0) }
+        notifications.start(hotWallet: hotWallet, purchases: purchases)
+        _notifications = State(initialValue: notifications)
         _store = State(initialValue: store)
         _hotWallet = State(initialValue: hotWallet)
         _navigation = State(initialValue: navigation)
@@ -74,6 +80,15 @@ struct MacApp: App {
         }
     }
 
+    /// A scripted run never shows anything outside its own windows, or asks the system for anything.
+    private static var postsNotifications: Bool {
+        #if DEBUG
+        !HotWalletDebug.isQuiet
+        #else
+        true
+        #endif
+    }
+
     private var opensAtLaunch: Bool {
         #if DEBUG
         !HotWalletDebug.isQuiet
@@ -86,7 +101,7 @@ struct MacApp: App {
         MenuBarExtra {
             PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)
         } label: {
-            MenuBarLabel(summary: FeedSummary(feed: store.feed, portfolio: store.portfolio), alarm: hotWallet.alarm, siteBridge: siteBridge, navigation: navigation)
+            MenuBarLabel(store: store, alarm: hotWallet.alarm, siteBridge: siteBridge, navigation: navigation)
         }
         .menuBarExtraStyle(.window)
 
@@ -141,7 +156,7 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
 
         Settings {
-            SettingsView(store: store, tab: Bindable(navigation).settingsPane)
+            SettingsView(store: store, notifications: notifications, tab: Bindable(navigation).settingsPane)
                 .holdsDockPresence()
         }
     }
@@ -150,6 +165,13 @@ struct MacApp: App {
 enum WindowID {
     static let main = "main"
     static let siteApproval = "site-approval"
+}
+
+enum MainWindowState {
+    /// Open, and not in the Dock. SwiftUI names the window after its id.
+    static var isOnScreen: Bool {
+        NSApp.windows.contains { $0.identifier?.rawValue.hasPrefix(WindowID.main) == true && $0.isVisible && !$0.isMiniaturized }
+    }
 }
 
 /// The window may be closed, so this opens it too.
@@ -212,7 +234,7 @@ private struct OpenSectionCommand: View {
 }
 
 struct MenuBarLabel: View {
-    let summary: FeedSummary
+    let store: PortfolioStore
     let alarm: StolenKeyAlarm?
     let siteBridge: SiteBridge
     let navigation: Navigation
@@ -221,9 +243,11 @@ struct MenuBarLabel: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        MenuBarLabelContent(summary: summary, isAlarm: alarm != nil)
+        MenuBarLabelContent(summary: FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: store.menuBarShows), isAlarm: alarm != nil)
             .onAppear {
                 StatusItemMenu.shared.start(
+                    shows: { store.menuBarShows },
+                    setShows: { store.setMenuBarShows($0) },
                     openApp: {
                         openWindow(id: WindowID.main)
                         DockPresence.bringForward()
@@ -287,6 +311,12 @@ struct MenuBarLabel: View {
             .onChange(of: navigation.addingSavings) { _, link in
                 guard link != nil else { return }
                 navigation.showSpendingMoney()
+                openWindow(id: WindowID.main)
+                DockPresence.bringForward()
+            }
+            // A notification was clicked, so the person wants to see it, wherever the window is.
+            .onChange(of: navigation.shownRow) { _, row in
+                guard row != nil else { return }
                 openWindow(id: WindowID.main)
                 DockPresence.bringForward()
             }
