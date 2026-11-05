@@ -465,6 +465,56 @@ const UNSEEN_ETH_CASES = [
   [{ blockNum: 1, amount: "5", txHashes: [`0xaaaa${"0".repeat(60)}`, `0xbbbb${"0".repeat(60)}`] }, ...[2, 3, 4, 5, 6].map((blockNum) => ({ blockNum, amount: "1000000000000000000", txHashes: [`0x${String(blockNum).repeat(64)}`] }))],
 ]
 
+describe("what a transaction did", () => {
+  const usd = (delta: bigint, asset: string, decimals: number, kind: PricedLeg["kind"], extra: Partial<PricedLeg> = {}) => ({ asset, decimals, kind, delta: delta.toString(), priceMicros: null, ...extra }) as PricedLeg
+  const ETH = 10n ** 18n
+  const USDC = 10n ** 6n
+  const say = (...legs: PricedLeg[]) => wording.describeTransaction(legs, "USD")
+
+  it("says what was sold and for what", () => {
+    assert.equal(say(usd(-(ETH / 2500n), "ETH", 18, "swap"), usd(USDC, "USDC", 6, "swap")), "Sold 0.0004 ETH for 1 USDC")
+  })
+
+  it("says dollars spent bought something", () => {
+    assert.equal(say(usd(-USDC, "USDC", 6, "swap"), usd(ETH / 2500n, "ETH", 18, "swap")), "Bought 0.0004 ETH for 1 USDC")
+  })
+
+  it("names one side when the other's off the allowlist", () => {
+    assert.equal(say(usd(-USDC, "USDC", 6, "swap")), "Sold 1 USDC")
+    assert.equal(say(usd(USDC, "USDC", 6, "swap")), "Bought 1 USDC")
+  })
+
+  it("doesn't state a claimed amount as fact", () => {
+    assert.equal(say(usd(-USDC, "AERO", 6, "swap"), usd(ETH, "ETH", 18, "swap", { unsettledCredit: true })), "Sold 1 AERO for ETH")
+  })
+
+  it("says what was sent or received, and leaves the fee out when something moved", () => {
+    assert.equal(say(usd(-USDC, "USDC", 6, "transfer"), usd(-ETH / 1000n, "ETH", 18, "gas", { priceMicros: "3000000000" })), "Sent 1 USDC")
+    assert.equal(say(usd(ETH, "ETH", 18, "transfer")), "Received 1 ETH")
+  })
+
+  it("keeps a long list short", () => {
+    const asset = (name: string) => usd(-USDC, name, 6, "transfer")
+    assert.equal(say(asset("USDC"), asset("DAI"), asset("AERO"), asset("DEGEN")), "Sent 1 USDC, 1 DAI and 2 more")
+  })
+
+  it("joins what moved in different ways", () => {
+    assert.equal(say(usd(-ETH, "ETH", 18, "swap"), usd(USDC, "USDC", 6, "swap"), usd(-USDC, "DAI", 6, "transfer")), "Sold 1 ETH for 1 USDC, sent 1 DAI")
+  })
+
+  it("says when only a fee was paid, with its value when it has one", () => {
+    assert.equal(say(usd(-ETH / 1000n, "ETH", 18, "gas", { priceMicros: "3000000000" })), "Network fee of $3.00")
+    assert.equal(say(usd(-ETH / 1000n, "ETH", 18, "gas")), "Network fee")
+  })
+
+  it("is on each point with a transaction, in the wallet's currency, and not on the last", () => {
+    const { points } = portfolioOf(DEMO_WALLET, "average")
+    assert.ok(points.filter((p) => p.txHash).every((p) => p.summary))
+    assert.equal(points.at(-1)?.txHash, null)
+    assert.equal(points.at(-1)?.summary, null)
+  })
+})
+
 describe("wording", () => {
   const costLabels = ["paid", "inherited", "received at market", "self-reported", "unknown"] as const
   const kinds = ["swap", "transfer", "gas"] as const

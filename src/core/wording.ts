@@ -2,7 +2,7 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
+import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
@@ -50,6 +50,43 @@ export function actionLabel(kind: FoldLeg["kind"], incoming: boolean): string {
   if (kind === "gas") return "Network fee"
   if (kind === "swap") return incoming ? "Bought" : "Sold"
   return incoming ? "Received" : "Sent"
+}
+
+const DOLLARS: readonly string[] = ["USDC", "USDT", "DAI"]
+
+/** A few assets by name, and how many more when there are too many for a row. */
+function movedAmounts(legs: readonly PricedLeg[]): string {
+  // How much of a claim reached the wallet isn't known, so it only says what.
+  const names = legs.map((leg) => (leg.unsettledCredit && BigInt(leg.delta) > 0n ? leg.asset : `${formatAmount(leg.delta.replace("-", ""), leg.decimals)} ${leg.asset}`))
+  return names.length <= 2 ? names.join(" and ") : `${names[0]}, ${names[1]} and ${names.length - 2} more`
+}
+
+/**
+ * What a transaction did to this wallet, in a few words, from its legs. Amounts rather than money, because what moved
+ * is known even when what it was worth isn't. null when nothing moved at all.
+ */
+export function describeTransaction(legs: readonly PricedLeg[], currency: CurrencyCode): string | null {
+  const moved = legs.filter((leg) => leg.kind !== "gas" && BigInt(leg.delta) !== 0n)
+  const of = (kind: FoldLeg["kind"], incoming: boolean) => moved.filter((leg) => leg.kind === kind && BigInt(leg.delta) > 0n === incoming)
+  const sold = of("swap", false)
+  const bought = of("swap", true)
+  const clauses: string[] = []
+  if (sold.length > 0 && bought.length > 0) {
+    // Spending dollars reads as buying what they bought, not as selling the dollars.
+    if (sold.every((leg) => DOLLARS.includes(leg.asset))) clauses.push(`Bought ${movedAmounts(bought)} for ${movedAmounts(sold)}`)
+    else clauses.push(`Sold ${movedAmounts(sold)} for ${movedAmounts(bought)}`)
+  } else if (sold.length > 0) clauses.push(`Sold ${movedAmounts(sold)}`)
+  else if (bought.length > 0) clauses.push(`Bought ${movedAmounts(bought)}`)
+  const sent = of("transfer", false)
+  const received = of("transfer", true)
+  if (sent.length > 0) clauses.push(`Sent ${movedAmounts(sent)}`)
+  if (received.length > 0) clauses.push(`Received ${movedAmounts(received)}`)
+  if (clauses.length > 0) return clauses.map((clause, i) => (i === 0 ? clause : clause[0]!.toLowerCase() + clause.slice(1))).join(", ")
+  const fees = legs.filter((leg) => leg.kind === "gas")
+  if (fees.length === 0) return null
+  // With no price at that block, it still says what this was.
+  if (fees.some((leg) => leg.priceMicros === null)) return "Network fee"
+  return `Network fee of ${formatMoney(fees.reduce((sum, leg) => sum + worth(BigInt(leg.delta.replace("-", "")), BigInt(leg.priceMicros as string), leg.decimals), 0n), currency)}`
 }
 
 export function priceSourceLabel(source: PriceSource): string {

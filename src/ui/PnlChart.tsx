@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { chartMoneyTicks, formatChartSpan, formatSignedMoney, formatTime, type CurrencyCode, type PnlPoint } from "@pricetag/sdk/core"
+import { chartMoneyTicks, formatChartSpan, formatSignedMoney, formatTime, type CurrencyCode } from "@pricetag/sdk/core"
+import type { BookPoint } from "../core/api.ts"
 import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../core/chart-times.ts"
 import { NOTHING_TO_CHART, PNL_HELP } from "../core/wording.ts"
 
@@ -7,10 +8,10 @@ const HEIGHT = 220
 const MARGIN = { top: 16, right: 84, bottom: 26, left: 64 }
 const TIME_ROW = 14
 
-type Props = { points: PnlPoint[]; currency: CurrencyCode; onSelect: (point: PnlPoint) => void }
+type Props = { points: BookPoint[]; currency: CurrencyCode; onSelect: (point: BookPoint) => void }
 
 export function PnlChart({ points, currency, onSelect }: Props) {
-  const showPnl = (point: PnlPoint) => (point.pnlMicros === null ? "⚠ Unavailable" : formatSignedMoney(point.pnlMicros, currency))
+  const showPnl = (point: BookPoint) => (point.pnlMicros === null ? "⚠ Unavailable" : formatSignedMoney(point.pnlMicros, currency))
   const box = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(720)
   const [active, setActive] = useState<number | null>(null)
@@ -111,6 +112,7 @@ export function PnlChart({ points, currency, onSelect }: Props) {
           <thead>
             <tr>
               <th>Time</th>
+              <th>What happened</th>
               <th className="num" title={PNL_HELP}>
                 PnL
               </th>
@@ -129,6 +131,7 @@ export function PnlChart({ points, currency, onSelect }: Props) {
                     `${formatTime(p.timestamp)} (now)`
                   )}
                 </td>
+                <td>{p.summary ?? "—"}</td>
                 <td className="num" title={PNL_HELP}>
                   {showPnl(p)}
                 </td>

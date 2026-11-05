@@ -425,91 +425,104 @@
       "timestamp": "2026-11-04T08:00:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000001",
       "pnlMicros": null,
-      "excludedCount": 3
+      "excludedCount": 3,
+      "summary": "Received 5,000 USDC"
     },
     {
       "blockNum": 53500150,
       "timestamp": "2026-11-04T08:05:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000002",
       "pnlMicros": null,
-      "excludedCount": 4
+      "excludedCount": 4,
+      "summary": "Received 0.02 ETH"
     },
     {
       "blockNum": 53500300,
       "timestamp": "2026-11-04T08:10:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000003",
       "pnlMicros": "-96000",
-      "excludedCount": 6
+      "excludedCount": 6,
+      "summary": "Bought 1 ETH for 2,400 USDC"
     },
     {
       "blockNum": 53500900,
       "timestamp": "2026-11-04T08:30:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
       "pnlMicros": "6560",
-      "excludedCount": 6
+      "excludedCount": 6,
+      "summary": "Bought 800 AERO for 1,000 USDC"
     },
     {
       "blockNum": 53501200,
       "timestamp": "2026-11-04T08:40:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000005",
       "pnlMicros": "48006560",
-      "excludedCount": 6
+      "excludedCount": 6,
+      "summary": "Received 200 USDT"
     },
     {
       "blockNum": 53501500,
       "timestamp": "2026-11-04T08:50:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
       "pnlMicros": "87907960",
-      "excludedCount": 6
+      "excludedCount": 6,
+      "summary": "Network fee of $0.10"
     },
     {
       "blockNum": 53502400,
       "timestamp": "2026-11-04T09:20:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000007",
       "pnlMicros": "199717560",
-      "excludedCount": 6
+      "excludedCount": 6,
+      "summary": "Sold 300 AERO for 450 USDC"
     },
     {
       "blockNum": 53503000,
       "timestamp": "2026-11-04T09:40:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000008",
       "pnlMicros": "184717560",
-      "excludedCount": 6
+      "excludedCount": 6,
+      "summary": "Received 0.02 cbBTC"
     },
     {
       "blockNum": 53503600,
       "timestamp": "2026-11-04T10:00:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
       "pnlMicros": "174614240",
-      "excludedCount": 6
+      "excludedCount": 6,
+      "summary": "Bought 50,000 DEGEN for 0.000001 USDC"
     },
     {
       "blockNum": 53504200,
       "timestamp": "2026-11-04T10:20:00.000Z",
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
       "pnlMicros": "164510640",
-      "excludedCount": 7
+      "excludedCount": 7,
+      "summary": "Bought 50 VIRTUAL for 100 USDC"
     },
     {
       "blockNum": 53504800,
       "timestamp": "2026-11-04T10:40:00.000Z",
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000b",
       "pnlMicros": "154406640",
-      "excludedCount": 7
+      "excludedCount": 7,
+      "summary": "Sold 0.5 ETH for 1,300 USDC"
     },
     {
       "blockNum": 53505000,
       "timestamp": "2026-11-04T10:46:40.000Z",
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000c",
       "pnlMicros": "149301840",
-      "excludedCount": 7
+      "excludedCount": 7,
+      "summary": "Sent 0.002 ETH"
     },
     {
       "blockNum": 53505400,
       "timestamp": "2026-11-04T11:00:00.000Z",
       "txHash": null,
       "pnlMicros": "149301840",
-      "excludedCount": 7
+      "excludedCount": 7,
+      "summary": null
     }
   ],
   "holdComparison": {
