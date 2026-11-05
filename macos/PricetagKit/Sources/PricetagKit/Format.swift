@@ -125,6 +125,17 @@ public enum Format {
         date.formatted(.dateTime.month(.abbreviated).day().hour().minute().locale(locale))
     }
 
+    /// A time of day, for a row under its day.
+    public static func clock(_ date: Date) -> String {
+        date.formatted(.dateTime.hour().minute().locale(locale))
+    }
+
+    /// A day as a heading, like "Wednesday, November 4".
+    public static func day(_ date: Date, withYear: Bool, calendar: Calendar = .current) -> String {
+        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone).weekday(.wide).month(.wide).day()
+        return date.formatted(withYear ? style.year() : style)
+    }
+
     public static func duration(ms: Int) -> String {
         let minutes = Int((Double(ms) / 60_000).rounded())
         if minutes < 120 { return "\(minutes) min" }

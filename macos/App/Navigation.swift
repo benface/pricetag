@@ -63,6 +63,8 @@ final class Navigation {
     /// Which holding Fill In was clicked on, so its questions come first.
     var resolvingAsset: String?
     var isExporting = false
+    /// ⌘F was pressed. The transactions' search field takes it from here.
+    var wantsSearch = false
 
     /// Spending Money is always this Mac's, so the wallet button isn't there. Every other section shows the wallet chosen.
     func switchWallet() {
@@ -101,6 +103,12 @@ final class Navigation {
     func addSavings() {
         section = .spendingMoney
         wantsAddSavings = true
+    }
+
+    /// Goes to the transactions and puts the cursor in their search field.
+    func findTransactions() {
+        section = .transactions
+        wantsSearch = true
     }
 
     func resolve(_ asset: String? = nil) {

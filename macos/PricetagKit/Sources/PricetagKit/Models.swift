@@ -196,9 +196,73 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public let excludedCount: Int
     /// What its transaction did, in words. The last point has no transaction.
     public var summary: String? = nil
+    /// What moved, apart from network fees. The rest of these are empty or nil on the last point, which has no transaction.
+    public var assets: [String] = []
+    /// The one address on the other side, or nil when there's none or more than one.
+    public var counterparty: String? = nil
+    public var amount: TransactionAmount? = nil
+    /// nil when nothing was sold.
+    public var gain: TransactionGain? = nil
+    /// What arrived with a cost nobody can work out yet.
+    public var unknownCost: [String] = []
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
     public var date: Date? { parseTimestamp(timestamp) }
+}
+
+extension PnlPoint {
+    private enum CodingKeys: String, CodingKey {
+        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, assets, counterparty, amount, gain, unknownCost
+    }
+
+    /// A server from before a transaction had facts still sends the rest.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        blockNum = try container.decode(Int.self, forKey: .blockNum)
+        timestamp = try container.decode(String.self, forKey: .timestamp)
+        txHash = try container.decodeIfPresent(String.self, forKey: .txHash)
+        pnlMicros = try container.decodeIfPresent(String.self, forKey: .pnlMicros)
+        excludedCount = try container.decode(Int.self, forKey: .excludedCount)
+        summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        assets = try container.decodeIfPresent([String].self, forKey: .assets) ?? []
+        counterparty = try container.decodeIfPresent(String.self, forKey: .counterparty)
+        amount = try container.decodeIfPresent(TransactionAmount.self, forKey: .amount)
+        gain = try container.decodeIfPresent(TransactionGain.self, forKey: .gain)
+        unknownCost = try container.decodeIfPresent([String].self, forKey: .unknownCost) ?? []
+    }
+}
+
+/// What a transaction moved, in the portfolio's currency.
+public struct TransactionAmount: Codable, Sendable, Equatable {
+    public enum Direction: String, Codable, Sendable {
+        /// Something only arrived, or only left.
+        case `in`, out
+        /// Things went both ways.
+        case trade
+        /// Only a network fee was paid.
+        case fee
+    }
+
+    public let direction: Direction
+    /// nil when part of it has no price, which isn't $0.
+    public let micros: String?
+
+    public init(direction: Direction, micros: String?) {
+        self.direction = direction
+        self.micros = micros
+    }
+}
+
+/// The gain or loss a sale in a transaction realized.
+public struct TransactionGain: Codable, Sendable, Equatable {
+    /// nil when what was sold has an unknown cost or price.
+    public let micros: String?
+    public let estimated: Bool
+
+    public init(micros: String?, estimated: Bool) {
+        self.micros = micros
+        self.estimated = estimated
+    }
 }
 
 public struct ReadProgress: Codable, Sendable, Equatable {

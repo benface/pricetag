@@ -316,6 +316,7 @@ public enum Wording {
     public static let demo = "Demo data, not a real wallet."
     public static let pnlUnavailable = "PnL unavailable"
     public static let unknown = "Unknown"
+    public static let noPrice = "No price"
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
     public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet. The first read can take a minute."
