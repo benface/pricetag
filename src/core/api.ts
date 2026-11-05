@@ -62,6 +62,9 @@ export type PortfolioExchange = {
   missingRateTxs: string[]
 }
 
+/** A point on the PnL chart, and what its transaction did. The last point has no transaction, so no summary. */
+export type BookPoint = PnlPoint & { summary: string | null }
+
 /** A wallet's holdings, cost and PnL, already folded by one method, in one currency. */
 export type PortfolioResponse = {
   address: string
@@ -89,7 +92,7 @@ export type PortfolioResponse = {
   positions: PortfolioPosition[]
   totals: Totals
   pnlStatus: PnlStatus
-  points: PnlPoint[]
+  points: BookPoint[]
   /** What this wallet made next to what simply holding ETH would have. */
   holdComparison: HoldComparison
   /** What's left to ask, most useful first. */

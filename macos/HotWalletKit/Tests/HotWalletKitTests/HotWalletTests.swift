@@ -1267,6 +1267,27 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .USD)])
         #expect(rig.wallet.needsAttention)
         #expect(rig.wallet.notices.first?.short == HotWalletWording.shortNoSavings)
+        #expect(rig.wallet.notices.first?.asksForSavings == true)
+    }
+
+    @Test func onlyWhatASavingsWalletAnswersAsksForOne() async throws {
+        let withSavings = await Rig(over)
+        await withSavings.wallet.tick()
+        #expect(!withSavings.wallet.notices.isEmpty)
+        #expect(!withSavings.wallet.notices.contains { $0.asksForSavings })
+        let without = await Rig(over, withCold: false)
+        await without.wallet.tick()
+        #expect(without.wallet.notices.first?.asksForSavings == true)
+    }
+
+    @Test func topUpNeverPromisesASweepWithNoSavings() {
+        for sentence in [HotWalletWording.topUpTitle(hasDestination: false), HotWalletWording.topUpRoom("$5.00", hasDestination: false), HotWalletWording.topUpAtCap("$25.00", hasDestination: false), HotWalletWording.topUpNeedsGas(hasDestination: false)] {
+            #expect(!sentence.contains("swept"))
+            #expect(!sentence.contains("sweeps"))
+            #expect(!sentence.contains("from Savings"))
+        }
+        #expect(HotWalletWording.topUpRoom("$5.00", hasDestination: true).contains("swept back to your savings"))
+        #expect(HotWalletWording.topUpAtCap("$25.00", hasDestination: true).contains("swept straight back"))
     }
 
     @Test func overTheCapWithNoColdWalletSaysSoOnce() async throws {

@@ -12,6 +12,25 @@ public enum HotWalletWording {
         "Add a savings wallet. Without one, this is all you have, so the cap stays at \(usd(dollars: 25, beside: main)) and nothing can be swept."
     }
 
+    public static let addSavingsButton = "Add a Savings Wallet…"
+
+    /// Without a savings wallet, the money can still come from a hardware wallet that hasn't been added, but nothing goes back to it.
+    public static func topUpTitle(hasDestination: Bool) -> String {
+        hasDestination ? "Top Up from Savings" : "Top Up"
+    }
+
+    public static func topUpRoom(_ room: String, hasDestination: Bool) -> String {
+        "There's room for \(room) under your cap. " + (hasDestination ? "Anything above that gets swept back to your savings." : "Anything above that stays here, over the cap, until you add a savings wallet.")
+    }
+
+    public static func topUpAtCap(_ cap: String, hasDestination: Bool) -> String {
+        "This wallet is already at its cap of \(cap). " + (hasDestination ? "Anything more would be swept straight back." : "Anything more would stay here, over the cap, until you add a savings wallet.")
+    }
+
+    public static func topUpNeedsGas(hasDestination: Bool) -> String {
+        "Send some of it as ETH. This wallet needs a little to pay for its \(hasDestination ? "sweeps" : "transactions")."
+    }
+
     public static let sweepsOnlyWhileOpen = "Sweeps only run while the app is open. If it's closed, whatever arrives stays here until it opens again."
 
     /// The cap, and everything measured against it, stays in USD.

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { chartMoneyTicks, formatChartSpan, formatSignedMoney, formatTime, type CurrencyCode, type PnlPoint } from "@pricetag/sdk/core"
+import { chartMoneyTicks, formatChartSpan, formatSignedMoney, formatTime, type CurrencyCode } from "@pricetag/sdk/core"
+import type { BookPoint } from "../core/api.ts"
 import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../core/chart-times.ts"
 import { NOTHING_TO_CHART, PNL_HELP } from "../core/wording.ts"
 
@@ -7,10 +8,10 @@ const HEIGHT = 220
 const MARGIN = { top: 16, right: 84, bottom: 26, left: 64 }
 const TIME_ROW = 14
 
-type Props = { points: PnlPoint[]; currency: CurrencyCode; onSelect: (point: PnlPoint) => void }
+type Props = { points: BookPoint[]; currency: CurrencyCode; onSelect: (point: BookPoint) => void }
 
 export function PnlChart({ points, currency, onSelect }: Props) {
-  const showPnl = (point: PnlPoint) => (point.pnlMicros === null ? "⚠ Unavailable" : formatSignedMoney(point.pnlMicros, currency))
+  const showPnl = (point: BookPoint) => (point.pnlMicros === null ? "⚠ Unavailable" : formatSignedMoney(point.pnlMicros, currency))
   const box = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(720)
   const [active, setActive] = useState<number | null>(null)
@@ -107,36 +108,40 @@ export function PnlChart({ points, currency, onSelect }: Props) {
         After each transaction: realized PnL, plus unrealized PnL where there's a price at that moment, less network fees. Unknown costs add nothing.
       </p>
       {asTable ? (
-        <table className="table compact">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th className="num" title={PNL_HELP}>
-                PnL
-              </th>
-              <th className="num">Excludes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {points.map((p) => (
-              <tr key={`${p.blockNum}-${p.txHash ?? "latest"}`}>
-                <td>
-                  {p.txHash ? (
-                    <button type="button" className="num-button" aria-label={`Explain the transaction at ${formatTime(p.timestamp)}`} onClick={() => onSelect(p)}>
-                      {formatTime(p.timestamp)}
-                    </button>
-                  ) : (
-                    `${formatTime(p.timestamp)} (now)`
-                  )}
-                </td>
-                <td className="num" title={PNL_HELP}>
-                  {showPnl(p)}
-                </td>
-                <td className="num">{p.excludedCount}</td>
+        <div className="table-scroll">
+          <table className="table compact">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>What happened</th>
+                <th className="num" title={PNL_HELP}>
+                  PnL
+                </th>
+                <th className="num">Excludes</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {points.map((p) => (
+                <tr key={`${p.blockNum}-${p.txHash ?? "latest"}`}>
+                  <td>
+                    {p.txHash ? (
+                      <button type="button" className="num-button" aria-label={`Explain the transaction at ${formatTime(p.timestamp)}`} onClick={() => onSelect(p)}>
+                        {formatTime(p.timestamp)}
+                      </button>
+                    ) : (
+                      `${formatTime(p.timestamp)} (now)`
+                    )}
+                  </td>
+                  <td>{p.summary ?? "—"}</td>
+                  <td className="num" title={PNL_HELP}>
+                    {showPnl(p)}
+                  </td>
+                  <td className="num">{p.excludedCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : null}
       {!asTable && !chart.hasData ? <p className="notice warn chart-empty">⚠ {NOTHING_TO_CHART}</p> : null}
       <div

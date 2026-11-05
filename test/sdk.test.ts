@@ -427,7 +427,8 @@ describe("getPortfolio", () => {
 
     assert.deepEqual(sdk.totals, app.totals)
     assert.equal(sdk.pnlStatus, app.pnlStatus)
-    assert.deepEqual(sdk.points, app.points)
+    // The words are the app's, and the SDK leaves them out.
+    assert.deepEqual(sdk.points, app.points.map(({ summary: _, ...point }) => point))
     assert.deepEqual(sdk.blocks, app.coverage)
     assert.deepEqual(sdk.positions.map((p) => [p.asset, p.values, p.reconciliation, p.price]), app.positions.map((p) => [p.asset, p.values, p.reconciliation, p.price]))
     assert.deepEqual(sdk.positions.map((p) => [p.asset, p.reconciliation?.status]), [["ETH", "reconciled"], ["USDC", "reconciled"], ["AERO", "reconciled"]])

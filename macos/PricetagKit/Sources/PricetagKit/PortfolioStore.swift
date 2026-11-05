@@ -6,7 +6,7 @@ import Observation
 
 public enum FeedState: Equatable, Sendable {
     case noWallet
-    /// Waiting on the first answer for this wallet, which can take a minute.
+    /// Waiting on an answer, which the first time for a wallet can take a minute. Numbers on screen are the previous answer.
     case reading
     case live
     /// The server and Amp both answer, but Amp's newest block is old.
@@ -80,8 +80,10 @@ public final class PortfolioStore {
     @ObservationIgnored private let reachableDelay: Duration
     @ObservationIgnored private let unreachableDelay: Duration
     @ObservationIgnored private let pushedDelay: Duration
+    @ObservationIgnored private let liveFor: Duration
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var eventsTask: Task<Void, Never>?
+    @ObservationIgnored private var liveExpiry: Task<Void, Never>?
     /// The server is telling this store about new blocks, so a read only needs to happen on a timer in case that stops working.
     @ObservationIgnored private var isPushed = false
     /// What the next read is waiting on, which a new block cuts short.
@@ -95,7 +97,9 @@ public final class PortfolioStore {
         now: @escaping @Sendable () -> Date = { Date() },
         reachableDelay: Duration = .seconds(2),
         unreachableDelay: Duration = .seconds(5),
-        pushedDelay: Duration = .seconds(15)
+        pushedDelay: Duration = .seconds(15),
+        // The longest wait for a block, plus as long as a read gets before it's marked as on its way anyway.
+        liveFor: Duration = .seconds(30)
     ) {
         self.defaults = defaults
         self.makeSource = makeSource
@@ -103,6 +107,7 @@ public final class PortfolioStore {
         self.reachableDelay = reachableDelay
         self.unreachableDelay = unreachableDelay
         self.pushedDelay = pushedDelay
+        self.liveFor = liveFor
         let address = defaults.string(forKey: Keys.wallet)
         let serverURL = defaults.string(forKey: Keys.server).flatMap(URL.init(string:)) ?? Self.defaultServerURL
         self.address = address
@@ -448,6 +453,7 @@ public final class PortfolioStore {
             portfolio = next
             updatedAt = now()
             feed = state(of: next)
+            expireLive()
             return reachableDelay
         } catch {
             guard isCurrent(), !(error is CancellationError) else { return .zero }
@@ -455,6 +461,18 @@ public final class PortfolioStore {
             if portfolio?.method != method || portfolio?.currency != currency || isOtherRule { portfolio = nil }
             feed = state(of: error)
             return feed == .serverUnreachable ? unreachableDelay : reachableDelay
+        }
+    }
+
+    /// Stops calling these numbers live once they're older than a read should leave them, say after a Mac sleeps. Checking when a read starts
+    /// wouldn't do, because one from before it slept can still be running. This sleep counts time the Mac is asleep, so it ends on waking. Demo data
+    /// doesn't age. `stop` leaves this running, because starting over doesn't make the numbers any newer.
+    private func expireLive() {
+        liveExpiry?.cancel()
+        liveExpiry = Task { [weak self, liveFor] in
+            try? await Task.sleep(for: liveFor)
+            guard let self, !Task.isCancelled, feed == .live, portfolio?.mode != .demo else { return }
+            feed = .reading
         }
     }
 
