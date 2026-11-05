@@ -206,7 +206,13 @@ public final class PurchaseTracker {
     public static func message(for error: any Error) -> String { failureMessage(for: error) }
 
     public func purchases(of wallet: String) -> [TrackedPurchase] {
-        purchases.filter { $0.wallet == wallet.lowercased() }.reversed()
+        purchases(of: [wallet])
+    }
+
+    /// Newest first, across all of them.
+    public func purchases(of wallets: Set<String>) -> [TrackedPurchase] {
+        let wallets = Set(wallets.map { $0.lowercased() })
+        return purchases.filter { wallets.contains($0.wallet) }.reversed()
     }
 
     public func phase(of purchase: TrackedPurchase) -> PurchasePhase {
@@ -231,7 +237,7 @@ public final class PurchaseTracker {
     /// Asks the server for a page, and starts following it. Throws when there's no page to open, with something to say about why.
     public func begin(wallet: String, asset: String, dollars: Int, cryptoAmount: String, typed: Money? = nil) async throws -> URL {
         let checkout = try await store.currentSource.onrampCheckout(address: wallet, asset: asset, cryptoAmount: cryptoAmount, fiat: typed)
-        guard let page = checkout.page else { throw FetchError.rejected("The server sent a page that isn't \(PurchaseWording.provider)'s.") }
+        guard let page = checkout.page else { throw FetchError.rejected("The price service sent a page that isn't \(PurchaseWording.provider)'s.") }
         purchases.append(TrackedPurchase(ref: checkout.ref, wallet: wallet.lowercased(), asset: asset, dollars: dollars, typed: typed, startedAt: now()))
         save()
         start()

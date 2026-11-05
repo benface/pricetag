@@ -13,6 +13,40 @@ public enum Wording {
     public static let pnlHelp = "PnL is profit and loss: what you've gained or lost so far."
     public static let realizedHelp = "Gain or loss on what you've sold or spent."
     public static let unrealizedHelp = "Gain or loss on what you still hold, at the current price."
+    public static let marketEstimates = "Some prices are estimates, from the market."
+
+    /// What a partial value is missing or can't vouch for, in sentences. What's left out says so. A balance that couldn't be
+    /// checked, or a history that's incomplete, is still in the value, so it's only said to be uncertain.
+    public static func valueGaps(_ gaps: Portfolio.ValueGaps) -> String {
+        var sentences: [String] = []
+        if !gaps.noPrice.isEmpty { sentences.append("The value leaves out \(list(gaps.noPrice)), which \(gaps.noPrice.count == 1 ? "has" : "have") no price right now.") }
+        if !gaps.unread.isEmpty { sentences.append("The value leaves out \(list(gaps.unread)), whose \(gaps.unread.count == 1 ? "balance" : "balances") couldn't be read.") }
+        if !gaps.unchecked.isEmpty { sentences.append("Couldn't check the balance of \(list(gaps.unchecked)), so \(gaps.unchecked.count == 1 ? "its value is" : "their values are") an estimate.") }
+        if !gaps.incompleteHistory.isEmpty { sentences.append("Incomplete history for \(list(gaps.incompleteHistory)), so \(gaps.incompleteHistory.count == 1 ? "its numbers" : "their numbers") may not be all of it.") }
+        return sentences.isEmpty ? "The value isn't complete." : sentences.joined(separator: " ")
+    }
+
+    /// The same, on one short line, without a period: what's left out first, because that's what changes the number most.
+    public static func shortValueGaps(_ gaps: Portfolio.ValueGaps) -> String {
+        let leftOut = gaps.noPrice + gaps.unread
+        if !leftOut.isEmpty { return "The value leaves out \(list(leftOut))" }
+        if !gaps.unchecked.isEmpty { return "Couldn't check the balance of \(list(gaps.unchecked))" }
+        if !gaps.incompleteHistory.isEmpty { return "Incomplete history for \(list(gaps.incompleteHistory))" }
+        return "The value isn't complete"
+    }
+
+    public static let pnlLeavesOutFees = "PnL leaves out some network fees"
+    public static let pnlIncomplete = "PnL isn't complete"
+
+    private static func list(_ assets: [String]) -> String {
+        assets.formatted(.list(type: .and).locale(Locale(identifier: "en_US")))
+    }
+
+    /// What a partial PnL leaves out, without a period. `also` when something before it already says part of it.
+    public static func pnlLeavesOut(_ assets: [String], also: Bool) -> String {
+        "PnL \(also ? "also " : "")leaves out \(list(assets))"
+    }
+    public static let returnHelp = "Unrealized PnL as a share of what you paid for what you still hold."
 
     public static let holdTitle = "Compared with holding ETH"
     public static let holdWallet = "This wallet, after network fees"
@@ -203,6 +237,21 @@ public enum Wording {
         "Updating. These numbers are from \(lastUpdate)."
     }
 
+    /// A read with no numbers on screen yet, once it's gone on long enough to be worth saying.
+    public static func stillReading(seconds: Int) -> String {
+        "Reading this wallet, \(Format.elapsed(seconds: seconds)) so far. A wallet with a lot of history can take a few minutes the first time."
+    }
+
+    /// A read with numbers on screen, once it's gone on long enough to be worth saying.
+    public static func stillUpdating(seconds: Int, lastUpdate: String) -> String {
+        "Still updating, \(Format.elapsed(seconds: seconds)) so far. Until it's done, these numbers are from \(lastUpdate)."
+    }
+
+    /// Another read after a failure, once it's gone on long enough to be worth saying. Whatever's wrong still stands until it answers.
+    public static func tryingAgain(seconds: Int) -> String {
+        "Trying again, \(Format.elapsed(seconds: seconds)) so far."
+    }
+
     public static func stale(lastUpdate: String) -> String {
         "These numbers aren't updating. Last update: \(lastUpdate)."
     }
@@ -314,12 +363,15 @@ public enum Wording {
 
     public static let demo = "Demo data, not a real wallet."
     public static let pnlUnavailable = "PnL unavailable"
+    public static let valueUnavailable = "Value unavailable"
     public static let unknown = "Unknown"
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
     public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet. The first read can take a minute."
-    public static let readTooSlow = "The server is answering, but this wallet is taking too long to read."
-    public static let serverTooSlow = "The server took too long to answer."
+    /// A failed read never touches what's onchain, so this is true of every problem the feed has.
+    public static let moneyUnaffected = "Your money isn't affected."
+    public static let serverTooSlow = "The price service took too long to answer."
+    public static let cantReachServer = "Can't reach the price service. Your money isn't affected."
     /// What moving a wallet on the list changes. They're in the numbers right away, so it's said right away, next to the way back.
     public static let movedToYours = "Costs now follow money between this wallet and your others."
     public static let movedToWatching = "Costs no longer follow money from this wallet."
@@ -340,7 +392,9 @@ extension AssetMetric {
         switch self {
         case .amount: "amount"
         case .average: Wording.averagePricePaid.lowercased()
+        case .price: "price"
         case .value: "value"
+        case .return: "return"
         case .realized: "realized PnL"
         case .unrealized: "unrealized PnL"
         case .onchain: Wording.balanceCheck.lowercased()
@@ -356,6 +410,7 @@ extension AssetMetric {
         switch self {
         case .realized: Wording.realizedHelp
         case .unrealized: Wording.unrealizedHelp
+        case .return: Wording.returnHelp
         default: nil
         }
     }

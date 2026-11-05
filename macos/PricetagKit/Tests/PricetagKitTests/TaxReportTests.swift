@@ -159,7 +159,7 @@ import Testing
         let model = model(fetch: { _ in try answer.get() })
         let request = model.request(address: "demo", currency: .CAD, serverURL: server)!
         await model.load(request)
-        #expect(model.state == .failed("Can't reach the server."))
+        #expect(model.state == .failed(Wording.cantReachServer))
         answer = .success(report)
         await model.load(request)
         #expect(model.state == .ready(report))
