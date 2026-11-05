@@ -34,10 +34,27 @@ import Testing
         #expect(ChartWindow(points: points, range: .all).points == points)
     }
 
-    @Test func noChangeBetweenSumsThatLeaveOutDifferentThings() {
-        var later = point(600, "2000000")
-        later = PnlPoint(blockNum: later.blockNum, timestamp: later.timestamp, txHash: later.txHash, pnlMicros: later.pnlMicros, excludedCount: 2)
-        #expect(ChartWindow(points: [point(0, "1000000"), later], range: .all).changeMicros == nil)
-        #expect(ChartWindow(points: [point(0, nil), point(600, "2000000")], range: .all).changeMicros == nil)
+    private func partial(_ second: Int, _ pnl: String, excluded: Int) -> PnlPoint {
+        let known = point(second, pnl)
+        return PnlPoint(blockNum: known.blockNum, timestamp: known.timestamp, txHash: known.txHash, pnlMicros: known.pnlMicros, excludedCount: excluded)
+    }
+
+    @Test func noChangeBetweenSumsThatLeaveOutSomething() {
+        // Both leave out one thing, but not the same thing: another holding became measurable, which isn't a gain.
+        let window = ChartWindow(points: [partial(0, "1000000", excluded: 1), partial(4000, "1000000", excluded: 1), partial(8000, "4000000", excluded: 1)], range: .hour)
+        #expect(window.changeMicros == nil)
+        #expect(ChartWindow(points: [point(0, "1000000"), partial(8000, "4000000", excluded: 2)], range: .hour).changeMicros == nil)
+        #expect(ChartWindow(points: [point(0, nil), point(8000, "2000000")], range: .hour).changeMicros == nil)
+    }
+
+    @Test func noChangeWithoutAKnownStart() {
+        // Three fees in the last 25 minutes of a longer history. The first point is already after the first fee, and nothing assumes zero before it.
+        let window = ChartWindow(points: [point(0, "-100000"), point(700, "-200000"), point(1500, "-300000")], range: .hour)
+        #expect(window.changeMicros == nil)
+        #expect(window.changeText(.USD, estimated: false) == nil)
+    }
+
+    @Test func allStatesNoChange() {
+        #expect(ChartWindow(points: [point(0, "1000000"), point(8000, "5000000")], range: .all).changeText(.USD, estimated: false) == nil)
     }
 }

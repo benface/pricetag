@@ -41,6 +41,8 @@ final class Navigation {
     var wantsTopUp = false
     /// The menu bar's Send button was pressed. The hot wallet's section takes it from here.
     var wantsSend = false
+    /// The web app sent over an account from a device. The hot wallet's window asks the person to check it.
+    var addingSavings: AddSavingsLink?
     var isResolving = false
     /// Which holding Fill In was clicked on, so its questions come first.
     var resolvingAsset: String?

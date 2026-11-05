@@ -402,6 +402,17 @@ actor BookSource: PortfolioSource {
         #expect(ResolveModel(store: store, noteWriter: FakeNoteWriter(wallet: wallet)).noteDraft(for: open) != nil)
     }
 
+    @Test func aNoteOnADeviceIsOnlyOfferedForASavingsWallet() async throws {
+        let (store, _, _) = try makeStore()
+        let tx = "0x" + String(repeating: "cd", count: 32)
+        let open = question(receipts: [CostReceipt(wallet: wallet, legId: "\(tx):USDC", asset: "USDC", units: "5")])
+        #expect(ResolveModel(store: store).deviceNoteDraft(for: open) == nil)
+        #expect(ResolveModel(store: store, noteWriter: FakeNoteWriter(wallet: wallet)).deviceNoteDraft(for: open) == nil)
+        let writer = FakeNoteWriter(wallet: nil)
+        writer.savings = wallet
+        #expect(ResolveModel(store: store, noteWriter: writer).deviceNoteDraft(for: open) != nil)
+    }
+
     /// The demo's question about VIRTUAL, which came in one transaction.
     func virtualDraft(_ store: PortfolioStore) async throws -> (ResolveModel, CostNoteDraft, Question, FakeNoteWriter) {
         await _ = store.poll()
@@ -526,6 +537,8 @@ final class FakeNoteWriter: CostNoteWriter {
     }
 
     func canWriteNote(from wallet: String) -> Bool { wallet == self.wallet || self.wallet == nil }
+    var savings: String?
+    func canWriteNoteOnDevice(from wallet: String) -> Bool { wallet == savings }
     func writeNote(_ calldata: [UInt8], asset: String, from wallet: String) async -> Bool {
         written.append(calldata)
         onWrite?()

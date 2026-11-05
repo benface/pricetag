@@ -34,6 +34,12 @@ export type FoldLeg = {
   pieces?: CostPiece[]
   /** Its cost or proceeds rest on an estimate, so whatever comes from them does too. */
   estimated?: boolean
+  /**
+   * Nothing says where this comes in its block, among other movements that depend on it, and the method it matters to:
+   * `always` when something left, and `fifo` when things only arrived, since those come to the same average either way.
+   * Where it matters, a credit takes no cost, and neither what a debit took nor what it left has one.
+   */
+  orderUnknown?: "always" | "fifo"
   blockNum?: number
   timestamp?: string
 }
@@ -242,8 +248,12 @@ function addLot({ method, tracksPaidAt }: PositionState, lots: readonly Lot[], l
   return lots.map((l) => (l === pool ? merged : l))
 }
 
+/** Whether this method's answer for this leg depends on an order nothing says. */
+export const orderMatters = ({ orderUnknown }: Pick<FoldLeg, "orderUnknown">, method: Method) => orderUnknown === "always" || (orderUnknown === "fifo" && method === "fifo")
+
 function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
   const dated = leg.blockNum === undefined ? {} : { acquiredBlock: leg.blockNum, acquiredAt: leg.timestamp as string }
+  if (orderMatters(leg, state.method)) return addLot(state, state.lots, lotOf({ qty: qty.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", ...dated }, leg.id))
   const estimated = (leg.estimated || leg.costLabel === "received at market") && leg.costMicros !== null ? leg.costMicros : "0"
   // A piece with its own date got it from the wallet that first acquired it. Any other was acquired here and now.
   const pieces = leg.pieces?.map((piece) => ({ ...dated, ...piece })) ?? [{ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...dated }]
@@ -316,6 +326,23 @@ function take(state: PositionState, qty: bigint): Taken {
   return result
 }
 
+/** What was taken, with no cost anyone can rely on. */
+function withoutCosts(taken: Taken): Taken {
+  return {
+    ...taken,
+    pieces: taken.pieces.map(({ qty, unconfirmedBy, acquiredBlock, acquiredAt }) => ({ qty, costMicros: null, label: "unknown", estimatedCostMicros: "0", ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }) })),
+    knownQty: 0n,
+    knownCost: 0n,
+    estimatedCost: 0n,
+    unknownQty: taken.unknownQty + taken.knownQty,
+  }
+}
+
+/** What's still held, with no cost anyone can rely on, since how much of each lot is left depends on the same order. */
+function lotsWithoutCosts(state: PositionState, lots: readonly Lot[]): Lot[] {
+  return lots.reduce<Lot[]>((kept, { qty, legId, unconfirmedBy, acquiredBlock, acquiredAt }) => addLot(state, kept, { qty, costMicros: null, label: "unknown", legId, ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }) }), [])
+}
+
 /** Applies a leg, and says what a debit took, which is what a transfer to a linked wallet carries with it. */
 export function applyLegTaking(state: PositionState, leg: FoldLeg): { state: PositionState; taken: CostPiece[] } {
   const delta = BigInt(leg.delta)
@@ -323,10 +350,11 @@ export function applyLegTaking(state: PositionState, leg: FoldLeg): { state: Pos
   if (delta > 0n) return { state: { ...state, lots: credit(state, leg, delta) }, taken: [] }
 
   const qty = -delta
-  const taken = take(state, qty)
+  const orderless = orderMatters(leg, state.method)
+  const taken = orderless ? withoutCosts(take(state, qty)) : take(state, qty)
   const next: PositionState = {
     ...state,
-    lots: taken.lots,
+    lots: orderless ? lotsWithoutCosts(state, taken.lots) : taken.lots,
     shortfallQty: (BigInt(state.shortfallQty) + taken.shortfall).toString(),
   }
 

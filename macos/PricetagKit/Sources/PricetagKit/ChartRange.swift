@@ -19,14 +19,14 @@ public enum ChartRange: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// In a sentence, after the change it covers.
-    var phrase: String {
+    var phrase: String? {
         switch self {
         case .hour: "in the past hour"
         case .day: "in the past day"
         case .week: "in the past week"
         case .month: "in the past month"
         case .year: "in the past year"
-        case .all: "so far"
+        case .all: nil
         }
     }
 
@@ -63,9 +63,12 @@ extension Portfolio {
 public struct ChartWindow: Equatable, Sendable {
     public let range: ChartRange
     public let points: [PnlPoint]
+    /// There's a known point from before the range began, so its first point really is what PnL was when it started.
+    private let startsAtRangeStart: Bool
 
     public init(points all: [PnlPoint], range: ChartRange) {
         self.range = range
+        startsAtRangeStart = Self.hasPointBefore(all, range)
         guard let duration = range.duration, let end = all.last?.date else {
             points = all
             return
@@ -80,15 +83,24 @@ public struct ChartWindow: Equatable, Sendable {
         points = [carried] + inside
     }
 
-    /// nil unless both ends are known and leave out the same things. Otherwise the two aren't the same sum, and their difference would mean nothing.
+    private static func hasPointBefore(_ all: [PnlPoint], _ range: ChartRange) -> Bool {
+        guard let duration = range.duration, let end = all.last?.date else { return false }
+        let start = end.addingTimeInterval(-duration)
+        return all.contains { ($0.date ?? end) < start }
+    }
+
+    /// How much PnL moved across the whole range, or nil when that can't honestly be said:
+    /// - Either end leaves something out. The same count doesn't mean the same things, and what became measurable in between isn't a gain or a loss.
+    /// - Nothing's known from before the range began. The first point is already after its first transaction, and nothing here assumes PnL was zero before it.
     public var changeMicros: String? {
-        guard let first = points.first, let last = points.last, first.excludedCount == last.excludedCount,
+        guard startsAtRangeStart, let first = points.first, let last = points.last, first.excludedCount == 0, last.excludedCount == 0,
               let from = first.pnlMicros.flatMap({ Int128($0) }), let to = last.pnlMicros.flatMap({ Int128($0) }) else { return nil }
         return String(to - from)
     }
 
     /// "+$12.40 in the past day", or nil when there's no change to state.
     public func changeText(_ currency: CurrencyCode, estimated: Bool) -> String? {
-        changeMicros.map { "\(Format.estimate(Format.signedMoney($0, currency), estimated)) \(range.phrase)" }
+        guard let change = changeMicros, let phrase = range.phrase else { return nil }
+        return "\(Format.estimate(Format.signedMoney(change, currency), estimated)) \(phrase)"
     }
 }

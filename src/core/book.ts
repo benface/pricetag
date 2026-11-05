@@ -53,6 +53,13 @@ export function answerSender(book: Book, focus: string, sender: string, answer: 
   return { ...book, senders }
 }
 
+/** Accounts from one hardware device are all the user's, and the device already proved it, so nobody's asked. This overrides any earlier answer about them. */
+export function linkDeviceAccounts(book: Book, addresses: readonly string[]): Book {
+  const senders: Book["senders"] = { ...book.senders }
+  for (const address of addresses) senders[normalizeAddress(address)] = { kind: "mine" }
+  return { ...book, senders }
+}
+
 /** Saying what was paid for a sender's open receipts, by asset. It takes over for those receipts, and any others keep their earlier answers. */
 export function enterExchangeCosts(book: Book, focus: string, sender: string, receipts: readonly Receipt[], amounts: Readonly<Record<string, Money>>): Book {
   const earlier = book.senders[sender]?.kind === "my-exchange" ? (book.senders[sender].costs ?? []) : []

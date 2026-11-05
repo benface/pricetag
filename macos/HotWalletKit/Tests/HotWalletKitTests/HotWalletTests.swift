@@ -573,6 +573,35 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         for transaction in await rig.signer.signed { #expect(allowed.contains(transaction.to)) }
     }
 
+    @Test func aDevicesOtherAccountsAreLinkedButNeverSavings() async throws {
+        let rig = await Rig(snapshot(eth: oneEth))
+        let other = "0x" + String(repeating: "ab", count: 20)
+        let destination = rig.wallet.settings.sweepDestination
+        rig.wallet.linkDeviceAccounts([other, other, "nope", hotAddress.lowercased, EthereumAddress.zero.lowercased])
+        #expect(rig.wallet.linkedWallets.filter { $0 == other }.count == 1)
+        #expect(rig.wallet.linkedWallets.filter { $0 == hotAddress.lowercased }.count == 1, "the hot wallet is already there, and isn't a device's")
+        #expect(!rig.wallet.linkedWallets.contains(EthereumAddress.zero.lowercased))
+        #expect(!rig.wallet.settings.coldWallets.contains { $0.address.lowercased == other })
+        #expect(rig.wallet.settings.sweepDestination == destination)
+    }
+
+    @Test func settingsSavedBeforeDeviceAccountsStillLoad() throws {
+        var settings = WalletSettings()
+        settings.add(ColdWallet(address: coldAddress, name: "Ledger", confirmedOnDeviceAt: Date(timeIntervalSince1970: 0)))
+        var fields = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
+        #expect(fields.removeValue(forKey: "deviceAccounts") != nil)
+        let loaded = try JSONDecoder().decode(WalletSettings.self, from: JSONSerialization.data(withJSONObject: fields))
+        #expect(loaded.coldWallets.map(\.address) == [coldAddress])
+        #expect(loaded.deviceAccounts.isEmpty)
+    }
+
+    @Test func aColdWalletsNoteGoesToItsDevice() async throws {
+        let rig = await Rig(snapshot(eth: oneEth))
+        #expect(rig.wallet.canWriteNoteOnDevice(from: coldAddress.lowercased))
+        #expect(!rig.wallet.canWriteNoteOnDevice(from: "0x" + String(repeating: "ab", count: 20)))
+        #expect(!rig.wallet.canWriteNoteOnDevice(from: hotAddress.lowercased))
+    }
+
     @Test func topUpRoomIsWhatTheCapHasLeft() async throws {
         let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(30)]))
         await rig.wallet.tick()

@@ -3,7 +3,7 @@
 
 import { describeError, type Logger } from "./amp.ts"
 import { LAST_2S_BLOCK, blockBefore, msBetweenBlocks, timestampOfBlock } from "./chain.ts"
-import { answerToMicros, buildPricedLegs, derivePricedRows, isUnwrapClaim, oneWaySendBalanceBlocks, settleUnwraps, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PricedRow, type Reference } from "./legs.ts"
+import { answerToMicros, buildPricedLegs, creditUnseenEth, derivePricedRows, isUnwrapClaim, oneWaySendBalanceBlocks, payerOf, settleUnwraps, unseenEthSearchBlocks, unwrapBalanceBlocks, type EthPayer, type GasUnknownTx, type LegRow, type PayoutTx, type PricedRow, type Reference } from "./legs.ts"
 import { MARKET_MAX_AGE_MS, markNeeds, marketPrice, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
 import type { CostNote } from "./notes.ts"
 import { feedPrice, foldPositions, latestPrices, type FeedRound, type Head, type LatestPrices } from "./portfolio.ts"
@@ -35,6 +35,8 @@ export type Source = {
   readBalances(address: string, block: number): Promise<BalanceSnapshot | null>
   /** This wallet's plain ETH at the end of each block, not counting WETH. A block whose read failed isn't in it. */
   readEthBalances(address: string, blocks: readonly number[]): Promise<Map<number, string>>
+  /** The successful transactions in these blocks that name this wallet in their calldata, or that it sent. */
+  readPayoutTxs?(address: string, blocks: readonly number[]): Promise<PayoutTx[]>
   /** The cost notes this wallet published in these blocks: zero-value transactions from itself to itself. */
   readNotes?(address: string, blocks: readonly number[]): Promise<CostNote[]>
   /** Whether `readMarketTrades` can be trusted. An older dataset's `priced_legs` has wrong rows, so it can't. */
@@ -55,6 +57,8 @@ export const settledThrough = (tip: number) => blockBefore(tip, REORG_MS)
 const MAX_WALLETS = 20
 /** A busy wallet catches up over a few refreshes, and until then the swaps left say they aren't confirmed. */
 const MAX_ETH_BALANCES_PER_READ = 400
+/** Each block costs a scan of its transactions' calldata, so a wallet with many of these learns who to ask about them over a few refreshes. */
+const MAX_PAYER_BLOCKS_PER_READ = 40
 
 type Cached = {
   fromBlock: number
@@ -94,6 +98,8 @@ type Cached = {
   staleFeeTxs: string[]
   /** Plain ETH at the end of the blocks `settleUnwraps` reads, when they've been worth reading. */
   ethBalances: Map<number, string>
+  /** Who's behind ETH that arrived with no row, by block. Null when no transaction can be named. A block whose read failed isn't in it. */
+  ethPayers: Map<number, EthPayer | null>
 }
 
 /** What the wallet holds off the allowlist. An ID or an unreadable amount can't be netted, so those count as held. */
@@ -124,7 +130,7 @@ type Reorg = { from: number; oldTip: number }
  * What happened to a wallet up to one block, without what any of it was worth. Two pricing rules read through the same
  * facts can only differ by the rule, because what's held, what moved and what fees came to are all the same object.
  */
-export type WalletFacts = Pick<Cached, "fromBlock" | "coveredTo" | "rows" | "latest" | "gasUnknown" | "opening" | "closing" | "lastBalances" | "lastCheckableEth" | "l1Fees" | "staleFeeTxs" | "ethBalances" | "notes" | "notesReadTo" | "marketChecked"> & {
+export type WalletFacts = Pick<Cached, "fromBlock" | "coveredTo" | "rows" | "latest" | "gasUnknown" | "opening" | "closing" | "lastBalances" | "lastCheckableEth" | "l1Fees" | "staleFeeTxs" | "ethBalances" | "ethPayers" | "notes" | "notesReadTo" | "marketChecked"> & {
   /** What the feeds in `TOKEN_FEEDS` answered at or just before `coveredTo`, which is the chain's whatever rule prices the rest. */
   feedRounds: Record<string, FeedRound>
   /** What the feeds answered for its chart so far, so what two rules mark a token at can only differ by their ETH. */
@@ -274,6 +280,7 @@ function rewound(wallet: Cached, block: number): Cached {
     lastCheckableEth: wallet.lastCheckableEth && wallet.lastCheckableEth.blockNum < block ? wallet.lastCheckableEth : null,
     l1Fees: kept(wallet.l1Fees, (fee) => fee.blockNum),
     ethBalances: kept(wallet.ethBalances, (_, at) => at),
+    ethPayers: kept(wallet.ethPayers, (_, at) => at),
     notes: wallet.notes.filter((note) => note.blockNum < block),
     notesReadTo: Math.min(wallet.notesReadTo, last),
   }
@@ -508,6 +515,58 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     })
   }
 
+  /** A wallet's settled rows, with the ETH its balance says arrived and no row explains. */
+  function withUnseenEth(address: string, wallet: Pick<Cached, "fromBlock" | "coveredTo" | "latest" | "rows" | "ethBalances" | "ethPayers" | "gasUnknown" | "l1Fees" | "staleFeeTxs">, rows: readonly LegRow[]): LegRow[] {
+    return creditUnseenEth({
+      rows,
+      ethBalances: wallet.ethBalances,
+      feeUnknownTxs: [...wallet.gasUnknown.keys(), ...l1FeeRows(wallet.rows, wallet.l1Fees).unknownTxs, ...wallet.staleFeeTxs],
+      gasUnknownBlocks: [...wallet.gasUnknown.values()],
+      account: address,
+      fromBlock: wallet.fromBlock,
+      through: wallet.coveredTo,
+      payers: wallet.ethPayers,
+      timestampOf: (block) => timestampOfBlock(block, wallet.latest),
+    })
+  }
+
+  /** The balances a wallet still needs to find ETH that its rows don't explain. One whose ETH adds up has nothing to find, so it costs no reads. */
+  function unreadUnseenBlocks(address: string, wallet: Cached): number[] {
+    const data = responseOf(address, wallet)
+    const eth = foldPositions(data.legs, "average", {}, data).find((position) => position.asset === "ETH")
+    if (eth?.reconciliation?.status !== "incomplete") return []
+    return unseenEthSearchBlocks({ rows: settle(wallet).rows, ethBalances: wallet.ethBalances, fromBlock: wallet.fromBlock, through: wallet.coveredTo })
+  }
+
+  const unseenCredits = (address: string, wallet: Cached) => withUnseenEth(address, wallet, settle(wallet).rows).filter((row) => row.kind === "unseen_eth")
+
+  const unreadPayerBlocks = (address: string, wallet: Cached) => (source.readPayoutTxs ? unseenCredits(address, wallet).filter((row) => !wallet.ethPayers.has(row.block_num)) : [])
+
+  /** Finds where a wallet's ETH moved without a row to show for it, then what's needed to treat it like any other ETH that arrived. A failed read leaves what's unread as it was. */
+  async function findUnseenEth(address: string, wallet: Cached, budget: number) {
+    let left = budget
+    while (left > 0) {
+      const blocks = unreadUnseenBlocks(address, wallet).slice(0, left)
+      if (blocks.length === 0) break
+      const known = wallet.ethBalances.size
+      await readEthBalances(address, blocks, wallet.ethBalances)
+      if (wallet.ethBalances.size === known) break
+      left -= blocks.length
+    }
+    const credits = unseenCredits(address, wallet)
+    const unpriced = credits.map((row) => row.block_num).filter((block) => !wallet.references.has(block))
+    const unread = unreadPayerBlocks(address, wallet).slice(0, MAX_PAYER_BLOCKS_PER_READ)
+    try {
+      if (unpriced.length > 0) for (const reference of await source.readReferences(unpriced)) wallet.references.set(reference.blockNum, reference)
+      if (unread.length > 0 && source.readPayoutTxs) {
+        const txs = await source.readPayoutTxs(address, unread.map((row) => row.block_num))
+        for (const { block_num, amount } of unread) wallet.ethPayers.set(block_num, payerOf(txs.filter((tx) => tx.blockNum === block_num), address, amount))
+      }
+    } catch (error) {
+      logger.warn(`Couldn't read what's behind ETH that arrived unseen: ${describeError(error)}`)
+    }
+  }
+
   /** A failed read leaves what's unread as it was. The next refresh tries again. */
   async function readEthBalances(address: string, blocks: readonly number[], into: Map<number, string>) {
     if (blocks.length === 0) return
@@ -528,6 +587,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     !fixedMayChange(wallet, chain) &&
     !openingMayChange(wallet, chain) &&
     unreadSendBlocks(address, wallet).length === 0 &&
+    unreadUnseenBlocks(address, wallet).length === 0 &&
+    unreadPayerBlocks(address, wallet).length === 0 &&
     !hasMarketReadsLeft(address, wallet, chain.blockNum)
 
   async function refresh(address: string, key: string, range: WalletRange): Promise<Cached> {
@@ -555,6 +616,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const known = new Map(cached?.references ?? [])
     const gasUnknown = new Map(cached?.gasUnknown ?? [])
     const ethBalances = new Map(cached?.ethBalances ?? [])
+    const ethPayers = new Map(cached?.ethPayers ?? [])
     let replacedFrom = Number.POSITIVE_INFINITY
     if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo || reorgable)) {
       const readFrom = cached ? Math.max(fromBlock, Math.min(settledThrough(cached.coveredTo) + 1, unsettled ?? Infinity)) : fromBlock
@@ -563,6 +625,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
       for (const block of known.keys()) if (block >= readFrom) known.delete(block)
       for (const block of ethBalances.keys()) if (block >= readFrom) ethBalances.delete(block)
+      for (const block of ethPayers.keys()) if (block >= readFrom) ethPayers.delete(block)
       const missing = [...new Set(rows.map((r) => r.block_num))].filter((b) => !known.has(b))
       for (const reference of await source.readReferences(missing)) known.set(reference.blockNum, reference)
       priced = window.priced ? [...priced.filter((p) => p.block_num < readFrom), ...window.priced] : derivePricedRows(rows, [...known.values()])
@@ -638,9 +701,11 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     }
     const marketChecked = marketRead && feedsLeftNoGap(heldAssets, prices)
 
-    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknown, opening, openingReadAt, readAtHead: chain.blockNum, tablesReached, closing, lastBalances, lastCheckableEth, l1Fees, staleFeeTxs, ethBalances, notes, notesReadTo, marketChecked }
+    const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknown, opening, openingReadAt, readAtHead: chain.blockNum, tablesReached, closing, lastBalances, lastCheckableEth, l1Fees, staleFeeTxs, ethBalances, ethPayers, notes, notesReadTo, marketChecked }
     // This comes after the claims and the closing balance, because whether ETH adds up depends on both.
-    await readEthBalances(address, unreadSendBlocks(address, next).slice(0, MAX_ETH_BALANCES_PER_READ - unreadEth.length), ethBalances)
+    const sendBlocks = unreadSendBlocks(address, next).slice(0, MAX_ETH_BALANCES_PER_READ - unreadEth.length)
+    await readEthBalances(address, sendBlocks, ethBalances)
+    await findUnseenEth(address, next, MAX_ETH_BALANCES_PER_READ - unreadEth.length - sendBlocks.length)
     wallets.delete(key)
     wallets.set(key, next)
     if (wallets.size > MAX_WALLETS) wallets.delete(wallets.keys().next().value as string)
@@ -651,7 +716,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const references = [...wallet.references.values()]
     const l1 = l1FeeRows(wallet.rows, wallet.l1Fees)
     const { opening, closing } = wallet
-    const { rows, priced, unseenEth } = settle(wallet)
+    const { rows: settled, priced, unseenEth } = settle(wallet)
+    const rows = withUnseenEth(address, wallet, settled)
     const marketAt = (asset: string, block: number) => {
       const key = `${asset}:${bucketOf(block)}`
       return use(key) ? (market.get(key)?.usdMicros ?? null) : null
@@ -726,6 +792,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         l1Fees: wallet.l1Fees,
         staleFeeTxs: wallet.staleFeeTxs,
         ethBalances: wallet.ethBalances,
+        ethPayers: wallet.ethPayers,
         notes: wallet.notes.filter((n) => n.blockNum <= through),
         notesReadTo: Math.min(wallet.notesReadTo, through),
         marketChecked: wallet.marketChecked,

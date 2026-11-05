@@ -444,6 +444,8 @@ private struct HoldingsTable: View {
     /// What each column needs, for what's usually in it. A column can always grow if there's room.
     private enum Column {
         static let asset: CGFloat = 130
+        /// With a note and a warning beside its name.
+        static let assetRoom: CGFloat = 175
         static let amount: CGFloat = 100
         static let averagePrice: CGFloat = 90
         static let value: CGFloat = 90
@@ -461,8 +463,8 @@ private struct HoldingsTable: View {
     }
 
     /// Below the width each needs, the average price paid gives way, then realized. Both stay in the details' menu.
-    private var showsAverage: Bool { width >= Column.asset + Column.amount + Column.averagePrice + Column.value + Column.realized + Column.unrealized + Column.chrome + Column.comebackRoom }
-    private var showsRealized: Bool { width >= Column.asset + Column.amount + Column.value + Column.realized + Column.unrealized + Column.chrome }
+    private var showsAverage: Bool { width >= Column.assetRoom + Column.amount + Column.averagePrice + Column.value + Column.realized + Column.unrealized + Column.chrome + Column.comebackRoom }
+    private var showsRealized: Bool { width >= Column.assetRoom + Column.amount + Column.value + Column.realized + Column.unrealized + Column.chrome + Column.comebackRoom }
 
     /// Hiding a column doesn't give its width to the others, so while any is hidden, each stops at what it needs, and what's left always fits.
     /// Only a change of limits reaches the rows: setting a column's width outright moves its header and leaves its cells behind.
@@ -483,7 +485,7 @@ private struct HoldingsTable: View {
                 }
                 .opacity(position.isHeld ? 1 : 0.6)
             }
-            .width(min: Column.asset, ideal: Column.asset * 1.3)
+            .width(min: Column.asset, ideal: Column.assetRoom, max: limit(Column.assetRoom))
             .disabledCustomizationBehavior(.all)
             TableColumn("Amount") { position in
                 number(position, .amount, Format.amount(position.values.qty, decimals: position.decimals), tone: .neutral)
@@ -517,7 +519,7 @@ private struct HoldingsTable: View {
                 let realized = position.values.realizedMicros
                 number(position, .realized, realized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized) } ?? Wording.unknown, tone: realized == nil ? .secondary : Tone(signed: realized))
             }
-            .width(min: Column.realized, ideal: Column.realized, max: Column.realized + Column.comebackRoom + (showsAverage ? 200 : 0))
+            .width(min: Column.realized, ideal: Column.realized, max: showsAverage ? nil : Column.realized + Column.comebackRoom)
             .alignment(.numeric)
             .customizationID(Column.realizedID)
             .disabledCustomizationBehavior(.all)
@@ -679,6 +681,8 @@ private struct NoActivity<Notices: View>: View {
             } actions: {
                 Button("Change Wallet") { navigation.isChangingWallet = true }
             }
+            // Fills what's left, so a notice stays at the top instead of floating over it.
+            .frame(maxHeight: .infinity)
         }
     }
 }
