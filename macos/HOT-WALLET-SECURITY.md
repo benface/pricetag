@@ -28,6 +28,8 @@ Send, Sweep Everything and site requests ask with no click, as soon as what's be
 - [x] The next prompt waits 2 seconds after any answer, yes or no, so a second touch can't approve what comes next. This holds across windows, and for a request that arrives after the last one has gone.
 - [x] Each ask has its own `LAContext`, with no reuse window, so no touch counts twice.
 - [x] A cancelled prompt leaves the request waiting, and only a click asks again. Rejecting is one click, and Escape does the same.
+- [x] Backing out works up to the touch, and wins if it lands at the same moment. Past it, nothing offers to back out, because what's been approved is on its way.
+- [x] An interrupted prompt doesn't ask again until the view on screen is paired with its new context, or it would be a dialog over the details. `macos/shot.sh site-refocused` fails if that doesn't happen.
 
 - [ ] **It isn't enforced by the enclave.** The same wrapping key has to open with no prompt for sweeps, so the prompt lives in the app. It stops someone at an unlocked Mac, not malware running as this user.
 
@@ -52,7 +54,7 @@ A browser extension lets websites use this wallet. A site can do real damage wit
 
 - [x] The extension never sees a key, and doesn't log or store anything. It runs as it's committed, with no build step and no dependencies, and asks only for `nativeMessaging`.
 - [x] Approvals only appear in the app's own window, showing the site and what's being signed. The wire protocol has no message for answering one, and a test sends the attempts anyone would try.
-- [x] Rejecting is the default: Return, Esc and closing the window all reject. Approve can't be pressed for the first second, so a window opening under the pointer can't catch a click, and it has no keyboard shortcut.
+- [x] Rejecting is one click, and Esc and closing the window do the same. Nothing approves with a key: Return only asks Touch ID again after a cancelled prompt. Connect and acknowledging a strong warning can't be pressed for the first second, so a window opening under the pointer can't catch a click. Everything else takes a touch, and Touch ID asks about 400 ms after the window's in front.
 - [x] Sending and signing also ask for Touch ID, right away, with the site and what's being signed on screen. A refused prompt leaves the request waiting, and signs nothing.
 - [x] The origin comes from the browser (`sender.origin`), not the page, and is checked again in the app. Only top-level pages on HTTPS or this Mac can ask: no iframes, and no plain HTTP that anyone on the network could change.
 - [x] Only the hot wallet is ever exposed. Nothing in the bridge can read a cold wallet, and a request naming any other address is refused.

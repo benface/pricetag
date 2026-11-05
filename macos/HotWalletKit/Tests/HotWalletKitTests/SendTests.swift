@@ -121,10 +121,21 @@ private let stolen = "0x" + String(repeating: "ab", count: 32)
     }
 }
 
+/// Says yes, whatever happened while it was asking.
+private final class TouchLands: UserPresence, @unchecked Sendable {
+    nonisolated(unsafe) var whileAsking: @MainActor (PresencePrompt) -> Void = { _ in }
+
+    func confirm(reason: String) async throws {}
+
+    @MainActor func confirm(reason: String, in prompt: PresencePrompt) async throws {
+        whileAsking(prompt)
+    }
+}
+
 @MainActor
 @Suite struct ConfirmingASendTests {
-    private func model(presence: Bool = true) async throws -> (SendModel, PortfolioStore, Rig) {
-        let rig = await Rig(funded, presence: presence)
+    private func model(presence: Bool = true, userPresence: (any UserPresence)? = nil) async throws -> (SendModel, PortfolioStore, Rig) {
+        let rig = await Rig(funded, presence: presence, userPresence: userPresence)
         await rig.wallet.tick()
         let source = ScriptedPortfolios(.success(portfolio()))
         let store = PortfolioStore(defaults: UserDefaults(suiteName: "send-tests-\(UUID().uuidString)")!, makeSource: { _ in source })
@@ -167,6 +178,81 @@ private let stolen = "0x" + String(repeating: "ab", count: 32)
             return
         }
         #expect(model.stage == .confirming)
+        #expect(await rig.signer.signed.isEmpty)
+    }
+
+    private func waitForTheNode(_ rig: Rig) async {
+        for _ in 0..<5000 {
+            if await rig.chain.heldCalls > 0 { return }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        Issue.record("Nothing reached the node")
+    }
+
+    /// So nothing on screen can look like it called back what's about to be signed anyway.
+    @Test func editingStopsWorkingOnceTouchIDHasSaidYesWhileItWaitsForTheNode() async throws {
+        let (model, store, rig) = try await model()
+        defer { store.stop() }
+        model.confirm()
+        let gate = ApprovalPrompt(sleep: { _ in }) { prompt, _ in await model.sendConfirmed(in: prompt) }
+        gate.promptPaired(gate.prompt)
+        await rig.chain.hold(snapshots: true)
+        gate.windowChanged(isInFront: true)
+        await waitForTheNode(rig)
+        #expect(gate.phase == .working)
+        model.backToEditing()
+        #expect(model.stage == .confirming, "there's no going back from here")
+        gate.stop()
+        #expect(gate.phase == .working, "going away doesn't change what's underway")
+        await rig.chain.release()
+        for _ in 0..<5000 where gate.phase == .working {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(gate.phase == .done)
+        #expect(model.stage == .sent)
+        #expect(await rig.signer.signed.count == 1)
+    }
+
+    @Test func aSweepIsWorkingOnceTouchIDHasSaidYesWhileItWaitsForTheNode() async throws {
+        let rig = await Rig(funded, presence: true)
+        let wallet = rig.wallet
+        await wallet.tick()
+        let gate = ApprovalPrompt(sleep: { _ in }) { prompt, _ in
+            await wallet.sweepEverything(in: prompt) ? .done : wallet.sweepProblem.map(ApprovalResult.failed) ?? .cancelled
+        }
+        gate.promptPaired(gate.prompt)
+        await rig.chain.hold(snapshots: true)
+        gate.windowChanged(isInFront: true)
+        await waitForTheNode(rig)
+        #expect(gate.phase == .working)
+        await rig.chain.release()
+        for _ in 0..<5000 where gate.phase == .working {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(gate.phase == .done)
+    }
+
+    @Test func backingOutAsTheTouchLandsStopsASend() async throws {
+        let presence = TouchLands()
+        let (model, store, rig) = try await model(userPresence: presence)
+        defer { store.stop() }
+        presence.whileAsking = { prompt in
+            model.backToEditing()
+            prompt.cancel()
+        }
+        model.confirm()
+        #expect(await model.sendConfirmed(in: PresencePrompt()) == .cancelled)
+        #expect(model.stage == .composing, "it can still be called off while it's asking")
+        #expect(await rig.signer.signed.isEmpty)
+    }
+
+    @Test func backingOutAsTheTouchLandsStopsASweep() async throws {
+        let presence = TouchLands()
+        presence.whileAsking = { $0.cancel() }
+        let rig = await Rig(funded, userPresence: presence)
+        await rig.wallet.tick()
+        #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
+        #expect(rig.wallet.sweepProblem == nil, "changing their mind isn't a problem to report")
         #expect(await rig.signer.signed.isEmpty)
     }
 

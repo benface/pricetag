@@ -168,29 +168,53 @@ private struct RowView: View {
     let row: ConfirmationRow
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(row.label)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-            VStack(alignment: .trailing, spacing: 2) {
-                if let name = row.name { Text(name) }
-                if row.isAddress {
-                    // On one line, because that's how it's checked.
-                    Text(row.value)
-                        .font(.system(size: 11, design: .monospaced))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                } else {
-                    Text(row.value)
-                        .monospacedDigit()
-                        .multilineTextAlignment(.trailing)
-                        .fixedSize(horizontal: false, vertical: true)
+        if row.isAddress {
+            // Whole, and on one line, because that's how it's checked. If that leaves no room beside the label, it goes under it.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    label
+                    Spacer(minLength: 0)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        name
+                        address
+                    }
                 }
+                VStack(alignment: .leading, spacing: 2) {
+                    label
+                    name
+                    address
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .textSelection(.enabled)
-            // Ahead of the spacer, so an address only shrinks when it has to.
-            .layoutPriority(1)
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                label
+                Spacer(minLength: 0)
+                Text(row.value)
+                    .monospacedDigit()
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
         }
+    }
+
+    private var label: some View {
+        Text(row.label)
+            .foregroundStyle(.secondary)
+            .fixedSize()
+    }
+
+    @ViewBuilder
+    private var name: some View {
+        if let name = row.name { Text(name) }
+    }
+
+    private var address: some View {
+        Text(row.value)
+            .font(.system(size: 11, design: .monospaced))
+            .fixedSize()
     }
 }
 
@@ -245,6 +269,8 @@ struct TouchIDFooter: View {
     let gate: ApprovalPrompt
     /// What Touch ID does, as in "Touch ID to send".
     let verb: String
+    /// What's happening once it's said yes, as in "Sending…".
+    let doing: String
     /// "Reject" or "Cancel". One click, and Escape does the same.
     let leaveTitle: String
     let leave: () -> Void
@@ -290,7 +316,7 @@ struct TouchIDFooter: View {
             } else {
                 ZStack {
                     // Paired before it's asked, or it wouldn't be the one asking. It draws nothing until then.
-                    TouchIDGlyph(context: gate.prompt.context)
+                    TouchIDGlyph(prompt: gate.prompt) { gate.promptPaired($0) }
                     if !gate.drawsSystemGlyph {
                         Image(systemName: "touchid")
                             .font(.system(size: 28))
@@ -302,6 +328,10 @@ struct TouchIDFooter: View {
                 Text(gate.isInFront || gate.phase == .asking ? "Touch ID to \(verb)" : "Click here for Touch ID")
                     .font(.headline)
             }
+        case .working:
+            ProgressView().controlSize(.small)
+            Text(doing)
+                .font(.headline)
         case .stopped(let reason):
             Text(reason ?? "Nothing happened")
                 .font(.headline)
@@ -321,9 +351,12 @@ struct TouchIDFooter: View {
             Button(leaveTitle, action: leave)
                 .keyboardShortcut(.cancelAction)
                 .buttonStyle(.borderedProminent)
-        case .waiting, .asking, .done:
+        case .waiting, .asking:
             Button(leaveTitle, action: leave)
                 .keyboardShortcut(.cancelAction)
+        case .working, .done:
+            // Past Touch ID, there's no calling it back, so nothing here offers to.
+            EmptyView()
         case .stopped:
             Button(leaveTitle, action: leave)
                 .keyboardShortcut(.cancelAction)
@@ -361,15 +394,35 @@ struct ProgressFooter: View {
     }
 }
 
-/// The system's own Touch ID glyph. Pairing it with a context is what keeps the prompt in our window.
+/// The system's own Touch ID glyph. Pairing it with a context is what keeps the prompt in our window. That only happens when the system's
+/// view is made, so a new prompt needs a new one, and it says so only once what's on screen really is paired with that prompt.
 private struct TouchIDGlyph: NSViewRepresentable {
-    let context: LAContext
+    let prompt: PresencePrompt
+    let paired: (PresencePrompt) -> Void
 
-    func makeNSView(context representable: Context) -> LAAuthenticationView {
-        LAAuthenticationView(context: context, controlSize: .large)
+    func makeNSView(context: Context) -> Holder {
+        Holder()
     }
 
-    func updateNSView(_ view: LAAuthenticationView, context representable: Context) {}
+    func updateNSView(_ holder: Holder, context: Context) {
+        if holder.glyph?.context !== prompt.context {
+            holder.glyph?.removeFromSuperview()
+            let glyph = LAAuthenticationView(context: prompt.context, controlSize: .large)
+            glyph.frame = holder.bounds
+            glyph.autoresizingMask = [.width, .height]
+            holder.addSubview(glyph)
+            holder.glyph = glyph
+        }
+        guard holder.glyph?.context === prompt.context else { return }
+        let prompt = prompt
+        let paired = paired
+        // Later, because this runs in the middle of a SwiftUI update.
+        DispatchQueue.main.async { paired(prompt) }
+    }
+
+    final class Holder: NSView {
+        var glyph: LAAuthenticationView?
+    }
 }
 
 /// Whether the window it's in is on screen, uncovered, and what the user's using. A sheet counts as its own window.

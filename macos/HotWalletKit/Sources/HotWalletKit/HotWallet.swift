@@ -698,6 +698,9 @@ public final class HotWallet {
     func confirmPresence(reason: String, in prompt: PresencePrompt? = nil) async throws {
         if let prompt {
             try await presence.confirm(reason: reason, in: prompt)
+            // They backed out as the touch landed. Backing out wins, because it's what's on screen.
+            if prompt.isCancelled { throw LAError(.appCancel) }
+            prompt.markConfirmed()
         } else {
             try await presence.confirm(reason: reason)
         }

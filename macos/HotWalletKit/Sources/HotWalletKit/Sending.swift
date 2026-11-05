@@ -84,6 +84,7 @@ public final class SendModel {
 
     private let wallet: HotWallet
     private let store: PortfolioStore
+    private var askingPrompt: PresencePrompt?
 
     public init(wallet: HotWallet, store: PortfolioStore) {
         self.wallet = wallet
@@ -164,7 +165,9 @@ public final class SendModel {
         stage = .confirming
     }
 
+    /// Not once Touch ID has said yes, when it's on its way whatever this shows.
     public func backToEditing() {
+        guard askingPrompt?.isConfirmed != true else { return }
         stage = .composing
     }
 
@@ -180,7 +183,11 @@ public final class SendModel {
         // Together, because the answer is about this address, whatever's on screen by the time this lands.
         let answer = asksIfItsYours ? ownership?.answer : nil
         isSending = true
-        defer { isSending = false }
+        askingPrompt = prompt
+        defer {
+            isSending = false
+            askingPrompt = nil
+        }
         failure = nil
         guard await wallet.send(SendRequest(token: token, amount: amount, to: recipient), in: prompt) else {
             failure = wallet.sweepProblem

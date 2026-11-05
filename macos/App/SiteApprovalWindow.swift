@@ -58,7 +58,7 @@ struct SiteApprovalView: View {
                 if case .connect = approval.action {
                     ConnectFooter(connect: connect, reject: reject)
                 } else {
-                    TouchIDFooter(gate: gate, verb: verb, leaveTitle: "Reject", leave: reject)
+                    TouchIDFooter(gate: gate, verb: verb, doing: isMessage ? "Signing…" : "Sending…", leaveTitle: "Reject", leave: reject)
                 }
                 if waitingBehind > 0 {
                     Text("\(waitingBehind) more waiting")
@@ -69,6 +69,10 @@ struct SiteApprovalView: View {
         }
         // Reject has this shortcut already, once it can take it. This is for when focus is in the text.
         .onExitCommand(perform: reject)
+    }
+
+    private var isMessage: Bool {
+        if case .message = approval.action { true } else { false }
     }
 
     private var verb: String {

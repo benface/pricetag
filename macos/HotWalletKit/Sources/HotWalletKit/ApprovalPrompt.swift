@@ -21,13 +21,19 @@ public final class ApprovalPrompt {
         /// It's coming: the window has to be in front, and it gives the user a moment.
         case waiting
         case asking
+        /// Touch ID said yes and it's on its way, which nothing can call back, so nothing should offer to.
+        case working
         /// Nothing happened, and it won't ask again until told to. With what went wrong, if it was more than changing their mind.
         case stopped(String?)
         case done
     }
 
-    public private(set) var phase: Phase
+    public var phase: Phase {
+        storedPhase == .asking && prompt.isConfirmed ? .working : storedPhase
+    }
+
     public private(set) var prompt = PresencePrompt()
+    private var storedPhase: Phase
     /// Whether the user can see this and it's what they're using. Until then, a click on the window is what starts it.
     public private(set) var isInFront = false
 
@@ -36,6 +42,8 @@ public final class ApprovalPrompt {
 
     @ObservationIgnored private var wasAcknowledged = false
     @ObservationIgnored private var wasInterrupted = false
+    /// The prompt a view has paired with the system's. Asked before that, it would be a dialog over the details instead.
+    @ObservationIgnored private weak var pairedPrompt: PresencePrompt?
     @ObservationIgnored private var isGone = false
     #if DEBUG
     @ObservationIgnored private var isScene = false
@@ -53,7 +61,7 @@ public final class ApprovalPrompt {
         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
         perform: @escaping (_ prompt: PresencePrompt, _ acknowledged: Bool) async -> ApprovalResult
     ) {
-        phase = needsAcknowledgment ? .needsAcknowledgment : .waiting
+        storedPhase = needsAcknowledgment ? .needsAcknowledgment : .waiting
         self.notBefore = notBefore
         self.now = now
         self.sleep = sleep
@@ -80,15 +88,25 @@ public final class ApprovalPrompt {
     public func acknowledge() {
         guard phase == .needsAcknowledgment else { return }
         wasAcknowledged = true
-        phase = .waiting
+        storedPhase = .waiting
         askAfterAMoment()
     }
 
     public func tryAgain() {
         guard case .stopped = phase else { return }
-        phase = .waiting
+        storedPhase = .waiting
         askAfterAMoment()
     }
+
+    /// A view holds the system's view for this prompt now. It only counts for the prompt that's current.
+    public func promptPaired(_ paired: PresencePrompt) {
+        guard paired === prompt, pairedPrompt !== paired else { return }
+        pairedPrompt = paired
+        askAfterAMoment()
+    }
+
+    /// Whether a view has this prompt paired yet.
+    public var isPromptPaired: Bool { pairedPrompt === prompt }
 
     /// What's on show is going away, so nothing can be approved from here anymore.
     public func stop() {
@@ -107,7 +125,7 @@ public final class ApprovalPrompt {
 
     private func askAfterAMoment() {
         pause?.cancel()
-        guard phase == .waiting, isInFront, !isGone else { return }
+        guard phase == .waiting, isInFront, !isGone, isPromptPaired else { return }
         pause = Task {
             do {
                 try await sleep(Self.moment)
@@ -115,8 +133,8 @@ public final class ApprovalPrompt {
             } catch {
                 return
             }
-            guard !Task.isCancelled, phase == .waiting, isInFront, !isGone else { return }
-            phase = .asking
+            guard !Task.isCancelled, phase == .waiting, isInFront, !isGone, isPromptPaired else { return }
+            storedPhase = .asking
             // Outside this task, which going away cancels. Only the prompt's own cancel should stop what's been asked.
             Task { await ask() }
         }
@@ -127,7 +145,7 @@ public final class ApprovalPrompt {
         let interrupted = wasInterrupted
         wasInterrupted = false
         guard result != .done else {
-            phase = .done
+            storedPhase = .done
             return
         }
         // Never the same one twice.
@@ -136,12 +154,12 @@ public final class ApprovalPrompt {
         case .done:
             break
         case .cancelled where interrupted:
-            phase = .waiting
+            storedPhase = .waiting
             askAfterAMoment()
         case .cancelled:
-            phase = .stopped(nil)
+            storedPhase = .stopped(nil)
         case .failed(let reason):
-            phase = .stopped(reason)
+            storedPhase = .stopped(reason)
         }
     }
 }
@@ -151,11 +169,16 @@ extension ApprovalPrompt {
     /// For `macos/shot.sh`. It stays as it is and never asks.
     public static func scene(_ phase: Phase, isInFront: Bool = true) -> ApprovalPrompt {
         let scene = ApprovalPrompt { _, _ in .cancelled }
-        scene.phase = phase
+        scene.storedPhase = phase
         scene.isInFront = isInFront
         scene.isGone = true
         scene.isScene = true
         return scene
+    }
+
+    /// The same as an interruption does to the prompt, for the scene that checks the view follows it.
+    public func sceneReplacePrompt() {
+        prompt = PresencePrompt()
     }
 }
 #endif

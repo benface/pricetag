@@ -48,7 +48,9 @@ private func settle(until condition: () -> Bool = { false }) async {
 @MainActor
 struct ApprovalPromptTests {
     private func gate(_ asked: Asked, needsAcknowledgment: Bool = false, notBefore: Date? = nil, pauses: Pauses = Pauses(), now: Date = Date()) -> ApprovalPrompt {
-        ApprovalPrompt(needsAcknowledgment: needsAcknowledgment, notBefore: { notBefore }, now: { now }, sleep: { pauses.record($0) }, perform: asked.answer)
+        let gate = ApprovalPrompt(needsAcknowledgment: needsAcknowledgment, notBefore: { notBefore }, now: { now }, sleep: { pauses.record($0) }, perform: asked.answer)
+        gate.promptPaired(gate.prompt)
+        return gate
     }
 
     @Test func itAsksByItselfOnceTheWindowIsInFront() async {
@@ -95,6 +97,7 @@ struct ApprovalPromptTests {
         await settle()
         #expect(asked.prompts.count == 1, "it doesn't keep asking by itself")
         gate.tryAgain()
+        gate.promptPaired(gate.prompt)
         await settle { gate.phase == .done }
         #expect(asked.prompts.count == 2)
         #expect(asked.prompts[0] !== asked.prompts[1], "no context is used twice")
@@ -137,8 +140,58 @@ struct ApprovalPromptTests {
         await settle()
         #expect(asked.prompts.count == 1, "nothing's asked while the window's away")
         gate.windowChanged(isInFront: true)
+        await settle()
+        #expect(asked.prompts.count == 1, "nor before the view has the new prompt")
+        gate.promptPaired(first)
+        await settle()
+        #expect(asked.prompts.count == 1, "what the old prompt's view says doesn't count")
+        #expect(!gate.isPromptPaired)
+        gate.promptPaired(gate.prompt)
         await settle { gate.phase == .done }
         #expect(asked.prompts.count == 2)
+        #expect(asked.prompts[1] !== first)
+    }
+
+    @Test func itDoesntAskUntilAViewHasThePromptPaired() async {
+        let asked = Asked()
+        let gate = ApprovalPrompt(sleep: { _ in }, perform: asked.answer)
+        gate.windowChanged(isInFront: true)
+        await settle()
+        #expect(asked.prompts.isEmpty, "it would be a dialog over the details")
+        gate.promptPaired(gate.prompt)
+        await settle { !asked.prompts.isEmpty }
+        #expect(asked.prompts.count == 1)
+    }
+
+    @Test func onceTouchIDSaysYesItsWorkingAndCantBeInterrupted() async {
+        let asked = Asked()
+        asked.holds = true
+        asked.answers = [.done]
+        let gate = gate(asked)
+        gate.windowChanged(isInFront: true)
+        await settle { asked.holding != nil }
+        #expect(gate.phase == .asking)
+        asked.prompts[0].markConfirmed()
+        #expect(gate.phase == .working)
+        gate.windowChanged(isInFront: false)
+        #expect(!asked.prompts[0].isCancelled, "what's underway isn't what's being asked")
+        asked.release()
+        await settle { gate.phase == .done }
+        #expect(gate.phase == .done)
+    }
+
+    @Test func aFailureAfterTheTouchComesBackToAFreshPrompt() async {
+        let asked = Asked()
+        asked.holds = true
+        asked.answers = [.failed("Fees rose.")]
+        let gate = gate(asked)
+        gate.windowChanged(isInFront: true)
+        await settle { asked.holding != nil }
+        asked.prompts[0].markConfirmed()
+        asked.release()
+        await settle { gate.phase == .stopped("Fees rose.") }
+        #expect(gate.phase == .stopped("Fees rose."))
+        #expect(!gate.prompt.isConfirmed, "the next try takes its own touch")
     }
 
     @Test func macOSsOwnDialogTakingTheWindowsPlaceDoesntStopIt() async {

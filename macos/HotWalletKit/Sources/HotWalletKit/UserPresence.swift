@@ -23,9 +23,15 @@ public final class PresencePrompt {
     public private(set) var context = LAContext()
     /// macOS's own dialog is asking instead, because this Mac can't ask inline right now. It names what's being approved by itself.
     public private(set) var isSystemDialog = false
+    /// The person said yes, so what it was asking about is underway, and cancelling this can't call that back.
+    public private(set) var isConfirmed = false
     @ObservationIgnored private(set) var isCancelled = false
 
     public init() {}
+
+    func markConfirmed() {
+        isConfirmed = true
+    }
 
     public func cancel() {
         isCancelled = true

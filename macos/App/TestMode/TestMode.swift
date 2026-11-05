@@ -150,6 +150,7 @@ enum TestScene: String, CaseIterable {
     case sendCAD = "send-cad"
     case sendKnown = "send-known"
     case sendWaiting = "send-waiting"
+    case sendGoing = "send-going"
     case sendSent = "send-sent"
     case sendStopped = "send-stopped"
     case sweep
@@ -167,6 +168,7 @@ enum TestScene: String, CaseIterable {
     case siteStopped = "site-stopped"
     case siteNext = "site-next"
     case siteBehind = "site-behind"
+    case siteRefocused = "site-refocused"
     case siteSending = "site-sending"
     case siteSent = "site-sent"
     case siteFailure = "site-failure"
@@ -185,7 +187,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
-             .send, .sendCAD, .sendKnown, .sendWaiting, .sendSent, .sendStopped, .sweep, .sweepCAD, .siteConnect, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteSending, .siteSent, .siteFailure, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
+             .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .siteConnect, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteFailure, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
         }
@@ -228,7 +230,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown, .sendWaiting, .sendSent, .sendStopped, .sweep, .sweepCAD: .funded
+        case .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD: .funded
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
         case .hotWalletNoPrice: .noPrice
         case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap: .overCap
@@ -309,7 +311,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet, address: HotWalletFixture.savings.lowercased)), isReady: isReady)
         case .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD:
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet)), isReady: isReady)
-        case .send, .sendCAD, .sendKnown, .sendWaiting, .sendSent, .sendStopped:
+        case .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped:
             let model = SendModel(wallet: hotWallet, store: store)
             model.token = Base.tokens.first { $0.symbol == "USDC" }!
             model.amountText = "12.50"
@@ -317,13 +319,14 @@ enum TestScene: String, CaseIterable {
             switch self {
             // Touch ID's part never happens here: this only draws what's around it.
             case .sendWaiting: return TestScreen(view: AnyView(SendConfirmation(model: model, gate: .scene(.asking), done: {}).frame(width: 460)), isReady: isReady)
+            case .sendGoing: return TestScreen(view: AnyView(SendConfirmation(model: model, gate: .scene(.working), done: {}).frame(width: 460)), isReady: isReady)
             case .sendSent: return TestScreen(view: AnyView(SendConfirmation(model: model, gate: .scene(.done), done: {}).frame(width: 460)), isReady: isReady)
             case .sendStopped: return TestScreen(view: AnyView(SendConfirmation(model: model, gate: .scene(.stopped(nil)), done: {}).frame(width: 460)), isReady: isReady)
             default: return TestScreen(view: AnyView(SendSheet(model: model)), isReady: isReady)
             }
         case .sweep, .sweepCAD:
             return TestScreen(view: AnyView(SweepSheet(wallet: hotWallet, gate: .scene(.asking))), isReady: isReady)
-        case .siteConnect, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteSending, .siteSent, .siteFailure:
+        case .siteConnect, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteFailure:
             return siteScreen(hotWallet: hotWallet, isReady: isReady)
         case .publishCost, .publishCAD, .publishWaiting:
             let draft = CostNoteDraft(wallet: "0x00000000000000000000000000000000000de301", txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
@@ -363,6 +366,20 @@ enum TestScene: String, CaseIterable {
         if self == .siteNext {
             phase = .waiting
             waitingBehind = 2
+        }
+        // An interruption replaces the prompt. This isn't ready until the system's view on screen is paired with the new one, so if
+        // it never is, the scene fails instead of drawing, and a real prompt would have been a dialog over the details.
+        if self == .siteRefocused {
+            let gate = ApprovalPrompt.scene(.waiting)
+            var isReplaced = false
+            let view = SiteApprovalView(approval: approval, waitingBehind: 0, usd: { hotWallet.usd($0) }, gate: gate, connect: {}, reject: {})
+            return TestScreen(view: AnyView(view.frame(width: 480).background(.background)), isReady: {
+                guard isReady(), gate.isPromptPaired else { return false }
+                if isReplaced { return true }
+                isReplaced = true
+                gate.sceneReplacePrompt()
+                return false
+            })
         }
         let view: AnyView
         switch self {

@@ -172,10 +172,10 @@ struct SendConfirmation: View {
                         done()
                     }
             } else {
-                TouchIDFooter(gate: gate, verb: "send", leaveTitle: "Edit") { model.backToEditing() }
+                TouchIDFooter(gate: gate, verb: "send", doing: "Sending…", leaveTitle: "Edit") { model.backToEditing() }
             }
         }
-        .onExitCommand { if model.stage == .confirming { model.backToEditing() } }
+        .onExitCommand { if model.stage == .confirming, gate.phase != .working { model.backToEditing() } }
     }
 
     private var rows: [ConfirmationRow] {
@@ -215,7 +215,7 @@ struct SweepSheet: View {
                         dismiss()
                     }
             } else {
-                TouchIDFooter(gate: gate, verb: "sweep", leaveTitle: "Cancel") { dismiss() }
+                TouchIDFooter(gate: gate, verb: "sweep", doing: "Sweeping…", leaveTitle: "Cancel") { dismiss() }
             }
         }
         .frame(width: 460)
