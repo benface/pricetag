@@ -159,10 +159,9 @@ public enum Wording {
         return "It lines up with what left this wallet in \(named.joined(separator: ", "))\(more): ETH rose by that much in the same block, with no transaction showing it."
     }
 
-    /// What's missing while a dataset catches up to the chain. nil when it isn't behind.
+    /// What's missing while a dataset catches up to the chain. nil when it isn't behind, or hasn't started: there are no numbers yet, and the empty state says why.
     public static func catchingUp(_ portfolio: Portfolio) -> String? {
-        if !portfolio.progress.started { return notStarted }
-        if portfolio.progress.behindBlocks == 0 { return nil }
+        if !portfolio.progress.started || portfolio.progress.behindBlocks == 0 { return nil }
         let head = portfolio.latest.blockNum
         return behind(ms: BlockTime.msBetween(head - portfolio.progress.behindBlocks, head))
     }

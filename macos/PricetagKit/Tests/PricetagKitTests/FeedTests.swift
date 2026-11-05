@@ -154,7 +154,8 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         let (store, _, _) = makeStore([.success(waiting)])
         await _ = store.poll()
         #expect(store.feed == .catchingUp)
-        #expect(try #require(store.feed.staleNotice(serverURL: store.serverURL, portfolio: store.portfolio)).contains("hasn't reached"))
+        // The empty state explains this, so a notice would only repeat it.
+        #expect(store.feed.staleNotice(serverURL: store.serverURL, portfolio: store.portfolio) == nil)
     }
 
     @Test func demoDataIsNeverBehind() async throws {

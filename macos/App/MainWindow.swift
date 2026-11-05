@@ -157,7 +157,7 @@ struct MainWindow: View {
         VStack(alignment: .leading, spacing: 14) {
             notices(portfolio)
             if !portfolio.progress.started {
-                ContentUnavailableView("Nothing to show yet", systemImage: "hourglass", description: Text(Wording.notStarted))
+                ContentUnavailableView("Still catching up", systemImage: "hourglass", description: Text(Wording.notStarted))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if portfolio.isEmpty {
                 VStack(spacing: 14) {
