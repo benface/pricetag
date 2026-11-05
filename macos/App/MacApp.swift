@@ -25,6 +25,7 @@ struct MacApp: App {
             store.setLinkedWallets($0)
             siteBridge.walletChanged()
         }
+        hotWallet.onKeyRetired = { store.followRetiredWallet($0.lowercased, to: $1?.lowercased) }
         #if DEBUG
         HotWalletDebug.applyLaunchArguments(to: hotWallet, bridge: siteBridge)
         #endif
