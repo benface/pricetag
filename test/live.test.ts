@@ -511,6 +511,44 @@ describe("watchWallet", () => {
       assert.deepEqual(await noteTxs(), ["0xnew"])
     })
 
+    it("doesn't keep a price read outside a wallet's own read that crossed the reorg", async () => {
+      const tables: Tables = { ...OLD, legs: [{ ...creditAt(105, "dd", "5"), token: "940181a94a35a4569e4529a3cdfb74e38fd98631", kind: "erc20" }], reference_prices: [{ ...REFERENCE, block_num: "105" }, { ...REFERENCE, block_num: "150" }] }
+      const query: Query = async <T,>(sql: string) => fakeAmp(tables, 150).query<T>(sql)
+      const held = heldPromise()
+      const started = heldPromise()
+      let holding = false
+      const asked: number[] = []
+      const source: Source = {
+        ...datasetSource(query, { dataset: "benface/pricetag@0.0.1", baseDataset: "b", startBlock: 50, network: "base_mainnet" }),
+        marketReady: async () => true,
+        readMarketTrades: async (_asset, _from, to) => {
+          asked.push(to)
+          if (holding) {
+            started.resolve()
+            await held.promise
+          }
+          return []
+        },
+      }
+      const wallets = createWallets(source, async () => ({ blockNum: 150, timestamp: new Date(1_800_000_000_000).toISOString() }), async () => new Map(), QUIET)
+      await wallets.get(ADDRESS, {})
+      const facts = await wallets.factsAt(ADDRESS, 150, { withBalances: false })
+      await wallets.rewind(150, 150)
+
+      // The comparison's own read of a price, which isn't one of the reads a reorg waits for.
+      holding = true
+      const crossing = wallets.marketOn(ADDRESS, facts!, {})
+      await started.promise
+      await wallets.rewind(150, 150)
+      holding = false
+      held.resolve()
+      assert.equal((await crossing).checked, false)
+
+      asked.length = 0
+      await wallets.get(ADDRESS, {})
+      assert.ok(asked.includes(150), "the price is read again, from the chain that replaced it")
+    })
+
     it("doesn't touch a read as of a block before the reorg", async () => {
       const { chain, client } = chainAt(150, { ...OLD, legs: [creditAt(90, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "90" }] })
       const asOf = { to: 95 }
@@ -706,14 +744,20 @@ describe("exchange rates after a reorg", () => {
   })
 })
 
+function heldPromise() {
+  let resolve = () => {}
+  const promise = new Promise<void>((done) => (resolve = done))
+  return { promise, resolve: () => resolve() }
+}
+
 describe("an exchange rate read that crosses a reorg", () => {
   const WALLET = (blockNum: number) => ({ latest: { blockNum, timestamp: new Date(1_800_000_000_000).toISOString() }, legs: [{ blockNum: 150 }] }) as Parameters<ReturnType<typeof createRates>>[1]
 
   /** Rates that answer with what `answer` is now, and hold their first read until the test lets it finish. */
   function heldRates() {
     const state = { answer: "1", calls: 0 }
-    const started = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
+    const started = heldPromise()
+    const release = heldPromise()
     const rates = createRates(async (_feed, blocks) => {
       state.calls += 1
       const result = new Map(blocks.map((block) => [block, { answer: state.answer, updatedAt: block } satisfies RateRound]))

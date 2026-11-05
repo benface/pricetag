@@ -59,8 +59,8 @@ public final class PortfolioStore {
     public private(set) var currency: CurrencyCode
     public private(set) var serverURL: URL
     /// What the user has said about where things came from. It stays on this device.
-    public private(set) var book: Book
-    /// What each answer replaced, newest last, so Undo is always there.
+    private var answers: Book
+    /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
     public private(set) var undoStack: [Book] = []
     /// The server's pricing rules. Empty when it has only one, so there's nothing to choose.
     public private(set) var rules: [PricingRule] = []
@@ -105,7 +105,7 @@ public final class PortfolioStore {
         self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
         self.currency = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
         self.serverURL = serverURL
-        self.book = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
+        self.answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.selectedRule = defaults.string(forKey: Keys.rule)
         self.feed = address == nil ? .noWallet : .reading
         self.source = makeSource(serverURL)
@@ -197,6 +197,17 @@ public final class PortfolioStore {
         if address != nil, pollTask != nil { start() }
     }
 
+    /// The answers, with the accounts in this wallet as `mine`. Nobody's asked about those, so there's nothing to undo or save, and
+    /// one that's removed is simply gone, or a mistyped savings wallet would stay linked.
+    public var book: Book {
+        answers.linking(linkedWallets)
+    }
+
+    /// Whether there's anything of the user's own to forget.
+    public var hasAnswers: Bool {
+        !answers.isEmpty
+    }
+
     public func setCurrency(_ currency: CurrencyCode) {
         guard currency != self.currency else { return }
         self.currency = currency
@@ -234,7 +245,7 @@ public final class PortfolioStore {
 
     public func comparison() async throws -> RuleComparison {
         guard let address else { throw CancellationError() }
-        return try await source.comparison(address: address, method: method, currency: currency, linked: linked(for: address), book: book)
+        return try await source.comparison(address: address, method: method, currency: currency, linked: linked(for: address), book: bookToSend(book, for: address))
     }
 
     public func setServerURL(_ url: URL) {
@@ -252,9 +263,10 @@ public final class PortfolioStore {
 
     /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced.
     public func setBook(_ next: Book) {
-        guard next != book else { return }
-        undoStack.append(book)
-        store(next)
+        let nextAnswers = answers(in: next)
+        guard nextAnswers != answers else { return }
+        undoStack.append(answers)
+        store(nextAnswers)
     }
 
     public func undo() {
@@ -263,21 +275,34 @@ public final class PortfolioStore {
     }
 
     private func store(_ next: Book) {
-        book = next
+        answers = next
         defaults.set(try? JSONEncoder().encode(next), forKey: Keys.book)
         start()
+    }
+
+    /// A book built on `book` has the accounts in it, and they aren't answers. What was said about one before it was an account stays.
+    private func answers(in next: Book) -> Book {
+        var kept = next.unlinking(linkedWallets)
+        for account in linkedWallets where next.senders[account]?.kind == .mine { kept.senders[account] = answers.senders[account] }
+        return kept
+    }
+
+    /// What goes along with a read. A wallet being watched could be anyone's, and it didn't get its costs from this user's accounts
+    /// just because they sent it something, so it only gets what's actually been answered.
+    private func bookToSend(_ book: Book, for address: String) -> Book {
+        book.linkedWallets.contains(address) ? book : book.unlinking(linkedWallets)
     }
 
     /// What these answers would do to the headline. Nothing's kept, so asking changes nothing.
     public func previews(of candidates: [Book]) async throws -> [BookPreview] {
         guard let address else { throw FetchError.unreachable }
-        return try await source.previews(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), candidates: candidates)
+        return try await source.previews(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), candidates: candidates.map { bookToSend($0, for: address) })
     }
 
     /// Every movement as a spreadsheet, marked so an estimate or an unknown can't pass for an exact number.
     public func exportCSV() async throws -> String {
         guard let address else { throw FetchError.unreachable }
-        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), book: book)
+        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), book: bookToSend(book, for: address))
     }
 
     /// Reads an exchange's history, and keeps what it found on this device. Says how many withdrawals had no usable cost.
@@ -299,7 +324,7 @@ public final class PortfolioStore {
 
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), serverURL: serverURL, book: book) }
+        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), serverURL: serverURL, book: bookToSend(book, for: $0)) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
@@ -348,7 +373,7 @@ public final class PortfolioStore {
         // reads the wallet again, so they get as long as a first read.
         let timeout: Duration = portfolio?.currency == currency && !isOtherRule ? .seconds(15) : .seconds(180)
         do {
-            let next = try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: book, timeout: timeout)
+            let next = try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address), timeout: timeout)
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()

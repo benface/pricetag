@@ -27,14 +27,6 @@ struct MacApp: App {
         _hotWallet = State(initialValue: hotWallet)
     }
 
-    private var opensSpendingMoney: Bool {
-        #if DEBUG
-        HotWalletDebug.opensWindow
-        #else
-        false
-        #endif
-    }
-
     var body: some Scene {
         MenuBarExtra {
             PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)
@@ -44,13 +36,13 @@ struct MacApp: App {
         .menuBarExtraStyle(.window)
 
         Window(AppName.current, id: WindowID.main) {
-            MainWindow(store: store, navigation: navigation)
+            MainWindow(store: store, navigation: navigation, noteWriter: hotWallet)
                 .holdsDockPresence()
         }
         .defaultSize(width: 1120, height: 760)
         .windowToolbarStyle(.unified)
         // Opens at launch, because a full menu bar can hide the item, and launching should always show something.
-        .defaultLaunchBehavior(opensSpendingMoney ? .suppressed : .presented)
+        .defaultLaunchBehavior(.presented)
         .restorationBehavior(.disabled)
         .commands {
             CommandGroup(replacing: .newItem) {}
@@ -127,11 +119,6 @@ struct MenuBarLabel: View {
 
     var body: some View {
         label
-            #if DEBUG
-            .task {
-                if HotWalletDebug.opensWindow { openWindow(id: WindowID.hotWallet) }
-            }
-            #endif
             // In the label because it's the one view that's always there. A possibly stolen key can't wait for someone to look.
             .onChange(of: alarm?.findings.count) { _, count in
                 guard count != nil else { return }
