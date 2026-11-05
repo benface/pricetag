@@ -195,6 +195,75 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(store.feed == .live)
     }
 
+    func makeAgingStore(_ source: any PortfolioSource, liveFor: Duration) -> PortfolioStore {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let now = now
+        return PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now }, liveFor: liveFor)
+    }
+
+    @Test func aReadRunningAcrossAGapStopsCallingOldNumbersLive() async throws {
+        let gate = GatedSource()
+        let store = makeAgingStore(gate, liveFor: .milliseconds(200))
+        let first = Task { await store.poll() }
+        await gate.waitUntilAsked()
+        await gate.answer(.success(try realPortfolio(at: now)))
+        await _ = first.value
+        #expect(store.feed == .live)
+        let held = store.portfolio
+        let second = Task { await store.poll() }
+        await gate.waitUntilAsked()
+        for _ in 0..<2000 where store.feed == .live {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        #expect(store.feed == .reading)
+        #expect(store.portfolio == held)
+        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Reading…")
+        let later = now.addingTimeInterval(1)
+        await gate.answer(.success(try realPortfolio(at: later)))
+        await _ = second.value
+        #expect(store.feed == .live)
+        #expect(store.portfolio?.latest.date == later)
+    }
+
+    @Test func aNewReadKeepsNumbersLive() async throws {
+        let answer = try realPortfolio(at: now)
+        let store = makeAgingStore(ScriptedSource([.success(answer), .success(answer)]), liveFor: .seconds(1))
+        await _ = store.poll()
+        try await Task.sleep(for: .milliseconds(600))
+        await _ = store.poll()
+        // Past when the first read's numbers would have stopped being live.
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(store.feed == .live)
+    }
+
+    @Test func restartingDoesntKeepOldNumbersLive() async throws {
+        let gate = GatedSource()
+        let store = makeAgingStore(gate, liveFor: .milliseconds(200))
+        let first = Task { await store.poll() }
+        await gate.waitUntilAsked()
+        await gate.answer(.success(try realPortfolio(at: now)))
+        await _ = first.value
+        store.start()
+        defer { store.stop() }
+        await gate.waitUntilAsked()
+        for _ in 0..<2000 where store.feed == .live {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        #expect(store.feed == .reading)
+        await gate.answer(.failure(.unreachable))
+    }
+
+    @Test func onlyLiveNumbersAge() async throws {
+        let store = makeAgingStore(ScriptedSource([.success(try realPortfolio(at: now.addingTimeInterval(-600)))]), liveFor: .milliseconds(1))
+        await _ = store.poll()
+        let demo = makeAgingStore(ScriptedSource([.success(try demoPortfolio())]), liveFor: .milliseconds(1))
+        await _ = demo.poll()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(store.feed == .behind(seconds: 600))
+        #expect(demo.feed == .live, "demo data isn't reading from anywhere that can fall behind")
+    }
+
     @Test func aReadThatTimesOutWithNothingAnsweringIsOffline() async throws {
         for rulesFailure in [FetchError.unreachable, .timedOut] {
             let (store, source, _) = makeStore([.success(try realPortfolio(at: now)), .failure(.timedOut)], rulesFailure: rulesFailure)
