@@ -8,6 +8,7 @@ import type { Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
 import { combinedPortfolioOf, explainCombined, type CombinedPortfolioResponse } from "../server/combined.ts"
 import { portfolioOf } from "../server/portfolio.ts"
+import type { RatesReader } from "../server/rates.ts"
 import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { DEMO_SAVINGS_ADDRESS, emptyBook, type Book } from "../src/core/book.ts"
 import { DEMO_WALLET, demoWallet } from "../src/core/fixtures.ts"
@@ -236,5 +237,121 @@ describe("all your wallets over the api", () => {
     assert.equal((await post("", { method: "average", linked: ["nope"] })).status, 400)
     assert.equal((await post("", { method: "average", linked: [] })).status, 400)
     assert.equal((await post("/compare", { method: "average", linked: [HOT] })).status, 400)
+  })
+})
+
+describe("all your wallets, when one of them can't keep up", () => {
+  const row = (block: number, tx: string, account: string, side: LegRow["side"], amount: bigint, counterparty: string | null = null): LegRow => ({
+    block_num: block,
+    timestamp: "2026-11-04T00:00:00.000Z",
+    tx_hash: tx,
+    tx_index: 0,
+    log_index: 0,
+    token: ETH_ADDRESS,
+    account,
+    side,
+    amount: amount.toString(),
+    counterparty,
+    kind: "eth",
+  })
+  // Savings already has 1 ETH, from someone nobody's answered for. It moves to spending money at block 15.
+  const before: Record<string, LegRow[]> = { [HOT]: [], [COLD]: [row(5, "0x1", COLD, "credit", ONE, STRANGER)] }
+  const move = { [HOT]: [row(15, "0x2", HOT, "credit", ONE, COLD)], [COLD]: [row(15, "0x2", COLD, "debit", ONE, HOT)] }
+
+  /** A server over wallets whose rows and head the test moves on, with `trouble` for what one wallet's read or rates run into. */
+  function serve(trouble: { read?: (address: string) => Promise<void>; rates?: (address: string) => Promise<void> }) {
+    const state = { head: 10, rows: structuredClone(before) as Record<string, LegRow[]>, troubled: false }
+    const source: Source = {
+      mode: "raw",
+      startBlock: 1,
+      historyFrom: null,
+      head: async () => ({ blockNum: state.head, timestamp: "2026-11-04T00:00:00.000Z" }),
+      processedThrough: async (_, head) => head,
+      readWindow: async (address, from, to) => {
+        if (state.troubled) await trouble.read?.(address)
+        return { rows: (state.rows[address] ?? []).filter((r) => r.block_num >= from && r.block_num <= to), priced: null, gasUnknown: [] }
+      },
+      readReferences: async (blocks) => blocks.map((block_num) => ({ blockNum: block_num, ethUsd: "300000000000", usdcUsd: "100000000" })),
+      readLatestReference: async (head) => ({ blockNum: head, ethUsd: "300000000000", usdcUsd: "100000000" }),
+      readEthBalances: async () => new Map(),
+      readBalances: async (address, block) => {
+        const amounts: Record<string, string> = Object.fromEntries(ASSETS.map((asset) => [asset, "0"]))
+        for (const r of state.rows[address] ?? []) if (r.block_num <= block) amounts.ETH = (BigInt(amounts.ETH as string) + (r.side === "credit" ? BigInt(r.amount) : -BigInt(r.amount))).toString()
+        return { blockNum: block, amounts }
+      },
+    }
+    // Rates are read for a wallet's legs, and only savings has the first transaction.
+    const readRates: RatesReader = async (_currency, wallet) => {
+      if (state.troubled) await trouble.rates?.(wallet.legs.some((leg) => leg.txHash === "0x1") ? COLD : HOT)
+      return { byBlock: {}, latest: null }
+    }
+    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+    const server = createServer((req, res) => void api(req, res))
+    const ready = new Promise<string>((resolve) => server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)))
+    const post = async (path: string, body: unknown) => (await fetch(`${await ready}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json() as Promise<CombinedPortfolioResponse>
+    /** The move happens, and from then on the troubled wallet runs into its trouble. */
+    const moveOn = () => {
+      for (const [address, rows] of Object.entries(move)) state.rows[address]?.push(...rows)
+      state.head = 20
+      state.troubled = true
+    }
+    return { post, moveOn, close: () => server.close() }
+  }
+  const ethOf = (all: CombinedPortfolioResponse) => all.positions.find((p) => p.asset === "ETH")?.values.qty
+  const stuck = () => new Promise<void>(() => {})
+  const body = { method: "average", linked: [HOT, COLD] }
+
+  it("leaves out a wallet whose read just failed, rather than its old balance", async () => {
+    const api = serve({ read: async (address) => (address === COLD ? Promise.reject(new Error("nope")) : undefined) })
+    assert.equal(ethOf(await api.post("/api/portfolio/all", body)), ONE.toString())
+    api.moveOn()
+    const all = await api.post("/api/portfolio/all", body)
+    // Savings' old balance still has the ETH that's now in spending money. Counting both would say 2 ETH.
+    assert.equal(ethOf(all), ONE.toString())
+    assert.deepEqual(all.wallets.map((w) => [w.address, w.state]), [[HOT, "read"], [COLD, "failed"]])
+    assert.deepEqual([all.linkedFailed, all.linkedReading], [[COLD], []])
+    // And what's already been read says so too.
+    assert.deepEqual((await api.post("/api/portfolio/all/last", body)).linkedFailed, [COLD])
+    api.close()
+  })
+
+  it("leaves out a wallet whose read is taking too long, rather than its old balance", async () => {
+    const api = serve({ read: async (address) => (address === COLD ? stuck() : undefined) })
+    await api.post("/api/portfolio/all", body)
+    api.moveOn()
+    const all = await api.post("/api/portfolio/all", body)
+    assert.equal(ethOf(all), ONE.toString())
+    assert.deepEqual([all.linkedReading, all.linkedFailed], [[COLD], []])
+    api.close()
+  })
+
+  it("reads every wallet at the same block, so a move is never in both", async () => {
+    const api = serve({})
+    await api.post("/api/portfolio/all", body)
+    api.moveOn()
+    // Spending money alone has read past the move. Savings was last read before it.
+    await api.post(`/api/portfolio/${HOT}`, { method: "average" })
+    const last = await api.post("/api/portfolio/all/last", body)
+    assert.equal(ethOf(last), ONE.toString())
+    assert.deepEqual(last.wallets.map((w) => w.state), ["read", "read"])
+    // Once both have read it, the move's there, once.
+    const all = await api.post("/api/portfolio/all", body)
+    assert.deepEqual(all.positions.find((p) => p.asset === "ETH")?.wallets.map((w) => [w.wallet, w.qty]), [[HOT, ONE.toString()], [COLD, "0"]])
+    api.close()
+  })
+
+  it("leaves out a wallet whose rates fail or take too long, and answers with the rest", async () => {
+    const failing = serve({ rates: async (address) => (address === COLD ? Promise.reject(new Error("no rate")) : undefined) })
+    failing.moveOn()
+    const failed = await failing.post("/api/portfolio/all", { ...body, currency: "CAD" })
+    assert.deepEqual([failed.currency, failed.linkedFailed, failed.linkedReading], ["CAD", [COLD], []])
+    failing.close()
+    const slow = serve({ rates: async (address) => (address === COLD ? stuck() : undefined) })
+    slow.moveOn()
+    const started = Date.now()
+    const waiting = await slow.post("/api/portfolio/all", { ...body, currency: "CAD" })
+    assert.ok(Date.now() - started < 10_000)
+    assert.deepEqual([waiting.linkedReading, waiting.linkedFailed], [[COLD], []])
+    slow.close()
   })
 })

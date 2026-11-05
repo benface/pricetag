@@ -72,6 +72,25 @@ struct AllYoursTests {
         #expect(showing.recent.isEmpty, "and it's never a recent wallet")
     }
 
+    @Test func comesBackAfterARelaunchAsAllYoursAndNothingElse() throws {
+        let defaults = UserDefaults(suiteName: "all-yours-relaunch-\(UUID().uuidString)")!
+        defaults.set(WalletAddress.allYours, forKey: "wallet")
+        // What an earlier build could have saved.
+        defaults.set(try JSONEncoder().encode([SavedWallet(address: WalletAddress.allYours, lastSeen: date(1)), SavedWallet(address: d, name: "Treasury", lastSeen: date(2))]), forKey: "savedWallets")
+        defaults.set(try JSONEncoder().encode(Book().answering(a, .mine, focus: nil).answering(b, .mine, focus: nil)), forKey: "answers")
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in AllYoursSource() })
+        #expect(store.address == WalletAddress.allYours)
+        #expect(store.savedWallets.map(\.address) == [d])
+        let list = WalletList(spending: nil, savings: [], linked: store.book.linkedWallets, saved: store.savedWallets, current: store.address)
+        #expect(list.all.filter { $0.address == WalletAddress.allYours }.map(\.kind) == [.allYours], "once, as itself")
+        #expect(list.recent.isEmpty && list.watching.map(\.address) == [d])
+        #expect(!list.pickable.contains { WalletAddress.isAllYours($0.address) })
+        #expect(Set(list.all.map(\.id)).count == list.all.count)
+        // Even if a saved list still has it, the list never shows it as a wallet.
+        let stale = WalletList(spending: nil, savings: [], linked: [a, b], saved: [SavedWallet(address: WalletAddress.allYours, lastSeen: date(1))], current: WalletAddress.allYours)
+        #expect(stale.recent.isEmpty && stale.watching.isEmpty)
+    }
+
     @Test func readsEveryWalletOfYoursAsOne() async throws {
         let defaults = UserDefaults(suiteName: "all-yours-\(UUID().uuidString)")!
         let source = AllYoursSource()

@@ -169,7 +169,7 @@ public struct WalletList: Equatable, Sendable {
         allYours = self.yours.count >= 2 || current == WalletAddress.allYours ? WalletEntry.allYours(count: self.yours.count) : nil
 
         let own = Set(linked + yours.map(\.address))
-        let others = saved.filter { !own.contains($0.address) && $0.address != WalletAddress.demo }
+        let others = saved.filter { !own.contains($0.address) && $0.address != WalletAddress.demo && !WalletAddress.isAllYours($0.address) }
         // Listed for good, they keep their place, so they're where the hand expects. Recent ones move, because that's what recent means.
         let listed = others.filter(\.isListedForGood)
             .sorted { ($0.name ?? $0.address).localizedStandardCompare($1.name ?? $1.address) == .orderedAscending }

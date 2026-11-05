@@ -150,9 +150,10 @@ public final class PortfolioStore {
         self.serverURL = serverURL
         self.answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.selectedRule = defaults.string(forKey: Keys.rule)
-        var saved = defaults.data(forKey: Keys.savedWallets).flatMap { try? JSONDecoder().decode([SavedWallet].self, from: $0) } ?? []
+        // All Yours isn't a wallet, so it's never one to remember, whatever an earlier version saved.
+        var saved = (defaults.data(forKey: Keys.savedWallets).flatMap { try? JSONDecoder().decode([SavedWallet].self, from: $0) } ?? []).filter { !WalletAddress.isAllYours($0.address) }
         // From before there was a list, the wallet being shown is all there is to remember.
-        if let address, address != WalletAddress.demo, !saved.contains(where: { $0.address == address }) {
+        if let address, address != WalletAddress.demo, !WalletAddress.isAllYours(address), !saved.contains(where: { $0.address == address }) {
             saved.append(SavedWallet(address: address, lastSeen: now()))
         }
         self.savedWallets = saved

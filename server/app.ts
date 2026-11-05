@@ -2,7 +2,7 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { currentRateMicros, isAddress, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { currentRateMicros, hasStarted, isAddress, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createWallets, describeError, followChain, followRawSql, followSql, readHeadMark, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
@@ -41,6 +41,17 @@ const MAX_OTHER_WALLETS = 20
 
 /** How long a read of all the user's wallets waits on the slowest before answering with the rest. A wallet catching up takes far less. */
 const ALL_YOURS_WAIT_MS = 2_500
+
+/**
+ * Waits for every job, or `ALL_YOURS_WAIT_MS`, whichever's first. If `enough` still says no by then, it keeps waiting, a job at
+ * a time, until it does or they're all done. Jobs that aren't done keep running, and never reject.
+ */
+async function settleSome(jobs: readonly Promise<void>[], enough: () => boolean): Promise<void> {
+  const pending = new Set(jobs)
+  for (const job of jobs) void job.finally(() => pending.delete(job))
+  await Promise.race([Promise.all(jobs), new Promise((resolve) => setTimeout(resolve, ALL_YOURS_WAIT_MS).unref())])
+  while (pending.size > 0 && !enough()) await Promise.race(pending)
+}
 
 function parseCurrency(value: string | null): CurrencyCode | null {
   if (value === null) return "USD"
@@ -264,14 +275,19 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     }
   }
 
+  /** A wallet with the rates to show it in `currency`. Never falls back to USD. Throws when they can't be read. */
+  async function convert(wallet: WalletResponse, currency: CurrencyCode, books: readonly Book[] = []): Promise<WalletResponse> {
+    const live = created && wallet.mode !== "demo" ? created : null
+    const paidRates = live ? await readPaidRates(live.readRates, wallet, currency, books) : undefined
+    const paid = paidRates ? { ...wallet, paidRates } : wallet
+    if (currency === "USD") return paid
+    return { ...paid, currency, rates: live ? await live.readRates(currency, wallet) : demoRates(currency) }
+  }
+
   /** A wallet with the rates to show it in `currency`, or answers the request with why it can't. Never falls back to USD. */
   async function inCurrency(wallet: WalletResponse, currency: CurrencyCode, res: ServerResponse, books: readonly Book[] = []): Promise<WalletResponse | null> {
     try {
-      const live = created && wallet.mode !== "demo" ? created : null
-      const paidRates = live ? await readPaidRates(live.readRates, wallet, currency, books) : undefined
-      const paid = paidRates ? { ...wallet, paidRates } : wallet
-      if (currency === "USD") return paid
-      return { ...paid, currency, rates: live ? await live.readRates(currency, wallet) : demoRates(currency) }
+      return await convert(wallet, currency, books)
     } catch (error) {
       sendAmpError(res, error)
       return null
@@ -329,50 +345,73 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   /**
-   * Every one of the user's wallets that's read, in `currency`, and the ones that aren't yet. One slow wallet doesn't hold up
-   * the rest: each read starts, and after a moment whatever's done is the answer, with the rest still on their way. With
-   * nothing read at all, it waits for the first one. `fresh: false` only takes what's already been read.
+   * Every one of the user's wallets that this request could read, in `currency`, and the ones it couldn't yet. Each wallet is
+   * one job, its read and its rates together, so one slow or failing wallet doesn't hold up or fail the rest: after a moment
+   * whatever's done is the answer, and the rest are still reading or failed. With nothing done at all, it waits for the first.
+   * A wallet whose read this time failed or hasn't finished is left out, whatever was read of it before, because its balance
+   * then can be from before a move another wallet has already seen. `fresh: false` takes what's already been read, and
+   * leaves out a wallet whose last read failed.
    */
   async function readAllYours(addresses: readonly string[], currency: CurrencyCode, rule: (typeof rules)[number] | null, books: readonly Book[], fresh: boolean, res: ServerResponse): Promise<{ read: WalletResponse[]; unread: Unread } | null> {
     const from = rule?.wallets ?? wallets
-    if (!from) {
+    const chain = rule?.source ?? source
+    if (!from || !chain) {
       sendJson(res, 503, { error: "No data source is set up, so only the demo wallet is available." })
       return null
     }
-    if (fresh) {
-      const pending = new Set(
-        addresses.map((address) => {
-          const reading: Promise<void> = from.get(address).then(
-            () => {
-              linkedFailures.delete(address)
-              pending.delete(reading)
-            },
-            (error: unknown) => {
-              console.error("Wallet read failed:", describeError(error))
-              linkedFailures.add(address)
-              pending.delete(reading)
-            },
-          )
-          return reading
-        }),
-      )
-      const all = Promise.all(pending)
-      await Promise.race([all, new Promise((resolve) => setTimeout(resolve, ALL_YOURS_WAIT_MS))])
-      while (pending.size > 0 && !addresses.some((address) => from.peek(address))) await Promise.race(pending)
-    }
-    const read: WalletResponse[] = []
-    const unread: { reading: string[]; failed: string[] } = { reading: [], failed: [] }
-    for (const address of addresses) {
-      const wallet = from.peek(address)
-      if (!wallet) {
-        ;(linkedFailures.has(address) ? unread.failed : unread.reading).push(address)
-        continue
+    const ruled = (wallet: WalletResponse): WalletResponse => (rule ? { ...wallet, rule: rule.rule.id, ruleNote: rule.note } : wallet)
+    const failed = new Set<string>()
+    const done = new Map<string, WalletResponse>()
+    const job = async (address: string): Promise<void> => {
+      let wallet: WalletResponse | null
+      try {
+        wallet = fresh ? await from.get(address) : from.peek(address)
+        if (fresh) linkedFailures.delete(address)
+      } catch (error) {
+        console.error("Wallet read failed:", describeError(error))
+        linkedFailures.add(address)
+        failed.add(address)
+        return
       }
-      const converted = await inCurrency(rule ? { ...wallet, rule: rule.rule.id, ruleNote: rule.note } : wallet, currency, res, books)
-      if (!converted) return null
-      read.push(converted)
+      if (!wallet) return
+      if (!fresh && linkedFailures.has(address)) {
+        failed.add(address)
+        return
+      }
+      try {
+        done.set(address, await convert(ruled(wallet), currency, books))
+      } catch (error) {
+        console.error("Wallet rates failed:", describeError(error))
+        failed.add(address)
+      }
     }
-    if (read.length === 0 && fresh) {
+    await settleSome(addresses.map(job), () => done.size > 0)
+
+    // One block for all of them, the oldest any of them reached, so a move between them is in both or neither.
+    const started = [...done.values()].filter(hasStarted)
+    const blockNum = Math.min(...started.map((wallet) => wallet.coverage.toBlock))
+    const ahead = started.filter((wallet) => wallet.coverage.toBlock > blockNum)
+    if (ahead.length > 0) {
+      for (const wallet of ahead) done.delete(wallet.address.toLowerCase())
+      const prices = latestPrices(await chain.readLatestReference(blockNum).catch(() => null))
+      await settleSome(
+        ahead.map(async ({ address }) => {
+          const account = address.toLowerCase()
+          try {
+            const facts = await from.factsAt(account, blockNum, { withBalances: true })
+            const at = facts && from.pricedOn(account, facts, prices, await from.marketOn(account, facts, prices))
+            if (at) done.set(account, await convert(ruled(at), currency, books))
+          } catch (error) {
+            console.error("Wallet read at an earlier block failed:", describeError(error))
+          }
+        }),
+        () => true,
+      )
+    }
+
+    const read = addresses.flatMap((address) => done.get(address) ?? [])
+    const unread = { reading: addresses.filter((address) => !done.has(address) && !failed.has(address)), failed: addresses.filter((address) => !done.has(address) && failed.has(address)) }
+    if (read.length === 0 && fresh && unread.reading.length === 0) {
       sendJson(res, 502, { error: "None of your wallets could be read." })
       return null
     }
