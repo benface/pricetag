@@ -106,7 +106,7 @@ public struct ResolveFlow: View {
                 }
             }
             ProgressView(value: model.meter?.progress ?? 0)
-                .tint(model.isBalanced ? Tone.gain.style : Tone.warning.style)
+                .tint(model.isBalanced ? Tone.gain.color : .accentColor)
                 .animation(reduceMotion ? nil : .snappy, value: model.meter)
                 .accessibilityLabel("Questions, \(model.meter?.open ?? 0) left")
             HStack(spacing: 6) {
