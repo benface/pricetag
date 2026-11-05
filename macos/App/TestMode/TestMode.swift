@@ -235,7 +235,7 @@ enum TestScene: String, CaseIterable {
     case routeDetailsOpen = "route-details-open"
     case routeAnswer = "route-answer"
     case routeAnswerOpen = "route-answer-open"
-    case routeProveWallet = "route-prove-wallet"
+    case routeProveWalletOpen = "route-prove-wallet-open"
     case menuBarLabel = "menu-bar-label"
     case settings
     case settingsServer = "settings-server"
@@ -591,7 +591,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 2200, height: 1300), isReady: isReady)
         case .mainMissingPrice:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .routeHoldings, .routeHoldingsOpen, .routeAddWallet, .routeAddWalletOpen, .routeDetails, .routeDetailsOpen, .routeAnswer, .routeAnswerOpen, .routeProveWallet:
+        case .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .routeHoldings, .routeHoldingsOpen, .routeAddWallet, .routeAddWalletOpen, .routeDetails, .routeDetailsOpen, .routeAnswer, .routeAnswerOpen, .routeProveWalletOpen:
             let press: () -> Void
             let hasArrived: () -> Bool
             let hasSheet = { NSApp.windows.contains { $0.attachedSheet != nil } }
@@ -614,14 +614,15 @@ enum TestScene: String, CaseIterable {
                 navigation.section = .spendingMoney
                 press = { navigation.explain(.asset("AERO", .amount)) }
                 hasArrived = { navigation.section == .overview && navigation.target != nil }
-            case .routeProveWallet:
+            case .routeProveWalletOpen:
                 // As the list's row does it: the list closes in the same moment, and the sheet still has to appear.
                 navigation.section = .overview
+                navigation.isSwitchingWallet = true
                 press = {
                     navigation.isSwitchingWallet = false
                     navigation.provingWallet = WalletProof(address: TestScene.namedWallet, owner: TestScene.namedWallet, title: "Treasury")
                 }
-                hasArrived = { navigation.provingWallet != nil && hasSheet() }
+                hasArrived = { !navigation.isSwitchingWallet && navigation.provingWallet != nil && hasSheet() }
             default:
                 navigation.section = .spendingMoney
                 press = { navigation.resolve() }

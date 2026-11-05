@@ -9,7 +9,8 @@ struct ProveWalletSheet: View {
     let proof: WalletProof
     @State var signature = ""
     @State var problem: String?
-    @State private var isChecking = false
+    /// Only while the server's looking at a signature. Backing out stops it, or a good answer would still add the wallet after they'd said no.
+    @State private var pending: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
 
     private var trimmed: String { signature.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -63,15 +64,20 @@ struct ProveWalletSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                Button("Cancel", role: .cancel) {
+                    pending?.cancel()
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
                 Button("Add to Yours", action: check)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(trimmed.isEmpty || isChecking)
+                    .disabled(trimmed.isEmpty || pending != nil)
             }
         }
         .padding(20)
         .frame(width: 440)
+        // The window can close with this still open.
+        .onDisappear { pending?.cancel() }
     }
 
     private func check() {
@@ -79,17 +85,17 @@ struct ProveWalletSheet: View {
             problem = Wording.notASignature
             return
         }
-        isChecking = true
-        Task {
-            defer { isChecking = false }
+        let signature = trimmed
+        pending = Task {
+            defer { pending = nil }
             do {
-                if try await store.linkProved(proof, signature: trimmed) {
+                if try await store.linkProved(proof, signature: signature) {
                     dismiss()
                 } else {
                     problem = Wording.wrongSignature
                 }
             } catch {
-                problem = Wording.couldntCheckSignature
+                if !Task.isCancelled { problem = Wording.couldntCheckSignature }
             }
         }
     }

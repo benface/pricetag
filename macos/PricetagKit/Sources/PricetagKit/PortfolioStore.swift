@@ -363,10 +363,12 @@ public final class PortfolioStore {
     }
 
     /// Links a wallet that proved it's this user's by signing. Says whether the signature holds up. Only something shaped like one reaches the
-    /// server, and only that wallet is linked: its signature says nothing about the one showing.
+    /// server, and only that wallet is linked: its signature says nothing about the one showing. Cancelling while it's checked links nothing, however it goes.
     public func linkProved(_ proof: WalletProof, signature: String) async throws -> Bool {
         guard WalletAddress.isSignature(signature) else { return false }
-        guard try await source.verifyLink(owner: proof.owner, address: proof.address, signature: signature) else { return false }
+        let verified = try await source.verifyLink(owner: proof.owner, address: proof.address, signature: signature)
+        try Task.checkCancellation()
+        guard verified else { return false }
         setBook(book.answering(proof.address, .mine, focus: nil))
         return true
     }

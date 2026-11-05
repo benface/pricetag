@@ -56,6 +56,32 @@ actor BookSource: PortfolioSource {
     }
 }
 
+/// Holds a signature's check open until it's told how it went, whatever happens to whoever asked.
+actor GatedVerifier: PortfolioSource {
+    private var waiting: CheckedContinuation<Bool, any Error>?
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+        throw FetchError.unreachable
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func verifyLink(owner: String, address: String, signature: String) async throws -> Bool {
+        try await withCheckedThrowingContinuation { waiting = $0 }
+    }
+
+    func waitUntilAsked() async {
+        while waiting == nil { await Task.yield() }
+    }
+
+    func answer(_ verified: Bool) {
+        waiting?.resume(returning: verified)
+        waiting = nil
+    }
+}
+
 @MainActor
 @Suite struct ResolveTests {
     let wallet = "0x00000000000000000000000000000000000000aa"
@@ -253,6 +279,18 @@ actor BookSource: PortfolioSource {
         store.setWallet("0x00000000000000000000000000000000000000cc")
         #expect(try await store.linkProved(WalletProof(address: sender, owner: sender, title: ""), signature: goodSignature) == true)
         #expect(store.book.linkedWallets == [sender])
+    }
+
+    @Test func aProofCancelledWhileItsCheckedLinksNothing() async throws {
+        let source = GatedVerifier()
+        let store = PortfolioStore(defaults: UserDefaults(suiteName: "prove-\(UUID().uuidString)")!, makeSource: { _ in source })
+        let proof = WalletProof(address: sender, owner: wallet, title: "")
+        let check = Task { try await store.linkProved(proof, signature: goodSignature) }
+        await source.waitUntilAsked()
+        check.cancel()
+        await source.answer(true)
+        await #expect(throws: CancellationError.self) { try await check.value }
+        #expect(store.book.isEmpty, "the signature was good, but they'd already said no")
     }
 
     @Test func onlyWhatLooksLikeASignatureReachesTheServer() async throws {
