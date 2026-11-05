@@ -142,6 +142,8 @@ enum TestScene: String, CaseIterable {
     case popoverHotWalletAlarm = "popover-hot-wallet-alarm"
     case popoverHotWalletCAD = "popover-hot-wallet-cad"
     case settings
+    case settingsWallets = "settings-wallets"
+    case settingsServer = "settings-server"
     case settingsHotWallet = "settings-hot-wallet"
     case settingsCAD = "settings-cad"
     case settingsHotWalletCAD = "settings-hot-wallet-cad"
@@ -180,7 +182,7 @@ enum TestScene: String, CaseIterable {
     enum Chrome { case titled, none }
 
     /// Rendering draws the inspector's text in the wrong color in dark mode, so these only come from a real window.
-    var needsRealWindow: Bool { rawValue.hasPrefix("main") || self == .mainDetails || self == .mainFirstRunDetails || self == .mainDetailsCAD || self == .mainHoldDetails || self == .mainSmallestEnd }
+    var needsRealWindow: Bool { rawValue.hasPrefix("main") || rawValue.hasPrefix("settings") || self == .mainDetails || self == .mainFirstRunDetails || self == .mainDetailsCAD || self == .mainHoldDetails || self == .mainSmallestEnd }
 
     var chrome: Chrome {
         switch self {
@@ -310,8 +312,14 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
         case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
-        case .settings, .settingsHotWallet, .settingsCAD, .settingsHotWalletCAD:
-            return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
+        case .settings, .settingsWallets, .settingsServer, .settingsHotWallet, .settingsCAD, .settingsHotWalletCAD:
+            let pane: SettingsView.Pane = switch self {
+            case .settingsWallets: .wallets
+            case .settingsServer: .server
+            case .settingsHotWallet, .settingsHotWalletCAD: .spendingMoney
+            default: .general
+            }
+            return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet, tab: pane)), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 720), isReady: isReady)
         case .hotWallet, .hotWalletCAD, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck:
