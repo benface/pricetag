@@ -222,6 +222,13 @@ public final class PortfolioStore {
         defaults.set(try? JSONEncoder().encode(wallets), forKey: Keys.savedWallets)
     }
 
+    /// A key is gone, and `next` took over from it, if anything did. Whoever's looking at its wallet follows, or they'd see an empty address and
+    /// think the money vanished. Any other wallet stays, because only the user replaces that.
+    public func followRetiredWallet(_ address: String, to next: String?) {
+        guard self.address == address.lowercased() else { return }
+        setWallet(next)
+    }
+
     public func setMethod(_ method: CostMethod) {
         guard method != self.method else { return }
         self.method = method

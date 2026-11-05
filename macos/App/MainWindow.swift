@@ -92,6 +92,7 @@ struct MainWindow: View {
         // What's open belongs to the wallet it was opened on.
         .onChange(of: store.address) {
             navigation.target = nil
+            navigation.isResolving = false
         }
     }
 

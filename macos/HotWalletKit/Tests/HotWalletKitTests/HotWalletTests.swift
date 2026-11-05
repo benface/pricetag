@@ -1260,6 +1260,75 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     }
 }
 
+/// What the main window and menu bar show, wired up the way the app does it.
+@MainActor
+@Suite struct ShownWalletTests {
+    private func makeStore(_ rig: Rig, showing address: String? = hotAddress.lowercased) -> PortfolioStore {
+        let portfolios = rig.portfolios
+        let store = PortfolioStore(defaults: UserDefaults(suiteName: "shown-wallet-\(UUID().uuidString)")!, makeSource: { _ in portfolios })
+        store.setWallet(address)
+        store.stop()
+        rig.wallet.onKeyRetired = { store.followRetiredWallet($0.lowercased, to: $1?.lowercased) }
+        return store
+    }
+
+    @Test func aRotationThatFinishesByItselfShowsTheNewKey() async throws {
+        let rig = await Rig(snapshot(eth: 0), portfolio: .success(portfolio(toBlock: 2000)))
+        let store = makeStore(rig)
+        await rig.wallet.replaceKey()
+        #expect(store.address == hotAddress.lowercased, "the old key is still the wallet until it's empty")
+        await rig.wallet.readHistory()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        store.stop()
+        #expect(rig.wallet.address == nextAddress)
+        #expect(store.address == nextAddress.lowercased)
+    }
+
+    @Test func aRotationThatLeavesFundsBehindShowsTheNewKey() async throws {
+        let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(10)]))
+        let store = makeStore(rig)
+        await rig.wallet.replaceKey()
+        await rig.wallet.finishRotationLeavingFundsBehind()
+        store.stop()
+        #expect(store.address == nextAddress.lowercased)
+    }
+
+    @Test func aDeletedKeyGoesBackToTheFirstScreen() async throws {
+        let rig = await Rig()
+        let store = makeStore(rig)
+        await rig.wallet.deleteWallet()
+        store.stop()
+        #expect(store.address == nil)
+        #expect(store.feed == .noWallet)
+    }
+
+    @Test func aDeleteThatsCancelledChangesNothing() async throws {
+        let rig = await Rig(presence: false)
+        let store = makeStore(rig)
+        await rig.wallet.deleteWallet()
+        #expect(rig.wallet.address == hotAddress)
+        #expect(store.address == hotAddress.lowercased)
+    }
+
+    @Test func anyOtherWalletStaysShowing() async throws {
+        let watched = coldAddress.lowercased
+        let replaced = await Rig(snapshot(eth: 0))
+        let stillWatched = makeStore(replaced, showing: watched)
+        await replaced.wallet.replaceKey()
+        await replaced.wallet.finishRotationLeavingFundsBehind()
+        stillWatched.stop()
+        #expect(replaced.wallet.address == nextAddress)
+        #expect(stillWatched.address == watched)
+
+        let deleted = await Rig()
+        let stillDemo = makeStore(deleted, showing: WalletAddress.demo)
+        await deleted.wallet.deleteWallet()
+        stillDemo.stop()
+        #expect(deleted.wallet.address == nil)
+        #expect(stillDemo.address == WalletAddress.demo)
+    }
+}
+
 @Suite struct DeviceStateTests {
     @Test func survivesTheFile() throws {
         let url = URL.temporaryDirectory.appending(path: "work331-\(UUID().uuidString)/state.json")
