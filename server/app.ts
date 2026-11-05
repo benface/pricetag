@@ -3,7 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { isAddress, isCurrencyCode, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createWallets, describeError, type Source } from "@pricetag/sdk/internal"
+import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createWallets, describeError, sharedMarket, type AmpQuery, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -53,15 +53,16 @@ function pinned(dataset: string, hash: string | undefined): string {
   return `${dataset.split("@")[0]}@${hash}`
 }
 
-function createSource(env: Env): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs } | null {
-  if (!env.AMP_QUERY_URL) return null
-  const query = createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined)
+export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs } | null {
+  if (!query) return null
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
   const readRates = createRates(feedRounds(query, { baseDataset, network }))
-  const proofs = createProofs(query, {
+  // Only a fork pins the default. Without one, a hash left in the env can be a hosted Amp's, which a local Amp doesn't have.
+  const pin = env.PRICETAG_DATASET && env.PRICETAG_FORK_DATASET ? pinned(env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH) : null
+  const proofs = createProofs(pin ? query.aliased({ pricetag: pin }) : query, {
     baseDataset,
-    dataset: env.PRICETAG_DATASET || null,
+    dataset: env.PRICETAG_DATASET ? { name: env.PRICETAG_DATASET, reference: pin ? "pricetag" : env.PRICETAG_DATASET, hash: pin ? env.PRICETAG_DATASET_HASH! : null } : null,
     readDeposits: createDepositReader(env.BASE_RPC_URL || DEFAULT_RPC_URL),
     readManifestHash: createManifestReader(env.AMP_ADMIN_URL || `${env.AMP_QUERY_URL}/controller`, env.AMP_QUERY_TOKEN || undefined),
   })
@@ -69,17 +70,16 @@ function createSource(env: Env): { source: Source; rules?: RuleSource[]; readRat
     const startBlock = Number(env.PRICETAG_START_BLOCK)
     if (!Number.isSafeInteger(startBlock) || startBlock <= 0) throw new Error("PRICETAG_DATASET needs PRICETAG_START_BLOCK")
     void warnOfNewAggregators(env.BASE_RPC_URL || DEFAULT_RPC_URL)
-    if (env.PRICETAG_FORK_DATASET) {
+    if (pin) {
       // The same SQL for both. The header alone says which prices it reads, and the transactions always come from the
       // first, so they can't differ.
-      const dataset = pinned(env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH)
       const ruleSource = (id: string, name: string, hash: string | undefined, priceDataset: string): RuleSource => ({
         rule: { id, ...RULE_TEXT[id]!, dataset: name, hash: hash as string },
-        source: resolvingSource(query.aliased({ pricetag: dataset, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", startBlock, network }),
+        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", startBlock, network }),
       })
       const rules = [
-        ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, dataset),
-        ruleSource(CAUTIOUS_RULE_ID, env.PRICETAG_FORK_DATASET, env.PRICETAG_FORK_HASH, pinned(env.PRICETAG_FORK_DATASET, env.PRICETAG_FORK_HASH)),
+        ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, pin),
+        ruleSource(CAUTIOUS_RULE_ID, env.PRICETAG_FORK_DATASET!, env.PRICETAG_FORK_HASH, pinned(env.PRICETAG_FORK_DATASET!, env.PRICETAG_FORK_HASH)),
       ]
       return { source: rules[0]!.source, rules, readRates, proofs }
     }
@@ -418,8 +418,13 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
       if (!atA || !atB || atA.blockNum !== atB.blockNum) return notYet()
       const pair = async (wallet: string, withBalances: boolean): Promise<[WalletResponse, WalletResponse] | null | undefined> => {
         const facts = await first.wallets.factsAt(wallet, blockNum, { withBalances })
-        const a = facts && first.wallets.pricedOn(wallet, facts, latestPrices(atA))
-        const b = facts && second.wallets.pricedOn(wallet, facts, latestPrices(atB))
+        if (!facts) return null
+        // Each rule's own market prices at this block, and only where both have one, so a token priced on one side alone
+        // can't look like the rule.
+        const [pricesA, pricesB] = [latestPrices(atA), latestPrices(atB)]
+        const market = sharedMarket(await first.wallets.marketOn(wallet, facts, pricesA), await second.wallets.marketOn(wallet, facts, pricesB))
+        const a = first.wallets.pricedOn(wallet, facts, pricesA, market)
+        const b = second.wallets.pricedOn(wallet, facts, pricesB, market)
         if (!a || !b) return null
         // A block one side has no price for would look like the rule made a number unavailable.
         const blocksOf = (wallet: WalletResponse) => new Set(wallet.references.map((reference) => reference.blockNum))

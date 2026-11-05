@@ -5,10 +5,10 @@ import { describeError, type Logger } from "./amp.ts"
 import { buildPricedLegs, derivePricedRows, oneWaySendBalanceBlocks, settleUnwraps, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PricedRow, type Reference } from "./legs.ts"
 import { MARKET_MAX_AGE_BLOCKS, markNeeds, marketPrice, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
 import type { CostNote } from "./notes.ts"
-import { foldPositions, latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
+import { feedPrice, foldPositions, latestPrices, type FeedRound, type Head, type LatestPrices } from "./portfolio.ts"
 import type { ReadL1Fees } from "./receipts.ts"
 import { openingLegs, type BalanceSnapshot } from "./reconcile.ts"
-import { ASSETS, TOKENS, tokenByAddress } from "./tokens.ts"
+import { ASSETS, TOKENS, TOKEN_FEEDS, tokenByAddress } from "./tokens.ts"
 import type { Mode, UnlistedToken, WalletData } from "./wallet.ts"
 
 export type WindowRows = { rows: LegRow[]; priced: PricedRow[] | null; gasUnknown: GasUnknownTx[] }
@@ -39,6 +39,8 @@ export type Source = {
   marketReady?(): Promise<boolean>
   /** An asset's latest trades in a block range, newest first. Only a dataset's `priced_legs` has them. */
   readMarketTrades?(asset: string, from: number, to: number): Promise<MarketTrade[]>
+  /** What these assets' `TOKEN_FEEDS` answer at `block`. A feed whose read failed isn't in it. */
+  readFeedRounds?(assets: readonly string[], block: number): Promise<Record<string, FeedRound>>
 }
 
 /** Blocks to read, inclusive, where the source's defaults aren't wanted. `to` reads the wallet as of that block. */
@@ -77,7 +79,7 @@ type Cached = {
   notes: CostNote[]
   /** Blocks already checked for notes, so each is only read once it's past the part of the chain re-read for reorgs. */
   notesReadTo: number
-  /** Market prices were all read this time. */
+  /** Market prices were all read this time, and no token's price is missing because of its feed. */
   marketChecked: boolean
   /** Transactions whose fee is older than the balance read of their block. See `isL1FeeCurrent`. */
   staleFeeTxs: string[]
@@ -106,7 +108,19 @@ type L1Fee = { blockNum: number; fee: string; readAtTip: number }
  * What happened to a wallet up to one block, without what any of it was worth. Two pricing rules read through the same
  * facts can only differ by the rule, because what's held, what moved and what fees came to are all the same object.
  */
-export type WalletFacts = Pick<Cached, "fromBlock" | "coveredTo" | "rows" | "latest" | "gasUnknown" | "opening" | "closing" | "lastBalances" | "l1Fees" | "staleFeeTxs" | "ethBalances" | "notes" | "notesReadTo" | "marketChecked">
+export type WalletFacts = Pick<Cached, "fromBlock" | "coveredTo" | "rows" | "latest" | "gasUnknown" | "opening" | "closing" | "lastBalances" | "l1Fees" | "staleFeeTxs" | "ethBalances" | "notes" | "notesReadTo" | "marketChecked"> & {
+  /** What the feeds in `TOKEN_FEEDS` answered at or just before `coveredTo`, which is the chain's whatever rule prices the rest. */
+  feedRounds: Record<string, FeedRound>
+}
+
+/** The market prices one set of facts can use, by `<asset>:<bucket>`, and whether every one it needs was read. */
+export type MarketOn = { priced: ReadonlySet<string>; checked: boolean }
+
+/** What two rules can both say. A price only one of them has would be a difference that isn't the rule. */
+export function sharedMarket(a: MarketOn, b: MarketOn): MarketOn {
+  const priced = new Set([...a.priced].filter((key) => b.priced.has(key)))
+  return { priced, checked: a.checked && b.checked && priced.size === a.priced.size && priced.size === b.priced.size }
+}
 
 /** Everything about a row but its price. A transaction that moved to another block isn't the same fact, even with the same amounts. */
 const rowKey = (r: LegRow) => `${r.block_num}:${r.timestamp}:${r.tx_index}:${r.tx_hash}:${r.log_index}:${r.account}:${r.side}:${r.kind}:${r.token}:${r.amount}`
@@ -159,6 +173,29 @@ const bucketOf = (block: number, size = MARKET_BUCKET_BLOCKS) => block - (block 
 const MARKET_ASSETS = TOKENS.filter((t) => !t.oracle).map((t) => t.asset)
 type MarketRead = { asset: string; bucket: number }
 const marketKey = ({ asset, bucket }: MarketRead) => `${asset}:${bucket}`
+/** What's held at each point on a wallet's chart. */
+const chartReads = (address: string, rows: readonly LegRow[], opening: BalanceSnapshot | null): MarketRead[] => markNeeds(address, rows, opening).map(({ asset, block }) => ({ asset, bucket: bucketOf(block) }))
+
+/** What a wallet needs a current price for, of the tokens the dataset has no oracle reads for. */
+function assetsHeld({ rows, opening, closing, lastBalances }: Pick<Cached, "rows" | "opening" | "closing" | "lastBalances">): string[] {
+  return MARKET_ASSETS.filter((asset) => rows.some((r) => tokenByAddress(r.token)?.asset === asset) || [opening?.amounts[asset], closing?.amounts[asset], lastBalances[asset]?.amount].some((amount) => BigInt(amount ?? "0") > 0n))
+}
+
+/** A price at `through`, for what's held and has no price in `current`, and one for each movement a trade doesn't already price. */
+function marketWanted(wallet: Pick<Cached, "rows" | "opening" | "closing" | "lastBalances">, priced: readonly PricedRow[], through: number, current: LatestPrices) {
+  const headBucket = bucketOf(through, MARKET_HEAD_BUCKET_BLOCKS)
+  const unpriced = assetsHeld(wallet).filter((asset) => !current[asset])
+  return { headBucket, unpriced, wanted: [...unpriced.map((asset) => ({ asset, bucket: headBucket })), ...marketNeeds(wallet.rows, priced).map(({ asset, block }) => ({ asset, bucket: bucketOf(block) }))] }
+}
+
+/** The feeds' prices, given what ETH's worth. Each rule has its own ETH price, so this isn't part of a wallet's facts. */
+function feedPrices(rounds: Record<string, FeedRound>, prices: LatestPrices): LatestPrices {
+  return Object.fromEntries(Object.entries(rounds).flatMap(([asset, round]) => {
+    const micros = feedPrice(asset, round, prices.ETH?.micros ?? null)
+    return micros ? [[asset, { micros, source: "oracle" as const, blockNum: round.blockNum }]] : []
+  }))
+}
+
 /** Whether a reorg could have changed any opening balance since it was read. */
 function openingMayChange(wallet: Cached | undefined, chain: Head): boolean {
   if (!wallet) return false
@@ -201,12 +238,33 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
   /** Prices by `<asset>:<bucket>`, null when too little trading backs one. A failed read isn't in here, so it's tried again. */
   const market = new Map<string, MarketPrice | null>()
   let marketReady: boolean | null = null
+  /** Each asset's latest answer, shared by every wallet. A failed read isn't in here, so it's tried again. */
+  const latestRounds = new Map<string, FeedRound>()
+
+  /** The answers at `block`'s bucket, reading what's missing. A failure leaves those assets out, and it mustn't take the wallet down with it. */
+  async function loadFeedRounds(assets: readonly string[], block: number): Promise<Record<string, FeedRound>> {
+    if (!source.readFeedRounds) return {}
+    const known = (asset: string) => latestRounds.get(asset)?.blockNum === block
+    const withFeeds = assets.filter((asset) => TOKEN_FEEDS[asset])
+    const missing = withFeeds.filter((asset) => !known(asset))
+    if (missing.length > 0) {
+      try {
+        for (const [asset, round] of Object.entries(await source.readFeedRounds(missing, block))) latestRounds.set(asset, round)
+      } catch (error) {
+        logger.warn(`Feed read failed: ${describeError(error)}`)
+      }
+    }
+    return Object.fromEntries(withFeeds.filter(known).map((asset) => [asset, latestRounds.get(asset) as FeedRound]))
+  }
+
+  /** A feed that failed or was rejected says nothing about whether the token trades, so a price missing because of one isn't "no market". */
+  const feedsLeftNoGap = (held: readonly string[], prices: LatestPrices) => !source.readFeedRounds || held.every((asset) => prices[asset] || !TOKEN_FEEDS[asset])
 
   /**
    * Reads what's missing, `wanted` first, and says whether all of `wanted` is now known. `extra` only gets the reads left
    * over, and waiting for them doesn't count against what's known, because all that's missing without them is chart points.
    */
-  async function loadMarket(wanted: readonly MarketRead[], extra: readonly MarketRead[]): Promise<boolean> {
+  async function loadMarket(wanted: readonly MarketRead[], extra: readonly MarketRead[] = []): Promise<boolean> {
     if (!source.readMarketTrades || !source.marketReady) return false
     try {
       marketReady ??= await source.marketReady()
@@ -227,43 +285,19 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     return wanted.every((w) => market.has(marketKey(w)))
   }
 
-  /**
-   * What a wallet needs from the market. A price at the end of what's covered, for what's held, and one for each movement
-   * a trade doesn't already price, which its numbers depend on, then what's held at each point on its chart.
-   */
-  function marketReadsOf(address: string, { rows, priced, opening, closing, coveredTo, latest }: Pick<Cached, "rows" | "priced" | "opening" | "closing" | "coveredTo" | "latest">) {
-    const headBucket = bucketOf(Math.min(coveredTo, latest.blockNum), MARKET_HEAD_BUCKET_BLOCKS)
-    const heldAssets = MARKET_ASSETS.filter((asset) => rows.some((r) => tokenByAddress(r.token)?.asset === asset) || BigInt(opening?.amounts[asset] ?? "0") > 0n || BigInt(closing?.amounts[asset] ?? "0") > 0n)
-    return {
-      headBucket,
-      heldAssets,
-      wanted: [...heldAssets.map((asset) => ({ asset, bucket: headBucket })), ...marketNeeds(rows, priced).map(({ asset, block }) => ({ asset, bucket: bucketOf(block) }))],
-      chart: markNeeds(address, rows, opening).map(({ asset, block }) => ({ asset, bucket: bucketOf(block) })),
-    }
-  }
-
   /** Whether a read could still add a price this wallet needs. A failed read or the limit leaves some for the next refresh. */
   function hasMarketReadsLeft(address: string, wallet: Cached): boolean {
     if (!source.readMarketTrades || !source.marketReady || marketReady === false) return false
-    const { wanted, chart } = marketReadsOf(address, wallet)
-    return [...wanted, ...chart].some((read) => !market.has(marketKey(read)))
+    const { wanted } = marketWanted(wallet, wallet.priced, Math.min(wallet.coveredTo, wallet.latest.blockNum), wallet.prices)
+    return [...wanted, ...chartReads(address, wallet.rows, wallet.opening)].some((read) => !market.has(marketKey(read)))
   }
 
-  /** What's been read for a wallet's chart so far. Prices come from this source's own trades, like the rest of what's priced. */
-  function marketMarksOf(address: string, { rows, opening }: Pick<Cached, "rows" | "opening">): MarketMarks {
-    const marks: MarketMarks = {}
-    for (const { asset, block } of markNeeds(address, rows, opening)) {
-      const price = market.get(`${asset}:${bucketOf(block)}`)
-      if (price) (marks[block] ??= {})[asset] = price.usdMicros
-    }
-    return marks
-  }
-
-  /** What's already been read for the end of `through`. An asset that hasn't been has no current price, rather than a later one. */
-  function marketPricesAt(through: number): LatestPrices {
+  /** These prices for the end of `through`. An asset without one has no current price, rather than a later one. */
+  function marketPricesAt(through: number, { priced }: MarketOn): LatestPrices {
     const bucket = bucketOf(through, MARKET_HEAD_BUCKET_BLOCKS)
     return Object.fromEntries(MARKET_ASSETS.flatMap((asset) => {
-      const price = market.get(`${asset}:${bucket}`)
+      const key = `${asset}:${bucket}`
+      const price = priced.has(key) ? market.get(key) : null
       return price ? [[asset, { micros: price.usdMicros, source: "market" as const, blockNum: price.blockNum }]] : []
     }))
   }
@@ -393,12 +427,17 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
     const prices = latestPrices(await source.readLatestReference(head.blockNum))
 
-    const { headBucket, heldAssets, wanted, chart } = marketReadsOf(address, { rows, priced, opening, closing, coveredTo, latest: head })
-    const marketChecked = await loadMarket(wanted, chart)
-    for (const asset of heldAssets) {
+    const wallet = { rows, opening, closing, lastBalances }
+    const heldAssets = assetsHeld(wallet)
+    // At the head rather than at what's covered, like ETH's: a table that stops processing can't keep an old answer current.
+    Object.assign(prices, feedPrices(await loadFeedRounds(heldAssets, bucketOf(head.blockNum, MARKET_HEAD_BUCKET_BLOCKS)), prices))
+    const { headBucket, unpriced, wanted } = marketWanted(wallet, priced, Math.min(coveredTo, head.blockNum), prices)
+    const marketRead = await loadMarket(wanted, chartReads(address, rows, opening))
+    for (const asset of unpriced) {
       const price = market.get(`${asset}:${headBucket}`)
       if (price) prices[asset] = { micros: price.usdMicros, source: "market", blockNum: price.blockNum }
     }
+    const marketChecked = marketRead && feedsLeftNoGap(heldAssets, prices)
 
     const next: Cached = { fromBlock, coveredTo, rows, priced, references: known, prices, latest: head, gasUnknown, opening, openingReadAt, readAtHead: chain.blockNum, closing, lastBalances, l1Fees, staleFeeTxs, ethBalances, notes, notesReadTo, marketChecked }
     // This comes after the claims and the closing balance, because whether ETH adds up depends on both.
@@ -409,7 +448,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     return next
   }
 
-  function responseOf(address: string, wallet: Omit<Cached, "openingReadAt" | "readAtHead">): WalletData {
+  function responseOf(address: string, wallet: Omit<Cached, "openingReadAt" | "readAtHead">, use: (key: string) => boolean = () => true): WalletData {
     const references = [...wallet.references.values()]
     const l1 = l1FeeRows(wallet.rows, wallet.l1Fees)
     const { opening, closing } = wallet
@@ -421,12 +460,22 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       feeUnknownTxs: [...wallet.gasUnknown.keys(), ...l1.unknownTxs, ...wallet.staleFeeTxs],
       gasUnknownBlocks: [...wallet.gasUnknown.values()],
     })
+    const marketAt = (asset: string, block: number) => {
+      const key = `${asset}:${bucketOf(block)}`
+      return use(key) ? (market.get(key)?.usdMicros ?? null) : null
+    }
+    // What's been read for its chart so far.
+    const marketMarks: MarketMarks = {}
+    for (const { asset, block } of markNeeds(address, wallet.rows, opening)) {
+      const micros = marketAt(asset, block)
+      if (micros) (marketMarks[block] ??= {})[asset] = micros
+    }
     const openedAt = new Date(new Date(wallet.latest.timestamp).getTime() - (wallet.latest.blockNum - wallet.fromBlock + 1) * BLOCK_MS).toISOString()
     return {
       address,
       mode: source.mode,
       coverage: { fromBlock: wallet.fromBlock, toBlock: wallet.coveredTo },
-      legs: [...(opening ? openingLegs(opening, openedAt) : []), ...buildPricedLegs({ account: address, rows, references, priced, market: (asset, block) => market.get(`${asset}:${bucketOf(block)}`)?.usdMicros ?? null })],
+      legs: [...(opening ? openingLegs(opening, openedAt) : []), ...buildPricedLegs({ account: address, rows, references, priced, market: marketAt })],
       references,
       prices: wallet.prices,
       latest: wallet.latest,
@@ -442,7 +491,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       unseenEth,
       notes: wallet.notes,
       marketChecked: wallet.marketChecked,
-      marketMarks: marketMarksOf(address, wallet),
+      marketMarks,
     }
   }
 
@@ -468,42 +517,64 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       const wallet = wallets.get(keyOf(account, {}))
       if (!wallet || wallet.coveredTo < through) return null
       const closing = !withBalances ? null : wallet.closing?.blockNum === through ? wallet.closing : await readBalances(account, through)
+      const rows = wallet.rows.filter((r) => r.block_num <= through)
+      const lastBalances = Object.fromEntries(Object.entries(wallet.lastBalances).filter(([, last]) => last.blockNum <= through))
       return {
         fromBlock: wallet.fromBlock,
         coveredTo: through,
-        rows: wallet.rows.filter((r) => r.block_num <= through),
+        rows,
         latest: { blockNum: through, timestamp: new Date(new Date(wallet.latest.timestamp).getTime() - (wallet.latest.blockNum - through) * BLOCK_MS).toISOString() },
         gasUnknown: wallet.gasUnknown,
         opening: wallet.opening,
         closing,
-        lastBalances: Object.fromEntries(Object.entries(wallet.lastBalances).filter(([, last]) => last.blockNum <= through)),
+        lastBalances,
         l1Fees: wallet.l1Fees,
         staleFeeTxs: wallet.staleFeeTxs,
         ethBalances: wallet.ethBalances,
         notes: wallet.notes.filter((n) => n.blockNum <= through),
         notesReadTo: Math.min(wallet.notesReadTo, through),
         marketChecked: wallet.marketChecked,
+        // Read for this block, since what the last refresh read can be from after it.
+        feedRounds: await loadFeedRounds(assetsHeld({ rows, opening: wallet.opening, closing, lastBalances }), bucketOf(through, MARKET_HEAD_BUCKET_BLOCKS)),
       }
     },
 
     /**
-     * Those facts, priced by this source's rows, with `prices` as what's current. Null when this source hasn't read that
-     * far, or read different transactions, as after a reorg, so the two can't be said to differ only by price.
+     * This source's own market prices for those facts, with `prices` as what's current, read now if they haven't been. Two rules can read a wallet either
+     * side of a bucket, so what each read for itself may not be for the block they're compared at.
      */
-    pricedOn(address: string, facts: WalletFacts, prices: LatestPrices): WalletData | null {
+    async marketOn(address: string, facts: WalletFacts, prices: LatestPrices): Promise<MarketOn> {
+      const through = facts.coveredTo
+      const priced = wallets.get(keyOf(address.toLowerCase(), {}))?.priced.filter((p) => p.block_num <= through) ?? []
+      const { wanted } = marketWanted(facts, priced, through, { ...prices, ...feedPrices(facts.feedRounds, prices) })
+      const checked = await loadMarket(wanted)
+      return { priced: new Set(wanted.map(({ asset, bucket }) => `${asset}:${bucket}`).filter((key) => market.get(key))), checked }
+    },
+
+    /**
+     * Those facts, priced by this source's rows, with `prices` as what's current and `using` as the market prices it can
+     * use. Null when this source hasn't read that far, or read different transactions, as after a reorg, so the two can't
+     * be said to differ only by price.
+     */
+    pricedOn(address: string, facts: WalletFacts, prices: LatestPrices, using: MarketOn): WalletData | null {
       const account = address.toLowerCase()
       const own = wallets.get(keyOf(account, {}))
       if (!own || own.coveredTo < facts.coveredTo) return null
       const through = facts.coveredTo
       if (rowKeys(own.rows.filter((r) => r.block_num <= through)) !== rowKeys(facts.rows)) return null
-      return responseOf(account, {
-        ...facts,
-        priced: own.priced.filter((p) => p.block_num <= through),
-        references: new Map([...own.references].filter(([block]) => block <= through)),
-        // Market prices come from this source's own trades, like the rest of what's priced.
-        prices: { ...prices, ...marketPricesAt(through) },
-        marketChecked: own.marketChecked,
-      })
+      // Market prices come from this source's own trades, like the rest of what's priced. A feed comes first, as in a refresh.
+      const current = { ...prices, ...marketPricesAt(through, using), ...feedPrices(facts.feedRounds, prices) }
+      return responseOf(
+        account,
+        {
+          ...facts,
+          priced: own.priced.filter((p) => p.block_num <= through),
+          references: new Map([...own.references].filter(([block]) => block <= through)),
+          prices: current,
+          marketChecked: using.checked && feedsLeftNoGap(assetsHeld(facts), current),
+        },
+        (key) => using.priced.has(key),
+      )
     },
 
     /** What's already been read, with no query, or null when nothing has been. */
