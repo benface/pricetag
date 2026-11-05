@@ -153,35 +153,43 @@ struct MainWindow: View {
         }
     }
 
+    /// Fills the window while it fits, with the table taking what's spare, and scrolls once it needs more height than the window has.
     private func details(_ portfolio: Portfolio) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            notices(portfolio)
-            if !portfolio.progress.started {
-                ContentUnavailableView("Still catching up", systemImage: "hourglass", description: Text(Wording.notStarted))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if portfolio.isEmpty {
-                VStack(spacing: 14) {
-                    ContentUnavailableView("No activity", systemImage: "tray", description: Text("Nothing moved for \(Format.shortHash(portfolio.address)) in this time."))
-                    coverageNote(portfolio)
-                        .multilineTextAlignment(.center)
+        GeometryReader { window in
+            ScrollView {
+                AtLeastHeight(window.size.height) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        notices(portfolio)
+                        if !portfolio.progress.started {
+                            ContentUnavailableView("Still catching up", systemImage: "hourglass", description: Text(Wording.notStarted))
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if portfolio.isEmpty {
+                            VStack(spacing: 14) {
+                                ContentUnavailableView("No activity", systemImage: "tray", description: Text("Nothing moved for \(Format.shortHash(portfolio.address)) in this time."))
+                                coverageNote(portfolio)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            summary(portfolio)
+                            HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
+                            history(portfolio)
+                            HoldingsTable(portfolio: portfolio, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
+                                .frame(minHeight: 140)
+                            if let noMarket = Wording.noMarket(portfolio) {
+                                Text(noMarket)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            coverageNote(portfolio)
+                        }
+                    }
+                    .padding(16)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                summary(portfolio)
-                HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
-                history(portfolio)
-                HoldingsTable(portfolio: portfolio, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
-                    .frame(minHeight: 150)
-                if let noMarket = Wording.noMarket(portfolio) {
-                    Text(noMarket)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                coverageNote(portfolio)
             }
+            .scrollBounceBehavior(.basedOnSize)
         }
-        .padding(16)
     }
 
     private func coverageNote(_ portfolio: Portfolio) -> some View {
@@ -191,7 +199,7 @@ struct MainWindow: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// The same size whichever it shows, so switching moves nothing else.
+    /// The same size whichever it shows, so switching moves nothing else. It gives up some height before the page has to scroll.
     private func history(_ portfolio: Portfolio) -> some View {
         GroupBox {
             Group {
@@ -207,7 +215,7 @@ struct MainWindow: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .frame(height: 170)
+            .frame(minHeight: 120, idealHeight: 170, maxHeight: 170)
         } label: {
             HStack {
                 Spacer()
@@ -246,6 +254,8 @@ struct MainWindow: View {
     private func summary(_ portfolio: Portfolio) -> some View {
         HStack(alignment: .top, spacing: 32) {
             PnlHeadline(portfolio: portfolio, isLive: isLive, size: 40, onOpen: { navigation.target = .total(.pnl) }, onResolve: { navigation.resolve() })
+                // Short of height, its amounts would shrink and cut off instead of the page scrolling.
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(alignment: .top, spacing: 26) {
                 ForEach(portfolio.totalStats, id: \.metric) { stat in
@@ -256,6 +266,25 @@ struct MainWindow: View {
             // The headline's caveats can wrap, and these can't.
             .fixedSize()
         }
+    }
+}
+
+/// Offers its content a height, and is taller if the content needs more. A scroll view offers none, and a frame with an ideal height stops at that height, which leaves nothing to scroll.
+private struct AtLeastHeight: Layout {
+    let height: CGFloat
+
+    init(_ height: CGFloat) {
+        self.height = height
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let fit = subviews.first?.sizeThatFits(ProposedViewSize(width: proposal.width, height: height)) ?? .zero
+        return CGSize(width: fit.width, height: max(fit.height, height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        // The same offer as above. Offered what it asked for instead, the chart grows again and the page runs past its end.
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: height))
     }
 }
 

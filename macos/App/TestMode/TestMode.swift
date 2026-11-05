@@ -90,6 +90,7 @@ enum TestScene: String, CaseIterable {
     case main
     case mainTransactions = "main-transactions"
     case mainDetails = "main-details"
+    case mainNarrow = "main-narrow"
     case mainNoWallet = "main-no-wallet"
     case mainReading = "main-reading"
     case mainServerDown = "main-server-down"
@@ -97,6 +98,8 @@ enum TestScene: String, CaseIterable {
     case mainLinkedFailed = "main-linked-failed"
     case mainEmpty = "main-empty"
     case mainEmptySmallest = "main-empty-smallest"
+    case mainSmallest = "main-smallest"
+    case mainSmallestEnd = "main-smallest-end"
     case mainEmptyNotice = "main-empty-notice"
     case mainNotStarted = "main-not-started"
     case holdComparison = "hold-comparison"
@@ -154,7 +157,7 @@ enum TestScene: String, CaseIterable {
     enum Chrome { case titled, none }
 
     /// Rendering draws the inspector's text in the wrong color in dark mode, so these only come from a real window.
-    var needsRealWindow: Bool { self == .mainDetails || self == .mainDetailsCAD || self == .mainHoldDetails }
+    var needsRealWindow: Bool { self == .mainDetails || self == .mainDetailsCAD || self == .mainHoldDetails || self == .mainSmallestEnd }
 
     var chrome: Chrome {
         switch self {
@@ -259,8 +262,13 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
         case .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .mainEmptySmallest:
+        case .mainSmallestEnd:
+            // Starts at the end of the page, because a screenshot can't scroll to it.
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)
+        case .mainEmptySmallest, .mainSmallest:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 560), isReady: isReady)
+        case .mainNarrow:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 760), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
         case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
