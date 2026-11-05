@@ -2,6 +2,7 @@ import SwiftUI
 
 /// The top of a wallet: what it's worth, then how it's done, then the sums behind that. An investor comes to see what they have,
 /// and a tiny loss on a new wallet shouldn't be the biggest thing on screen. It wraps when there's no room for one line.
+/// What these leave out or estimate is said once, by `PortfolioAttention` right under them, and not on each number.
 public struct PortfolioSummary: View {
     let portfolio: Portfolio
     let isLive: Bool
@@ -62,20 +63,21 @@ public struct PortfolioSummary: View {
 
     private var valueStat: some View {
         VStack(alignment: .leading, spacing: 2) {
-            statLabel("Value · \(portfolio.currency.rawValue)", isPartial: portfolio.isValuePartial)
+            statLabel("Value · \(portfolio.currency.rawValue)")
                 .help(portfolio.partialValueReason ?? "")
             Button { onOpen(.value) } label: {
                 big(value, size: size, tone: .neutral)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("Value, \(value ?? "unavailable")")
+            // Read alone, it still says it's incomplete.
+            .accessibilityLabel("Value, \(value ?? "unavailable")\(portfolio.isValuePartial ? ", partial" : "")")
             .accessibilityHint("Shows the activity behind this number")
         }
     }
 
     private var pnlStat: some View {
         VStack(alignment: .leading, spacing: 2) {
-            statLabel("Total PnL", isPartial: portfolio.pnlStatus == .partial)
+            statLabel("Total PnL")
                 .help(Wording.pnlHelp)
             Button { onOpen(.pnl) } label: {
                 big(pnl, size: size * 0.62, tone: isLive ? portfolio.totalPnlTone : .neutral)
@@ -86,14 +88,10 @@ public struct PortfolioSummary: View {
         }
     }
 
-    private func statLabel(_ text: String, isPartial: Bool) -> some View {
-        HStack(spacing: 4) {
-            Text(text)
-            // As readable as what it qualifies, because it changes what the number means.
-            if isPartial { Text("partial").fontWeight(.medium) }
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
+    private func statLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     /// One line whatever it says: a big number shrinks to fit instead of pushing everything down. What's unknown stays a word, never $0.
@@ -183,7 +181,7 @@ public struct PortfolioAttention: View {
     }
 }
 
-/// One of the sums beside the total. It says when it's partial, and shows no number when nothing's known.
+/// One of the sums beside the total. It shows no number when nothing's known. What it leaves out is said once, under the headline.
 public struct TotalStat: View {
     let label: String
     let help: String?
@@ -204,13 +202,10 @@ public struct TotalStat: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 4) {
-                Text(label).foregroundStyle(.secondary).help(help ?? "")
-                if text != nil, coverage?.isPartial == true {
-                    Text("partial").foregroundStyle(.secondary).fontWeight(.medium)
-                }
-            }
-            .font(.caption)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .help(help ?? "")
             Button(action: onOpen) {
                 Group {
                     if let text {
@@ -231,15 +226,15 @@ public struct TotalStat: View {
 }
 
 extension Portfolio {
-    /// nil when there's no number to show, and that says so instead of showing $0.
+    /// nil when there's no number to show, and that says so instead of showing $0. What it estimates is in `attention`, which is always beside it.
     public var totalValueText: String? {
-        totals.valueMicros.map { Format.estimate(Format.money($0, currency), totals.estimated.value) }
+        totals.valueMicros.map { Format.money($0, currency) }
     }
 
-    /// nil when there's no number to show, and that says so instead of showing $0.
+    /// nil when there's no number to show, and that says so instead of showing $0. What it leaves out or estimates is in `attention`, which is always beside it.
     public var totalPnlText: String? {
         guard pnlStatus != .unavailable else { return nil }
-        return totals.pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), isPositive(totals.estimatedMicros)) }
+        return totals.pnlMicros.map { Format.signedMoney($0, currency) }
     }
 
     /// Whether the value leaves out something held, which changes what the number means.
@@ -276,8 +271,8 @@ extension Portfolio {
         let money = { Format.money($0, currency) }
         let signed = { Format.signedMoney($0, currency) }
         return [
-            (.realized, "Realized", Wording.realizedHelp, totals.realizedMicros.map { Format.estimate(signed($0), totals.estimated.realized) }, totals.coverage.realized),
-            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map { Format.estimate(signed($0), totals.estimated.unrealized) }, totals.coverage.unrealized),
+            (.realized, "Realized", Wording.realizedHelp, totals.realizedMicros.map(signed), totals.coverage.realized),
+            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map(signed), totals.coverage.unrealized),
             (.gas, Wording.networkFees, nil, totals.gasMicros.map(money), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
     }
@@ -291,6 +286,7 @@ extension Portfolio {
         public let fullList: String?
     }
 
+    /// The one place the headline says it's incomplete or estimated, so it's never nil while any of its numbers is.
     /// nil when the numbers leave out nothing and rest on nothing estimated.
     public var attention: Attention? {
         var lines = Wording.unreadBalances(unreadAssets).map { [$0] } ?? []
@@ -299,6 +295,11 @@ extension Portfolio {
         if !l1FeeUnknownTxs.isEmpty { lines.append(Wording.networkFeeUnknown(l1FeeUnknownTxs.count)) }
         lines += withheld.map { Wording.withheld(wallet: $0.wallet, asset: $0.asset) }
         lines += Wording.missingRates(self)
+        // What's left out of the value is in the list below, unless nothing named it.
+        if isValuePartial, totals.excluded.isEmpty, let reason = partialValueReason { lines.append(reason) }
+        // The sentence about estimates only counts what's in the PnL. A value from a market price is an estimate too.
+        let estimates = totals.estimated
+        if !isPositive(totals.estimatedMicros), estimates.value || estimates.realized || estimates.unrealized { lines.append(Wording.marketEstimates) }
         let excludedList = Wording.excluded(totals.excluded)
         if let title = Wording.leavesOut(totals, currency) { return Attention(title: title, details: lines, fullList: excludedList) }
         if let excludedList { return Attention(title: excludedList, details: lines, fullList: nil) }

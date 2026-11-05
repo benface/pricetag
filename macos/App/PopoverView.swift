@@ -200,6 +200,7 @@ struct PopoverView: View {
     }
 
     /// The value, with its currency because a bare "$" doesn't say which, and how it's done right under it.
+    /// What they leave out is said once, in the attention row below, the same as in the window.
     private func headline(_ portfolio: Portfolio) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Button { open(.total(.value)) } label: {
@@ -212,12 +213,6 @@ struct PopoverView: View {
                         Text(portfolio.currency.rawValue)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        // As readable as what it qualifies, because it changes what the number means.
-                        if portfolio.isValuePartial {
-                            Text("partial")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.secondary)
-                        }
                     } else {
                         Text("Value unavailable")
                             .font(.title3.weight(.semibold))
@@ -235,10 +230,6 @@ struct PopoverView: View {
                         LiveNumber(pnl, tone: isLive ? portfolio.totalPnlTone : .neutral)
                             .fontWeight(.medium)
                         Text("PnL").foregroundStyle(.secondary)
-                        // As readable as what it qualifies, because it changes what the number means.
-                        if portfolio.pnlStatus == .partial {
-                            Text("partial").fontWeight(.medium).foregroundStyle(.secondary)
-                        }
                     } else {
                         Text(Wording.pnlUnavailable).foregroundStyle(.secondary)
                     }

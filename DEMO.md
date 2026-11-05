@@ -35,12 +35,12 @@ About 5 minutes. **Before you start:**
 
 | # | Do | Say | Should appear |
 |---|---|---|---|
-| 1 | Click the menu bar item | "This is my real wallet, with real money. A small amount, on purpose." | Value, PnL and holdings. PnL is marked partial |
-| 2 | Open the main window | "It only has what I've done since Wednesday at 14:24, when the dataset starts. Every position is checked against the chain to the smallest unit." | Holdings with check marks, and a warning that ETH's cost is unknown |
+| 1 | Click the menu bar item | "This is my real wallet, with real money. A small amount, on purpose." | Value, PnL and holdings, with a line under them saying what PnL leaves out |
+| 2 | Open the main window | "It only has what I've done since Wednesday at 14:24, when the dataset starts. Every position is checked against the chain to the smallest unit." | Holdings, largest first, with price, return and check marks, and a warning that ETH's cost is unknown |
 | 3 | Click cbBTC's number in the holdings | "Any number opens what's behind it: what moved, at what price, and where that price came from." | Details on the right, with each row's price source and cost |
 | 4 | On a swap's row, click **Proof**, then **Verify block …** | "This recomputes the block's hashes from what Amp returned. It doesn't prove my SQL or Chainlink's number, and it says so." | About 11 s (*measured* on the $1 swap), then "The data Amp stored for this block matches its header, and so does Chainlink's update behind this price" and 5 passed checks |
 | 5 | Click **Resolve** in the toolbar | "My ETH came from Coinbase inside a batched payout. No transaction points at my wallet, and this data has no traces. We found it from the balance. So it asks, instead of guessing." | "Who's this?" with "From a Coinbase address" |
-| 6 | **My exchange account**, type what you paid, **Save**, **Done** | "That stays on this Mac. Now everything adds up." | PnL is no longer partial, and ETH has PnL. "Compared with holding ETH" and a full chart appear |
+| 6 | **My exchange account**, type what you paid, **Save**, **Done** | "That stays on this Mac. Now everything adds up." | The line saying what PnL leaves out is gone, and ETH has PnL and a return. "Compared with holding ETH" and a full chart appear |
 | 7 | In Settings, pick **Cautious ETH** | "Same transactions, different recipe. It counts ETH 1% lower. That's a second dataset version, two tables, with no app code for it. Here's its fingerprint." | The numbers change on their own |
 | 8 | **Compare Side by Side…** | "Same block, same facts. The only difference is the rule." | ETH price differs by 1% and Value by 1% of the ETH held. About 11 s (*measured*) |
 | 9 | Switch back to **Market price**. *Optional:* **Spending Money**, **Send**, $1 to your savings, Touch ID | "It sends too. Savings stay on a hardware wallet, and Spending Money has a cap." | "On its way", then "Done", and the numbers update by themselves. Cut this step if it takes over 15 s in rehearsal |
@@ -130,7 +130,7 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 **Morning**
 - [ ] Read the 8:00 health check on this issue.
 - [ ] Fund and buy, as above.
-- [ ] Right after the buys, answer the Coinbase card. There should be no other question and PnL shouldn't say partial. If it does, read what it leaves out, and see above. Then **Undo Last Answer**.
+- [ ] Right after the buys, answer the Coinbase card. There should be no other question and no line saying what PnL leaves out. If it does, read what it leaves out, and see above. Then **Undo Last Answer**.
 - [ ] Review WORK-426, then 431 and 432. Merging 426 starts WORK-449's test on real data, so read its results if they're in by 14:00.
 - [ ] Say on WORK-448 what time the demo is.
 - [ ] Make one small real purchase with **Buy…** (steps on WORK-462), and check its cost shows with no question.
@@ -148,7 +148,7 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 - [ ] Stop the server and bring it back. Switch to the hotspot. Try the PublicNode fallback.
 - [ ] Go through the device checklist once, with a few dollars. Decide whether a device goes on stage.
 - [ ] Record the backup.
-- [ ] Check again that PnL isn't partial with Coinbase answered, now that the sale's in. Then undo that answer, and freeze `main`. After that, merge only what the demo needs, then run the steps again.
+- [ ] Check again that nothing says what PnL leaves out with Coinbase answered, now that the sale's in. Then undo that answer, and freeze `main`. After that, merge only what the demo needs, then run the steps again.
 
 **Skip until after the demo**
 - Everything Low in Backlog, and WORK-439, WORK-446 and WORK-447.
