@@ -180,7 +180,7 @@ private struct WalletCommands: View {
         Button("Copy Address") { address.map(Clipboard.copy) }
             .keyboardShortcut("c", modifiers: [.command, .shift])
             .disabled(address == nil)
-        Button("View on Basescan") { address.flatMap(Basescan.address).map { NSWorkspace.shared.open($0) } }
+        Button("View on Basescan") { if let url = address.flatMap(Basescan.address) { NSWorkspace.shared.open(url) } }
             .disabled(address == nil)
         Divider()
         Button("Receive…") {
