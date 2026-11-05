@@ -4,7 +4,7 @@
 // The rest come from here, and the fold then runs on the result. An unanswered sender stays unknown: it could be the user's
 // own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, emptyPosition, foldWallet, formatAmount, normalizeAddress, usableAnswer, usdView, vouchedThrough, viewWallet, worth, type CostPiece, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, emptyPosition, foldWallet, formatAmount, lessPaidAt, normalizeAddress, sharePaidAt, usableAnswer, usdView, vouchedThrough, viewWallet, worth, type CostPiece, type HoldComparison, type MarkPrice, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "./api.ts"
 import { costKey, linkedWallets, type Book, type ExchangeCost, type Money, type Receipt } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
@@ -53,12 +53,14 @@ function moneyIn({ wallet, view }: Side, money: Money, leg: PricedLeg): string |
 function slice(piece: CostPiece, qty: bigint): CostPiece {
   const whole = BigInt(piece.qty)
   const share = (micros: string) => (qty === whole ? BigInt(micros) : (BigInt(micros) * qty) / whole).toString()
+  const cost = piece.costMicros === null ? null : share(piece.costMicros)
   return {
     ...piece,
     qty: qty.toString(),
-    costMicros: piece.costMicros === null ? null : share(piece.costMicros),
+    costMicros: cost,
     estimatedCostMicros: share(piece.estimatedCostMicros),
     ...(piece.givenCostMicros === undefined ? {} : { givenCostMicros: share(piece.givenCostMicros) }),
+    ...(piece.paidAt && cost !== null ? { paidAt: sharePaidAt(piece.paidAt, BigInt(cost), BigInt(piece.costMicros as string), qty, whole) } : {}),
   }
 }
 
@@ -71,6 +73,7 @@ function without(piece: CostPiece, taken: CostPiece): CostPiece {
     costMicros: less(piece.costMicros, taken.costMicros),
     estimatedCostMicros: less(piece.estimatedCostMicros, taken.estimatedCostMicros) as string,
     ...(piece.givenCostMicros === undefined ? {} : { givenCostMicros: less(piece.givenCostMicros, taken.givenCostMicros as string) as string }),
+    ...(piece.paidAt && taken.paidAt ? { paidAt: lessPaidAt(piece.paidAt, taken.paidAt) } : {}),
   }
 }
 
@@ -260,7 +263,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const next = resolve(side, leg)
     ;(output.get(address) as PricedLeg[])[index] = next
     const key = `${address}:${next.asset}`
-    const { state, taken } = applyLegTaking(states.get(key) ?? emptyPosition(method, next.decimals), next)
+    const { state, taken } = applyLegTaking(states.get(key) ?? emptyPosition(method, next.decimals, sides.length > 1), next)
     states.set(key, state)
     const recipients = next.kind === "transfer" && taken.length > 0 ? recipientsOf(next) : null
     for (const [recipient, pieces] of allocateTaken(taken, recipients ?? [], method)) carried.set(`${next.txHash}:${address}:${next.asset}:${recipient}`, pieces)
@@ -389,6 +392,7 @@ export type BookFold = {
   totals: Totals
   pnlStatus: PnlStatus
   points: PnlPoint[]
+  holdComparison: HoldComparison
   questions: Question[]
   meter: Meter
   /** Other wallets' history that can't be confirmed, and that's why some of what arrived in this wallet has an unknown cost. */
@@ -407,7 +411,9 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
   const view = (sides[0] as Side).view
   const { legs: resolved, open } = resolveLegs(sides, method, book)
   const legs = resolved.get(address) as PricedLeg[]
-  const { positions, unreadAssets: unread, totals, pnlStatus, points } = foldWallet(focus, method, { ...view, legs })
+  // What came from a linked wallet was first paid for in its blocks, which only its oracle reads have.
+  const markPrice: MarkPrice = (blockNum, asset) => sides.map((side) => side.view.markPrice(blockNum, asset)).find((price) => price !== null) ?? null
+  const { positions, unreadAssets: unread, totals, pnlStatus, points, holdComparison } = foldWallet(focus, method, { ...view, legs, markPrice })
   const questions = questionsOf(open, sides, book)
   return {
     view,
@@ -417,6 +423,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
     totals,
     pnlStatus,
     points,
+    holdComparison,
     questions,
     meter: meterOf(questions, book, address, missingWallets(book, focus, others).length),
     withheld: withheldIn(legs).filter(({ wallet }) => wallet !== address),
