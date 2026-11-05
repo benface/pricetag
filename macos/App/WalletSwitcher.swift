@@ -17,7 +17,7 @@ extension PortfolioStore {
     }
 }
 
-/// A name being typed. It lives with the button that opens the list and not in the list, because a popover's content isn't reliably told when it closes.
+/// A name being typed. It's kept outside the list, because a popover's content isn't reliably told when it closes.
 @Observable
 final class PendingWalletName {
     var address: String?
@@ -81,7 +81,6 @@ struct WalletButton: View {
     @Bindable var navigation: Navigation
     /// Past what the toolbar has room for, it hides the whole button behind its overflow menu. A long name gives way instead.
     var maxWidth: CGFloat = 300
-    @State var pendingName = PendingWalletName()
 
     var body: some View {
         let list = store.walletList(hotWallet: hotWallet)
@@ -111,11 +110,7 @@ struct WalletButton: View {
         .accessibilityLabel(current.map { [$0.title, $0.badge].compactMap(\.self).joined(separator: ", ") } ?? "Add Wallet")
         .accessibilityHint("Switches wallet")
         .popover(isPresented: $navigation.isSwitchingWallet, arrowEdge: .bottom) {
-            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: pendingName, onOpenSpendingMoney: { navigation.section = .spendingMoney }) { navigation.isSwitchingWallet = false }
-        }
-        // Closing the list keeps what was typed, whichever way it closes. Only Esc cancels.
-        .onChange(of: navigation.isSwitchingWallet) { _, isOpen in
-            if !isOpen { store.save(pendingName, hotWallet: hotWallet) }
+            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: navigation.pendingWalletName, onOpenSpendingMoney: { navigation.section = .spendingMoney }) { navigation.isSwitchingWallet = false }
         }
     }
 }
@@ -421,9 +416,18 @@ struct WalletAddressField: View {
 struct WalletPicker: View {
     let store: PortfolioStore
     let list: WalletList
+    let navigation: Navigation
+    var onChoose: () -> Void = {}
+
+    /// Spending Money shows this Mac's wallet whichever one is chosen, so choosing another leaves that section, or nothing would seem to happen.
+    func choose(_ address: String?) {
+        store.setWallet(address)
+        navigation.showChosenWallet()
+        onChoose()
+    }
 
     var body: some View {
-        Picker("Wallet", selection: Binding(get: { store.address }, set: { store.setWallet($0) })) {
+        Picker("Wallet", selection: Binding(get: { store.address }, set: choose)) {
             ForEach(list.all) { entry in
                 Text([entry.title, entry.badge].compactMap(\.self).joined(separator: " · ")).tag(Optional(entry.address))
             }

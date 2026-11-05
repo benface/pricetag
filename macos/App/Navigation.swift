@@ -31,12 +31,22 @@ enum AppSection: String, CaseIterable, Identifiable {
 final class Navigation {
     /// Details belong to the section they were opened from, so set this first when opening both.
     var section: AppSection = .overview {
-        didSet { if section != oldValue { target = nil } }
+        didSet {
+            if section != oldValue { target = nil }
+            // There's no wallet button there for the list to belong to.
+            if section == .spendingMoney { isSwitchingWallet = false }
+        }
     }
     var chartRange: ChartRange = .all
     /// The number being explained in the details.
     var target: ExplainTarget?
-    var isSwitchingWallet = false
+    var isSwitchingWallet = false {
+        // Here and not in a view, because the view that opened the list can be gone by the time it closes.
+        didSet { if oldValue, !isSwitchingWallet { onSwitcherClosed?() } }
+    }
+    /// A wallet's name while it's being typed. Closing the list keeps it, whichever way the list closes, and only Esc cancels.
+    let pendingWalletName = PendingWalletName()
+    @ObservationIgnored var onSwitcherClosed: (() -> Void)?
     /// The extension's Top Up button was pressed. The hot wallet's section takes it from here.
     var wantsTopUp = false
     /// The web app sent over an account from a device. The hot wallet's window asks the person to check it.
@@ -48,8 +58,12 @@ final class Navigation {
 
     /// Spending Money is always this Mac's, so the wallet button isn't there. Every other section shows the wallet chosen.
     func switchWallet() {
-        if section == .spendingMoney { section = .overview }
+        showChosenWallet()
         isSwitchingWallet = true
+    }
+
+    func showChosenWallet() {
+        if section == .spendingMoney { section = .overview }
     }
 
     func resolve(_ asset: String? = nil) {

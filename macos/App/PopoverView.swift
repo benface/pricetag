@@ -85,7 +85,7 @@ struct PopoverView: View {
         let list = store.walletList(hotWallet: hotWallet)
         let current = list.entry(for: store.address)
         return Menu {
-            WalletPicker(store: store, list: list)
+            WalletPicker(store: store, list: list, navigation: navigation)
             Divider()
             Button("Add Wallet…") {
                 navigation.switchWallet()

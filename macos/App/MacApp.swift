@@ -31,6 +31,7 @@ struct MacApp: App {
         let navigation = Navigation()
         let siteBridge = SiteBridge(wallet: hotWallet)
         siteBridge.onTopUp = { navigation.wantsTopUp = true }
+        navigation.onSwitcherClosed = { store.save(navigation.pendingWalletName, hotWallet: hotWallet) }
         AppLinks.onOpen = { url in
             if let link = AddSavingsLink(url: url) { navigation.addingSavings = link }
         }
@@ -106,9 +107,7 @@ struct MacApp: App {
                     .keyboardShortcut("r", modifiers: .command)
             }
             CommandMenu("Wallet") {
-                SwitchWalletCommand(navigation: navigation)
-                Divider()
-                WalletPicker(store: store, list: store.walletList(hotWallet: hotWallet))
+                WalletCommands(store: store, hotWallet: hotWallet, navigation: navigation)
             }
             CommandGroup(after: .newItem) {
                 Button("Answer Questions…") { navigation.resolve() }
@@ -144,17 +143,25 @@ enum WindowID {
 }
 
 /// The window may be closed, so this opens it too.
-private struct SwitchWalletCommand: View {
+private struct WalletCommands: View {
+    let store: PortfolioStore
+    let hotWallet: HotWallet
     let navigation: Navigation
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Button("Switch Wallet…") {
-            openWindow(id: WindowID.main)
-            DockPresence.bringForward()
+            openMainWindow()
             navigation.switchWallet()
         }
         .keyboardShortcut("l", modifiers: .command)
+        Divider()
+        WalletPicker(store: store, list: store.walletList(hotWallet: hotWallet), navigation: navigation, onChoose: openMainWindow)
+    }
+
+    private func openMainWindow() {
+        openWindow(id: WindowID.main)
+        DockPresence.bringForward()
     }
 }
 

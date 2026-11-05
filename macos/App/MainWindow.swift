@@ -94,6 +94,8 @@ struct MainWindow: View {
             navigation.target = nil
             navigation.isResolving = false
         }
+        // Or it would open again by itself with the window.
+        .onDisappear { navigation.isSwitchingWallet = false }
     }
 
     private var sidebar: some View {
