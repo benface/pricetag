@@ -365,7 +365,7 @@ public enum AddSavingsWording {
 
     public static let browserTroubles = [
         Trouble(when: "Your Ledger isn't in the list", then: "Check it's unlocked and Ledger Wallet is closed, then unplug it and plug it back in."),
-        Trouble(when: "The page won't load", then: "This app's server has to be running on this Mac."),
+        Trouble(when: "The page won't load", then: "This app's price service has to be running on this Mac."),
     ]
 
     public static func browserBody(_ browser: String, defaultThatCant: String?) -> String {
