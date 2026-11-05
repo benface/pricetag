@@ -559,7 +559,9 @@ struct TopUpSheet: View {
             } else {
                 LabeledContent("Amount") {
                     HStack {
+                        // A slider needs two ends, and with room for one dollar, the other end is too much.
                         Slider(value: $dollars, in: 1...Double(max(room, 2)), step: 1)
+                            .disabled(room < 2)
                         Text(wallet.usd(dollars: Int(dollars)))
                             .monospacedDigit()
                             .frame(width: 56, alignment: .trailing)
@@ -602,6 +604,8 @@ struct TopUpSheet: View {
         .padding(20)
         .frame(width: 460)
         .onAppear { dollars = Double(max(1, min(room, 20))) }
+        // A read can leave less room than there was when this opened. What's chosen stays if it still fits.
+        .onChange(of: room) { dollars = min(dollars, Double(max(room, 1))) }
     }
 
     private var ethHint: String {
