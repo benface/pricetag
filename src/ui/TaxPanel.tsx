@@ -66,10 +66,13 @@ function unknownSentence({ unknownCount: count, soldCount, feeCount, sentCount }
   return `${n(count)} of these ${n(total)} ${count === 1 ? "has" : "have"} an unknown gain, in whole or in part. What's unknown is left out of the total.`
 }
 
-export function TaxPanel({ address, currency, book, overviewMethod, questionCount, onResolve, onClose }: {
+export function TaxPanel({ address, currency, book, year, onYear, overviewMethod, questionCount, onResolve, onClose }: {
   address: string
   currency: CurrencyCode
   book: Book
+  /** Held by the page, so it stays the same while the report closes to answer another wallet's questions. */
+  year: TaxYear
+  onYear: (year: TaxYear) => void
   overviewMethod: Method
   /** The questions about the wallet showing. */
   questionCount: number
@@ -83,8 +86,6 @@ export function TaxPanel({ address, currency, book, overviewMethod, questionCoun
   // Nothing chosen means whatever the country calls for. Choosing another country goes back to that.
   const [chosenMethod, setChosenMethod] = useState<Method | null>(readMethod)
   const [chosenScope, setChosenScope] = useState<TaxScope | null>(readScope)
-  // Not remembered: opening the report again starts on the newest year.
-  const [year, setYear] = useState<TaxYear>("latest")
   const [years, setYears] = useState<number[]>([])
   const [othersText, setOthersText] = useState(() => localStorage.getItem(OTHERS_KEY) ?? "")
   const [report, setReport] = useState<TaxReportResponse | null>(null)
@@ -177,10 +178,11 @@ export function TaxPanel({ address, currency, book, overviewMethod, questionCoun
           <span className="small muted">Year</span>
           <select value={String(shownYear)} onChange={(e) => {
               const next = e.target.value === "all" ? "all" : Number(e.target.value)
-              if (next !== shownYear) setYear(next)
+              if (next !== shownYear) onYear(next)
             }}>
-            {years.length === 0 ? <option value="latest">Newest</option> : null}
-            {years.map((option) => (
+            {years.length === 0 && year === "latest" ? <option value="latest">Newest</option> : null}
+            {/* Until the report says which years there are, the one chosen is still one of them. */}
+            {(typeof year === "number" && !years.includes(year) ? [year, ...years] : years).map((option) => (
               <option key={option} value={option}>
                 {option}
               </option>

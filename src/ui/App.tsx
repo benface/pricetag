@@ -43,6 +43,7 @@ import { ResolvePanel } from "./ResolvePanel.tsx"
 import { useBook, useOtherWallets } from "./useBook.ts"
 import { RulesPanel } from "./RulesPanel.tsx"
 import { useRules } from "./useRules.ts"
+import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
 import { linkedWallets, walletsBehind } from "../core/book.ts"
@@ -197,6 +198,8 @@ export function App() {
   const [method, setMethod] = useState<Method>("average")
   const [target, setTarget] = useState<ExplainTarget | null>(null)
   const [taxOpen, setTaxOpen] = useState(false)
+  // Not remembered: opening the report starts on the newest year. Coming back from answering keeps the one it was on.
+  const [taxYear, setTaxYear] = useState<TaxYear>("latest")
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
   const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule)
@@ -421,7 +424,14 @@ export function App() {
                 </div>
               </section>
               <p className="tax-link">
-                <button type="button" className="link" onClick={() => setTaxOpen(true)}>
+                <button
+                  type="button"
+                  className="link"
+                  onClick={() => {
+                    setTaxYear("latest")
+                    setTaxOpen(true)
+                  }}
+                >
                   Export a tax report…
                 </button>
               </p>
@@ -469,6 +479,8 @@ export function App() {
           address={address}
           currency={chosenCurrency}
           book={book}
+          year={taxYear}
+          onYear={setTaxYear}
           overviewMethod={method}
           questionCount={questions.length}
           onResolve={resolveFromTax}
