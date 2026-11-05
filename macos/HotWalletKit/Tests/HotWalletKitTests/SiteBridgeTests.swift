@@ -426,6 +426,21 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         #expect(rig.bridge.failure?.reason == "nope")
     }
 
+    @Test func aFailureNamesTheSiteLikeTheApprovalDid() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let (answer, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        #expect(approval.site == "app.example.com")
+        await rig.chain.failSnapshots(1, with: .rejected("nope"))
+        await rig.bridge.approve(approval.id)
+        _ = await answer.value
+        #expect(rig.bridge.failure?.site == approval.site)
+
+        // It's only https:// that goes. Anything else a site can be here stays whole.
+        let local = SiteFailure(sceneOrigin: "http://localhost:5173", isTransaction: true, reason: "nope")
+        #expect(local.site == "http://localhost:5173")
+    }
+
     @Test func everyFailureGetsSeen() async throws {
         let rig = SiteRig()
         await rig.connect()

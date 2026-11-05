@@ -32,10 +32,7 @@ public struct SiteApproval: Identifiable, Equatable, Sendable {
         if case .transaction = action { true } else { false }
     }
 
-    /// Without https://, which is the only scheme a site can have here apart from this Mac's own.
-    public var site: String {
-        origin.hasPrefix("https://") ? String(origin.dropFirst(8)) : origin
-    }
+    public var site: String { siteName(origin) }
 
     /// Signing asks for Touch ID too, like every other time money can leave. Connecting only shows an address.
     /// It names the site and what leaves, because macOS's own dialog shows this over the window that does.
@@ -95,6 +92,13 @@ public struct SiteFailure: Identifiable, Equatable, Sendable {
     public let origin: String
     public let isTransaction: Bool
     public let reason: String
+
+    public var site: String { siteName(origin) }
+}
+
+/// A site as people read it: without https://, which is the only scheme a site can have here apart from this Mac's own.
+private func siteName(_ origin: String) -> String {
+    origin.hasPrefix("https://") ? String(origin.dropFirst(8)) : origin
 }
 
 public struct SiteRequest: Sendable {
