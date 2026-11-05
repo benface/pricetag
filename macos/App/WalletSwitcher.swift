@@ -175,6 +175,7 @@ struct WalletSwitcher: View {
     /// Where the pointer was when the arrows last moved. Rows scrolling under a still pointer report a hover that nobody made.
     @State private var pointerAtLastKey: CGPoint?
     @FocusState private var focus: Field?
+    @Environment(\.openSettings) private var openSettings
 
     private enum Field: Hashable {
         case add, rename
@@ -203,7 +204,13 @@ struct WalletSwitcher: View {
                 .onKeyPress(.downArrow) { moveHighlight(by: 1, proxy) }
                 .onKeyPress(.upArrow) { moveHighlight(by: -1, proxy) }
                 // Opens where the wallet showing is, however long the list.
-                .task { if let shown = pendingName.address ?? store.address { proxy.scrollTo(shown) } }
+                .task {
+                    guard let shown = pendingName.address ?? store.address else { return }
+                    // A list only knows where a far row is once it has laid out the rows before it, so this takes a second try.
+                    proxy.scrollTo(shown, anchor: .center)
+                    await Task.yield()
+                    proxy.scrollTo(shown, anchor: .center)
+                }
         }
     }
 
@@ -431,11 +438,12 @@ struct WalletSwitcher: View {
         if entry.kind == .spendingMoney {
             Divider()
             // It holds a key, so deleting it is never one click away, and only Settings does it.
-            SettingsLink { Text("Delete in Settings…") }
-                .simultaneousGesture(TapGesture().onEnded {
-                    onDeleteSpendingMoney()
-                    onDone()
-                })
+            Button("Delete in Settings…") {
+                onDeleteSpendingMoney()
+                onDone()
+                openSettings()
+                DockPresence.bringForward()
+            }
         }
     }
 

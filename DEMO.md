@@ -43,7 +43,7 @@ About 5 minutes. **Before you start:**
 | 6 | **My exchange account**, type what you paid, **Save**, **Done** | "That stays on this Mac. Now everything adds up." | PnL is no longer partial, and ETH has PnL. "Compared with holding ETH" and a full chart appear |
 | 7 | In Settings, pick **Cautious ETH** | "Same transactions, different recipe. It counts ETH 1% lower. That's a second dataset version, two tables, with no app code for it. Here's its fingerprint." | The numbers change on their own |
 | 8 | **Compare Side by Side…** | "Same block, same facts. The only difference is the rule." | ETH price differs by 1% and Value by 1% of the ETH held. About 11 s (*measured*) |
-| 9 | Switch back to **Market price**. *Optional:* **Spending Money**, **Send**, $1 to your savings, Touch ID | "It sends too. Savings stay on a hardware wallet, and Spending Money has a cap." | "On its way", then "Done", and the numbers update by themselves. Cut this step if it takes over 15 s in rehearsal |
+| 9 | Switch back to **Market price**. *Optional:* choose **Spending Money** in the wallet button (⌘4), **Send**, $1 to your savings, Touch ID | "It sends too. Savings stay on a hardware wallet, and Spending Money has a cap." | "On its way", then "Done", and the numbers update by themselves. Cut this step if it takes over 15 s in rehearsal |
 | 10 | Close | "One dataset, with no fork and no contracts. Price is a fact, and what you paid is yours." | |
 
 **Compare's amounts are small on a $45 wallet,** about $0.20. If that falls flat, show the screenshot from the [recording list](#backup-recording): a busy public wallet came out at $548,006 vs $544,586 (*measured*). Don't paste that wallet live. Its first read took 142 s and its Compare 57 s (*measured*, see WORK-410).
@@ -55,14 +55,14 @@ WORK-452 rewrites the steps for whatever has merged by Thursday at 13:45.
 | Issue | State at writing | Change to the steps |
 |---|---|---|
 | WORK-429 | Merged | Nothing: Send asks for Touch ID in the same window |
-| WORK-426 | Reviewed, PR #65 | Sidebar with Overview, Transactions, Spending Money (⌘3) and Tax Report. **Resolve** becomes **Fill In** on the holding, or Answer Questions… (⇧⌘R). The rule is in Settings > General, and the RPC and sweep settings are in Settings > Spending Money. The chart gets ranges, and waits for 3 known transactions over 5 minutes. A change only shows when nothing's left out at either end. **The Mac app no longer has a demo wallet in Release builds** |
+| WORK-426 | Reviewed, PR #65 | Sidebar with Overview, Transactions and Tax Report. Spending Money is chosen in the wallet button (⌘4), with Send, Top Up and Sweep above its numbers on Overview. **Resolve** becomes **Fill In** on the holding, or Answer Questions… (⇧⌘R). The rule is in Settings > General, and the RPC and sweep settings are in Settings > Spending Money. The chart gets ranges, and waits for 3 known transactions over 5 minutes. A change only shows when nothing's left out at either end. **The Mac app no longer has a demo wallet in Release builds** |
 | WORK-431 | In review, needs 426 | Wallet button in the toolbar instead of Change Wallet. ⌘L still works |
 | WORK-432 | In review, needs 426 | New popover, with Send and Top Up in it. Step 9 can start there |
 | WORK-442 | Handed off, not merged | Guided Add a Savings Wallet for Ledger and Keystone. Only affects setup, and the optional device moment |
 
 ## Wallet setup
 
-**Use the hot wallet you already have,** `0x3762…5D89`. It holds $5 today (*measured*): a Coinbase payout, one $1 swap to USDC, and one open question. Always copy its address from Patina's Spending Money, not from this file or any message. Only you do these steps. No agent touches keys or funds.
+**Use the hot wallet you already have,** `0x3762…5D89`. It holds $5 today (*measured*): a Coinbase payout, one $1 swap to USDC, and one open question. Always copy its address from Patina's Spending Money page, not from this file or any message. Only you do these steps. No agent touches keys or funds.
 
 | When | You do | Why |
 |---|---|---|

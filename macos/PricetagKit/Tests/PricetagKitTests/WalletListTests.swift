@@ -97,6 +97,19 @@ struct WalletListTests {
         #expect(list.entry(for: a)?.kind == .yours)
     }
 
+    @Test func aWalletThatStopsBeingSavingsStaysYoursUnderItsName() {
+        let (store, _) = makeStore()
+        store.setLinkedWallets([a])
+        store.moveToYours(a)
+        #expect(store.undoStack.isEmpty, "Saying so about an account changes nothing")
+        store.setLinkedWallets([])
+        store.renameWallet(a, to: "Ledger")
+        store.moveToYours(a)
+        #expect(store.book.linkedWallets == [a], "Costs keep following its money")
+        let list = WalletList(spending: nil, savings: [], linked: store.book.linkedWallets, saved: store.savedWallets, current: nil)
+        #expect(list.yours.map(\.title) == ["Ledger"])
+    }
+
     @Test func removingAWalletOfYoursTakesBackThatItsYours() {
         let (store, _) = makeStore()
         store.setWallet(a)

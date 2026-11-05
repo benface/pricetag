@@ -529,9 +529,21 @@ private struct DetailsGroup<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) { content }
+            .labeledContentStyle(DetailsRowStyle())
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+/// As a form lays one out, with its value at the far end. Outside a form, the two would sit side by side.
+private struct DetailsRowStyle: LabeledContentStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack {
+            configuration.label
+            Spacer()
+            configuration.content
+        }
     }
 }
 
