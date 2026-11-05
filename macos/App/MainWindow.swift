@@ -95,7 +95,7 @@ struct MainWindow: View {
                     exportDocument = CSVDocument(text: try await store.exportCSV())
                     exporting = true
                 } catch {
-                    exportError = "The server couldn't make this file."
+                    exportError = "The price service couldn't make this file."
                 }
             }
         }
@@ -121,7 +121,7 @@ struct MainWindow: View {
         // A status, so it looks like one: it's text, and it's down here with nothing around it that suggests a click.
         .safeAreaInset(edge: .bottom) {
             if store.feed != .noWallet {
-                FeedBadge(feed: store.feed, portfolio: portfolio)
+                FeedBadge(feed: store.feed, portfolio: portfolio, readingSince: store.readingSince)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
@@ -264,7 +264,11 @@ struct MainWindow: View {
             ContentUnavailableView {
                 ProgressView().controlSize(.large)
             } description: {
-                Text(Wording.reading)
+                // Says how long it's been once that's worth saying, without promising when it ends.
+                ReadingClock(since: store.readingSince ?? .now) { seconds in
+                    Text(seconds < FeedState.longReadSeconds ? Wording.reading : Wording.stillReading(seconds: seconds))
+                        .contentTransition(.numericText())
+                }
             }
         } else {
             Unavailable(store: store)
@@ -314,8 +318,18 @@ struct MainWindow: View {
 
     @ViewBuilder
     private func notices(_ portfolio: Portfolio) -> some View {
-        if let notice = store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) {
+        if let problem = store.feed.problem(serverURL: store.serverURL, portfolio: portfolio) {
+            Notice(.warning, problem.message, detail: problem.detail, actionTitle: "Try Again", action: store.refresh)
+        } else if let notice = store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) {
             Notice(.warning, notice)
+        }
+        // Each number that may change has a spinner by it. This says how long it's been, once that's worth saying.
+        if store.feed == .reading, let since = store.readingSince {
+            ReadingClock(since: since) { seconds in
+                if seconds >= FeedState.longReadSeconds {
+                    Notice(.info, Wording.stillUpdating(seconds: seconds, lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp))
+                }
+            }
         }
         if portfolio.mode == .demo {
             Notice(.info, Wording.demo)
@@ -788,13 +802,17 @@ private struct Unavailable: View {
     let store: PortfolioStore
 
     var body: some View {
+        let problem = store.feed.problem(serverURL: store.serverURL, portfolio: nil)
         ContentUnavailableView {
-            Label("Can't Show This Wallet", systemImage: "exclamationmark.triangle")
+            Label(problem?.title ?? "Can't Show This Wallet", systemImage: "exclamationmark.triangle")
         } description: {
-            Text(store.feed.staleNotice(serverURL: store.serverURL, portfolio: nil) ?? "")
+            Text(problem?.message ?? "")
         } actions: {
             Button("Try Again") { store.refresh() }
                 .buttonStyle(.borderedProminent)
+            if let detail = problem?.detail {
+                DetailsButton(detail: detail)
+            }
         }
     }
 }

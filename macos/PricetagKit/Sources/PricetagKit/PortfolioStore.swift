@@ -14,6 +14,8 @@ public enum FeedState: Equatable, Sendable {
     /// The chain is current, but the dataset hasn't processed up to it yet.
     case catchingUp
     case serverUnreachable
+    /// The server answers, but this wallet's read didn't finish in as long as a first read gets.
+    case tooSlow
     case ampUnavailable(String)
     case noAmpConfigured(String)
     case rejected(String)
@@ -25,7 +27,7 @@ public enum FeedState: Equatable, Sendable {
     public var isStale: Bool {
         switch self {
         case .noWallet, .reading, .live, .catchingUp: false
-        case .behind, .serverUnreachable, .ampUnavailable, .noAmpConfigured, .rejected: true
+        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected: true
         }
     }
 }
@@ -49,13 +51,19 @@ public final class PortfolioStore {
     /// Past this, the newest block is too old to call live.
     static let behindAfterSeconds = 120
     /// As long as a read of a wallet the server hasn't read yet can take.
-    static let firstReadTimeout: Duration = .seconds(180)
+    nonisolated static let firstReadTimeout: Duration = .seconds(180)
 
     /// What the store holds, which may not be current: read `feed` before calling it live. While a new wallet's, method's, currency's
     /// or rule's numbers are on their way, the feed is `.reading` and this holds the last ones known, so the screen doesn't go blank.
     /// They're always this wallet's, though they can be by the last method, currency or rule it was read in.
     public private(set) var portfolio: Portfolio?
-    public private(set) var feed: FeedState
+    public private(set) var feed: FeedState {
+        didSet {
+            if feed != .reading { readingSince = nil } else if oldValue != .reading { readingSince = now() }
+        }
+    }
+    /// When the feed started reading, so a long read can say how long it's been. nil unless it's reading.
+    public private(set) var readingSince: Date?
     public private(set) var updatedAt: Date?
     public private(set) var address: String?
     public private(set) var method: CostMethod
@@ -137,6 +145,7 @@ public final class PortfolioStore {
         }
         self.savedWallets = saved
         self.feed = address == nil ? .noWallet : .reading
+        if address != nil { readingSince = now() }
         self.source = makeSource(serverURL)
         self.cache = PortfolioCache(directory: cacheDirectory, now: now())
         if address != nil { portfolio = lastKnown() }
@@ -583,7 +592,7 @@ public final class PortfolioStore {
             return try await read(timeout)
         } catch FetchError.timedOut {
             guard await serverAnswers() else { throw FetchError.unreachable }
-            guard timeout < Self.firstReadTimeout else { throw FetchError.ampUnavailable(Wording.readTooSlow) }
+            guard timeout < Self.firstReadTimeout else { throw ReadTooSlow() }
             guard isCurrent() else { throw CancellationError() }
             feed = .reading
             return try await patiently(read, timeout: Self.firstReadTimeout, isCurrent: isCurrent)
@@ -610,7 +619,8 @@ public final class PortfolioStore {
     }
 
     private func state(of error: any Error) -> FeedState {
-        switch error as? FetchError {
+        if error is ReadTooSlow { return .tooSlow }
+        return switch error as? FetchError {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
         case .rejected(let message): .rejected(message)
@@ -628,6 +638,8 @@ public final class PortfolioStore {
         static let savedWallets = "savedWallets"
     }
 }
+
+private struct ReadTooSlow: Error {}
 
 private struct CurrentRate {
     let currency: CurrencyCode

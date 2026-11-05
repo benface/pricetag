@@ -91,7 +91,7 @@ struct PopoverView: View {
                 walletHeader
                 Spacer(minLength: 8)
                 if showsBadge {
-                    FeedBadge(feed: store.feed, portfolio: portfolio)
+                    FeedBadge(feed: store.feed, portfolio: portfolio, readingSince: store.readingSince)
                         .fixedSize()
                 }
             }
@@ -112,19 +112,33 @@ struct PopoverView: View {
             case (_, let portfolio?):
                 headline(portfolio)
             case (.reading, nil):
-                HStack(spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Reading this wallet…").foregroundStyle(.secondary)
+                    ReadingClock(since: store.readingSince ?? .now) { seconds in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Reading this wallet…")
+                            // Once it's taking a while, it says how long so far, without promising when it ends.
+                            if seconds >= FeedState.longReadSeconds {
+                                Text("\(Format.elapsed(seconds: seconds)) so far")
+                                    .font(.caption)
+                                    .monospacedDigit()
+                                    .contentTransition(.numericText())
+                            }
+                        }
+                        .foregroundStyle(.secondary)
+                        .help(Wording.stillReading(seconds: seconds))
+                    }
                 }
-                .help("The first read can take a minute.")
             default:
                 EmptyView()
             }
             if let problem = store.feed.shortProblem(portfolio: portfolio) {
+                let full = store.feed.problem(serverURL: store.serverURL, portfolio: portfolio)
                 ProblemRow(
                     problem,
-                    detail: portfolio.flatMap(lastUpdate),
-                    help: store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) ?? problem,
+                    // With no numbers here, nothing says how old they are, so it says what matters most instead.
+                    detail: portfolio.flatMap(lastUpdate) ?? (full == nil ? nil : Wording.moneyUnaffected),
+                    help: full.map { [$0.message, $0.detail].compactMap { $0 }.joined(separator: "\n\n") } ?? store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) ?? problem,
                     // Catching up is still updating, so there's nothing to retry.
                     actionTitle: isCatchingUp ? nil : "Retry",
                     action: store.refresh
