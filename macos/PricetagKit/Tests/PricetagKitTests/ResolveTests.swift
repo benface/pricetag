@@ -558,6 +558,28 @@ actor BookSource: PortfolioSource {
         #expect(Format.micros(fromDollars: "1,234,567.50") == "1234567500000")
         for bad in ["1.234,50", "12,3456", "1,23,456", "0,125", ",5"] { #expect(Format.micros(fromDollars: bad) == nil, "\(bad)") }
     }
+
+    @Test func aCostTakesEveryMarkOfTheMainCurrency() {
+        for currency in CurrencyCode.allCases {
+            for mark in Set([currency.rawValue, currency.symbol, currency.label].map { $0.trimmingCharacters(in: .whitespaces) }) {
+                #expect(Format.micros(fromDollars: "\(mark)46", in: currency) == "46000000", "\(mark)46")
+                #expect(Format.micros(fromDollars: "46 \(mark)", in: currency) == "46000000", "46 \(mark)")
+            }
+        }
+        #expect(Format.micros(fromDollars: "46 ZAR", in: .ZAR) == "46000000")
+    }
+
+    @Test func aCostTakesOnlyTheMainCurrencysOwnSymbol() {
+        #expect(Format.micros(fromDollars: "€46,20", in: .EUR) == "46200000")
+        #expect(Format.micros(fromDollars: "46,20 €", in: .EUR) == "46200000")
+        #expect(Format.micros(fromDollars: "CHF 46", in: .CHF) == "46000000")
+        #expect(Format.micros(fromDollars: "A$46", in: .AUD) == "46000000")
+        #expect(Format.micros(fromDollars: "$46", in: .AUD) == "46000000")
+        // Another currency's amount isn't one in this currency, and a note's USD stays in dollars.
+        #expect(Format.micros(fromDollars: "$46", in: .EUR) == nil)
+        #expect(Format.micros(fromDollars: "US$46", in: .CAD) == nil)
+        #expect(Format.micros(fromDollars: "€46") == nil)
+    }
 }
 
 @MainActor

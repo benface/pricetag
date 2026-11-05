@@ -137,7 +137,7 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
   /** The book a typed cost leads to, or null until every amount reads as one. */
   const costBook = useMemo(() => {
     if (!current) return null
-    const entered = Object.fromEntries(current.arrivals.map((a) => [a.asset, microsOf(costs[a.asset] ?? "")]))
+    const entered = Object.fromEntries(current.arrivals.map((a) => [a.asset, microsOf(costs[a.asset] ?? "", currency)]))
     if (Object.values(entered).includes(null)) return null
     const money = (micros: string | null): Money => ({ micros: micros as string, currency })
     if (current.sender) return enterExchangeCosts(book, wallet.address, current.sender, current.receipts, Object.fromEntries(Object.entries(entered).map(([asset, micros]) => [asset, money(micros)])))
@@ -221,11 +221,11 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
               {current.arrivals.map((arrival) => (
                 <label key={arrival.asset} className="small">
                   Paid for {formatAmount(arrival.units, arrival.decimals)} {arrival.asset}
-                  <input autoFocus inputMode="decimal" placeholder="$0.00" value={costs[arrival.asset] ?? ""} onChange={(e) => setCosts({ ...costs, [arrival.asset]: e.target.value })} />
+                  <input autoFocus inputMode="decimal" placeholder={formatMoney("0", currency)} value={costs[arrival.asset] ?? ""} onChange={(e) => setCosts({ ...costs, [arrival.asset]: e.target.value })} />
                 </label>
               ))}
               {costBook ? <p className="small">That would make it {consequence(previewBook(wallet, others as WalletResponse[], method, costBook, failed), currency)}</p> : null}
-              {current.arrivals.length === 1 && looksOff(microsOf(costs[(current.arrivals[0] as { asset: string }).asset] ?? ""), current.valueMicros) ? <p className="small warn-text">⚠ That's far from what it was worth when it arrived, about {formatMoney(current.valueMicros as string, currency)}. Double-check it.</p> : null}
+              {current.arrivals.length === 1 && looksOff(microsOf(costs[(current.arrivals[0] as { asset: string }).asset] ?? "", currency), current.valueMicros) ? <p className="small warn-text">⚠ That's far from what it was worth when it arrived, about {formatMoney(current.valueMicros as string, currency)}. Double-check it.</p> : null}
               <div className="cost-actions">
                 <button type="button" onClick={saveCost}>
                   Save

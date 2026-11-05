@@ -1,0 +1,83 @@
+{
+  "kind": "manifest",
+  "dependencies": {
+    "base": "edgeandnode/base_mainnet@0.0.2"
+  },
+  "tables": {
+    "rate_updates": {
+      "input": {
+        "sql": "SELECT block_num, timestamp, tx_hash, log_index, CASE WHEN address = X'9D779986f861810CadA370F04F524226d150fb7F' THEN 'CAD' WHEN address = X'46ba9365C7CE12224504cF8581f061a6942f8516' THEN 'EUR' WHEN address = X'2e46086480909c2049F372DE72Ba5a2fAB281eE9' THEN 'GBP' WHEN address = X'61d85c6cCE419845c2DfC20130B4f120C10B2105' THEN 'CHF' WHEN address = X'Be5bC9c1d407a0D97C34A73FbA19118b478F427d' THEN 'AUD' WHEN address = X'f74260ed595B7e31829f6f32cAD273563949A4BB' THEN 'NZD' WHEN address = X'3860668e752604a6734e3d812E14DF14d2B3Ae48' THEN 'SGD' WHEN address = X'84A0f5A767BD862bE27F6C8F07aCf6506b393370' THEN 'MXN' WHEN address = X'70f3a88dfD546dE52D2cEA8733E4DecC5d58F5f0' THEN 'BRL' WHEN address = X'74Ec57bB8B8eb99e668c052c7F3c0c6e88d38Dec' THEN 'TRY' WHEN address = X'1D292e75f586f4B2638b9C81300d58aD6299c0Da' THEN 'ZAR' END AS currency,\n  get_field(t, 'current') AS answer, get_field(t, 'roundId') AS round_id, get_field(t, 'updatedAt') AS updated_at\nFROM (SELECT block_num, timestamp, tx_hash, log_index, address, evm_decode_log(topic1, topic2, topic3, data, 'AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)') AS t\n  FROM base.logs WHERE topic0 = evm_topic('AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)') AND address IN (X'9D779986f861810CadA370F04F524226d150fb7F', X'46ba9365C7CE12224504cF8581f061a6942f8516', X'2e46086480909c2049F372DE72Ba5a2fAB281eE9', X'61d85c6cCE419845c2DfC20130B4f120C10B2105', X'Be5bC9c1d407a0D97C34A73FbA19118b478F427d', X'f74260ed595B7e31829f6f32cAD273563949A4BB', X'3860668e752604a6734e3d812E14DF14d2B3Ae48', X'84A0f5A767BD862bE27F6C8F07aCf6506b393370', X'70f3a88dfD546dE52D2cEA8733E4DecC5d58F5f0', X'74Ec57bB8B8eb99e668c052c7F3c0c6e88d38Dec', X'1D292e75f586f4B2638b9C81300d58aD6299c0Da'))\nWHERE block_num() >= 53385846"
+      },
+      "schema": {
+        "arrow": {
+          "fields": [
+            {
+              "name": "_block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "_ts",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "timestamp",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "tx_hash",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": false
+            },
+            {
+              "name": "log_index",
+              "type": "UInt32",
+              "nullable": false
+            },
+            {
+              "name": "currency",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "answer",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "round_id",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "updated_at",
+              "type": "Utf8",
+              "nullable": true
+            }
+          ]
+        }
+      },
+      "network": "base-mainnet"
+    }
+  },
+  "functions": {}
+}
