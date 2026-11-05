@@ -366,6 +366,12 @@ export type PnlPoint = {
   /** Realized, plus unrealized at that moment's prices, less gas. Only what's known, and null when nothing is. */
   pnlMicros: string | null
   excludedCount: number
+  /** What was held right after it, at that moment's prices. Only what's known, and null when nothing is. */
+  valueMicros: string | null
+  /** What was held right before it, at the same prices, so a deposit shows as a jump and not a slope. */
+  valueBeforeMicros: string | null
+  /** What `valueMicros` leaves out. `valueBeforeMicros` can leave out other things, and then it's null. */
+  valueExcludedCount: number
 }
 
 /**
@@ -425,14 +431,50 @@ export function pnlOverTime(
     }
     return { pnlMicros: answer(pnl, coverage), excludedCount }
   }
+  // What's held, and nothing about cost. A quantity history can't vouch for is left out, like one with no price.
+  const worthNow = (priceOf: (asset: string) => string | null) => {
+    const coverage: Coverage = { known: 0, missing: 0 }
+    let value = 0n
+    const excluded: string[] = []
+    for (const [asset, state] of states) {
+      if (noMarket.has(asset)) continue
+      const v = valuePosition(state, priceOf(asset))
+      if (unconfirmed.has(asset) || BigInt(state.shortfallQty) > 0n || (v.valueMicros === null && BigInt(v.qty) > 0n)) {
+        excluded.push(asset)
+        coverage.missing++
+      } else if (v.valueMicros !== null && BigInt(v.qty) > 0n) {
+        value += BigInt(v.valueMicros)
+        coverage.known++
+      }
+    }
+    for (const asset of unconfirmed) {
+      if (states.has(asset)) continue
+      excluded.push(asset)
+      coverage.missing++
+    }
+    return { valueMicros: answer(value, coverage), excluded: excluded.sort() }
+  }
+  let before: Worth | null = null
   legs.forEach((leg, i) => {
+    const at = (asset: string) => markPrice(leg.blockNum, asset)
+    if (!leg.opening && leg.txHash && legs[i - 1]?.txHash !== leg.txHash) before = worthNow(at)
     states.set(leg.asset, applyLeg(states.get(leg.asset) ?? emptyPosition(method, leg.decimals), leg))
     // ETH that arrived with no transaction to name has nothing to click, and the next point counts it.
     if (leg.opening || !leg.txHash || legs[i + 1]?.txHash === leg.txHash) return
-    points.push({ blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure((asset) => markPrice(leg.blockNum, asset)) })
+    const after = worthNow(at)
+    points.push({ blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure(at), ...valueAround(before, after) })
   })
   if (latest && (states.size > 0 || unconfirmed.size > 0)) {
-    points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.micros ?? null) })
+    const now = worthNow((asset) => prices[asset]?.micros ?? null)
+    points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.micros ?? null), ...valueAround(now, now) })
   }
   return points
+}
+
+type Worth = { valueMicros: string | null; excluded: string[] }
+
+/** Before and after can only be compared when they leave out the same things. */
+function valueAround(before: Worth | null, after: Worth) {
+  const comparable = before !== null && before.excluded.join() === after.excluded.join()
+  return { valueMicros: after.valueMicros, valueBeforeMicros: comparable ? before.valueMicros : null, valueExcludedCount: after.excluded.length }
 }

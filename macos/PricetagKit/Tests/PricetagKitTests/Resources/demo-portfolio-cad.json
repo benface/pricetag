@@ -437,6 +437,9 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000001",
       "pnlMicros": null,
       "excludedCount": 3,
+      "valueMicros": "7074155750",
+      "valueBeforeMicros": "336960750",
+      "valueExcludedCount": 1,
       "summary": "Received 5,000 USDC"
     },
     {
@@ -445,6 +448,9 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000002",
       "pnlMicros": null,
       "excludedCount": 4,
+      "valueMicros": "7148261903",
+      "valueBeforeMicros": "7083700500",
+      "valueExcludedCount": 1,
       "summary": "Received 0.02 ETH"
     },
     {
@@ -453,6 +459,9 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000003",
       "pnlMicros": "-130081",
       "excludedCount": 6,
+      "valueMicros": "7178059539",
+      "valueBeforeMicros": "7177537900",
+      "valueExcludedCount": 1,
       "summary": "Bought 1 ETH for 2,400 USDC"
     },
     {
@@ -461,6 +470,9 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
       "pnlMicros": "9427",
       "excludedCount": 6,
+      "valueMicros": "7267342706",
+      "valueBeforeMicros": "7267202858",
+      "valueExcludedCount": 1,
       "summary": "Bought 800 AERO for 1,000 USDC"
     },
     {
@@ -469,6 +481,9 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000005",
       "pnlMicros": "69305427",
       "excludedCount": 6,
+      "valueMicros": "7645474466",
+      "valueBeforeMicros": "7372277866",
+      "valueExcludedCount": 1,
       "summary": "Received 200 USDT"
     },
     {
@@ -477,6 +492,9 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
       "pnlMicros": "126222744",
       "excludedCount": 6,
+      "valueMicros": "7731447882",
+      "valueBeforeMicros": "7731582766",
+      "valueExcludedCount": 1,
       "summary": "Network fee of $0.13"
     },
     {
@@ -485,6 +503,9 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000007",
       "pnlMicros": "287067973",
       "excludedCount": 6,
+      "valueMicros": "7979934192",
+      "valueBeforeMicros": "7980195854",
+      "valueExcludedCount": 1,
       "summary": "Sold 300 AERO for 450 USDC"
     },
     {
@@ -493,6 +514,9 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000008",
       "pnlMicros": "271778073",
       "excludedCount": 6,
+      "valueMicros": "8051345900",
+      "valueBeforeMicros": "8051345900",
+      "valueExcludedCount": 1,
       "summary": "Received 0.02 cbBTC"
     },
     {
@@ -501,6 +525,9 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
       "pnlMicros": "261371169",
       "excludedCount": 6,
+      "valueMicros": "8103371714",
+      "valueBeforeMicros": "8103514620",
+      "valueExcludedCount": 1,
       "summary": "Bought 50,000 DEGEN for 0.000001 USDC"
     },
     {
@@ -509,6 +536,9 @@
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
       "pnlMicros": "252669381",
       "excludedCount": 7,
+      "valueMicros": "8139990331",
+      "valueBeforeMicros": "8133162019",
+      "valueExcludedCount": 1,
       "summary": "Bought 50 VIRTUAL for 100 USDC"
     },
     {
@@ -517,6 +547,9 @@
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000b",
       "pnlMicros": "242136635",
       "excludedCount": 7,
+      "valueMicros": "8162432326",
+      "valueBeforeMicros": "8162939431",
+      "valueExcludedCount": 1,
       "summary": "Sold 0.5 ETH for 1,300 USDC"
     },
     {
@@ -525,6 +558,9 @@
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000c",
       "pnlMicros": "238527767",
       "excludedCount": 7,
+      "valueMicros": "8185299758",
+      "valueBeforeMicros": "8192764563",
+      "valueExcludedCount": 1,
       "summary": "Sent 0.002 ETH"
     },
     {
@@ -533,6 +569,9 @@
       "txHash": null,
       "pnlMicros": "240285367",
       "excludedCount": 7,
+      "valueMicros": "8211228143",
+      "valueBeforeMicros": "8211228143",
+      "valueExcludedCount": 1,
       "summary": null
     }
   ],
