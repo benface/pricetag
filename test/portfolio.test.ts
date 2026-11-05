@@ -271,6 +271,19 @@ describe("the portfolio API", () => {
     assert.ok(!without.questions.some((q) => q.wallet === SAVINGS), "the next request knows nothing about it")
   })
 
+  it("has nothing waiting or failing on the book the Mac sends for the demo, with its accounts left out", async () => {
+    const macBook = { senders: { [SAVINGS]: { kind: "mine" } } }
+    const account = "0x000000000000000000000000000000000000aaaa"
+    // `linked` is the one thing a client sends that the demo ignores outright.
+    const portfolio = (await post("/api/portfolio/demo", { method: "average", book: macBook, linked: [account] })).body as unknown as PortfolioResponse
+    assert.deepEqual([portfolio.linkedReading, portfolio.linkedFailed, portfolio.meter.waiting], [[], [], 0])
+    const { previews } = (await post("/api/portfolio/demo/preview", { method: "average", candidates: [macBook], linked: [account] })).body as { previews: { failed: boolean; pending: boolean }[] }
+    assert.deepEqual(previews.map((p) => [p.failed, p.pending]), [[false, false]])
+    const explained = (await post("/api/portfolio/demo/explain?asset=USDC&metric=amount", { method: "average", book: macBook, linked: [account] })).body as unknown as ExplanationResponse
+    assert.ok(explained.legs.some((l) => l.costLabel === "inherited"), "it still inherits from its own savings wallet")
+    assert.equal((await post("/api/portfolio/demo/export", { method: "average", book: macBook, linked: [account] })).status, 200)
+  })
+
   it("folds linked wallets in the currency asked for", async () => {
     const { status, body } = await post("/api/portfolio/demo", { method: "average", currency: "CAD", book: mine })
     assert.equal(status, 200)

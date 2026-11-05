@@ -181,7 +181,7 @@ Both apps export the same CSV, because the server writes it (`POST /api/tax-repo
 
 Canada's "all together" is our reading: s. 47 averages what a taxpayer owns and says nothing about where it's held, but CRA's crypto guide doesn't address wallets directly.
 
-Wallets are the address on screen, any others typed into the report, and the ones the user's answers or the app say are theirs. A transfer between them, netting to zero, isn't a sale. All together, its cost stays in the pool. Each on its own, its cost carries over to the wallet it arrived in. On a wallet nobody's said is theirs, the wallets in the answers only supply costs, and aren't listed. The demo's are the same way, because they start at different blocks.
+Wallets are the address on screen, any others typed into the report, and the ones the user's answers or the app say are theirs. A transfer between them, netting to zero, isn't a sale. All together, its cost stays in the pool. Each on its own, its cost carries over to the wallet it arrived in. On a wallet nobody's said is theirs, the wallets in the answers aren't listed, and it takes no costs from them. Only the demo's wallets supply costs without being listed, because they start at different blocks.
 
 All together needs one consistent history, because a cost worked out from part of it would look known and be wrong. So the report stops at the last block every wallet has reached and says what that leaves out. If their histories start at different blocks, which can only happen reading the raw dataset, every cost and gain says `unknown`. The demo wallet can't be combined with anything.
 

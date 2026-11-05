@@ -633,6 +633,11 @@ public enum WalletAddress {
     /// What the server accepts in place of an address, to read its fixtures.
     public static let demo = "demo"
 
+    /// Whether the server reads this from its fixtures, which it also does for the fixtures' own addresses.
+    public static func isDemo(_ value: String) -> Bool {
+        [demo, "0x00000000000000000000000000000000000de300", "0x00000000000000000000000000000000000de301"].contains(value.lowercased())
+    }
+
     public static func isValid(_ value: String) -> Bool {
         value.wholeMatch(of: /0x[0-9a-fA-F]{40}/) != nil
     }

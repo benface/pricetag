@@ -369,8 +369,8 @@ export function createApi(env: Env, created: Created | null = createSource(env))
 
   /**
    * Answers with a report on `address`, the wallets typed in with it, and the ones the answers say are the user's, because
-   * those are in what the apps show. On a wallet nobody's said is theirs, like one being watched, the answers still decide
-   * its costs, so they're read for that, but their sales aren't this wallet's to list. Demo data and real data never mix.
+   * those are in what the apps show. A wallet nobody's said is theirs, like one being watched, takes no costs from them, so
+   * they aren't read or listed. The demo's own wallets are read for its costs without being listed. Demo data and real data never mix.
    */
   async function taxReport(address: string, choices: { country: unknown; method: unknown; scope: unknown }, also: readonly string[], currency: CurrencyCode, book: Book, res: ServerResponse): Promise<void> {
     const { country } = choices

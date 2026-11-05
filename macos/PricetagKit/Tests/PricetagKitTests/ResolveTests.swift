@@ -33,6 +33,16 @@ actor BookSource: PortfolioSource {
         return previewAnswers
     }
 
+    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String {
+        books.append(book)
+        return ""
+    }
+
+    func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison {
+        books.append(book)
+        throw FetchError.unreachable
+    }
+
     func importCoinbase(csv: String) async throws -> ExchangeImport {
         ExchangeImport(withdrawals: [ExchangeWithdrawal(exchange: "Coinbase", asset: "ETH", units: "1", at: "2026-11-04T00:00:00.000Z", cost: Money(micros: "5", currency: .USD), toAddress: nil)], skipped: 1)
     }
@@ -315,6 +325,30 @@ actor BookSource: PortfolioSource {
         store.stop()
         await _ = store.poll()
         #expect(await source.books.last?.senders[watched]?.kind == .mine, "they've said this one's theirs too")
+    }
+
+    @Test(arguments: [WalletAddress.demo, "0x00000000000000000000000000000000000de300", "0x00000000000000000000000000000000000de301"])
+    func theDemoNeverGetsTheseAccounts(demo: String) async throws {
+        let (store, source, _) = try makeStore()
+        let saving = "0x00000000000000000000000000000000000de301"
+        store.setWallet(demo)
+        store.stop()
+        store.setLinkedWallets([wallet])
+        store.setBook(store.book.answering(saving, .mine, focus: nil))
+        store.stop()
+        let expected = Book().answering(saving, .mine, focus: nil)
+        #expect(store.linked(for: demo).isEmpty)
+
+        await _ = store.poll()
+        #expect(await source.books.last == expected, "its own answer stays, and that's what it inherits from")
+        _ = try await store.previews(of: [store.book])
+        #expect(await source.previewed.last == [expected])
+        _ = try await store.exportCSV()
+        #expect(await source.books.last == expected)
+        _ = try? await store.comparison()
+        #expect(await source.books.last == expected)
+        #expect(store.explanationRequest(for: .asset("ETH", .value))?.book == expected)
+        #expect(store.book.senders[wallet]?.kind == .mine, "it's still an account, for anything that isn't the demo")
     }
 
     @Test func sayingAWatchedWalletGotItFromSomeoneElseLeavesYoursAlone() throws {
