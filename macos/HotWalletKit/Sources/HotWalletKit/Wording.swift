@@ -52,6 +52,7 @@ public enum HotWalletWording {
     public static let feesLookWrong = "The network is quoting far higher fees than Base ever charges, so nothing was signed. Check the network address in Settings."
     public static let keyMissing = "This device no longer has this wallet's key, so nothing here can be moved. This can happen after restoring onto a different device."
     public static let rotating = "Moving everything off the old key. It's deleted once there's nothing left on it."
+    public static let deleteWaitsForRotation = "This wallet's key is being replaced, and some of its money may already be on the new key. You can delete it once that's finished."
 
     public static func rotationHeldByOtherTokens(_ count: Int) -> String {
         "The old key still holds \(count) \(count == 1 ? "token" : "tokens") this app doesn't track, and it won't touch them. It keeps the old key until you choose to leave \(count == 1 ? "it" : "them") behind."

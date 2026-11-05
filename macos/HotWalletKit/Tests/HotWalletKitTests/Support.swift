@@ -194,6 +194,17 @@ struct FakePresence: UserPresence {
     }
 }
 
+/// Says yes, after doing something once while the prompt's open, like another window using the wallet.
+final class OpenPrompt: UserPresence, @unchecked Sendable {
+    var whileOpen: (@MainActor () async -> Void)?
+
+    func confirm(reason: String) async {
+        let body = whileOpen
+        whileOpen = nil
+        await body?()
+    }
+}
+
 actor ScriptedPortfolios: PortfolioSource {
     private var next: Result<Portfolio, FetchError>
     private(set) var linked: [[String]] = []
