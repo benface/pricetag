@@ -24,6 +24,8 @@ export type OnrampOrder = {
   /** Everything paid, fees included. */
   cost: { micros: string; currency: CurrencyCode } | null
   costUsdMicros: string | null
+  /** The currency it was paid in, when that's why `cost` is null: there's no rate for it. */
+  paidIn: string | null
 }
 export type { Head, Mode, PnlStatus }
 

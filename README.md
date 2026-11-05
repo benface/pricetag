@@ -174,8 +174,9 @@ Both apps show every value in the chosen currency, USD or CAD, and remember the 
 - **Each amount converts at the rate when it happened.** A cost or sale uses the rate at its transaction's block, and a current value uses the current rate. Conversion runs before the fold, so a gain in CAD is proceeds in CAD minus cost in CAD, and it includes what the exchange rate did in between.
 - **Rates come from Chainlink's feed on Base**, read at the block with `eth_call`, so a transaction minutes old already has its rate. Clicking through a number names the source, the rate, and the amount in USD.
 - **A missing rate is never filled in.** That amount is unavailable, whatever depends on it says so, and no other day's rate stands in. A feed that hasn't updated in 3 days counts as missing, since forex markets close for only about 2.
+- **A purchase keeps what was really paid,** in USD, CAD, EUR, GBP or CHF. Read in another currency, it converts at the rate of the block it arrived in, from the feed for what was paid, and its source says what was paid. Coinbase's own USD total only stands in when that feed has no answer. A purchase in a currency with no feed, like SEK, stays unknown and is asked about: Coinbase's USD total for it hasn't been checked against a real order.
 
-To add a currency, add its Chainlink feed to `CURRENCIES` in `packages/sdk/src/currency.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/Currency.swift`. Base has feeds for EUR, GBP, AUD, CHF, SGD and others.
+To add a currency, add its Chainlink feed to `CURRENCIES` in `packages/sdk/src/currency.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/Currency.swift`. To show one as a main currency, also add it to `MAIN_CURRENCY_CODES` and `CurrencyCode.mainChoices`. Base also has feeds for AUD, SGD and others. A new currency's feed needs its address checked against its `description()` onchain.
 
 ## Tax report
 

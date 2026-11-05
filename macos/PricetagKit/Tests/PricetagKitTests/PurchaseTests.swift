@@ -81,6 +81,7 @@ struct PurchaseTrackerTests {
         #expect(phase(OnrampOrder(id: "x", status: .failed)) == .failed(.payment))
         #expect(phase(delivered()) == .recorded(paid))
         #expect(phase(delivered(cost: nil)) == .costNotSaid, "Delivered, and it never said what it cost")
+        #expect(phase(OnrampOrder(id: "x", status: .succeeded, asset: "ETH", units: "1", wallet: wallet, txHash: hash, blockNum: 50, paidIn: "SEK")) == .noRateFor("SEK"))
         #expect(phase(OnrampOrder(id: "x", status: .succeeded, asset: "ETH", units: "1", wallet: wallet)) == .onItsWay, "Done, with nothing on the chain yet")
         let (waiting, _, _, _) = setup(match: .waiting)
         func arriving(blockNum: Int?, age: TimeInterval) -> PurchasePhase {
@@ -100,6 +101,34 @@ struct PurchaseTrackerTests {
         await tracker.check()
         #expect(store.book.purchases.isEmpty, "So what arrived is asked about as usual")
         #expect(tracker.phase(of: tracker.purchases[0]) == .costNotSaid)
+    }
+
+    @Test func paidInACurrencyWithNoRateIsAskedAboutAndSaysWhy() async throws {
+        let (tracker, store, source, _) = setup()
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        await source.say([OnrampOrder(id: "order", status: .succeeded, asset: "ETH", units: "1", wallet: wallet, txHash: hash, blockNum: 50, paidIn: "SEK")])
+        await tracker.check()
+        #expect(store.book.purchases.isEmpty, "So what arrived is asked about as usual")
+        let phase = tracker.phase(of: tracker.purchases[0])
+        #expect(phase.isFinished)
+        #expect(PurchaseWording.isWarning(phase))
+        #expect(PurchaseWording.status(phase) == "Cost unknown. There's no exchange rate for SEK")
+    }
+
+    @Test func aPurchaseInEurosIsRecordedInEuros() async throws {
+        let euros = Money(micros: "46200000", currency: .EUR)
+        let (tracker, store, source, _) = setup(match: .recorded)
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        await source.say([delivered(cost: euros, usd: "50000000")])
+        await tracker.check()
+        #expect(store.book.purchases.first?.cost == euros)
+        #expect(store.book.purchases.first?.costUsdMicros == "50000000")
+        #expect(PurchaseWording.status(tracker.phase(of: tracker.purchases[0])) == "Cost €46.20, fees included")
+    }
+
+    @Test func anOrderSavedBeforePaidInExistedStillReads() throws {
+        let saved = #"{"provider":"coinbase","id":"x","status":"succeeded"}"#
+        #expect(try JSONDecoder().decode(OnrampOrder.self, from: Data(saved.utf8)).paidIn == nil)
     }
 
     @Test func picksUpWhatWasStillGoingAfterARestart() async throws {

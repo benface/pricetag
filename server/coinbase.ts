@@ -67,8 +67,10 @@ export function orderOf(raw: unknown): OnrampOrder | null {
   const currency = typeof total.currency === "string" && isCurrencyCode(total.currency) ? total.currency : null
   const bought = isPurchase(row)
   const paid = bought && currency ? unitsOf(total.value, 6) : null
+  // Paid in a currency with no feed, which leaves only Coinbase's own USD figure. Nothing has shown that figure is exact, so the cost stays unknown.
+  const paidIn = bought && !currency && typeof total.currency === "string" && /^[A-Z]{3}$/.test(total.currency) ? total.currency : null
   const usd = recordOf(row.payment_total_usd)
-  const usdMicros = bought && (usd.currency === "USD" || usd.currency === undefined) ? unitsOf(usd.value, 6) : null
+  const usdMicros = bought && !paidIn && (usd.currency === "USD" || usd.currency === undefined) ? unitsOf(usd.value, 6) : null
   const txHash = typeof row.tx_hash === "string" && /^0x[0-9a-fA-F]{64}$/.test(row.tx_hash) ? row.tx_hash.toLowerCase() : null
   const wallet = typeof row.wallet_address === "string" && /^0x[0-9a-fA-F]{40}$/.test(row.wallet_address) ? normalizeAddress(row.wallet_address) : null
   const status = STATUSES[row.status] ?? "pending"
@@ -85,6 +87,7 @@ export function orderOf(raw: unknown): OnrampOrder | null {
     blockNum: null,
     cost: paid !== null && currency ? { micros: paid, currency } : null,
     costUsdMicros: usdMicros,
+    paidIn,
   }
 }
 
