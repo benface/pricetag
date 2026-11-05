@@ -56,11 +56,9 @@ private struct HotWalletSetup: View {
                 // What can't be undone stays in full, and on screen.
                 Notice(.warning, HotWalletWording.cannotBeRestored)
                 HStack {
-                    Text(HotWalletWording.label)
+                    Label(HotWalletWording.label, systemImage: "flask")
                         .font(.caption)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(.quaternary, in: Capsule())
+                        .foregroundStyle(.secondary)
                     Button("How It Works", systemImage: "info.circle") { showsHowItWorks.toggle() }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
@@ -182,11 +180,9 @@ private struct HotWalletDetails: View {
                     Text("of \(wallet.usd(wallet.settings.capUsdMicros))")
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Text(HotWalletWording.label)
+                    Label(HotWalletWording.label, systemImage: "flask")
                         .font(.caption)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(.quaternary, in: Capsule())
+                        .foregroundStyle(.secondary)
                 }
                 // Only a picture of the numbers above, which are what's real.
                 Gauge(value: gaugeValue, in: 0...1) {}
@@ -209,8 +205,9 @@ private struct HotWalletDetails: View {
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
                         .help("Copy this address")
-                        Button("Show in \(AppName.current)", systemImage: "chart.xyaxis.line") {
+                        Button("Show in Overview", systemImage: "chart.xyaxis.line") {
                             store.setWallet(address.lowercased)
+                            navigation.section = .overview
                         }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
@@ -294,7 +291,10 @@ private struct HotWalletDetails: View {
                             .minimumScaleFactor(0.8)
                     }
                     Spacer()
-                    Button("Show in \(AppName.current)", systemImage: "chart.xyaxis.line") { store.setWallet(cold.address.lowercased) }
+                    Button("Show in Overview", systemImage: "chart.xyaxis.line") {
+                        store.setWallet(cold.address.lowercased)
+                        navigation.section = .overview
+                    }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
                         .help("Show its cost and PnL in the main window")
