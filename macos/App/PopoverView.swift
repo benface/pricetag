@@ -63,11 +63,10 @@ struct PopoverView: View {
                 Text("No activity for this wallet in this time.").foregroundStyle(.secondary)
             case (_, let portfolio?):
                 PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 30) { open(.total($0)) }
-                PnlCaveat(portfolio: portfolio) {
+                PortfolioAttention(portfolio: portfolio, isCompact: true, onOpen: { open($0) }, onResolve: {
                     navigation.resolve()
                     open(nil)
-                }
-                PnlCaveats(portfolio: portfolio)
+                })
             case (.reading, nil):
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)

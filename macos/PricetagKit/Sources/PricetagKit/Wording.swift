@@ -188,6 +188,19 @@ public enum Wording {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
+    /// The same, as a sentence for when there's room to say what it means. nil when it's exact and whole.
+    public static func leavesOut(_ totals: Totals, _ currency: CurrencyCode) -> String? {
+        var parts: [String] = []
+        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) of what you hold has an unknown cost, so it isn't in your PnL.") }
+        if isPositive(totals.estimatedMicros) { parts.append("\(Format.money(totals.estimatedMicros, currency)) is estimated.") }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// What answering takes, on the button that starts it.
+    public static func answerQuestions(_ count: Int) -> String {
+        count == 1 ? "Answer 1 Question" : "Answer \(Format.block(count)) Questions"
+    }
+
     /// What isn't listed with the holdings, and why it doesn't matter to the numbers. nil when there's nothing.
     public static func noMarket(_ portfolio: Portfolio) -> String? {
         let listed = portfolio.noMarketPositions.map(\.asset)

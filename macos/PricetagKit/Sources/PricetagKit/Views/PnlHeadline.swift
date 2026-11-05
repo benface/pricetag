@@ -108,62 +108,78 @@ public struct PortfolioSummary: View {
     }
 }
 
-/// How much of the total is unknown or estimated, and a way to answer what can be answered.
-public struct PnlCaveat: View {
+/// Everything the numbers above leave out, said once, right under them, with what to do about it.
+/// Calm on purpose: it's usually a fact to know rather than something wrong, and a warning that never stops shouting stops being read.
+public struct PortfolioAttention: View {
     let portfolio: Portfolio
+    /// Leaves out the list of what's excluded when the headline already says how much, because the holdings just below show which.
+    let isCompact: Bool
+    let onOpen: (ExplainTarget) -> Void
     let onResolve: () -> Void
 
-    public init(portfolio: Portfolio, onResolve: @escaping () -> Void) {
+    public init(portfolio: Portfolio, isCompact: Bool = false, onOpen: @escaping (ExplainTarget) -> Void, onResolve: @escaping () -> Void) {
         self.portfolio = portfolio
+        self.isCompact = isCompact
+        self.onOpen = onOpen
         self.onResolve = onResolve
     }
 
     public var body: some View {
-        HStack(spacing: 8) {
-            if let caveat = Wording.headlineCaveat(portfolio.totals, portfolio.currency) {
-                Text(caveat).font(.callout.weight(.medium)).foregroundStyle(Tone.warning.style).monospacedDigit()
+        if let attention = portfolio.attention {
+            Group {
+                if isCompact {
+                    VStack(alignment: .leading, spacing: 8) {
+                        message(attention)
+                        action
+                    }
+                } else {
+                    HStack(alignment: .center, spacing: 12) {
+                        message(attention)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        action
+                            .fixedSize()
+                    }
+                }
             }
-            if !portfolio.questions.isEmpty {
-                Button("Resolve \(portfolio.questions.count)", action: onResolve)
-                    .controlSize(.small)
-                    .help("Answer what the app can't work out by itself")
-            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else if portfolio.pnlStatus == .complete {
+            Text("Nothing excluded.").font(.caption).foregroundStyle(.secondary)
         }
     }
-}
 
-public struct PnlCaveats: View {
-    let portfolio: Portfolio
-
-    public init(portfolio: Portfolio) {
-        self.portfolio = portfolio
+    private func message(_ attention: Portfolio.Attention) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.callout)
+                .foregroundStyle(Tone.warning.style)
+                .accessibilityLabel("Warning")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(attention.title)
+                    .font(.callout.weight(.medium))
+                    .monospacedDigit()
+                ForEach(attention.details.filter { !isCompact || $0 != Wording.excluded(portfolio.totals.excluded) }, id: \.self) { line in
+                    Text(line)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
-    public var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if let excluded = Wording.excluded(portfolio.totals.excluded) {
-                WarningText(excluded)
-            } else if portfolio.pnlStatus == .complete {
-                Text("Nothing excluded.").foregroundStyle(.secondary)
-            }
-            if portfolio.totals.unpricedGas {
-                WarningText(Wording.unpricedFees)
-            }
-            if !portfolio.gasUnknownTxs.isEmpty {
-                WarningText(Wording.feesUnknown(portfolio.gasUnknownTxs.count))
-            }
-            if !portfolio.l1FeeUnknownTxs.isEmpty {
-                WarningText(Wording.networkFeeUnknown(portfolio.l1FeeUnknownTxs.count)).help(Wording.pnlHelp)
-            }
-            ForEach(portfolio.withheld, id: \.self) { withheld in
-                WarningText(Wording.withheld(wallet: withheld.wallet, asset: withheld.asset))
-            }
-            ForEach(Wording.missingRates(portfolio), id: \.self) { line in
-                WarningText(line)
-            }
+    @ViewBuilder
+    private var action: some View {
+        if !portfolio.questions.isEmpty {
+            Button(Wording.answerQuestions(portfolio.questions.count), action: onResolve)
+                .controlSize(.small)
+                .help("Answer what the app can't work out by itself (⇧⌘R)")
+        } else {
+            Button("See Why") { onOpen(portfolio.attentionTarget) }
+                .controlSize(.small)
         }
-        .font(.caption)
-        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -224,5 +240,32 @@ extension Portfolio {
             (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map { Format.estimate(signed($0), totals.estimated.unrealized) }, totals.coverage.unrealized),
             (.gas, Wording.networkFees, nil, totals.gasMicros.map(money), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
+    }
+
+    /// What the top of a wallet has to say about its own numbers.
+    public struct Attention: Equatable, Sendable {
+        public let title: String
+        public let details: [String]
+    }
+
+    /// nil when the numbers leave out nothing and rest on nothing estimated.
+    public var attention: Attention? {
+        var lines = [Wording.excluded(totals.excluded)].compactMap(\.self)
+        if totals.unpricedGas { lines.append(Wording.unpricedFees) }
+        if !gasUnknownTxs.isEmpty { lines.append(Wording.feesUnknown(gasUnknownTxs.count)) }
+        if !l1FeeUnknownTxs.isEmpty { lines.append(Wording.networkFeeUnknown(l1FeeUnknownTxs.count)) }
+        lines += withheld.map { Wording.withheld(wallet: $0.wallet, asset: $0.asset) }
+        lines += Wording.missingRates(self)
+        if let title = Wording.leavesOut(totals, currency) { return Attention(title: title, details: lines) }
+        guard let first = lines.first else { return nil }
+        return Attention(title: first, details: Array(lines.dropFirst()))
+    }
+
+    /// Where "See Why" goes: the balance that doesn't match when that's the reason, or else what the total is made of.
+    public var attentionTarget: ExplainTarget {
+        if let position = listedPositions.first(where: { $0.isIncomplete || $0.hasShortfall || $0.reconciliation?.status == .unchecked }) {
+            return .asset(position.asset, .onchain)
+        }
+        return .total(.pnl)
     }
 }

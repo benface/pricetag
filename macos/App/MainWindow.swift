@@ -107,10 +107,6 @@ struct MainWindow: View {
             .help("\(Wording.methodHelp) (⌘1, ⌘2)")
         }
         ToolbarItem(placement: .primaryAction) {
-            if let open = portfolio?.questions.count, open > 0 {
-                Button("Resolve \(open)", systemImage: "questionmark.circle") { navigation.resolve() }
-                    .help("Answer what the app can't work out by itself (⇧⌘R)")
-            }
             Button("Tax Report", systemImage: "doc.text") { navigation.isExportingTaxReport = true }
                 .disabled(store.address == nil)
                 .help("Export a tax report (⌘E)")
@@ -272,8 +268,7 @@ struct MainWindow: View {
             PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 40) { navigation.target = .total($0) }
                 // Short of height, its amounts would shrink and cut off instead of the page scrolling.
                 .fixedSize(horizontal: false, vertical: true)
-            PnlCaveat(portfolio: portfolio) { navigation.resolve() }
-            PnlCaveats(portfolio: portfolio)
+            PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
         }
     }
 }
