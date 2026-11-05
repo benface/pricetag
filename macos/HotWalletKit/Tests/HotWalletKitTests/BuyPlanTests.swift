@@ -1,4 +1,5 @@
 import KeyVault
+import PricetagKit
 import Testing
 @testable import HotWalletKit
 
@@ -12,7 +13,7 @@ struct BuyPlanTests {
     private func plan(_ dollars: Int, native: Bool = true, room: Int = 25, eth: UInt128 = SweepPlanner.minimumGasReserveWei, savings: Bool = true, fees: FeeQuote? = nil, usdcHeld: UInt128? = nil) -> BuyPlan {
         let held = usdcHeld ?? (UInt128(50 - min(room, 50)) * 1_000_000)
         return BuyPlan(
-            dollars: dollars,
+            usdMicros: UInt128(max(dollars, 0)) * Money.dollar,
             token: native ? Base.eth : usdcToken,
             priceUsdMicros: native ? price : Money.dollar,
             // As the wallet lists them: a token that isn't held isn't there.
@@ -22,6 +23,18 @@ struct BuyPlanTests {
             fees: fees ?? lowFees,
             destination: savings ? cold : nil
         )
+    }
+
+    /// What's typed in another currency reaches the plan as USD, so the room, the sweep and the minimum are all measured as they are in USD.
+    @Test func anAmountInAnotherCurrencyIsMeasuredInUSD() {
+        let cad = MoneyDisplay(main: .CAD, rateMicros: "1400000")
+        #expect(cad.usdMicros(ofWhole: 28) == 20 * Money.dollar)
+        #expect(cad.wholeAmount(BuyPlan.minimumUsdMicros, rounding: .up) == 5)
+        #expect(cad.usdMicros(ofWhole: 4) < BuyPlan.minimumUsdMicros)
+        #expect(cad.usdMicros(ofWhole: 5) >= BuyPlan.minimumUsdMicros)
+        #expect(BuyPlan.cryptoAmount(usdMicros: cad.usdMicros(ofWhole: 4), isNative: false, ethUsdMicros: nil) == nil)
+        #expect(BuyPlan.cryptoAmount(usdMicros: cad.usdMicros(ofWhole: 50), isNative: false, ethUsdMicros: nil) == "35.71", "Rounded down, so it never asks for more than was chosen")
+        #expect(BuyPlan.cryptoAmount(usdMicros: cad.usdMicros(ofWhole: 28), isNative: false, ethUsdMicros: nil) == "20")
     }
 
     @Test func whatFitsStays() {
@@ -67,9 +80,9 @@ struct BuyPlanTests {
     }
 
     @Test func thereIsNoSayingUntilTheChainsBeenRead() {
-        let unread = BuyPlan(dollars: 20, token: Base.eth, priceUsdMicros: nil, holdings: [], capUsdMicros: 50 * Money.dollar, roomUsdMicros: 50 * Money.dollar, fees: nil, destination: cold)
+        let unread = BuyPlan(usdMicros: 20 * Money.dollar, token: Base.eth, priceUsdMicros: nil, holdings: [], capUsdMicros: 50 * Money.dollar, roomUsdMicros: 50 * Money.dollar, fees: nil, destination: cold)
         #expect(unread.problem == .notReadYet)
-        let noPrice = BuyPlan(dollars: 20, token: Base.eth, priceUsdMicros: nil, holdings: [Holding(token: Base.eth, balance: 0, priceUsdMicros: nil)], capUsdMicros: 50 * Money.dollar, roomUsdMicros: 50 * Money.dollar, fees: lowFees, destination: cold)
+        let noPrice = BuyPlan(usdMicros: 20 * Money.dollar, token: Base.eth, priceUsdMicros: nil, holdings: [Holding(token: Base.eth, balance: 0, priceUsdMicros: nil)], capUsdMicros: 50 * Money.dollar, roomUsdMicros: 50 * Money.dollar, fees: lowFees, destination: cold)
         #expect(noPrice.problem == .notReadYet)
     }
 
@@ -90,17 +103,17 @@ struct BuyPlanTests {
         for typed in [-5, -1, 0, Int.min, 2] {
             #expect(plan(typed).problem == .belowMinimum)
             #expect(plan(typed).stays == 0 || typed == 2)
-            #expect(BuyPlan.cryptoAmount(dollars: typed, isNative: true, ethUsdMicros: 2_640_000_000) == nil)
-            #expect(BuyPlan.cryptoAmount(dollars: typed, isNative: false, ethUsdMicros: nil) == nil)
+            #expect(BuyPlan.cryptoAmount(usdMicros: UInt128(max(typed, 0)) * Money.dollar, isNative: true, ethUsdMicros: 2_640_000_000) == nil)
+            #expect(BuyPlan.cryptoAmount(usdMicros: UInt128(max(typed, 0)) * Money.dollar, isNative: false, ethUsdMicros: nil) == nil)
         }
     }
 
     @Test func theAmountToAskForIsInTheToken() {
-        #expect(BuyPlan.cryptoAmount(dollars: 17, isNative: true, ethUsdMicros: 2_640_000_000) == "0.006439")
-        #expect(BuyPlan.cryptoAmount(dollars: 50, isNative: false, ethUsdMicros: nil) == "50")
-        #expect(BuyPlan.cryptoAmount(dollars: 17, isNative: true, ethUsdMicros: nil) == nil)
-        #expect(BuyPlan.cryptoAmount(dollars: 17, isNative: true, ethUsdMicros: 0) == nil)
-        #expect(BuyPlan.cryptoAmount(dollars: .max, isNative: true, ethUsdMicros: 1) != nil, "However large, it doesn't overflow")
+        #expect(BuyPlan.cryptoAmount(usdMicros: UInt128(max(17, 0)) * Money.dollar, isNative: true, ethUsdMicros: 2_640_000_000) == "0.006439")
+        #expect(BuyPlan.cryptoAmount(usdMicros: UInt128(max(50, 0)) * Money.dollar, isNative: false, ethUsdMicros: nil) == "50")
+        #expect(BuyPlan.cryptoAmount(usdMicros: UInt128(max(17, 0)) * Money.dollar, isNative: true, ethUsdMicros: nil) == nil)
+        #expect(BuyPlan.cryptoAmount(usdMicros: UInt128(max(17, 0)) * Money.dollar, isNative: true, ethUsdMicros: 0) == nil)
+        #expect(BuyPlan.cryptoAmount(usdMicros: UInt128(max(.max, 0)) * Money.dollar, isNative: true, ethUsdMicros: 1) != nil, "However large, it doesn't overflow")
     }
 
     @Test func amountsForTheProviderRoundDown() {

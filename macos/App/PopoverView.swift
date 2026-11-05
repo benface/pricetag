@@ -45,7 +45,11 @@ struct PopoverView: View {
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
-        .onAppear { isFocused = true }
+        .onAppear {
+            isFocused = true
+            StatusItemMenu.shared.closePopover = { dismiss() }
+        }
+        .onDisappear { StatusItemMenu.shared.closePopover = nil }
         .onKeyPress(.downArrow) { moveHighlight(by: 1) }
         .onKeyPress(.upArrow) { moveHighlight(by: -1) }
         .onKeyPress(.return) {
@@ -357,7 +361,7 @@ struct PopoverView: View {
             Button("Set Up…", action: openHotWallet)
                 .controlSize(.small)
         } else if let plan = hotWallet.plan {
-            Text("\(hotWallet.usd(plan.valueUsdMicros)) of \(hotWallet.usd(hotWallet.settings.capUsdMicros))")
+            Text("\(hotWallet.money(plan.valueUsdMicros)) of \(hotWallet.capText)")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .help(plan.gasKeptWei > 0 ? HotWalletWording.keptOutOfCap(plan.gasKeptWei) : "")

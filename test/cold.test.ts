@@ -325,6 +325,17 @@ describe("links into the flow", () => {
     assert.equal(usdMicrosOf(null), null)
   })
 
+  test("a decimal comma isn't thousands, since a note can't be taken back", () => {
+    assert.equal(usdMicrosOf("46,20"), "46200000")
+    assert.equal(usdMicrosOf("1 234,50 $"), "1234500000")
+    assert.equal(usdMicrosOf("1,234"), "1234000000")
+    assert.equal(usdMicrosOf("1,234,567.50"), "1234567500000")
+    for (const bad of ["1.234,50", "12,3456", "1,23,456", "0,125", ",5"]) assert.equal(usdMicrosOf(bad), null, bad)
+    assert.equal(noteLinkFor({ wallet: COLD, noteAbout: TX, arrivals: [{ asset: "USDC", units: "1500000", decimals: 6 }], receipts: [{}] }, "46,20", "USD")?.usdMicros, "46200000")
+    const link = parseDeviceLink(new URL(`http://127.0.0.1:8787?topup=${HOT}&usd=46,20`).search)
+    assert.deepEqual(link, { kind: "top-up", to: HOT, usdMicros: "46200000" })
+  })
+
   test("reads what the Mac app writes, as `DeviceFlowTests.swift` pins it", () => {
     assert.deepEqual(parseDeviceLink(new URL(`http://127.0.0.1:8787?topup=${HOT}&usd=20`).search), { kind: "top-up", to: HOT, usdMicros: "20000000" })
     assert.deepEqual(parseDeviceLink(new URL(`http://127.0.0.1:8787?publish=${TX}&wallet=${COLD}&asset=USDC&units=1500000&decimals=6&usd=250`).search), { kind: "publish", wallet: COLD, txHash: TX, asset: "USDC", usdMicros: "250000000", amount: { units: "1500000", decimals: 6 } })

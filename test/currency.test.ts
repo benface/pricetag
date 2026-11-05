@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
-import { CURRENCIES, foldPositions, formatMoney, formatPrice, formatRate, formatSignedMoney, openingLegs, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, viewWallet, type LegEffect, type PricedLeg, type Rates } from "@pricetag/sdk/core"
+import { CURRENCIES, atCurrentRate, currentRateMicros, foldPositions, formatMoney, formatUsdIn, formatPrice, formatRate, formatSignedMoney, openingLegs, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, viewWallet, type LegEffect, type PricedLeg, type RateRound, type Rates } from "@pricetag/sdk/core"
 import { describeConversion, describeEffect, explainContext, explainTarget, type ExplainTarget } from "../src/core/explain.ts"
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
@@ -480,5 +480,78 @@ describe("the API with a currency", () => {
   it("refuses a currency it doesn't have, rather than showing USD as if it were", async () => {
     assert.equal((await get("/api/portfolio/demo?currency=XXX")).status, 400)
     assert.equal((await get("/api/wallet/demo?currency=usd")).status, 400)
+  })
+})
+
+describe("the current rate", () => {
+  const at = "2026-11-05T12:00:00Z"
+  const fresh = Date.parse(at) / 1000 - 60
+  const rates = (answer: string, updatedAt = fresh): Rates => ({ byBlock: {}, latest: { blockNum: 1, round: { answer, updatedAt } } })
+
+  it("says what one USD buys", () => {
+    assert.equal(currentRateMicros(rates("71500000"), at), "1398601")
+  })
+
+  it("is null with no answer, a stopped feed or a zero, and never another day's", () => {
+    assert.equal(currentRateMicros(null, at), null)
+    assert.equal(currentRateMicros({ byBlock: {}, latest: null }, at), null)
+    assert.equal(currentRateMicros(rates("0"), at), null)
+    assert.equal(currentRateMicros(rates("71500000", fresh - 4 * 24 * 60 * 60), at), null)
+  })
+
+  it("converts what's shown, and says US$ when it can't", () => {
+    assert.equal(atCurrentRate("50000000", "1398601"), "69930050")
+    assert.equal(formatUsdIn("50000000", "CAD", "1398601"), "$69.93")
+    assert.equal(formatUsdIn("50000000", "CAD", null), "US$50.00")
+    assert.equal(formatUsdIn("50000000", "USD", null), "$50.00")
+    assert.equal(formatUsdIn("50000000", "USD", "1398601"), "$50.00")
+  })
+})
+
+describe("GET /api/rate", () => {
+  const serve = async (created: Parameters<typeof createApi>[1]) => {
+    const api = createApi({}, created, null)
+    const server = createServer((req, res) => void api(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    return { server, read: async (query: string) => { const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/rate${query}`); return { status: response.status, body: await response.json() as { rateMicros?: string | null } } } }
+  }
+
+  it("has no rate without a data source, because the demo's aren't for real balances, and nothing for USD", async () => {
+    const { server, read } = await serve(null)
+    assert.deepEqual((await read("?currency=CAD")).body, { currency: "CAD", rateMicros: null })
+    assert.deepEqual((await read("?currency=USD")).body, { currency: "USD", rateMicros: null })
+    assert.equal((await read("?currency=XYZ")).status, 400)
+    assert.equal((await read("?currency=EUR")).status, 400, "only what's paid in so far, and not a main currency")
+    assert.equal((await read("")).status, 400)
+    server.close()
+  })
+
+  it("reads at the head without any wallet, and has no rate rather than an old one", async () => {
+    const timestamp = "2026-11-05T12:00:00Z"
+    const updatedAt = Date.parse(timestamp) / 1000 - 60
+    let round: RateRound | null = { answer: "71500000", updatedAt }
+    const asked: unknown[] = []
+    const created = {
+      source: { head: async () => ({ blockNum: 10, timestamp }) },
+      readRates: async (currency: string, wallet: unknown) => {
+        asked.push([currency, wallet])
+        if (round === null) throw new Error("No answer")
+        return { byBlock: {}, latest: { blockNum: 10, round } }
+      },
+    } as unknown as Parameters<typeof createApi>[1]
+    const { server, read } = await serve(created)
+    const quiet = console.error
+    console.error = () => {}
+    try {
+      assert.equal((await read("?currency=CAD")).body.rateMicros, "1398601")
+      assert.deepEqual(asked[0], ["CAD", { legs: [], latest: { blockNum: 10, timestamp } }])
+      round = { answer: "71500000", updatedAt: updatedAt - 4 * 24 * 60 * 60 }
+      assert.equal((await read("?currency=CAD")).body.rateMicros, null)
+      round = null
+      assert.notEqual((await read("?currency=CAD")).status, 200, "a read that failed doesn't look like an answer")
+    } finally {
+      console.error = quiet
+      server.close()
+    }
   })
 })

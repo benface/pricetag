@@ -160,10 +160,13 @@ struct MainWindow: View {
         if hotWallet.availability == .ready {
             ToolbarItem(placement: .primaryAction) {
                 Button("Buy", systemImage: "plus") { navigation.isBuying = true }
+                    // A plus on its own could mean adding anything.
+                    .labelStyle(.titleAndIcon)
                     .help("Buy crypto")
             }
         }
-        if store.address != nil, navigation.section == .overview || navigation.section == .transactions {
+        // In a narrow window Buy's label takes its room, and pushing either into the overflow menu would hide Buy. ⌘R and the View menu still refresh.
+        if store.address != nil, navigation.section == .overview || navigation.section == .transactions, width >= Self.sidebarWidth || hotWallet.availability != .ready {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh", systemImage: "arrow.clockwise") { store.refresh() }
                     .help("Refresh (⌘R)")

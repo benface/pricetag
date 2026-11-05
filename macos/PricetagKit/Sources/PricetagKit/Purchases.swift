@@ -37,8 +37,10 @@ public struct OnrampOrder: Codable, Sendable, Equatable {
     public let blockNum: Int?
     public let cost: Money?
     public let costUsdMicros: String?
+    /// The currency it was paid in, when that's why `cost` is nil: there's no rate for it.
+    public let paidIn: String?
 
-    public init(provider: String = "coinbase", id: String, status: Status, failure: Failure? = nil, asset: String? = nil, units: String? = nil, wallet: String? = nil, network: String? = nil, txHash: String? = nil, blockNum: Int? = nil, cost: Money? = nil, costUsdMicros: String? = nil) {
+    public init(provider: String = "coinbase", id: String, status: Status, failure: Failure? = nil, asset: String? = nil, units: String? = nil, wallet: String? = nil, network: String? = nil, txHash: String? = nil, blockNum: Int? = nil, cost: Money? = nil, costUsdMicros: String? = nil, paidIn: String? = nil) {
         self.provider = provider
         self.id = id
         self.status = status
@@ -51,6 +53,7 @@ public struct OnrampOrder: Codable, Sendable, Equatable {
         self.blockNum = blockNum
         self.cost = cost
         self.costUsdMicros = costUsdMicros
+        self.paidIn = paidIn
     }
 
     /// What goes in the book. Nil until it's delivered and says all of this, because a cost is never made up from part of it.
@@ -67,16 +70,19 @@ public struct TrackedPurchase: Codable, Sendable, Equatable, Identifiable {
     public let wallet: String
     public let asset: String
     public let dollars: Int
+    /// What was typed, when that wasn't USD. Without it, `dollars` is what was typed. It's a past amount, so it never goes through today's rate.
+    public let typed: Money?
     public let startedAt: Date
     public var order: OnrampOrder?
 
     public var id: String { ref }
 
-    public init(ref: String, wallet: String, asset: String, dollars: Int, startedAt: Date, order: OnrampOrder? = nil) {
+    public init(ref: String, wallet: String, asset: String, dollars: Int, typed: Money? = nil, startedAt: Date, order: OnrampOrder? = nil) {
         self.ref = ref
         self.wallet = wallet
         self.asset = asset
         self.dollars = dollars
+        self.typed = typed
         self.startedAt = startedAt
         self.order = order
     }
@@ -94,6 +100,8 @@ public enum PurchasePhase: Equatable, Sendable {
     case costUnknown
     /// The order doesn't say what was paid for it, as when it was paid from crypto already held. Its cost stays unknown.
     case costNotSaid
+    /// It was paid in a currency there's no rate for. Its cost stays unknown.
+    case noRateFor(String)
     case failed(OnrampOrder.Failure)
     /// There's been a long time with no order. Someone could still have paid, so it's asked about whenever the app starts or comes back.
     case noOrderYet
@@ -101,7 +109,7 @@ public enum PurchasePhase: Equatable, Sendable {
     public var isFinished: Bool {
         switch self {
         case .onProvidersPage, .noOrderYet, .onItsWay, .arriving: false
-        case .recorded, .costUnknown, .costNotSaid, .failed: true
+        case .recorded, .costUnknown, .costNotSaid, .noRateFor, .failed: true
         }
     }
 
@@ -115,21 +123,37 @@ public enum PurchaseWording {
     static let providerHosts: Set<String> = ["pay.coinbase.com"]
 
     /// What the order says once it says, because the amount can be changed on the page. Until then, what was chosen.
-    public static func title(_ purchase: TrackedPurchase, usd: (Int) -> String) -> String {
+    public static func title(_ purchase: TrackedPurchase, beside main: CurrencyCode) -> String {
         if let units = purchase.order?.units, let asset = purchase.order?.asset, let decimals = ["ETH": 18, "USDC": 6][asset] {
             return "\(Format.amount(units, decimals: decimals)) \(asset)"
         }
-        return "\(usd(purchase.dollars)) of \(purchase.order?.asset ?? purchase.asset)"
+        let typed = purchase.typed ?? Money(micros: String(UInt128(max(purchase.dollars, 0)) * 1_000_000), currency: .USD)
+        // Whole, as it was typed.
+        let chosen = Format.money(typed, beside: main).replacing(".00", with: "")
+        return "\(chosen) of \(purchase.order?.asset ?? purchase.asset)"
     }
 
-    public static func status(_ phase: PurchasePhase) -> String {
+    /// What the amount in the sheet will do once it's on the provider's page, so what it charges is no surprise.
+    public static func checkoutNote(_ display: MoneyDisplay) -> String {
+        let account = "You'll need a \(provider) account."
+        if display.isConverted {
+            return "\(account) Its page starts at this amount in \(display.currency.rawValue) and shows its fees before you pay. What it charges, fees included, becomes the cost here."
+        }
+        if display.main != .USD {
+            return "There's no current USD to \(display.main.rawValue) rate, so this is in US dollars, and \(provider)'s page works out its own price in your currency. \(account) What it charges, fees included, becomes the cost here."
+        }
+        return "\(account) Its fees are added, and that total becomes the cost here."
+    }
+
+    public static func status(_ phase: PurchasePhase, beside main: CurrencyCode) -> String {
         switch phase {
         case .onProvidersPage: "Waiting for you on \(provider)"
         case .onItsWay: "On its way"
         case .arriving: "Delivered. Waiting to see it arrive"
-        case .recorded(let cost): "Cost \(Format.money(cost.micros, cost.currency)), fees included"
+        case .recorded(let cost): "Cost \(Format.money(cost, beside: main)), fees included"
         case .costUnknown: "Cost unknown. The order didn't match what arrived"
         case .costNotSaid: "Cost unknown. The order doesn't say what you paid for it"
+        case .noRateFor(let currency): "Cost unknown. There's no exchange rate for \(currency)"
         case .failed(.payment): "\(provider) couldn't take the payment"
         case .failed(.delivery): "\(provider) couldn't deliver it"
         case .noOrderYet: "No order from \(provider) yet"
@@ -138,7 +162,7 @@ public enum PurchaseWording {
 
     public static func isWarning(_ phase: PurchasePhase) -> Bool {
         switch phase {
-        case .costUnknown, .costNotSaid, .failed: true
+        case .costUnknown, .costNotSaid, .noRateFor, .failed: true
         default: false
         }
     }
@@ -194,7 +218,7 @@ public final class PurchaseTracker {
         case .pending: return .onItsWay
         case .succeeded:
             if order.txHash == nil { return .onItsWay }
-            guard let recorded = order.purchase else { return .costNotSaid }
+            guard let recorded = order.purchase else { return order.paidIn.map(PurchasePhase.noRateFor) ?? .costNotSaid }
             switch matchOf(order.id) {
             case .recorded: return .recorded(recorded.cost)
             case .unmatched: return .costUnknown
@@ -205,10 +229,10 @@ public final class PurchaseTracker {
     }
 
     /// Asks the server for a page, and starts following it. Throws when there's no page to open, with something to say about why.
-    public func begin(wallet: String, asset: String, dollars: Int, cryptoAmount: String) async throws -> URL {
-        let checkout = try await store.currentSource.onrampCheckout(address: wallet, asset: asset, cryptoAmount: cryptoAmount)
+    public func begin(wallet: String, asset: String, dollars: Int, cryptoAmount: String, typed: Money? = nil) async throws -> URL {
+        let checkout = try await store.currentSource.onrampCheckout(address: wallet, asset: asset, cryptoAmount: cryptoAmount, fiat: typed)
         guard let page = checkout.page else { throw FetchError.rejected("The server sent a page that isn't \(PurchaseWording.provider)'s.") }
-        purchases.append(TrackedPurchase(ref: checkout.ref, wallet: wallet.lowercased(), asset: asset, dollars: dollars, startedAt: now()))
+        purchases.append(TrackedPurchase(ref: checkout.ref, wallet: wallet.lowercased(), asset: asset, dollars: dollars, typed: typed, startedAt: now()))
         save()
         start()
         return page

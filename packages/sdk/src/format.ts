@@ -1,7 +1,7 @@
 // Display only. Every value here was computed in BigInt. Converting to Number happens only to print it.
 // Money can be null, which means unknown, and prints as that. It never prints as $0. Without a currency, it's USD.
 
-import { CURRENCIES, type CurrencyCode } from "./currency.ts"
+import { CURRENCIES, atCurrentRate, type CurrencyCode } from "./currency.ts"
 
 const UNKNOWN = "unknown"
 
@@ -37,6 +37,27 @@ export function formatSignedMoney(micros: string | bigint | null, currency: Curr
 /** USD beside amounts in the main currency. If that's another kind of dollar, a bare "$" doesn't say which. Takes what's already formatted, sign and all. */
 export function labelUsd(text: string, main: CurrencyCode): string {
   return main === "USD" ? text : text.replace("$", "US$")
+}
+
+/** A USD amount as someone should read it right now: in their currency, or in labelled USD when there's no current rate. */
+export function formatUsdIn(usdMicros: string, main: CurrencyCode, rateMicros: string | null): string {
+  return rateMicros !== null && main !== "USD" ? formatMoney(atCurrentRate(usdMicros, rateMicros), main) : labelUsd(formatMoney(usdMicros, "USD"), main)
+}
+
+/**
+ * A number as someone typed it, without its spaces and grouping, or null when a comma in it can't be told apart. Whether what's left is a number is the caller's to check.
+ * A comma only groups thousands in threes, so "46,20" is 46.20, and dropping it would make that 4,620. Anything else with a comma is refused rather than guessed.
+ */
+export function plainAmount(text: string): string | null {
+  const clean = text.replace(/\s/g, "")
+  if (/^\d+,\d{1,2}$/.test(clean)) return clean.replace(",", ".")
+  if (clean.includes(",") && !/^[1-9]\d{0,2}(,\d{3})+(\.\d*)?$/.test(clean)) return null
+  return clean.replaceAll(",", "")
+}
+
+/** What was paid, beside amounts in another currency, so no kind of dollar is left bare. This locale says US$, CA$, €, £ and CHF. */
+export function formatPaid(micros: string, currency: CurrencyCode): string {
+  return new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(Number(micros) / 1e6)
 }
 
 /** What one USD buys, to four decimals, which is how far exchange rates are usually quoted. */

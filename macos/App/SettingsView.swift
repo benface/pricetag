@@ -8,12 +8,31 @@ struct SettingsView: View {
     let store: PortfolioStore
     let hotWallet: HotWallet
     @State var tab: Pane = .general
-    @State private var server = ""
-    @State private var serverError: String?
+    @State var server = ""
+    @State var serverError: String?
     @State private var isComparing = false
-    @State private var rpc = ""
-    @State private var rpcError: String?
+    @State var rpc = ""
+    @State var rpcError: String?
     @State private var isConfirmingDelete = false
+    /// How tall what's in each tab wants to be. A tab has no answer until it's first shown.
+    @State private var contentHeights: [Pane: CGFloat] = [:]
+    /// How tall the tab is right now, which is what moves the window. It's one number for all the tabs, so it can animate from one to the next.
+    @State private var shownHeight: CGFloat?
+    @State private var room = SettingsView.roomOnDisplay
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Stands in for a small display in a test scene.
+    var displayRoom: CGFloat?
+
+    /// What's left of the display under the title bar and the tabs.
+    private static var roomOnDisplay: CGFloat {
+        (NSScreen.main?.visibleFrame.height ?? 700) - 100
+    }
+
+    private var availableHeight: CGFloat { displayRoom ?? room }
+
+    private var targetHeight: CGFloat? {
+        contentHeights[tab].map { min($0, availableHeight) }
+    }
 
     var body: some View {
         TabView(selection: $tab) {
@@ -22,27 +41,46 @@ struct SettingsView: View {
             Tab("Server", systemImage: "server.rack", value: Pane.server) { connection }
         }
         .onAppear {
-            server = store.serverURL.absoluteString
-            rpc = hotWallet.settings.rpcURL.absoluteString
+            // What didn't save stays, next to what's wrong with it.
+            if serverError == nil { server = store.serverURL.absoluteString }
+            if rpcError == nil { rpc = hotWallet.settings.rpcURL.absoluteString }
         }
         .task { await store.refreshRules() }
         .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
         // It read one wallet's numbers once, and replacing a key can change the wallet behind it.
         .onChange(of: store.address) { isComparing = false }
+        // Opens at its size, and only moves after that.
+        .onChange(of: targetHeight) { _, height in
+            guard let height else { return }
+            if shownHeight == nil || reduceMotion {
+                shownHeight = height
+            } else {
+                withAnimation(.easeInOut(duration: 0.25)) { shownHeight = height }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeScreenNotification)) { _ in room = Self.roomOnDisplay }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in room = Self.roomOnDisplay }
     }
 
-    /// A fixed height that fits any display, with the pane scrolling inside it if it ever needs more.
-    private func pane(height: CGFloat, @ViewBuilder content: () -> some View) -> some View {
-        Form(content: content)
-            .formStyle(.grouped)
-            .frame(width: 480, height: height)
+    /// As tall as what's in it, and it only scrolls if that's more than the display has room for. The form lays out at its full height
+    /// inside the scroll view, because a form that scrolls by itself has no height of its own to ask for.
+    private func pane(_ pane: Pane, @ViewBuilder content: () -> some View) -> some View {
+        ScrollView {
+            Form(content: content)
+                .formStyle(.grouped)
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self, of: \.size.height) { contentHeights[pane] = $0 }
+        }
+        .scrollDisabled((contentHeights[pane] ?? 0) <= availableHeight)
+        .modifier(WindowMovingHeight(height: shownHeight ?? contentHeights[pane] ?? 200))
+        .frame(width: 480)
     }
 
     private var general: some View {
-        pane(height: store.rules.count > 1 ? 400 : 220) {
+        pane(.general) {
             Section {
                 Picker("Main currency", selection: Binding(get: { store.currency }, set: { store.setCurrency($0) })) {
-                    ForEach(CurrencyCode.allCases) { Text("\($0.rawValue) · \($0.name)").tag($0) }
+                    ForEach(CurrencyCode.mainChoices) { Text("\($0.rawValue) · \($0.name)").tag($0) }
                 }
                 .help("Costs use the rate when each transaction happened, and values use the current rate.")
                 Picker("Cost method", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
@@ -72,10 +110,12 @@ struct SettingsView: View {
     }
 
     private var connection: some View {
-        pane(height: 170) {
+        pane(.server) {
             Section {
                 TextField("Server", text: $server, prompt: Text(PortfolioStore.defaultServerURL.absoluteString))
                     .onSubmit(applyServer)
+                    // Leaving the tab or closing the window counts as being done, because there's no Save button to say otherwise.
+                    .onDisappear(perform: applyServer)
                 if let serverError {
                     WarningText(serverError).font(.callout)
                 }
@@ -88,12 +128,12 @@ struct SettingsView: View {
     }
 
     private var spendingMoney: some View {
-        pane(height: 320) {
+        pane(.spendingMoney) {
             Section {
                 LabeledContent("Cap") {
                     HStack {
                         Slider(value: Binding(get: { Double(hotWallet.settings.capInDollars) }, set: { hotWallet.setCap(dollars: Int($0)) }), in: 1...Double(hotWallet.settings.capCeiling / Money.dollar))
-                        Text(hotWallet.usd(dollars: hotWallet.settings.capInDollars))
+                        Text(hotWallet.money(dollars: hotWallet.settings.capInDollars))
                             .monospacedDigit()
                             .frame(width: 56, alignment: .trailing)
                     }
@@ -101,6 +141,7 @@ struct SettingsView: View {
                 Toggle("Sweep realized gains to savings", isOn: Binding(get: { hotWallet.settings.sweepsRealizedGains }, set: { hotWallet.setSweepsRealizedGains($0) }))
                 TextField("Network", text: $rpc, prompt: Text(Base.publicRPC.absoluteString))
                     .onSubmit(applyRPC)
+                    .onDisappear(perform: applyRPC)
                     .help("Only reads balances and passes on what this app signed. It can't move anything by itself.")
                 if let rpcError {
                     WarningText(rpcError).font(.callout)
@@ -123,7 +164,7 @@ struct SettingsView: View {
                     }
                 }
             } footer: {
-                Text("The cap is \(hotWallet.usd(dollars: Int(hotWallet.settings.capCeiling / Money.dollar))) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build").")
+                Text("The cap is \(hotWallet.display.whole(hotWallet.settings.capCeiling)) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build").\(hotWallet.display.isConverted ? " \(HotWalletWording.capFollowsRate(hotWallet.display.main))" : "")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -148,5 +189,15 @@ struct SettingsView: View {
         }
         serverError = nil
         store.setServerURL(url)
+    }
+}
+
+/// A window follows the size of what's in it but not an animation of that size, so it would jump. This gives the content a real height on every frame of the animation.
+@Animatable
+private struct WindowMovingHeight: ViewModifier {
+    var height: CGFloat
+
+    func body(content: Content) -> some View {
+        content.frame(height: height)
     }
 }
