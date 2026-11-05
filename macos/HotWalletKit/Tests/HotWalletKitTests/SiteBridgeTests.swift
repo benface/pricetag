@@ -39,7 +39,7 @@ private struct SiteRig {
     let bridge: SiteBridge
     let connection = UUID()
 
-    init(_ start: ChainSnapshot = snapshot(), presence: CountingPresence = CountingPresence(), now: @escaping @Sendable () -> Date = { Date() }) {
+    init(_ start: ChainSnapshot = snapshot(), presence: CountingPresence = CountingPresence(), mainCurrency: @escaping @MainActor () -> CurrencyCode = { .USD }, now: @escaping @Sendable () -> Date = { Date() }) {
         let chain = FakeChain(start)
         let signer = FakeSigner(keys: [hotAddress], next: [nextAddress])
         let stateStore = MemoryStateStore()
@@ -56,7 +56,7 @@ private struct SiteRig {
         self.stateStore = stateStore
         self.presence = presence
         self.portfolios = portfolios
-        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: presence, portfolioSource: { portfolios }, makeChain: { _ in chain }, now: now, readRetryDelay: .zero)
+        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: presence, portfolioSource: { portfolios }, mainCurrency: mainCurrency, makeChain: { _ in chain }, now: now, readRetryDelay: .zero)
         bridge = SiteBridge(wallet: wallet, now: now)
     }
 
@@ -280,6 +280,19 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         }
         let status = String(decoding: try JSONEncoder().encode(rig.bridge.popupStatus()), as: UTF8.self)
         #expect(!status.lowercased().contains(coldAddress.lowercased))
+    }
+
+    @Test func thePopupSaysWhichDollarsAndHowFull() async throws {
+        let rig = SiteRig(mainCurrency: { .CAD })
+        await rig.portfolios.set(.success(portfolio()))
+        await rig.wallet.tick()
+        let status = rig.bridge.popupStatus()
+        #expect(status["cap"]?.string?.hasPrefix("US$") == true)
+        #expect(status["value"]?.string?.hasPrefix("US$") == true)
+        let plan = try #require(rig.wallet.plan)
+        let share = min(1, Double(plan.valueUsdMicros) / Double(rig.wallet.settings.capUsdMicros))
+        #expect(status["share"] == .number(share))
+        #expect(status["over"] == .bool(plan.excessUsdMicros > 0))
     }
 
     @Test func aSiteOrTheUserCanDisconnect() async {

@@ -697,11 +697,53 @@ private struct Welcome: View {
         ContentUnavailableView {
             Label("See What a Wallet Is Worth", systemImage: "wallet.bifold")
         } description: {
-            Text("Paste a Base address to see its holdings, cost and PnL.")
+            Text("See the holdings, cost and PnL of any Base wallet.")
                 .help(Wording.pnlHelp)
         } actions: {
-            WalletForm(store: store, onDone: {})
-                .frame(width: 340)
+            VStack(spacing: 16) {
+                spendingMoney
+                VStack(alignment: .leading, spacing: 6) {
+                    WalletAddressField(prompt: "Paste an address to watch it", problem: $problem) { store.setWallet($0) }
+                        .textFieldStyle(.roundedBorder)
+                    if let problem {
+                        WarningText(problem).font(.callout)
+                    }
+                }
+                if WalletList.offersDemo {
+                    Button("Try the Demo Wallet") { store.setWallet(WalletAddress.demo) }
+                        .buttonStyle(.link)
+                }
+            }
+            .frame(maxWidth: 340)
+        }
+    }
+
+    /// Nothing to offer on a build that can't hold a key. The rest of this screen still works there.
+    @ViewBuilder
+    private var spendingMoney: some View {
+        if hotWallet.availability == .ready {
+            VStack(spacing: 6) {
+                if let address = hotWallet.address {
+                    Button("Show \(HotWalletWording.title)") { store.setWallet(address.lowercased) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                } else {
+                    // That section says what this is and what can go wrong, and only it makes the key.
+                    Button("Create \(HotWalletWording.title)…") { navigation.section = .spendingMoney }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                    Text(HotWalletWording.summary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            HStack {
+                VStack { Divider() }
+                Text("or").font(.callout).foregroundStyle(.secondary)
+                VStack { Divider() }
+            }
         }
     }
 }
@@ -718,79 +760,5 @@ private struct Unavailable: View {
             Button("Try Again") { store.start() }
                 .buttonStyle(.borderedProminent)
         }
-    }
-}
-
-struct WalletSheet: View {
-    let store: PortfolioStore
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Change Wallet").font(.headline)
-            WalletForm(store: store) { dismiss() }
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-            }
-        }
-        .padding(18)
-        .frame(width: 480)
-    }
-}
-
-/// Addresses only. Nothing in this app ever asks for a key or a recovery phrase.
-struct WalletForm: View {
-    let store: PortfolioStore
-    let onDone: () -> Void
-    @State private var input = ""
-    @State private var error: String?
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        VStack(spacing: 10) {
-            HStack {
-                TextField("Paste a Base address, 0x…", text: $input)
-                    .textFieldStyle(.roundedBorder)
-                    // Only what's typed: a prompt in a code font reads as a command.
-                    .font(input.isEmpty ? .body : .body.monospaced())
-                    .autocorrectionDisabled()
-                    .focused($isFocused)
-                    .onSubmit(submit)
-                Button("Look Up", action: submit)
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(input.isEmpty)
-                    .fixedSize()
-            }
-            if let error {
-                WarningText(error)
-                    .font(.callout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            #if DEBUG
-            // For trying things while building the app. A fixture has no place in a release build, and scenes show what one looks like.
-            if !TestMode.isRunning {
-                Button("Try the demo wallet") {
-                    store.setWallet(WalletAddress.demo)
-                    onDone()
-                }
-                .buttonStyle(.link)
-            }
-            #endif
-        }
-        .onAppear { isFocused = true }
-    }
-
-    private func submit() {
-        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard WalletAddress.isValid(value) else {
-            error = Wording.notAnAddress
-            return
-        }
-        error = nil
-        store.setWallet(value)
-        onDone()
     }
 }

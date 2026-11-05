@@ -1,48 +1,209 @@
+/* The Mac app's Spending Money, at the popup's size. Nothing here waits on anything, and the layout doesn't move when the answer arrives. */
 :root {
   color-scheme: light dark;
-  font: 13px/1.4 system-ui, sans-serif;
+  --background: #fff;
+  --text: #1d1d1f;
+  --secondary: #636366;
+  --line: rgb(0 0 0 / 0.1);
+  --fill: rgb(0 0 0 / 0.06);
+  --accent: #267f73;
+  --accent-hover: #1f6b61;
+  --over: #c9630a;
+  font: 13px/1.4 -apple-system, system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #262626;
+    --text: #f5f5f7;
+    --secondary: #aeaeb2;
+    --line: rgb(255 255 255 / 0.12);
+    --fill: rgb(255 255 255 / 0.1);
+    --over: #f4a460;
+  }
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
-  width: 260px;
+  width: 300px;
   margin: 0;
-  padding: 14px;
-}
-
-h1 {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 600;
-  opacity: 0.7;
+  padding: 16px;
+  background: var(--background);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
 }
 
 p {
   margin: 0;
 }
 
-.value {
-  margin: 2px 0 6px;
-  font-size: 24px;
+svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 13px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.label {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--secondary);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.amount {
+  margin-top: 8px;
+  white-space: nowrap;
+}
+
+.value {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 34px;
+  letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
 }
 
-.address {
-  margin-top: 4px;
-  font: 11px ui-monospace, monospace;
-  opacity: 0.7;
-  overflow-wrap: anywhere;
+.value.unknown {
+  color: var(--secondary);
+  font-weight: 400;
 }
 
-button {
+.cap {
+  margin-left: 2px;
+  color: var(--secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.meter {
+  height: 5px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--fill);
+}
+
+.fill {
+  width: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.fill.over {
+  background: var(--over);
+}
+
+.address-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  margin-top: 8px;
+}
+
+.address {
+  color: var(--secondary);
+  font: 12px ui-monospace, Menlo, monospace;
+  white-space: nowrap;
+}
+
+.copy {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--secondary);
+  cursor: default;
+}
+
+.copy[hidden],
+.copy svg[hidden] {
+  display: none;
+}
+
+.copy:hover {
+  background: var(--fill);
+  color: var(--text);
+}
+
+.copy svg {
+  width: 15px;
+  height: 15px;
+}
+
+.status {
+  min-height: 18px;
+  margin-top: 4px;
+  color: var(--secondary);
+}
+
+.top-up {
   width: 100%;
-  margin: 12px 0;
-  padding: 6px 10px;
+  height: 30px;
+  margin-top: 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
   font: inherit;
-  font-weight: 600;
+  font-weight: 500;
+}
+
+.top-up:hover:enabled {
+  background: var(--accent-hover);
+}
+
+.top-up:disabled {
+  background: var(--fill);
+  color: var(--secondary);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .note {
-  font-size: 11px;
-  opacity: 0.7;
+  display: flex;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--secondary);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.note svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
 }

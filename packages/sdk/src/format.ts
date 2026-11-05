@@ -103,7 +103,10 @@ export function formatChartSpan(startIso: string, endIso: string, narrow = false
   const clock = { hour: "numeric", minute: "2-digit" } as const
   const options = !narrow ? { ...date, ...clock } : span >= 86_400_000 ? date : clock
   const show = (iso: string, extra = {}) => new Date(iso).toLocaleString("en-US", { ...options, ...extra })
-  return show(startIso) === show(endIso) ? [show(startIso, { second: "2-digit" }), show(endIso, { second: "2-digit" })] : [show(startIso), show(endIso)]
+  if (span === 0 || show(startIso) !== show(endIso)) return [show(startIso), show(endIso)]
+  // The same minute, or the hour that repeats when the clocks go back.
+  const extra = span < 60_000 ? { second: "2-digit" } : { timeZoneName: "short" }
+  return [show(startIso, extra), show(endIso, extra)]
 }
 
 export function formatDuration(ms: number): string {

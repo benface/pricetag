@@ -293,7 +293,11 @@ public final class SiteBridge {
         var status: [String: JSONValue] = ["appName": .string(SiteWording.appName), "canTopUp": .bool(wallet.canTopUp)]
         if let problem = wallet.siteProblem { status["problem"] = .string(problem.message) }
         if let address = wallet.address { status["address"] = .string(address.checksummed) }
-        if let plan = wallet.plan { status["value"] = .string(wallet.usd(plan.valueUsdMicros)) }
+        if let plan = wallet.plan {
+            status["value"] = .string(wallet.usd(plan.valueUsdMicros))
+            status["share"] = .number(min(1, Double(plan.valueUsdMicros) / Double(max(wallet.settings.capUsdMicros, 1))))
+            status["over"] = .bool(plan.excessUsdMicros > 0)
+        }
         status["cap"] = .string(wallet.usd(wallet.settings.capUsdMicros))
         status["sites"] = .number(Double(wallet.connectedSites.count))
         return .object(status)
