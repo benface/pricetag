@@ -32,11 +32,14 @@ struct BuySheet: View {
         _failure = State(initialValue: failure)
     }
 
+    /// What's typed, which can be nothing, or below zero. Nothing here assumes it's an amount until `BuyPlan` has said so.
     private var chosen: Int { dollars ?? 0 }
     private var hasSavings: Bool { wallet.settings.sweepDestination != nil }
 
+    private var token: Token { asset == .eth ? Base.eth : Base.tokens.first { $0.symbol == asset.rawValue } ?? Base.eth }
+
     private var plan: BuyPlan {
-        BuyPlan(dollars: chosen, isNative: asset == .eth, roomUsdMicros: wallet.topUpRoom, ethBalanceWei: wallet.holdings.first { $0.token.isNative }?.balance ?? 0, hasSavings: hasSavings)
+        BuyPlan(dollars: chosen, token: token, priceUsdMicros: asset == .eth ? wallet.snapshot?.ethUsdMicros : wallet.snapshot?.usdcUsdMicros, holdings: wallet.holdings, capUsdMicros: wallet.settings.capUsdMicros, roomUsdMicros: wallet.topUpRoom, fees: wallet.snapshot?.fees, destination: wallet.settings.sweepDestination)
     }
 
     /// What the savings wallet is called, because that's what someone knows it by.
@@ -44,14 +47,8 @@ struct BuySheet: View {
         wallet.settings.coldWallets.first { $0.address == wallet.settings.sweepDestination }?.name ?? "your savings"
     }
 
-    /// The amount in the token, which is what a page in any currency can start from. Nil with no price to work it out from.
     private var cryptoAmount: String? {
-        switch asset {
-        case .usdc: return String(chosen)
-        case .eth:
-            guard let price = wallet.snapshot?.ethUsdMicros, price > 0 else { return nil }
-            return BuyPlan.decimal(Money.amount(ofUsdMicros: UInt128(chosen) * Money.dollar, priceMicros: price, decimals: 18), decimals: 18, keeping: 6)
-        }
+        BuyPlan.cryptoAmount(dollars: chosen, isNative: asset == .eth, ethUsdMicros: wallet.snapshot?.ethUsdMicros)
     }
 
     var body: some View {
@@ -108,10 +105,19 @@ struct BuySheet: View {
         case .needsSavings:
             Notice(.info, "There's room for \(wallet.usd(wallet.topUpRoom)) in Spending Money. To buy more, add a savings wallet for the rest to go to.")
         case .noGasToSweep:
-            Notice(.warning, "This wallet has no ETH to move USDC to \(savingsName), so it would get stuck here. Buy ETH this time.")
+            Notice(.warning, "This wallet doesn't have enough ETH to move USDC to \(savingsName), so it could get stuck here. Buy ETH this time.")
+        case .notReadYet:
+            Text("Reading this wallet…")
+                .foregroundStyle(.secondary)
         case nil:
             VStack(alignment: .leading, spacing: 4) {
                 Text(whereItGoes)
+                // The page can change the amount, and nothing here can stop it.
+                if !hasSavings {
+                    Text("If you buy more on \(PurchaseWording.provider)'s page, the rest stays here above your cap until you add a savings wallet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if plan.sweeps > 0 {
                     Text("Keep \(AppName.current) open until it lands. If it's closed, it moves the next time it opens.")
                         .font(.caption)
@@ -186,14 +192,14 @@ struct PurchaseRow: View {
                     .foregroundStyle(PurchaseWording.isWarning(phase) ? Tone.warning.style : AnyShapeStyle(.secondary))
             }
             Spacer()
-            if !phase.isFinished, phase != .onProvidersPage {
+            if !phase.isFinished, !phase.isUpToThem {
                 ProgressView().controlSize(.small)
             }
-            if phase.isFinished || phase == .onProvidersPage {
-                Button(phase == .onProvidersPage ? "I Didn't Buy It" : "Dismiss", systemImage: "xmark.circle") { dismiss() }
+            if phase.isFinished || phase.isUpToThem {
+                Button(phase.isUpToThem ? "I Didn't Buy It" : "Dismiss", systemImage: "xmark.circle") { dismiss() }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
-                    .help(phase == .onProvidersPage ? "Stop waiting for this one" : "Dismiss")
+                    .help(phase.isUpToThem ? "Stop waiting for this one" : "Dismiss")
             }
             if let hash = purchase.order?.txHash, let url = URL(string: "https://basescan.org/tx/\(hash)") {
                 Link(destination: url) { Image(systemName: "arrow.up.right.square") }

@@ -106,7 +106,7 @@ export function describeEffect({ leg, before, after }: LegEffect, currency: Curr
       const unknown = leg.pieces.filter((p) => p.costMicros === null).reduce((sum, p) => sum + BigInt(p.qty), 0n)
       parts.push(`Adds ${amount}: ${money(known)} of it from ${COST_WORDS[leg.costLabel]}, and ${formatAmount(unknown, leg.decimals)} ${leg.asset} at an unknown cost`)
     } else if (leg.costLabel === "unknown") parts.push(`Adds ${amount} at an unknown cost`)
-    else parts.push(`Adds ${amount} for ${leg.estimated ? "about " : ""}${money(leg.costMicros as string)}${leg.purchaseSource ? `, fees included. ${leg.purchaseSource}` : leg.costLabel === "paid" ? "" : `, from ${COST_WORDS[leg.costLabel]}`}`)
+    else parts.push(`Adds ${amount} for ${leg.estimated ? "about " : ""}${money(leg.costMicros as string)}${leg.purchaseSource ? `, ${leg.costLabel === "inherited" ? `from ${COST_WORDS.inherited}, ` : ""}fees included. ${leg.purchaseSource}` : leg.costLabel === "paid" ? "" : `, from ${COST_WORDS[leg.costLabel]}`}`)
     if (leg.parts.some((p) => p.kind === "unseen_eth")) parts.push("Nothing onchain records this amount directly, so it's how far this wallet's balance rose in this block")
     if (leg.orderUnknown && orderMatters(leg, before.method)) parts.push(ORDER_UNKNOWN[leg.orderUnknown])
     return parts.join(". ")

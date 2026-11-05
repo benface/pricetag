@@ -13,6 +13,7 @@ import { costKey, emptyBook, parseBook, type Book, type Purchase } from "../src/
 import { exportCsv } from "../src/core/export.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { taxRows } from "../src/core/tax.ts"
+import { costTag } from "../src/core/wording.ts"
 
 const ME = "0x3762620fbcb400b0f98365da4aad7d2a250e5d89"
 const COINBASE = "0x4b5c71082d027d16d2a146465d66f9eec11634f6"
@@ -212,7 +213,11 @@ describe("a purchase's cost", () => {
       assert.deepEqual([leg.costLabel, leg.costMicros, leg.purchaseSource], ["inherited", "25800000", "Bought on Coinbase"])
       assert.equal(fold.positions.find((p) => p.asset === "USDC")!.values.costMicros, "25800000")
       assert.deepEqual(fold.purchases, [{ order: "order-1", state: "recorded" }], "and it reads the same from the savings wallet")
-      assert.equal(explainPortfolio(savings, "average", { kind: "asset", asset: "USDC", metric: "amount" }, [hot], linkedBook(purchase()))!.legs[0]!.costSource, "Bought on Coinbase")
+      const moved = explainPortfolio(savings, "average", { kind: "asset", asset: "USDC", metric: "amount" }, [hot], linkedBook(purchase()))!.legs[0]!
+      assert.deepEqual([moved.costLabel, moved.costSource], ["inherited", "Bought on Coinbase"], "it says who sold it, and stays what it is here")
+      assert.match(moved.effect, /from what your other wallet paid, fees included\. Bought on Coinbase/)
+      assert.equal(costTag(leg.costLabel, leg.purchaseSource), "Cost: Bought on Coinbase, from your other wallet")
+      assert.ok(exportCsv(fold.positions, "USD").includes("inherited: Bought on Coinbase"))
     })
 
     it("splits it when only what's above the cap moves, and the two parts add up to what was paid", () => {
@@ -461,9 +466,16 @@ describe("the routes", () => {
     assert.deepEqual(Object.fromEntries(url.searchParams), { sessionToken: "session-token", defaultNetwork: "base", defaultAsset: "ETH", presetCryptoAmount: "0.01", partnerUserRef: json.ref })
     assert.match(json.ref as string, /^[0-9a-f]{32}$/)
     assert.equal(calls[0]!.url, "https://api.developer.coinbase.com/onramp/v1/token")
-    assert.deepEqual(JSON.parse(calls[0]!.init.body as string), { addresses: [{ address: ME, blockchains: ["base"] }], assets: ["ETH", "USDC"] }, "a client on this machine has no IP that would mean anything")
+    assert.deepEqual(JSON.parse(calls[0]!.init.body as string), { addresses: [{ address: ME, blockchains: ["base"] }], assets: ["ETH"] }, "only what was chosen, and a client on this machine has no IP that would mean anything")
     assert.match((calls[0]!.init.headers as Record<string, string>).authorization!, /^Bearer /)
     assert.ok(!JSON.stringify(json).includes(secret))
+  })
+
+  it("only let the page sell the token the app checked it can move", async () => {
+    const { send, calls } = stub()
+    const port = await serve(createOnramp(env, send))
+    await call(port, "POST", "/api/onramp/checkout", { ...SESSION, asset: "USDC", cryptoAmount: "20" })
+    assert.deepEqual(JSON.parse(calls[0]!.init.body as string).assets, ["USDC"])
   })
 
   it("ask for Coinbase's mocked mode when that's what's set up", async () => {
@@ -524,6 +536,42 @@ describe("the routes", () => {
     const going = stub({ orders: () => Response.json({ transactions: [{ ...order, status: "ONRAMP_TRANSACTION_STATUS_IN_PROGRESS" }] }) })
     await call(await serve(createOnramp(env, going.send)), "GET", `/api/onramp/orders/${REF}`)
     assert.equal(going.calls.length, 1)
+  })
+
+  it("never log what an RPC's error says, which can quote its URL and the key in it", async () => {
+    const order = { status: "ONRAMP_TRANSACTION_STATUS_SUCCESS", transaction_id: "abc", tx_hash: TX, type: "ONRAMP_TRANSACTION_TYPE_BUY_AND_SEND", payment_method: "CARD" }
+    const fake = "fake-password-for-this-test"
+    const rpc = `https://user:${fake}@rpc.example/${fake}`
+    // Node's own fetch, which refuses a URL with credentials in it, and quotes it in saying so.
+    const { send: stubbed } = stub({ orders: () => Response.json({ transactions: [order] }) })
+    const send = (async (input: string | URL | Request, init?: RequestInit) => (String(input).startsWith(rpc) ? fetch(input, init) : stubbed(input, init))) as typeof fetch
+    const logged: unknown[][] = []
+    const before = console.error
+    console.error = (...line: unknown[]) => logged.push(line)
+    try {
+      const { status, json } = await call(await serve(createOnramp({ ...env, BASE_RPC_URL: rpc }, send)), "GET", `/api/onramp/orders/${REF}`)
+      assert.equal(status, 200)
+      assert.equal((json.orders as { blockNum: null }[])[0]!.blockNum, null, "and the order is still read")
+    } finally {
+      console.error = before
+    }
+    assert.ok(logged.length > 0, "it does say something went wrong")
+    assert.ok(!logged.flat().map((part) => (part instanceof Error ? `${part.message} ${String(part.cause)}` : String(part))).join(" ").includes(fake))
+  })
+
+  it("never log what a failed call to Coinbase says, for the same reason", async () => {
+    const logged: unknown[][] = []
+    const before = console.error
+    console.error = (...line: unknown[]) => logged.push(line)
+    try {
+      const down = (async () => {
+        throw new Error("https://user:fake-password@somewhere")
+      }) as typeof fetch
+      await call(await serve(createOnramp(env, down)), "POST", "/api/onramp/checkout", SESSION)
+    } finally {
+      console.error = before
+    }
+    assert.ok(!JSON.stringify(logged).includes("fake-password"))
   })
 
   it("won't read an order by anything that could change what's asked of the provider", async () => {

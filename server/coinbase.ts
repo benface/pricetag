@@ -5,7 +5,7 @@ import { createPrivateKey, randomBytes, sign, type KeyObject } from "node:crypto
 import { TOKENS, isCurrencyCode, normalizeAddress } from "@pricetag/sdk/core"
 import { DEFAULT_RPC_URL } from "@pricetag/sdk/internal"
 import type { OnrampOrder } from "../src/core/api.ts"
-import { ONRAMP_ASSETS, OnrampError, unitsOf, type Onramp } from "./onramp.ts"
+import { OnrampError, unitsOf, type Onramp } from "./onramp.ts"
 
 type Env = Record<string, string | undefined>
 
@@ -124,7 +124,7 @@ export function createCoinbase(env: Env, send: typeof fetch = fetch): Onramp | n
         signal: AbortSignal.timeout(TIMEOUT_MS),
       })
     } catch (error) {
-      console.error("Coinbase couldn't be reached:", error instanceof Error ? error.message : "unknown error")
+      console.error("Coinbase couldn't be reached:", error instanceof Error ? error.name : "unknown error")
       throw new OnrampError("Coinbase can't be reached right now.")
     }
     if (!response.ok) {
@@ -149,15 +149,16 @@ export function createCoinbase(env: Env, send: typeof fetch = fetch): Onramp | n
       const hex = recordOf(result).blockNumber
       return typeof hex === "string" && /^0x[0-9a-f]+$/i.test(hex) ? Number(hex) : null
     } catch (error) {
-      // Not the URL: a dedicated RPC's has a key in it.
-      console.error("Couldn't read a delivery's block:", error instanceof Error ? error.message : "unknown error")
+      // Only what kind of error it is. A message can quote the URL, and a dedicated RPC's has a key in it.
+      console.error("Couldn't read a delivery's block:", error instanceof Error ? error.name : "unknown error")
       return null
     }
   }
 
   return {
     async checkout({ address, asset, cryptoAmount, clientIp }) {
-      const answer = recordOf(await call("POST", "/onramp/v1/token", "", { addresses: [{ address, blockchains: [NETWORK] }], assets: ONRAMP_ASSETS, ...(clientIp ? { clientIp } : {}) }))
+      // Only the token that was chosen, because that's the one the app checked it can move. The amount is only a preset, and the page can change it.
+      const answer = recordOf(await call("POST", "/onramp/v1/token", "", { addresses: [{ address, blockchains: [NETWORK] }], assets: [asset], ...(clientIp ? { clientIp } : {}) }))
       if (typeof answer.token !== "string" || answer.token === "") throw new OnrampError("Coinbase sent something this server can't read.")
       // One to a purchase, so an order can't be mistaken for another. It has to stay under 50 characters. The prefix is what asks for Coinbase's mocked mode.
       const ref = `${mocked ? "sandbox-" : ""}${randomBytes(16).toString("hex")}`

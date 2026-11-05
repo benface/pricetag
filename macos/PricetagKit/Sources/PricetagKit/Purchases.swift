@@ -95,15 +95,18 @@ public enum PurchasePhase: Equatable, Sendable {
     /// The order doesn't say what was paid for it, as when it was paid from crypto already held. Its cost stays unknown.
     case costNotSaid
     case failed(OnrampOrder.Failure)
-    /// Nothing came of the page, so nothing was bought.
-    case nothingBought
+    /// There's been a long time with no order. Someone could still have paid, so it's asked about whenever the app starts or comes back.
+    case noOrderYet
 
     public var isFinished: Bool {
         switch self {
-        case .onProvidersPage, .onItsWay, .arriving: false
-        case .recorded, .costUnknown, .costNotSaid, .failed, .nothingBought: true
+        case .onProvidersPage, .noOrderYet, .onItsWay, .arriving: false
+        case .recorded, .costUnknown, .costNotSaid, .failed: true
         }
     }
+
+    /// Nothing says they've paid, so only they can say they won't.
+    public var isUpToThem: Bool { self == .onProvidersPage || self == .noOrderYet }
 }
 
 public enum PurchaseWording {
@@ -129,7 +132,7 @@ public enum PurchaseWording {
         case .costNotSaid: "Cost unknown. The order doesn't say what you paid for it"
         case .failed(.payment): "\(provider) couldn't take the payment"
         case .failed(.delivery): "\(provider) couldn't deliver it"
-        case .nothingBought: "Nothing was bought"
+        case .noOrderYet: "No order from \(provider) yet"
         }
     }
 
@@ -155,10 +158,8 @@ public final class PurchaseTracker {
     @ObservationIgnored private let matchOf: @MainActor (String) -> PurchaseMatch.State?
     @ObservationIgnored private var polling: Task<Void, Never>?
 
-    /// A page's session only lasts minutes, and paying doesn't take this long, so by now nothing's coming.
-    private static let pageTimeout: TimeInterval = 2 * 60 * 60
-    /// How long to keep asking for the block of a delivery that doesn't have one, which is how a batched payout is found.
-    private static let blockTimeout: TimeInterval = 60 * 60
+    /// How long something unresolved is polled for. After that it's read when the app starts or comes back, so it's never given up on.
+    private static let followedFor: TimeInterval = 2 * 60 * 60
     private static let shownFinished = 5
     private static let key = "purchases"
 
@@ -186,7 +187,7 @@ public final class PurchaseTracker {
 
     public func phase(of purchase: TrackedPurchase) -> PurchasePhase {
         guard let order = purchase.order else {
-            return now().timeIntervalSince(purchase.startedAt) > Self.pageTimeout ? .nothingBought : .onProvidersPage
+            return now().timeIntervalSince(purchase.startedAt) > Self.followedFor ? .noOrderYet : .onProvidersPage
         }
         switch order.status {
         case .failed: return .failed(order.failure ?? .payment)
@@ -197,8 +198,8 @@ public final class PurchaseTracker {
             switch matchOf(order.id) {
             case .recorded: return .recorded(recorded.cost)
             case .unmatched: return .costUnknown
-            // Its hash never led to a block, so it can't be expected to arrive any more than it has.
-            case .waiting, nil: return order.blockNum == nil && now().timeIntervalSince(purchase.startedAt) > Self.blockTimeout ? .costUnknown : .arriving
+            // Its hash hasn't led to a block in all this time. It's still asked about, and a block would change this.
+            case .waiting, nil: return order.blockNum == nil && now().timeIntervalSince(purchase.startedAt) > Self.followedFor ? .costUnknown : .arriving
             }
         }
     }
@@ -213,23 +214,23 @@ public final class PurchaseTracker {
         return page
     }
 
-    /// Keeps checking while anything's open. Here and not in a view, because a delivery gets its cost whether or not a window's open.
+    /// Reads everything unresolved, however old, and keeps polling what's recent. Here and not in a view, because a delivery gets its cost whether or not a window's open.
     public func start() {
-        guard polling == nil, purchases.contains(where: isOpen) else { return }
+        guard polling == nil, purchases.contains(where: { !isResolved($0) }) else { return }
         polling = Task { [weak self] in
             while let self, !Task.isCancelled {
                 await self.check()
-                guard self.purchases.contains(where: self.isOpen) else { break }
+                guard self.purchases.contains(where: self.isFollowed) else { break }
                 try? await Task.sleep(for: self.pollDelay)
             }
             self?.polling = nil
         }
     }
 
-    /// Reads every open order. A failed read changes nothing, so a purchase can't get lost, and it's tried again.
+    /// Reads every unresolved order. A failed read changes nothing, so a purchase can't get lost, and it's tried again.
     public func check() async {
         var failure: String?
-        for purchase in purchases where isOpen(purchase) {
+        for purchase in purchases where !isResolved(purchase) {
             do {
                 let orders = try await store.currentSource.onrampOrders(ref: purchase.ref)
                 failure = nil
@@ -255,19 +256,23 @@ public final class PurchaseTracker {
         save()
     }
 
-    private func isOpen(_ purchase: TrackedPurchase) -> Bool {
-        let age = now().timeIntervalSince(purchase.startedAt)
-        guard let order = purchase.order else { return age <= Self.pageTimeout }
+    /// Whether there's nothing more to learn about it. How long it's been never settles this: an order can appear after any wait, and so can a delivery's block.
+    private func isResolved(_ purchase: TrackedPurchase) -> Bool {
+        guard let order = purchase.order else { return false }
         switch order.status {
-        case .failed: return false
-        case .pending: return true
-        case .succeeded: return order.txHash == nil || (order.blockNum == nil && age <= Self.blockTimeout)
+        case .failed: return true
+        case .pending: return false
+        case .succeeded: return order.txHash != nil && order.blockNum != nil
         }
+    }
+
+    private func isFollowed(_ purchase: TrackedPurchase) -> Bool {
+        !isResolved(purchase) && now().timeIntervalSince(purchase.startedAt) <= Self.followedFor
     }
 
     /// What's finished only matters for a while, and what's still going stays however long this gets.
     private func trim() {
-        let finished = purchases.filter { !isOpen($0) }
+        let finished = purchases.filter(isResolved)
         guard finished.count > Self.shownFinished else { return }
         let dropped = Set(finished.dropLast(Self.shownFinished).map(\.ref))
         purchases.removeAll { dropped.contains($0.ref) }

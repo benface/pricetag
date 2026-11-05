@@ -138,10 +138,6 @@ private struct HotWalletDetails: View {
             AddColdWalletSheet(wallet: wallet, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
         }
         .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet, server: store.serverURL) }
-        // Coming back from Coinbase's page is when there's news.
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await purchases.check() }
-        }
         .onChange(of: navigation.addingSavings, initial: true) { _, link in
             // The sheet takes it from there, and it may already be open, waiting for this.
             if link != nil { isAddingCold = true }

@@ -242,4 +242,13 @@ struct HoldComparisonTests {
         // The demo has one that doesn't.
         #expect(Wording.allBalancesMatch(try demoPortfolio()) == nil)
     }
+
+    @Test func aBoughtCostSaysWhichTransactionItsOrderIsFor() {
+        #expect(Wording.costTag("paid", source: "Bought on Coinbase") == "Cost: Bought on Coinbase")
+        #expect(Wording.costTag("inherited", source: "Bought on Coinbase") == "Cost: Bought on Coinbase, from your other wallet")
+        #expect(Wording.costProof(source: "Bought on Coinbase", label: "paid").contains("matches this transaction exactly"))
+        let moved = Wording.costProof(source: "Bought on Coinbase", label: "inherited")
+        #expect(!moved.contains("matches this transaction"))
+        #expect(moved.contains("your other wallet"))
+    }
 }

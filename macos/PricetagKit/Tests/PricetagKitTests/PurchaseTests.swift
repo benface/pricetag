@@ -76,7 +76,7 @@ struct PurchaseTrackerTests {
         func phase(_ order: OnrampOrder?, age: TimeInterval = 1) -> PurchasePhase {
             tracker.phase(of: TrackedPurchase(ref: "r", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now.addingTimeInterval(-age), order: order))
         }
-        #expect(phase(nil, age: 3 * 60 * 60) == .nothingBought)
+        #expect(phase(nil, age: 3 * 60 * 60) == .noOrderYet, "A long wait says nothing about whether someone paid")
         #expect(phase(OnrampOrder(id: "x", status: .failed, failure: .delivery)) == .failed(.delivery))
         #expect(phase(OnrampOrder(id: "x", status: .failed)) == .failed(.payment))
         #expect(phase(delivered()) == .recorded(paid))
@@ -87,8 +87,8 @@ struct PurchaseTrackerTests {
             waiting.phase(of: TrackedPurchase(ref: "r", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now.addingTimeInterval(-age), order: delivered(blockNum: blockNum)))
         }
         #expect(arriving(blockNum: nil, age: 60) == .arriving)
-        #expect(arriving(blockNum: 50, age: 2 * 60 * 60) == .arriving, "Its block is known, so it's only that the read is behind")
-        #expect(arriving(blockNum: nil, age: 2 * 60 * 60) == .costUnknown, "Its hash never led anywhere")
+        #expect(arriving(blockNum: 50, age: 3 * 60 * 60) == .arriving, "Its block is known, so it's only that the read is behind")
+        #expect(arriving(blockNum: nil, age: 3 * 60 * 60) == .costUnknown, "Its hash never led anywhere")
         let (unmatched, _, _, _) = setup(match: .unmatched)
         #expect(unmatched.phase(of: TrackedPurchase(ref: "r", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: delivered())) == .costUnknown)
     }
@@ -168,14 +168,76 @@ struct PurchaseTrackerTests {
         #expect(await source.asked == asked, "There's nothing left to ask about")
     }
 
-    @Test func stopsAskingAboutAPageThatCameToNothing() async throws {
+    /// What a restart finds: something from hours ago, with its answer waiting at the provider.
+    private func restarted(with old: TrackedPurchase, answer: [OnrampOrder]) async throws -> (PurchaseTracker, PortfolioStore, Orders) {
         let (_, store, source, defaults) = setup()
-        let old = TrackedPurchase(ref: "ref", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now.addingTimeInterval(-3 * 60 * 60))
         defaults.set(try JSONEncoder().encode([old]), forKey: "purchases")
-        let again = PurchaseTracker(store: store, defaults: defaults, matchOf: { _ in nil })
-        await again.check()
-        #expect(await source.asked == 0)
-        #expect(again.phase(of: again.purchases[0]) == .nothingBought)
+        await source.say(answer)
+        return (PurchaseTracker(store: store, defaults: defaults, pollDelay: .milliseconds(5), matchOf: { _ in .recorded }), store, source)
+    }
+
+    private func until(_ condition: @MainActor () async -> Bool) async throws {
+        let deadline = Date.now.addingTimeInterval(30)
+        while await !condition(), Date.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+    }
+
+    private func old(_ order: OnrampOrder? = nil) -> TrackedPurchase {
+        TrackedPurchase(ref: "ref", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now.addingTimeInterval(-3 * 60 * 60), order: order)
+    }
+
+    @Test func anOrderPaidForWhileTheAppWasClosedGetsItsCostOnStart() async throws {
+        let (tracker, store, source) = try await restarted(with: old(), answer: [delivered()])
+        #expect(tracker.phase(of: tracker.purchases[0]) == .noOrderYet)
+        tracker.start()
+        try await until { store.book.purchases.count == 1 }
+        #expect(store.book.purchases.map(\.cost) == [paid])
+        #expect(tracker.phase(of: tracker.purchases[0]) == .recorded(paid))
+        #expect(await source.asked >= 1)
+    }
+
+    @Test func anOrderPaidForLongAgoAlsoGetsItsCostOnComingBack() async throws {
+        let (tracker, store, _) = try await restarted(with: old(), answer: [delivered()])
+        await tracker.check()
+        #expect(store.book.purchases.map(\.cost) == [paid])
+    }
+
+    @Test func aDeliverysBlockThatTurnsUpLateStillFindsABatchedPayout() async throws {
+        let (tracker, store, _) = try await restarted(with: old(delivered(blockNum: nil)), answer: [delivered()])
+        tracker.start()
+        try await until { store.book.purchases.first?.blockNum == 50 }
+        #expect(store.book.purchases.map(\.blockNum) == [50])
+        #expect(tracker.purchases[0].order?.blockNum == 50)
+    }
+
+    @Test func somethingOldIsReadOnceAndNotPolled() async throws {
+        let (tracker, _, source) = try await restarted(with: old(), answer: [])
+        tracker.start()
+        try await until { await source.asked >= 1 }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await source.asked == 1, "It's asked about again when the app comes back")
+        #expect(tracker.phase(of: tracker.purchases[0]) == .noOrderYet)
+        await tracker.check()
+        #expect(await source.asked == 2)
+    }
+
+    @Test func somethingRecentKeepsBeingPolled() async throws {
+        let recent = TrackedPurchase(ref: "ref", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now)
+        let (tracker, _, source) = try await restarted(with: recent, answer: [])
+        tracker.start()
+        try await until { await source.asked >= 3 }
+        #expect(await source.asked >= 3)
+        tracker.dismiss(tracker.purchases[0])
+    }
+
+    @Test func whatsUnresolvedIsNeverTrimmedAway() async throws {
+        let (_, store, source, defaults) = setup()
+        let settled = (0..<8).map { TrackedPurchase(ref: "done\($0)", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: delivered(id: "done\($0)")) }
+        defaults.set(try JSONEncoder().encode([old()] + settled), forKey: "purchases")
+        await source.say([])
+        let tracker = PurchaseTracker(store: store, defaults: defaults, matchOf: { _ in nil })
+        await tracker.check()
+        #expect(tracker.purchases.contains { $0.ref == "ref" })
+        #expect(tracker.purchases.count == 6, "That and the newest five")
     }
 
     @Test func dismissingForgetsThePurchaseAndNotItsCost() async throws {

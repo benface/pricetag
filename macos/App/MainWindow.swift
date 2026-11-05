@@ -65,6 +65,10 @@ struct MainWindow: View {
             if wasWide != isWide { columns = isWide ? .all : .detailOnly }
         }
         .sheet(isPresented: detailsSheetBinding) { detailsSheet }
+        // Coming back from the provider's page is when there's news, whichever section this is on.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await purchases.check() }
+        }
         .sheet(isPresented: $navigation.isBuying) {
             BuySheet(wallet: hotWallet, purchases: purchases) { navigation.section = .spendingMoney } addSavings: { navigation.addSavings() }
         }
