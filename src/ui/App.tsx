@@ -435,7 +435,18 @@ export function App() {
           />
         </Suspense>
       ) : null}
-      {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} book={book} onClose={() => setTaxOpen(false)} /> : null}
+      {taxOpen && address ? <TaxPanel
+          address={address}
+          currency={chosenCurrency}
+          book={book}
+          overviewMethod={method}
+          questionCount={questions.length}
+          onResolve={() => {
+            setTaxOpen(false)
+            setResolving({ asset: null })
+          }}
+          onClose={() => setTaxOpen(false)}
+        /> : null}
     </div>
   )
 }

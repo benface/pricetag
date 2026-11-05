@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { formatSignedMoney, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
 import type { Book } from "../core/book.ts"
-import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, type TaxCountryCode, type TaxScope } from "../core/tax.ts"
+import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME } from "../core/wording.ts"
 
 const COUNTRY_KEY = "pricetag.taxCountry"
@@ -49,13 +49,31 @@ function download({ csv, filename }: TaxReportResponse) {
   URL.revokeObjectURL(url)
 }
 
-export function TaxPanel({ address, currency, book, onClose }: { address: string; currency: CurrencyCode; book: Book; onClose: () => void }) {
+const RULES: Record<TaxCountryCode, string> = { CA: "Canada's rules", US: "US rules" }
+
+/** Overview's numbers and this report's can differ only through the method, so it says so and why. */
+function methodNote(method: Method, overview: Method, country: TaxCountryCode): string | null {
+  if (method === overview) return null
+  if (method === TAX_COUNTRIES[country].method) return `Overview uses ${METHOD_LABELS[overview]}, but ${RULES[country]} call for ${METHOD_LABELS[method]}, so this report uses that. Its gains can differ from Overview's.`
+  return `Overview uses ${METHOD_LABELS[overview]}, and you chose ${METHOD_LABELS[method]} here, so its gains can differ from Overview's.`
+}
+
+function unknownSentence({ unresolvedCount: count, rowCount }: TaxReportResponse): string {
+  const n = (value: number) => value.toLocaleString("en-US")
+  if (count === rowCount) return count === 1 ? "Its gain is unknown." : `All ${n(count)} have an unknown gain.`
+  return `${n(count)} of ${n(rowCount)} ${count === 1 ? "has an unknown gain, so it's" : "have an unknown gain, so they're"} left out of the total.`
+}
+
+export function TaxPanel({ address, currency, book, overviewMethod, questionCount, onResolve, onClose }: { address: string; currency: CurrencyCode; book: Book; overviewMethod: Method; questionCount: number; onResolve: () => void; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const close = useRef<HTMLButtonElement>(null)
   const [country, setCountry] = useState(() => readCountry(currency))
   // Nothing chosen means whatever the country calls for. Choosing another country goes back to that.
   const [chosenMethod, setChosenMethod] = useState<Method | null>(readMethod)
   const [chosenScope, setChosenScope] = useState<TaxScope | null>(readScope)
+  // Not remembered: opening the report again starts on the newest year.
+  const [year, setYear] = useState<TaxYear>("latest")
+  const [years, setYears] = useState<number[]>([])
   const [othersText, setOthersText] = useState(() => localStorage.getItem(OTHERS_KEY) ?? "")
   const [report, setReport] = useState<TaxReportResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -85,8 +103,9 @@ export function TaxPanel({ address, currency, book, onClose }: { address: string
     const controller = new AbortController()
     setLoading(true)
     setError(null)
-    fetchReport(address, { country, method, scope, currency, also: others, book }, controller.signal)
+    fetchReport(address, { country, method, scope, year, currency, also: others, book }, controller.signal)
       .then((next) => {
+        setYears(next.years)
         setReport(next)
         setLoading(false)
       })
@@ -98,7 +117,7 @@ export function TaxPanel({ address, currency, book, onClose }: { address: string
         setLoading(false)
       })
     return () => controller.abort()
-  }, [address, country, method, scope, currency, others, badOther, book])
+  }, [address, country, method, scope, year, currency, others, badOther, book])
 
   const chooseMethod = (next: Method | null) => {
     remember(METHOD_KEY, next)
@@ -114,6 +133,9 @@ export function TaxPanel({ address, currency, book, onClose }: { address: string
     chooseMethod(null)
     chooseScope(null)
   }
+  // The newest year shows as itself once a report has said which that is.
+  const shownYear = year === "latest" && years[0] !== undefined ? years[0] : year
+  const note = methodNote(method, overviewMethod, country)
   const defaultTag = (isDefault: boolean) => (isDefault ? " (default)" : "")
   const ready = report !== null && !loading && badOther === null
 
@@ -139,6 +161,21 @@ export function TaxPanel({ address, currency, book, onClose }: { address: string
         </header>
         <p className="notice warn tax-advice">⚠ {report?.disclaimer ?? "Not tax advice. Check this with an accountant before relying on it."}</p>
 
+        <label className="field">
+          <span className="small muted">Year</span>
+          <select value={String(shownYear)} onChange={(e) => {
+              const next = e.target.value === "all" ? "all" : Number(e.target.value)
+              if (next !== shownYear) setYear(next)
+            }}>
+            {years.length === 0 ? <option value="latest">Newest</option> : null}
+            {years.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+            <option value="all">All years</option>
+          </select>
+        </label>
         <label className="field">
           <span className="small muted">Country</span>
           <select value={country} onChange={(e) => chooseCountry(e.target.value as TaxCountryCode)}>
@@ -178,6 +215,7 @@ export function TaxPanel({ address, currency, book, onClose }: { address: string
             ))}
           </select>
         </label>
+        {note ? <p className="small muted">{note}</p> : null}
         {isDemo ? null : (
           <label className="field">
             <span className="small muted">Your other wallets, one per line</span>
@@ -199,23 +237,37 @@ export function TaxPanel({ address, currency, book, onClose }: { address: string
 
         {report && !badOther ? (
           <>
+            <h3 className="tax-year">{report.year === null ? "In all years" : `In ${report.year}`}</h3>
             <dl className="tax-counts">
               <div>
-                <dt className="small muted">Rows</dt>
-                <dd>{report.rowCount.toLocaleString("en-US")}</dd>
+                <dt className="small muted">Sales</dt>
+                <dd>{report.soldCount.toLocaleString("en-US")}</dd>
               </div>
               <div>
-                <dt className="small muted">Unknown gain</dt>
-                <dd className={report.unresolvedCount > 0 ? "warn-text" : ""}>
-                  {report.unresolvedCount > 0 ? "⚠ " : ""}
-                  {report.unresolvedCount.toLocaleString("en-US")}
-                </dd>
+                <dt className="small muted">Network fees</dt>
+                <dd>{report.feeCount.toLocaleString("en-US")}</dd>
               </div>
+              {report.sentCount > 0 ? (
+                <div>
+                  <dt className="small muted">Sent to other addresses</dt>
+                  <dd>{report.sentCount.toLocaleString("en-US")}</dd>
+                </div>
+              ) : null}
               <div>
-                <dt className="small muted">Gain on known rows · {report.currency}</dt>
+                <dt className="small muted">Total gain · {report.currency}</dt>
                 <dd>{report.gainMicros === null ? <span className="warn-text">⚠ Unknown</span> : formatSignedMoney(report.gainMicros, report.currency)}</dd>
               </div>
             </dl>
+            {report.unresolvedCount > 0 ? (
+              <p className="notice warn tax-unknown">
+                <span>⚠ {unknownSentence(report)}</span>
+                {questionCount > 0 ? (
+                  <button type="button" className="resolve-button" onClick={onResolve}>
+                    Resolve {questionCount}
+                  </button>
+                ) : null}
+              </p>
+            ) : null}
             {report.warnings.map((warning) => (
               <p key={warning} className="notice warn">
                 ⚠ {warning}
