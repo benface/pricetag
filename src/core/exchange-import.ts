@@ -1,12 +1,12 @@
 // Reads a Coinbase transaction history CSV, to find what each withdrawal cost. A withdrawal it can't price exactly is left
 // out rather than guessed: it stays a question.
 
-import { ASSETS, decimalsOf, isAddress, isCurrencyCode, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
+import { ASSETS, decimalsOf, isAddress, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
 import type { ExchangeWithdrawal } from "./book.ts"
 
 export type ExchangeImport = {
   withdrawals: ExchangeWithdrawal[]
-  /** Withdrawals with no usable cost: bought in a currency this app doesn't have, in several at once, or with a history it can't follow. */
+  /** Withdrawals with no usable cost: bought in a currency this can't read, in several at once, or with a history it can't follow. */
   skipped: number
 }
 
@@ -40,6 +40,10 @@ function unitsOf(text: string, decimals: number): bigint | null {
 const BUYS = new Set(["buy", "advanced trade buy", "advance trade buy"])
 const SELLS = new Set(["sell", "advanced trade sell", "advance trade sell"])
 const SENDS = new Set(["send", "withdrawal"])
+
+/** Nobody has seen an export from a European account, and "1.234,50" would read as 1.2345 here, so those stay out rather than read wrong. */
+const READABLE: ReadonlySet<string> = new Set(["USD", "CAD"])
+const isReadable = (currency: string): currency is CurrencyCode => READABLE.has(currency)
 
 type Pool = { units: bigint; cost: bigint; known: boolean; currency: CurrencyCode | null }
 
@@ -78,7 +82,7 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
     if (BUYS.has(type)) {
       const total = unitsOf(cells[at.total] ?? "", 6)
       // Adding up two currencies would need a rate at each purchase, so a mix has no usable cost.
-      if (total === null || !isCurrencyCode(currency) || (pool.currency !== null && pool.currency !== currency)) pool.known = false
+      if (total === null || !isReadable(currency) || (pool.currency !== null && pool.currency !== currency)) pool.known = false
       else {
         pool.cost += total
         pool.currency = currency

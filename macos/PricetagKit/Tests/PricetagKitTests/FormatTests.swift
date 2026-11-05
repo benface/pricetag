@@ -27,9 +27,21 @@ struct FormatVectors: Decodable {
     struct BlocksBefore: Decodable {
         let block, ms, before: Int
     }
+    struct Other: Decodable {
+        struct OtherPrice: Decodable { let micros, price: String }
+        struct OtherTicks: Decodable {
+            let values: [Double]
+            let ticks: [ChartTick]
+        }
+        let currency: CurrencyCode
+        let money: [USD]
+        let price: [OtherPrice]
+        let chartTicks: [OtherTicks]
+    }
     let usd: [USD]
     let cad: [USD]
     let price: [Price]
+    let others: [Other]
     let labeledUsd: [LabeledUSD]
     let amount: [Amount]
     let chartTicks: [ChartTicks]
@@ -56,6 +68,26 @@ struct FormatVectors: Decodable {
         for vector in vectors.cad {
             #expect(Format.money(vector.micros, .CAD) == vector.usd, "\(vector.micros)")
             #expect(Format.signedMoney(vector.micros, .CAD) == vector.signed, "\(vector.micros)")
+        }
+    }
+
+    @Test func onlyUSDAndCADCanBeChosenAsTheMainCurrencyForNow() {
+        #expect(CurrencyCode.mainChoices == [.USD, .CAD], "Beside MAIN_CURRENCY_CODES in currency.ts")
+    }
+
+    @Test func otherCurrenciesMatchTheWebApp() {
+        #expect(vectors.others.map(\.currency) == [.EUR, .GBP, .CHF])
+        for other in vectors.others {
+            for vector in other.money {
+                #expect(Format.money(vector.micros, other.currency) == vector.usd, "\(other.currency) \(vector.micros)")
+                #expect(Format.signedMoney(vector.micros, other.currency) == vector.signed, "\(other.currency) \(vector.micros)")
+            }
+            for vector in other.price {
+                #expect(Format.price(vector.micros, other.currency) == vector.price, "\(other.currency) \(vector.micros)")
+            }
+            for vector in other.chartTicks {
+                #expect(ChartAxis.moneyTicks(vector.values, other.currency).map(\.label) == vector.ticks.map(\.label), "\(other.currency) \(vector.values)")
+            }
         }
     }
 
