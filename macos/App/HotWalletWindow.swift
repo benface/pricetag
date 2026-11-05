@@ -266,7 +266,7 @@ struct HotWalletDetails<Overview: View>: View {
                 if let plan = wallet.plan, plan.gasKeptWei > 0 {
                     Text(HotWalletWording.keptOutOfCap(plan.gasKeptWei))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
                 if let address {
                     HStack {
@@ -333,7 +333,7 @@ struct HotWalletDetails<Overview: View>: View {
     private var holdings: some View {
         DetailsSection("Holdings") {
             if wallet.holdings.isEmpty {
-                Text("Reading…").foregroundStyle(.secondary)
+                Text("Reading…").secondaryText()
             }
             ForEach(wallet.holdings) { holding in
                 LabeledContent(holding.token.symbol) {
@@ -374,7 +374,7 @@ struct HotWalletDetails<Overview: View>: View {
         DetailsSection("Savings", footer: wallet.settings.coldWallets.isEmpty ? nil : "Sweeps go to the checked one.") {
             if wallet.settings.coldWallets.isEmpty {
                 Text("No savings wallet yet.")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
             ForEach(wallet.settings.coldWallets) { cold in
                 HStack {
@@ -636,7 +636,7 @@ private struct RecordStatus: View {
             }
             Text(text)
                 .contentTransition(.opacity)
-                .foregroundStyle(status == .failed || status == .dropped ? Tone.warning.style : AnyShapeStyle(.secondary))
+                .foregroundStyle(status == .failed || status == .dropped ? Tone.warning.style : Tone.secondary.style)
         }
         .font(.caption)
         .animation(Motion.state, value: status)
@@ -684,7 +684,7 @@ struct TopUpSheet: View {
                 }
                 Text(HotWalletWording.topUpRoom(wallet.money(wallet.topUpRoom), hasDestination: hasDestination))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
                 if let deviceLink {
                     DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.") { open(deviceLink, in: nil) }

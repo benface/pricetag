@@ -90,17 +90,17 @@ struct PopoverView: View {
             switch (store.feed, portfolio) {
             case (.noWallet, _):
                 HStack {
-                    Text("No wallet yet").foregroundStyle(.secondary)
+                    Text("No wallet yet").secondaryText()
                     Spacer()
                     Button("Add Wallet…") { openOverview() }
                         .controlSize(.small)
                 }
             case (_, let portfolio?) where !portfolio.progress.started:
                 Text("No data for this wallet yet")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .help(Wording.notStarted)
             case (_, let portfolio?) where portfolio.isEmpty:
-                Text("No activity so far").foregroundStyle(.secondary)
+                Text("No activity so far").secondaryText()
             case (_, let portfolio?):
                 headline(portfolio)
             case (.reading, nil):
@@ -117,7 +117,7 @@ struct PopoverView: View {
                                     .contentTransition(.numericText())
                             }
                         }
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .help(Wording.stillReading(seconds: seconds))
                     }
                 }
@@ -386,12 +386,12 @@ struct PopoverView: View {
         } else if let plan = hotWallet.plan {
             Text("\(hotWallet.money(plan.valueUsdMicros)) of \(hotWallet.capText)")
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .contentTransition(.numericText(value: Double(plan.valueUsdMicros)))
                 .motion(Motion.number, value: plan.valueUsdMicros)
                 .help(plan.gasKeptWei > 0 ? HotWalletWording.keptOutOfCap(plan.gasKeptWei) : "")
         } else {
-            Text("Reading…").foregroundStyle(.secondary)
+            Text("Reading…").secondaryText()
         }
     }
 
@@ -477,7 +477,7 @@ private struct ProblemRow: View {
                 if let detail {
                     Text(detail)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                 }

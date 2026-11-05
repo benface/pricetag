@@ -22,7 +22,8 @@ public enum Tone {
 
     /// Quieter than the text, for what still says something: "Unknown", the label over a number, "partial", a comparison.
     /// The system's secondary color measured 3.1:1 in light, so this is the text color, faded only as far as 4.5:1 allows, measured from a render.
-    /// Captions and fine print keep the system's. See `secondaryText()` and `ContrastTests`.
+    /// Any amount, or anything saying something's unknown, waiting or how it went, uses this at any size. Only fine print that repeats what's
+    /// already said, names, dates and icons keep the system's. See `secondaryText()` and `ContrastTests`.
     public static func readableSecondary(_ contrast: ColorSchemeContrast) -> Color {
         Color.primary.opacity(contrast == .increased ? 0.92 : secondaryOpacity)
     }
@@ -299,7 +300,7 @@ public struct Notice: View {
                 .foregroundStyle(kind == .warning ? Tone.warning.style : AnyShapeStyle(.secondary))
             VStack(alignment: .leading, spacing: 7) {
                 Text(text)
-                    .foregroundStyle(kind == .warning ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(kind == .warning ? AnyShapeStyle(.primary) : Tone.secondary.style)
                     .fixedSize(horizontal: false, vertical: true)
                 if actionTitle != nil || detail != nil {
                     HStack(spacing: 12) {
@@ -423,7 +424,7 @@ public struct FeedBadge: View {
             }
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .secondaryText()
         .accessibilityElement(children: .combine)
         .help(portfolio.map { Wording.feedDetail($0.mode, block: $0.coverage.toBlock) } ?? "")
     }

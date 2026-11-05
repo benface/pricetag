@@ -105,7 +105,7 @@ public struct ResolveFlow: View {
                 Text(headline).font(.sheetTitle)
                 Spacer()
                 if let meter = model.meter, meter.open > 0 {
-                    Text("\(meter.open) left").font(.callout).foregroundStyle(.secondary).monospacedDigit().contentTransition(.numericText(value: Double(meter.open))).motion(Motion.number, value: meter.open)
+                    Text("\(meter.open) left").font(.callout).secondaryText().monospacedDigit().contentTransition(.numericText(value: Double(meter.open))).motion(Motion.number, value: meter.open)
                 }
             }
             ProgressView(value: model.meter?.progress ?? 0)
@@ -142,9 +142,9 @@ public struct ResolveFlow: View {
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
             }
-            Text(detail(question)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+            Text(detail(question)).font(.callout).secondaryText().textSelection(.enabled)
             ForEach(question.evidence, id: \.self) { fact in
-                Label(fact, systemImage: "lightbulb").font(.callout).foregroundStyle(.secondary)
+                Label(fact, systemImage: "lightbulb").font(.callout).secondaryText()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -218,7 +218,7 @@ public struct ResolveFlow: View {
                 Text(consequence(ownership))
                     .font(.callout)
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 Text("\(key)").font(.caption.monospaced()).foregroundStyle(.tertiary)
@@ -315,7 +315,7 @@ public struct ResolveFlow: View {
                 if let excluded = Wording.excluded(portfolio.totals.excluded) {
                     Text("Every question's answered.")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .help(excluded)
                 }
             }
@@ -327,11 +327,11 @@ public struct ResolveFlow: View {
                 let waiting = portfolio.linkedReading.count
                 Text("Still reading your other \(waiting == 1 ? "wallet" : "wallets").")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .multilineTextAlignment(.center)
             }
             if !model.skipped.isEmpty {
-                Text("\(model.skipped.count) skipped").font(.callout).foregroundStyle(.secondary)
+                Text("\(model.skipped.count) skipped").font(.callout).secondaryText()
                 Button("Go Back to Them") { model.revisitSkipped() }
                     .buttonStyle(.borderedProminent)
             }

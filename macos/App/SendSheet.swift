@@ -38,7 +38,7 @@ private struct SendForm: View {
         VStack(spacing: 18) {
             Label(HotWalletWording.title, systemImage: "banknote")
                 .font(.headline)
-                .foregroundStyle(.secondary)
+                .secondaryText()
             VStack(spacing: 6) {
                 TextField("Amount", text: $model.amountText, prompt: Text("0"))
                     .labelsHidden()
@@ -104,7 +104,7 @@ private struct SendForm: View {
         } else if let worth = model.worthText {
             Text(worth)
                 .font(.title3)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .monospacedDigit()
                 .accessibilityLabel("Worth \(Spoken.text(worth))")
         }

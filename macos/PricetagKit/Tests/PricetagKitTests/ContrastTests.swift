@@ -70,6 +70,25 @@ struct ContrastTests {
         if !dark { #expect(try rendered(Text("8888").font(big).foregroundStyle(.secondary), dark: false) < 4.5) }
     }
 
+    /// At the sizes it's really used, where thin strokes come out lighter: the worth under an amount, "Unavailable", "Leaves out 2 unknown" and the
+    /// chart's change. Faded, with Increase Contrast on, and on the chart tooltip's material.
+    @Test(arguments: [false, true])
+    func amountsAndUnknownsCanBeReadAtTheirOwnSizes(dark: Bool) throws {
+        for (name, font) in [("title 3", Font.title3), ("medium callout", .callout.weight(.medium)), ("callout", .callout), ("caption", .caption)] {
+            let text = Text("$12.50 8888").font(font).monospacedDigit()
+            let cases: [(String, AnyView)] = [
+                ("as it is", AnyView(text.secondaryText())),
+                ("faded", AnyView(text.secondaryText().stale(true))),
+                ("with Increase Contrast", AnyView(text.secondaryText().environment(\._colorSchemeContrast, .increased))),
+                ("on a material", AnyView(text.secondaryText().padding(4).background(.regularMaterial))),
+            ]
+            for (state, view) in cases {
+                let measured = try rendered(view, dark: dark, step: 1)
+                #expect(measured >= 4.5, "\(name), \(state), in \(dark ? "dark" : "light") measured \(measured)")
+            }
+        }
+    }
+
     /// They lose their color as they fade, so it's the text color that has to hold. Measured from a render, because text comes out lighter
     /// than its color says: 0.7 measured 4.3:1 in light.
     @Test(arguments: [false, true])
@@ -82,14 +101,14 @@ struct ContrastTests {
     }
 
     /// The contrast of the pixel that's furthest from the window's color, which a big bold glyph always reaches.
-    private func rendered(_ view: some View, dark: Bool) throws -> Double {
+    private func rendered(_ view: some View, dark: Bool, step: Int = 2) throws -> Double {
         let background = window(dark: dark)
         // Plain text has nothing to wait for, and a render holds the main thread that other tests are waiting on.
         let png = try OffscreenRenderer.png(of: view.padding(20).background(Color(nsColor: .windowBackgroundColor)), dark: dark, settle: 0)
         let bitmap = try #require(NSBitmapImageRep(data: png))
         var best = 1.0
-        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 2) {
-            for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: step) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: step) {
                 guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
                 let (a, b) = (luminance((color.redComponent, color.greenComponent, color.blueComponent)), luminance(background))
                 best = max(best, (max(a, b) + 0.05) / (min(a, b) + 0.05))

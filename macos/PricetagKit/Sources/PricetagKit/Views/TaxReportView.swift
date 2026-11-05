@@ -140,7 +140,7 @@ public struct TaxReportView: View {
             Section {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Working it out…").foregroundStyle(.secondary)
+                    Text("Working it out…").secondaryText()
                 }
             }
         default:
@@ -179,7 +179,7 @@ public struct TaxReportView: View {
                 ForEach(report.warnings + report.notes, id: \.self) { line in
                     Text(line)
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

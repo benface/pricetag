@@ -616,7 +616,7 @@ private struct HoldingsTable: View {
                 HStack(spacing: 5) {
                     Text(position.asset).fontWeight(.medium)
                     if let note = position.note {
-                        Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(note).font(.caption).secondaryText().lineLimit(1)
                     }
                     // Once per row, however many of its numbers it affects. A balance that matches says nothing.
                     balanceCheck(position)

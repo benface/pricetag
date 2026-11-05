@@ -98,6 +98,25 @@ struct AccessibilityTreeTests {
         #expect(!tree.contains("partial"))
     }
 
+    /// The server leaves a difference out when the two totals can't be compared. That's not the same as there being none.
+    @Test func anUnknownDifferenceIsNeverReadAsNone() throws {
+        let demo = try resource("demo-rule-comparison", as: RuleComparison.self)
+        func row(_ label: String, _ b: String?, difference: String?) -> RuleRow {
+            RuleRow(label: label, format: "money", a: "1000000", b: b, difference: difference, aPartial: false, bPartial: false, aEstimated: false, bEstimated: false)
+        }
+        let comparison = RuleComparison(address: demo.address, currency: demo.currency, blockNum: demo.blockNum, a: demo.a, b: demo.b, why: demo.why, warnings: [], rows: [
+            row("No price", nil, difference: nil),
+            row("Left out", "2000000", difference: nil),
+            row("Equal", "1000000", difference: "0"),
+        ], transactions: [], changedTxs: 0)
+        let tree = try lines(RuleComparisonTable(comparison: comparison))
+        #expect(tree.contains("No price, by \(demo.b.name), unknown"), "\(tree)")
+        #expect(tree.contains("No price, difference, unknown"), "\(tree)")
+        #expect(tree.contains("Left out, difference, unknown"), "\(tree)")
+        #expect(tree.contains("Equal, difference, Same"), "\(tree)")
+        #expect(!tree.contains { $0.hasSuffix(", none") }, "\(tree)")
+    }
+
     @Test func theHoldComparisonSaysWhenItStoppedUpdating() throws {
         let portfolio = try demoPortfolio()
         let live = try lines(HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: true) {})

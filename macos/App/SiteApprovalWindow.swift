@@ -236,7 +236,7 @@ struct SiteFailureView: View {
                 .textSelection(.enabled)
             if failure.isTransaction {
                 Text("Nothing was sent, so no money moved.")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
             HStack {
                 Spacer()

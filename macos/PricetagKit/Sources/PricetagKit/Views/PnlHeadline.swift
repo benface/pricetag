@@ -164,7 +164,7 @@ public struct PortfolioAttention: View {
                 ForEach(attention.details, id: \.self) { line in
                     Text(line)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
             }
             .fixedSize(horizontal: false, vertical: true)

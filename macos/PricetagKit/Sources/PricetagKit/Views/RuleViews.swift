@@ -40,7 +40,7 @@ public struct RuleComparisonTable: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(comparison.why).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text(comparison.why).font(.callout).secondaryText().fixedSize(horizontal: false, vertical: true)
             ForEach(comparison.warnings, id: \.self) { WarningText($0).font(.caption).fixedSize(horizontal: false, vertical: true) }
             Grid(alignment: .trailing, horizontalSpacing: 16, verticalSpacing: 6) {
                 GridRow {
@@ -70,7 +70,7 @@ public struct RuleComparisonTable: View {
             if comparison.changedTxs > comparison.transactions.count {
                 Text("The newest \(comparison.transactions.count) of the amounts that changed, across \(comparison.changedTxs) transactions.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
         }
         .monospacedDigit()
@@ -78,14 +78,15 @@ public struct RuleComparisonTable: View {
     }
 
     private func line(_ label: String, format: String, a: String?, b: String?, difference: String?, aPartial: Bool = false, bPartial: Bool = false, aEstimated: Bool, bEstimated: Bool) -> some View {
-        let difference = Format.ruleDifference(difference, format: format, currency: comparison.currency, isEstimate: aEstimated || bEstimated)
+        let shownDifference = Format.ruleDifference(difference, format: format, currency: comparison.currency, isEstimate: aEstimated || bEstimated)
         return GridRow {
             Text(label).gridColumnAlignment(.leading)
             value(a, label: label, rule: comparison.a.name, format: format, isPartial: aPartial, isEstimate: aEstimated)
             value(b, label: label, rule: comparison.b.name, format: format, isPartial: bPartial, isEstimate: bEstimated)
-            Text(difference)
+            Text(shownDifference)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Spoken.number("\(label), difference", difference))
+                // Its dash means it's unknown, not that there's none. "Same" is a known zero.
+                .accessibilityLabel(Spoken.number("\(label), difference", difference == nil ? nil : shownDifference))
         }
     }
 
@@ -123,7 +124,7 @@ public struct RuleComparisonSheet: View {
                     } else if let comparison {
                         RuleComparisonTable(comparison: comparison)
                     } else {
-                        Text("Reading this wallet by both rules. The first read of each can take a minute.").foregroundStyle(.secondary)
+                        Text("Reading this wallet by both rules. The first read of each can take a minute.").secondaryText()
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

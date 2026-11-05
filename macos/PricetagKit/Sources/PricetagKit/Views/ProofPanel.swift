@@ -87,7 +87,7 @@ struct ProofPanel: View {
     @ViewBuilder
     private func verifySection(_ proof: Proof) -> some View {
         if let unavailable = proof.unavailable {
-            Text(unavailable).foregroundStyle(.secondary)
+            Text(unavailable).secondaryText()
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
@@ -98,7 +98,7 @@ struct ProofPanel: View {
                     .disabled(model.isVerifying)
                     if model.isVerifying {
                         ProgressView().controlSize(.small)
-                        Text("Checking this block…").foregroundStyle(.secondary)
+                        Text("Checking this block…").secondaryText()
                     }
                 }
                 if let failure = model.verificationFailure {
@@ -124,7 +124,7 @@ struct ProofPanel: View {
                         .accessibilityLabel(check.status.rawValue)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(check.title).fontWeight(.medium)
-                        Text(check.detail).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        Text(check.detail).secondaryText().fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                     }
                 }
             }

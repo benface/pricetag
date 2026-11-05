@@ -41,7 +41,7 @@ struct ReceiveSheet: View {
                 .accessibilityLabel(Text("This wallet's address, ") + Text(Spoken.address(address.checksummed)).speechSpellsOutCharacters())
                 Text(HotWalletWording.receiveNote(cap: wallet.capText, hasDestination: wallet.settings.sweepDestination != nil))
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }

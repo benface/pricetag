@@ -138,7 +138,7 @@ struct ConfirmationView<Footer: View>: View {
         case .spendingMoney:
             Label(HotWalletWording.title, systemImage: "banknote")
                 .font(.headline)
-                .foregroundStyle(.secondary)
+                .secondaryText()
         }
     }
 
@@ -153,7 +153,7 @@ struct ConfirmationView<Footer: View>: View {
                     Text(symbol)
                         .font(.displaySmall)
                         .fontWeight(.medium)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
                 .monospacedDigit()
                 .lineLimit(1)
@@ -170,7 +170,7 @@ struct ConfirmationView<Footer: View>: View {
             if let worth {
                 Text(worth)
                     .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .monospacedDigit()
             }
         }
@@ -284,7 +284,7 @@ private struct RowView: View {
 
     private var label: some View {
         Text(row.label)
-            .foregroundStyle(.secondary)
+            .secondaryText()
             .fixedSize()
     }
 
@@ -402,7 +402,7 @@ struct TouchIDFooter: View {
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
             Text("Touch ID is next")
-                .foregroundStyle(.secondary)
+                .secondaryText()
         case .waiting, .asking:
             if gate.prompt.isSystemDialog {
                 Label("Confirm in the dialog", systemImage: "lock.fill")

@@ -108,7 +108,7 @@ struct WalletButton: View {
                 // Never cut off: a long name mustn't hide that this is only being watched.
                 if let badge = current?.badge {
                     Text(badge)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .fixedSize()
                 }
                 Image(systemName: "chevron.down")
@@ -225,7 +225,7 @@ struct WalletSwitcher: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(note.text)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             if let undo = note.undo {

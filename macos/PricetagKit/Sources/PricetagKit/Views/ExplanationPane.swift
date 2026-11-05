@@ -53,7 +53,7 @@ public struct ExplanationPane: View {
                     ForEach(explanation.lines, id: \.self) { line in
                         Text(line)
                             .font(.callout)
-                            .foregroundStyle(.secondary)
+                            .secondaryText()
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                             .help(Wording.pnlHelp(for: line) ?? "")
@@ -100,13 +100,13 @@ public struct LegRow: View {
             tags
             Text("\(leg.effect).").font(.callout).fixedSize(horizontal: false, vertical: true).help(Wording.pnlHelp(for: leg.effect) ?? "")
             if let note = leg.priceNote {
-                Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(note).font(.caption).secondaryText().fixedSize(horizontal: false, vertical: true)
             }
             if let netting = leg.netting {
-                Text(netting).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(netting).font(.caption).secondaryText().fixedSize(horizontal: false, vertical: true)
             }
             if let conversion = leg.conversion {
-                Text(conversion).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(conversion).font(.caption).secondaryText().fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 6) {
                 if let url = leg.transactionURL {

@@ -86,11 +86,11 @@ public struct PnlChartView: View {
                             if let pnl = hovered.point.pnlMicros {
                                 LiveNumber(Format.signedMoney(pnl, currency)).font(.callout.weight(.medium))
                             } else {
-                                Text("Unavailable").font(.callout.weight(.medium)).foregroundStyle(.secondary)
+                                Text("Unavailable").font(.callout.weight(.medium)).secondaryText()
                             }
-                            Text(Format.time(hovered.date)).monospacedDigit().foregroundStyle(.secondary)
+                            Text(Format.time(hovered.date)).monospacedDigit().secondaryText()
                             if hovered.point.excludedCount > 0 {
-                                Text("Leaves out \(hovered.point.excludedCount) unknown").monospacedDigit().foregroundStyle(.secondary)
+                                Text("Leaves out \(hovered.point.excludedCount) unknown").monospacedDigit().secondaryText()
                             }
                         }
                         .font(.caption)
@@ -278,7 +278,7 @@ public struct PnlHistorySection: View {
             Text("Total PnL").font(.headline).help(Wording.pnlHelp)
             Text(window.changeText(portfolio.currency, estimated: isPositive(portfolio.totals.estimatedMicros)) ?? portfolio.historyLength)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .monospacedDigit()
                 .contentTransition(.opacity)
                 .motion(Motion.state, value: shown)
@@ -304,7 +304,7 @@ public struct PnlHistorySection: View {
     private func placeholder(_ title: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "chart.xyaxis.line").foregroundStyle(.tertiary)
-            Text(title).foregroundStyle(.secondary)
+            Text(title).secondaryText()
             Spacer(minLength: 0)
         }
         .font(.callout)
