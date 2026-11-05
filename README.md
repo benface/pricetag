@@ -214,7 +214,7 @@ To add a country, add it to `TAX_COUNTRIES` in `src/core/tax.ts` and a case to `
 Each position's legs are compared with its onchain balance at the last block they cover, to the smallest unit. ETH is compared with ETH plus WETH.
 
 - **Reconciled** gets a check mark.
-- **Incomplete** shows the computed balance, the actual balance and the difference. Its amount and value come from the chain, because those are facts, and its PnL shows as unavailable. Without traces, this is what catches internal ETH transfers and rebasing tokens.
+- **Doesn't match** shows the computed balance, the actual balance and the difference. Its amount and value come from the chain, because those are facts, and its PnL shows as unavailable. Without traces, this is what catches internal ETH transfers and rebasing tokens.
 - **Not checked** means a read failed or an L1 fee isn't in yet. It clears on its own. Its PnL shows as unavailable until then, so PnL only ever shows for a position that matches. Otherwise a failed read would bring back a number already known to be wrong. Its amount comes from the chain if that read worked, and otherwise from the last read plus what's moved since.
 
 Whether something is held is a separate question from whether it can be checked. A failed read never makes a holding disappear, and an asset with no balance read and no other evidence is listed as missing from the totals and the chart. It's never counted as zero.

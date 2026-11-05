@@ -30,6 +30,11 @@ public struct ExplanationPane: View {
         }
     }
 
+    /// It has no single number to be missing: its lines are the answer.
+    private var isBalanceCheck: Bool {
+        if case .asset(_, .onchain) = target { true } else { false }
+    }
+
     private func content(_ explanation: Explanation) -> some View {
         List {
             Section {
@@ -37,7 +42,7 @@ public struct ExplanationPane: View {
                     Text(explanation.title).font(.headline).help(Wording.pnlHelp(for: explanation.title) ?? "")
                     if let value = explanation.value {
                         LiveNumber(value).font(.title2.weight(.semibold))
-                    } else {
+                    } else if !isBalanceCheck {
                         WarningText("Unavailable").font(.title3.weight(.semibold))
                     }
                     if let sourceValue = explanation.sourceValue {
