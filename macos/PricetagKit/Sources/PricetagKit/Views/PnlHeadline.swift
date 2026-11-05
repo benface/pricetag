@@ -65,11 +65,13 @@ public struct PortfolioSummary: View {
             statLabel("Value · \(portfolio.currency.rawValue)", isPartial: portfolio.isValuePartial)
                 .help(portfolio.partialValueReason ?? "")
                 .updatingMark(.trailing)
+                // The number's own label says all of this.
+                .accessibilityHidden(true)
             Button { onOpen(.value) } label: {
                 big(value, size: size, tone: .neutral)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("Value, \(value ?? "unavailable")")
+            .accessibilityLabel(Spoken.number("Value", value, isPartial: portfolio.isValuePartial, isLive: isLive))
             .accessibilityHint("Shows the activity behind this number")
         }
     }
@@ -79,11 +81,12 @@ public struct PortfolioSummary: View {
             statLabel("Total PnL", isPartial: portfolio.pnlStatus == .partial)
                 .help(Wording.pnlHelp)
                 .updatingMark(.trailing)
+                .accessibilityHidden(true)
             Button { onOpen(.pnl) } label: {
                 big(pnl, size: size * 0.6, tone: isLive ? portfolio.totalPnlTone : .neutral)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("Total PnL, \(pnl ?? Wording.pnlUnavailable)\(portfolio.pnlStatus == .partial ? ", partial" : "")")
+            .accessibilityLabel(Spoken.number("Total PnL", pnl, isPartial: portfolio.pnlStatus == .partial, isLive: isLive))
             .accessibilityHint("Shows the activity behind this number")
         }
     }
@@ -105,15 +108,13 @@ public struct PortfolioSummary: View {
             if let text {
                 DisplayNumber(text, size: size, tone: tone)
             } else {
-                Text("Unavailable")
+                LiveNumber("Unavailable", tone: .secondary)
                     .font(.display(max(size * 0.6, 17)))
-                    .foregroundStyle(.secondary)
             }
         }
         .lineLimit(1)
         .minimumScaleFactor(0.5)
-        .opacity(isLive ? 1 : 0.55)
-        .animation(Motion.state, value: isLive)
+        .stale(!isLive)
     }
 }
 
@@ -168,6 +169,8 @@ public struct PortfolioAttention: View {
             }
             .fixedSize(horizontal: false, vertical: true)
         }
+        // One sentence, not a picture and then its words.
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -214,21 +217,22 @@ public struct TotalStat: View {
             }
             .font(.subheadline)
             .motion(Motion.state, value: coverage?.isPartial == true)
+            .accessibilityHidden(true)
             Button(action: onOpen) {
                 Group {
                     if let text {
                         LiveNumber(text)
                     } else {
-                        Text("Unavailable").foregroundStyle(.secondary)
+                        LiveNumber("Unavailable", tone: .secondary)
                     }
                 }
                 .font(.body.weight(.medium))
                 .lineLimit(1)
-                .opacity(isLive ? 1 : 0.55)
-                .animation(Motion.state, value: isLive)
+                .stale(!isLive)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("\(label), \(text ?? "unavailable")\(text != nil && coverage?.isPartial == true ? ", partial" : "")")
+            .accessibilityLabel(Spoken.number(label, text, isPartial: coverage?.isPartial == true, isLive: isLive))
+            .accessibilityHint(help ?? "")
         }
     }
 }

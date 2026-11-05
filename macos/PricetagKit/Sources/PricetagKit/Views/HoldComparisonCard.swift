@@ -36,8 +36,7 @@ public struct HoldComparisonCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .opacity(isLive ? 1 : 0.55)
-        .animation(Motion.state, value: isLive)
+        .stale(!isLive)
         // The fine print, a hover or a click away.
         .help([Wording.holdCaveat(comparison, currency), comparison.status == .unavailable ? nil : Wording.holdPast].compactMap(\.self).joined(separator: " "))
         .accessibilityHint("Shows how this is worked out")

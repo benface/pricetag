@@ -151,7 +151,10 @@ public struct TaxReportView: View {
     @ViewBuilder
     private func content(_ report: TaxReport) -> some View {
         Section {
+            // Each with its label, as one thing to read. Combining them would keep only the label.
             LabeledContent("Rows") { Text(Format.block(report.rowCount)).monospacedDigit() }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Rows, \(Format.block(report.rowCount))")
             LabeledContent("Unknown gain") {
                 if report.unresolvedCount > 0 {
                     WarningText(Format.block(report.unresolvedCount)).monospacedDigit()
@@ -159,6 +162,8 @@ public struct TaxReportView: View {
                     Text("0").monospacedDigit()
                 }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Unknown gain, \(Format.block(report.unresolvedCount))")
             LabeledContent("Gain on known rows") {
                 if let gain = report.gainMicros {
                     LiveNumber(Format.signedMoney(gain, report.currency), tone: Tone(signed: gain))
@@ -166,6 +171,8 @@ public struct TaxReportView: View {
                     WarningText("Unknown")
                 }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Spoken.number("Gain on known rows", report.gainMicros.map { Format.signedMoney($0, report.currency) }))
         }
         Section {
             DisclosureGroup("What this leaves out") {

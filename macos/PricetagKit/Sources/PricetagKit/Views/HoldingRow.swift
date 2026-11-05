@@ -12,12 +12,15 @@ public struct HoldingRow: View {
         self.isLive = isLive
     }
 
-    private var pnlText: String {
+    private var pnlText: String { Self.pnlText(position, currency) }
+    private var valueText: String { Self.valueText(position, currency) }
+
+    static func pnlText(_ position: Position, _ currency: CurrencyCode) -> String {
         if let pnl = position.pnlMicros { return Format.estimate(Format.signedMoney(pnl, currency), position.estimates.realized || position.estimates.unrealized) }
         return position.isHeld && position.values.averageCostMicros == nil ? "Cost unknown" : Wording.pnlUnavailable
     }
 
-    private var valueText: String {
+    static func valueText(_ position: Position, _ currency: CurrencyCode) -> String {
         if !position.isHeld { return "—" }
         return position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price"
     }
@@ -39,9 +42,22 @@ public struct HoldingRow: View {
                 .fixedSize()
         }
         .lineLimit(1)
-        .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
+        .stale(!isLive || !position.isHeld)
         .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.spokenLabel(position, currency, isLive: isLive))
+    }
+
+    /// Each number with what it is, since "AERO, $700, $150" doesn't say which is which. `amount` is there when it's on screen too.
+    public static func spokenLabel(_ position: Position, _ currency: CurrencyCode, isLive: Bool, amount: String? = nil) -> String {
+        var parts = [position.asset]
+        if let check = OnchainCheck.label(for: position) { parts.append(check) }
+        if let amount { parts.append(Spoken.number("amount", amount)) }
+        parts.append(position.isHeld ? Spoken.number("value", valueText(position, currency)) : "no longer held")
+        let pnl = pnlText(position, currency)
+        parts.append(position.pnlMicros == nil ? pnl : Spoken.number("PnL", pnl))
+        if !isLive { parts.append(Spoken.notUpdating) }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -54,7 +70,9 @@ public struct OnchainCheck: View {
         self.position = position
     }
 
-    private var label: String? {
+    private var label: String? { Self.label(for: position) }
+
+    public static func label(for position: Position) -> String? {
         if let status = position.reconciliation?.status, status != .reconciled { return Wording.checkLabel(status) }
         return position.hasShortfall ? Wording.checkLabel(.incomplete) : nil
     }

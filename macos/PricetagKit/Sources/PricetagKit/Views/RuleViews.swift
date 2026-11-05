@@ -130,6 +130,10 @@ public struct RuleComparisonSheet: View {
         }
         .padding(20)
         .frame(minWidth: 660, minHeight: 420)
+        #if os(macOS)
+        // Done is Return's, so Escape closes it too.
+        .onExitCommand { dismiss() }
+        #endif
         .task { await read() }
     }
 

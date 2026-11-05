@@ -533,9 +533,10 @@ private struct CompactHolding: View {
         }
         .lineLimit(1)
         .padding(.vertical, 7)
-        .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
+        .stale(!isLive || !position.isHeld)
         .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(HoldingRow.spokenLabel(position, currency, isLive: isLive, amount: Format.amount(position.values.qty, decimals: position.decimals)))
     }
 }
 
@@ -602,7 +603,7 @@ private struct HoldingsTable: View {
                     // Once per row, however many of its numbers it affects. A balance that matches says nothing.
                     balanceCheck(position)
                 }
-                .opacity(position.isHeld ? 1 : 0.6)
+                .stale(!position.isHeld)
             }
             .width(min: Column.asset, ideal: Column.assetRoom, max: limit(Column.assetRoom))
             .disabledCustomizationBehavior(.all)
@@ -690,7 +691,7 @@ private struct HoldingsTable: View {
     }
 
     private var dash: some View {
-        Text("—").foregroundStyle(.tertiary)
+        Text("—").foregroundStyle(.tertiary).accessibilityLabel("None")
     }
 
     private func balanceCheck(_ position: Position) -> some View {
@@ -710,12 +711,12 @@ private struct HoldingsTable: View {
                 .lineLimit(1)
                 // A long amount gets smaller rather than losing digits.
                 .minimumScaleFactor(0.7)
-                .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
+                .stale(!isLive || !position.isHeld)
                 .justKnown(justKnown.contains(position.asset) && (metric == .average || metric == .unrealized))
         }
         .buttonStyle(NumberButtonStyle())
         .help(metric.help ?? "")
-        .accessibilityLabel("\(position.asset) \(metric.label), \(text)")
+        .accessibilityLabel(Spoken.number("\(position.asset) \(metric.label)", text, isLive: isLive))
     }
 }
 
@@ -751,8 +752,9 @@ private struct TransactionsTable: View {
             .width(min: 100)
             TableColumn("Total PnL") { point in
                 LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: point.pnlMicros == nil ? .secondary : isLive ? Tone(signed: point.pnlMicros) : .neutral)
-                    .opacity(isLive ? 1 : 0.55)
+                    .stale(!isLive)
                     .help(Wording.pnlHelp)
+                    .accessibilityLabel(Spoken.number("Total PnL", point.pnlMicros.map { Format.signedMoney($0, currency) }, isLive: isLive))
                     .updatingMark()
             }
             .width(min: 90, ideal: 90, max: 110)

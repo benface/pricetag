@@ -48,6 +48,8 @@ private struct SendForm: View {
                     .multilineTextAlignment(.center)
                     .focused($focus, equals: .amount)
                     .onSubmit(next)
+                    // Its label is hidden, so a field that only said "12.50" would say nothing about what it's for.
+                    .accessibilityLabel("Amount")
                 HStack(spacing: 10) {
                     Picker("Token", selection: $model.token) {
                         ForEach(model.tokens) { Text($0.symbol).tag($0) }
@@ -104,6 +106,7 @@ private struct SendForm: View {
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+                .accessibilityLabel("Worth \(Spoken.text(worth))")
         }
     }
 
@@ -118,6 +121,8 @@ private struct SendForm: View {
                 .font(.callout)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text("Sending to, ") + Text(Spoken.address(address.checksummed)).speechSpellsOutCharacters())
             if let problem = model.recipientProblem {
                 WarningText(problem.message).font(.callout).fixedSize(horizontal: false, vertical: true)
             } else if let known = model.knownAs {

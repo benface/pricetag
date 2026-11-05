@@ -40,8 +40,10 @@ public struct ExplanationPane: View {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(explanation.title).font(.headline).help(Wording.pnlHelp(for: explanation.title) ?? "")
+                        .accessibilityAddTraits(.isHeader)
                     if let value = explanation.value {
                         LiveNumber(value).font(.sheetTitle)
+                            .accessibilityLabel(Spoken.number(explanation.title, value, isLive: !store.feed.isStale))
                     } else if !isBalanceCheck {
                         WarningText("Unavailable").font(.title3.weight(.semibold))
                     }
@@ -120,6 +122,7 @@ public struct LegRow: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.tint)
+                    .accessibilityValue(showsProof ? "Showing" : "Hidden")
                 }
                 Spacer(minLength: 0)
                 Text("Block \(Format.block(leg.blockNum))").foregroundStyle(.secondary).monospacedDigit()
@@ -155,6 +158,7 @@ public struct LegRow: View {
             .foregroundStyle(.tint)
             .disabled(!leg.hasTransaction)
             .help(leg.hasTransaction ? "See where this price comes from" : "")
+            .accessibilityLabel("Price, \(Format.price(price, currency)), \(Wording.priceSource(source))")
         } else {
             Tag("No price", isWarning: true)
         }

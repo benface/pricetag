@@ -74,8 +74,10 @@ private struct HotWalletSetup: View {
                 Image(systemName: "banknote")
                     .font(.system(size: 30))
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 Text("Spending Money")
                     .font(.sheetTitle)
+                    .accessibilityAddTraits(.isHeader)
                 Text("\(HotWalletWording.summary) Anything above your cap moves to your savings.")
                     .fixedSize(horizontal: false, vertical: true)
                 // What can't be undone stays in full, and on screen.
@@ -111,6 +113,7 @@ private struct HotWalletSetup: View {
                     }
                 }
                     .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                     .disabled(!understands || wallet.isWorking)
                 if let problem = wallet.sweepProblem {
                     WarningText(problem).font(.callout)
@@ -230,9 +233,12 @@ struct HotWalletDetails<Overview: View>: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
                     DisplayNumber(wallet.plan.map { wallet.money($0.valueUsdMicros) } ?? "—", size: 20, tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
+                        .accessibilityLabel(Spoken.number("Balance", wallet.plan.map { wallet.money($0.valueUsdMicros) }) + (wallet.plan?.excessUsdMicros ?? 0 > 0 ? ", above the cap" : ""))
                     Button("of \(wallet.capText)") { isChangingCap.toggle() }
                         .buttonStyle(.link)
                         .help("Change the cap")
+                        .accessibilityLabel("Cap, \(wallet.capText)")
+                        .accessibilityHint("Change the cap")
                         .popover(isPresented: $isChangingCap, arrowEdge: .bottom) { capEditor }
                     Spacer()
                     Label(HotWalletWording.label, systemImage: "flask")
@@ -329,6 +335,9 @@ struct HotWalletDetails<Overview: View>: View {
                         }
                     }
                 }
+                // "ETH, 0.005, $13.20" doesn't say which number is which.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(holding.token.symbol), \(Format.amount(String(holding.balance), decimals: holding.token.decimals)), \(holding.valueUsdMicros.map { "worth \(wallet.money($0))" } ?? "no price")")
             }
         }
     }
@@ -494,6 +503,7 @@ struct HotWalletDetails<Overview: View>: View {
                         Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                             .foregroundStyle(.secondary)
                             .help("Open this transaction")
+                            .accessibilityLabel("Open this transaction on Basescan")
                     }
                 }
             }

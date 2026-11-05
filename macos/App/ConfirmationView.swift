@@ -167,6 +167,18 @@ struct ConfirmationView<Footer: View>: View {
             }
         }
         .frame(maxWidth: .infinity)
+        // The whole amount and what it's worth, in one go, so neither can be missed.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(heroSpoken)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    private var heroSpoken: String {
+        let what = switch hero {
+        case .amount(let amount, let symbol): "\(amount) \(symbol)"
+        case .words(let words): words
+        }
+        return [Spoken.text(what.trimmingCharacters(in: .whitespaces)), worth.map(Spoken.text)].compactMap { $0 }.joined(separator: ", ")
     }
 
     private var rowsBox: some View {
@@ -234,6 +246,9 @@ private struct RowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .textSelection(.enabled)
+            // What it's called, whose it is, then the whole address a character at a time, because that's what's being checked.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(([row.label, row.name].compactMap { $0 } + [""]).joined(separator: ", ")) + Text(Spoken.address(row.value)).speechSpellsOutCharacters())
         } else {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 label
@@ -244,6 +259,8 @@ private struct RowView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(row.label), \(Spoken.text(row.value))")
         }
     }
 
@@ -308,6 +325,8 @@ private struct StrongWarning: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.red, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Warning: \(text)")
     }
 }
 
@@ -320,6 +339,8 @@ struct TouchIDFooter: View {
     let doing: String
     /// "Reject" or "Cancel". One click, and Escape does the same.
     let leaveTitle: String
+    /// The warning that "I Trust This Site" says yes to, so it's heard by whoever goes straight to the button.
+    var acknowledges = ""
     let leave: () -> Void
 
     @State private var isArmed = false
@@ -343,6 +364,14 @@ struct TouchIDFooter: View {
             isArmed = true
         }
         .motion(Motion.state, value: gate.phase)
+        // What changes here changes without focus moving, so VoiceOver says it.
+        .onChange(of: gate.phase) { _, phase in
+            switch phase {
+            case .working: AccessibilityNotification.Announcement(doing).post()
+            case .stopped(let reason): AccessibilityNotification.Announcement(reason ?? "Nothing happened").post()
+            default: break
+            }
+        }
     }
 
     @ViewBuilder
@@ -399,6 +428,7 @@ struct TouchIDFooter: View {
         case .needsAcknowledgment:
             Button("I Trust This Site", action: gate.acknowledge)
                 .disabled(!isArmed)
+                .accessibilityHint(acknowledges)
             Button(leaveTitle, action: backOut)
                 .keyboardShortcut(.cancelAction)
                 .buttonStyle(.borderedProminent)
@@ -456,6 +486,7 @@ struct ProgressFooter: View {
         .padding(.vertical, 8)
         .softBox(cornerRadius: 18)
         .animation(Motion.state, value: stage)
+        .onChange(of: text) { AccessibilityNotification.Announcement(text).post() }
         .sensoryFeedback(.success, trigger: stage) { _, stage in
             if case .finished = stage { true } else { false }
         }
