@@ -53,16 +53,22 @@ type Side = { wallet: WalletResponse; view: WalletView }
 
 const E8 = 10n ** 8n
 
+/** USD for one unit of a currency when this arrived, from the wallet's own rates or the ones read for what's stored in another. */
+function answerAt({ wallet }: Side, currency: CurrencyCode, leg: PricedLeg): bigint | null {
+  const byBlock = currency === wallet.currency ? wallet.rates?.byBlock : wallet.paidRates?.[currency]
+  return usableAnswer(byBlock?.[leg.blockNum], leg.timestamp)
+}
+
 /**
- * An entered amount in the currency being folded, at the rate when it arrived. Null when there's no such rate, which leaves
- * the cost unknown: a CAD amount read as USD would be quietly wrong.
+ * A stored amount in the currency being folded, through USD at the rates when it arrived. Null when either rate is missing,
+ * which leaves the cost unknown: a CAD amount read as USD would be quietly wrong. The stored amount itself never changes.
  */
-function moneyIn({ wallet, view }: Side, money: Money, leg: PricedLeg): string | null {
-  if (money.currency === view.currency) return money.micros
-  const answer = usableAnswer(wallet.rates?.byBlock[leg.blockNum], leg.timestamp)
-  if (answer === null) return null
-  if (money.currency === "USD") return ((BigInt(money.micros) * E8) / answer).toString()
-  return view.currency === "USD" && money.currency === wallet.currency ? ((BigInt(money.micros) * answer) / E8).toString() : null
+function moneyIn(side: Side, money: Money, leg: PricedLeg): string | null {
+  const shown = side.view.currency
+  if (money.currency === shown) return money.micros
+  const from = money.currency === "USD" ? E8 : answerAt(side, money.currency, leg)
+  const to = shown === "USD" ? E8 : answerAt(side, shown, leg)
+  return from === null || to === null ? null : ((BigInt(money.micros) * from) / to).toString()
 }
 
 /** Part of a piece, with its share of the cost. Taking it all takes all of the cost, so rounding never loses any. */
@@ -210,14 +216,8 @@ function purchasedLegs(sides: readonly Side[], book: Book): Map<string, Purchase
   return purchased
 }
 
-/** What was paid, at its own feed's rate when it arrived, in the currency being folded. */
-function paidAtItsRate(side: Side, { micros, currency }: Money, leg: PricedLeg): string | null {
-  const answer = usableAnswer(side.wallet.paidRates?.[currency]?.[leg.blockNum], leg.timestamp)
-  return answer === null ? null : moneyIn(side, { micros: ((BigInt(micros) * answer) / E8).toString(), currency: "USD" }, leg)
-}
-
 /** What a purchase cost in the currency being folded. Null when that can't be said, which leaves it unknown. */
-const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: PricedLeg) => moneyIn(side, cost, leg) ?? paidAtItsRate(side, cost, leg) ?? (costUsdMicros === null ? null : moneyIn(side, { micros: costUsdMicros, currency: "USD" }, leg))
+const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: PricedLeg) => moneyIn(side, cost, leg) ?? (costUsdMicros === null ? null : moneyIn(side, { micros: costUsdMicros, currency: "USD" }, leg))
 
 export function resolveLegs(sides: readonly Side[], method: Method, book: Book): Resolved {
   const linked = new Set(linkedWallets(book))

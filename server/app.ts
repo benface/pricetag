@@ -2,7 +2,7 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { currentRateMicros, isAddress, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { currentRateMicros, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createWallets, describeError, followChain, followRawSql, followSql, readHeadMark, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
@@ -41,6 +41,12 @@ const MAX_OTHER_WALLETS = 20
 function parseCurrency(value: string | null): CurrencyCode | null {
   if (value === null) return "USD"
   return isMainCurrency(value) ? value : null
+}
+
+/** The other currencies a client's own answers are in, so it can fold them. It keeps those answers, and this is all it says about them. */
+function parsePaidIn(value: string | null): CurrencyCode[] | null {
+  const codes = value ? value.split(",") : []
+  return codes.every((code) => isCurrencyCode(code)) ? (codes as CurrencyCode[]) : null
 }
 
 /** A pricing rule, and where a wallet's rows come from when it's read through that rule. */
@@ -263,10 +269,10 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   /** A wallet with the rates to show it in `currency`, or answers the request with why it can't. Never falls back to USD. */
-  async function inCurrency(wallet: WalletResponse, currency: CurrencyCode, res: ServerResponse, books: readonly Book[] = []): Promise<WalletResponse | null> {
+  async function inCurrency(wallet: WalletResponse, currency: CurrencyCode, res: ServerResponse, books: readonly Book[] = [], paidIn: readonly CurrencyCode[] = []): Promise<WalletResponse | null> {
     try {
       const live = created && wallet.mode !== "demo" ? created : null
-      const paidRates = live ? await readPaidRates(live.readRates, wallet, currency, books) : undefined
+      const paidRates = await readPaidRates(live ? live.readRates : async (other) => demoRates(other), wallet, currency, books, paidIn)
       const paid = paidRates ? { ...wallet, paidRates } : wallet
       if (currency === "USD") return paid
       return { ...paid, currency, rates: live ? await live.readRates(currency, wallet) : demoRates(currency) }
@@ -612,8 +618,13 @@ export function createApi(env: Env, created: Created | null = createSource(env),
 
     const walletMatch = /^\/api\/wallet\/([^/]+)$/.exec(path)
     if (walletMatch) {
+      const paidIn = parsePaidIn(params.get("paid"))
+      if (!paidIn) {
+        sendJson(res, 400, { error: "That currency isn't supported." })
+        return true
+      }
       const read = await readWallet(walletMatch[1] as string, res, { fresh: true, rule })
-      const wallet = read && (await inCurrency(read, currency, res))
+      const wallet = read && (await inCurrency(read, currency, res, [], paidIn))
       if (wallet) sendJson(res, 200, wallet)
       return true
     }
