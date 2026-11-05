@@ -67,7 +67,11 @@ struct ProofPanel: View {
                 }
             }
             verifySection(proof)
-            lines(proof.scope, style: .secondary)
+            if !proof.scope.isEmpty {
+                DisclosureGroup("What this does and doesn't show") {
+                    lines(proof.scope, style: .secondary)
+                }
+            }
         }
     }
 

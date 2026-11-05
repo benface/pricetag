@@ -13,6 +13,8 @@ enum TestMode {
         CommandLine.arguments.firstIndex(of: flag).flatMap { CommandLine.arguments.indices.contains($0 + 1) ? CommandLine.arguments[$0 + 1] : nil }
     }
 
+    static let isRunning = CommandLine.arguments.contains("--test-scene")
+
     /// Takes over before anything of the real app exists, so there's no menu bar item, and nothing to call `DockPresence`.
     static func runIfAsked() {
         if CommandLine.arguments.contains("--test-scenes") {
@@ -79,6 +81,38 @@ enum TestMode {
     }
 }
 
+/// Every kind of thing the menu bar item says, on a light, a dark and a tinted bar. These are stand-ins for the real menu bar, which only macOS can draw:
+/// the system picks the item's color, so this shows the words and their lengths, not the real thing.
+private struct MenuBarLabelScene: View {
+    let portfolio: () -> Portfolio?
+
+    private var summaries: [FeedSummary] {
+        let states: [FeedState] = [.noWallet, .reading, .live, .behind(seconds: 600), .serverUnreachable]
+        return states.map { FeedSummary(feed: $0, portfolio: portfolio()) }
+    }
+
+    private func bar(_ background: Color, _ foreground: Color) -> some View {
+        HStack(spacing: 16) {
+            ForEach(summaries, id: \.text) { MenuBarLabelContent(summary: $0, isAlarm: false) }
+            MenuBarLabelContent(summary: summaries[0], isAlarm: true)
+        }
+        .font(.system(size: 13))
+        .foregroundStyle(foreground)
+        .padding(.horizontal, 12)
+        .frame(height: 24)
+        .background(background)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            bar(Color(white: 0.92), .black)
+            bar(Color(white: 0.14), .white)
+            bar(Color(red: 0.1, green: 0.32, blue: 0.62), .white)
+        }
+        .padding(8)
+    }
+}
+
 /// A scene's view, and how to tell its fixtures have arrived.
 struct TestScreen {
     let view: AnyView
@@ -92,10 +126,25 @@ enum TestScene: String, CaseIterable {
     case mainTransactions = "main-transactions"
     case mainDetails = "main-details"
     case mainNarrow = "main-narrow"
-    case mainNoWallet = "main-no-wallet"
-    case mainNoWalletSmallest = "main-no-wallet-smallest"
+    case mainSmall = "main-small"
+    case mainMedium = "main-medium"
+    case mainHuge = "main-huge"
+    // Around where the holdings table changes shape, with the sidebar open.
+    case mainWidth660 = "main-width-660"
+    case mainWidth760 = "main-width-760"
+    case mainWidth860 = "main-width-860"
+    case mainWidth960 = "main-width-960"
+    case mainWidth1040 = "main-width-1040"
+    case mainFirstRunSmall = "main-first-run-small"
+    case mainTransactionsSmall = "main-transactions-small"
+    case mainSpendingMoney = "main-spending-money"
+    case mainSpendingMoneySmall = "main-spending-money-small"
+    case mainTaxReport = "main-tax-report"
+    case mainTaxReportSmall = "main-tax-report-small"
+    case mainNoWalletSmall = "main-no-wallet-small"
     case mainNoWalletHasSpendingMoney = "main-no-wallet-has-spending-money"
     case mainNoWalletNotProvisioned = "main-no-wallet-not-provisioned"
+    case mainNoWallet = "main-no-wallet"
     case mainReading = "main-reading"
     case mainServerDown = "main-server-down"
     case mainNotUpdating = "main-not-updating"
@@ -105,6 +154,9 @@ enum TestScene: String, CaseIterable {
     case mainSmallest = "main-smallest"
     case mainSmallestEnd = "main-smallest-end"
     case mainEmptyNotice = "main-empty-notice"
+    case mainFirstRun = "main-first-run"
+    case mainFirstRunSmallest = "main-first-run-smallest"
+    case mainFirstRunDetails = "main-first-run-details"
     case mainNotStarted = "main-not-started"
     case holdComparison = "hold-comparison"
     case mainHoldDetails = "main-hold-details"
@@ -112,6 +164,7 @@ enum TestScene: String, CaseIterable {
     case mainSmallAmounts = "main-small-amounts"
     case mainSmallAmountsNarrow = "main-small-amounts-narrow"
     case mainLongHistory = "main-long-history"
+    case mainChartWeek = "main-chart-week"
     case mainCAD = "main-cad"
     case mainTransactionsCAD = "main-transactions-cad"
     case mainDetailsCAD = "main-details-cad"
@@ -123,15 +176,42 @@ enum TestScene: String, CaseIterable {
     case popoverNoWallet = "popover-no-wallet"
     case popoverNotUpdating = "popover-not-updating"
     case popoverNotStarted = "popover-not-started"
+    case popoverFirstRun = "popover-first-run"
     case popoverCAD = "popover-cad"
     case popoverHotWallet = "popover-hot-wallet"
     case popoverHotWalletOverCap = "popover-hot-wallet-over-cap"
     case popoverHotWalletAlarm = "popover-hot-wallet-alarm"
     case popoverHotWalletCAD = "popover-hot-wallet-cad"
+    case popoverReading = "popover-reading"
+    case popoverServerDown = "popover-server-down"
+    case popoverEmpty = "popover-empty"
+    case popoverHotWalletNoSavings = "popover-hot-wallet-no-savings"
+    case popoverHotWalletKeyMissing = "popover-hot-wallet-key-missing"
+    case popoverNotProvisioned = "popover-not-provisioned"
+    case popoverMissingPrice = "popover-missing-price"
+    case mainMissingPrice = "main-missing-price"
+    case popoverUnreadBalance = "popover-unread-balance"
+    /// What the menu bar's buttons do, with the window closed and with it open on another section. Each fails unless its sheet opens.
+    case routeSend = "route-send"
+    case routeSendOpen = "route-send-open"
+    case routeTopUp = "route-top-up"
+    case routeTopUpOpen = "route-top-up-open"
+    /// The menu bar's other destinations, starting from another section. Each fails unless it gets there and stays.
+    case routeHoldings = "route-holdings"
+    case routeHoldingsOpen = "route-holdings-open"
+    case routeAddWallet = "route-add-wallet"
+    case routeAddWalletOpen = "route-add-wallet-open"
+    case routeDetails = "route-details"
+    case routeDetailsOpen = "route-details-open"
+    case routeAnswer = "route-answer"
+    case routeAnswerOpen = "route-answer-open"
+    case menuBarLabel = "menu-bar-label"
     case settings
-    case settingsHotWallet = "settings-hot-wallet"
+    case settingsWallets = "settings-wallets"
+    case settingsServer = "settings-server"
     case settingsShowingSpendingMoney = "settings-showing-spending-money"
     case settingsNoWallet = "settings-no-wallet"
+    case settingsHotWallet = "settings-hot-wallet"
     case settingsCAD = "settings-cad"
     case settingsHotWalletCAD = "settings-hot-wallet-cad"
     case settingsReplacingKey = "settings-replacing-key"
@@ -201,11 +281,11 @@ enum TestScene: String, CaseIterable {
     enum Chrome { case titled, none }
 
     /// Rendering draws the inspector's text in the wrong color in dark mode, so these only come from a real window.
-    var needsRealWindow: Bool { self == .mainDetails || self == .mainDetailsCAD || self == .mainHoldDetails || self == .mainSmallestEnd }
+    var needsRealWindow: Bool { rawValue.hasPrefix("main") || rawValue.hasPrefix("settings") || rawValue.hasPrefix("route") || self == .mainDetails || self == .mainFirstRunDetails || self == .mainDetailsCAD || self == .mainHoldDetails || self == .mainSmallestEnd }
 
     var chrome: Chrome {
         switch self {
-        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
+        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
              .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
@@ -215,31 +295,34 @@ enum TestScene: String, CaseIterable {
 
     private var feed: FixtureSource.Feed {
         switch self {
-        case .mainReading: .neverAnswers
-        case .mainServerDown: .serverDown
+        case .popoverMissingPrice, .mainMissingPrice: .missingPrice
+        case .popoverUnreadBalance: .unreadBalance
+        case .mainReading, .popoverReading: .neverAnswers
+        case .mainServerDown, .popoverServerDown: .serverDown
         case .mainNotUpdating, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
         case .mainCostWithheld, .resolveCostWithheld: .costWithheld
         case .mainSmallAmounts, .mainSmallAmountsNarrow: .smallAmounts
-        case .mainLongHistory: .longHistory
+        case .mainLongHistory, .mainChartWeek: .longHistory
         case .resolveAnsweredWallet: .answeredWallet
-        case .mainEmpty, .mainEmptySmallest: .empty
+        case .mainEmpty, .mainEmptySmallest, .popoverEmpty: .empty
         case .mainEmptyNotice: .emptyReadingLinked
         case .mainNotStarted, .popoverNotStarted: .notStarted
+        case .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunSmall, .mainFirstRunDetails, .popoverFirstRun: .firstRun
         default: .demo
         }
     }
 
     private var hasWallet: Bool {
         switch self {
-        case .mainNoWallet, .mainNoWalletSmallest, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .popoverNoWallet, .settingsNoWallet: false
+        case .mainNoWallet, .mainNoWalletSmall, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .popoverNoWallet, .settingsNoWallet, .routeAddWallet, .routeAddWalletOpen: false
         default: true
         }
     }
 
     private var usesDemoWallet: Bool {
         switch self {
-        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .mainNotStarted, .popoverNotStarted, .settingsShowingSpendingMoney: false
+        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .popoverEmpty, .mainNotStarted, .popoverNotStarted, .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunSmall, .mainFirstRunDetails, .popoverFirstRun, .settingsShowingSpendingMoney: false
         default: true
         }
     }
@@ -253,17 +336,17 @@ enum TestScene: String, CaseIterable {
 
     private var hotWalletFixture: HotWalletFixture {
         switch self {
-        case .hotWalletNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
+        case .hotWalletNotProvisioned, .popoverNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .settingsShowingSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD: .funded
+        case .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .settingsShowingSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD: .funded
         case .siteConnect: .funded
         case .siteTransaction, .siteTransactionCAD, .siteUnlimitedApproval, .siteTypedPermit: .connectedToSite
         case .hotWalletTopUpOneDollar: .nearCap
-        case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
+        case .hotWalletNoSavings, .hotWalletNoSavingsCAD, .popoverHotWalletNoSavings: .noSavings
         case .hotWalletNoPrice: .noPrice
         case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap: .overCap
         case .hotWalletOverCapNoSavings: .overCapNoSavings
-        case .hotWalletKeyMissing: .keyMissing
+        case .hotWalletKeyMissing, .popoverHotWalletKeyMissing: .keyMissing
         case .hotWalletAlarm, .popoverHotWalletAlarm: .alarm
         case .hotWalletReplacingKey, .settingsReplacingKey: .replacingKey
         case .hotWalletReplacingKeyStuck: .replacingKeyStuck
@@ -300,13 +383,22 @@ enum TestScene: String, CaseIterable {
             }
         }
         let navigation = Navigation()
-        navigation.showsTransactions = self == .mainTransactions || self == .mainTransactionsCAD
-        if self == .mainDetails || self == .mainDetailsCAD { navigation.target = .asset("AERO", .realized) }
-        if self == .mainHoldDetails { navigation.target = .holdComparison }
+        if self == .mainChartWeek { navigation.chartRange = .week }
+        if self == .mainTransactions || self == .mainTransactionsCAD || self == .mainTransactionsSmall { navigation.section = .transactions }
+        if self == .mainSpendingMoney || self == .mainSpendingMoneySmall { navigation.section = .spendingMoney }
+        if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
+        // Once the window has its size, as when someone clicks. Before that it's too small for the details to fit beside the section.
+        let opened: ExplainTarget? = switch self {
+        case .mainDetails, .mainDetailsCAD: .asset("AERO", .realized)
+        case .mainHoldDetails: .holdComparison
+        case .mainFirstRunDetails: .asset("ETH", .onchain)
+        default: nil
+        }
+        if let opened { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { navigation.target = opened } }
 
         let isReady: () -> Bool = { [feed] in
             switch feed {
-            case .demo, .linkedFails, .costWithheld, .smallAmounts, .longHistory, .answeredWallet, .empty, .emptyReadingLinked, .notStarted: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .smallAmounts, .longHistory, .answeredWallet, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
             case .stopsAnswering: store.feed == .serverUnreachable && store.portfolio != nil
@@ -317,25 +409,83 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .holdComparison:
             return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
-        case .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
-            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .mainNoWallet, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned:
-            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .mainNoWalletSmallest:
-            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet)), size: CGSize(width: 780, height: 560), isReady: isReady)
+        case .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainSmallestEnd:
             // Starts at the end of the page, because a screenshot can't scroll to it.
-            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)
-        case .mainEmptySmallest, .mainSmallest:
-            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 560), isReady: isReady)
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet)).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)
+        case .mainEmptySmallest, .mainSmallest, .mainFirstRunSmallest:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .mainNarrow, .mainSmallAmountsNarrow:
-            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 760), isReady: isReady)
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 780, height: 760), isReady: isReady)
+        case .mainSmall, .mainFirstRunSmall, .mainTransactionsSmall, .mainSpendingMoneySmall, .mainTaxReportSmall, .mainNoWalletSmall:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: MainWindow.minimumSize, isReady: isReady)
+        case .mainMedium, .mainSpendingMoney, .mainTaxReport:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 900, height: 640), isReady: isReady)
+        case .mainWidth660, .mainWidth760, .mainWidth860, .mainWidth960, .mainWidth1040:
+            let width = CGFloat(Int(rawValue.split(separator: "-").last ?? "") ?? 900)
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: width, height: 760), isReady: isReady)
+        case .mainHuge:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 2200, height: 1300), isReady: isReady)
+        case .mainMissingPrice:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 1120, height: 760), isReady: isReady)
+        case .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .routeHoldings, .routeHoldingsOpen, .routeAddWallet, .routeAddWalletOpen, .routeDetails, .routeDetailsOpen, .routeAnswer, .routeAnswerOpen:
+            let press: () -> Void
+            let hasArrived: () -> Bool
+            let hasSheet = { NSApp.windows.contains { $0.attachedSheet != nil } }
+            switch self {
+            case .routeSend, .routeSendOpen:
+                press = navigation.send
+                hasArrived = { !navigation.wantsSend && navigation.section == .spendingMoney && hasSheet() }
+            case .routeTopUp, .routeTopUpOpen:
+                press = navigation.topUp
+                hasArrived = { !navigation.wantsTopUp && navigation.section == .spendingMoney && hasSheet() }
+            case .routeHoldings, .routeHoldingsOpen:
+                navigation.section = .spendingMoney
+                press = navigation.showOverview
+                hasArrived = { navigation.section == .overview }
+            case .routeAddWallet, .routeAddWalletOpen:
+                navigation.section = .spendingMoney
+                press = navigation.showOverview
+                hasArrived = { navigation.section == .overview && store.feed == .noWallet }
+            case .routeDetails, .routeDetailsOpen:
+                navigation.section = .spendingMoney
+                press = { navigation.explain(.asset("AERO", .amount)) }
+                hasArrived = { navigation.section == .overview && navigation.target != nil }
+            default:
+                navigation.section = .spendingMoney
+                press = { navigation.resolve() }
+                hasArrived = { navigation.isResolving && hasSheet() }
+            }
+            // A closed window has no section on screen yet, so it finds where to go when it appears.
+            var pressedAt: Date?
+            if !rawValue.hasSuffix("-open") {
+                press()
+                pressedAt = .now
+            }
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 900, height: 640), isReady: {
+                guard isReady() else { return false }
+                if pressedAt == nil {
+                    press()
+                    pressedAt = .now
+                }
+                // Long enough for whatever reacts to the change to have run, because arriving doesn't count if something then undoes it.
+                return Date.now.timeIntervalSince(pressedAt ?? .now) > 0.5 && hasArrived()
+            })
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
-        case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
+        case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
-        case .settings, .settingsHotWallet, .settingsShowingSpendingMoney, .settingsNoWallet, .settingsCAD, .settingsHotWalletCAD, .settingsReplacingKey:
-            return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
+        case .menuBarLabel:
+            return TestScreen(view: AnyView(MenuBarLabelScene(portfolio: { store.portfolio })), isReady: isReady)
+        case .settings, .settingsWallets, .settingsServer, .settingsShowingSpendingMoney, .settingsNoWallet, .settingsHotWallet, .settingsCAD, .settingsHotWalletCAD, .settingsReplacingKey:
+            let pane: SettingsView.Pane = switch self {
+            case .settingsWallets, .settingsShowingSpendingMoney, .settingsNoWallet: .wallets
+            case .settingsServer: .server
+            case .settingsHotWallet, .settingsHotWalletCAD, .settingsReplacingKey: .spendingMoney
+            default: .general
+            }
+            return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet, tab: pane)), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 720), isReady: isReady)
         case .hotWallet, .hotWalletCAD, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck, .hotWalletReplacingKeyMissing:
@@ -499,7 +649,7 @@ private final class ReadOnce {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, smallAmounts, longHistory, answeredWallet, empty, emptyReadingLinked, notStarted }
+    enum Feed { case demo, missingPrice, unreadBalance, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, smallAmounts, longHistory, answeredWallet, empty, emptyReadingLinked, notStarted, firstRun }
 
     private let feed: Feed
     private let reads = Mutex(0)
@@ -515,6 +665,33 @@ final class FixtureSource: PortfolioSource {
         }
         switch feed {
         case .demo: break
+        case .missingPrice:
+            // The demo, with no price for USDC right now. It's the largest holding, so its value is a big part of the total, and with no price it's listed last.
+            return try demo { object in
+                var positions = object["positions"] as? [[String: Any]] ?? []
+                for index in positions.indices where positions[index]["asset"] as? String == "USDC" {
+                    var values = positions[index]["values"] as? [String: Any] ?? [:]
+                    values["valueMicros"] = NSNull()
+                    positions[index]["values"] = values
+                }
+                object["positions"] = positions
+                var totals = object["totals"] as? [String: Any] ?? [:]
+                totals["valueMicros"] = "4321680200"
+                var coverage = totals["coverage"] as? [String: Any] ?? [:]
+                coverage["value"] = ["known": 6, "missing": 1]
+                totals["coverage"] = coverage
+                object["totals"] = totals
+            }
+        case .unreadBalance:
+            // The demo, with every price known and a balance that couldn't be read.
+            return try demo { object in
+                object["unreadAssets"] = ["wstETH"]
+                var totals = object["totals"] as? [String: Any] ?? [:]
+                var coverage = totals["coverage"] as? [String: Any] ?? [:]
+                coverage["value"] = ["known": 7, "missing": 1]
+                totals["coverage"] = coverage
+                object["totals"] = totals
+            }
         case .linkedFails:
             // The demo, with one of its linked wallets unreadable.
             return try demo { $0["linkedFailed"] = ["0x00000000000000000000000000000000000de301"] }
@@ -542,7 +719,12 @@ final class FixtureSource: PortfolioSource {
             }
         case .longHistory:
             // Weeks of history, where a time of day on the axis would say nothing.
-            return try demo { $0["points"] = Self.points(every: 3 * 86_400, pnl: [1_000_000, 250_000_000, 1_250_000_000, 900_000_000, 400_000_000, 1_100_000_000, 800_000_000]) }
+            return try demo {
+                let points = Self.points(every: 3 * 86_400, pnl: [1_000_000, 250_000_000, 1_250_000_000, 900_000_000, 400_000_000, 1_100_000_000, 800_000_000])
+                $0["points"] = points
+                // At 2 s a block, so what's offered goes back as far as these do.
+                $0["coverage"] = ["fromBlock": 53_500_000 - points.count * 3 * 86_400 / 2, "toBlock": 53_500_000]
+            }
         case .answeredWallet:
             // What a wallet being read gets asked about one of the user's own wallets, which isn't what the demo itself would ask.
             return try demo { object in
@@ -555,6 +737,7 @@ final class FixtureSource: PortfolioSource {
         case .empty: return try newWallet(started: true, readingLinked: false, address: address)
         case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: address)
         case .notStarted: return try newWallet(started: false, readingLinked: false, address: address)
+        case .firstRun: return try firstRun(address: address)
         case .neverAnswers: try await Task.sleep(for: .seconds(600))
         case .serverDown: throw FetchError.unreachable
         case .stopsAnswering: if read > 1 { throw FetchError.unreachable }
@@ -601,8 +784,70 @@ final class FixtureSource: PortfolioSource {
         }
     }
 
+    /// A real wallet minutes after it was funded, from benface's test in WORK-336: $4 of ETH that arrived with no transaction showing it, a swap to $1 of USDC, and its fee.
+    /// It's what most people see first, and it's the demo. The rich demo wallet hides how this looks.
+    private func firstRun(address: String) throws -> Portfolio {
+        let now = Date.now
+        let blockNum = 53_525_400
+        func stamp(_ secondsAgo: Double) -> String { now.addingTimeInterval(-secondsAgo).formatted(.iso8601) }
+        func position(_ asset: String, decimals: Int, note: Any, price: String, qty: String, unknownCostQty: String, averageCost: Any, value: String, realized: Any, unrealized: Any, pnl: Any, check: [String: Any], resolvable: Bool) -> [String: Any] {
+            [
+                "asset": asset, "decimals": decimals, "note": note,
+                "price": ["micros": price, "source": "oracle", "blockNum": blockNum],
+                "values": ["qty": qty, "unknownCostQty": unknownCostQty, "costMicros": averageCost is NSNull ? NSNull() : "1000000", "averageCostMicros": averageCost, "valueMicros": value, "realizedMicros": realized, "unrealizedMicros": unrealized, "estimatedCostMicros": "0", "estimatedRealizedMicros": "0"],
+                "pnlMicros": pnl, "shortfallQty": "0", "legCount": 3, "reconciliation": check, "noMarket": false,
+                "estimates": ["cost": false, "value": false, "realized": false, "unrealized": false],
+                "resolvable": resolvable,
+            ]
+        }
+        return try demo {
+            $0["address"] = address
+            $0["mode"] = "dataset"
+            $0["coverage"] = ["fromBlock": 53_515_000, "toBlock": blockNum]
+            $0["latest"] = ["blockNum": blockNum, "timestamp": stamp(0)]
+            $0["progress"] = ["started": true, "behindBlocks": 0]
+            $0["questions"] = [Any]()
+            $0["unlisted"] = [Any]()
+            $0["outgoingTxs"] = ["0x" + String(repeating: "a1", count: 32)]
+            $0["meter"] = ["open": 0, "answered": 0, "waiting": 0]
+            $0["positions"] = [
+                position("ETH", decimals: 18, note: "incl. wrapped ETH", price: "2426000000", qty: "1648711832883181", unknownCostQty: "1648711832883181", averageCost: NSNull(), value: "4000000", realized: NSNull(), unrealized: NSNull(), pnl: NSNull(), check: ["status": "incomplete", "blockNum": blockNum, "computedQty": "-413118167116819", "actualQty": "1648711832883181", "differenceQty": "2061830000000000"], resolvable: false),
+                position("USDC", decimals: 6, note: NSNull(), price: "1000000", qty: "1000000", unknownCostQty: "0", averageCost: "999800", value: "1000000", realized: "0", unrealized: "0", pnl: "0", check: ["status": "reconciled", "blockNum": blockNum, "computedQty": "1000000", "actualQty": "1000000", "differenceQty": "0"], resolvable: false),
+            ]
+            $0["totals"] = [
+                "valueMicros": "5000000", "realizedMicros": NSNull(), "unrealizedMicros": "0", "gasMicros": "2300", "pnlMicros": "-2300",
+                "excluded": [["asset": "ETH", "reason": "doesn't match its actual balance"]],
+                "unpricedGas": false,
+                "coverage": ["value": ["known": 2, "missing": 0], "realized": ["known": 0, "missing": 1], "unrealized": ["known": 1, "missing": 1], "pnl": ["known": 1, "missing": 1]],
+                "unresolvedMicros": "4000000", "estimatedMicros": "0",
+                "estimated": ["value": false, "realized": false, "unrealized": false],
+                "noMarket": [Any](),
+            ]
+            $0["pnlStatus"] = "partial"
+            $0["points"] = [
+                ["blockNum": blockNum - 30, "timestamp": stamp(70), "txHash": "0x" + String(repeating: "a1", count: 32), "pnlMicros": "-2300", "excludedCount": 1],
+                ["blockNum": blockNum, "timestamp": stamp(0), "txHash": NSNull(), "pnlMicros": "-2300", "excludedCount": 1],
+            ]
+            $0["holdComparison"] = [
+                "walletMicros": "-2300", "gainThatLeftMicros": "0", "walletLeavesOut": true, "walletEstimated": false, "putInMicros": "0", "takenOutMicros": "0", "ethPriceMicros": "2426000000", "unknownAmounts": 1, "ranOut": false,
+                "status": "unavailable", "unavailable": "nothing known put in", "holdMicros": NSNull(), "differenceMicros": NSNull(), "ethQty": "0", "ethValueMicros": "0", "estimated": false,
+            ]
+        }
+    }
+
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
-        try Self.decode(target == .holdComparison ? "demo-hold-explanation" : fixture("demo-explanation", currency))
+        if feed == .firstRun {
+            // In the words `onchainLines` in `src/core/explain.ts` uses for this balance.
+            let object: [String: Any] = ["currency": currency.rawValue, "title": "ETH: Balance check", "value": NSNull(), "sourceValue": NSNull(), "legCount": 0, "legs": [Any](), "lines": [
+                "Worked out from its transactions: -0.00041 ETH.",
+                "Actual balance at block 53,525,400: 0.00164 ETH.",
+                "Difference: +0.00206 ETH.",
+                "This wallet holds more ETH than its transactions explain. Most likely a contract sent it some, which we can't see yet.",
+                "Value uses the actual balance. PnL is unavailable, because we know some of this wallet's activity is missing.",
+            ]]
+            return try JSONDecoder().decode(Explanation.self, from: JSONSerialization.data(withJSONObject: object))
+        }
+        return try Self.decode(target == .holdComparison ? "demo-hold-explanation" : fixture("demo-explanation", currency))
     }
 
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
@@ -614,7 +859,7 @@ final class FixtureSource: PortfolioSource {
     }
 
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
-        throw FetchError.rejected("There's no tax report fixture.")
+        try Self.decode("demo-tax-report")
     }
 
     /// What each answer would do, as the demo's own numbers, so a card shows them in place.

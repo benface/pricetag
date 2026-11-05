@@ -106,9 +106,9 @@ public struct ResolveFlow: View {
                 }
             }
             ProgressView(value: model.meter?.progress ?? 0)
-                .tint(model.isBalanced ? Tone.gain.style : Tone.warning.style)
+                .tint(model.isBalanced ? Tone.gain.color : .accentColor)
                 .animation(reduceMotion ? nil : .snappy, value: model.meter)
-                .accessibilityLabel("Unresolved, \(model.meter?.open ?? 0) left")
+                .accessibilityLabel("Questions, \(model.meter?.open ?? 0) left")
             HStack(spacing: 6) {
                 Text("Now").foregroundStyle(.secondary)
                 if let portfolio = store.portfolio {
@@ -120,7 +120,7 @@ public struct ResolveFlow: View {
     }
 
     private var headline: String {
-        guard let question = model.current else { return model.isBalanced ? "Books balanced" : "That's all for now" }
+        guard let question = model.current else { return model.isBalanced ? "All answered" : "That's all for now" }
         if isTakingCost(question) { return "What did this cost?" }
         return "Who's this?"
     }
@@ -273,10 +273,10 @@ public struct ResolveFlow: View {
                         .help("Opens your browser, where your hardware wallet signs it. Anyone can read it after that")
                 }
             }
-            Text("This stays on this Mac. Publishing a cost onchain would tie your wallets together in public, so that's never done without asking.")
+            Text("This stays on this Mac.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .help("Publishing a cost onchain would tie your wallets together in public, so that's never done without asking.")
             if let failure = model.failure { WarningText(failure).font(.callout) }
         }
         .padding(16)
@@ -305,11 +305,10 @@ public struct ResolveFlow: View {
             if let portfolio = store.portfolio {
                 Text(nowText(portfolio)).font(.title3.weight(.semibold)).monospacedDigit()
                 if let excluded = Wording.excluded(portfolio.totals.excluded) {
-                    Text("Every question's answered. What's left isn't a question: \(excluded)")
+                    Text("Every question's answered.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .help(excluded)
                 }
             }
             if let failed = store.portfolio?.linkedFailed.count, failed > 0 {
@@ -318,14 +317,15 @@ public struct ResolveFlow: View {
             }
             if let portfolio = store.portfolio, !portfolio.linkedReading.isEmpty {
                 let waiting = portfolio.linkedReading.count
-                Text("Still reading your other \(waiting == 1 ? "wallet" : "wallets"). What came from \(waiting == 1 ? "it" : "them") stays unresolved until that's done.")
+                Text("Still reading your other \(waiting == 1 ? "wallet" : "wallets").")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
             if !model.skipped.isEmpty {
-                Text("\(model.skipped.count) skipped, and still flagged.").font(.callout).foregroundStyle(Tone.warning.style)
+                Text("\(model.skipped.count) skipped").font(.callout).foregroundStyle(.secondary)
                 Button("Go Back to Them") { model.revisitSkipped() }
+                    .buttonStyle(.borderedProminent)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

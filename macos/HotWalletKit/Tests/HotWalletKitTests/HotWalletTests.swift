@@ -1256,6 +1256,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     }
 
     @Test func overTheCapSaysWhichDollars() {
+        #expect(HotWalletWording.shortOverCap(by: 10 * Money.dollar, beside: .CAD) == "US$10.00 over the cap")
         #expect(HotWalletWording.overCap(by: 10 * Money.dollar, hasDestination: true, beside: .CAD).hasPrefix("US$10.00 over the cap."))
         #expect(HotWalletWording.overCap(by: 10 * Money.dollar, hasDestination: false, beside: .USD).hasPrefix("$10.00 over the cap,"))
     }
@@ -1265,6 +1266,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.wallet.tick()
         #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .USD)])
         #expect(rig.wallet.needsAttention)
+        #expect(rig.wallet.notices.first?.short == HotWalletWording.shortNoSavings)
     }
 
     @Test func overTheCapWithNoColdWalletSaysSoOnce() async throws {

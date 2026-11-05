@@ -80,7 +80,7 @@ actor BookSource: PortfolioSource {
     @Test func aTotalNeverAppearsBare() throws {
         let portfolio = try demoPortfolio()
         let caveat = try #require(Wording.headlineCaveat(portfolio.totals, portfolio.currency))
-        #expect(caveat.contains("unresolved"))
+        #expect(caveat.contains("cost unknown"))
         #expect(caveat.contains("estimated"))
         #expect(FeedSummary(feed: .live, portfolio: portfolio).text.contains("≈"))
     }
@@ -484,7 +484,7 @@ actor BookSource: PortfolioSource {
     }
 
     @Test func aPartlyEstimatedOrUnresolvedConsequenceSaysSo() {
-        #expect(Wording.consequence(BookPreview(pnlMicros: "1000000", pnlStatus: .partial, estimatedMicros: "5", unresolvedMicros: "45000000", open: 1, pending: false, failed: false), .USD) == "≈+$1.00 · $45.00 unresolved")
+        #expect(Wording.consequence(BookPreview(pnlMicros: "1000000", pnlStatus: .partial, estimatedMicros: "5", unresolvedMicros: "45000000", open: 1, pending: false, failed: false), .USD) == "≈+$1.00 · $45.00 cost unknown")
     }
 
     @Test func aCostInCADIsKeptInCAD() async throws {

@@ -118,6 +118,18 @@ public enum Wording {
         return "Covers about \(Format.duration(ms: BlockTime.msBetween(span.fromBlock, span.toBlock))) of history and \(trackedTokens) tokens plus ETH. \(opening) Other tokens aren't counted."
     }
 
+    /// What the rows no longer say one by one. nil unless every listed balance was checked and matches.
+    public static func allBalancesMatch(_ portfolio: Portfolio) -> String? {
+        let listed = portfolio.listedPositions
+        // A balance that couldn't be read has no row, and hasn't been shown to match anything.
+        return !listed.isEmpty && portfolio.unreadAssets.isEmpty && listed.allSatisfy(\.isReconciled) ? "Every balance matches the chain." : nil
+    }
+
+    /// What there is instead of a chart, so what's short isn't mistaken for nothing.
+    public static func transactionsSoFar(_ count: Int) -> String {
+        count == 1 ? "1 transaction so far." : "\(Format.block(count)) transactions so far."
+    }
+
     public static func feesUnknown(_ count: Int) -> String {
         "Network fees couldn't be worked out for \(count) \(count == 1 ? "transaction" : "transactions"), so the network fees shown are too low."
     }
@@ -129,7 +141,7 @@ public enum Wording {
     public static func checkLabel(_ status: Reconciliation.Status) -> String {
         switch status {
         case .reconciled: "Matches"
-        case .incomplete: "Incomplete"
+        case .incomplete: "Doesn't match"
         case .unchecked: "Not checked"
         }
     }
@@ -166,6 +178,14 @@ public enum Wording {
         return behind(ms: BlockTime.msBetween(head - portfolio.progress.behindBlocks, head))
     }
 
+    /// `catchingUp` in a few words.
+    public static func shortCatchingUp(_ portfolio: Portfolio) -> String? {
+        if !portfolio.progress.started || portfolio.progress.behindBlocks == 0 { return nil }
+        let head = portfolio.latest.blockNum
+        let ms = BlockTime.msBetween(head - portfolio.progress.behindBlocks, head)
+        return ms < 30_000 ? "Less than a minute behind" : "About \(Format.duration(ms: ms)) behind"
+    }
+
     static func behind(ms: Int) -> String {
         // Under half a minute would round to "0 min", which reads as not behind at all.
         "The data is still catching up, \(ms < 30_000 ? "less than a minute" : "about \(Format.duration(ms: ms))") behind the network. Anything newer isn't in these numbers yet."
@@ -183,9 +203,40 @@ public enum Wording {
     /// What sits right next to a total, so it never appears bare. nil when it's exact and whole.
     public static func headlineCaveat(_ totals: Totals, _ currency: CurrencyCode) -> String? {
         var parts: [String] = []
-        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) unresolved") }
+        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) cost unknown") }
         if isPositive(totals.estimatedMicros) { parts.append("\(Format.money(totals.estimatedMicros, currency)) estimated") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// The same, as a sentence for when there's room to say what it means. nil when it's exact and whole.
+    public static func leavesOut(_ totals: Totals, _ currency: CurrencyCode) -> String? {
+        var parts: [String] = []
+        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) has an unknown cost, so it isn't in your PnL.") }
+        if isPositive(totals.estimatedMicros) { parts.append("\(Format.money(totals.estimatedMicros, currency)) is estimated.") }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// What answering takes, on the button that starts it.
+    public static func answerQuestions(_ count: Int) -> String {
+        count == 1 ? "Answer 1 Question" : "Answer \(Format.block(count)) Questions"
+    }
+
+    /// Why a value is partial, for its tooltip. Names the holdings, because they may not be on screen. With no cause known, it only says what's sure.
+    public static func partialValue(noPrice: [String], unread: [String], unchecked: [String], incompleteHistory: [String]) -> String {
+        func list(_ assets: [String]) -> String { assets.joined(separator: ", ") }
+        var causes: [String] = []
+        if !noPrice.isEmpty { causes.append("\(list(noPrice)) \(noPrice.count == 1 ? "has" : "have") no price right now.") }
+        if !unread.isEmpty { causes.append("Couldn't read the balance of \(list(unread)).") }
+        if !unchecked.isEmpty { causes.append("Couldn't check the balance of \(list(unchecked)).") }
+        if !incompleteHistory.isEmpty { causes.append("Incomplete history for \(list(incompleteHistory)).") }
+        return causes.isEmpty ? "This value isn't complete." : causes.joined(separator: " ")
+    }
+
+    /// `leavesOut` in a few words. The biggest thing it leaves out, because the rest is a click away.
+    public static func shortLeavesOut(_ totals: Totals, _ currency: CurrencyCode) -> String? {
+        if isPositive(totals.unresolvedMicros) { return "\(Format.money(totals.unresolvedMicros, currency)) has an unknown cost" }
+        if isPositive(totals.estimatedMicros) { return "\(Format.money(totals.estimatedMicros, currency)) is estimated" }
+        return nil
     }
 
     /// What isn't listed with the holdings, and why it doesn't matter to the numbers. nil when there's nothing.
@@ -203,7 +254,7 @@ public enum Wording {
     }
 
     public static func linkedFailed(_ count: Int) -> String {
-        count == 1 ? "Couldn't read your other wallet, so what came from it may show as unresolved." : "Couldn't read \(count) of your other wallets, so what came from them may show as unresolved."
+        count == 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : "Couldn't read \(count) of your other wallets, so what came from them may show an unknown cost."
     }
 
     /// A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent.
@@ -217,11 +268,27 @@ public enum Wording {
         if preview.pending { return "Reading that wallet…" }
         guard let pnl = preview.pnlMicros else { return "PnL still unavailable" }
         let number = Format.estimate(Format.signedMoney(pnl, currency), isPositive(preview.estimatedMicros))
-        return isPositive(preview.unresolvedMicros) ? "\(number) · \(Format.money(preview.unresolvedMicros, currency)) unresolved" : number
+        return isPositive(preview.unresolvedMicros) ? "\(number) · \(Format.money(preview.unresolvedMicros, currency)) cost unknown" : number
     }
 
-    public static let notStarted = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."
+    public static let notStarted = "Numbers appear once the data reaches this wallet."
     public static let unpricedFees = "Some network fees had no price at the time, and aren't in this total."
+
+    /// Balances with no row, because nothing could be read about them. nil when there are none.
+    public static func unreadBalances(_ assets: [String]) -> String? {
+        assets.isEmpty ? nil : "Couldn't read your \(assets.joined(separator: ", ")) \(assets.count == 1 ? "balance" : "balances")."
+    }
+
+    /// The comparison in a few words, for the line that opens the whole of it.
+    public static func holdSummary(_ comparison: HoldComparison, _ currency: CurrencyCode) -> String {
+        switch comparison.status {
+        case .unavailable: return "Not available yet"
+        case .partial: return "Not comparable yet"
+        case .complete:
+            guard let difference = comparison.differenceMicros else { return "Not available yet" }
+            return holdDifference(difference, currency, estimated: comparison.walletEstimated || comparison.estimated)
+        }
+    }
 
     /// What's unavailable because of a missing exchange rate. Empty in USD, or with every rate there.
     public static func missingRates(_ portfolio: Portfolio) -> [String] {
@@ -238,10 +305,12 @@ public enum Wording {
         return lines
     }
 
-    public static let demo = "Demo data, not a real wallet. Every case the app has to get right is in here."
+    public static let demo = "Demo data, not a real wallet."
     public static let pnlUnavailable = "PnL unavailable"
+    public static let unknown = "Unknown"
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
-    public static let reading = "Reading this wallet's history. The first read can take a minute, then only new activity is read."
+    public static let tooNewToChart = "Not enough history for a chart yet."
+    public static let reading = "Reading this wallet. The first read can take a minute."
     public static let notAnAddress = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 }
 

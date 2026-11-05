@@ -205,7 +205,7 @@ export function TaxPanel({ address, currency, book, onClose }: { address: string
                 <dd>{report.rowCount.toLocaleString("en-US")}</dd>
               </div>
               <div>
-                <dt className="small muted">Unresolved</dt>
+                <dt className="small muted">Unknown gain</dt>
                 <dd className={report.unresolvedCount > 0 ? "warn-text" : ""}>
                   {report.unresolvedCount > 0 ? "⚠ " : ""}
                   {report.unresolvedCount.toLocaleString("en-US")}

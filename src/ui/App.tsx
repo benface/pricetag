@@ -255,7 +255,7 @@ export function App() {
   const resolvable = useMemo(() => new Set(questions.flatMap((q) => q.arrivals.map((a) => a.asset))), [questions])
   const listed = positions.filter((p) => !p.noMarket)
   const noMarketCount = totals.noMarket.length + (wallet?.unlisted.length ?? 0)
-  const caveat = [BigInt(totals.unresolvedMicros) > 0n ? `${formatMoney(totals.unresolvedMicros, currency)} unresolved` : null, BigInt(totals.estimatedMicros) > 0n ? `${formatMoney(totals.estimatedMicros, currency)} estimated` : null].filter(Boolean).join(" · ")
+  const caveat = [BigInt(totals.unresolvedMicros) > 0n ? `${formatMoney(totals.unresolvedMicros, currency)} cost unknown` : null, BigInt(totals.estimatedMicros) > 0n ? `${formatMoney(totals.estimatedMicros, currency)} estimated` : null].filter(Boolean).join(" · ")
   const download = () => {
     const link = document.createElement("a")
     link.href = URL.createObjectURL(new Blob([exportCsv(positions, currency)], { type: "text/csv" }))

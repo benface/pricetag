@@ -4,14 +4,12 @@ import UniformTypeIdentifiers
 /// Choose a country, read what the file will and won't say, then save it. The server writes the file.
 public struct TaxReportView: View {
     let store: PortfolioStore
-    let onClose: () -> Void
     @State private var model: TaxReportModel
     @State private var document: TaxReportDocument?
     @State private var saveError: String?
 
-    public init(store: PortfolioStore, model: TaxReportModel? = nil, onClose: @escaping () -> Void) {
+    public init(store: PortfolioStore, model: TaxReportModel? = nil) {
         self.store = store
-        self.onClose = onClose
         _model = State(initialValue: model ?? TaxReportModel(currency: store.currency, fetch: { try await store.taxReport($0) }))
     }
 
@@ -31,25 +29,27 @@ public struct TaxReportView: View {
     public var body: some View {
         VStack(spacing: 0) {
             Form {
-                Section {
-                    Notice(.warning, report?.disclaimer ?? "Not tax advice. Check this with an accountant before relying on it.")
-                }
                 choices
                 results
             }
             .formStyle(.grouped)
+            Divider()
             HStack {
-                if let saveError { WarningText(saveError).font(.callout) }
+                if let saveError {
+                    WarningText(saveError).font(.callout)
+                } else {
+                    Text("Not tax advice.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .help(report?.disclaimer ?? "Check this with an accountant before relying on it.")
+                }
                 Spacer()
-                Button("Close", action: onClose)
-                    .keyboardShortcut(.cancelAction)
                 Button("Export CSV…") { document = report.map(TaxReportDocument.init) }
-                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
                     .disabled(report == nil)
             }
-            .padding(16)
+            .padding(12)
         }
-        .frame(width: 520, height: 640)
         .task(id: request) {
             if let request { await model.load(request) }
         }
@@ -116,7 +116,7 @@ public struct TaxReportView: View {
     private func content(_ report: TaxReport) -> some View {
         Section {
             LabeledContent("Rows") { Text(Format.block(report.rowCount)).monospacedDigit() }
-            LabeledContent("Unresolved") {
+            LabeledContent("Unknown gain") {
                 if report.unresolvedCount > 0 {
                     WarningText(Format.block(report.unresolvedCount)).monospacedDigit()
                 } else {
@@ -131,19 +131,10 @@ public struct TaxReportView: View {
                 }
             }
         }
-        if !report.warnings.isEmpty {
-            Section {
-                ForEach(report.warnings, id: \.self) { warning in
-                    WarningText(warning)
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
         Section {
-            DisclosureGroup("What this report covers and leaves out") {
-                ForEach(report.notes, id: \.self) { note in
-                    Text(note)
+            DisclosureGroup("What this leaves out") {
+                ForEach(report.warnings + report.notes, id: \.self) { line in
+                    Text(line)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
