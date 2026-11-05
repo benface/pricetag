@@ -120,7 +120,7 @@ private struct HotWalletDetails: View {
                 Section { alarmBanner(alarm) }
             }
             ForEach(wallet.notices) { notice in
-                Notice(notice.kind == .warning ? .warning : .info, notice.text)
+                Notice(notice.kind == .warning ? .warning : .info, notice.text, actionTitle: notice.asksForSavings ? HotWalletWording.addSavingsButton : nil) { isAddingCold = true }
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
             }
@@ -356,7 +356,7 @@ private struct HotWalletDetails: View {
                 .onTapGesture { wallet.setSweepDestination(cold.address) }
                 .accessibilityAddTraits(cold.address == wallet.settings.sweepDestination ? .isSelected : [])
             }
-            Button("Add a Savings Wallet…", systemImage: "plus") { isAddingCold = true }
+            Button(HotWalletWording.addSavingsButton, systemImage: "plus") { isAddingCold = true }
         } header: {
             Text("Savings")
         } footer: {
@@ -446,7 +446,7 @@ private struct HotWalletDetails: View {
     }
 
     private var topUp: some View {
-        Button("Top Up from Savings…") { isToppingUp = true }
+        Button("\(HotWalletWording.topUpTitle(hasDestination: wallet.settings.sweepDestination != nil))…") { isToppingUp = true }
             .disabled(!wallet.canTopUp)
     }
 
@@ -534,6 +534,7 @@ struct TopUpSheet: View {
     }
 
     private var room: Int { Int(wallet.topUpRoom / Money.dollar) }
+    private var hasDestination: Bool { wallet.settings.sweepDestination != nil }
 
     private var deviceLink: URL? {
         wallet.address.flatMap { DeviceFlow.topUp(server: server, to: $0.checksummed, dollars: Int(dollars)) }
@@ -541,10 +542,10 @@ struct TopUpSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Top Up from Savings")
+            Text(HotWalletWording.topUpTitle(hasDestination: hasDestination))
                 .font(.title2.bold())
             if room < 1 {
-                Notice(.info, "This wallet is already at its cap of \(wallet.usd(wallet.settings.capUsdMicros)). Anything more would be swept straight back.")
+                Notice(.info, HotWalletWording.topUpAtCap(wallet.usd(wallet.settings.capUsdMicros), hasDestination: hasDestination))
             } else {
                 LabeledContent("Amount") {
                     HStack {
@@ -556,7 +557,7 @@ struct TopUpSheet: View {
                             .frame(width: 56, alignment: .trailing)
                     }
                 }
-                Text("There's room for \(wallet.usd(wallet.topUpRoom)) under your cap. Anything above that gets swept back to your savings.")
+                Text(HotWalletWording.topUpRoom(wallet.usd(wallet.topUpRoom), hasDestination: hasDestination))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -581,7 +582,7 @@ struct TopUpSheet: View {
                     .padding(.top, 6)
                 }
                 if wallet.holdings.first(where: { $0.token.isNative })?.balance ?? 0 < SweepPlanner.minimumGasReserveWei {
-                    Notice(.warning, "Send some of it as ETH. This wallet needs a little to pay for its sweeps.")
+                    Notice(.warning, HotWalletWording.topUpNeedsGas(hasDestination: hasDestination))
                 }
             }
             HStack {

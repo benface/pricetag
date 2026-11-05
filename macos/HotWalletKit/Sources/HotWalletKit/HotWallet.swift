@@ -432,7 +432,7 @@ public final class HotWallet {
         if let plan {
             if plan.blockers.contains(.notEnoughGas) || rotationHold == .notEnoughGas { notices.append(.init(.warning, HotWalletWording.noGas, short: HotWalletWording.shortNoGas)) }
             if plan.excessUsdMicros > 0, !plan.excessIsDust || plan.blockers.contains(.noDestination) {
-                notices.append(.init(.warning, HotWalletWording.overCap(by: plan.excessUsdMicros, hasDestination: settings.sweepDestination != nil, beside: mainCurrency()), short: HotWalletWording.shortOverCap(by: plan.excessUsdMicros, beside: mainCurrency())))
+                notices.append(.init(.warning, HotWalletWording.overCap(by: plan.excessUsdMicros, hasDestination: settings.sweepDestination != nil, beside: mainCurrency()), short: HotWalletWording.shortOverCap(by: plan.excessUsdMicros, beside: mainCurrency()), asksForSavings: settings.sweepDestination == nil))
             } else if plan.excessIsDust {
                 notices.append(.init(.info, HotWalletWording.excessIsDust))
             }
@@ -440,7 +440,7 @@ public final class HotWallet {
         if snapshot != nil, snapshot?.ethUsdMicros == nil { notices.append(.init(.warning, HotWalletWording.noEthPrice, short: HotWalletWording.shortNoEthPrice)) }
         if !unpricedSymbols.isEmpty { notices.append(.init(.warning, HotWalletWording.noPrice(unpricedSymbols), short: HotWalletWording.shortNoPrice(unpricedSymbols))) }
         // Being over the cap with nowhere to sweep already says to add one.
-        if settings.coldWallets.isEmpty, plan?.excessUsdMicros ?? 0 == 0 { notices.append(.init(.warning, HotWalletWording.addSavings(beside: mainCurrency()), short: HotWalletWording.shortNoSavings)) }
+        if settings.coldWallets.isEmpty, plan?.excessUsdMicros ?? 0 == 0 { notices.append(.init(.warning, HotWalletWording.addSavings(beside: mainCurrency()), short: HotWalletWording.shortNoSavings, asksForSavings: true)) }
         if ampProblem { notices.append(.init(.info, HotWalletWording.cantCheckAmp)) }
         return notices
     }
@@ -468,12 +468,15 @@ public final class HotWallet {
         public let text: String
         /// A warning in a few words, for places with room for only that.
         public let short: String?
+        /// Adding a savings wallet is what answers this one.
+        public let asksForSavings: Bool
         public var id: String { text }
 
-        init(_ kind: Kind, _ text: String, short: String? = nil) {
+        init(_ kind: Kind, _ text: String, short: String? = nil, asksForSavings: Bool = false) {
             self.kind = kind
             self.text = text
             self.short = short
+            self.asksForSavings = asksForSavings
         }
     }
 

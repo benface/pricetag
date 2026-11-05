@@ -100,19 +100,28 @@ public struct Notice: View {
 
     let kind: Kind
     let text: String
+    let actionTitle: String?
+    let action: () -> Void
 
-    public init(_ kind: Kind, _ text: String) {
+    public init(_ kind: Kind, _ text: String, actionTitle: String? = nil, action: @escaping () -> Void = {}) {
         self.kind = kind
         self.text = text
+        self.actionTitle = actionTitle
+        self.action = action
     }
 
     public var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Image(systemName: kind == .warning ? "exclamationmark.triangle.fill" : "info.circle")
                 .foregroundStyle(kind == .warning ? Tone.warning.style : AnyShapeStyle(.secondary))
-            Text(text)
-                .foregroundStyle(kind == .warning ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 7) {
+                Text(text)
+                    .foregroundStyle(kind == .warning ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .fixedSize(horizontal: false, vertical: true)
+                if let actionTitle {
+                    Button(actionTitle, action: action)
+                }
+            }
             Spacer(minLength: 0)
         }
         .font(.callout)
