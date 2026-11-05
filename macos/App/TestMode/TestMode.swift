@@ -327,6 +327,8 @@ enum TestScene: String, CaseIterable {
     /// What clicking a notification opens: its row, lit up.
     case hotWalletPurchaseShown = "hot-wallet-purchase-shown"
     case hotWalletRecordShown = "hot-wallet-record-shown"
+    /// A notification from before the key was replaced, whose row went with the old key.
+    case hotWalletReplacedKeyShown = "hot-wallet-replaced-key-shown"
     case buy
     case buyCAD = "buy-cad"
     case buyCADAboveRoom = "buy-cad-above-room"
@@ -501,6 +503,7 @@ enum TestScene: String, CaseIterable {
         case .hotWalletKeyMissing, .popoverHotWalletKeyMissing: .keyMissing
         case .hotWalletAlarm, .popoverHotWalletAlarm: .alarm
         case .hotWalletReplacingKey, .settingsReplacingKey: .replacingKey
+        case .hotWalletReplacedKeyShown: .replaced
         case .hotWalletReplacingKeyStuck: .replacingKeyStuck
         case .hotWalletReplacingKeyMissing: .replacingKeyMissing
         case .hotWalletSites: .usedBySites
@@ -626,7 +629,7 @@ enum TestScene: String, CaseIterable {
         if self == .taxReportOtherWallets || self == .taxReportLeftOver { registered["taxOtherWallets"] = "\(TestScene.recentWallet)\n0x0000000000000000000000000000000000c0ffee\n0xnope" }
         if self == .sendKnown, let book = try? JSONEncoder().encode(Book().answering(TestScene.recipient, .someoneElse, focus: nil)) { registered["answers"] = book }
         if self == .resolveAnsweredWallet, let book = try? JSONEncoder().encode(Book().answering(TestScene.answeredWallet, .mine, focus: nil)) { registered["answers"] = book }
-        if self == .hotWalletPurchases || self == .hotWalletPurchaseShown || self == .hotWalletPurchasesCAD || self == .hotWalletPurchasesCantCheck, let saved = try? JSONEncoder().encode(self != .hotWalletPurchasesCantCheck ? TestScene.purchases(inCAD: self == .hotWalletPurchasesCAD) : Array(TestScene.purchases().suffix(3))) { registered["purchases"] = saved }
+        if self == .hotWalletPurchases || self == .hotWalletPurchaseShown || self == .hotWalletReplacedKeyShown || self == .hotWalletPurchasesCAD || self == .hotWalletPurchasesCantCheck, let saved = try? JSONEncoder().encode(self != .hotWalletPurchasesCantCheck ? TestScene.purchases(inCAD: self == .hotWalletPurchasesCAD) : Array(TestScene.purchases().suffix(3))) { registered["purchases"] = saved }
         defaults.register(defaults: registered)
         let source: any PortfolioSource = TestMode.live.map { PricetagClient(serverURL: $0.server) } ?? FixtureSource(feed: feed, hasRate: !hasNoRate, rules: self == .settingsRules || self == .settingsSmallDisplay ? TestScene.twoRules : [])
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: TestMode.live == nil ? .milliseconds(50) : .seconds(30), unreachableDelay: .seconds(30))
@@ -822,8 +825,10 @@ enum TestScene: String, CaseIterable {
             default: nil
             }
             return TestScreen(view: AnyView(BuySheet(wallet: hotWallet, purchases: purchases, typed: typed, asset: self == .buyUSDCNoGas ? .usdc : .eth, failure: failure) {} addSavings: {}), isReady: isReady)
-        case .hotWalletPurchases, .hotWalletPurchaseShown, .hotWalletPurchasesCAD, .hotWalletPurchasesCantCheck:
+        case .hotWalletPurchases, .hotWalletPurchaseShown, .hotWalletReplacedKeyShown, .hotWalletPurchasesCAD, .hotWalletPurchasesCantCheck:
             if self == .hotWalletPurchaseShown { navigation.show(row: MoneyNotice.purchaseRow("recorded")) }
+            // The old key's manual sweep, which isn't shown anymore.
+            if self == .hotWalletReplacedKeyShown { navigation.show(row: MoneyNotice.recordRow("0xde4" + String(repeating: "0", count: 59) + "20")) }
             // It keeps few enough that checking has nothing to trim, because that would save over what's registered here.
             if purchases.purchases.isEmpty { TestMode.fail("This scene's purchases weren't read. Something saved over them.") }
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation, purchases: purchases).task { if self == .hotWalletPurchasesCantCheck { await purchases.check() } }), size: CGSize(width: 780, height: 900), isReady: isReady)

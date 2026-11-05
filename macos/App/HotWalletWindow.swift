@@ -259,6 +259,8 @@ private struct HotWalletDetails: View {
                     }
                 }
             }
+            .lit(litRow == MoneyNotice.balanceRow)
+            .id(MoneyNotice.balanceRow)
         }
     }
 
@@ -267,8 +269,10 @@ private struct HotWalletDetails: View {
         return min(1, Double(value) / Double(wallet.settings.capUsdMicros))
     }
 
+    /// This Mac's, including what was bought for a key that's since been replaced, which may still be arriving.
     private var shownPurchases: [TrackedPurchase] {
-        address.map { purchases.purchases(of: $0.lowercased) } ?? []
+        guard let address else { return [] }
+        return purchases.purchases(of: Set(([address] + wallet.state.retired).map(\.lowercased)))
     }
 
     private var bought: some View {
@@ -512,9 +516,12 @@ private struct HotWalletDetails: View {
     }
 
     /// Scrolls to what a notification was about, and lights it up long enough to find it. It's taken, so the same click works twice.
-    private func reveal(_ row: String?, with proxy: ScrollViewProxy) {
-        guard let row else { return }
+    private func reveal(_ wanted: String?, with proxy: ScrollViewProxy) {
+        guard let wanted else { return }
         navigation.shownRow = nil
+        // A row from a key that's been replaced isn't here anymore, so it opens what the money's on now.
+        let shown = Set(wallet.records.map { MoneyNotice.recordRow($0.hash) } + shownPurchases.map { MoneyNotice.purchaseRow($0.ref) } + (wallet.sweepProblem == nil ? [] : [MoneyNotice.sweepProblemRow]))
+        let row = shown.contains(wanted) ? wanted : MoneyNotice.balanceRow
         withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(row, anchor: .center) }
         litRow = row
         Task {
@@ -540,7 +547,8 @@ private struct HotWalletDetails: View {
         case .pending: "On its way"
         case .confirmed: "Done"
         case .failed: "Failed"
-        case .dropped: "Never landed"
+        // Given up on, it can still land, unless another transaction took its place.
+        case .dropped: wallet.records.contains { $0.nonce == record.nonce && ($0.status == .confirmed || $0.status == .failed) } ? "Never landed" : "Not confirmed"
         }
     }
 }
