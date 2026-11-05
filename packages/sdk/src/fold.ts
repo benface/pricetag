@@ -37,7 +37,7 @@ export type FoldLeg = {
   /**
    * Nothing says where this comes in its block, among other movements that depend on it, and the method it matters to:
    * `always` when something left, and `fifo` when things only arrived, since those come to the same average either way.
-   * Where it matters, a credit takes no cost, and what a debit took has none.
+   * Where it matters, a credit takes no cost, and neither what a debit took nor what it left has one.
    */
   orderUnknown?: "always" | "fifo"
   blockNum?: number
@@ -338,6 +338,11 @@ function withoutCosts(taken: Taken): Taken {
   }
 }
 
+/** What's still held, with no cost anyone can rely on, since how much of each lot is left depends on the same order. */
+function lotsWithoutCosts(state: PositionState, lots: readonly Lot[]): Lot[] {
+  return lots.reduce<Lot[]>((kept, { qty, legId, unconfirmedBy, acquiredBlock, acquiredAt }) => addLot(state, kept, { qty, costMicros: null, label: "unknown", legId, ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }) }), [])
+}
+
 /** Applies a leg, and says what a debit took, which is what a transfer to a linked wallet carries with it. */
 export function applyLegTaking(state: PositionState, leg: FoldLeg): { state: PositionState; taken: CostPiece[] } {
   const delta = BigInt(leg.delta)
@@ -345,10 +350,11 @@ export function applyLegTaking(state: PositionState, leg: FoldLeg): { state: Pos
   if (delta > 0n) return { state: { ...state, lots: credit(state, leg, delta) }, taken: [] }
 
   const qty = -delta
-  const taken = orderMatters(leg, state.method) ? withoutCosts(take(state, qty)) : take(state, qty)
+  const orderless = orderMatters(leg, state.method)
+  const taken = orderless ? withoutCosts(take(state, qty)) : take(state, qty)
   const next: PositionState = {
     ...state,
-    lots: taken.lots,
+    lots: orderless ? lotsWithoutCosts(state, taken.lots) : taken.lots,
     shortfallQty: (BigInt(state.shortfallQty) + taken.shortfall).toString(),
   }
 

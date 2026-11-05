@@ -6,7 +6,7 @@ import { portfolioOf } from "../server/portfolio.ts"
 import { costKey, emptyBook } from "../src/core/book.ts"
 import { describeEffect } from "../src/core/explain.ts"
 import { foldBook } from "../src/core/resolve.ts"
-import { taxRows } from "../src/core/tax.ts"
+import { taxReportOf, taxRows } from "../src/core/tax.ts"
 import type { WalletResponse } from "../src/core/api.ts"
 
 // The real wallet and payout behind WORK-424: a contract paid it 0.00206183 ETH, and the transaction doesn't name it as `to`.
@@ -482,6 +482,97 @@ describe("ETH that arrived in a block where ETH also left", () => {
       assert.equal(eth.effects.find(({ leg }) => leg.id === UNSEEN)!.leg.costMicros, "2000000000")
       assert.equal(eth.values.costMicros, "3000000000")
     }
+  })
+})
+
+describe("what's still held after ETH arrived and left in one block", () => {
+  const OTHER = "0x2222222222222222222222222222222222222222"
+  const BLOCK = 500
+  const stamp = "2026-11-05T00:00:00.000Z"
+  const reference = (blockNum: number, ethUsd = "200000000000"): Reference => ({ blockNum, ethUsd, usdcUsd: "100000000" })
+  const book = { ...emptyBook(), costs: { [costKey(ME, "opening:ETH")]: usd("1000000000"), [costKey(ME, UNSEEN)]: usd("2000000000") } }
+  const later = (tx: string, token: string, side: LegRow["side"], amount: bigint, kind: LegRow["kind"], counterparty?: string): LegRow => ({ ...at500(tx, token, side, amount, kind, counterparty), block_num: 501 })
+  // 1 ETH costing $1,000, 0.5 sent and some received in one block. Then whatever `then` does in the next.
+  const walletWith = (received: bigint, then: LegRow[], blockRows: LegRow[] = [at500("0xsend", ETH_ADDRESS, "debit", E18 / 2n, "eth", OTHER)], payer?: EthPayer) => {
+    const left = blockRows.reduce((sum, row) => sum + (row.side === "debit" ? BigInt(row.amount) : 0n), 0n)
+    const settled = creditUnseenEth({ rows: [...blockRows, ...then], ethBalances: new Map([[BLOCK - 1, E18.toString()], [BLOCK, (E18 - left + received).toString()]]), feeUnknownTxs: [], gasUnknownBlocks: [], account: ME, fromBlock: BLOCK, through: 501, payers: new Map(payer ? [[BLOCK, payer]] : []), timestampOf: () => stamp })
+    const legs = [...openingLegs({ blockNum: BLOCK - 1, amounts: { ETH: E18.toString() } }, stamp), ...buildPricedLegs({ account: ME, rows: settled, references: [reference(BLOCK), reference(501)], priced: [] })]
+    const moved = then.reduce((sum, row) => sum + (row.token !== ETH_ADDRESS ? 0n : row.side === "debit" ? -BigInt(row.amount) : BigInt(row.amount)), 0n)
+    const usdc = then.filter((row) => row.token === USDC_ADDRESS).reduce((sum, row) => sum + BigInt(row.amount), 0n)
+    return { ...blockOf({ rows: [], before: 0n, after: E18 - left + received + moved, amounts: { USDC: usdc.toString() } }), legs, coverage: { fromBlock: BLOCK, toBlock: 501 } } as WalletResponse
+  }
+  const sale = (eth: bigint, usdcUnits: bigint) => [later("0xsale", ETH_ADDRESS, "debit", eth, "eth"), later("0xsale", USDC_ADDRESS, "credit", usdcUnits, "erc20")]
+  const ethOf = (wallet: WalletResponse, method: "average" | "fifo") => foldBook(wallet, [], method, book).positions.find((p) => p.asset === "ETH")!
+  const methods = ["average", "fifo"] as const
+  const scopes = ["per-wallet", "pooled"] as const
+
+  for (const method of methods) {
+    for (const scope of scopes) {
+      it(`gives a later sale no gain, by ${method} in a ${scope} report`, () => {
+        const wallet = walletWith(E18, sale((3n * E18) / 2n, 3_000_000_000n))
+        assert.equal(ethOf(wallet, method).reconciliation?.status, "reconciled")
+        const rows = taxRows([wallet], { method, scope }, { book }).filter((row) => row.type === "Sold" && row.asset === "ETH")
+        assert.ok(rows.length > 0)
+        assert.ok(rows.every((row) => row.gainMicros === null && row.costMicros === null && row.status === "unresolved"))
+      })
+    }
+
+    it(`keeps a later sale out of the report's gain total, by ${method}`, () => {
+      const report = taxReportOf([walletWith(E18, sale((3n * E18) / 2n, 3_000_000_000n))], { country: "CA", method, scope: "per-wallet" }, { book })
+      assert.ok(BigInt(report.gainMicros ?? "0") === 0n, `gain ${report.gainMicros}`)
+    })
+
+    it(`leaves a later sale's PnL unavailable, by ${method}`, () => {
+      const eth = ethOf(walletWith(E18, sale((3n * E18) / 2n, 3_000_000_000n)), method)
+      assert.equal(eth.values.qty, "0")
+      assert.equal(eth.values.realizedMicros, null)
+    })
+
+    it(`isn't cleared by a tiny arrival being used up in the send, by ${method}`, () => {
+      const eth = ethOf(walletWith(1n, []), method)
+      assert.equal(eth.reconciliation?.status, "reconciled")
+      assert.equal(eth.values.qty, (E18 / 2n + 1n).toString())
+      assert.deepEqual([eth.values.costMicros, eth.values.unrealizedMicros, eth.values.averageCostMicros], [null, null, null])
+    })
+
+    it(`carries no cost to a linked wallet later on, by ${method}`, () => {
+      const sender = walletWith(E18, [later("0xnext", ETH_ADDRESS, "debit", E18, "eth", OTHER)])
+      const received = buildPricedLegs({ account: OTHER, rows: [{ ...later("0xnext", ETH_ADDRESS, "credit", E18, "eth", ME), account: OTHER }], references: [reference(501)], priced: [] })
+      const recipient = { ...blockOf({ account: OTHER, rows: [], before: 0n, after: E18 }), legs: received, coverage: { fromBlock: BLOCK, toBlock: 501 } } as WalletResponse
+      const linked = { ...book, senders: { [ME]: { kind: "mine" as const }, [OTHER]: { kind: "mine" as const } } }
+      const arrived = foldBook(recipient, [sender], method, linked).positions.find((p) => p.asset === "ETH")!.effects[0]!.leg
+      assert.ok(arrived.pieces?.length && arrived.pieces.every((piece) => piece.costMicros === null))
+    })
+
+    it(`gives the same result whichever transaction is named, by ${method}`, () => {
+      const read = (payer?: EthPayer) => {
+        const eth = ethOf(walletWith(E18, sale(E18, 2_000_000_000n), undefined, payer), method)
+        return [eth.values.costMicros, eth.values.realizedMicros, eth.state.lots.map((lot) => [lot.qty, lot.costMicros])]
+      }
+      assert.deepEqual(read(), read({ txHash: "0xguess", sender: OTHER }))
+    })
+
+    it(`loses what was held before when only a fee left, by ${method}`, () => {
+      const fee = [at500("0xfee", ETH_ADDRESS, "debit", E18 / 1000n, "gas")]
+      const eth = ethOf(walletWith(E18, sale(E18 / 2n, 1_000_000_000n), fee), method)
+      assert.equal(eth.values.costMicros, null)
+      assert.equal(eth.values.realizedMicros, null)
+      assert.ok(eth.state.lots.every((lot) => lot.costMicros === null))
+    })
+
+    it(`keeps what the wallet buys afterward at what it paid, by ${method}`, () => {
+      const buy = [later("0xbuy", USDC_ADDRESS, "debit", 2_000_000_000n, "erc20"), later("0xbuy", ETH_ADDRESS, "credit", E18, "eth")]
+      const eth = ethOf(walletWith(E18, buy), method)
+      const bought = eth.effects.find(({ leg }) => leg.txHash === "0xbuy")!.leg
+      assert.deepEqual([bought.costLabel, bought.costMicros], ["paid", "2000000000"])
+      assert.equal(eth.values.costMicros, null, "what's mixed with it still has no cost")
+    })
+  }
+
+  it("leaves a block with nothing else moving ETH alone", () => {
+    const quiet = walletWith(E18, [], [])
+    const eth = ethOf(quiet, "average")
+    assert.equal(eth.values.costMicros, "3000000000")
   })
 })
 

@@ -90,7 +90,7 @@ export function missingRatesLine(count: number, currency: CurrencyCode): string 
 
 /** Why ETH that moved beside ETH nothing shows has an unknown cost. */
 const ORDER_UNKNOWN = {
-  always: "ETH both arrived and left in this block, and nothing says which came first, so what each one cost can't be worked out",
+  always: "ETH both arrived and left in this block, and nothing says which came first, so what each one cost can't be worked out, and neither can what's still held",
   fifo: "ETH arrived more than once in this block, and nothing says which came first, so oldest first can't say what each one cost",
 }
 
