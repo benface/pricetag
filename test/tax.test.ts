@@ -728,9 +728,11 @@ describe("the user's answers in a report", () => {
     it("can take costs from a wallet without listing its sales", () => {
       const giver = walletOf(B, [buy(10, 1n, 1000), sent(hop, A, B)])
       const here = walletOf(A, [arrived(hop, B), sell(30, 1n, 2500)])
-      const report = taxReportOf([here], US, { book: answering({ [B]: { kind: "mine" } }), costsFrom: [giver] })
+      const report = taxReportOf([here], US, { book: answering({ [A]: { kind: "mine" }, [B]: { kind: "mine" } }), costsFrom: [giver] })
       assert.deepEqual(report.wallets, [A])
       assert.deepEqual(eventsOf(report).map((row) => [row.Cost, row.Wallet]), [["1000.000000", A]])
+      const notTheirs = taxReportOf([here], US, { book: answering({ [B]: { kind: "mine" } }), costsFrom: [giver] })
+      assert.deepEqual(eventsOf(notTheirs).map((row) => [row.Cost, row.Status]), [["unknown", "UNRESOLVED"]], "being paid by their wallet doesn't make it theirs")
     })
   })
 
@@ -808,7 +810,7 @@ describe("POST /api/tax-report", () => {
     assert.equal((await post(A, { country: "CA", also: ["nope"] })).status, 400)
     assert.equal((await post(A, { country: "CA", also: Array(21).fill(B) })).status, 400)
     const senders = Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`0x${i.toString(16).padStart(40, "c")}`, { kind: "mine" }]))
-    assert.equal((await post(A, { country: "CA", book: { senders } })).status, 400)
+    assert.equal((await post(A, { country: "CA", book: { senders: { ...senders, [A]: { kind: "mine" } } } })).status, 400)
   })
 
   it("fails rather than leave out a wallet the answers named", async () => {
@@ -886,11 +888,13 @@ describe("POST /api/tax-report on real wallets", () => {
     assert.deepEqual(report.wallets, [C, A, B])
   })
 
-  it("on a wallet nobody's said is theirs, reads the answers' wallets for costs and doesn't list them", async () => {
+  it("on a wallet nobody's said is theirs, doesn't use the answers' wallets or list them", async () => {
     const report = await post(C, { country: "US", book: mine })
     assert.deepEqual(report.wallets, [C])
     assert.equal(report.rowCount, 0)
     assert.ok(!report.notes.some((note) => /wallets you've said are yours/.test(note)))
+    const stranger = await post(B, { country: "US", book: { senders: { [A]: { kind: "mine" }, [C]: { kind: "mine" } } } })
+    assert.deepEqual([stranger.wallets, sale(stranger)?.Cost, sale(stranger)?.Status], [[B], "unknown", "UNRESOLVED"])
   })
 
   it("doesn't let an answered demo wallet in", async () => {

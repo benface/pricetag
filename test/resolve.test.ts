@@ -5,7 +5,7 @@ import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
 import { createWallets, type Source } from "@pricetag/sdk/internal"
 import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, shortHash, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
-import { answerSender, costKey, emptyBook, enterExchangeCosts, linkMessage, parseBook, type Book, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
+import { answerSender, costKey, emptyBook, enterExchangeCosts, linkMessage, linkedWallets, parseBook, type Book, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
 import { matchWithdrawals, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
@@ -382,7 +382,7 @@ describe("the cost of an incoming leg", () => {
         const gasAt = (block: number, tx: string) => move(block, tx, A, "debit", 1000n, null, ETH_ADDRESS)
         const gasRow = (block: number, tx: string): LegRow => ({ ...gasAt(block, tx), kind: "gas" })
         const claimRow = (block: number, tx: string): LegRow => ({ ...move(block, tx, A, "credit", 1000n, null, ETH_ADDRESS), kind: "unwrap" })
-        const answers = book({ [A]: { kind: "mine" }, [STRANGER]: { kind: "someone-else" } })
+        const answers = book({ [A]: { kind: "mine" }, [B]: { kind: "mine" }, [STRANGER]: { kind: "someone-else" } })
 
         type World = {
           rows?: (head: number) => LegRow[]
@@ -1125,6 +1125,78 @@ describe("asking as little as possible", () => {
     const answered = answerSender(emptyBook(), A, B, { kind: "mine" })
     assert.deepEqual(Object.keys(answered.senders).sort(), [A, B].sort())
     assert.deepEqual(answerSender(emptyBook(), "demo", B, { kind: "mine" }).senders, { [B]: { kind: "mine" } })
+  })
+
+  describe("a wallet that isn't the user's", () => {
+    const rows = [...buy(10, "0x1", A, 1000n), ...send(20, "0x2", A, B, 1000n * E6)]
+    const real = (address: string, more: Partial<WalletResponse> = {}) => wallet(address, rows, { mode: "raw", ...more })
+    // They answered this while looking at their own wallet, A or C. B is only someone A paid.
+    const theirs = answerSender(emptyBook(), C, A, { kind: "mine" })
+
+    it("takes no cost from a wallet answered as theirs, and asks", () => {
+      const fold = foldBook(real(B), [real(A)], "average", theirs)
+      const usdc = fold.positions.find((p) => p.asset === "USDC")
+      assert.equal(usdc?.effects[0]?.leg.costLabel, "unknown")
+      assert.equal(usdc?.values.costMicros, null)
+      assert.deepEqual(fold.questions.map((q) => [q.kind, q.sender]), [["sender", A]])
+      assert.match(fold.questions[0]?.evidence[0] as string, /You've said this is your wallet/)
+    })
+
+    it("has nothing waiting on their wallets, and they don't make its books balance", () => {
+      assert.equal(foldBook(real(B), [], "average", theirs).meter.waiting, 0)
+      const quiet = foldBook(wallet(STRANGER, [], { mode: "raw" }), [], "average", theirs).meter
+      assert.deepEqual([quiet.answered, isBalanced(quiet)], [0, false])
+      assert.equal(foldBook(wallet(C, [], { mode: "raw" }), [], "average", theirs).meter.answered, 1, "C is theirs, and A's an answer about it")
+    })
+
+    it("doesn't say one of their wallets failed, because this read doesn't use them", () => {
+      const portfolio = portfolioOf(real(B), "average", [], theirs, [A])
+      assert.deepEqual([portfolio.linkedFailed, portfolio.linkedReading, portfolio.meter.waiting], [[], [], 0])
+      assert.equal(previewBook(real(B), [], "average", theirs, [A]).failed, false)
+    })
+
+    it("inherits once they say it's theirs too", () => {
+      const said = answerSender(theirs, B, A, { kind: "mine" })
+      assert.deepEqual([said.senders[A], said.senders[B]], [{ kind: "mine" }, { kind: "mine" }])
+      const usdc = position(real(B), [real(A)], said)
+      assert.equal(usdc.effects[0]?.leg.costLabel, "inherited")
+      assert.equal(usdc.values.costMicros, "1000000000")
+    })
+
+    it("is received at market once they say it isn't, and their wallet stays theirs", () => {
+      const said = answerSender(theirs, B, A, { kind: "someone-else" })
+      assert.deepEqual(said.senders, { [A]: { kind: "mine" }, [C]: { kind: "mine" }, [B]: { kind: "someone-else" } })
+      const fold = foldBook(real(B), [real(A)], "average", said)
+      const usdc = fold.positions.find((p) => p.asset === "USDC")
+      assert.equal(usdc?.effects[0]?.leg.costLabel, "received at market")
+      assert.equal(usdc?.values.costMicros, "1000000000")
+      assert.deepEqual(fold.questions, [])
+      assert.ok(isBalanced(fold.meter), "that was the last thing to answer")
+      assert.ok(linkedWallets(said).includes(A))
+      // And what B sends one of their wallets later is still what it was worth to them.
+      const back = [...rows, ...send(30, "0x3", B, C, 1000n * E6)]
+      const mine = foldBook(wallet(C, back, { mode: "raw" }), [], "average", said).positions.find((p) => p.asset === "USDC")
+      assert.equal(mine?.effects[0]?.leg.costLabel, "received at market")
+    })
+
+    it("still carries between wallets a client vouches for, and within one wallet", () => {
+      const usdc = position(real(B), [real(A)], { ...emptyBook(), linked: [A] })
+      assert.equal(usdc.effects[0]?.leg.costLabel, "inherited")
+      const answered = position(real(B), [real(A), real(C)], { ...theirs, linked: [A] })
+      assert.equal(answered.effects[0]?.leg.costLabel, "inherited")
+    })
+
+    it("treats the demo as theirs, which nobody answers for", () => {
+      const answered = { ...emptyBook(), senders: { [DEMO_SAVINGS_ADDRESS]: { kind: "mine" as const } } }
+      const { positions } = foldBook(DEMO_WALLET, [DEMO_SAVINGS_WALLET], "average", answered)
+      assert.ok(positions.flatMap((p) => p.effects).some(({ leg }) => leg.costLabel === "inherited"))
+    })
+
+    it("answers someone else as before when the sender isn't already theirs", () => {
+      assert.deepEqual(answerSender(emptyBook(), B, A, { kind: "someone-else" }).senders, { [A]: { kind: "someone-else" } })
+      const own = answerSender(emptyBook(), C, A, { kind: "mine" })
+      assert.deepEqual(answerSender(own, C, A, { kind: "someone-else" }).senders, { [A]: { kind: "someone-else" }, [C]: { kind: "mine" } }, "on their own wallet it's a change of mind")
+    })
   })
 
   it("the meter drops with each answer, and counts what's answered", () => {

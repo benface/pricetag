@@ -3,7 +3,7 @@
 
 import { TOKENS, answerToMicros, worth, type CurrencyCode, type WalletView, type LegEffect, type Method, type Position, type PricedLeg, type Reference } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
-import { emptyBook, linkedWallets, type Book } from "../src/core/book.ts"
+import { emptyBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { describeConversion, describeEffect, describeNetting, explainTarget, missingRatesLine, rateSource, type ExplainContext, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
 import { foldBook, missingWallets, type Question } from "../src/core/resolve.ts"
 import { differenceOf, whySentence, type PricingRule, type RuleComparison, type RuleRow, type RuleTransaction } from "../src/core/rules.ts"
@@ -52,7 +52,7 @@ const linkingTo = (others: readonly WalletResponse[]): Book => ({ ...emptyBook()
 export function portfolioOf(wallet: WalletResponse, method: Method, others: readonly WalletResponse[] = [], book: Book = linkingTo(others), failed: readonly string[] = []): PortfolioResponse {
   const { view, positions, unread, totals, pnlStatus, points, holdComparison, questions, meter, withheld } = foldBook(wallet, others, method, book)
   const missing = missingWallets(book, wallet, others)
-  const linkedFailed = linkedWallets(book).filter((address) => failed.includes(address))
+  const linkedFailed = walletsBehind(book, wallet).filter((address) => failed.includes(address))
   return {
     address: wallet.address,
     mode: wallet.mode,

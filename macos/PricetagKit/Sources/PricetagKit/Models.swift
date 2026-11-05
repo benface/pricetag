@@ -577,9 +577,14 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
         self.withdrawals = withdrawals
     }
 
-    /// Saying a sender's yours says the wallet you're looking at is yours too.
+    /// Saying a sender's yours says the wallet you're looking at is yours too. Saying someone else sent what arrived from a wallet
+    /// that's already yours is about the wallet you're looking at, and yours stays yours.
     public func answering(_ sender: String, _ answer: SenderAnswer, focus: String?) -> Book {
         var next = self
+        if answer.kind == .someoneElse, senders[sender.lowercased()]?.kind == .mine, let focus, WalletAddress.isValid(focus), senders[focus.lowercased()]?.kind != .mine {
+            next.senders[focus.lowercased()] = answer
+            return next
+        }
         next.senders[sender.lowercased()] = answer
         if answer.kind == .mine, let focus, WalletAddress.isValid(focus) { next.senders[focus.lowercased()] = .mine }
         return next
@@ -627,6 +632,11 @@ extension ExchangeWithdrawal: Hashable {}
 public enum WalletAddress {
     /// What the server accepts in place of an address, to read its fixtures.
     public static let demo = "demo"
+
+    /// Whether the server reads this from its fixtures, which it also does for the fixtures' own addresses.
+    public static func isDemo(_ value: String) -> Bool {
+        [demo, "0x00000000000000000000000000000000000de300", "0x00000000000000000000000000000000000de301"].contains(value.lowercased())
+    }
 
     public static func isValid(_ value: String) -> Bool {
         value.wholeMatch(of: /0x[0-9a-fA-F]{40}/) != nil

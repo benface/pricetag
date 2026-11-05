@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http"
 import { isAddress, isCurrencyCode, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createWallets, describeError, followChain, followRawSql, followSql, readHeadMark, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
-import { emptyBook, linkedWallets, parseBook, type Book } from "../src/core/book.ts"
+import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fixtures.ts"
@@ -265,11 +265,11 @@ export function createApi(env: Env, created: Created | null = createSource(env))
    * The linked wallets already read, in `currency`. Never waits on a first read, because it can take a while and a number
    * shouldn't: it starts the read, and what came from that wallet stays unresolved until the next request finds it.
    */
-  async function linkedOf(focus: string, books: readonly Book[], currency: CurrencyCode, rule: (typeof rules)[number] | null, res: ServerResponse): Promise<WalletResponse[] | null> {
-    const addresses = new Set(books.flatMap(linkedWallets))
+  async function linkedOf(focus: WalletResponse, books: readonly Book[], currency: CurrencyCode, rule: (typeof rules)[number] | null, res: ServerResponse): Promise<WalletResponse[] | null> {
+    const addresses = new Set(books.flatMap((book) => walletsBehind(book, focus)))
     const read: WalletResponse[] = []
     for (const address of addresses) {
-      if (address === focus.toLowerCase()) continue
+      if (address === focus.address.toLowerCase()) continue
       let wallet = address === DEMO_ADDRESS ? DEMO_WALLET : demoWallet(address)
       const from = rule?.wallets ?? wallets
       if (!wallet && from) {
@@ -341,7 +341,7 @@ export function createApi(env: Env, created: Created | null = createSource(env))
       const known = Array.isArray(body.linked) ? body.linked : []
       if (!known.every((address) => typeof address === "string" && isAddress(address))) return sendJson(res, 400, { error: "Linked wallets are a list of Base addresses." })
       const linking = { ...book, linked: known.map((address: string) => address.toLowerCase()) }
-      return compare(match[1] as string, currency, method, linkedWallets(linking), res, linking)
+      return compare(match[1] as string, currency, method, walletsBehind(linking, { address: match[1] as string }), res, linking)
     }
 
     const read = await readWallet(match[1] as string, res, { fresh: action === undefined, rule })
@@ -351,7 +351,7 @@ export function createApi(env: Env, created: Created | null = createSource(env))
     const known: unknown[] = wallet.mode === "demo" || !Array.isArray(body.linked) ? [] : body.linked
     if (!known.every((address) => typeof address === "string" && isAddress(address))) return sendJson(res, 400, { error: "Linked wallets are a list of Base addresses." })
     const linkedBooks = books.map((one) => ({ ...one, linked: (known as string[]).map((address) => address.toLowerCase()) }))
-    const others = await linkedOf(wallet.address, linkedBooks, currency, rule, res)
+    const others = await linkedOf(wallet, linkedBooks, currency, rule, res)
     if (!others) return
 
     if (action === "preview") return sendJson(res, 200, { previews: linkedBooks.map((candidate) => previewBook(wallet, others, method, candidate, [...linkedFailures])) })
@@ -369,8 +369,8 @@ export function createApi(env: Env, created: Created | null = createSource(env))
 
   /**
    * Answers with a report on `address`, the wallets typed in with it, and the ones the answers say are the user's, because
-   * those are in what the apps show. On a wallet nobody's said is theirs, like one being watched, the answers still decide
-   * its costs, so they're read for that, but their sales aren't this wallet's to list. Demo data and real data never mix.
+   * those are in what the apps show. A wallet nobody's said is theirs, like one being watched, takes no costs from them, so
+   * they aren't read or listed. The demo's own wallets are read for its costs without being listed. Demo data and real data never mix.
    */
   async function taxReport(address: string, choices: { country: unknown; method: unknown; scope: unknown }, also: readonly string[], currency: CurrencyCode, book: Book, res: ServerResponse): Promise<void> {
     const { country } = choices
@@ -393,7 +393,8 @@ export function createApi(env: Env, created: Created | null = createSource(env))
     // The demo's wallets start at different blocks, so their costs couldn't be worked out together, and its report stays its own.
     const own = !isDemo(focus) && (others.length > 0 || answered.includes(focus))
     const listed = new Set([focus, ...others, ...(own ? answered : [])])
-    const costsFrom = own ? [] : answered.filter((wallet) => !listed.has(wallet) && wallet !== (focus === "demo" ? DEMO_ADDRESS : focus))
+    // Anyone else's wallet takes nothing from the user's, so only the demo needs them.
+    const costsFrom = isDemo(focus) ? answered.filter((wallet) => !listed.has(wallet) && wallet !== (focus === "demo" ? DEMO_ADDRESS : focus)) : []
     if (others.length > MAX_OTHER_WALLETS || listed.size - 1 + costsFrom.length > MAX_OTHER_WALLETS) return sendJson(res, 400, { error: `A report can add up to ${MAX_OTHER_WALLETS} other wallets.` })
 
     // One at a time, because a read that fails answers the request. A report never quietly leaves a wallet out.

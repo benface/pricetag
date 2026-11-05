@@ -107,6 +107,7 @@ enum TestScene: String, CaseIterable {
     case mainDetailsCAD = "main-details-cad"
     case resolve
     case resolveCostWithheld = "resolve-cost-withheld"
+    case resolveAnsweredWallet = "resolve-answered-wallet"
     case changeWallet = "change-wallet"
     case popover
     case popoverNoWallet = "popover-no-wallet"
@@ -158,7 +159,7 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
+        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
              .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
@@ -173,6 +174,7 @@ enum TestScene: String, CaseIterable {
         case .mainNotUpdating, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
         case .mainCostWithheld, .resolveCostWithheld: .costWithheld
+        case .resolveAnsweredWallet: .answeredWallet
         case .mainEmpty, .mainEmptySmallest: .empty
         case .mainEmptyNotice: .emptyReadingLinked
         case .mainNotStarted, .popoverNotStarted: .notStarted
@@ -222,6 +224,7 @@ enum TestScene: String, CaseIterable {
         var registered: [String: Any] = ["currency": currency.rawValue]
         if hasWallet { registered["wallet"] = usesDemoWallet ? WalletAddress.demo : TestScene.emptyWallet }
         if self == .sendKnown, let book = try? JSONEncoder().encode(Book().answering(TestScene.recipient, .someoneElse, focus: nil)) { registered["answers"] = book }
+        if self == .resolveAnsweredWallet, let book = try? JSONEncoder().encode(Book().answering(TestScene.answeredWallet, .mine, focus: nil)) { registered["answers"] = book }
         defaults.register(defaults: registered)
         let source = FixtureSource(feed: feed)
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: .milliseconds(50), unreachableDelay: .seconds(30))
@@ -246,14 +249,14 @@ enum TestScene: String, CaseIterable {
 
         let isReady: () -> Bool = { [feed] in
             switch feed {
-            case .demo, .linkedFails, .costWithheld, .empty, .emptyReadingLinked, .notStarted: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .linkedFails, .costWithheld, .answeredWallet, .empty, .emptyReadingLinked, .notStarted: store.feed == .noWallet || store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
             case .stopsAnswering: store.feed == .serverUnreachable && store.portfolio != nil
             }
         }
         switch self {
-        case .resolve, .resolveCostWithheld:
+        case .resolve, .resolveCostWithheld, .resolveAnsweredWallet:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .holdComparison:
             return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
@@ -298,6 +301,7 @@ enum TestScene: String, CaseIterable {
 
     private static let recipient = "0x0000000000000000000000000000000000c0ffee"
     private static let emptyWallet = "0x00000000000000000000000000000000000de301"
+    private static let answeredWallet = "0x00000000000000000000000000000000000de301"
 }
 
 /// The card in each state it can be in, from what `test/hold.test.ts` wrote.
@@ -330,7 +334,7 @@ private final class ReadOnce {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, empty, emptyReadingLinked, notStarted }
+    enum Feed { case demo, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, answeredWallet, empty, emptyReadingLinked, notStarted }
 
     private let feed: Feed
     private let reads = Mutex(0)
@@ -355,6 +359,15 @@ final class FixtureSource: PortfolioSource {
                 object["withheld"] = [["wallet": "0x00000000000000000000000000000000000de301", "asset": "USDC"]]
                 let asked: [String: Any] = ["id": "cost:0xdemo:0xwithheld:USDC", "kind": "cost", "wallet": object["address"] ?? "", "receipts": [["wallet": object["address"] ?? "", "legId": "0xwithheld:USDC", "asset": "USDC", "units": "500000000"]], "costKey": "0xdemo:0xwithheld:USDC", "noteAbout": NSNull(), "needsCost": false, "arrivals": [["asset": "USDC", "decimals": 6, "units": "500000000"]], "transfers": 1, "firstAt": "2026-11-04T12:00:00.000Z", "lastAt": "2026-11-04T12:00:00.000Z", "evidence": ["0x0000…e301, your wallet, sent this, and its USDC history can't be confirmed"], "valueMicros": "500000000"]
                 object["questions"] = [asked] + (object["questions"] as? [[String: Any]] ?? [])
+            }
+        case .answeredWallet:
+            // What a wallet being read gets asked about one of the user's own wallets, which isn't what the demo itself would ask.
+            return try demo { object in
+                var questions = object["questions"] as? [[String: Any]] ?? []
+                guard var first = questions.first else { return }
+                first["evidence"] = ["You've said this is your wallet. Choose My wallet if the one you're looking at is yours too, or Someone else if it isn't."]
+                questions[0] = first
+                object["questions"] = questions
             }
         case .empty: return try newWallet(started: true, readingLinked: false, address: address)
         case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: address)

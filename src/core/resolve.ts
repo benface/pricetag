@@ -6,7 +6,7 @@
 
 import { applyLegTaking, emptyPosition, foldWallet, formatAmount, historyGaps, lessPaidAt, normalizeAddress, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "./api.ts"
-import { costKey, linkedWallets, type Book, type ExchangeCost, type Money, type Receipt } from "./book.ts"
+import { costKey, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Receipt, type SenderAnswer } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
 
@@ -225,7 +225,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const pieces = (sources ?? []).flatMap(({ address: sender, units: part }): CostPiece[] => {
       const unknown: CostPiece = { qty: part.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" }
       const answer = book.senders[sender]
-      if (answer?.kind === "mine" || linked.has(sender) || sender === address) {
+      if (sender === address || (linked.has(sender) && isOwnWallet(book, wallet))) {
         if (!read.has(sender)) {
           unvouched.push({ sender, settled: false })
           return [unknown]
@@ -245,7 +245,8 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
         return [unknown]
       }
       // A bridge or a mint could be the user's own money arriving from elsewhere. Only an answer says it came from someone else.
-      const given = answer?.kind === "someone-else"
+      // Their wallet sent it to a wallet they've said isn't theirs, so that wallet got it from someone else.
+      const given = answer?.kind === "someone-else" || (answer?.kind === "mine" && book.senders[address]?.kind === "someone-else")
       const someoneElse = given || knownSender(sender)?.kind === "bridge" || sender === MINT_ADDRESS
       if (someoneElse) {
         if (leg.priceMicros === null) return [unknown]
@@ -322,8 +323,8 @@ export const isBalanced = ({ open, answered, waiting }: Meter) => open === 0 && 
 
 const day = (timestamp: string) => new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
 
-function evidenceFor(sender: string, sides: readonly Side[], known: KnownSender | null): string[] {
-  const evidence = known ? [`From a ${known.name} address`] : []
+function evidenceFor(sender: string, sides: readonly Side[], known: KnownSender | null, book: Book): string[] {
+  const evidence = [...(known ? [`From a ${known.name} address`] : []), ...(book.senders[sender]?.kind === "mine" ? ["You've said this is your wallet. Choose My wallet if the one you're looking at is yours too, or Someone else if it isn't."] : [])]
   const sends = sides
     .flatMap(({ view }) => view.legs)
     .filter((leg) => BigInt(leg.delta) < 0n && leg.kind === "transfer" && leg.parts.some((p) => p.counterparty && normalizeAddress(p.counterparty) === sender))
@@ -357,7 +358,7 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
       transfers: 0,
       firstAt: leg.timestamp,
       lastAt: leg.timestamp,
-      evidence: sender ? evidenceFor(sender, sides, known) : (evidence ?? []),
+      evidence: sender ? evidenceFor(sender, sides, known, book) : (evidence ?? []),
       valueMicros: null,
       first: { leg, units },
       arrived: new Map<string, Arrival>(),
@@ -390,9 +391,11 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
     })
 }
 
-export function meterOf(questions: readonly Question[], book: Book, focus: string, waiting: number): Meter {
+export function meterOf(questions: readonly Question[], book: Book, focus: WalletResponse, waiting: number): Meter {
   const open = new Set(questions.map((q) => q.sender).filter((s) => s !== null))
-  const senders = Object.keys(book.senders).filter((address) => address !== normalizeAddress(focus) && !open.has(address)).length
+  // Saying a wallet's yours has no bearing on one that isn't, so it can't make this one's books balance. This one being yours is what follows from an answer, not an answer.
+  const counts = (address: string, answer: SenderAnswer) => answer.kind !== "mine" || (isOwnWallet(book, focus) && address !== normalizeAddress(focus.address))
+  const senders = Object.entries(book.senders).filter(([address, answer]) => !open.has(address) && counts(address, answer)).length
   return { open: questions.length, answered: senders + Object.keys(book.costs).length, waiting }
 }
 
@@ -417,7 +420,7 @@ export type BookFold = {
  */
 export function foldBook(focus: WalletResponse, others: readonly WalletResponse[], method: Method, book: Book, { usd = false } = {}): BookFold {
   const address = normalizeAddress(focus.address)
-  const linked = new Set(linkedWallets(book))
+  const linked = new Set(walletsBehind(book, focus))
   const sideOf = (wallet: WalletResponse): Side => ({ wallet, view: usd ? usdView(wallet) : viewWallet(wallet) })
   const sides = [focus, ...others.filter((w) => normalizeAddress(w.address) !== address && linked.has(normalizeAddress(w.address)) && sameRead(w, focus))].map(sideOf)
   const view = (sides[0] as Side).view
@@ -437,7 +440,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
     points,
     holdComparison,
     questions,
-    meter: meterOf(questions, book, address, missingWallets(book, focus, others).length),
+    meter: meterOf(questions, book, focus, missingWallets(book, focus, others).length),
     withheld: withheldIn(legs).filter(({ wallet }) => wallet !== address),
   }
 }
@@ -461,11 +464,11 @@ export const readsMatching = (reads: Readonly<Record<string, WalletResponse>>, a
 /** The linked wallets a book needs that aren't in `read`, or were read another way. */
 export const missingWallets = (book: Book, focus: WalletResponse, read: readonly WalletResponse[]) => {
   const have = new Set([normalizeAddress(focus.address), ...read.filter((w) => sameRead(w, focus)).map((w) => normalizeAddress(w.address))])
-  return linkedWallets(book).filter((address) => !have.has(address))
+  return walletsBehind(book, focus).filter((address) => !have.has(address))
 }
 
 /** What a different set of answers would make the headline say, before any of them is final. */
 export function previewBook(focus: WalletResponse, others: readonly WalletResponse[], method: Method, book: Book, failed: readonly string[] = []): BookPreview {
   const { totals, pnlStatus: status, questions } = foldBook(focus, others, method, book)
-  return { pnlMicros: totals.pnlMicros, pnlStatus: status, estimatedMicros: totals.estimatedMicros, unresolvedMicros: totals.unresolvedMicros, open: questions.length, pending: missingWallets(book, focus, others).length > 0, failed: linkedWallets(book).some((address) => failed.includes(address)) }
+  return { pnlMicros: totals.pnlMicros, pnlStatus: status, estimatedMicros: totals.estimatedMicros, unresolvedMicros: totals.unresolvedMicros, open: questions.length, pending: missingWallets(book, focus, others).length > 0, failed: walletsBehind(book, focus).some((address) => failed.includes(address)) }
 }

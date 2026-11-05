@@ -40,8 +40,14 @@ export const emptyBook = (): Book => ({ senders: {}, costs: {}, withdrawals: [] 
 
 export const costKey = (wallet: string, legId: string) => `${normalizeAddress(wallet)}:${legId}`
 
-/** Answering for a sender. Saying it's yours says the wallet you're looking at is yours too. */
+/**
+ * Answering for a sender. Saying it's yours says the wallet you're looking at is yours too. Saying someone else sent what
+ * arrived from a wallet that's already yours is about the wallet you're looking at, and yours stays yours.
+ */
 export function answerSender(book: Book, focus: string, sender: string, answer: SenderAnswer): Book {
+  if (answer.kind === "someone-else" && book.senders[normalizeAddress(sender)]?.kind === "mine" && isAddress(focus) && book.senders[normalizeAddress(focus)]?.kind !== "mine") {
+    return { ...book, senders: { ...book.senders, [normalizeAddress(focus)]: answer } }
+  }
   const senders: Book["senders"] = { ...book.senders, [normalizeAddress(sender)]: answer }
   if (answer.kind === "mine" && isAddress(focus)) senders[normalizeAddress(focus)] = { kind: "mine" }
   return { ...book, senders }
@@ -55,6 +61,15 @@ export function enterExchangeCosts(book: Book, focus: string, sender: string, re
 }
 
 export const linkedWallets = (book: Book) => [...new Set([...Object.entries(book.senders).flatMap(([address, answer]) => (answer.kind === "mine" ? [address] : [])), ...(book.linked ?? [])])]
+
+/**
+ * Whether a wallet's the user's own, which is what lets costs carry onto it. Having been paid by one of their wallets doesn't
+ * make it so, because they could have paid anyone. A client only sends `linked` for its own, and the demo stands in for theirs.
+ */
+export const isOwnWallet = (book: Book, { address, mode }: { address: string; mode?: string }) => mode === "demo" || (book.linked?.length ?? 0) > 0 || linkedWallets(book).includes(normalizeAddress(address))
+
+/** The user's wallets a read of this one goes with. A wallet that isn't theirs has nothing to do with them. */
+export const walletsBehind = (book: Book, wallet: { address: string; mode?: string }) => (isOwnWallet(book, wallet) ? linkedWallets(book) : [])
 
 const plainRecord = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
 

@@ -287,10 +287,9 @@ public final class PortfolioStore {
         return kept
     }
 
-    /// What goes along with a read. A wallet being watched could be anyone's, and it didn't get its costs from this user's accounts
-    /// just because they sent it something, so it only gets what's actually been answered.
+    /// What goes along with a read. The demo isn't anyone's, and demo data and real data never mix, so it doesn't get this user's accounts.
     private func bookToSend(_ book: Book, for address: String) -> Book {
-        book.linkedWallets.contains(address) ? book : book.unlinking(linkedWallets)
+        WalletAddress.isDemo(address) ? book.unlinking(linkedWallets) : book
     }
 
     /// What these answers would do to the headline. Nothing's kept, so asking changes nothing.

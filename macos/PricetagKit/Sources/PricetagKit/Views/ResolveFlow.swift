@@ -47,7 +47,7 @@ public struct ResolveFlow: View {
         .onAppear { isFocused = true }
         .onKeyPress(keys: ["1", "2", "3"]) { press in
             guard let question = model.current, question.kind == .sender, !isTakingCost(question) else { return .ignored }
-            let options = Ownership.allCases
+            let options = model.options
             guard let index = Int(press.characters), options.indices.contains(index - 1) else { return .ignored }
             model.answer(options[index - 1])
             return .handled
@@ -157,7 +157,7 @@ public struct ResolveFlow: View {
         VStack(alignment: .leading, spacing: 14) {
             arrived(question)
             VStack(spacing: 8) {
-                ForEach(Array(Ownership.allCases.enumerated()), id: \.element) { index, ownership in
+                ForEach(Array(model.options.enumerated()), id: \.element) { index, ownership in
                     answerButton(ownership, key: index + 1)
                 }
             }
@@ -199,7 +199,7 @@ public struct ResolveFlow: View {
     private var dragged: String? {
         if drag.width > 40 { return Ownership.mine.title }
         if drag.width < -40 { return Ownership.someoneElse.title }
-        if drag.height < -40 { return Ownership.myExchange.title }
+        if drag.height < -40, model.options.contains(.myExchange) { return Ownership.myExchange.title }
         if drag.height > 40 { return "Skip" }
         return nil
     }

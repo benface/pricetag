@@ -33,6 +33,16 @@ actor BookSource: PortfolioSource {
         return previewAnswers
     }
 
+    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String {
+        books.append(book)
+        return ""
+    }
+
+    func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison {
+        books.append(book)
+        throw FetchError.unreachable
+    }
+
     func importCoinbase(csv: String) async throws -> ExchangeImport {
         ExchangeImport(withdrawals: [ExchangeWithdrawal(exchange: "Coinbase", asset: "ETH", units: "1", at: "2026-11-04T00:00:00.000Z", cost: Money(micros: "5", currency: .USD), toAddress: nil)], skipped: 1)
     }
@@ -302,18 +312,72 @@ actor BookSource: PortfolioSource {
         #expect(store.book.senders[wallet]?.kind == .mine)
     }
 
-    @Test func aWatchedWalletDoesntTakeCostsFromTheseAccounts() async throws {
+    @Test func aWatchedWalletIsntLinkedToTheseAccounts() async throws {
         let (store, source, _) = try makeStore()
         let watched = "0x00000000000000000000000000000000000000cc"
         store.setWallet(watched)
         store.stop()
         store.setLinkedWallets([wallet])
+        #expect(store.linked(for: watched).isEmpty)
         await _ = store.poll()
-        #expect(await source.books.last?.senders[wallet] == nil)
-        store.setBook(store.book.answering(sender, .mine, focus: watched))
+        #expect(await source.books.last?.senders[watched] == nil, "the server goes by this, so it won't carry costs onto it")
+        store.setBook(store.book.answering(wallet, .mine, focus: watched))
         store.stop()
         await _ = store.poll()
-        #expect(await source.books.last?.senders[wallet]?.kind == .mine, "they've said this one's theirs too")
+        #expect(await source.books.last?.senders[watched]?.kind == .mine, "they've said this one's theirs too")
+    }
+
+    @Test(arguments: [WalletAddress.demo, "0x00000000000000000000000000000000000de300", "0x00000000000000000000000000000000000de301"])
+    func theDemoNeverGetsTheseAccounts(demo: String) async throws {
+        let (store, source, _) = try makeStore()
+        let saving = "0x00000000000000000000000000000000000de301"
+        store.setWallet(demo)
+        store.stop()
+        store.setLinkedWallets([wallet])
+        store.setBook(store.book.answering(saving, .mine, focus: nil))
+        store.stop()
+        let expected = Book().answering(saving, .mine, focus: nil)
+        #expect(store.linked(for: demo).isEmpty)
+
+        await _ = store.poll()
+        #expect(await source.books.last == expected, "its own answer stays, and that's what it inherits from")
+        _ = try await store.previews(of: [store.book])
+        #expect(await source.previewed.last == [expected])
+        _ = try await store.exportCSV()
+        #expect(await source.books.last == expected)
+        _ = try? await store.comparison()
+        #expect(await source.books.last == expected)
+        #expect(store.explanationRequest(for: .asset("ETH", .value))?.book == expected)
+        #expect(store.book.senders[wallet]?.kind == .mine, "it's still an account, for anything that isn't the demo")
+    }
+
+    @Test func sayingAWatchedWalletGotItFromSomeoneElseLeavesYoursAlone() throws {
+        let watched = "0x00000000000000000000000000000000000000cc"
+        let book = Book().answering(sender, .mine, focus: wallet).answering(sender, .someoneElse, focus: watched)
+        #expect(book.senders[sender]?.kind == .mine)
+        #expect(book.senders[wallet]?.kind == .mine)
+        #expect(book.senders[watched]?.kind == .someoneElse)
+        #expect(book.answering(sender, .mine, focus: watched).senders[watched]?.kind == .mine, "they can still change their mind")
+        #expect(Book().answering(sender, .someoneElse, focus: watched).senders == [sender: .someoneElse], "that's only about a sender already said to be theirs")
+    }
+
+    @Test func aSenderSaidToBeAWalletCantAlsoBeAnExchange() async throws {
+        let portfolio = try demoPortfolio()
+        let (store, source, _) = try makeStore([portfolio])
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        let first = try #require(model.current?.sender)
+        #expect(model.options == Ownership.allCases)
+        store.setBook(store.book.answering(first, .mine, focus: nil))
+        await _ = store.poll()
+        #expect(model.current?.sender == first, "this fixture keeps asking, as a wallet that isn't theirs would")
+        #expect(model.options == [.mine, .someoneElse])
+        model.answer(.myExchange)
+        #expect(store.book.senders[first]?.kind == .mine)
+        #expect(!model.isAskingCost)
+        await source.answerPreviews([BookPreview(pnlMicros: "1", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false, failed: false), BookPreview(pnlMicros: "2", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false, failed: false)])
+        await model.loadPreviews()
+        #expect(model.previews.keys.sorted { $0.rawValue < $1.rawValue } == [.mine, .someoneElse])
     }
 
     func question(receipts: [CostReceipt], noteAbout: String? = "0x" + String(repeating: "cd", count: 32)) -> Question {
