@@ -25,6 +25,10 @@ if (params.get("many")) accounts.push({ address: "0x2c4e6a8b0d1f3a5c7e9b1d3f5a7c
 const scene = params.get("scene") ?? "route"
 const signer = mockSigner(accounts, { check: params.get("look") ? "look-on-device" : "shown-on-device" })
 
+// For checking what the device was asked, and `&holds=1` is a device that keeps showing an address until someone answers.
+Object.assign(window, { deviceHarnessShown: signer.shown })
+if (params.get("holds")) signer.showAddress = (account) => (signer.shown.push(account.address), new Promise(() => {}))
+
 const connectors: Connectors = {
   canUseUsb: () => params.get("usb") !== "no",
   preloadLedger: () => {},
@@ -38,7 +42,7 @@ const connectors: Connectors = {
   send: async () => `0x${"ab".repeat(32)}`,
 }
 
-const chosen = scene === "check" || scene === "ready" ? (accounts[1] as SeenAccount).address : (accounts[0] as SeenAccount).address
+const chosen = scene === "check" || scene === "ready" || scene === "handoff" ? (accounts[1] as SeenAccount).address : (accounts[0] as SeenAccount).address
 
 const root = createRoot(document.getElementById("root") as HTMLElement)
 
@@ -56,6 +60,6 @@ if (scene === "code") {
     onView={() => {}}
     onClose={() => {}}
     connectors={connectors}
-    {...(scene === "route" ? {} : { start: { signer, accounts, chosen, step: scene as "accounts", ...(params.get("look") ? { lookOnDevice: true } : {}) } })}
+    {...(scene === "route" ? {} : { start: { signer, accounts, chosen, step: scene === "handoff" ? "check" : (scene as "accounts"), ...(scene === "handoff" ? { handingOff: true } : {}), ...(params.get("look") ? { lookOnDevice: true } : {}) } })}
   />,
 )

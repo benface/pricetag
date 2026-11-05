@@ -6,7 +6,7 @@ import { readColdRequest, transferRequest, type ColdAccount, type ColdRequest, t
 import { accountsToLink, isFresh, readCheckedAccounts, rememberCheckedAccount, selectedAccount, type AccountActivity, type CheckedAccount, type SeenAccount } from "../core/device-accounts.ts"
 import { addToMacLink, usdMicrosOf, type DeviceLink } from "../core/device-link.ts"
 import { amountForUsd, checkSend, parseAmount, readActivity, readEthPriceMicros, type SendCheck } from "../core/device-read.ts"
-import { CHECK_ADDRESS_WARNING, NEVER_ASKED, PROMPTS, PUBLISH_DETAIL, PUBLISH_DEVICE_NOTE, PUBLISH_WARNING, WRONG_PUBLISHER, groupAddress } from "../core/device-wording.ts"
+import { CHECK_ADDRESS_WARNING, KEYSTONE_CONNECT, KEYSTONE_LOOK, LEDGER_HANDED_OFF, LEDGER_HAND_OFF, LEDGER_NEEDS_CHROMIUM, LEDGER_READY, LEDGER_VERIFY, LOOK_HANDED_OFF, NEVER_ASKED, PROMPTS, PUBLISH_DETAIL, PUBLISH_DEVICE_NOTE, PUBLISH_WARNING, WRONG_PUBLISHER, groupAddress } from "../core/device-wording.ts"
 import type { BrowserWallet } from "./devices/browser.ts"
 import { realConnectors, type Connectors } from "./devices/connectors.ts"
 import type { ScannedCode } from "./devices/keystone.ts"
@@ -30,7 +30,7 @@ const activityWords = (activity: AccountActivity) => {
 /** Waits on the person: what's being shown, and what's expected back. */
 type Exchange = { code: ScannedCode; expected: string; resolve: (code: ScannedCode) => void; reject: (reason: Error) => void }
 
-type Step = "route" | "keystone" | "accounts" | "check" | "ready" | "send" | "publish" | "sent"
+type Step = "route" | "ledger" | "keystone" | "accounts" | "check" | "ready" | "send" | "publish" | "sent"
 
 type Props = {
   link: DeviceLink | null
@@ -42,14 +42,14 @@ type Props = {
   onClose: () => void
   connectors?: Connectors
   /** A test page starts partway through. */
-  start?: { signer: ColdSigner; accounts: SeenAccount[]; chosen: string; step: Step; lookOnDevice?: boolean }
+  start?: { signer: ColdSigner; accounts: SeenAccount[]; chosen: string; step: Step; lookOnDevice?: boolean; handingOff?: boolean }
 }
 
 /** The one place the web app reaches a hardware wallet. Keys stay on the device: this only ever sees addresses and signatures. */
 export function DevicePanel({ link, book, onLink, onView, onClose, connectors = realConnectors, start }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
-  const [step, setStep] = useState<Step>(start?.step ?? "route")
+  const [step, setStep] = useState<Step>(start?.step ?? (link?.kind === "add-savings" && link.device === "ledger" && connectors.canUseUsb() ? "ledger" : "route"))
   const [signer, setSigner] = useState<ColdSigner | null>(start?.signer ?? null)
   const [wallets, setWallets] = useState<BrowserWallet[]>([])
   const [accounts, setAccounts] = useState<SeenAccount[]>(start?.accounts ?? [])
@@ -61,11 +61,13 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
   const [problem, setProblem] = useState<string | null>(null)
   const [lookOnDevice, setLookOnDevice] = useState(start?.lookOnDevice ?? false)
   const [matches, setMatches] = useState(false)
+  // Sending an address to the Mac app, which is where it gets checked against what the device shows now.
+  const [handingOff, setHandingOff] = useState(start?.handingOff ?? false)
   const [checked, setChecked] = useState<CheckedAccount[]>(readCheckedAccounts)
   const [exchange, setExchange] = useState<Exchange | null>(null)
   const [sent, setSent] = useState<{ hash: string; status: "pending" | "done" | "failed"; what: string } | null>(null)
 
-  const purpose = link ? "send" : "receive"
+  const purpose = link && link.kind !== "add-savings" ? "send" : "receive"
   // A note counts for whoever sends it, so it can only ever come from the wallet it's about.
   const required = link?.kind === "publish" ? link.wallet : null
   const account = accounts.find((a) => a.address === chosen && (required === null || a.address === required)) ?? null
@@ -149,6 +151,19 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
     })
   }
 
+  /** Goes with the link to the Mac app, so that a Ledger is showing the address while the Mac app asks about it. */
+  const handOff = () => {
+    if (!account) return
+    onLink([account.address])
+    setHandingOff(true)
+    checkOnDevice()
+  }
+
+  /** A device only shows it once, so opening the Mac app again means asking again. Unless it's still showing, since it does one thing at a time. */
+  const handOffAgain = () => {
+    if (!busy) checkOnDevice()
+  }
+
   const confirmChecked = () => {
     if (!signer || !account) return
     setChecked(rememberCheckedAccount({ address: account.address, path: account.path, ...(account.deviceId ? { deviceId: account.deviceId } : {}), deviceName: signer.name, kind: signer.kind }))
@@ -181,12 +196,13 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
 
   const others = accounts.filter((a) => a.address !== chosen)
   const name = signer?.name ?? "device"
+  const toMac = account ? addToMacLink(account.address, name, accountsToLink(others, null)) : ""
 
   return (
     <dialog ref={dialog} className="panel" aria-label="Hardware wallet" onCancel={(e) => (e.preventDefault(), onClose())}>
       <div className="panel-body device">
         <header className="panel-head">
-          <h2>{link?.kind === "top-up" ? "Top up from savings" : link?.kind === "publish" ? "Publish this cost" : "Hardware wallet"}</h2>
+          <h2>{link?.kind === "add-savings" ? "Add a savings wallet" : link?.kind === "top-up" ? "Top up from savings" : link?.kind === "publish" ? "Publish this cost" : "Hardware wallet"}</h2>
           <button ref={closeButton} type="button" className="link" onClick={onClose}>
             Close
           </button>
@@ -195,9 +211,9 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
         {step === "route" ? (
           <>
             <p className="muted small">Your device holds the keys and signs everything. {NEVER_ASKED}</p>
-            <button type="button" className="route" disabled={busy || !connectors.canUseUsb()} onClick={() => void connect(() => connectors.ledger())}>
+            <button type="button" className="route" disabled={busy || !connectors.canUseUsb()} onClick={() => setStep("ledger")}>
               <strong>Ledger</strong>
-              <span className="muted small">{connectors.canUseUsb() ? "Plug it in and unlock it" : "Needs Chrome, Brave, Edge or another Chromium browser"}</span>
+              <span className="muted small">{connectors.canUseUsb() ? "With its USB cable" : LEDGER_NEEDS_CHROMIUM}</span>
             </button>
             <button type="button" className="route" disabled={busy} onClick={() => {
               scanned.current = false
@@ -215,9 +231,25 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
           </>
         ) : null}
 
+        {step === "ledger" ? (
+          <>
+            <ol className="small device-steps">
+              {LEDGER_READY.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ol>
+            <button type="button" className="primary" disabled={busy} onClick={() => void connect(() => connectors.ledger())}>
+              Connect my Ledger
+            </button>
+            <button type="button" className="link" disabled={busy} onClick={() => (setProblem(null), setStep("route"))}>
+              Back
+            </button>
+          </>
+        ) : null}
+
         {step === "keystone" ? (
           <>
-            <p className="small">On your Keystone, open <strong>Connect Software Wallet</strong>, choose <strong>MetaMask</strong>, and hold its screen up to your webcam.</p>
+            <p className="small">{KEYSTONE_CONNECT}</p>
             <Suspense fallback={<p className="muted small">Starting the camera…</p>}>
               <CodeScanner types={CONNECT_TYPES} onProblem={setProblem} onScan={(code) => {
                 if (scanned.current) return
@@ -262,31 +294,53 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
                   Use another device
                 </button>
               ) : null}
-              <button type="button" className="primary" disabled={busy || !account} onClick={pickAccount}>
-                {link?.kind === "publish" || link?.kind === "top-up" ? "Continue" : "Check it on the device"}
-              </button>
+              {link?.kind === "add-savings" && account && !busy ? (
+                <a className="button-link primary" href={toMac} onClick={handOff}>
+                  Add to the Mac app
+                </a>
+              ) : (
+                <button type="button" className="primary" disabled={busy || !account} onClick={pickAccount}>
+                  {link?.kind === "publish" || link?.kind === "top-up" ? "Continue" : "Check it on the device"}
+                </button>
+              )}
             </div>
           </>
         ) : null}
 
         {step === "check" && account ? (
           <>
-            <h3>Does your device show this?</h3>
+            <h3>{handingOff ? "Finish in the Mac app" : "Does your device show this?"}</h3>
             <p className="address-big mono">{groupAddress(account.address)}</p>
             {busy && prompt ? <p className="notice">{PROMPTS[prompt]}</p> : null}
-            {lookOnDevice ? <p className="small">{signer?.kind === "keystone" ? "This page can't reach your Keystone, so go to its receive screen for Ethereum and find this address there." : `This page can't reach your device through ${name}. Have ${name} show this address on your device, or look it up on the device's receive screen.`}</p> : null}
-            <label className="check-row">
-              <input type="checkbox" checked={matches} disabled={busy} onChange={(e) => setMatches(e.target.checked)} />
-              <span>Every character matches what my device's screen shows</span>
-            </label>
-            <p className="muted small">{CHECK_ADDRESS_WARNING}</p>
+            {signer?.kind === "ledger" && !lookOnDevice && busy ? <p className="small">{handingOff ? LEDGER_HAND_OFF : LEDGER_VERIFY}</p> : null}
+            {lookOnDevice ? <p className="small">{signer?.kind === "keystone" ? KEYSTONE_LOOK : `This page can't reach your device through ${name}. Have ${name} show this address on your device, or look it up on the device's receive screen.`}</p> : null}
+            {handingOff ? (
+              <>
+                {lookOnDevice ? <p className="small">{LOOK_HANDED_OFF}</p> : !busy && !problem ? <p className="notice">{LEDGER_HANDED_OFF}</p> : null}
+                <p className="muted small">If nothing opened, your browser may have asked first. {signer?.kind === "ledger" ? "Opening it again shows the address on your Ledger again too." : ""}</p>
+              </>
+            ) : (
+              <>
+                <label className="check-row">
+                  <input type="checkbox" checked={matches} disabled={busy} onChange={(e) => setMatches(e.target.checked)} />
+                  <span>Every character matches what my device's screen shows</span>
+                </label>
+                <p className="muted small">{CHECK_ADDRESS_WARNING}</p>
+              </>
+            )}
             <div className="device-actions">
-              <button type="button" disabled={busy} onClick={() => setStep("accounts")}>
+              <button type="button" disabled={busy} onClick={() => (setHandingOff(false), setStep("accounts"))}>
                 Back
               </button>
-              <button type="button" className="primary" disabled={busy || !matches || problem !== null} onClick={confirmChecked}>
-                It matches
-              </button>
+              {handingOff ? (
+                <a className="button-link" href={toMac} onClick={handOffAgain}>
+                  Open the Mac app again
+                </a>
+              ) : (
+                <button type="button" className="primary" disabled={busy || !matches || problem !== null} onClick={confirmChecked}>
+                  It matches
+                </button>
+              )}
             </div>
           </>
         ) : null}
@@ -302,7 +356,7 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
               <button type="button" onClick={() => setStep("send")}>
                 Send to another of my wallets
               </button>
-              <a className="button-link" href={addToMacLink(account.address, name, accountsToLink(others, null))}>
+              <a className="button-link" href={toMac} onClick={handOff}>
                 Add to the Mac app as savings
               </a>
               <button type="button" onClick={() => onView(account.address)}>
@@ -348,6 +402,7 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
 
         {busy && prompt && !exchange && step !== "check" ? <p className="notice">{PROMPTS[prompt]}</p> : null}
         {busy && !prompt && !exchange && step === "route" ? <p className="notice">Connecting…</p> : null}
+        {busy && !prompt && !exchange && step === "ledger" ? <p className="notice">Choose your Ledger in your browser's list.</p> : null}
         {problem ? <p className="notice warn">⚠ {problem}</p> : null}
         {problem && step === "check" ? (
           <button type="button" onClick={checkOnDevice}>

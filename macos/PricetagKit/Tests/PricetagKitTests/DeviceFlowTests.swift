@@ -13,6 +13,38 @@ import Testing
         #expect(DeviceFlow.topUp(server: server, to: hot, dollars: 20)?.absoluteString == "http://127.0.0.1:8787?topup=\(hot)&usd=20")
     }
 
+    @Test func anAddSavingsLink() {
+        #expect(DeviceFlow.addSavingsFromLedger(server: server)?.absoluteString == "http://127.0.0.1:8787?addsavings=ledger")
+    }
+
+    private func browser(_ id: String, _ name: String) -> InstalledBrowser {
+        InstalledBrowser(bundleID: id, name: name, url: URL(filePath: "/Applications/\(name).app"))
+    }
+
+    @Test func aChromiumDefaultIsTheOneToUse() {
+        let brave = browser("com.brave.Browser", "Brave")
+        let chrome = browser("com.google.Chrome", "Chrome")
+        let choice = LedgerBrowserChoice(defaultBrowser: brave, installed: [chrome, brave])
+        #expect(choice.browser == brave)
+        #expect(choice.defaultThatCant == nil)
+    }
+
+    @Test func safariHandsOverToAChromiumBrowser() {
+        let safari = browser("com.apple.Safari", "Safari")
+        let edge = browser("com.microsoft.edgemac", "Edge")
+        let choice = LedgerBrowserChoice(defaultBrowser: safari, installed: [safari, edge])
+        #expect(choice.browser == edge)
+        #expect(choice.defaultThatCant == "Safari")
+    }
+
+    @Test func noBrowserThatCanReachALedger() {
+        let safari = browser("com.apple.Safari", "Safari")
+        let firefox = browser("org.mozilla.firefox", "Firefox")
+        let choice = LedgerBrowserChoice(defaultBrowser: firefox, installed: [safari, firefox])
+        #expect(choice.browser == nil)
+        #expect(choice.defaultThatCant == "Firefox")
+    }
+
     @Test func aPublishLink() {
         let draft = CostNoteDraft(wallet: cold, txHash: tx, asset: "USDC", decimals: 6, units: "1500000")
         #expect(DeviceFlow.publish(server: server, draft: draft, usd: "250")?.absoluteString == "http://127.0.0.1:8787?publish=\(tx)&wallet=\(cold)&asset=USDC&units=1500000&decimals=6&usd=250")

@@ -504,12 +504,17 @@ public final class HotWallet {
         case notAnAddress, isThisHotWallet, isARetiredKey, isZero
     }
 
+    /// Why this can't be a savings wallet, whatever the device shows.
+    public func problem(addingColdWallet address: EthereumAddress) -> ColdWalletProblem? {
+        if address == .zero { return .isZero }
+        if address == self.address { return .isThisHotWallet }
+        return state.retired.contains(address) ? .isARetiredKey : nil
+    }
+
     /// The address has to be what the user read on the device's screen. Nothing here can check that, so the sheet makes them say so.
     public func addColdWallet(address text: String, name: String) throws(ColdWalletProblem) {
         guard let address = EthereumAddress(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw .notAnAddress }
-        guard address != .zero else { throw .isZero }
-        guard address != self.address else { throw .isThisHotWallet }
-        guard !state.retired.contains(address) else { throw .isARetiredKey }
+        if let problem = problem(addingColdWallet: address) { throw problem }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         updateSettings { $0.add(ColdWallet(address: address, name: cleanName.isEmpty ? "Savings" : cleanName, confirmedOnDeviceAt: now())) }
     }
