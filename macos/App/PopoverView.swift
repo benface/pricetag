@@ -83,7 +83,7 @@ struct PopoverView: View {
                 walletHeader
                 Spacer(minLength: 8)
                 if showsBadge {
-                    FeedBadge(feed: store.feed, portfolio: portfolio)
+                    FeedBadge(feed: store.feed, portfolio: portfolio, readingSince: store.readingSince)
                         .fixedSize()
                 }
             }
@@ -104,23 +104,33 @@ struct PopoverView: View {
             case (_, let portfolio?):
                 headline(portfolio)
             case (.reading, nil):
-                HStack(spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Reading this wallet…").foregroundStyle(.secondary)
+                    ReadingClock(since: store.readingSince ?? .now) { seconds in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Reading this wallet…")
+                            // Once it's taking a while, it says how long so far, without promising when it ends.
+                            if seconds >= FeedState.longReadSeconds {
+                                Text("\(Format.elapsed(seconds: seconds)) so far")
+                                    .font(.caption)
+                                    .monospacedDigit()
+                                    .contentTransition(.numericText())
+                            }
+                        }
+                        .foregroundStyle(.secondary)
+                        .help(Wording.stillReading(seconds: seconds))
+                    }
                 }
-                .help("The first read can take a minute.")
             default:
                 EmptyView()
             }
             if let problem = store.feed.shortProblem(portfolio: portfolio) {
-                ProblemRow(
-                    problem,
-                    detail: portfolio.flatMap(lastUpdate),
-                    help: store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) ?? problem,
-                    // Catching up is still updating, so there's nothing to retry.
-                    actionTitle: isCatchingUp ? nil : "Retry",
-                    action: store.refresh
-                )
+                // A retry that's taking a while says so in place of the second line, which comes back if it fails again.
+                if store.feed.isStale, let since = store.readingSince {
+                    ReadingClock(since: since) { problemRow(problem, retrying: $0 >= FeedState.longReadSeconds ? $0 : nil) }
+                } else {
+                    problemRow(problem, retrying: nil)
+                }
             }
             if let portfolio, portfolio.progress.started, !portfolio.isEmpty, let attention = portfolio.shortAttention {
                 attentionRow(attention, portfolio)
@@ -187,12 +197,29 @@ struct PopoverView: View {
         if case .catchingUp = store.feed { true } else { false }
     }
 
+    private func problemRow(_ problem: String, retrying seconds: Int?) -> some View {
+        let full = store.feed.problem(serverURL: store.serverURL, portfolio: portfolio)
+        // With no numbers here, nothing says how old they are, so it says what matters most instead.
+        // A retry keeps how old the numbers are, and the badge above has its count.
+        let last = portfolio.flatMap(lastUpdate)
+        let detail = seconds.map { seconds in last.map { "\($0) · trying again" } ?? "Trying again · \(Format.elapsed(seconds: seconds))" } ?? last ?? (full == nil ? nil : Wording.moneyUnaffected)
+        return ProblemRow(
+            problem,
+            detail: detail,
+            help: full.map { [$0.message, $0.detail].compactMap { $0 }.joined(separator: "\n\n") } ?? store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) ?? problem,
+            // Catching up is still updating, so there's nothing to retry.
+            actionTitle: isCatchingUp ? nil : "Retry",
+            action: store.refresh
+        )
+    }
+
     private func lastUpdate(_ portfolio: Portfolio) -> String? {
         guard !isCatchingUp, portfolio.progress.started else { return nil }
         return "Last update \(portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp)"
     }
 
     /// The value, with its currency because a bare "$" doesn't say which, and how it's done right under it.
+    /// What they leave out is said once, in the attention row below, the same as in the window.
     private func headline(_ portfolio: Portfolio) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Button { open(.total(.value)) } label: {
@@ -204,13 +231,6 @@ struct PopoverView: View {
                         Text(portfolio.currency.rawValue)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        // As readable as what it qualifies, because it changes what the number means.
-                        if portfolio.isValuePartial {
-                            Text("partial")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.secondary)
-                                .transition(.opacity)
-                        }
                     } else {
                         Text("Value unavailable")
                             .font(.title3.weight(.semibold))
@@ -229,10 +249,6 @@ struct PopoverView: View {
                         LiveNumber(pnl, tone: isLive ? portfolio.totalPnlTone : .neutral)
                             .fontWeight(.medium)
                         Text("PnL").foregroundStyle(.secondary)
-                        // As readable as what it qualifies, because it changes what the number means.
-                        if portfolio.pnlStatus == .partial {
-                            Text("partial").fontWeight(.medium).foregroundStyle(.secondary).transition(.opacity)
-                        }
                     } else {
                         Text(Wording.pnlUnavailable).foregroundStyle(.secondary)
                     }

@@ -52,6 +52,7 @@ struct MacApp: App {
         // Here and not in a view: the menu bar shows the total, and sweeps run, whether or not anything is open.
         hotWallet.start()
         store.start()
+        TypingHistory.shared.start()
         // So an order still going when this last quit gets its cost.
         let purchases = PurchaseTracker(store: store)
         purchases.start()
@@ -116,12 +117,20 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .undoRedo) {
+                UndoCommands(store: store)
+            }
+            SidebarCommands()
             CommandGroup(after: .toolbar) {
                 Divider()
                 ForEach(Array(AppSection.allCases.enumerated()), id: \.element) { index, section in
                     OpenSectionCommand(section: section, navigation: navigation)
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
                 }
+                Divider()
+                Button(navigation.target == nil ? "Show Details" : "Hide Details") { navigation.toggleDetails() }
+                    .keyboardShortcut("i", modifiers: [.command, .control])
+                    .disabled(!navigation.canShowDetails || store.portfolio == nil)
                 Divider()
                 Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
@@ -136,10 +145,9 @@ struct MacApp: App {
                 Button("Export as CSV…") { navigation.isExporting = true }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(store.portfolio == nil)
-                Button("Undo Last Answer") { store.undo() }
-                    .keyboardShortcut("z", modifiers: [.command, .option])
-                    .disabled(store.undoStack.isEmpty)
             }
+            // Nothing to offer yet, and an item that opens nothing would be worse. The menu's search still finds any command.
+            CommandGroup(replacing: .help) {}
         }
 
         Window(SiteApprovalWindow.title, id: WindowID.siteApproval) {
@@ -187,6 +195,13 @@ private struct WalletCommands: View {
             navigation.switchWallet()
         }
         .keyboardShortcut("l", modifiers: .command)
+        let address = store.walletList(hotWallet: hotWallet).entry(for: store.address)?.checksummedAddress
+        Button("Copy Address") { address.map(Clipboard.copy) }
+            .keyboardShortcut("c", modifiers: [.command, .shift])
+            .disabled(address == nil)
+        Button("View on Basescan") { if let url = address.flatMap(Basescan.address) { NSWorkspace.shared.open(url) } }
+            .disabled(address == nil)
+        Divider()
         Button("Receive…") {
             openMainWindow()
             navigation.isReceiving = true
@@ -216,6 +231,58 @@ private struct WalletCommands: View {
         openWindow(id: WindowID.main)
         DockPresence.bringForward()
     }
+}
+
+/// Answers have their own history, and typing has its own. While a field has something to take back, that comes first, as anywhere on a Mac.
+private struct UndoCommands: View {
+    let store: PortfolioStore
+    private let typing = TypingHistory.shared
+
+    var body: some View {
+        Button(typing.undoTitle ?? store.undoNames.last.map { "Undo \($0)" } ?? "Undo") {
+            if typing.undoTitle != nil { typing.undo() } else { store.undo() }
+        }
+        .keyboardShortcut("z", modifiers: .command)
+        .disabled(typing.undoTitle == nil && store.undoStack.isEmpty)
+        Button(typing.redoTitle ?? store.redoNames.last.map { "Redo \($0)" } ?? "Redo") {
+            if typing.redoTitle != nil { typing.redo() } else { store.redo() }
+        }
+        .keyboardShortcut("z", modifiers: [.command, .shift])
+        .disabled(typing.redoTitle == nil && store.redoStack.isEmpty)
+    }
+}
+
+/// What can be taken back in the field being typed in. The menu reads it, so it's kept up to date after every event, when focus or typing can change.
+@MainActor @Observable
+final class TypingHistory {
+    static let shared = TypingHistory()
+    private(set) var undoTitle: String?
+    private(set) var redoTitle: String?
+    @ObservationIgnored private var observer: NSObjectProtocol?
+
+    func start() {
+        guard observer == nil else { return }
+        observer = NotificationCenter.default.addObserver(forName: NSApplication.didUpdateNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { TypingHistory.shared.update() }
+        }
+    }
+
+    /// A text field being edited has a text view in front of it, which keeps the window's history of typing.
+    private var manager: UndoManager? {
+        (NSApp.keyWindow?.firstResponder as? NSTextView)?.undoManager
+    }
+
+    /// Only what changed is set, since this runs after every event.
+    private func update() {
+        let manager = manager
+        let undo = manager?.canUndo == true ? manager?.undoMenuItemTitle : nil
+        let redo = manager?.canRedo == true ? manager?.redoMenuItemTitle : nil
+        if undo != undoTitle { undoTitle = undo }
+        if redo != redoTitle { redoTitle = redo }
+    }
+
+    func undo() { manager?.undo() }
+    func redo() { manager?.redo() }
 }
 
 /// The window may be closed, so this opens it too.

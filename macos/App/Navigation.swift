@@ -38,11 +38,15 @@ final class Navigation {
 
     /// Details belong to the section they were opened from, so set this first when opening both.
     var section: AppSection = .overview {
-        didSet { if section != oldValue { target = nil } }
+        didSet { if section != oldValue { forgetDetails() } }
     }
     var chartRange: ChartRange = .all
     /// The number being explained in the details.
-    var target: ExplainTarget?
+    var target: ExplainTarget? {
+        didSet { if target == nil, let oldValue { closedTarget = oldValue } }
+    }
+    /// What the details last showed, so Show Details opens them again on it.
+    @ObservationIgnored private var closedTarget: ExplainTarget?
     var isSwitchingWallet = false {
         // Here and not in a view, because the view that opened the list can be gone by the time it closes.
         didSet { if oldValue, !isSwitchingWallet { onSwitcherClosed?() } }
@@ -96,6 +100,22 @@ final class Navigation {
     /// What the wallet's page shows: its holdings, or where to enter a wallet when there isn't one.
     func showOverview() {
         section = .overview
+    }
+
+    /// Only where there's a wallet's numbers to explain.
+    var canShowDetails: Bool {
+        section == .overview || section == .transactions
+    }
+
+    /// The View menu's. With nothing opened yet, the details start on the total PnL, which everything else adds up to.
+    func toggleDetails() {
+        target = target == nil ? closedTarget ?? .total(.pnl) : nil
+    }
+
+    /// For another section or wallet, where the last details mean something else, or nothing.
+    func forgetDetails() {
+        target = nil
+        closedTarget = nil
     }
 
     /// Opens the details of a number, which belong to the overview.

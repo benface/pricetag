@@ -47,6 +47,12 @@ actor HeldSource: PortfolioSource {
     }
 }
 
+/// A clock a test moves by hand.
+final class TestClock: @unchecked Sendable {
+    var date: Date
+    init(_ date: Date) { self.date = date }
+}
+
 @MainActor
 @Suite struct WalletSwitchTests {
     /// The real time, because a file's age is measured against it.
@@ -264,6 +270,56 @@ actor HeldSource: PortfolioSource {
         #expect(store.feed == .reading)
         #expect(store.portfolio != nil)
         store.stop()
+        await source.finish()
+    }
+
+    enum Change: CaseIterable { case wallet, method, currency, server, refresh }
+
+    @Test(arguments: Change.allCases) func aChangeStartsTheReadsTimeOver(_ change: Change) async throws {
+        let source = HeldSource()
+        let clock = TestClock(now)
+        let defaults = UserDefaults(suiteName: "switch-tests-\(UUID().uuidString)")!
+        defaults.set(walletA, forKey: "wallet")
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { clock.date }, reachableDelay: .seconds(600), unreachableDelay: .seconds(600), pushedDelay: .seconds(600))
+        store.start()
+        await source.waitUntilAsked(about: walletA)
+        #expect(store.readingSince == now)
+        clock.date = now.addingTimeInterval(90)
+        switch change {
+        case .wallet: store.setWallet(walletB)
+        case .method: store.setMethod(.fifo)
+        case .currency: store.setCurrency(.CAD)
+        case .server: store.setServerURL(URL(string: "http://127.0.0.1:8788")!)
+        case .refresh: store.refresh()
+        }
+        #expect(store.feed == .reading)
+        #expect(store.readingSince == clock.date)
+        // The read it replaced ending late doesn't stop the new one's count.
+        clock.date = now.addingTimeInterval(95)
+        await source.answer(walletA, .failure(.unreachable))
+        await source.waitUntilAsked(about: change == .wallet ? walletB : walletA)
+        #expect(store.readingSince == now.addingTimeInterval(90) || store.readingSince == now.addingTimeInterval(95))
+        #expect(store.readingSince != nil)
+        store.stop()
+        await source.finish()
+    }
+
+    @Test func aRetryAfterAFailureCountsToo() async throws {
+        let source = HeldSource()
+        let clock = TestClock(now)
+        let defaults = UserDefaults(suiteName: "switch-tests-\(UUID().uuidString)")!
+        defaults.set(walletA, forKey: "wallet")
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { clock.date }, reachableDelay: .milliseconds(5), unreachableDelay: .milliseconds(5), pushedDelay: .seconds(600))
+        store.start()
+        await source.waitUntilAsked(about: walletA)
+        clock.date = now.addingTimeInterval(30)
+        await source.answer(walletA, .failure(.unreachable))
+        // The next read starts by itself, and the failure stands while it runs.
+        await source.waitUntilAsked(about: walletA)
+        #expect(store.feed == .serverUnreachable)
+        #expect(store.readingSince == now.addingTimeInterval(30))
+        store.stop()
+        #expect(store.readingSince == nil)
         await source.finish()
     }
 

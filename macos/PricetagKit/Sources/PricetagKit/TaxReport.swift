@@ -214,7 +214,7 @@ public final class TaxReportModel {
         switch error as? FetchError {
         case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message): message
         case .timedOut: Wording.serverTooSlow
-        case .unreachable, nil: "Can't reach the server."
+        case .unreachable, nil: Wording.cantReachServer
         }
     }
 
