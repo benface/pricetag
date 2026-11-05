@@ -67,16 +67,8 @@ struct PopoverView: View {
             Text(HotWalletWording.alarmShort)
                 .font(.headline)
             Spacer(minLength: 0)
-            // Its own colors rather than a tint, as on the window's banner.
-            Button(action: openHotWallet) {
-                Text("Review")
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            }
-            .buttonStyle(.plain)
+            Button("Review", action: openHotWallet)
+                .buttonStyle(AlarmButtonStyle())
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 14)
@@ -171,7 +163,7 @@ struct PopoverView: View {
                         .fixedSize()
                 }
                 Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.semibold))
+                    .font(.caption.weight(.semibold))
             }
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -206,8 +198,7 @@ struct PopoverView: View {
             Button { open(.total(.value)) } label: {
                 HStack(alignment: .lastTextBaseline, spacing: 5) {
                     if let value = portfolio.totalValueText {
-                        LiveNumber(value)
-                            .font(.system(size: 30, weight: .semibold))
+                        DisplayNumber(value, size: 30)
                             .lineLimit(1)
                             .minimumScaleFactor(0.5)
                         Text(portfolio.currency.rawValue)
@@ -218,6 +209,7 @@ struct PopoverView: View {
                             Text("partial")
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
+                                .transition(.opacity)
                         }
                     } else {
                         Text("Value unavailable")
@@ -239,7 +231,7 @@ struct PopoverView: View {
                         Text("PnL").foregroundStyle(.secondary)
                         // As readable as what it qualifies, because it changes what the number means.
                         if portfolio.pnlStatus == .partial {
-                            Text("partial").fontWeight(.medium).foregroundStyle(.secondary)
+                            Text("partial").fontWeight(.medium).foregroundStyle(.secondary).transition(.opacity)
                         }
                     } else {
                         Text(Wording.pnlUnavailable).foregroundStyle(.secondary)
@@ -252,7 +244,8 @@ struct PopoverView: View {
             .accessibilityHint("Shows the activity behind this number")
         }
         .opacity(isLive ? 1 : 0.55)
-        .animation(.easeOut(duration: 0.15), value: isLive)
+        .animation(Motion.state, value: isLive)
+        .motion(Motion.state, value: portfolio.pnlStatus == .partial)
     }
 
     private func attentionRow(_ text: String, _ portfolio: Portfolio) -> some View {
@@ -278,12 +271,8 @@ struct PopoverView: View {
                     HoldingRow(position: position, currency: portfolio.currency, isLive: isLive)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background {
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(.primary.opacity(highlighted == position.asset ? 0.09 : 0))
-                        }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(RowButtonStyle(isHighlighted: highlighted == position.asset))
                 .onHover { highlighted = $0 ? position.asset : nil }
                 .accessibilityHint("Shows this token's activity")
             }
@@ -319,6 +308,7 @@ struct PopoverView: View {
                     .tint(plan.excessUsdMicros > 0 ? .orange : .accentColor)
                     .controlSize(.small)
                     .accessibilityHidden(true)
+                    .motion(Motion.number, value: plan.valueUsdMicros)
             }
             if case .unavailable(let message) = hotWallet.availability {
                 ProblemRow("Can't open this wallet", help: message, actionTitle: "Review", action: openHotWallet)
@@ -364,6 +354,8 @@ struct PopoverView: View {
             Text("\(hotWallet.money(plan.valueUsdMicros)) of \(hotWallet.capText)")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+                .contentTransition(.numericText(value: Double(plan.valueUsdMicros)))
+                .motion(Motion.number, value: plan.valueUsdMicros)
                 .help(plan.gasKeptWei > 0 ? HotWalletWording.keptOutOfCap(plan.gasKeptWei) : "")
         } else {
             Text("Reading…").foregroundStyle(.secondary)
