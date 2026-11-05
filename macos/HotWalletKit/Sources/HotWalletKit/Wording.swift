@@ -151,6 +151,32 @@ public enum HotWalletWording {
     public static let unreadableAnswer = "The network sent an answer this app can't read, so nothing was signed. Try again in a moment."
     public static let changedWhileWaiting = "This wallet changed while that was waiting, so nothing was signed."
 
+    /// What a node's refusal means, and what to do about it. Nodes word these differently, so one this doesn't know keeps the node's own words.
+    public static func refusal(_ message: String) -> String {
+        let lower = message.lowercased()
+        if lower.contains("insufficient funds") { return "There isn't enough ETH for this and its network fee. Add some ETH, then try again." }
+        if lower.contains("revert") { return "The token's contract refused it. Check the amount and the address." }
+        if lower.contains("nonce") || lower.contains("already known") || lower.contains("replacement transaction") {
+            return "Another transaction from this wallet went first. Try again in a moment."
+        }
+        if lower.contains("underpriced") || lower.contains("fee cap") || lower.contains("base fee") { return "Network fees went up. Try again." }
+        return "The network refused it, saying \u{201C}\(message)\u{201D}. Try again in a moment."
+    }
+
+    /// A send or a note the node refused, before or after it was signed. Either way, nothing left this wallet.
+    public static func notSent(_ message: String) -> String {
+        "Nothing was sent. \(refusal(message))"
+    }
+
+    /// What stopped a send, said for a send. The wallet's own wording is for everything it does, like sweeping.
+    public static func sendFailure(_ problem: String) -> String {
+        switch problem {
+        case cantReachChain: "Nothing was sent, because the network can't be reached. Check your internet connection, then try again."
+        case touchIDDidNotConfirm: "Nothing was sent, because Touch ID didn't confirm it. Try again."
+        default: problem
+        }
+    }
+
     public static func failedOnchain(_ record: SignedRecord) -> String {
         record.reason == .note
             ? "Publishing the cost of \(record.symbol) failed onchain. Nothing was published, but its gas was spent."
