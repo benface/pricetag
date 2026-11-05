@@ -129,6 +129,20 @@ struct CurrentRateTests {
         #expect(store.moneyDisplay == MoneyDisplay(main: .CAD))
     }
 
+    @Test func aFirstReadThatFailsIsTriedAgainSoon() async throws {
+        let source = Rates(.failure(.unreachable))
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        defaults.set("CAD", forKey: "currency")
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, rateRetryDelay: .milliseconds(10))
+        store.start()
+        defer { store.stop() }
+        while await source.asked.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(!store.moneyDisplay.isConverted)
+        await source.say(.success("1400000"))
+        for _ in 0..<400 where !store.moneyDisplay.isConverted { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(store.moneyDisplay == MoneyDisplay(main: .CAD, rateMicros: "1400000"))
+    }
+
     @Test func aRateIsOnlyForItsOwnCurrency() async {
         let source = Rates(.success("1400000"))
         let store = store(source)

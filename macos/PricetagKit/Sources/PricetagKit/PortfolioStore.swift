@@ -91,6 +91,7 @@ public final class PortfolioStore {
     /// What the next read is waiting on, which a new block cuts short.
     @ObservationIgnored private var sleeper: Task<Void, Never>?
     @ObservationIgnored private var rateTask: Task<Void, Never>?
+    @ObservationIgnored private let rateRetryDelay: Duration
     private static let rateDelay: Duration = .seconds(300)
     private static let rateLasts: TimeInterval = 60 * 60
     /// A block arrived during a read, which may have missed it.
@@ -104,8 +105,10 @@ public final class PortfolioStore {
         unreachableDelay: Duration = .seconds(5),
         pushedDelay: Duration = .seconds(15),
         // The longest wait for a block, plus as long as a read gets before it's marked as on its way anyway.
-        liveFor: Duration = .seconds(30)
+        liveFor: Duration = .seconds(30),
+        rateRetryDelay: Duration = .seconds(30)
     ) {
+        self.rateRetryDelay = rateRetryDelay
         self.defaults = defaults
         self.makeSource = makeSource
         self.now = now
@@ -137,9 +140,8 @@ public final class PortfolioStore {
         Task { await refreshRules() }
         rateTask = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.readRate()
-                guard self != nil else { return }
-                try? await Task.sleep(for: Self.rateDelay)
+                guard let hasRead = await self?.readRate(), let delay = self?.rateRetryDelay else { return }
+                try? await Task.sleep(for: hasRead ? Self.rateDelay : delay)
             }
         }
         guard address != nil else { return }
@@ -282,21 +284,25 @@ public final class PortfolioStore {
     }
 
     /// Reads the current rate. A failed read keeps the last one for a while, because the feed moves hourly at most, and after that amounts go back to USD. An answer of no rate counts straight away.
-    public func readRate() async {
+    /// True when the server answered, so a read that failed can be tried again sooner.
+    @discardableResult
+    public func readRate() async -> Bool {
         let currency = self.currency
         guard currency != .USD else {
             currentRate = nil
-            return
+            return true
         }
         let source = self.source
         let server = serverURL
         do {
             let micros = try await source.currentRate(currency: currency)
-            guard !Task.isCancelled, currency == self.currency, server == serverURL else { return }
+            guard !Task.isCancelled, currency == self.currency, server == serverURL else { return true }
             currentRate = micros.map { CurrentRate(currency: currency, micros: $0, readAt: now()) }
+            return true
         } catch {
-            if Task.isCancelled { return }
+            if Task.isCancelled { return true }
             if let currentRate, now().timeIntervalSince(currentRate.readAt) > Self.rateLasts { self.currentRate = nil }
+            return false
         }
     }
 

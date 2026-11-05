@@ -837,7 +837,7 @@ enum TestScene: String, CaseIterable {
             purchase("different", dollars: 25, delivered("different")),
             purchase("recorded", dollars: 25, delivered("recorded")),
             purchase("arriving", dollars: 25, delivered("arriving")),
-            purchase("going", dollars: 30, OnrampOrder(id: "going", status: .pending)),
+            purchase("going", dollars: 30, typed: inCAD ? Money(micros: "42000000", currency: .CAD) : nil, OnrampOrder(id: "going", status: .pending)),
             purchase("page", dollars: 20, typed: inCAD ? Money(micros: "28000000", currency: .CAD) : nil),
         ]
     }

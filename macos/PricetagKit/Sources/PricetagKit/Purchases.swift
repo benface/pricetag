@@ -67,7 +67,7 @@ public struct TrackedPurchase: Codable, Sendable, Equatable, Identifiable {
     public let wallet: String
     public let asset: String
     public let dollars: Int
-    /// What was typed, when it was typed in a currency other than USD. Purchases from before this don't have it.
+    /// What was typed, when that wasn't USD. Without it, `dollars` is what was typed. It's a past amount, so it never goes through today's rate.
     public let typed: Money?
     public let startedAt: Date
     public var order: OnrampOrder?
@@ -118,12 +118,13 @@ public enum PurchaseWording {
     static let providerHosts: Set<String> = ["pay.coinbase.com"]
 
     /// What the order says once it says, because the amount can be changed on the page. Until then, what was chosen.
-    public static func title(_ purchase: TrackedPurchase, in display: MoneyDisplay) -> String {
+    public static func title(_ purchase: TrackedPurchase, beside main: CurrencyCode) -> String {
         if let units = purchase.order?.units, let asset = purchase.order?.asset, let decimals = ["ETH": 18, "USDC": 6][asset] {
             return "\(Format.amount(units, decimals: decimals)) \(asset)"
         }
-        // Whole, as it was typed, and as what's left of the list reads.
-        let chosen = purchase.typed.map { Format.money($0, beside: display.main).replacing(".00", with: "") } ?? display.whole(dollars: purchase.dollars)
+        let typed = purchase.typed ?? Money(micros: String(UInt128(max(purchase.dollars, 0)) * 1_000_000), currency: .USD)
+        // Whole, as it was typed.
+        let chosen = Format.money(typed, beside: main).replacing(".00", with: "")
         return "\(chosen) of \(purchase.order?.asset ?? purchase.asset)"
     }
 

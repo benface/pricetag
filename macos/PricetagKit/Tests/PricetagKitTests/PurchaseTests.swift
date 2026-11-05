@@ -52,20 +52,31 @@ struct PurchaseTrackerTests {
         _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 20, cryptoAmount: "0.008", typed: typed)
         #expect(await source.askedFiat == typed)
         let started = try #require(tracker.purchases(of: wallet).first)
-        let display = MoneyDisplay(main: .CAD, rateMicros: "1500000")
-        #expect(PurchaseWording.title(started, in: display) == "$28 of ETH", "A rate that's moved since doesn't change what was typed")
-        #expect(PurchaseWording.title(started, in: MoneyDisplay(main: .USD)) == "CA$28 of ETH")
+        #expect(PurchaseWording.title(started, beside: .CAD) == "$28 of ETH")
+        #expect(PurchaseWording.title(started, beside: .USD) == "CA$28 of ETH")
         let reloaded = PurchaseTracker(store: PortfolioStore(defaults: defaults, makeSource: { _ in source }), defaults: defaults, matchOf: { _ in nil })
         #expect(reloaded.purchases(of: wallet).first?.typed == typed)
     }
 
-    @Test func aPurchaseFromBeforeTypedAmountsIsStillRead() throws {
+    /// Typed in USD, or saved before amounts in other currencies. It's a past amount, so today's rate has nothing to say about it.
+    @Test func aPurchaseInUSDStaysInUSD() throws {
         let saved = #"{"ref":"r","wallet":"\#(wallet)","asset":"ETH","dollars":25,"startedAt":0}"#
         let purchase = try JSONDecoder().decode(TrackedPurchase.self, from: Data(saved.utf8))
         #expect(purchase.typed == nil)
-        #expect(PurchaseWording.title(purchase, in: MoneyDisplay(main: .USD)) == "$25 of ETH")
-        #expect(PurchaseWording.title(purchase, in: MoneyDisplay(main: .CAD, rateMicros: "1400000")) == "$35 of ETH")
-        #expect(PurchaseWording.title(purchase, in: MoneyDisplay(main: .CAD)) == "US$25 of ETH")
+        #expect(PurchaseWording.title(purchase, beside: .USD) == "$25 of ETH")
+        #expect(PurchaseWording.title(purchase, beside: .CAD) == "US$25 of ETH")
+    }
+
+    @Test func anAbsurdAmountDoesntTrap() {
+        let purchase = TrackedPurchase(ref: "r", wallet: wallet, asset: "ETH", dollars: .max, startedAt: .now)
+        #expect(PurchaseWording.title(purchase, beside: .USD).hasSuffix(" of ETH"))
+    }
+
+    @Test func nothingUSDIsSentAsWhatWasTyped() async throws {
+        let (tracker, _, source, _) = setup()
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        #expect(await source.askedFiat == nil)
+        #expect(tracker.purchases(of: wallet).first?.typed == nil)
     }
 
     @Test func aCostSaysWhichDollarsOnlyBesideAnotherCurrency() {

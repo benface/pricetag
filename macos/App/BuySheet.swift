@@ -180,15 +180,15 @@ struct BuySheet: View {
 struct PurchaseRow: View {
     let purchase: TrackedPurchase
     let phase: PurchasePhase
-    let display: MoneyDisplay
+    let main: CurrencyCode
     let dismiss: () -> Void
 
     var body: some View {
         HStack {
             VStack(alignment: .leading) {
-                Text(PurchaseWording.title(purchase, in: display))
+                Text(PurchaseWording.title(purchase, beside: main))
                     .monospacedDigit()
-                Text(PurchaseWording.status(phase, beside: display.main))
+                Text(PurchaseWording.status(phase, beside: main))
                     .font(.caption)
                     .foregroundStyle(PurchaseWording.isWarning(phase) ? Tone.warning.style : AnyShapeStyle(.secondary))
             }

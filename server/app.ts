@@ -272,11 +272,14 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     }
   }
 
-  /** What one USD buys right now, without reading any wallet, for what's shown before one has been read. Null when there's no current rate. */
+  /**
+   * What one USD buys right now, without reading any wallet, for what's shown before one has been read. Null when there's no current rate.
+   * With no data source there's no rate either: this is for real balances, which the demo's made-up rates mustn't convert.
+   */
   async function answerRate(currency: CurrencyCode, res: ServerResponse) {
     if (currency === "USD") return sendJson(res, 200, { currency, rateMicros: null })
     try {
-      if (!created) return sendJson(res, 200, { currency, rateMicros: currentRateMicros(demoRates(currency), DEMO_WALLET.latest.timestamp) })
+      if (!created) return sendJson(res, 200, { currency, rateMicros: null })
       const latest = await pollHead()
       sendJson(res, 200, { currency, rateMicros: currentRateMicros(await created.readRates(currency, { legs: [], latest }), latest.timestamp) })
     } catch (error) {

@@ -267,7 +267,7 @@ private struct HotWalletDetails: View {
                 WarningText(problem).font(.callout)
             }
             ForEach(shownPurchases) { purchase in
-                PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), display: wallet.display) { purchases.dismiss(purchase) }
+                PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), main: wallet.display.main) { purchases.dismiss(purchase) }
             }
         }
     }

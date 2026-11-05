@@ -516,11 +516,9 @@ describe("GET /api/rate", () => {
     return { server, read: async (query: string) => { const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/rate${query}`); return { status: response.status, body: await response.json() as { rateMicros?: string | null } } } }
   }
 
-  it("answers in the demo with the demo's latest rate, with nothing for USD", async () => {
+  it("has no rate without a data source, because the demo's aren't for real balances, and nothing for USD", async () => {
     const { server, read } = await serve(null)
-    const latest = demoRates("CAD")
-    assert.equal((await read("?currency=CAD")).body.rateMicros, currentRateMicros(latest, DEMO_WALLET.latest.timestamp))
-    assert.equal(typeof (await read("?currency=CAD")).body.rateMicros, "string")
+    assert.deepEqual((await read("?currency=CAD")).body, { currency: "CAD", rateMicros: null })
     assert.deepEqual((await read("?currency=USD")).body, { currency: "USD", rateMicros: null })
     assert.equal((await read("?currency=XYZ")).status, 400)
     assert.equal((await read("")).status, 400)
