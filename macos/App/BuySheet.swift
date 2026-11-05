@@ -11,7 +11,8 @@ struct BuySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var asset: Asset
-    @State private var dollars: Int?
+    /// What's typed, in whole units of what's shown. Only that's in anything but USD: it's converted before anything else sees it.
+    @State private var typed: Int?
     @State private var isStarting = false
     @State private var failure: String?
 
@@ -22,24 +23,27 @@ struct BuySheet: View {
     }
 
     /// ETH first, because it also pays for what a sweep costs.
-    init(wallet: HotWallet, purchases: PurchaseTracker, dollars: Int? = nil, asset: Asset = .eth, failure: String? = nil, started: @escaping () -> Void, addSavings: @escaping () -> Void) {
+    init(wallet: HotWallet, purchases: PurchaseTracker, typed: Int? = nil, asset: Asset = .eth, failure: String? = nil, started: @escaping () -> Void, addSavings: @escaping () -> Void) {
         self.wallet = wallet
         self.purchases = purchases
         self.started = started
         self.addSavings = addSavings
-        _dollars = State(initialValue: dollars ?? max(BuyPlan.minimumDollars, min(Int(wallet.topUpRoom / Money.dollar), 20)))
+        let display = wallet.display
+        _typed = State(initialValue: typed ?? max(display.wholeAmount(BuyPlan.minimumUsdMicros, rounding: .up), min(display.wholeAmount(wallet.topUpRoom, rounding: .down), 20)))
         _asset = State(initialValue: asset)
         _failure = State(initialValue: failure)
     }
 
     /// What's typed, which can be nothing, or below zero. Nothing here assumes it's an amount until `BuyPlan` has said so.
-    private var chosen: Int { dollars ?? 0 }
+    private var chosen: Int { typed ?? 0 }
+    private var display: MoneyDisplay { wallet.display }
+    private var usdMicros: UInt128 { display.usdMicros(ofWhole: chosen) }
     private var hasSavings: Bool { wallet.settings.sweepDestination != nil }
 
     private var token: Token { asset == .eth ? Base.eth : Base.tokens.first { $0.symbol == asset.rawValue } ?? Base.eth }
 
     private var plan: BuyPlan {
-        BuyPlan(dollars: chosen, token: token, priceUsdMicros: asset == .eth ? wallet.snapshot?.ethUsdMicros : wallet.snapshot?.usdcUsdMicros, holdings: wallet.holdings, capUsdMicros: wallet.settings.capUsdMicros, roomUsdMicros: wallet.topUpRoom, fees: wallet.snapshot?.fees, destination: wallet.settings.sweepDestination)
+        BuyPlan(usdMicros: usdMicros, token: token, priceUsdMicros: asset == .eth ? wallet.snapshot?.ethUsdMicros : wallet.snapshot?.usdcUsdMicros, holdings: wallet.holdings, capUsdMicros: wallet.settings.capUsdMicros, roomUsdMicros: wallet.topUpRoom, fees: wallet.snapshot?.fees, destination: wallet.settings.sweepDestination)
     }
 
     /// What the savings wallet is called, because that's what someone knows it by.
@@ -48,7 +52,7 @@ struct BuySheet: View {
     }
 
     private var cryptoAmount: String? {
-        BuyPlan.cryptoAmount(dollars: chosen, isNative: asset == .eth, ethUsdMicros: wallet.snapshot?.ethUsdMicros)
+        BuyPlan.cryptoAmount(usdMicros: usdMicros, isNative: asset == .eth, ethUsdMicros: wallet.snapshot?.ethUsdMicros)
     }
 
     var body: some View {
@@ -79,9 +83,9 @@ struct BuySheet: View {
         .pickerStyle(.segmented)
         LabeledContent("Amount") {
             HStack(spacing: 4) {
-                Text(wallet.usd(dollars: 0).replacing("0", with: ""))
+                Text(display.symbol)
                     .foregroundStyle(.secondary)
-                TextField("Amount", value: $dollars, format: .number.grouping(.never))
+                TextField("Amount", value: $typed, format: .number.grouping(.never))
                     .labelsHidden()
                     .multilineTextAlignment(.trailing)
                     .frame(width: 90)
@@ -89,7 +93,7 @@ struct BuySheet: View {
             }
         }
         destination
-        Text("\(cryptoAmount.map { "About \($0) \(asset.rawValue). " } ?? "")You'll need a \(PurchaseWording.provider) account. Its fees are added, and that total becomes the cost here.")
+        Text("\(cryptoAmount.map { "About \($0) \(asset.rawValue). " } ?? "")\(PurchaseWording.checkoutNote(display))")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -100,7 +104,7 @@ struct BuySheet: View {
     private var destination: some View {
         switch plan.problem {
         case .belowMinimum:
-            Text("\(PurchaseWording.provider)'s minimum is about \(wallet.usd(dollars: BuyPlan.minimumDollars)), depending on how you pay.")
+            Text("\(PurchaseWording.provider)'s minimum is about \(display.whole(BuyPlan.minimumUsdMicros, rounding: .up)), depending on how you pay.")
                 .foregroundStyle(.secondary)
         case .needsSavings:
             // The sheet asks for one instead of showing this.
@@ -126,7 +130,7 @@ struct BuySheet: View {
     private var whereItGoes: String {
         if plan.sweeps == 0 { return "It all stays in Spending Money." }
         if plan.stays == 0 { return "Spending Money is full, so it all goes to \(savingsName)." }
-        return "\(wallet.usd(plan.stays)) stays in Spending Money, the rest goes to \(savingsName)."
+        return "\(wallet.money(plan.stays)) stays in Spending Money, the rest goes to \(savingsName)."
     }
 
     private var buttons: some View {
@@ -160,7 +164,9 @@ struct BuySheet: View {
         isStarting = true
         defer { isStarting = false }
         do {
-            let page = try await purchases.begin(wallet: address.lowercased, asset: asset.rawValue, dollars: chosen, cryptoAmount: cryptoAmount)
+            // What was typed goes to the page, so it starts at that number, and not at what a rate made of it.
+            let typed = display.isConverted ? Money(micros: String(UInt128(chosen) * Money.dollar), currency: display.currency) : nil
+            let page = try await purchases.begin(wallet: address.lowercased, asset: asset.rawValue, dollars: Int(clamping: usdMicros / Money.dollar), cryptoAmount: cryptoAmount, typed: typed)
             openURL(page)
             started()
             dismiss()
@@ -174,15 +180,15 @@ struct BuySheet: View {
 struct PurchaseRow: View {
     let purchase: TrackedPurchase
     let phase: PurchasePhase
-    let usd: (Int) -> String
+    let display: MoneyDisplay
     let dismiss: () -> Void
 
     var body: some View {
         HStack {
             VStack(alignment: .leading) {
-                Text(PurchaseWording.title(purchase, usd: usd))
+                Text(PurchaseWording.title(purchase, in: display))
                     .monospacedDigit()
-                Text(PurchaseWording.status(phase))
+                Text(PurchaseWording.status(phase, beside: display.main))
                     .font(.caption)
                     .foregroundStyle(PurchaseWording.isWarning(phase) ? Tone.warning.style : AnyShapeStyle(.secondary))
             }

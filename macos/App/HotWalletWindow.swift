@@ -209,9 +209,9 @@ private struct HotWalletDetails: View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
-                    LiveNumber(wallet.plan.map { wallet.usd($0.valueUsdMicros) } ?? "—", tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
+                    LiveNumber(wallet.plan.map { wallet.money($0.valueUsdMicros) } ?? "—", tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
                         .font(.system(size: 34, weight: .semibold))
-                    Text("of \(wallet.usd(wallet.settings.capUsdMicros))")
+                    Text("of \(wallet.capText)")
                         .foregroundStyle(.secondary)
                     Spacer()
                     Label(HotWalletWording.label, systemImage: "flask")
@@ -267,7 +267,7 @@ private struct HotWalletDetails: View {
                 WarningText(problem).font(.callout)
             }
             ForEach(shownPurchases) { purchase in
-                PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), usd: { wallet.usd(dollars: $0) }) { purchases.dismiss(purchase) }
+                PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), display: wallet.display) { purchases.dismiss(purchase) }
             }
         }
     }
@@ -283,7 +283,7 @@ private struct HotWalletDetails: View {
                         Text(Format.amount(String(holding.balance), decimals: holding.token.decimals))
                             .monospacedDigit()
                         if let value = holding.valueUsdMicros {
-                            Text(wallet.usd(value))
+                            Text(wallet.money(value))
                                 .monospacedDigit()
                                 .foregroundStyle(.secondary)
                                 .frame(minWidth: 72, alignment: .trailing)
@@ -545,19 +545,19 @@ struct TopUpSheet: View {
             Text(HotWalletWording.topUpTitle(hasDestination: hasDestination))
                 .font(.title2.bold())
             if room < 1 {
-                Notice(.info, HotWalletWording.topUpAtCap(wallet.usd(wallet.settings.capUsdMicros), hasDestination: hasDestination))
+                Notice(.info, HotWalletWording.topUpAtCap(wallet.capText, hasDestination: hasDestination))
             } else {
                 LabeledContent("Amount") {
                     HStack {
                         // A slider needs two ends, and with room for one dollar, the other end is too much.
                         Slider(value: $dollars, in: 1...Double(max(room, 2)), step: 1)
                             .disabled(room < 2)
-                        Text(wallet.usd(dollars: Int(dollars)))
+                        Text(amountText)
                             .monospacedDigit()
                             .frame(width: 56, alignment: .trailing)
                     }
                 }
-                Text(HotWalletWording.topUpRoom(wallet.usd(wallet.topUpRoom), hasDestination: hasDestination))
+                Text(HotWalletWording.topUpRoom(wallet.money(wallet.topUpRoom), hasDestination: hasDestination))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -567,7 +567,7 @@ struct TopUpSheet: View {
                 DisclosureGroup("Or do it by hand on the device") {
                     VStack(alignment: .leading, spacing: 8) {
                         Label("Choose Send, on Base", systemImage: "1.circle")
-                        Label("Enter about \(wallet.usd(dollars: Int(dollars))) of ETH or USDC\(ethHint)", systemImage: "2.circle")
+                        Label("Enter about \(amountText) of ETH or USDC\(tokenHint)", systemImage: "2.circle")
                         Label("Send it to this address", systemImage: "3.circle")
                         if let address = wallet.address {
                             Text(address.checksummed)
@@ -614,9 +614,19 @@ struct TopUpSheet: View {
         dismiss()
     }
 
-    private var ethHint: String {
-        guard let price = wallet.snapshot?.ethUsdMicros else { return "" }
-        let amount = Money.amount(ofUsdMicros: UInt128(dollars) * Money.dollar, priceMicros: price, decimals: 18)
-        return " (about \(Format.amount(String(amount), decimals: 18)) ETH)"
+    /// Rounded down, so it can't read as more than the room it's measured against.
+    private var amountText: String {
+        wallet.display.whole(UInt128(dollars) * Money.dollar, rounding: .down)
+    }
+
+    /// What that is in each token. USDC is worth a dollar, so it only needs saying when what's shown isn't in dollars of that kind.
+    private var tokenHint: String {
+        var tokens: [String] = []
+        if let price = wallet.snapshot?.ethUsdMicros {
+            let amount = Money.amount(ofUsdMicros: UInt128(dollars) * Money.dollar, priceMicros: price, decimals: 18)
+            tokens.append("\(Format.amount(String(amount), decimals: 18)) ETH")
+        }
+        if wallet.display.isConverted { tokens.append("\(Int(dollars)) USDC") }
+        return tokens.isEmpty ? "" : " (about \(tokens.joined(separator: " or ")))"
     }
 }

@@ -13,6 +13,8 @@ const API_HOST = "api.developer.coinbase.com"
 const PAGE = "https://pay.coinbase.com/buy/select-asset"
 const NETWORK = "base"
 const TIMEOUT_MS = 15_000
+/** What its docs say `presetFiatAmount` works in. In anything else, the page starts from a token amount and shows its own price. */
+const PRESET_FIAT: ReadonlySet<string> = new Set(["USD", "CAD", "GBP", "EUR"])
 
 /** Ed25519 keys are base64 of the seed and the public key. Older ones are EC keys in PEM form. */
 function signerOf(secret: string): { alg: "EdDSA" | "ES256"; sign: (data: Buffer) => Buffer } {
@@ -156,13 +158,15 @@ export function createCoinbase(env: Env, send: typeof fetch = fetch): Onramp | n
   }
 
   return {
-    async checkout({ address, asset, cryptoAmount, clientIp }) {
+    async checkout({ address, asset, cryptoAmount, fiat, clientIp }) {
       // Only the token that was chosen, because that's the one the app checked it can move. The amount is only a preset, and the page can change it.
       const answer = recordOf(await call("POST", "/onramp/v1/token", "", { addresses: [{ address, blockchains: [NETWORK] }], assets: [asset], ...(clientIp ? { clientIp } : {}) }))
       if (typeof answer.token !== "string" || answer.token === "") throw new OnrampError("Coinbase sent something this server can't read.")
       // One to a purchase, so an order can't be mistaken for another. It has to stay under 50 characters. The prefix is what asks for Coinbase's mocked mode.
       const ref = `${mocked ? "sandbox-" : ""}${randomBytes(16).toString("hex")}`
-      const params = new URLSearchParams({ sessionToken: answer.token, defaultNetwork: NETWORK, defaultAsset: asset, presetCryptoAmount: cryptoAmount, partnerUserRef: ref })
+      // Its page ignores a fiat amount when there's also a crypto one, so it only ever gets one of them.
+      const preset: Record<string, string> = fiat && PRESET_FIAT.has(fiat.currency) ? { presetFiatAmount: fiat.amount, fiatCurrency: fiat.currency } : { presetCryptoAmount: cryptoAmount }
+      const params = new URLSearchParams({ sessionToken: answer.token, defaultNetwork: NETWORK, defaultAsset: asset, ...preset, partnerUserRef: ref })
       return { url: `${PAGE}?${params}`, ref }
     },
     async orders(ref) {

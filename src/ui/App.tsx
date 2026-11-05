@@ -421,6 +421,7 @@ export function App() {
           <DevicePanel
             link={device.link}
             book={book}
+            currency={chosenCurrency}
             onLink={linkAccounts}
             onView={(next) => {
               setDevice(null)

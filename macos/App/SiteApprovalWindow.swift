@@ -15,7 +15,7 @@ struct SiteApprovalWindow: View {
             if let failure = bridge.failure {
                 SiteFailureView(failure: failure) { bridge.dismissFailure() }
             } else if let approval = bridge.current {
-                SiteApprovalView(approval: approval, waitingBehind: bridge.pending.count - 1, usd: bridge.usd, gate: ApprovalPrompt(needsAcknowledgment: approval.needsAcknowledgment, notBefore: { bridge.nextPromptAt }) { prompt, acknowledged in
+                SiteApprovalView(approval: approval, waitingBehind: bridge.pending.count - 1, money: bridge.money, gate: ApprovalPrompt(needsAcknowledgment: approval.needsAcknowledgment, notBefore: { bridge.nextPromptAt }) { prompt, acknowledged in
                     await bridge.approve(approval.id, acknowledged: acknowledged, in: prompt)
                 }) {
                     Task { await bridge.approve(approval.id) }
@@ -24,9 +24,9 @@ struct SiteApprovalWindow: View {
                 }
                 .id(approval.id)
             } else if let working = bridge.working {
-                SiteProgressView(work: working, usd: bridge.usd, isDone: false)
+                SiteProgressView(work: working, money: bridge.money, isDone: false)
             } else if let finished = bridge.finished {
-                SiteProgressView(work: finished, usd: bridge.usd, isDone: true)
+                SiteProgressView(work: finished, money: bridge.money, isDone: true)
             }
         }
         .frame(width: 480)
@@ -50,14 +50,14 @@ struct SiteApprovalView: View {
 
     let approval: SiteApproval
     let waitingBehind: Int
-    let usd: (UInt128) -> String
+    let money: (UInt128) -> String
     @State var gate: ApprovalPrompt
     /// Connecting only shows an address, so it takes a click and no Touch ID.
     let connect: () -> Void
     let reject: () -> Void
 
     var body: some View {
-        SiteRequestSummary(approval: approval, usd: usd) {
+        SiteRequestSummary(approval: approval, money: money) {
             VStack(spacing: 8) {
                 if case .connect = approval.action {
                     ConnectFooter(connect: connect, reject: reject)
@@ -114,7 +114,7 @@ private struct ConnectFooter: View {
 /// What a request is, the same before and after it's approved.
 private struct SiteRequestSummary<Footer: View>: View {
     let approval: SiteApproval
-    let usd: (UInt128) -> String
+    let money: (UInt128) -> String
     @ViewBuilder let footer: Footer
 
     var body: some View {
@@ -127,7 +127,7 @@ private struct SiteRequestSummary<Footer: View>: View {
                 footer
             }
         case .transaction(let review):
-            ConfirmationView(asker: .site(approval.site), hero: hero(review), worth: review.preview == nil ? review.moved?.usdMicros.map(usd) : nil, rows: rows(review), warnings: approval.warnings, details: details(review), data: review.data.isEmpty ? nil : "0x" + Hex.encode(review.data)) {
+            ConfirmationView(asker: .site(approval.site), hero: hero(review), worth: review.preview == nil ? review.moved?.usdMicros.map(money) : nil, rows: rows(review), warnings: approval.warnings, details: details(review), data: review.data.isEmpty ? nil : "0x" + Hex.encode(review.data)) {
                 footer
             }
         case .message(let review):
@@ -148,7 +148,7 @@ private struct SiteRequestSummary<Footer: View>: View {
         func row(_ label: String, _ asset: CallPreview.Asset) -> ConfirmationRow {
             switch asset {
             case .known(let amount):
-                ConfirmationRow(label: label, value: amount.usdMicros.map { "\(amount.text) \(amount.symbol) (\(usd($0)))" } ?? "\(amount.text) \(amount.symbol)")
+                ConfirmationRow(label: label, value: amount.usdMicros.map { "\(amount.text) \(amount.symbol) (\(money($0)))" } ?? "\(amount.text) \(amount.symbol)")
             case .unknown(let contract):
                 ConfirmationRow(label: label, value: AddressText.grouped(contract.checksummed), isAddress: true, name: "Unknown token")
             }
@@ -181,7 +181,7 @@ private struct SiteRequestSummary<Footer: View>: View {
         if review.alsoSendsEth {
             rows.append(ConfirmationRow(label: "Also sends", value: amount(Money.text(ofUnits: review.value, decimals: 18), usdMicros: review.valueUsdMicros)))
         }
-        rows.append(ConfirmationRow(label: "Network fee", value: "About \(review.feeUsdMicros.map(usd) ?? "\(Format.amount(String(review.feeWei), decimals: 18)) ETH")"))
+        rows.append(ConfirmationRow(label: "Network fee", value: "About \(review.feeUsdMicros.map(money) ?? "\(Format.amount(String(review.feeWei), decimals: 18)) ETH")"))
         return rows
     }
 
@@ -192,18 +192,18 @@ private struct SiteRequestSummary<Footer: View>: View {
     }
 
     private func amount(_ text: String, usdMicros: UInt128?) -> String {
-        usdMicros.map { "\(text) ETH (\(usd($0)))" } ?? "\(text) ETH"
+        usdMicros.map { "\(text) ETH (\(money($0)))" } ?? "\(text) ETH"
     }
 }
 
 /// Between approving and the transaction going out, which can take a few seconds when the network is busy, and a moment after to say it did.
 struct SiteProgressView: View {
     let work: SiteWork
-    let usd: (UInt128) -> String
+    let money: (UInt128) -> String
     let isDone: Bool
 
     var body: some View {
-        SiteRequestSummary(approval: work.approval, usd: usd) {
+        SiteRequestSummary(approval: work.approval, money: money) {
             ProgressFooter(doing: work.isTransaction ? "Sending…" : "Signing…", done: work.isTransaction ? "Sent" : "Signed", isDone: isDone)
         }
     }

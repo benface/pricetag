@@ -471,6 +471,24 @@ describe("the routes", () => {
     assert.ok(!JSON.stringify(json).includes(secret))
   })
 
+  it("start the page from what was typed, in the currency it was typed in", async () => {
+    const port = await serve(createOnramp(env, stub().send))
+    const { status, json } = await call(port, "POST", "/api/onramp/checkout", { ...SESSION, fiat: { amount: "27", currency: "CAD" } })
+    assert.equal(status, 200)
+    const params = new URL(json.url as string).searchParams
+    assert.deepEqual([params.get("presetFiatAmount"), params.get("fiatCurrency")], ["27", "CAD"])
+    assert.equal(params.get("presetCryptoAmount"), null, "the page ignores a fiat amount when there's also a crypto one")
+  })
+
+  it("refuse a typed amount that isn't one", async () => {
+    const { send, calls } = stub()
+    const port = await serve(createOnramp(env, send))
+    for (const fiat of [{ amount: "0", currency: "CAD" }, { amount: "1e3", currency: "CAD" }, { amount: 27, currency: "CAD" }, { amount: "27", currency: "XYZ" }, { amount: "27" }, "27"]) {
+      assert.equal((await call(port, "POST", "/api/onramp/checkout", { ...SESSION, fiat })).status, 400, JSON.stringify(fiat))
+    }
+    assert.equal(calls.length, 0)
+  })
+
   it("only let the page sell the token the app checked it can move", async () => {
     const { send, calls } = stub()
     const port = await serve(createOnramp(env, send))

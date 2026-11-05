@@ -2,7 +2,7 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { isAddress, isCurrencyCode, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { currentRateMicros, isAddress, isCurrencyCode, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createWallets, describeError, followChain, followRawSql, followSql, readHeadMark, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
@@ -14,7 +14,7 @@ import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule
 import { verifyLink } from "./links.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
 import { createCoinbase } from "./coinbase.ts"
-import { ONRAMP_ASSETS, OnrampError, type Onramp } from "./onramp.ts"
+import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onramp.ts"
 import { createRates } from "./rates.ts"
 import { createDepositReader } from "./block.ts"
 import { warnOfNewAggregators } from "./feeds.ts"
@@ -168,6 +168,13 @@ const isLocal = (ip: string) => ip === "::1" || ip === "::ffff:127.0.0.1" || ip.
 
 const NO_ONRAMP = "Buying isn't set up on this server."
 
+/** An amount typed in a currency, or undefined when it isn't one. */
+function fiatOf(value: unknown): FiatAmount | undefined {
+  const { amount, currency } = recordOf(value) ?? {}
+  if (typeof amount !== "string" || !/^\d{1,9}(\.\d{1,2})?$/.test(amount) || !/[1-9]/.test(amount)) return undefined
+  return typeof currency === "string" && isCurrencyCode(currency) ? { amount, currency } : undefined
+}
+
 export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env)) {
   const source = created?.source ?? null
 
@@ -265,6 +272,18 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     }
   }
 
+  /** What one USD buys right now, without reading any wallet, for what's shown before one has been read. Null when there's no current rate. */
+  async function answerRate(currency: CurrencyCode, res: ServerResponse) {
+    if (currency === "USD") return sendJson(res, 200, { currency, rateMicros: null })
+    try {
+      if (!created) return sendJson(res, 200, { currency, rateMicros: currentRateMicros(demoRates(currency), DEMO_WALLET.latest.timestamp) })
+      const latest = await pollHead()
+      sendJson(res, 200, { currency, rateMicros: currentRateMicros(await created.readRates(currency, { legs: [], latest }), latest.timestamp) })
+    } catch (error) {
+      sendAmpError(res, error)
+    }
+  }
+
   /** Linked wallets whose last read failed, so a client can say so rather than go on saying it's reading. Each request tries again. */
   const linkedFailures = new Set<string>()
 
@@ -327,12 +346,14 @@ export function createApi(env: Env, created: Created | null = createSource(env),
 
     if (path === "/api/onramp/checkout") {
       if (!onramp) return sendJson(res, 503, { error: NO_ONRAMP })
-      const { address, asset, cryptoAmount } = body
+      const { address, asset, cryptoAmount, fiat } = body
       if (typeof address !== "string" || !isAddress(address)) return sendJson(res, 400, { error: "That needs a Base address." })
       if (typeof asset !== "string" || !ONRAMP_ASSETS.includes(asset)) return sendJson(res, 400, { error: "That token can't be bought here." })
       if (typeof cryptoAmount !== "string" || !/^\d{1,12}(\.\d{1,18})?$/.test(cryptoAmount) || !/[1-9]/.test(cryptoAmount)) return sendJson(res, 400, { error: "That isn't an amount." })
+      const typed = fiat === undefined || fiat === null ? null : fiatOf(fiat)
+      if (typed === undefined) return sendJson(res, 400, { error: "That isn't an amount." })
       const ip = req.socket.remoteAddress
-      return onrampAnswer(res, () => onramp.checkout({ address, asset, cryptoAmount, clientIp: ip && !isLocal(ip) ? ip : null }))
+      return onrampAnswer(res, () => onramp.checkout({ address, asset, cryptoAmount, fiat: typed, clientIp: ip && !isLocal(ip) ? ip : null }))
     }
 
     const taxMatch = /^\/api\/tax-report\/([^/]+)$/.exec(path)
@@ -541,6 +562,16 @@ export function createApi(env: Env, created: Created | null = createSource(env),
 
     if (path === "/api/rules") {
       sendJson(res, 200, { rules: rules.map(({ rule }) => rule) })
+      return true
+    }
+
+    if (path === "/api/rate") {
+      const currency = new URL(req.url ?? "/", "http://localhost").searchParams.get("currency")
+      if (!isCurrencyCode(currency)) {
+        sendJson(res, 400, { error: "That isn't a currency this app knows." })
+        return true
+      }
+      await answerRate(currency, res)
       return true
     }
 

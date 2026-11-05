@@ -41,6 +41,17 @@ public enum Format {
         main == .USD ? text : text.replacing("$", with: "US$", maxReplacements: 1)
     }
 
+    /// What someone actually paid, in what they paid it in. Beside another main currency, it says which.
+    public static func money(_ money: Money, beside main: CurrencyCode) -> String {
+        let text = Self.money(money.micros, money.currency)
+        return money.currency == main ? text : text.replacing(money.currency.symbol, with: money.currency.label, maxReplacements: 1)
+    }
+
+    /// In plain digits for a provider, with no symbol or grouping.
+    static func plainAmount(_ micros: String) -> String {
+        "\(whole(micros))"
+    }
+
     /// One side of a comparison. A nil is unavailable, not zero.
     public static func ruleValue(_ micros: String?, format: String, currency: CurrencyCode, isEstimate: Bool = false) -> String {
         guard let micros else { return "Unavailable" }

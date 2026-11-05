@@ -1,7 +1,7 @@
 // Display only. Every value here was computed in BigInt. Converting to Number happens only to print it.
 // Money can be null, which means unknown, and prints as that. It never prints as $0. Without a currency, it's USD.
 
-import { CURRENCIES, type CurrencyCode } from "./currency.ts"
+import { CURRENCIES, atCurrentRate, type CurrencyCode } from "./currency.ts"
 
 const UNKNOWN = "unknown"
 
@@ -37,6 +37,11 @@ export function formatSignedMoney(micros: string | bigint | null, currency: Curr
 /** USD beside amounts in the main currency. If that's another kind of dollar, a bare "$" doesn't say which. Takes what's already formatted, sign and all. */
 export function labelUsd(text: string, main: CurrencyCode): string {
   return main === "USD" ? text : text.replace("$", "US$")
+}
+
+/** A USD amount as someone should read it right now: in their currency, or in labelled USD when there's no current rate. */
+export function formatUsdIn(usdMicros: string, main: CurrencyCode, rateMicros: string | null): string {
+  return rateMicros !== null && main !== "USD" ? formatMoney(atCurrentRate(usdMicros, rateMicros), main) : labelUsd(formatMoney(usdMicros, "USD"), main)
 }
 
 /** What one USD buys, to four decimals, which is how far exchange rates are usually quoted. */

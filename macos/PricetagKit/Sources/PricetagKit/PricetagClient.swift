@@ -32,9 +32,11 @@ public protocol PortfolioSource: Sendable {
     func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification
     /// One element each time the server says there's a new block, until the connection goes. Nil when this source can't say.
     func headEvents() -> AsyncThrowingStream<Void, any Error>?
-    /// A provider's page for buying `cryptoAmount` of `asset` for this address, and what to ask about its order by.
-    func onrampCheckout(address: String, asset: String, cryptoAmount: String) async throws -> OnrampCheckout
+    /// A provider's page for buying `asset` for this address, and what to ask about its order by. It starts at `fiat`, what was typed, when the provider can start from that currency, and otherwise at `cryptoAmount`.
+    func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout
     func onrampOrders(ref: String) async throws -> [OnrampOrder]
+    /// What one USD buys right now, in millionths, without reading any wallet. Nil when there's no current rate.
+    func currentRate(currency: CurrencyCode) async throws -> String?
 }
 
 /// Nothing here needs to be there for a source that only reads, like one in a test.
@@ -49,7 +51,8 @@ extension PortfolioSource {
     public func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
     public func rules() async throws -> [PricingRule] { [] }
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
-    public func onrampCheckout(address: String, asset: String, cryptoAmount: String) async throws -> OnrampCheckout { throw FetchError.unreachable }
+    public func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout { throw FetchError.unreachable }
+    public func currentRate(currency: CurrencyCode) async throws -> String? { throw FetchError.unreachable }
     public func onrampOrders(ref: String) async throws -> [OnrampOrder] { throw FetchError.unreachable }
 }
 
@@ -148,8 +151,13 @@ public struct PricetagClient: PortfolioSource {
         try await decoded(post("/api/portfolio/\(address)/compare", body: FoldBody(method: method, currency: currency, rule: nil, linked: linked, book: book), timeout: .seconds(180)))
     }
 
-    public func onrampCheckout(address: String, asset: String, cryptoAmount: String) async throws -> OnrampCheckout {
-        try await decoded(post("/api/onramp/checkout", body: ["address": address, "asset": asset, "cryptoAmount": cryptoAmount], timeout: .seconds(30)))
+    public func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout {
+        try await decoded(post("/api/onramp/checkout", body: CheckoutBody(address: address, asset: asset, cryptoAmount: cryptoAmount, fiat: fiat.map { .init(amount: Format.plainAmount($0.micros), currency: $0.currency) }), timeout: .seconds(30)))
+    }
+
+    public func currentRate(currency: CurrencyCode) async throws -> String? {
+        let body: RateBody = try await get("/api/rate", query: [URLQueryItem(name: "currency", value: currency.rawValue)], timeout: .seconds(15))
+        return body.rateMicros
     }
 
     public func onrampOrders(ref: String) async throws -> [OnrampOrder] {
@@ -208,6 +216,22 @@ public struct PricetagClient: PortfolioSource {
         case 503: throw FetchError.noAmpConfigured(message)
         default: throw FetchError.rejected(message)
         }
+    }
+
+    private struct CheckoutBody: Encodable {
+        struct Fiat: Encodable {
+            let amount: String
+            let currency: CurrencyCode
+        }
+
+        let address: String
+        let asset: String
+        let cryptoAmount: String
+        let fiat: Fiat?
+    }
+
+    private struct RateBody: Decodable {
+        let rateMicros: String?
     }
 
     private struct OrdersBody: Decodable {
