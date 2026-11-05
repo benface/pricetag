@@ -111,10 +111,13 @@ private struct HotWalletDetails: View {
     @State private var isSweeping = false
     @State private var isConfirmingRotation = false
     @State private var isConfirmingAbandon = false
+    /// The row a notification opened, lit up for a moment.
+    @State private var litRow: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var address: EthereumAddress? { wallet.address }
 
-    var body: some View {
+    private var form: some View {
         Form {
             if let alarm = wallet.alarm {
                 Section { alarmBanner(alarm) }
@@ -123,6 +126,7 @@ private struct HotWalletDetails: View {
                 Notice(notice.kind == .warning ? .warning : .info, notice.text, actionTitle: notice.asksForSavings ? HotWalletWording.addSavingsButton : nil) { isAddingCold = true }
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
+                    .id(notice.text == wallet.sweepProblem ? MoneyNotice.sweepProblemRow : notice.id)
             }
             balance
             actions
@@ -134,6 +138,12 @@ private struct HotWalletDetails: View {
             if !wallet.records.isEmpty { activity }
         }
         .formStyle(.grouped)
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            form.onChange(of: navigation.shownRow, initial: true) { _, row in reveal(row, with: proxy) }
+        }
         .sheet(isPresented: $isAddingCold, onDismiss: { if testingSavings != nil { isSending = true } }) {
             AddColdWalletSheet(wallet: wallet, wallets: store.walletList(hotWallet: wallet).pickable, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
         }
@@ -268,6 +278,8 @@ private struct HotWalletDetails: View {
             }
             ForEach(shownPurchases) { purchase in
                 PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), main: wallet.display.main) { purchases.dismiss(purchase) }
+                    .lit(litRow == MoneyNotice.purchaseRow(purchase.ref))
+                    .id(MoneyNotice.purchaseRow(purchase.ref))
             }
         }
     }
@@ -493,7 +505,22 @@ private struct HotWalletDetails: View {
                             .help("Open this transaction")
                     }
                 }
+                .lit(litRow == MoneyNotice.recordRow(record.hash))
+                .id(MoneyNotice.recordRow(record.hash))
             }
+        }
+    }
+
+    /// Scrolls to what a notification was about, and lights it up long enough to find it. It's taken, so the same click works twice.
+    private func reveal(_ row: String?, with proxy: ScrollViewProxy) {
+        guard let row else { return }
+        navigation.shownRow = nil
+        withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(row, anchor: .center) }
+        litRow = row
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard litRow == row else { return }
+            withAnimation(.easeOut(duration: 0.6)) { litRow = nil }
         }
     }
 
@@ -628,5 +655,19 @@ struct TopUpSheet: View {
         }
         if wallet.display.isConverted { tokens.append("\(Int(dollars)) USDC") }
         return tokens.isEmpty ? "" : " (about \(tokens.joined(separator: " or ")))"
+    }
+}
+
+private extension View {
+    /// The row a notification opened, in the system's selection color, so it's found at a glance. Behind the content, since a grouped form ignores a row's own background.
+    func lit(_ isLit: Bool) -> some View {
+        background {
+            if isLit {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.18))
+                    .padding(.horizontal, -6)
+                    .padding(.vertical, -4)
+            }
+        }
     }
 }

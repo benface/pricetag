@@ -63,6 +63,8 @@ final class Navigation {
     /// Which holding Fill In was clicked on, so its questions come first.
     var resolvingAsset: String?
     var isExporting = false
+    /// A notification was clicked. Spending Money scrolls to its row and lights it up, and the window opens if it's closed.
+    var shownRow: String?
 
     /// Spending Money is always this Mac's, so the wallet button isn't there. Every other section shows the wallet chosen.
     func switchWallet() {
@@ -101,6 +103,12 @@ final class Navigation {
     func addSavings() {
         section = .spendingMoney
         wantsAddSavings = true
+    }
+
+    /// Goes to spending money and shows one of its rows, which it scrolls to once the section is on screen.
+    func show(row: String) {
+        section = .spendingMoney
+        shownRow = row
     }
 
     func resolve(_ asset: String? = nil) {
