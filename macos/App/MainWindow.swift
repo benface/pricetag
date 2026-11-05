@@ -234,7 +234,7 @@ struct MainWindow: View {
             if store.address == nil {
                 NoWalletYet(navigation: navigation)
             } else {
-                TaxReportView(store: store)
+                TaxReportView(store: store, wallets: store.walletList(hotWallet: hotWallet).pickable, readAddress: AddressText.readAnywhere)
             }
         }
     }
@@ -740,7 +740,7 @@ private struct Welcome: View {
     let store: PortfolioStore
     let hotWallet: HotWallet
     let navigation: Navigation
-    @State private var problem: String?
+    @State private var input = ""
 
     var body: some View {
         ContentUnavailableView {
@@ -751,13 +751,8 @@ private struct Welcome: View {
         } actions: {
             VStack(spacing: 16) {
                 spendingMoney
-                VStack(alignment: .leading, spacing: 6) {
-                    WalletAddressField(prompt: "Paste an address to watch it", problem: $problem) { store.setWallet($0) }
-                        .textFieldStyle(.roundedBorder)
-                    if let problem {
-                        WarningText(problem).font(.callout)
-                    }
-                }
+                AddressField(prompt: "Paste an address to watch it", text: $input, wallets: store.walletList(hotWallet: hotWallet).pickable, read: AddressText.readAnywhere, onAddress: { store.setWallet($0) })
+                    .textFieldStyle(.roundedBorder)
                 if WalletList.offersDemo {
                     Button("Try the Demo Wallet") { store.setWallet(WalletAddress.demo) }
                         .buttonStyle(.link)

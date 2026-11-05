@@ -4,12 +4,18 @@ import UniformTypeIdentifiers
 /// Choose a country, read what the file will and won't say, then save it. The server writes the file.
 public struct TaxReportView: View {
     let store: PortfolioStore
+    let wallets: [WalletEntry]
+    let readAddress: (String) -> String?
     @State private var model: TaxReportModel
+    @State private var addingWallet: String
     @State private var document: TaxReportDocument?
     @State private var saveError: String?
 
-    public init(store: PortfolioStore, model: TaxReportModel? = nil) {
+    public init(store: PortfolioStore, wallets: [WalletEntry] = [], readAddress: @escaping (String) -> String? = WalletAddress.pasted(in:), addingWallet: String = "", model: TaxReportModel? = nil) {
         self.store = store
+        _addingWallet = State(initialValue: addingWallet)
+        self.wallets = wallets
+        self.readAddress = readAddress
         _model = State(initialValue: model ?? TaxReportModel(currency: store.currency, fetch: { try await store.taxReport($0) }))
     }
 
@@ -78,16 +84,46 @@ public struct TaxReportView: View {
         }
         if store.address != WalletAddress.demo {
             Section {
-                TextEditor(text: Binding(get: { model.otherWalletsText }, set: { model.setOtherWalletsText($0) }))
-                    .font(.callout.monospaced())
-                    .autocorrectionDisabled()
-                    .frame(height: 54)
-                if let bad = badWallet {
-                    WarningText("\(bad) isn't a Base address.").font(.callout)
-                }
+                ForEach(model.otherWallets, id: \.self) { otherWalletRow($0) }
+                AddressField(
+                    "Add a wallet",
+                    prompt: wallets.isEmpty ? "Paste an address" : "Paste an address, or find a wallet",
+                    text: $addingWallet,
+                    wallets: wallets.filter { model.offers($0, showing: store.address, linked: store.address.map(store.linked(for:)) ?? []) },
+                    read: readAddress,
+                    takesSeveral: true,
+                    onAddress: model.addOtherWallet
+                )
+                // A form's own style has no box, so its prompt would read as a label.
+                .textFieldStyle(.roundedBorder)
             } header: {
-                Text("Your other wallets, one per line")
+                Text("Your other wallets")
             }
+        }
+    }
+
+    private func otherWalletRow(_ address: String) -> some View {
+        let wallet = wallets.first { $0.address == address }
+        return HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(wallet?.title ?? (WalletAddress.isValid(address) ? Format.shortHash(address) : address))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if !WalletAddress.isValid(address) {
+                    // Only from before this could only hold addresses.
+                    WarningText("This isn't a Base address.").font(.callout)
+                } else if let wallet {
+                    Text(wallet.pickDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            Button("Remove", systemImage: "minus.circle") { model.removeOtherWallet(address) }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help("Remove")
         }
     }
 

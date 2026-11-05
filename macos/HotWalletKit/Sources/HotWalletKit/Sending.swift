@@ -140,9 +140,15 @@ public final class SendModel {
         return snapshot.ethUsdMicros.map { wallet.money(Money.usdMicros(of: wei, priceMicros: $0, decimals: 18)) } ?? "\(Format.amount(String(wei), decimals: 18)) ETH"
     }
 
-    /// The name of a savings wallet, when that's what this is.
+    /// What the user calls this address, if anything. It's only ever shown beside the address, because a name proves nothing.
     public var recipientName: String? {
-        wallet.settings.coldWallets.first { $0.address == recipient }?.name
+        guard let recipient else { return nil }
+        return wallet.settings.coldWallets.first { $0.address == recipient }?.name ?? store.savedWallets.first { $0.address == recipient.lowercased }?.name
+    }
+
+    /// Whether a saved wallet is somewhere this can send to, so the list only offers what would work.
+    public func canSend(to entry: WalletEntry) -> Bool {
+        EthereumAddress(entry.address).map { wallet.problem(sendingTo: $0) == nil } ?? false
     }
 
     public var nextPromptAt: Date? { wallet.nextPromptAt }

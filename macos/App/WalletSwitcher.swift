@@ -54,27 +54,6 @@ extension WalletList {
     }
 }
 
-extension WalletKind {
-    var symbol: String {
-        switch self {
-        case .spendingMoney: "banknote.fill"
-        case .savings: "lock.fill"
-        case .yours: "person.fill"
-        case .watching: "eye.fill"
-        case .demo: "sparkles"
-        }
-    }
-
-    /// Green for money this Mac can move, blue for the user's own, and quiet for what's only being looked at.
-    var tint: Color {
-        switch self {
-        case .spendingMoney: .green
-        case .savings, .yours: .blue
-        case .watching, .demo: .secondary
-        }
-    }
-}
-
 /// The current wallet, in the toolbar. It's what to click to get to another one, and it always says whose this is.
 struct WalletButton: View {
     let store: PortfolioStore
@@ -124,7 +103,7 @@ struct WalletSwitcher: View {
     let onOpenSpendingMoney: () -> Void
     let onProve: (WalletProof) -> Void
     let onDone: () -> Void
-    @State var problem: String?
+    @State var input = ""
     @State private var highlighted: String?
     /// Where the pointer was when the arrows last moved. Rows scrolling under a still pointer report a hover that nobody made.
     @State private var pointerAtLastKey: CGPoint?
@@ -173,13 +152,6 @@ struct WalletSwitcher: View {
             VStack(alignment: .leading, spacing: 0) {
                 if offersSpendingMoney { createSpendingMoney }
                 addRow
-                if let problem {
-                    WarningText(problem)
-                        .font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, 6)
-                }
             }
             .padding(6)
         }
@@ -351,18 +323,18 @@ struct WalletSwitcher: View {
     }
 
     private var addRow: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: "plus")
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 26, height: 26)
                 .background(.quaternary.opacity(0.6), in: Circle())
                 .accessibilityHidden(true)
-            WalletAddressField(prompt: "Paste an address to watch it", problem: $problem, onEmptySubmit: {
+            // The list above is what there is to pick from, so this doesn't repeat it.
+            AddressField(prompt: "Paste an address to watch it", text: $input, read: AddressText.readAnywhere, focus: $focus, equals: .add, onSubmit: {
                 if let highlighted { choose(highlighted) } else { onDone() }
             }, onAddress: choose)
             .textFieldStyle(.plain)
-            .focused($focus, equals: .add)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -384,48 +356,6 @@ struct WalletSwitcher: View {
         // The first row goes all the way up, to show its section's title too.
         if next == 0 { proxy.scrollTo(Self.top, anchor: .top) } else { proxy.scrollTo(addresses[next]) }
         return .handled
-    }
-}
-
-private struct WalletIcon: View {
-    let kind: WalletKind
-
-    var body: some View {
-        Image(systemName: kind.symbol)
-            .font(.caption.weight(.medium))
-            .foregroundStyle(kind.tint)
-            .frame(width: 26, height: 26)
-            .background(kind.tint.opacity(0.15), in: Circle())
-            .accessibilityHidden(true)
-    }
-}
-
-/// Addresses only: nothing in this app ever asks for a key or a recovery phrase, and nothing typed here is kept unless it's an address.
-/// A complete address needs no confirming, so it goes straight through.
-struct WalletAddressField: View {
-    let prompt: String
-    @Binding var problem: String?
-    var onEmptySubmit: () -> Void = {}
-    let onAddress: (String) -> Void
-    @State private var input = ""
-
-    var body: some View {
-        // Only what's typed is in a code font: a prompt in one reads as a command.
-        TextField(prompt, text: $input)
-            .font(input.isEmpty ? .body : .body.monospaced())
-            .autocorrectionDisabled()
-            .onChange(of: input) {
-                if let address = WalletAddress.find(in: input) {
-                    input = ""
-                    problem = nil
-                    onAddress(address)
-                } else {
-                    problem = WalletAddress.isTooLong(input) ? Wording.notAnAddress : nil
-                }
-            }
-            .onSubmit {
-                if input.isEmpty { onEmptySubmit() } else { problem = Wording.notAnAddress }
-            }
     }
 }
 
