@@ -83,6 +83,11 @@ public final class PortfolioStore {
     public private(set) var undoStack: [Book] = []
     /// Which change made each entry of `undoStack`, so one can be found again whatever's been added above it.
     @ObservationIgnored private var undoIDs: [UUID] = []
+    /// What each entry of `undoStack` takes back, in a menu's words, as in "Undo Answer".
+    public private(set) var undoNames: [String] = []
+    /// What Undo took back, newest last, until something else changes.
+    public private(set) var redoStack: [Book] = []
+    public private(set) var redoNames: [String] = []
     /// The server's pricing rules. Empty when it has only one, so there's nothing to choose.
     public private(set) var rules: [PricingRule] = []
     /// What to ask the server for, or nil for its default.
@@ -276,7 +281,7 @@ public final class PortfolioStore {
         } else if book.senders[address]?.kind == .mine {
             var answers = book
             answers.senders[address] = nil
-            setBook(answers)
+            setBook(answers, action: "Remove from List")
         }
         saveWallets(savedWallets.filter { $0.address != address })
         saveOrder(walletOrder.filter { $0 != address })
@@ -287,14 +292,14 @@ public final class PortfolioStore {
     /// The user says it's theirs, which is what answering "My wallet" says: from now on costs follow money between it and their other wallets.
     /// This is only ever about costs. It can't sign, and it isn't a savings wallet, which takes the device check.
     public func moveToYours(_ address: String) {
-        setBook(book.answering(address, .mine, focus: nil))
+        setBook(book.answering(address, .mine, focus: nil), action: "Move to Yours")
     }
 
     /// It's not the user's after all, so costs stop following its money. It stays listed under Watching, so a slip is easy to put right.
     public func moveToWatching(_ address: String) {
         var answers = book
         answers.senders[address] = nil
-        setBook(answers)
+        setBook(answers, action: "Move to Watching")
         keepWallet(address)
     }
 
@@ -345,8 +350,11 @@ public final class PortfolioStore {
         if let entry = snapshot.undoEntry, let index = undoIDs.firstIndex(of: entry) {
             undoStack.remove(at: index)
             undoIDs.remove(at: index)
+            undoNames.remove(at: index)
             since = index
         }
+        // What Undo took back may have the change in it or not, so Redo can't know what it would bring back.
+        clearRedo()
         // What was saved for Undo since then has the change in it. Undoing something else mustn't bring it back.
         for index in undoStack.indices where index >= since && isUnchanged(undoStack[index]) {
             undoStack[index].senders[address] = snapshot.answer
@@ -520,12 +528,13 @@ public final class PortfolioStore {
         answersChanged()
     }
 
-    /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced.
-    public func setBook(_ next: Book) {
+    /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced,
+    /// and the Edit menu calls it `action`.
+    public func setBook(_ next: Book, action: String = "Answer") {
         let nextAnswers = answers(in: next)
         guard nextAnswers != answers else { return }
-        undoStack.append(answers)
-        undoIDs.append(UUID())
+        pushUndo(answers, name: action)
+        clearRedo()
         store(nextAnswers)
     }
 
@@ -534,13 +543,34 @@ public final class PortfolioStore {
         let next = answers.recording(purchase)
         guard next != answers else { return }
         undoStack = undoStack.map { $0.recording(purchase) }
+        redoStack = redoStack.map { $0.recording(purchase) }
         store(next)
     }
 
     public func undo() {
         guard let previous = undoStack.popLast() else { return }
         undoIDs.removeLast()
+        let name = undoNames.removeLast()
+        redoStack.append(answers)
+        redoNames.append(name)
         store(previous)
+    }
+
+    public func redo() {
+        guard let next = redoStack.popLast() else { return }
+        pushUndo(answers, name: redoNames.removeLast())
+        store(next)
+    }
+
+    private func pushUndo(_ book: Book, name: String) {
+        undoStack.append(book)
+        undoIDs.append(UUID())
+        undoNames.append(name)
+    }
+
+    private func clearRedo() {
+        redoStack = []
+        redoNames = []
     }
 
     private func store(_ next: Book) {
@@ -578,7 +608,7 @@ public final class PortfolioStore {
         let imported = try await source.importCoinbase(csv: csv)
         var next = book
         next.withdrawals = imported.withdrawals
-        setBook(next)
+        setBook(next, action: "Import")
         return imported
     }
 

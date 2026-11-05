@@ -98,7 +98,7 @@ struct SettingsView: View {
             }
             Section {
                 LabeledContent("Who sent what") {
-                    Button("Forget All My Answers", role: .destructive) { store.setBook(Book()) }
+                    Button("Forget All My Answers", role: .destructive) { store.setBook(Book(), action: "Forget All Answers") }
                         .controlSize(.small)
                         .disabled(!store.hasAnswers)
                 }

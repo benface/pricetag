@@ -76,6 +76,13 @@ extension HotWallet {
     }
 }
 
+extension WalletEntry {
+    /// What Copy Address copies: this entry's own, with its checksum, so a pasted one can still be checked. Nothing for the demo wallet, which has none.
+    var checksummedAddress: String? {
+        kind == .demo ? nil : EthereumAddress(address)?.checksummed
+    }
+}
+
 extension WalletList {
     /// For trying things while building the app. A fixture has no place in a release build, and scenes show what one looks like.
     static var offersDemo: Bool {
@@ -122,6 +129,14 @@ struct WalletButton: View {
         .help(current.map { $0.shortAddress == nil ? "Switch wallet (⌘L)" : "\($0.address)\nSwitch wallet (⌘L)" } ?? "Add a wallet (⌘L)")
         .accessibilityLabel(current.map { [$0.title, $0.badge].compactMap(\.self).joined(separator: ", ") } ?? "Add Wallet")
         .accessibilityHint("Switches wallet")
+        // The same as the Wallet menu's. It's this wallet's own address, never another row's.
+        .contextMenu {
+            if let address = current?.checksummedAddress {
+                AddressActions(address: address)
+                Divider()
+            }
+            Button("Switch Wallet…") { navigation.switchWallet() }
+        }
         .popover(isPresented: $navigation.isSwitchingWallet, arrowEdge: .bottom) {
             WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: navigation.pendingWalletName, onOpenSpendingMoney: navigation.showSpendingMoney, onRemoveFromSavings: { navigation.removingFromSavings = $0 }, onDeleteSpendingMoney: { navigation.settingsPane = .spendingMoney }) { navigation.isSwitchingWallet = false }
         }
@@ -358,9 +373,8 @@ struct WalletSwitcher: View {
                 focus = .rename
             }
         }
-        Button("Copy Address") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(EthereumAddress(entry.address)?.checksummed ?? entry.address, forType: .string)
+        if let address = entry.checksummedAddress {
+            AddressActions(address: address)
         }
         if let arranged = [list.yours, list.watching].first(where: { $0.contains(entry) && $0.count > 1 }), let index = arranged.firstIndex(of: entry) {
             // For the keyboard and VoiceOver, which can't drag.

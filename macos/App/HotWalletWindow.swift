@@ -490,12 +490,14 @@ struct HotWalletDetails<Overview: View>: View {
                     }
                     Spacer()
                     RecordStatus(status: record.status, text: statusText(record))
-                    if let url = URL(string: "https://basescan.org/tx/\(record.hash)") {
+                    if let url = Basescan.transaction(record.hash) {
                         Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                             .foregroundStyle(.secondary)
                             .help("Open this transaction")
                     }
                 }
+                .contentShape(Rectangle())
+                .contextMenu { TransactionActions(hash: record.hash) }
             }
         }
     }
