@@ -1,5 +1,6 @@
 import Foundation
 @testable import KeyVault
+import LocalAuthentication
 import OSLog
 import PricetagKit
 import Testing
@@ -14,9 +15,11 @@ private final class CountingPresence: UserPresence, @unchecked Sendable {
     private let lock = NSLock()
     private var answers: [Bool]
     private(set) var reasons: [String] = []
+    var error: LAError?
 
-    init(answers: [Bool] = []) {
+    init(answers: [Bool] = [], error: LAError? = nil) {
         self.answers = answers
+        self.error = error
     }
 
     func confirm(reason: String) throws {
@@ -24,6 +27,7 @@ private final class CountingPresence: UserPresence, @unchecked Sendable {
             reasons.append(reason)
             return answers.isEmpty ? true : answers.removeFirst()
         }
+        if let error { throw error }
         if !allowed { throw FakePresence.Refused() }
     }
 }
@@ -103,6 +107,10 @@ private func code(_ answer: RPCAnswer) -> Int? {
 
 private func word(_ hex: String) -> String {
     String(repeating: "0", count: 64 - hex.count) + hex
+}
+
+private final class TestClock: @unchecked Sendable {
+    var now = Date()
 }
 
 private let usdcText = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
@@ -339,7 +347,7 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         #expect(signed.maxFeePerGas == cheapFees.maxFeePerGas)
         #expect(signed.gasLimit == 75000)
         #expect(signed.nonce == 0)
-        #expect(rig.presence.reasons == ["send a transaction for \(site)"])
+        #expect(rig.presence.reasons.first?.contains("for app.example.com") == true)
 
         // Written down before it left, so the alarm doesn't take it for a thief's.
         let record = try #require(rig.wallet.records.first)
@@ -880,6 +888,103 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         _ = await again.value
     }
 
+    // MARK: Asking right away
+
+    @Test func touchIDsPromptNamesTheSiteAndWhatLeaves() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let amount = word(String(5_000_000, radix: 16))
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters(to: usdcText, value: "0x0", data: "0xa9059cbb" + spenderWord + amount))
+        await rig.bridge.approve(approval.id)
+        _ = try await task.value.get()
+        let reason = try #require(rig.presence.reasons.first)
+        #expect(reason.contains("5 USDC"))
+        #expect(reason.contains("app.example.com"))
+    }
+
+    @Test func ethGoingAlongWithSomethingElseIsInThePromptAndTheReview() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let amount = word(String(5_000_000, radix: 16))
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters(to: usdcText, value: "0x38d7ea4c68000", data: "0xa9059cbb" + spenderWord + amount))
+        guard case .transaction(let review) = approval.action else { Issue.record("Not a transaction"); return }
+        #expect(review.moved?.symbol == "USDC")
+        #expect(review.moved?.text == "5")
+        #expect(review.recipient != review.to, "a token's recipient isn't its contract")
+        #expect(review.alsoSendsEth)
+        await rig.bridge.approve(approval.id)
+        _ = try await task.value.get()
+        #expect(rig.presence.reasons.first?.contains("0.001 ETH") == true)
+    }
+
+    @Test func aPlainSendMovesItsEthAndAnApprovalMovesNothing() async {
+        let rig = SiteRig()
+        await rig.connect()
+        let (first, plain) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        guard case .transaction(let review) = plain.action else { Issue.record("Not a transaction"); return }
+        #expect(review.moved?.symbol == "ETH")
+        #expect(review.recipient == review.to)
+        rig.bridge.reject(plain.id)
+        _ = await first.value
+        let (second, approving) = await rig.start("eth_sendTransaction", rig.sendParameters(to: usdcText, value: "0x0", data: "0x095ea7b3" + spenderWord + word("5")))
+        guard case .transaction(let approval) = approving.action else { Issue.record("Not a transaction"); return }
+        #expect(approval.moved == nil)
+        #expect(approval.spender != nil)
+        rig.bridge.reject(approving.id)
+        _ = await second.value
+    }
+
+    @Test func anAnswerPutsOffTheNextPromptWhetherItWasYesOrNo() async throws {
+        let clock = TestClock()
+        let rig = SiteRig(now: { clock.now })
+        #expect(rig.bridge.nextPromptAt == nil)
+        await rig.connect()
+        #expect(rig.bridge.nextPromptAt != nil, "connecting was an answer")
+        let (first, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        rig.bridge.reject(approval.id)
+        _ = await first.value
+        #expect(rig.bridge.nextPromptAt == clock.now.addingTimeInterval(HotWallet.pauseBetweenPrompts))
+        let (second, next) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        clock.now = clock.now.addingTimeInterval(5)
+        await rig.bridge.approve(next.id)
+        _ = try await second.value.get()
+        #expect(rig.bridge.nextPromptAt == clock.now.addingTimeInterval(HotWallet.pauseBetweenPrompts))
+    }
+
+    @Test func whatWentThroughIsKeptToSayItDidWithoutHoldingTheWindowOpen() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        await rig.bridge.approve(approval.id)
+        _ = try await task.value.get()
+        #expect(rig.bridge.finished?.approval.id == approval.id)
+        #expect(rig.bridge.windowID == nil)
+        rig.bridge.dismissFinished()
+        #expect(rig.bridge.finished == nil)
+    }
+
+    @Test func aRejectedRequestSaysNothingWentThrough() async {
+        let rig = SiteRig()
+        await rig.connect()
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+        rig.bridge.reject(approval.id)
+        _ = await task.value
+        #expect(rig.bridge.finished == nil)
+    }
+
+    @Test func aCancelledPromptAndARefusedOneAreToldApart() async {
+        for (error, expected) in [(LAError(.userCancel), ApprovalResult.cancelled), (LAError(.authenticationFailed), .failed(HotWalletWording.touchIDDidNotConfirm))] {
+            let rig = SiteRig(presence: CountingPresence(error: error))
+            await rig.connect()
+            let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters())
+            #expect(await rig.bridge.approve(approval.id) == expected)
+            #expect(rig.bridge.current?.id == approval.id, "it's still waiting")
+            #expect(await rig.signer.signed.isEmpty)
+            rig.bridge.reject(approval.id)
+            _ = await task.value
+        }
+    }
+
     // MARK: Strong warnings
 
     @Test func anUnlimitedApprovalTakesAcknowledgingAndAStrongWarning() async throws {
@@ -946,7 +1051,7 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         await rig.bridge.approve(approval.id, acknowledged: true)
         let signature = try #require(try await task.value.get().string)
         #expect(signature.count == 132)
-        #expect(rig.presence.reasons == ["sign a message for \(site)"])
+        #expect(rig.presence.reasons.first?.hasSuffix("for app.example.com") == true)
         guard case .typedData = await rig.signer.signedMessages.first else { Issue.record("Not typed data"); return }
     }
 

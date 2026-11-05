@@ -136,9 +136,14 @@ struct MacApp: App {
 
         Window(SiteApprovalWindow.title, id: WindowID.siteApproval) {
             SiteApprovalWindow(bridge: siteBridge)
+                .windowMinimizeBehavior(.disabled)
                 .holdsDockPresence()
         }
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+        // It stays where it can be seen, so Touch ID's prompt is never about something covered up.
+        .windowLevel(.floating)
+        .defaultPosition(.center)
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
 
@@ -191,7 +196,11 @@ struct MenuBarLabel: View {
                 if HotWalletDebug.isQuiet { return }
                 #endif
                 if id == nil {
-                    dismissWindow(id: WindowID.siteApproval)
+                    // A moment to see that it went through, unless something else has come up by then.
+                    Task {
+                        if siteBridge.finished != nil { try? await Task.sleep(for: .seconds(1.1)) }
+                        if siteBridge.windowID == nil { dismissWindow(id: WindowID.siteApproval) }
+                    }
                 } else {
                     openWindow(id: WindowID.siteApproval)
                     DockPresence.bringForward()
