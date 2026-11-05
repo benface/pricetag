@@ -102,7 +102,7 @@ private struct SendForm: View {
 
     private var amountField: some View {
         @Bindable var model = model
-        return TextField("Amount", text: $model.amountText, prompt: Text("0"))
+        return TextField(model.unit == .money ? "Amount in \(model.moneySymbol)" : "Amount in \(model.token.symbol)", text: $model.amountText, prompt: Text("0"))
             .labelsHidden()
             .textFieldStyle(.plain)
             .font(.displayLarge)
