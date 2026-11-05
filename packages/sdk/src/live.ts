@@ -8,7 +8,8 @@ export type Via = "stream" | "polling"
 
 /**
  * block: `blockNum` is the newest block, and `reorgFrom`, when it isn't null, is the first block a reorg replaced since the
- * last tick. Polling only sees a reorg at the head. Deeper ones are left to the re-read of recent blocks.
+ * last tick, or may have: what polling said counts as replaced once the stream is back, since only the stream can vouch for
+ * it. Polling only sees a reorg at the head. Deeper ones are left to the re-read of recent blocks.
  * down: neither the stream nor polling can reach Amp.
  */
 export type ChainTick = { kind: "block"; blockNum: number; reorgFrom: number | null; via: Via } | { kind: "down"; message: string }
@@ -53,6 +54,12 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
   let resume: BlockMark | null = null
   /** The first block replaced by a reorg that no tick has said yet. It outlives a stream that dies halfway through reporting one. */
   let reorgFrom: number | null = null
+  /**
+   * The first block polling said that the stream hasn't been through. Amp only reports a reorg before where the stream
+   * resumes, so one after it would pass as new blocks. A hash can't rule that out, since polling can read one block from the
+   * old chain and the next from the new one. So they count as replaced when the stream catches up, however many tries it takes.
+   */
+  let unconfirmedFrom: number | null = null
 
   const tickFor = (blockNum: number, via: Via): ChainTick => {
     const tick: ChainTick = { kind: "block", blockNum, reorgFrom, via }
@@ -64,11 +71,7 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
     const stalled = new AbortController()
     const watchdog = setTimeout(() => stalled.abort(new Error(`No new block in ${stallMs} ms`)), stallMs)
     let at = from
-    /**
-     * Blocks polling said that the stream hasn't confirmed. Amp only reports a reorg before `from`, so one after it would
-     * pass as new blocks. If the stream gets to the polled block with its hash, they held. If not, they count as replaced.
-     */
-    let unconfirmed = last && last.blockNum > from.blockNum ? { from: from.blockNum + 1, mark: last } : null
+    if (last && last.blockNum > from.blockNum) unconfirmedFrom ??= from.blockNum + 1
     try {
       for await (const range of streamed(sql, from, AbortSignal.any([signal, stalled.signal]))) {
         watchdog.refresh()
@@ -77,13 +80,10 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
         if (range.start <= at.blockNum && !isSameBlock) reorgFrom = Math.min(reorgFrom ?? range.start, range.start)
         if (!range.complete || isSameBlock) continue
         at = resume = { blockNum: range.end, hash: range.hash }
-        if (unconfirmed && range.end >= unconfirmed.mark.blockNum) {
-          const held = range.end === unconfirmed.mark.blockNum && range.hash === unconfirmed.mark.hash
-          if (!held) reorgFrom = Math.min(reorgFrom ?? unconfirmed.from, unconfirmed.from)
-          unconfirmed = null
-        }
-        // Catching up on blocks polling already said, with nothing replaced.
-        if (reorgFrom === null && last && range.end <= last.blockNum) continue
+        // Catching up on blocks polling already said, with nothing replaced so far.
+        if (reorgFrom === null && last && range.end < last.blockNum) continue
+        if (unconfirmedFrom !== null) reorgFrom = Math.min(reorgFrom ?? unconfirmedFrom, unconfirmedFrom)
+        unconfirmedFrom = null
         last = at
         emit(tickFor(range.end, "stream"))
       }
