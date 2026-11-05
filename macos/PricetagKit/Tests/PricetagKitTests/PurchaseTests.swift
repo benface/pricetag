@@ -16,6 +16,7 @@ private actor Orders: PortfolioSource {
     var failure: FetchError?
     var page = "https://pay.coinbase.com/buy/select-asset?sessionToken=x"
     var asked = 0
+    var askedFiat: Money?
 
     func say(_ orders: [OnrampOrder]) { self.orders = orders }
     func fail(_ error: FetchError?) { failure = error }
@@ -23,8 +24,9 @@ private actor Orders: PortfolioSource {
 
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
-    func onrampCheckout(address: String, asset: String, cryptoAmount: String) async throws -> OnrampCheckout {
+    func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout {
         if let failure { throw failure }
+        askedFiat = fiat
         return OnrampCheckout(url: page, ref: "ref")
     }
     func onrampOrders(ref: String) async throws -> [OnrampOrder] {
@@ -44,6 +46,59 @@ private func setup(match: PurchaseMatch.State? = nil, now: @escaping @Sendable (
 
 @MainActor
 struct PurchaseTrackerTests {
+    @Test func whatWasTypedGoesToThePageAndStaysAsTyped() async throws {
+        let (tracker, _, source, defaults) = setup()
+        let typed = Money(micros: "28000000", currency: .CAD)
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 20, cryptoAmount: "0.008", typed: typed)
+        #expect(await source.askedFiat == typed)
+        let started = try #require(tracker.purchases(of: wallet).first)
+        #expect(PurchaseWording.title(started, beside: .CAD) == "$28 of ETH")
+        #expect(PurchaseWording.title(started, beside: .USD) == "CA$28 of ETH")
+        let reloaded = PurchaseTracker(store: PortfolioStore(defaults: defaults, makeSource: { _ in source }), defaults: defaults, matchOf: { _ in nil })
+        #expect(reloaded.purchases(of: wallet).first?.typed == typed)
+    }
+
+    /// Typed in USD, or saved before amounts in other currencies. It's a past amount, so today's rate has nothing to say about it.
+    @Test func aPurchaseInUSDStaysInUSD() throws {
+        let saved = #"{"ref":"r","wallet":"\#(wallet)","asset":"ETH","dollars":25,"startedAt":0}"#
+        let purchase = try JSONDecoder().decode(TrackedPurchase.self, from: Data(saved.utf8))
+        #expect(purchase.typed == nil)
+        #expect(PurchaseWording.title(purchase, beside: .USD) == "$25 of ETH")
+        #expect(PurchaseWording.title(purchase, beside: .CAD) == "US$25 of ETH")
+    }
+
+    @Test func anAbsurdAmountDoesntTrap() {
+        let purchase = TrackedPurchase(ref: "r", wallet: wallet, asset: "ETH", dollars: .max, startedAt: .now)
+        #expect(PurchaseWording.title(purchase, beside: .USD).hasSuffix(" of ETH"))
+    }
+
+    @Test func nothingUSDIsSentAsWhatWasTyped() async throws {
+        let (tracker, _, source, _) = setup()
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        #expect(await source.askedFiat == nil)
+        #expect(tracker.purchases(of: wallet).first?.typed == nil)
+    }
+
+    @Test func aCostSaysWhichDollarsOnlyBesideAnotherCurrency() {
+        let usd = PurchasePhase.recorded(paid)
+        let cad = PurchasePhase.recorded(Money(micros: "25810000", currency: .CAD))
+        #expect(PurchaseWording.status(usd, beside: .USD) == "Cost $25.81, fees included")
+        #expect(PurchaseWording.status(usd, beside: .CAD) == "Cost US$25.81, fees included")
+        #expect(PurchaseWording.status(cad, beside: .CAD) == "Cost $25.81, fees included")
+        #expect(PurchaseWording.status(cad, beside: .USD) == "Cost CA$25.81, fees included")
+        for (currency, text) in [(CurrencyCode.EUR, "€25.81"), (.GBP, "£25.81"), (.CHF, "CHF\u{00A0}25.81")] {
+            let paid = PurchasePhase.recorded(Money(micros: "25810000", currency: currency))
+            #expect(PurchaseWording.status(paid, beside: .USD) == "Cost \(text), fees included")
+            #expect(PurchaseWording.status(paid, beside: .CAD) == "Cost \(text), fees included")
+        }
+    }
+
+    @Test func theSheetSaysWhatThePageWillDo() {
+        #expect(PurchaseWording.checkoutNote(MoneyDisplay(main: .USD)) == "You'll need a Coinbase account. Its fees are added, and that total becomes the cost here.")
+        #expect(PurchaseWording.checkoutNote(MoneyDisplay(main: .CAD, rateMicros: "1400000")).contains("starts at this amount in CAD"))
+        #expect(PurchaseWording.checkoutNote(MoneyDisplay(main: .CAD)).hasPrefix("There's no current USD to CAD rate, so this is in US dollars"))
+    }
+
     @Test func followsAnOrderFromThePageToItsCost() async throws {
         let (tracker, store, source, _) = setup()
         let page = try await tracker.begin(wallet: wallet.uppercased().replacing("0X", with: "0x"), asset: "ETH", dollars: 25, cryptoAmount: "0.008")
@@ -112,7 +167,7 @@ struct PurchaseTrackerTests {
         let phase = tracker.phase(of: tracker.purchases[0])
         #expect(phase.isFinished)
         #expect(PurchaseWording.isWarning(phase))
-        #expect(PurchaseWording.status(phase) == "Cost unknown. There's no exchange rate for SEK")
+        #expect(PurchaseWording.status(phase, beside: .CAD) == "Cost unknown. There's no exchange rate for SEK")
     }
 
     @Test func aPurchaseInEurosIsRecordedInEuros() async throws {
@@ -123,7 +178,7 @@ struct PurchaseTrackerTests {
         await tracker.check()
         #expect(store.book.purchases.first?.cost == euros)
         #expect(store.book.purchases.first?.costUsdMicros == "50000000")
-        #expect(PurchaseWording.status(tracker.phase(of: tracker.purchases[0])) == "Cost €46.20, fees included")
+        #expect(PurchaseWording.status(tracker.phase(of: tracker.purchases[0]), beside: .CAD) == "Cost €46.20, fees included")
     }
 
     @Test func anOrderSavedBeforePaidInExistedStillReads() throws {

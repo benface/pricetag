@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ETH_ADDRESS, TOKENS, encodeNote, formatAmount, formatMoney, isAddress, normalizeAddress, shortHash, type Token } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, TOKENS, encodeNote, formatAmount, formatMoney, formatUsdIn, isAddress, labelUsd, normalizeAddress, shortHash, type CurrencyCode, type Token } from "@pricetag/sdk/core"
 import type { Hex, PublicClient } from "viem"
 import { linkedWallets, type Book } from "../core/book.ts"
 import { readColdRequest, transferRequest, type ColdAccount, type ColdRequest, type ColdSigner, type DevicePrompt } from "../core/cold.ts"
@@ -10,6 +10,7 @@ import { CHECK_ADDRESS_WARNING, KEYSTONE_CONNECT, KEYSTONE_LOOK, LEDGER_HANDED_O
 import type { BrowserWallet } from "./devices/browser.ts"
 import { realConnectors, type Connectors } from "./devices/connectors.ts"
 import type { ScannedCode } from "./devices/keystone.ts"
+import { useCurrentRate } from "./useCurrentRate.ts"
 
 const CodeScanner = lazy(() => import("./devices/KeystoneCodes.tsx").then((m) => ({ default: m.CodeScanner })))
 const CodeToSign = lazy(() => import("./devices/KeystoneCodes.tsx").then((m) => ({ default: m.CodeToSign })))
@@ -35,6 +36,8 @@ type Step = "route" | "ledger" | "keystone" | "accounts" | "check" | "ready" | "
 type Props = {
   link: DeviceLink | null
   book: Book
+  /** What amounts read in. A note's still published in USD. */
+  currency?: CurrencyCode
   /** Accounts from a device are the user's, with no question. */
   onLink: (addresses: readonly string[]) => void
   /** Opens a wallet in the main view. */
@@ -46,7 +49,7 @@ type Props = {
 }
 
 /** The one place the web app reaches a hardware wallet. Keys stay on the device: this only ever sees addresses and signatures. */
-export function DevicePanel({ link, book, onLink, onView, onClose, connectors = realConnectors, start }: Props) {
+export function DevicePanel({ link, book, currency = "USD", onLink, onView, onClose, connectors = realConnectors, start }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   const [step, setStep] = useState<Step>(start?.step ?? (link?.kind === "add-savings" && link.device === "ledger" && connectors.canUseUsb() ? "ledger" : "route"))
@@ -367,9 +370,9 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
           </>
         ) : null}
 
-        {step === "send" && account && signer ? <SendForm link={link?.kind === "top-up" ? link : null} from={account} book={book} checked={checked} accounts={accounts} clientOf={clientOf} busy={busy} onLink={onLink} onSend={send} /> : null}
+        {step === "send" && account && signer ? <SendForm link={link?.kind === "top-up" ? link : null} currency={currency} from={account} book={book} checked={checked} accounts={accounts} clientOf={clientOf} busy={busy} onLink={onLink} onSend={send} /> : null}
 
-        {step === "publish" && account && signer && link?.kind === "publish" ? <PublishForm link={link} busy={busy} onBack={() => setStep("accounts")} onSend={send} /> : null}
+        {step === "publish" && account && signer && link?.kind === "publish" ? <PublishForm link={link} currency={currency} busy={busy} onBack={() => setStep("accounts")} onSend={send} /> : null}
 
         {step === "sent" && sent ? (
           <>
@@ -414,8 +417,9 @@ export function DevicePanel({ link, book, onLink, onView, onClose, connectors = 
   )
 }
 
-function SendForm({ link, from, book, checked, accounts, clientOf, busy, onLink, onSend }: {
+function SendForm({ link, currency, from, book, checked, accounts, clientOf, busy, onLink, onSend }: {
   link: Extract<DeviceLink, { kind: "top-up" }> | null
+  currency: CurrencyCode
   from: SeenAccount
   book: Book
   checked: readonly CheckedAccount[]
@@ -432,6 +436,7 @@ function SendForm({ link, from, book, checked, accounts, clientOf, busy, onLink,
   const [touched, setTouched] = useState(false)
   const [ethPrice, setEthPrice] = useState<bigint | null>(null)
   const [check, setCheck] = useState<SendCheck | null>(null)
+  const rateMicros = useCurrentRate(currency)
 
   const knownOwn = useMemo(() => new Set([...linkedWallets(book), ...checked.map((c) => c.address), ...accounts.filter((a) => a.activity !== null && !isFresh(a.activity)).map((a) => a.address)]), [book, checked, accounts])
   const to = isAddress(typed.trim()) ? normalizeAddress(typed.trim()) : null
@@ -512,7 +517,7 @@ function SendForm({ link, from, book, checked, accounts, clientOf, busy, onLink,
           </select>
         </label>
       </div>
-      {usdMicros ? <p className="muted small">About {formatMoney(usdMicros, "USD")}</p> : null}
+      {usdMicros ? <p className="muted small">About {formatUsdIn(usdMicros.toString(), currency, rateMicros)}</p> : null}
       {amount && !units ? <p className="small warn-text">⚠ That isn't an amount of {token.symbol}.</p> : null}
       {refused && !needsAnswer ? <p className="small warn-text">⚠ {refused}</p> : null}
       {check?.feeUnits ? <p className="muted small">Network fee: about {formatAmount(check.feeUnits, 18)} ETH</p> : null}
@@ -525,14 +530,14 @@ function SendForm({ link, from, book, checked, accounts, clientOf, busy, onLink,
   )
 }
 
-function PublishForm({ link, busy, onBack, onSend }: { link: Extract<DeviceLink, { kind: "publish" }>; busy: boolean; onBack: () => void; onSend: (request: ColdRequest, what: string, own: ReadonlySet<string>) => void }) {
+function PublishForm({ link, currency, busy, onBack, onSend }: { link: Extract<DeviceLink, { kind: "publish" }>; currency: CurrencyCode; busy: boolean; onBack: () => void; onSend: (request: ColdRequest, what: string, own: ReadonlySet<string>) => void }) {
   const [usd, setUsd] = useState(() => (link.usdMicros ? (Number(link.usdMicros) / 1_000_000).toString() : ""))
   const micros = usdMicrosOf(usd)
   const amount = link.amount ? `${formatAmount(link.amount.units, link.amount.decimals)} ${link.asset}` : link.asset
   const go = () => {
     if (!micros) return
     // To the wallet the link names, so from any other this isn't a send to itself, and the rule refuses it.
-    onSend({ to: link.wallet, value: 0n, data: encodeNote(link.txHash, link.asset, micros) as Hex }, `This wallet published that it paid ${formatMoney(micros, "USD")} for ${amount} in transaction ${shortHash(link.txHash)}.`, new Set())
+    onSend({ to: link.wallet, value: 0n, data: encodeNote(link.txHash, link.asset, micros) as Hex }, `This wallet published that it paid ${labelUsd(formatMoney(micros, "USD"), currency)} for ${amount} in transaction ${shortHash(link.txHash)}.`, new Set())
   }
   return (
     <>
@@ -541,7 +546,7 @@ function PublishForm({ link, busy, onBack, onSend }: { link: Extract<DeviceLink,
         <span className="small muted">Paid for {amount}, in USD</span>
         <input inputMode="decimal" placeholder="$0.00" value={usd} onChange={(e) => setUsd(e.target.value)} />
       </label>
-      {micros ? <p className="muted small">This wallet would publish that it paid {formatMoney(micros, "USD")} in transaction {shortHash(link.txHash)}.</p> : null}
+      {micros ? <p className="muted small">This wallet would publish that it paid {labelUsd(formatMoney(micros, "USD"), currency)} in transaction {shortHash(link.txHash)}.</p> : null}
       <p className="muted small">{PUBLISH_DETAIL}</p>
       <p className="muted small">{PUBLISH_DEVICE_NOTE}</p>
       <div className="device-actions">

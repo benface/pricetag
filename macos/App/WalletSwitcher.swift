@@ -72,7 +72,7 @@ extension PortfolioStore {
 extension HotWallet {
     func removingFromSavingsMessage(_ address: String) -> String {
         let others = settings.coldWallets.filter { $0.address.lowercased != address }
-        return HotWalletWording.removingFromSavings(sweepsNowGoTo: others.first?.name, wasDestination: settings.sweepDestination?.lowercased == address, cap: usd(WalletSettings.capCeilingWithoutCold))
+        return HotWalletWording.removingFromSavings(sweepsNowGoTo: others.first?.name, wasDestination: settings.sweepDestination?.lowercased == address, cap: display.whole(WalletSettings.capCeilingWithoutCold))
     }
 }
 

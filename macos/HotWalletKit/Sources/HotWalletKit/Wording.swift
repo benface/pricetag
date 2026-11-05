@@ -8,8 +8,8 @@ public enum HotWalletWording {
     public static let summary = "A small balance for everyday use, with no recovery phrase to write down."
     public static let cannotBeRestored = "This money lives only on this device. There's no recovery phrase and no backup: if this device is lost or erased, what's on it is gone."
     public static let newDevice = "Getting a new device? Sweep everything to your savings first."
-    public static func addSavings(beside main: CurrencyCode) -> String {
-        "Add a savings wallet. Without one, this is all you have, so the cap stays at \(usd(dollars: 25, beside: main)) and nothing can be swept."
+    public static func addSavings(in display: MoneyDisplay) -> String {
+        "Add a savings wallet. Without one, this is all you have, so the cap stays at \(display.whole(WalletSettings.capCeilingWithoutCold)) and nothing can be swept."
     }
 
     /// Why removing a savings wallet is more than a list entry: where sweeps go next, and what's kept.
@@ -41,24 +41,19 @@ public enum HotWalletWording {
 
     public static let sweepsOnlyWhileOpen = "Sweeps only run while the app is open. If it's closed, whatever arrives stays here until it opens again."
 
-    /// The cap, and everything measured against it, stays in USD.
-    public static func usd(_ micros: UInt128, beside main: CurrencyCode) -> String {
-        Format.usd(Format.money(String(micros), .USD), beside: main)
+    /// The cap's held in USD, so its number here moves with the rate, and what it does doesn't.
+    public static func capFollowsRate(_ main: CurrencyCode) -> String {
+        "It's kept in USD, so in \(main.rawValue) it moves a little with the exchange rate."
     }
 
-    /// For the whole dollars a slider moves in.
-    public static func usd(dollars: Int, beside main: CurrencyCode) -> String {
-        Format.usd("$\(dollars)", beside: main)
-    }
-
-    public static func overCap(by excess: UInt128, hasDestination: Bool, beside main: CurrencyCode) -> String {
+    public static func overCap(by excess: UInt128, hasDestination: Bool, in display: MoneyDisplay) -> String {
         hasDestination
-            ? "\(usd(excess, beside: main)) over the cap. It's being moved to your savings, so keep this app open until it lands."
-            : "\(usd(excess, beside: main)) over the cap, with nowhere to sweep it. Add a savings wallet."
+            ? "\(display.money(excess)) over the cap. It's being moved to your savings, so keep this app open until it lands."
+            : "\(display.money(excess)) over the cap, with nowhere to sweep it. Add a savings wallet."
     }
 
-    public static func shortOverCap(by excess: UInt128, beside main: CurrencyCode) -> String {
-        "\(usd(excess, beside: main)) over the cap"
+    public static func shortOverCap(by excess: UInt128, in display: MoneyDisplay) -> String {
+        "\(display.money(excess)) over the cap"
     }
 
     public static func shortNoPrice(_ symbols: [String]) -> String {

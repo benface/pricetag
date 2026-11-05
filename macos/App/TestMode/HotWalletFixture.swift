@@ -57,7 +57,7 @@ struct HotWalletFixture {
     static let replacingKeyStuck = HotWalletFixture(balances: ["USDC": 20_000_000], rotation: Rotation(from: spending, to: replacement, destination: replacement), canActOnChain: true)
     static let replacingKeyMissing = HotWalletFixture(keys: .isMissing, rotation: Rotation(from: spending, to: replacement, destination: replacement))
 
-    func make(source: any PortfolioSource, costMethod: @escaping @MainActor () -> CostMethod, mainCurrency: @escaping @MainActor () -> CurrencyCode) -> HotWallet {
+    func make(source: any PortfolioSource, costMethod: @escaping @MainActor () -> CostMethod, moneyDisplay: @escaping @MainActor () -> MoneyDisplay) -> HotWallet {
         HotWallet(
             signer: NoKeys(answer: keys),
             settingsStore: FixedSettings(settings: settings),
@@ -65,7 +65,7 @@ struct HotWalletFixture {
             presence: NoOneThere(),
             portfolioSource: { source },
             costMethod: costMethod,
-            mainCurrency: mainCurrency,
+            moneyDisplay: moneyDisplay,
             makeChain: { [snapshot, isConnectedToSite, failing] url -> any ChainClient in
                 if TestMode.live != nil { return ReadOnlyChain(node: RPCChainClient(url: url)) }
                 return FixtureChain(snapshot: snapshot, canQuote: isConnectedToSite, failing: failing)

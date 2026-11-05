@@ -95,6 +95,7 @@ The RPC is configurable and untrusted.
 - [x] The block of the last receipt is on disk, so the wait for newer balances survives a restart.
 - [x] While a transaction is on its way, its receipt is checked about once a second. That check only settles receipts and updates what's shown. Signing, giving up on a transaction, and the reads behind alarms and deleting a key stay on the 15 s tick, so checking faster doesn't make them any quicker to trigger.
 - [ ] **A lying node can still cost something.** It can claim false balances, which wastes gas on sweeps that fail. It can raise a false alarm, or hide activity from the nonce check, though not from the comparison with Amp. If it and the server both say the old key is empty during a rotation, the key is deleted and whatever's still there is lost.
+- [ ] **A lying server can misstate what amounts read as in another main currency.** Current rates come from our server (`GET /api/rate`), because they're only for reading: the cap, sweeps and what's signed work in USD from prices read off the chain. A wrong rate can make an approval's worth read wrong in CAD, but the token amount beside it is the real one.
 
 ## Cap and sweeps
 

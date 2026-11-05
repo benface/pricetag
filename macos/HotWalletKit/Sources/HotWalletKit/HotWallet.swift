@@ -58,7 +58,7 @@ public final class HotWallet {
     @ObservationIgnored private var lastAnswerAt: Date?
     @ObservationIgnored private let portfolioSource: @MainActor () -> any PortfolioSource
     @ObservationIgnored private let costMethod: @MainActor () -> CostMethod
-    @ObservationIgnored private let mainCurrency: @MainActor () -> CurrencyCode
+    @ObservationIgnored private let moneyDisplay: @MainActor () -> MoneyDisplay
     @ObservationIgnored private let makeChain: @Sendable (URL) -> any ChainClient
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let tickDelay: Duration
@@ -99,7 +99,7 @@ public final class HotWallet {
         presence: any UserPresence = DeviceOwnerPresence(),
         portfolioSource: @escaping @MainActor () -> any PortfolioSource,
         costMethod: @escaping @MainActor () -> CostMethod = { .average },
-        mainCurrency: @escaping @MainActor () -> CurrencyCode = { .USD },
+        moneyDisplay: @escaping @MainActor () -> MoneyDisplay = { MoneyDisplay(main: .USD) },
         makeChain: @escaping @Sendable (URL) -> any ChainClient = { RPCChainClient(url: $0) },
         now: @escaping @Sendable () -> Date = { Date() },
         tickDelay: Duration = .seconds(15),
@@ -113,7 +113,7 @@ public final class HotWallet {
         self.presence = presence
         self.portfolioSource = portfolioSource
         self.costMethod = costMethod
-        self.mainCurrency = mainCurrency
+        self.moneyDisplay = moneyDisplay
         self.makeChain = makeChain
         self.now = now
         self.tickDelay = tickDelay
@@ -435,7 +435,7 @@ public final class HotWallet {
         if let plan {
             if plan.blockers.contains(.notEnoughGas) || rotationHold == .notEnoughGas { notices.append(.init(.warning, HotWalletWording.noGas, short: HotWalletWording.shortNoGas)) }
             if plan.excessUsdMicros > 0, !plan.excessIsDust || plan.blockers.contains(.noDestination) {
-                notices.append(.init(.warning, HotWalletWording.overCap(by: plan.excessUsdMicros, hasDestination: settings.sweepDestination != nil, beside: mainCurrency()), short: HotWalletWording.shortOverCap(by: plan.excessUsdMicros, beside: mainCurrency()), asksForSavings: settings.sweepDestination == nil))
+                notices.append(.init(.warning, HotWalletWording.overCap(by: plan.excessUsdMicros, hasDestination: settings.sweepDestination != nil, in: display), short: HotWalletWording.shortOverCap(by: plan.excessUsdMicros, in: display), asksForSavings: settings.sweepDestination == nil))
             } else if plan.excessIsDust {
                 notices.append(.init(.info, HotWalletWording.excessIsDust))
             }
@@ -443,19 +443,24 @@ public final class HotWallet {
         if snapshot != nil, snapshot?.ethUsdMicros == nil { notices.append(.init(.warning, HotWalletWording.noEthPrice, short: HotWalletWording.shortNoEthPrice)) }
         if !unpricedSymbols.isEmpty { notices.append(.init(.warning, HotWalletWording.noPrice(unpricedSymbols), short: HotWalletWording.shortNoPrice(unpricedSymbols))) }
         // Being over the cap with nowhere to sweep already says to add one.
-        if settings.coldWallets.isEmpty, plan?.excessUsdMicros ?? 0 == 0 { notices.append(.init(.warning, HotWalletWording.addSavings(beside: mainCurrency()), short: HotWalletWording.shortNoSavings, asksForSavings: true)) }
+        if settings.coldWallets.isEmpty, plan?.excessUsdMicros ?? 0 == 0 { notices.append(.init(.warning, HotWalletWording.addSavings(in: display), short: HotWalletWording.shortNoSavings, asksForSavings: true)) }
         if ampProblem { notices.append(.init(.info, HotWalletWording.cantCheckAmp)) }
         return notices
     }
 
-    /// An amount of this wallet's, as the user should read it. See `HotWalletWording.usd`.
-    public func usd(_ micros: UInt128) -> String {
-        HotWalletWording.usd(micros, beside: mainCurrency())
+    /// How this wallet's amounts read. They're all USD in here, and this is the only place they stop being: see `MoneyDisplay`.
+    public var display: MoneyDisplay { moneyDisplay() }
+
+    public func money(_ usdMicros: UInt128) -> String {
+        display.money(usdMicros)
     }
 
-    public func usd(dollars: Int) -> String {
-        HotWalletWording.usd(dollars: dollars, beside: mainCurrency())
+    /// For the whole dollars a slider moves in.
+    public func money(dollars: Int) -> String {
+        display.whole(dollars: dollars)
     }
+
+    public var capText: String { display.cap(settings.capUsdMicros) }
 
     /// Whether something needs the user, for places with room for only a triangle.
     public var needsAttention: Bool {

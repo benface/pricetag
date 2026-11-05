@@ -133,7 +133,7 @@ struct SettingsView: View {
                 LabeledContent("Cap") {
                     HStack {
                         Slider(value: Binding(get: { Double(hotWallet.settings.capInDollars) }, set: { hotWallet.setCap(dollars: Int($0)) }), in: 1...Double(hotWallet.settings.capCeiling / Money.dollar))
-                        Text(hotWallet.usd(dollars: hotWallet.settings.capInDollars))
+                        Text(hotWallet.money(dollars: hotWallet.settings.capInDollars))
                             .monospacedDigit()
                             .frame(width: 56, alignment: .trailing)
                     }
@@ -164,7 +164,7 @@ struct SettingsView: View {
                     }
                 }
             } footer: {
-                Text("The cap is \(hotWallet.usd(dollars: Int(hotWallet.settings.capCeiling / Money.dollar))) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build").")
+                Text("The cap is \(hotWallet.display.whole(hotWallet.settings.capCeiling)) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build").\(hotWallet.display.isConverted ? " \(HotWalletWording.capFollowsRate(hotWallet.display.main))" : "")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
