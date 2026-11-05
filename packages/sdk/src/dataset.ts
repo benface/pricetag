@@ -129,6 +129,28 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
       if (isNotStarted(error)) return []
       throw error
     })
+
+  /** What moved in a wallet, which no pricing rule changes. */
+  async function readLegs(address: string, from: number, to: number) {
+    const me = hexOf(address)
+    const range = `block_num BETWEEN ${from} AND ${to}`
+    const legRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
+    const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
+    const rows = legRows.map(toLegRow)
+    return {
+      // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
+      // An unlisted row stays either way, because it's evidence that something moved.
+      rows: [...rows.filter((r) => r.amount !== "" && r.amount !== "0"), ...unlistedRows.map(toLegRow)],
+      gasUnknown: rows.filter((r) => r.kind === "gas" && r.amount === "").map(({ tx_hash, block_num }) => ({ tx_hash, block_num })),
+    }
+  }
+
+  /** What this rule's `priced_legs` says about a wallet. */
+  async function readPriced(address: string, from: number, to: number) {
+    const pricedRows = await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${prices}.priced_legs WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${hexOf(address)}'`)
+    return pricedRows.map(toPricedRow)
+  }
+
   return {
     head: (after: number | null) => readHead(query, config.baseDataset, after),
 
@@ -146,20 +168,12 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
       return through
     },
 
+    readLegs,
+
+    readPriced,
+
     async readWindow(address: string, from: number, to: number) {
-      const me = hexOf(address)
-      const range = `block_num BETWEEN ${from} AND ${to}`
-      const legRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
-      const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
-      const pricedRows = await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${prices}.priced_legs WHERE ${range} AND account = X'${me}'`)
-      const rows = legRows.map(toLegRow)
-      return {
-        // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
-        // An unlisted row stays either way, because it's evidence that something moved.
-        rows: [...rows.filter((r) => r.amount !== "" && r.amount !== "0"), ...unlistedRows.map(toLegRow)],
-        gasUnknown: rows.filter((r) => r.kind === "gas" && r.amount === "").map(({ tx_hash, block_num }) => ({ tx_hash, block_num })),
-        priced: pricedRows.map(toPricedRow),
-      }
+      return { ...(await readLegs(address, from, to)), priced: await readPriced(address, from, to) }
     },
 
     async readReferences(blocks: readonly number[]): Promise<Reference[]> {
