@@ -28,11 +28,12 @@ struct MacApp: App {
         TestMode.runIfAsked()
         HotWalletDebug.runSelfTestIfAsked()
         #endif
-        let store = PortfolioStore()
+        let store = PortfolioStore(cacheDirectory: .portfolioCache)
         let hotWallet = HotWalletFactory.make(store: store)
         let navigation = Navigation()
         let siteBridge = SiteBridge(wallet: hotWallet)
         siteBridge.onTopUp = { navigation.wantsTopUp = true }
+        siteBridge.onReceive = { navigation.wantsReceive = true }
         navigation.onSwitcherClosed = { store.save(navigation.pendingWalletName, hotWallet: hotWallet) }
         AppLinks.onOpen = { url in
             if let link = AddSavingsLink(url: url) { navigation.addingSavings = link }
@@ -123,7 +124,7 @@ struct MacApp: App {
                 Picker("Cost", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
                     ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
                 }
-                Button("Refresh") { store.start() }
+                Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
             }
             CommandMenu("Wallet") {
@@ -187,6 +188,11 @@ private struct WalletCommands: View {
             navigation.switchWallet()
         }
         .keyboardShortcut("l", modifiers: .command)
+        Button("Receive…") {
+            openMainWindow()
+            navigation.isReceiving = true
+        }
+        .disabled(!hotWallet.canSend)
         Button("Buy…") {
             openMainWindow()
             navigation.isBuying = true
@@ -274,6 +280,19 @@ struct MenuBarLabel: View {
                 }
                 #endif
                 navigation.section = .spendingMoney
+                openWindow(id: WindowID.main)
+                DockPresence.bringForward()
+            }
+            .onChange(of: navigation.wantsReceive) { _, wants in
+                guard wants else { return }
+                navigation.wantsReceive = false
+                #if DEBUG
+                if HotWalletDebug.isQuiet {
+                    FileHandle.standardError.write(Data("RECEIVE ASKED\n".utf8))
+                    return
+                }
+                #endif
+                navigation.isReceiving = true
                 openWindow(id: WindowID.main)
                 DockPresence.bringForward()
             }

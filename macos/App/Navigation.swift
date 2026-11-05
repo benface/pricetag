@@ -53,6 +53,10 @@ final class Navigation {
     var wantsSend = false
     /// Buy was pressed. It isn't tied to a section, so the window takes it from anywhere.
     var isBuying = false
+    /// Receive was pressed. Like Buy, the window takes it from anywhere.
+    var isReceiving = false
+    /// The extension's Receive button was pressed. The menu bar item opens the window for it, since nothing else may be open.
+    var wantsReceive = false
     /// Buy needs a savings wallet first. The hot wallet's section takes it from here.
     var wantsAddSavings = false
     /// The web app sent over an account from a device. The hot wallet's window asks the person to check it.

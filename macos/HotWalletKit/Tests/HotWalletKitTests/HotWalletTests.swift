@@ -1303,13 +1303,14 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     }
 
     @Test func topUpNeverPromisesASweepWithNoSavings() {
-        for sentence in [HotWalletWording.topUpTitle(hasDestination: false), HotWalletWording.topUpRoom("$5.00", hasDestination: false), HotWalletWording.topUpAtCap("$25.00", hasDestination: false), HotWalletWording.topUpNeedsGas(hasDestination: false)] {
+        for sentence in [HotWalletWording.topUpTitle(hasDestination: false), HotWalletWording.topUpRoom("$5.00", hasDestination: false), HotWalletWording.topUpAtCap("$25.00", hasDestination: false), HotWalletWording.topUpNeedsGas(hasDestination: false), HotWalletWording.receiveNote(cap: "$25.00", hasDestination: false)] {
             #expect(!sentence.contains("swept"))
             #expect(!sentence.contains("sweeps"))
             #expect(!sentence.contains("from Savings"))
         }
         #expect(HotWalletWording.topUpRoom("$5.00", hasDestination: true).contains("swept back to your savings"))
         #expect(HotWalletWording.topUpAtCap("$25.00", hasDestination: true).contains("swept straight back"))
+        #expect(HotWalletWording.receiveNote(cap: "$25.00", hasDestination: true).contains("swept to your savings"))
     }
 
     @Test func overTheCapWithNoColdWalletSaysSoOnce() async throws {

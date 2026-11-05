@@ -41,7 +41,7 @@ public struct ExplanationPane: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(explanation.title).font(.headline).help(Wording.pnlHelp(for: explanation.title) ?? "")
                     if let value = explanation.value {
-                        LiveNumber(value).font(.title2.weight(.semibold))
+                        LiveNumber(value).font(.sheetTitle)
                     } else if !isBalanceCheck {
                         WarningText("Unavailable").font(.title3.weight(.semibold))
                     }
@@ -87,6 +87,7 @@ public struct LegRow: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
                 Text("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
+                    .monospacedDigit()
                     .fontWeight(.medium)
                     .monospacedDigit()
                 Spacer(minLength: 8)

@@ -30,7 +30,9 @@ public struct HoldingRow: View {
             }
             Spacer(minLength: 0)
             LiveNumber(valueText, tone: position.isHeld && position.values.valueMicros == nil ? .secondary : .neutral)
-            LiveNumber(pnlText, tone: position.pnlMicros == nil ? .secondary : Tone(signed: position.pnlMicros))
+                .updatingMark()
+            // Green or red says how it's doing now, which old numbers can't.
+            LiveNumber(pnlText, tone: position.pnlMicros == nil ? .secondary : isLive ? Tone(signed: position.pnlMicros) : .neutral)
                 .font(.callout)
                 // At least this wide so the columns line up, and wider rather than cutting off a number.
                 .frame(minWidth: 88, alignment: .trailing)
@@ -64,7 +66,7 @@ public struct OnchainCheck: View {
     public var body: some View {
         if let label {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.caption2)
+                .font(.caption)
                 .foregroundStyle(prominence == .increased ? Tone.neutral.style : Tone.warning.style)
                 .help(help)
                 .accessibilityElement(children: .ignore)
