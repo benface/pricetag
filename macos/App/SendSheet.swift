@@ -201,13 +201,10 @@ struct SendConfirmation: View {
 struct SweepSheet: View {
     let wallet: HotWallet
     @State var gate: ApprovalPrompt
-    /// What was already signed, so what comes after is this sweep.
-    @State private var signedBefore: Set<String>
     @Environment(\.dismiss) private var dismiss
 
     init(wallet: HotWallet, gate: ApprovalPrompt? = nil) {
         self.wallet = wallet
-        _signedBefore = State(initialValue: Set(wallet.records.map(\.hash)))
         _gate = State(initialValue: gate ?? ApprovalPrompt(notBefore: { wallet.nextPromptAt }) { prompt, _ in
             await wallet.sweepConfirmed(in: prompt)
         })
@@ -234,8 +231,9 @@ struct SweepSheet: View {
         .interactiveDismissDisabled(wallet.isWorking)
     }
 
+    /// Only what this sweep put on its way. An earlier attempt that didn't go out isn't part of it.
     private var landing: Landing {
-        Landing(wallet.records.filter { !signedBefore.contains($0.hash) })
+        wallet.landing(of: wallet.lastSubmitted)
     }
 
     private var sweepStage: ProgressFooter.Stage {

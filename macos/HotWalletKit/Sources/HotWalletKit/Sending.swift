@@ -72,6 +72,8 @@ public final class SendModel {
     }
 
     public private(set) var stage = Stage.composing
+    /// What this send put on its way, once it has.
+    private var sentHashes: [String] = []
     public var token: Token
     public var amountText = ""
     public var addressText = "" {
@@ -147,10 +149,10 @@ public final class SendModel {
 
     public var nextPromptAt: Date? { wallet.nextPromptAt }
 
-    /// What became of this send, once it's gone. The newest to this address, because that's the one that was just signed.
+    /// What became of this send, once it's gone, from the receipts of exactly what it put on its way.
     public var landing: Landing {
         guard stage == .sent else { return .onItsWay }
-        return Landing(wallet.records.first { $0.reason == .sent && $0.to == recipient }.map { [$0] } ?? [])
+        return wallet.landing(of: sentHashes)
     }
 
     public var maximum: UInt128 { wallet.maximumSend(of: token) }
@@ -202,6 +204,7 @@ public final class SendModel {
             failure = wallet.sweepProblem
             return false
         }
+        sentHashes = wallet.lastSubmitted
         stage = .sent
         if let answer, store.book.senders[recipient.lowercased] == nil {
             store.setBook(store.book.answering(recipient.lowercased, answer, focus: wallet.address?.lowercased))
