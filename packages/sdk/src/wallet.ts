@@ -56,7 +56,7 @@ export type WalletData = {
   notes: CostNote[]
   /** Whether market prices were read successfully, so a token without one really has no market. */
   marketChecked: boolean
-  /** What this wallet's tokens without a feed traded at, at the blocks of its transactions, for a chart. Some can still be unread. */
+  /** What this wallet's tokens the dataset has no oracle reads for were worth at the blocks of its transactions, by their feed or else their market, for a chart. Some can still be unread. */
   marketMarks: MarketMarks
 }
 
