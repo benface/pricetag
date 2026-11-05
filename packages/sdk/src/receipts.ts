@@ -5,6 +5,12 @@ import type { Logger } from "./amp.ts"
 
 export const DEFAULT_RPC_URL = "https://mainnet.base.org"
 
+/** An RPC answered, but not with what was asked for. Only this code writes its message, so it's safe to log. */
+export class RpcAnswerError extends Error {}
+
+/** What to log when an RPC read fails. Other errors only give their name, because `fetch`'s messages can quote the URL, and a dedicated RPC's has a key in it. */
+export const describeRpcError = (error: unknown) => (error instanceof RpcAnswerError ? error.message : error instanceof Error ? error.name : "unknown error")
+
 /** Which transactions to read, with the block each was seen in. */
 export type FeeRequest = { txHash: string; blockNum: number }
 /** L1 fees in wei by transaction hash. A transaction with no answer yet isn't in it. */
@@ -45,7 +51,7 @@ export function createL1FeeReader(url: string, send: typeof fetch = fetch, pause
           await new Promise((resolve) => setTimeout(resolve, pauseAfter429Ms))
           response = await post()
         }
-        if (!response.ok) throw new Error(`status ${response.status}`)
+        if (!response.ok) throw new RpcAnswerError(`status ${response.status}`)
         const results = (await response.json()) as RpcResult[]
         for (const { id, result } of results) {
           const request = batch[id]
@@ -53,8 +59,8 @@ export function createL1FeeReader(url: string, send: typeof fetch = fetch, pause
           if (request && fee !== null) fees.set(request.txHash, fee)
         }
       } catch (error) {
-        // Not the URL: a dedicated RPC's has a key in it. What's missing is retried on the next refresh.
-        logger.warn(`Couldn't read L1 fees: ${error instanceof Error ? error.message : "unknown error"}`)
+        // What's missing is retried on the next refresh.
+        logger.warn(`Couldn't read L1 fees: ${describeRpcError(error)}`)
         break
       }
     }

@@ -219,7 +219,7 @@ public enum Wording {
     /// The same, as a sentence for when there's room to say what it means. nil when it's exact and whole.
     public static func leavesOut(_ totals: Totals, _ currency: CurrencyCode) -> String? {
         var parts: [String] = []
-        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) has an unknown cost, so it isn't in your PnL.") }
+        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) has an unknown cost, so it isn't in the PnL.") }
         if isPositive(totals.estimatedMicros) { parts.append("\(Format.money(totals.estimatedMicros, currency)) is estimated.") }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
@@ -284,7 +284,7 @@ public enum Wording {
 
     /// Balances with no row, because nothing could be read about them. nil when there are none.
     public static func unreadBalances(_ assets: [String]) -> String? {
-        assets.isEmpty ? nil : "Couldn't read your \(assets.joined(separator: ", ")) \(assets.count == 1 ? "balance" : "balances")."
+        assets.isEmpty ? nil : "Couldn't read the \(assets.joined(separator: ", ")) \(assets.count == 1 ? "balance" : "balances")."
     }
 
     /// The comparison in a few words, for the line that opens the whole of it.

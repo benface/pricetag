@@ -728,6 +728,27 @@ describe("reading deposits", () => {
     }
     assert.ok(logged.length > 0)
     assert.ok(!logged.join(" ").includes("secret-key"))
+    assert.match(logged.join(" "), /status 500/, "and it still says what the RPC answered")
+  })
+
+  it("never logs what a failed read's error says, which can quote the URL and the key in it", async () => {
+    const fake = "fake-password-for-this-test"
+    const rpc = `https://user:${fake}@rpc.example/${fake}`
+    const quoting = (async () => {
+      throw new Error(`couldn't reach ${rpc}`)
+    }) as typeof fetch
+    const logged: string[] = []
+    const original = console.error
+    console.error = (...args: unknown[]) => void logged.push(args.join(" "))
+    try {
+      // Node's own fetch refuses a URL with credentials in it, and quotes it in saying so.
+      assert.equal(await createDepositReader(rpc, fetch)(["ab"]), null)
+      assert.equal(await createDepositReader(rpc, quoting)(["ab"]), null)
+    } finally {
+      console.error = original
+    }
+    assert.equal(logged.length, 2)
+    assert.ok(!logged.join(" ").includes(fake))
   })
 })
 

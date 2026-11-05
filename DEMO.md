@@ -91,11 +91,11 @@ If this withdrawal pays from a different contract, the app can't name it (WORK-4
 
 ### Buying on stage (WORK-462)
 
-**Optional, and only after a real purchase has worked in rehearsal.** Press **Buy** in the toolbar, enter $5–$10 of ETH, **Continue on Coinbase**, and pay. It opens Spending Money, where the purchase says "On its way", then "Delivered", then "Cost $X, fees included". Say: "No question this time. Coinbase's order says what I paid, and it matches what arrived exactly." The row in Transactions says "Cost: Bought on Coinbase".
+**Optional, and only after a real purchase has worked in rehearsal.** Press **Buy** in the toolbar, enter $3 of ETH, **Continue on Coinbase**, and pay by card. It opens Spending Money, where the purchase says "On its way", then "Delivered", then "Cost $X, fees included". Say: "No question this time. Coinbase's order says what I paid, and it matches what arrived exactly." The row in Transactions says "Cost: Bought on Coinbase".
 
-**To show a larger amount:** type more than the room left, and the sheet says how much stays and that the rest goes to your savings. Don't buy more than you mean to: what lands above the cap sweeps by itself, with Patina open, and that needs a savings wallet you've checked on a device. Coinbase's page lets you change the amount but not the token. Its row in the savings wallet says the same cost and source.
+**To show a larger amount:** type more than the room left, and the sheet says how much stays and that the rest goes to your savings, but stop there, because the trial limit won't let it through. If you do buy more than the room left: what lands above the cap sweeps by itself, with Patina open, and that needs a savings wallet you've checked on a device. Coinbase's page lets you change the amount but not the token. Its row in the savings wallet says the same cost and source.
 
-**If about $5 is refused,** suspect Coinbase's trial mode first. New integrations start in it, and no page states its limits. The sheet shows what Coinbase said, as it said it. Use the fallbacks below.
+**Coinbase's trial limit is CA$6.99 a transaction (*measured*).** It refused $5 of ETH, which is about that before fees. $3 should fit, but that's not tried yet. Larger purchases need full access (https://support.cdp.coinbase.com/onramp-onboarding), so don't plan on one on stage. A refusal shows on Coinbase's page, or in the sheet as Coinbase said it. Use the fallbacks below.
 
 A real card purchase on stage can fail, and a real delivery can take minutes, so don't let the demo depend on one:
 - **Best:** do a real purchase before you go on, and show its finished row and its cost in Transactions. Open with "I bought this an hour ago".

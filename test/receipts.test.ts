@@ -90,4 +90,22 @@ describe("the receipt reader", () => {
     assert.ok(!logged.join(" ").includes("secret-key"))
   })
 
+  it("logs what the RPC answered, but never what a failed read's error says, which can quote the URL and the key in it", async () => {
+    const fake = "fake-password-for-this-test"
+    const rpc = `https://user:${fake}@rpc.example/${fake}`
+    const quoting = (async () => {
+      throw new Error(`couldn't reach ${rpc}`)
+    }) as typeof fetch
+    const logged: string[] = []
+    const logger = { warn: (message: string) => void logged.push(message) }
+    // Node's own fetch refuses a URL with credentials in it, and quotes it in saying so.
+    assert.equal((await createL1FeeReader(rpc, fetch, 0, logger)([request(1)])).size, 0)
+    assert.equal((await createL1FeeReader(rpc, quoting, 0, logger)([request(1)])).size, 0)
+    assert.equal(logged.length, 2)
+    assert.ok(!logged.join(" ").includes(fake))
+
+    logged.length = 0
+    await createL1FeeReader(rpc, answering(() => new Response("", { status: 500 })).send, 0, logger)([request(1)])
+    assert.match(logged.join(" "), /status 500/)
+  })
 })

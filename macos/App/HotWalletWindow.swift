@@ -360,9 +360,11 @@ private struct HotWalletDetails: View {
         } header: {
             Text("Savings")
         } footer: {
-            Text("Sweeps go to the checked one.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if !wallet.settings.coldWallets.isEmpty {
+                Text("Sweeps go to the checked one.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

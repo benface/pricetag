@@ -14,7 +14,8 @@ public struct BuyPlan: Equatable, Sendable {
         case notReadYet
     }
 
-    public static let minimumDollars = 5
+    /// Coinbase's live limits take a card from CA$3, and a new key's trial tier refused $5 at CA$6.99 a transaction, so this has to sit between them. Apple Pay and Google Pay want about $5, and the page says so.
+    public static let minimumDollars = 3
 
     public let stays: UInt128
     public let sweeps: UInt128

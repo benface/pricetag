@@ -149,7 +149,7 @@ public struct PnlHistorySection: View {
                 placeholder("No PnL to chart yet")
                     .help(Wording.nothingToChart)
             } else if portfolio.isTooNewToChart {
-                placeholder("Your chart starts after a few transactions")
+                placeholder("The chart starts after a few transactions")
                     .help(portfolio.historyLength)
             } else {
                 ViewThatFits(in: .horizontal) {

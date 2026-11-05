@@ -63,6 +63,11 @@ struct WalletListTests {
         let alone = WalletList(spending: nil, savings: [], linked: [], saved: [SavedWallet(address: c, lastSeen: date(1))], current: nil)
         #expect(alone.proof(of: try #require(alone.entry(for: c)), current: c).owner == c, "with nothing else, it speaks for itself")
         #expect(list.proof(of: watched, current: b).message == Wording.linkMessage(owner: b, address: d))
+        let demoSavings = "0x00000000000000000000000000000000000de301"
+        let answered = WalletList(spending: nil, savings: [], linked: [demoSavings], saved: [SavedWallet(address: c, lastSeen: date(1))], current: demoSavings)
+        #expect(answered.proof(of: try #require(answered.entry(for: c)), current: demoSavings).owner == c, "the demo's wallets aren't anyone's, even after answering for them")
+        let both = WalletList(spending: nil, savings: [], linked: [demoSavings, a], saved: [SavedWallet(address: c, lastSeen: date(1))], current: demoSavings)
+        #expect(both.proof(of: try #require(both.entry(for: c)), current: demoSavings).owner == a, "not even ahead of a real one")
     }
 
     @Test func onlyWhatTheUserSaidCanBeTakenBack() {

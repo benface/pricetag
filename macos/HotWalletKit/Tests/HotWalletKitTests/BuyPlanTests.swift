@@ -42,8 +42,8 @@ struct BuyPlanTests {
 
     @Test func withoutSavingsNothingCanBeBoughtEvenWhatFits() {
         // The page can raise the amount, so a small preset is no limit: at $500, $475 would have nowhere to go.
-        for dollars in [5, 25, 26, 500] { #expect(plan(dollars, savings: false).problem == .needsSavings) }
-        #expect(plan(5, native: false, savings: false).problem == .needsSavings)
+        for dollars in [3, 25, 26, 500] { #expect(plan(dollars, savings: false).problem == .needsSavings) }
+        #expect(plan(3, native: false, savings: false).problem == .needsSavings)
     }
 
     @Test func aTokenThatCantBeSweptForLackOfGasIsStopped() {
@@ -74,16 +74,22 @@ struct BuyPlanTests {
     }
 
     @Test func belowTheMinimumIsSaidFirst() {
-        #expect(plan(4).problem == .belowMinimum)
+        #expect(plan(2).problem == .belowMinimum)
         #expect(plan(0).problem == .belowMinimum)
-        #expect(plan(5).problem == nil)
+        #expect(plan(3).problem == nil)
+    }
+
+    @Test func aNewKeysTrialLimitCanBeMet() {
+        // Coinbase refused $5 of ETH at CA$6.99 a transaction, so the floor has to be well under that, at about 1.40 CAD to the dollar.
+        #expect(BuyPlan.minimumDollars * 140 < 699)
+        #expect(plan(BuyPlan.minimumDollars).problem == nil)
     }
 
     @Test func whatsTypedIsntAlwaysAnAmount() {
         // An empty field reads as 0.
-        for typed in [-5, -1, 0, Int.min, 4] {
+        for typed in [-5, -1, 0, Int.min, 2] {
             #expect(plan(typed).problem == .belowMinimum)
-            #expect(plan(typed).stays == 0 || typed == 4)
+            #expect(plan(typed).stays == 0 || typed == 2)
             #expect(BuyPlan.cryptoAmount(dollars: typed, isNative: true, ethUsdMicros: 2_640_000_000) == nil)
             #expect(BuyPlan.cryptoAmount(dollars: typed, isNative: false, ethUsdMicros: nil) == nil)
         }

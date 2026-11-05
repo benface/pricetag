@@ -145,7 +145,11 @@ public final class AddSavingsModel {
     }
 
     public var sweepsGoHere: Bool { added != nil && added == wallet.settings.sweepDestination }
-    public var sweepDestinationName: String? { wallet.settings.coldWallets.first { $0.address == wallet.settings.sweepDestination }?.name }
+    /// Nil when it has the same name as the one just added, like a second Ledger, since then it wouldn't say which it is.
+    public var sweepDestinationName: String? {
+        let name = wallet.settings.coldWallets.first { $0.address == wallet.settings.sweepDestination }?.name
+        return name == wallet.settings.coldWallets.first { $0.address == added }?.name ? nil : name
+    }
     public var canSendTest: Bool { wallet.canSend && !mayBeSweeping }
 
     public func choose(_ device: Device) {
@@ -256,8 +260,11 @@ public enum AddSavingsWording {
         public let body: String
         public var troubles: [Trouble] = []
 
-        /// For when what it says to do can't be done, and something else takes its place.
-        public var titleOnly: Page { Page(title: title, body: "") }
+        public init(title: String, body: String, troubles: [Trouble] = []) {
+            self.title = title
+            self.body = body
+            self.troubles = troubles
+        }
     }
 
     public static let neverAsked = "You'll never need your recovery phrase here. If anything asks for it, stop."
@@ -266,6 +273,7 @@ public enum AddSavingsWording {
     public static let scannedSomethingElse = "That code isn't an address. Show the one under Receive ETH."
     public static let checkWarning = "Sweeps send real money here, and a compromised computer could show you the wrong address. The device's screen is the only one to trust."
     public static let camera = "Your camera's picture stays on this Mac, and nothing's saved."
+    public static let noCamera = "No camera available"
     public static let matches = "Every character matches what my device's screen shows"
     public static let startsSweeps = "This Mac's spending money has more than its cap. Once you add this, what's above the cap can move here by itself, right away."
     public static let balanceUnread = "This Mac's spending money hasn't finished reading its balance. Once you add this, anything above the cap can move here by itself, right away."
