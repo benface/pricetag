@@ -114,6 +114,21 @@ private func hex(_ bytes: [UInt8]) -> String { Hex.encode(bytes) }
         #expect(rig.wallet.alarmFact == .watching)
     }
 
+    @Test func isntWatchingWhileTheDatasetHasNoHistoryYet() async {
+        let rig = await Rig(portfolio: .success(portfolio(started: false)))
+        await rig.wallet.tick()
+        await rig.wallet.readHistory()
+        #expect(!rig.wallet.ampProblem)
+        #expect(rig.wallet.alarmFact == .cantCheck)
+        await rig.portfolios.set(.success(portfolio()))
+        await rig.wallet.readHistory()
+        #expect(rig.wallet.alarmFact == .watching)
+        // A read that's gone back to having nothing doesn't keep the last one's word.
+        await rig.portfolios.set(.success(portfolio(started: false)))
+        await rig.wallet.readHistory()
+        #expect(rig.wallet.alarmFact == .cantCheck)
+    }
+
     @Test func isntWatchingWhileTheHistoryCantBeRead() async {
         let rig = await Rig(portfolio: .failure(.unreachable))
         await rig.wallet.tick()

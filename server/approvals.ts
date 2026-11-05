@@ -88,6 +88,16 @@ export function decodeChecks(data: string | null | undefined, candidates: readon
   return candidates.map((candidate, i) => (results[i]!.success ? decodeCheck(candidate, results[i]!.returnData) : null))
 }
 
+/**
+ * What an `eth_call` returned, only when it worked. Amp keeps a revert's bytes in `data` and says why in `message`, and those
+ * bytes can be exactly the size of a real answer, so a call with a message is a failure, whatever its data looks like.
+ */
+export function callResult(result: unknown): string | null {
+  const { data, message } = (result ?? {}) as { data?: unknown; message?: unknown }
+  if (message !== null && message !== undefined && message !== "") return null
+  return typeof data === "string" && data !== "" ? data : null
+}
+
 /** Calldata for one candidate's own check, as hex with no prefix, and the contract it goes to. */
 export function isolatedCall(owner: string, candidate: Candidate): { target: string; data: string } {
   const { target, callData } = callOf(owner, candidate)
@@ -244,7 +254,7 @@ export function createApprovals(query: Query, config: ApprovalsConfig) {
     for (let i = 0; i < trusted.length; i += CALLS_PER_READ) {
       const part = trusted.slice(i, i + CALLS_PER_READ)
       const [row] = await query<Row>(`SELECT rpc.${config.network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeChecks(address, part)}', ${head.blockNum}) AS r`)
-      const results = decodeChecks((row?.r as { data?: string } | null | undefined)?.data, part)
+      const results = decodeChecks(callResult(row?.r), part)
       if (!results) throw new Error("The approval check didn't answer")
       part.forEach((candidate, j) => keep(candidate, results[j]!))
     }
@@ -258,7 +268,7 @@ export function createApprovals(query: Query, config: ApprovalsConfig) {
       })
       const [row] = await query<Row>(`SELECT ${columns.join(", ")}`)
       if (!row) throw new Error("The approval check didn't answer")
-      part.forEach((candidate, j) => keep(candidate, decodeCheck(candidate, (row[`c${j}`] as { data?: string } | null | undefined)?.data)))
+      part.forEach((candidate, j) => keep(candidate, decodeCheck(candidate, callResult(row[`c${j}`]))))
     }
     return { checked, unreadable }
   }

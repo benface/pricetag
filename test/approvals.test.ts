@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { describe, it } from "node:test"
 import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult, parseAbi, type Hex } from "viem"
 import { APPROVAL_FOR_ALL_TOPIC, APPROVAL_TOPIC, PERMIT2, PERMIT2_APPROVAL_TOPIC, PERMIT2_PERMIT_TOPIC, USDC_ADDRESS, WETH_ADDRESS, candidatesFromLogs, isActive, knownSpenderCandidates, mergeCandidates, type ApprovalLog, type Candidate } from "@pricetag/sdk/core"
-import { createApprovals, decodeChecks, demoApprovals, encodeChecks, expiryOf, isTrustedCheck, sortViews, viewOf } from "../server/approvals.ts"
+import { callResult, createApprovals, decodeChecks, demoApprovals, encodeChecks, expiryOf, isTrustedCheck, sortViews, viewOf } from "../server/approvals.ts"
 import { tablesSql } from "../dataset/build.ts"
 import { DEMO_SAVINGS_WALLET, DEMO_WALLET } from "../src/core/fixtures.ts"
 
@@ -209,6 +209,46 @@ describe("checking contracts nobody vouches for", () => {
     assert.deepEqual(read.approvals.map((a) => [a.token, a.amount]), [[UNTRACKED, "100"]])
     // The collection's check failed, so what it allows isn't known, and the page has to say so.
     assert.equal(read.unreadable, 1)
+  })
+})
+
+describe("a failed call", () => {
+  const head = { blockNum: 1_000, timestamp: new Date(1_800_000_000_000).toISOString() }
+  const UNTRACKED = "0x000000000000000000000000000000000000f00d"
+  const zero = encodeAbiParameters([{ type: "uint256" }], [0n]).slice(2)
+
+  it("is never an answer, even when its revert bytes are the size of one", () => {
+    assert.equal(callResult({ data: zero, message: "execution reverted" }), null)
+    assert.equal(callResult({ data: zero, message: null }), zero)
+    assert.equal(callResult({ data: null, message: null }), null)
+    assert.equal(callResult(null), null)
+  })
+
+  it("leaves what a reverted check covers unknown, never zero", async () => {
+    const query = async <T>(sql: string): Promise<T[]> => {
+      if (sql.includes("ORDER BY block_num DESC")) return [{ block_num: 990 }] as T[]
+      if (sql.includes(".approvals")) return [{ ...log(500, UNTRACKED, APPROVAL_TOPIC, ME, SPENDER), timestamp: 1 }] as T[]
+      if (sql.includes(" AS r")) {
+        const calldata = /X'([0-9a-f]+)', 1000\) AS r/.exec(sql)![1]!
+        return [{ r: { data: answer(calldata, () => encodeAbiParameters([{ type: "uint256" }], [0n])), message: null } }] as T[]
+      }
+      return [{ c0: { data: zero, message: "execution reverted" } }] as T[]
+    }
+    const approvals = createApprovals(query, { baseDataset: "base", dataset: { reference: "pt", name: "pt" }, network: "base_mainnet", historyFrom: () => 100 })
+    const read = await approvals.read(ME, head)
+    assert.deepEqual(read.approvals, [])
+    assert.equal(read.unreadable, 1)
+  })
+
+  it("fails the whole read when the shared batch reverts", async () => {
+    const query = async <T>(sql: string): Promise<T[]> => {
+      if (sql.includes("ORDER BY block_num DESC")) return [{ block_num: 990 }] as T[]
+      if (sql.includes(".approvals")) return [] as T[]
+      const calldata = /X'([0-9a-f]+)', 1000\) AS r/.exec(sql)![1]!
+      return [{ r: { data: answer(calldata, () => encodeAbiParameters([{ type: "uint256" }], [0n])), message: "execution reverted" } }] as T[]
+    }
+    const approvals = createApprovals(query, { baseDataset: "base", dataset: { reference: "pt", name: "pt" }, network: "base_mainnet", historyFrom: () => 100 })
+    await assert.rejects(approvals.read(ME, head), /didn't answer/)
   })
 })
 
