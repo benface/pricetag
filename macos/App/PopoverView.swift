@@ -39,6 +39,7 @@ struct PopoverView: View {
             Divider()
             footer
         }
+        .environment(\.updatingNote, store.updatingNote)
         .frame(width: 320)
         .background(.regularMaterial)
         .focusable()
@@ -122,7 +123,7 @@ struct PopoverView: View {
                     help: store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) ?? problem,
                     // Catching up is still updating, so there's nothing to retry.
                     actionTitle: isCatchingUp ? nil : "Retry",
-                    action: store.start
+                    action: store.refresh
                 )
             }
             if let portfolio, portfolio.progress.started, !portfolio.isEmpty, let attention = portfolio.shortAttention {
@@ -220,6 +221,7 @@ struct PopoverView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                .updatingMark(.trailing)
             }
             .buttonStyle(NumberButtonStyle())
             .help(portfolio.partialValueReason ?? "")

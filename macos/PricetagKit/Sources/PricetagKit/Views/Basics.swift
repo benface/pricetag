@@ -53,6 +53,43 @@ public struct LiveNumber: View {
     }
 }
 
+extension EnvironmentValues {
+    /// Set while a read runs and the numbers on screen may change once it's done, to what a mark beside them says. See `updatingMark`.
+    @Entry public var updatingNote: String?
+}
+
+extension PortfolioStore {
+    /// nil unless there are numbers on screen that this read may change.
+    public var updatingNote: String? {
+        guard feed == .reading, let portfolio else { return nil }
+        return Wording.updating(lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp)
+    }
+}
+
+extension View {
+    /// A small spinner just outside this edge while `updatingNote` is set. It's outside the layout, so nothing moves when it comes or goes.
+    public func updatingMark(_ edge: HorizontalEdge = .leading) -> some View {
+        overlay(alignment: edge == .leading ? .leading : .trailing) {
+            UpdatingMark()
+                .alignmentGuide(edge == .leading ? .leading : .trailing) { edge == .leading ? $0[.trailing] + 5 : $0[.leading] - 5 }
+        }
+    }
+}
+
+private struct UpdatingMark: View {
+    @Environment(\.updatingNote) private var note
+
+    var body: some View {
+        if let note {
+            ProgressView()
+                .controlSize(.mini)
+                .help(note)
+                .accessibilityLabel("Updating")
+                .transition(.opacity)
+        }
+    }
+}
+
 /// A number you can click to read what's behind it. It looks like a number until you point at it.
 public struct NumberButtonStyle: ButtonStyle {
     @State private var isHovered = false
