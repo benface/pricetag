@@ -3,7 +3,7 @@ import { createPublicKey, generateKeyPairSync, verify } from "node:crypto"
 import { createServer, request, type Server } from "node:http"
 import { after, before, describe, it } from "node:test"
 import type { AddressInfo } from "node:net"
-import { ASSETS, ETH_ADDRESS, MAIN_CURRENCY_CODES, USDC_ADDRESS, buildPricedLegs, type LegRow, type Reference } from "@pricetag/sdk/core"
+import { ASSETS, CURRENCY_CODES, ETH_ADDRESS, MAIN_CURRENCY_CODES, USDC_ADDRESS, buildPricedLegs, type LegRow, type Reference } from "@pricetag/sdk/core"
 import type { Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
@@ -621,10 +621,20 @@ describe("the routes", () => {
     assert.equal(params.get("presetCryptoAmount"), null, "the page ignores a fiat amount when there's also a crypto one")
   })
 
+  it("start the page from a token amount when Coinbase can't start from the typed currency", async () => {
+    const port = await serve(createOnramp(env, stub().send))
+    for (const currency of ["AUD", "CHF", "MXN"]) {
+      const { status, json } = await call(port, "POST", "/api/onramp/checkout", { ...SESSION, fiat: { amount: "27", currency } })
+      assert.equal(status, 200, currency)
+      const params = new URL(json.url as string).searchParams
+      assert.deepEqual([params.get("presetFiatAmount"), params.get("fiatCurrency"), params.get("presetCryptoAmount")], [null, null, "0.01"], currency)
+    }
+  })
+
   it("refuse a typed amount that isn't one", async () => {
     const { send, calls } = stub()
     const port = await serve(createOnramp(env, send))
-    for (const fiat of [{ amount: "0", currency: "CAD" }, { amount: "1e3", currency: "CAD" }, { amount: 27, currency: "CAD" }, { amount: "27", currency: "XYZ" }, { amount: "27", currency: "EUR" }, { amount: "27" }, "27"]) {
+    for (const fiat of [{ amount: "0", currency: "CAD" }, { amount: "1e3", currency: "CAD" }, { amount: 27, currency: "CAD" }, { amount: "27", currency: "XYZ" }, { amount: "27", currency: "SEK" }, { amount: "27" }, "27"]) {
       assert.equal((await call(port, "POST", "/api/onramp/checkout", { ...SESSION, fiat })).status, 400, JSON.stringify(fiat))
     }
     assert.equal(calls.length, 0)
@@ -813,8 +823,8 @@ describe("the server, reading a purchase paid in euros", () => {
     }
   })
 
-  it("won't show a wallet in what a purchase can only be paid in", async () => {
-    assert.deepEqual([...MAIN_CURRENCY_CODES], ["USD", "CAD"])
-    for (const currency of ["EUR", "GBP", "CHF", "SEK"]) assert.equal((await post("portfolio", { method: "average", currency, book: emptyBook() })).status, 400, currency)
+  it("won't show a wallet in a currency with no feed, though a purchase can be paid in one", async () => {
+    assert.deepEqual([...MAIN_CURRENCY_CODES], CURRENCY_CODES)
+    for (const currency of ["SEK", "JPY", "XYZ"]) assert.equal((await post("portfolio", { method: "average", currency, book: emptyBook() })).status, 400, currency)
   })
 })
