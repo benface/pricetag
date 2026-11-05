@@ -364,6 +364,65 @@ describe("the background script", () => {
     assert.equal(native.messages[0].kind, "popup")
   })
 
+  test("a popup opens with what the last one heard, and then what the app says", async () => {
+    const { connect, native } = await loadBackground()
+    const sender = { id: "ours", url: "chrome-extension://ours/popup.html" }
+    const first = fakePort("popup", sender)
+    connect(first)
+    first.receive({ id: 1, method: "status" })
+    assert.equal(first.messages.length, 0)
+    native.receive({ id: native.messages[0].id, result: { value: "$1.00" } })
+
+    const second = fakePort("popup", sender)
+    connect(second)
+    second.receive({ id: 1, method: "status" })
+    assert.equal(JSON.stringify(second.messages), JSON.stringify([{ event: "last", result: { value: "$1.00" } }]))
+    native.receive({ id: native.messages[1].id, result: { value: "$2.00" } })
+    assert.equal(JSON.stringify(second.messages[1]), JSON.stringify({ id: 1, result: { value: "$2.00" } }))
+
+    // Anything else it asks has no effect on that.
+    second.receive({ id: 2, method: "topUp" })
+    native.receive({ id: native.messages[2].id, result: null })
+    const third = fakePort("popup", sender)
+    connect(third)
+    third.receive({ id: 1, method: "status" })
+    assert.equal(JSON.stringify(third.messages), JSON.stringify([{ event: "last", result: { value: "$2.00" } }]))
+  })
+
+  test("a popup forgets what it heard when the app goes, and doesn't answer a closed popup", async () => {
+    const { connect, native } = await loadBackground()
+    const sender = { id: "ours", url: "chrome-extension://ours/popup.html" }
+    const first = fakePort("popup", sender)
+    connect(first)
+    first.receive({ id: 1, method: "status" })
+    native.receive({ id: native.messages[0].id, result: { value: "$1.00" } })
+    native.close()
+
+    const second = fakePort("popup", sender)
+    connect(second)
+    second.receive({ id: 1, method: "status" })
+    assert.equal(second.messages.length, 0)
+    second.close()
+    second.postMessage = () => assert.fail("That popup is closed.")
+    native.receive({ id: native.messages[1].id, result: { value: "$2.00" } })
+
+    // An error isn't worth remembering either.
+    const third = fakePort("popup", sender)
+    connect(third)
+    third.receive({ id: 1, method: "status" })
+    assert.equal(JSON.stringify(third.messages), JSON.stringify([{ event: "last", result: { value: "$2.00" } }]))
+    native.receive({ id: native.messages[2].id, error: { code: 1, message: "No" } })
+    const fourth = fakePort("popup", sender)
+    connect(fourth)
+    fourth.receive({ id: 1, method: "status" })
+    assert.equal(fourth.messages.length, 0)
+  })
+
+  test("never breaks an address across lines", () => {
+    assert.match(read("extension/popup.css"), /\.address \{[^}]*white-space: nowrap/)
+    assert.doesNotMatch(read("extension/popup.css"), /overflow-wrap: anywhere|word-break/)
+  })
+
   test("sends each answer back to the page that asked, under its own ID", async () => {
     const { connect, native } = await loadBackground()
     const first = fakePort("site", tabSender("https://one.example"))

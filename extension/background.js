@@ -1,5 +1,5 @@
 // @ts-check
-// Routes requests between open pages and the Mac app, through the native messaging host. It keeps nothing, and never sees a key.
+// Routes requests between open pages and the Mac app, through the native messaging host. It keeps nothing on disk, and never sees a key.
 // It's the one place an origin gets attached to a request, and it takes it from the browser, never from the page.
 
 const HOST = "com.benface.patina"
@@ -15,6 +15,11 @@ const sites = new Set()
 /** @type {Map<string, (message: any) => void>} */
 const routes = new Map()
 let nextId = 1
+/**
+ * What the popup last heard, so it can open showing that while the app answers. Only ever in memory, and gone along with the app.
+ * @type {object | null}
+ */
+let lastStatus = null
 
 /**
  * Only a top-level page, on HTTPS or this Mac. This repeats the manifest's rules, and the app checks the origin again.
@@ -61,6 +66,7 @@ function connectNative() {
   opened.onDisconnect.addListener(() => {
     nativeProblem = chrome.runtime.lastError?.message ?? null
     native = null
+    lastStatus = null
     const message = problemMessage()
     const failed = [...routes.values()]
     routes.clear()
@@ -92,9 +98,17 @@ function toApp(request, done) {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "popup") {
     if (!isPopup(port.sender)) return port.disconnect()
+    let open = true
+    port.onDisconnect.addListener(() => {
+      open = false
+    })
     port.onMessage.addListener((/** @type {any} */ message) => {
+      const isStatus = message.method === "status"
+      if (isStatus && lastStatus) port.postMessage({ event: "last", result: lastStatus })
       toApp({ kind: "popup", method: message.method }, ({ result, error }) => {
-        port.postMessage({ id: message.id, result, error })
+        if (isStatus) lastStatus = error ? null : result
+        // Closing the popup doesn't wait for a slow answer.
+        if (open) port.postMessage({ id: message.id, result, error })
       })
     })
     return
