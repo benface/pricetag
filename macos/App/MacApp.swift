@@ -3,8 +3,18 @@ import KeyVault
 import PricetagKit
 import SwiftUI
 
+/// How a `patina://` link arrives. SwiftUI's own way would open a window of its choosing.
+final class AppLinks: NSObject, NSApplicationDelegate {
+    @MainActor static var onOpen: ((URL) -> Void)?
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        urls.forEach { Self.onOpen?($0) }
+    }
+}
+
 @main
 struct MacApp: App {
+    @NSApplicationDelegateAdaptor(AppLinks.self) private var links
     @State private var store: PortfolioStore
     @State private var hotWallet: HotWallet
     @State private var navigation: Navigation
@@ -21,6 +31,9 @@ struct MacApp: App {
         let navigation = Navigation()
         let siteBridge = SiteBridge(wallet: hotWallet)
         siteBridge.onTopUp = { navigation.wantsTopUp = true }
+        AppLinks.onOpen = { url in
+            if let link = AddSavingsLink(url: url) { navigation.addingSavings = link }
+        }
         hotWallet.onLinkedWalletsChange = {
             store.setLinkedWallets($0)
             siteBridge.walletChanged()
@@ -191,6 +204,11 @@ struct MenuBarLabel: View {
                     return
                 }
                 #endif
+                openWindow(id: WindowID.hotWallet)
+                DockPresence.bringForward()
+            }
+            .onChange(of: navigation.addingSavings) { _, link in
+                guard link != nil else { return }
                 openWindow(id: WindowID.hotWallet)
                 DockPresence.bringForward()
             }

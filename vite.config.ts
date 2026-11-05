@@ -3,6 +3,8 @@ import { createApi } from "./server/app.ts"
 
 export default defineConfig(({ command, mode }) => ({
   server: { host: "127.0.0.1", port: 5173 },
+  // Keystone's packages expect Node's. The trailing slashes are what pick the packages over the built-ins.
+  resolve: { alias: { buffer: "buffer/", events: "events/", stream: "readable-stream" } },
   plugins: [
     {
       name: "pricetag-api",

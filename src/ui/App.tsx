@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
+import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
 import { CURRENCIES, CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isCurrencyCode, msBetweenBlocks, sumTotals, type Coverage, type CurrencyCode, type HoldComparison, type Method, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
@@ -46,8 +46,12 @@ import { useRules } from "./useRules.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
 import { linkedWallets, walletsBehind } from "../core/book.ts"
+import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
 import { foldBook } from "../core/resolve.ts"
+
+// Only loads when someone asks for it, so looking at a wallet never pulls in any device code.
+const DevicePanel = lazy(() => import("./DevicePanel.tsx").then((m) => ({ default: m.DevicePanel })))
 
 function readAddress(): string | null {
   const value = new URLSearchParams(window.location.search).get("address")
@@ -196,7 +200,11 @@ export function App() {
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
   const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule)
-  const { book, change, undo, canUndo } = useBook()
+  const { book, change, undo, canUndo, linkAccounts } = useBook()
+  const [device, setDevice] = useState<{ link: DeviceLink | null } | null>(() => {
+    const link = parseDeviceLink(window.location.search)
+    return link ? { link } : null
+  })
   const [resolving, setResolving] = useState<{ asset: string | null } | null>(null)
   const [cardSender, setCardSender] = useState<string | null>(null)
   const wanted = useMemo(() => [...new Set([...linkedWallets(book), ...(cardSender ? [cardSender] : [])])].filter((a) => a !== wallet?.address), [book, cardSender, wallet?.address])
@@ -291,6 +299,9 @@ export function App() {
             ))}
           </select>
         </label>
+        <button type="button" onClick={() => setDevice({ link: null })}>
+          Hardware wallet
+        </button>
         {wallet ? <LiveBadge wallet={wallet} stale={error !== null} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
@@ -299,7 +310,7 @@ export function App() {
       {!address ? (
         <section className="empty">
           <h1>Every transfer gets a price.</h1>
-          <p>Paste a Base address to see its holdings, cost and <span title={PNL_HELP}>PnL</span>, with every number explained. This is view-only: there are no keys here, and it can't send anything.</p>
+          <p>Paste a Base address to see its holdings, cost and <span title={PNL_HELP}>PnL</span>, with every number explained. There are no keys here. Looking is all it does until you connect a hardware wallet, which signs everything on its own screen.</p>
           <button type="button" onClick={() => go("demo")}>
             Try the demo wallet
           </button>
@@ -404,7 +415,25 @@ export function App() {
       ) : null}
 
       {explanation && wallet ? <ExplainPanel explanation={explanation} address={wallet.address} rule={wallet.rule ?? null} onClose={close} /> : null}
-      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
+      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
+      {device ? (
+        <Suspense fallback={null}>
+          <DevicePanel
+            link={device.link}
+            book={book}
+            onLink={linkAccounts}
+            onView={(next) => {
+              setDevice(null)
+              go(next)
+            }}
+            onClose={() => {
+              // A link has done its job, and reloading shouldn't start it over.
+              if (parseDeviceLink(window.location.search)) window.history.replaceState(null, "", window.location.pathname)
+              setDevice(null)
+            }}
+          />
+        </Suspense>
+      ) : null}
       {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} book={book} onClose={() => setTaxOpen(false)} /> : null}
     </div>
   )
