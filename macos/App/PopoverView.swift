@@ -63,7 +63,7 @@ struct PopoverView: View {
                 Text("No activity for this wallet in this time.").foregroundStyle(.secondary)
             case (_, let portfolio?):
                 PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 30) { open(.total($0)) }
-                PortfolioAttention(portfolio: portfolio, isCompact: true, onOpen: { open($0) }, onResolve: {
+                PortfolioAttention(portfolio: portfolio, onOpen: { open($0) }, onResolve: {
                     navigation.resolve()
                     open(nil)
                 })
@@ -116,7 +116,8 @@ struct PopoverView: View {
     private var spendingMoney: some View {
         Button {
             dismiss()
-            openWindow(id: WindowID.hotWallet)
+            navigation.section = .spendingMoney
+            openWindow(id: WindowID.main)
             DockPresence.bringForward()
         } label: {
             HStack(spacing: 8) {

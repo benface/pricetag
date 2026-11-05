@@ -27,6 +27,7 @@ public struct PortfolioSummary: View {
     }
 
     public var body: some View {
+        // From one line down to a narrow column, so nothing is ever cut off.
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .lastTextBaseline, spacing: 28) {
                 headline
@@ -36,6 +37,18 @@ public struct PortfolioSummary: View {
             VStack(alignment: .leading, spacing: 12) {
                 headline
                 sums
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                valueStat
+                pnlStat
+                sums
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                valueStat
+                pnlStat
+                ForEach(portfolio.totalStats, id: \.metric) { stat in
+                    TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { onOpen(stat.metric) }
+                }
             }
         }
     }
@@ -109,45 +122,36 @@ public struct PortfolioSummary: View {
     }
 }
 
-/// Everything the numbers above leave out, said once, right under them, with what to do about it.
-/// Calm on purpose: it's usually a fact to know rather than something wrong, and a warning that never stops shouting stops being read.
+/// What the numbers above leave out, once, in a sentence, with what to do about it. The full list is a hover or a click away.
 public struct PortfolioAttention: View {
     let portfolio: Portfolio
-    /// Leaves out the list of what's excluded when the headline already says how much, because the holdings just below show which.
-    let isCompact: Bool
     let onOpen: (ExplainTarget) -> Void
     let onResolve: () -> Void
 
-    public init(portfolio: Portfolio, isCompact: Bool = false, onOpen: @escaping (ExplainTarget) -> Void, onResolve: @escaping () -> Void) {
+    public init(portfolio: Portfolio, onOpen: @escaping (ExplainTarget) -> Void, onResolve: @escaping () -> Void) {
         self.portfolio = portfolio
-        self.isCompact = isCompact
         self.onOpen = onOpen
         self.onResolve = onResolve
     }
 
     public var body: some View {
         if let attention = portfolio.attention {
-            Group {
-                if isCompact {
-                    VStack(alignment: .leading, spacing: 8) {
-                        message(attention)
-                        action
-                    }
-                } else {
-                    HStack(alignment: .center, spacing: 12) {
-                        message(attention)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        action
-                            .fixedSize()
-                    }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    message(attention)
+                    Spacer(minLength: 0)
+                    action
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    message(attention)
+                    action
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        } else if portfolio.pnlStatus == .complete {
-            Text("Nothing excluded.").font(.caption).foregroundStyle(.secondary)
+            .help(attention.fullList ?? "")
         }
     }
 
@@ -161,7 +165,7 @@ public struct PortfolioAttention: View {
                 Text(attention.title)
                     .font(.callout.weight(.medium))
                     .monospacedDigit()
-                ForEach(attention.details.filter { !isCompact || $0 != Wording.excluded(portfolio.totals.excluded) }, id: \.self) { line in
+                ForEach(attention.details, id: \.self) { line in
                     Text(line)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -176,10 +180,12 @@ public struct PortfolioAttention: View {
         if !portfolio.questions.isEmpty {
             Button(Wording.answerQuestions(portfolio.questions.count), action: onResolve)
                 .controlSize(.small)
+                .fixedSize()
                 .help("Answer what the app can't work out by itself (⇧⌘R)")
         } else {
             Button("See Why") { onOpen(portfolio.attentionTarget) }
                 .controlSize(.small)
+                .fixedSize()
         }
     }
 }
@@ -246,20 +252,25 @@ extension Portfolio {
     /// What the top of a wallet has to say about its own numbers.
     public struct Attention: Equatable, Sendable {
         public let title: String
+        /// What no row or number below would show.
         public let details: [String]
+        /// Exactly what's excluded and why, when the title only says how much. The holdings show which, row by row.
+        public let fullList: String?
     }
 
     /// nil when the numbers leave out nothing and rest on nothing estimated.
     public var attention: Attention? {
-        var lines = [Wording.excluded(totals.excluded)].compactMap(\.self)
+        var lines = Wording.unreadBalances(unreadAssets).map { [$0] } ?? []
         if totals.unpricedGas { lines.append(Wording.unpricedFees) }
         if !gasUnknownTxs.isEmpty { lines.append(Wording.feesUnknown(gasUnknownTxs.count)) }
         if !l1FeeUnknownTxs.isEmpty { lines.append(Wording.networkFeeUnknown(l1FeeUnknownTxs.count)) }
         lines += withheld.map { Wording.withheld(wallet: $0.wallet, asset: $0.asset) }
         lines += Wording.missingRates(self)
-        if let title = Wording.leavesOut(totals, currency) { return Attention(title: title, details: lines) }
+        let excludedList = Wording.excluded(totals.excluded)
+        if let title = Wording.leavesOut(totals, currency) { return Attention(title: title, details: lines, fullList: excludedList) }
+        if let excludedList { return Attention(title: excludedList, details: lines, fullList: nil) }
         guard let first = lines.first else { return nil }
-        return Attention(title: first, details: Array(lines.dropFirst()))
+        return Attention(title: first, details: Array(lines.dropFirst()), fullList: nil)
     }
 
     /// Where "See Why" goes: the balance that doesn't match when that's the reason, or else what the total is made of.

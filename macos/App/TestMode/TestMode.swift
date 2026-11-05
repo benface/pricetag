@@ -13,6 +13,8 @@ enum TestMode {
         CommandLine.arguments.firstIndex(of: flag).flatMap { CommandLine.arguments.indices.contains($0 + 1) ? CommandLine.arguments[$0 + 1] : nil }
     }
 
+    static let isRunning = CommandLine.arguments.contains("--test-scene")
+
     /// Takes over before anything of the real app exists, so there's no menu bar item, and nothing to call `DockPresence`.
     static func runIfAsked() {
         if CommandLine.arguments.contains("--test-scenes") {
@@ -92,6 +94,16 @@ enum TestScene: String, CaseIterable {
     case mainTransactions = "main-transactions"
     case mainDetails = "main-details"
     case mainNarrow = "main-narrow"
+    case mainSmall = "main-small"
+    case mainMedium = "main-medium"
+    case mainHuge = "main-huge"
+    case mainFirstRunSmall = "main-first-run-small"
+    case mainTransactionsSmall = "main-transactions-small"
+    case mainSpendingMoney = "main-spending-money"
+    case mainSpendingMoneySmall = "main-spending-money-small"
+    case mainTaxReport = "main-tax-report"
+    case mainTaxReportSmall = "main-tax-report-small"
+    case mainNoWalletSmall = "main-no-wallet-small"
     case mainNoWallet = "main-no-wallet"
     case mainReading = "main-reading"
     case mainServerDown = "main-server-down"
@@ -168,7 +180,7 @@ enum TestScene: String, CaseIterable {
     enum Chrome { case titled, none }
 
     /// Rendering draws the inspector's text in the wrong color in dark mode, so these only come from a real window.
-    var needsRealWindow: Bool { self == .mainDetails || self == .mainFirstRunDetails || self == .mainDetailsCAD || self == .mainHoldDetails || self == .mainSmallestEnd }
+    var needsRealWindow: Bool { rawValue.hasPrefix("main") || self == .mainDetails || self == .mainFirstRunDetails || self == .mainDetailsCAD || self == .mainHoldDetails || self == .mainSmallestEnd }
 
     var chrome: Chrome {
         switch self {
@@ -193,18 +205,18 @@ enum TestScene: String, CaseIterable {
         case .mainEmpty, .mainEmptySmallest: .empty
         case .mainEmptyNotice: .emptyReadingLinked
         case .mainNotStarted, .popoverNotStarted: .notStarted
-        case .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunDetails, .popoverFirstRun: .firstRun
+        case .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunSmall, .mainFirstRunDetails, .popoverFirstRun: .firstRun
         default: .demo
         }
     }
 
     private var hasWallet: Bool {
-        self != .mainNoWallet && self != .popoverNoWallet
+        self != .mainNoWallet && self != .mainNoWalletSmall && self != .popoverNoWallet
     }
 
     private var usesDemoWallet: Bool {
         switch self {
-        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .mainNotStarted, .popoverNotStarted, .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunDetails, .popoverFirstRun: false
+        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .mainNotStarted, .popoverNotStarted, .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunSmall, .mainFirstRunDetails, .popoverFirstRun: false
         default: true
         }
     }
@@ -220,7 +232,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
+        case .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
         case .sendWaiting: .waitingForTouchID
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
         case .hotWalletNoPrice: .noPrice
@@ -259,7 +271,9 @@ enum TestScene: String, CaseIterable {
             RunLoop.main.run(until: .now.addingTimeInterval(0.01))
         }
         let navigation = Navigation()
-        navigation.showsTransactions = self == .mainTransactions || self == .mainTransactionsCAD
+        if self == .mainTransactions || self == .mainTransactionsCAD || self == .mainTransactionsSmall { navigation.section = .transactions }
+        if self == .mainSpendingMoney || self == .mainSpendingMoneySmall { navigation.section = .spendingMoney }
+        if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
         if self == .mainDetails || self == .mainDetailsCAD { navigation.target = .asset("AERO", .realized) }
         if self == .mainHoldDetails { navigation.target = .holdComparison }
         if self == .mainFirstRunDetails { navigation.target = .asset("ETH", .onchain) }
@@ -278,14 +292,20 @@ enum TestScene: String, CaseIterable {
         case .holdComparison:
             return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
         case .mainFirstRun, .mainFirstRunDetails, .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
-            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainSmallestEnd:
             // Starts at the end of the page, because a screenshot can't scroll to it.
-            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet)).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .mainEmptySmallest, .mainSmallest, .mainFirstRunSmallest:
-            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 560), isReady: isReady)
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .mainNarrow, .mainSmallAmountsNarrow:
-            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 760), isReady: isReady)
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 780, height: 760), isReady: isReady)
+        case .mainSmall, .mainFirstRunSmall, .mainTransactionsSmall, .mainSpendingMoneySmall, .mainTaxReportSmall, .mainNoWalletSmall:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: MainWindow.minimumSize, isReady: isReady)
+        case .mainMedium, .mainSpendingMoney, .mainTaxReport:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 900, height: 640), isReady: isReady)
+        case .mainHuge:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 2200, height: 1300), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
         case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
@@ -540,7 +560,7 @@ final class FixtureSource: PortfolioSource {
     }
 
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
-        throw FetchError.rejected("There's no tax report fixture.")
+        try Self.decode("demo-tax-report")
     }
 
     /// What each answer would do, as the demo's own numbers, so a card shows them in place.

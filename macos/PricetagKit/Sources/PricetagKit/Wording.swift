@@ -121,7 +121,8 @@ public enum Wording {
     /// What the rows no longer say one by one. nil unless every listed balance was checked and matches.
     public static func allBalancesMatch(_ portfolio: Portfolio) -> String? {
         let listed = portfolio.listedPositions
-        return !listed.isEmpty && listed.allSatisfy(\.isReconciled) ? "Every balance matches the chain." : nil
+        // A balance that couldn't be read has no row, and hasn't been shown to match anything.
+        return !listed.isEmpty && portfolio.unreadAssets.isEmpty && listed.allSatisfy(\.isReconciled) ? "Every balance matches the chain." : nil
     }
 
     /// What there is instead of a chart, so what's short isn't mistaken for nothing.
@@ -202,7 +203,7 @@ public enum Wording {
     /// The same, as a sentence for when there's room to say what it means. nil when it's exact and whole.
     public static func leavesOut(_ totals: Totals, _ currency: CurrencyCode) -> String? {
         var parts: [String] = []
-        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) of what you hold has an unknown cost, so it isn't in your PnL.") }
+        if isPositive(totals.unresolvedMicros) { parts.append("\(Format.money(totals.unresolvedMicros, currency)) has an unknown cost, so it isn't in your PnL.") }
         if isPositive(totals.estimatedMicros) { parts.append("\(Format.money(totals.estimatedMicros, currency)) is estimated.") }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
@@ -246,6 +247,22 @@ public enum Wording {
 
     public static let notStarted = "The data hasn't reached this wallet's history yet, so there's nothing to show so far."
     public static let unpricedFees = "Some network fees had no price at the time, and aren't in this total."
+
+    /// Balances with no row, because nothing could be read about them. nil when there are none.
+    public static func unreadBalances(_ assets: [String]) -> String? {
+        assets.isEmpty ? nil : "Couldn't read your \(assets.joined(separator: ", ")) \(assets.count == 1 ? "balance" : "balances")."
+    }
+
+    /// The comparison in a few words, for the line that opens the whole of it.
+    public static func holdSummary(_ comparison: HoldComparison, _ currency: CurrencyCode) -> String {
+        switch comparison.status {
+        case .unavailable: return "Not available yet"
+        case .partial: return "Not comparable yet"
+        case .complete:
+            guard let difference = comparison.differenceMicros else { return "Not available yet" }
+            return holdDifference(difference, currency, estimated: comparison.walletEstimated || comparison.estimated)
+        }
+    }
 
     /// What's unavailable because of a missing exchange rate. Empty in USD, or with every rate there.
     public static func missingRates(_ portfolio: Portfolio) -> [String] {
