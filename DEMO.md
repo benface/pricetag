@@ -35,13 +35,14 @@ All times are Montréal. **Rehearsal: Thursday, about 16:00 to 17:00.** Numbers 
 About 5 minutes. **Before you start:**
 - The server has been running for at least 5 minutes, with the wallet already read once under each rule, so nothing's a cold read.
 - In Settings (⌘,) > General: USD, Average cost, and the Market price rule.
+- Spending Money is the wallet shown, on Overview (⌘4). Open Patina reopens whatever section and wallet you left, so step 2 presses ⌘4 again.
 - The Coinbase question is **unanswered**, and what you paid is on a sticky note.
 - The main window and Settings are arranged side by side. Keep the main window wide, or details open as a sheet instead of on the right.
 
 | # | Do | Say | Should appear |
 |---|---|---|---|
 | 1 | Click the menu bar item | "This is my real wallet, with real money. A small amount, on purpose." | Value, PnL and holdings. PnL is marked partial, with **Answer 1** beside the warning. Spending Money below, with Buy, Receive, Send and Top Up |
-| 2 | **Open Patina** (⌘O) | "It only has what I've done since Wednesday at 14:24, when the dataset starts. Every position is checked against the chain to the smallest unit." | Overview: holdings with check marks, and a warning above them with **Answer 1 Question** |
+| 2 | **Open Patina** (⌘O), then ⌘4 (Wallet > Spending Money) | "It only has what I've done since Wednesday at 14:24, when the dataset starts. Every position is checked against the chain to the smallest unit." | Spending Money's Overview: holdings, ETH's Unrealized unknown, and a warning above them with **Answer 1 Question**. A holding that matches the chain has no mark. Only one that doesn't gets a triangle |
 | 3 | Click cbBTC's number in the holdings | "Any number opens what's behind it: what moved, at what price, and where that price came from." | Details on the right, with each row's price source and cost |
 | 4 | On a swap's row, click **Proof**, then **Verify block …** | "Our server recomputes the block's hashes from what Amp returned. It doesn't prove my SQL or Chainlink's number, and it says so." | 8 to 11 s (*measured* after the switch), then "The data Amp stored for this block matches its header, and so does Chainlink's update behind this price" and 5 passed checks |
 | 5 | **Answer 1 Question** in the warning (⇧⌘R) | "My ETH came from Coinbase inside a batched payout. No transaction points at my wallet, and this data has no traces. We found it from the balance. So it asks, instead of guessing." | "Who's this?" with "From a Coinbase address" |
