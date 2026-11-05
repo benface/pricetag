@@ -118,6 +118,12 @@ public enum Wording {
         return "Covers about \(Format.duration(ms: BlockTime.msBetween(span.fromBlock, span.toBlock))) of history and \(trackedTokens) tokens plus ETH. \(opening) Other tokens aren't counted."
     }
 
+    /// What the rows no longer say one by one. nil unless every listed balance was checked and matches.
+    public static func allBalancesMatch(_ portfolio: Portfolio) -> String? {
+        let listed = portfolio.listedPositions
+        return !listed.isEmpty && listed.allSatisfy(\.isReconciled) ? "Every balance matches the chain." : nil
+    }
+
     public static func feesUnknown(_ count: Int) -> String {
         "Network fees couldn't be worked out for \(count) \(count == 1 ? "transaction" : "transactions"), so the network fees shown are too low."
     }
@@ -253,6 +259,7 @@ public enum Wording {
 
     public static let demo = "Demo data, not a real wallet. Every case the app has to get right is in here."
     public static let pnlUnavailable = "PnL unavailable"
+    public static let unknown = "Unknown"
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
     public static let reading = "Reading this wallet's history. The first read can take a minute, then only new activity is read."
     public static let notAnAddress = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."

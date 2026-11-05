@@ -212,4 +212,9 @@ struct HoldComparisonTests {
         #expect(Wording.answerQuestions(1) == "Answer 1 Question")
         #expect(Wording.answerQuestions(5) == "Answer 5 Questions")
     }
+
+    @Test func onlySaysBalancesMatchWhenTheyAllDo() throws {
+        // The demo has one that doesn't.
+        #expect(Wording.allBalancesMatch(try demoPortfolio()) == nil)
+    }
 }

@@ -205,7 +205,7 @@ struct MainWindow: View {
     }
 
     private func coverageNote(_ portfolio: Portfolio) -> some View {
-        Text(Wording.coverage(portfolio))
+        Text([Wording.allBalancesMatch(portfolio), Wording.coverage(portfolio)].compactMap(\.self).joined(separator: " "))
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -304,28 +304,26 @@ private struct HoldingsTable: View {
 
     private var currency: CurrencyCode { portfolio.currency }
 
-    /// What each column needs.
+    /// What each column needs, for what's usually in it. A column can always grow if there's room.
     private enum Column {
-        static let asset: CGFloat = 160
-        static let balanceCheck: CGFloat = 100
-        static let amount: CGFloat = 85
-        static let averagePrice: CGFloat = 130
-        static let value: CGFloat = 85
-        static let realized: CGFloat = 120
-        static let unrealized: CGFloat = 165
+        static let asset: CGFloat = 170
+        static let amount: CGFloat = 100
+        static let averagePrice: CGFloat = 105
+        static let value: CGFloat = 100
+        static let realized: CGFloat = 100
+        static let unrealized: CGFloat = 145
 
-        static let balanceCheckID = "balance-check"
         static let averagePriceID = "average-price"
 
         /// A column that was hidden comes back wider than it left, more so each time, unless something stops it.
         static let comebackRoom: CGFloat = 30
 
-        /// All seven, with what the table adds around them, and the two that come back at their widest.
-        static let allWidth = asset + balanceCheck + amount + averagePrice + value + realized + unrealized + 155 + 2 * comebackRoom
+        /// All six, with what the table adds around them, and the one that comes back at its widest.
+        static let allWidth = asset + amount + averagePrice + value + realized + unrealized + 130 + comebackRoom
     }
 
-    /// Below the width all seven need, which is the default window with the details open and the smallest window without them,
-    /// two columns give way. The balance check moves next to the asset, and the average price paid is in the details' menu.
+    /// Below the width all six need, which is the default window with the details open and the smallest window without them,
+    /// the average price paid gives way. It's in the details' menu.
     private var isNarrow: Bool { width < Column.allWidth }
 
     /// Hiding a column doesn't give its width to the others, so when narrow, each stops at what it needs, and the five always fit.
@@ -338,36 +336,26 @@ private struct HoldingsTable: View {
         Table(portfolio.listedPositions, selection: $selection, columnCustomization: $columns) {
             TableColumn("Asset") { position in
                 HStack(spacing: 5) {
-                    // A problem with the balance stays visible without its column.
-                    if isNarrow {
-                        balanceCheck(position, showsLabel: false)
-                            .frame(width: 14)
-                    }
                     Text(position.asset).fontWeight(.medium)
                     if let note = position.note {
-                        Text(note).font(.caption).foregroundStyle(.secondary)
+                        Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
+                    // Once per row, however many of its numbers it affects. A balance that matches says nothing.
+                    balanceCheck(position)
                 }
                 .opacity(position.isHeld ? 1 : 0.6)
             }
             .width(min: Column.asset, ideal: Column.asset, max: limit(Column.asset))
             .disabledCustomizationBehavior(.all)
-            TableColumn(Wording.balanceCheck) { position in
-                balanceCheck(position, showsLabel: true)
-            }
-            .width(min: Column.balanceCheck, ideal: Column.balanceCheck, max: Column.balanceCheck + Column.comebackRoom)
-            .customizationID(Column.balanceCheckID)
-            .disabledCustomizationBehavior(.all)
             TableColumn("Amount") { position in
-                let warn = position.hasShortfall || position.isIncomplete
-                number(position, .amount, Format.amount(position.values.qty, decimals: position.decimals), tone: warn ? .warning : .neutral, warn: warn)
+                number(position, .amount, Format.amount(position.values.qty, decimals: position.decimals), tone: .neutral)
             }
             .width(min: Column.amount, ideal: Column.amount, max: limit(Column.amount))
             .disabledCustomizationBehavior(.all)
             .alignment(.numeric)
-            TableColumn(Wording.averagePricePaid) { position in
+            TableColumn("Average paid") { position in
                 if position.isHeld {
-                    number(position, .average, position.values.averageCostMicros.map { Format.estimate(Format.price($0, currency), position.estimates.cost) } ?? "Unknown", tone: position.hasUnknownCost ? .warning : .neutral, warn: position.hasUnknownCost)
+                    number(position, .average, position.values.averageCostMicros.map { Format.estimate(Format.price($0, currency), position.estimates.cost) } ?? Wording.unknown, tone: position.hasUnknownCost ? .secondary : .neutral)
                 } else {
                     dash
                 }
@@ -379,7 +367,7 @@ private struct HoldingsTable: View {
             TableColumn("Value") { position in
                 if position.isHeld {
                     let value = position.values.valueMicros
-                    number(position, .value, value.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price", tone: value == nil ? .warning : .neutral, warn: value == nil)
+                    number(position, .value, value.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price", tone: value == nil ? .secondary : .neutral)
                 } else {
                     dash
                 }
@@ -389,7 +377,7 @@ private struct HoldingsTable: View {
             .disabledCustomizationBehavior(.all)
             TableColumn("Realized") { position in
                 let realized = position.values.realizedMicros
-                number(position, .realized, realized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized) } ?? Wording.pnlUnavailable, tone: Tone(signed: realized), warn: realized == nil)
+                number(position, .realized, realized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized) } ?? Wording.unknown, tone: realized == nil ? .secondary : Tone(signed: realized))
             }
             .width(min: Column.realized, ideal: Column.realized, max: limit(Column.realized))
             .alignment(.numeric)
@@ -398,12 +386,13 @@ private struct HoldingsTable: View {
                 if position.isHeld {
                     let unrealized = position.values.unrealizedMicros
                     HStack(spacing: 6) {
-                        number(position, .unrealized, unrealized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.unrealized) } ?? Wording.pnlUnavailable, tone: Tone(signed: unrealized), warn: unrealized == nil)
                         if position.resolvable {
-                            Button("Resolve") { onResolve(position.asset) }
+                            Button("Fill In") { onResolve(position.asset) }
                                 .controlSize(.mini)
-                                .accessibilityLabel("Resolve \(position.asset)")
+                                .accessibilityLabel("Fill in \(position.asset)'s cost")
+                                .help("Answer what the app can't work out about \(position.asset)")
                         }
+                        number(position, .unrealized, unrealized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.unrealized) } ?? Wording.unknown, tone: unrealized == nil ? .secondary : Tone(signed: unrealized))
                     }
                 } else {
                     dash
@@ -416,9 +405,8 @@ private struct HoldingsTable: View {
         .tableStyle(.inset)
         .alternatingRowBackgrounds(.disabled)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-        // Not `if` around the columns: a column that comes back that way lands at the end, under another column's header.
+        // Not `if` around the column: a column that comes back that way lands at the end, under another column's header.
         .onChange(of: isNarrow, initial: true) {
-            columns[visibility: Column.balanceCheckID] = isNarrow ? .hidden : .visible
             columns[visibility: Column.averagePriceID] = isNarrow ? .hidden : .visible
         }
         .onChange(of: selection) { _, asset in
@@ -440,25 +428,22 @@ private struct HoldingsTable: View {
         Text("—").foregroundStyle(.tertiary)
     }
 
-    private func balanceCheck(_ position: Position, showsLabel: Bool) -> some View {
+    private func balanceCheck(_ position: Position) -> some View {
         Button {
             target = .asset(position.asset, .onchain)
         } label: {
-            OnchainCheck(position: position, showsLabel: showsLabel)
+            OnchainCheck(position: position)
         }
         .buttonStyle(NumberButtonStyle())
     }
 
-    private func number(_ position: Position, _ metric: AssetMetric, _ text: String, tone: Tone, warn: Bool) -> some View {
+    private func number(_ position: Position, _ metric: AssetMetric, _ text: String, tone: Tone) -> some View {
         Button {
             target = .asset(position.asset, metric)
         } label: {
-            HStack(spacing: 4) {
-                if warn { WarningIcon() }
-                LiveNumber(text, tone: isLive ? tone : (warn ? .warning : .neutral))
-                    .lineLimit(1)
-            }
-            .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
+            LiveNumber(text, tone: isLive ? tone : .neutral)
+                .lineLimit(1)
+                .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
         }
         .buttonStyle(NumberButtonStyle())
         .help(metric.help ?? "")
