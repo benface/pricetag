@@ -142,10 +142,13 @@ struct HotWalletDetails<Overview: View>: View {
     @State private var isConfirmingRotation = false
     @State private var isConfirmingAbandon = false
     @State private var isChangingCap = false
-    /// What this Mac signed while the page was open, marked for a moment so it's found once its sheet has closed.
-    @State private var justSigned: Set<String> = []
+    /// What this Mac signed while the page was open, marked for a moment once its sheet has closed, so it's found.
+    @State private var newRows = NewRowMarks()
 
     private var address: EthereumAddress? { wallet.address }
+
+    /// The sheets here that can sign something.
+    private var isCoveredBySheet: Bool { isSending || isSweeping || isAddingCold || isToppingUp }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -164,13 +167,16 @@ struct HotWalletDetails<Overview: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onChange(of: wallet.records.map(\.hash)) { old, new in
-            let added = Set(new).subtracting(old)
-            if !added.isEmpty { justSigned.formUnion(added) }
+            newRows.rowsChanged(from: old, to: new, isCovered: isCoveredBySheet)
         }
-        .task(id: justSigned) {
-            guard !justSigned.isEmpty else { return }
+        // A send's sheet stays until its receipt arrives, and a moment more, so that's when its row is there to see.
+        .onChange(of: isCoveredBySheet) { _, covered in
+            if !covered { newRows.uncovered() }
+        }
+        .task(id: newRows.lit) {
+            guard !newRows.lit.isEmpty else { return }
             try? await Task.sleep(for: Motion.highlight)
-            if !Task.isCancelled { justSigned = [] }
+            if !Task.isCancelled { newRows.fade() }
         }
         .sheet(isPresented: $isAddingCold, onDismiss: { if testingSavings != nil { isSending = true } }) {
             AddColdWalletSheet(wallet: wallet, wallets: store.walletList(hotWallet: wallet).pickable, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
@@ -510,7 +516,7 @@ struct HotWalletDetails<Overview: View>: View {
                             .help("Open this transaction")
                     }
                 }
-                .justAdded(justSigned.contains(record.hash))
+                .justAdded(newRows.lit.contains(record.hash))
                 .arrives()
             }
         }
