@@ -1,11 +1,18 @@
 // What buying needs from a provider, and nothing about which one it is: open a checkout, and read what its order says happened.
 // Coinbase's is in `coinbase.ts`. Swapping it means another file like that one, and a word for it in `purchaseSource`.
 
+import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { OnrampOrder } from "../src/core/api.ts"
 
+/** An amount of money as someone typed it, in plain digits. */
+export type FiatAmount = { amount: string; currency: CurrencyCode }
+
 export type Onramp = {
-  /** A page for buying `cryptoAmount` of `asset` for this address, and what to ask about its order by. */
-  checkout(request: { address: string; asset: string; cryptoAmount: string; clientIp: string | null }): Promise<{ url: string; ref: string }>
+  /**
+   * A page for buying `asset` for this address, and what to ask about its order by. It starts at `fiat`, what the person typed,
+   * when it's given and the provider can start from that currency, and otherwise at `cryptoAmount`.
+   */
+  checkout(request: { address: string; asset: string; cryptoAmount: string; fiat: FiatAmount | null; clientIp: string | null }): Promise<{ url: string; ref: string }>
   orders(ref: string): Promise<OnrampOrder[]>
 }
 
