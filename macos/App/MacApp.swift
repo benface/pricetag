@@ -120,7 +120,7 @@ struct MacApp: App {
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
 
-        Window("Site Request", id: WindowID.siteApproval) {
+        Window(SiteApprovalWindow.title, id: WindowID.siteApproval) {
             SiteApprovalWindow(bridge: siteBridge)
                 .holdsDockPresence()
         }

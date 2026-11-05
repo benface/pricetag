@@ -15,6 +15,7 @@ struct HotWalletFixture {
     /// Fixed, so a scene looks the same whenever it's taken.
     private nonisolated static let today = Date(timeIntervalSince1970: 1_793_750_400)
     static let savings = EthereumAddress("0x00000000000000000000000000000000000de302")!
+    static let site = "https://app.example.com"
 
     private var hasWallet = true
     private var hasSavings = true
@@ -26,6 +27,7 @@ struct HotWalletFixture {
     private var canActOnChain = false
     private var recordsAreUnreadable = false
     private var promptNeverAnswers = false
+    private var isConnectedToSite = false
 
     /// No wallet yet, which is also what every scene that isn't about one gets.
     static let none = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:])
@@ -33,6 +35,7 @@ struct HotWalletFixture {
     static let unreadableRecords = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:], recordsAreUnreadable: true)
     static let funded = HotWalletFixture(hasRecords: true)
     static let waitingForTouchID = HotWalletFixture(promptNeverAnswers: true)
+    static let connectedToSite = HotWalletFixture(isConnectedToSite: true)
     static let noSavings = HotWalletFixture(hasSavings: false, balances: ["ETH": 1_000_000_000_000_000, "USDC": 10_000_000])
     static let noPrice = HotWalletFixture(balances: ["ETH": 5_000_000_000_000_000, "USDC": 20_000_000, "AERO": 12_000_000_000_000_000_000])
     static let overCap = HotWalletFixture(balances: ["ETH": 10_000_000_000_000_000, "USDC": 80_000_000])
@@ -52,7 +55,7 @@ struct HotWalletFixture {
             portfolioSource: { source },
             costMethod: costMethod,
             mainCurrency: mainCurrency,
-            makeChain: { [snapshot] _ in FixtureChain(snapshot: snapshot) },
+            makeChain: { [snapshot, isConnectedToSite] _ in FixtureChain(snapshot: snapshot, canQuote: isConnectedToSite) },
             now: { Self.today }
         )
     }
@@ -68,6 +71,7 @@ struct HotWalletFixture {
         guard hasWallet else { return state }
         state.active = Self.spending
         state.rotation = rotation
+        if isConnectedToSite { state.connectedSites = [Self.site] }
         if hasRecords { state.records[Self.spending] = records }
         // The demo portfolio is another wallet's history, so what it spent is news to this one unless it's been looked at.
         let history: Portfolio? = try? FixtureSource.decode("demo-portfolio")
@@ -156,15 +160,25 @@ private nonisolated struct StillAsking: UserPresence {
     }
 }
 
-/// Stands in for the node. It only ever answers reads.
+/// Stands in for the node. It only ever answers reads, and what a transaction would cost only for a site's scenes, which need it to show one.
 private nonisolated struct FixtureChain: ChainClient {
     let snapshot: ChainSnapshot
+    let canQuote: Bool
 
     func snapshot(of address: EthereumAddress) async throws -> ChainSnapshot { snapshot }
-    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64 { TestMode.fail("A scene tried to send a transaction.") }
+
+    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64 {
+        guard canQuote else { TestMode.fail("A scene tried to send a transaction.") }
+        return 120_000
+    }
+
     func send(_ transaction: SignedTransaction) async throws { TestMode.fail("A scene tried to send a transaction.") }
     func receipt(of hash: String) async throws -> Receipt? { nil }
     func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer { TestMode.fail("A scene tried to read for a site.") }
-    func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128 { TestMode.fail("A scene tried to price a transaction.") }
+
+    func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128 {
+        guard canQuote else { TestMode.fail("A scene tried to price a transaction.") }
+        return snapshot.fees.l1FeeWei
+    }
 }
 #endif
