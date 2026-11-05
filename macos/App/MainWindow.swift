@@ -162,6 +162,7 @@ struct MainWindow: View {
                 ContentUnavailableView("No activity", systemImage: "tray", description: Text("Nothing moved for \(portfolio.address) in this time."))
             } else {
                 summary(portfolio)
+                HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
                 history(portfolio)
                 HoldingsTable(portfolio: portfolio, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
                     .frame(minHeight: 150)

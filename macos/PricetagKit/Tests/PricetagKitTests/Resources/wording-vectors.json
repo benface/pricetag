@@ -206,7 +206,11 @@
     "reading": "Reading this wallet's history. The first read can take a minute, then only new activity is read.",
     "notAnAddress": "That isn't a Base address. It should start with 0x, then 40 letters and numbers.",
     "rulesTitle": "Pricing rule",
-    "rulesHelp": "Prices come from a public recipe anyone can copy and change. Each rule here is one version of it, named by its fingerprint. Switching only changes which one this wallet is read through."
+    "rulesHelp": "Prices come from a public recipe anyone can copy and change. Each rule here is one version of it, named by its fingerprint. Switching only changes which one this wallet is read through.",
+    "holdTitle": "Compared with holding ETH",
+    "holdWallet": "This wallet, after network fees",
+    "holdEth": "If you'd held ETH instead",
+    "holdPast": "Past results don't predict future ones."
   },
   "unseenEth": [
     {

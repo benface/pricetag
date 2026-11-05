@@ -95,6 +95,8 @@ enum TestScene: String, CaseIterable {
     case mainServerDown = "main-server-down"
     case mainNotUpdating = "main-not-updating"
     case mainLinkedFailed = "main-linked-failed"
+    case holdComparison = "hold-comparison"
+    case mainHoldDetails = "main-hold-details"
     case mainCostWithheld = "main-cost-withheld"
     case mainCAD = "main-cad"
     case mainTransactionsCAD = "main-transactions-cad"
@@ -136,11 +138,11 @@ enum TestScene: String, CaseIterable {
     enum Chrome { case titled, none }
 
     /// Rendering draws the inspector's text in the wrong color in dark mode, so these only come from a real window.
-    var needsRealWindow: Bool { self == .mainDetails || self == .mainDetailsCAD }
+    var needsRealWindow: Bool { self == .mainDetails || self == .mainDetailsCAD || self == .mainHoldDetails }
 
     var chrome: Chrome {
         switch self {
-        case .changeWallet, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm,
+        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap,
              .send, .sendKnown, .sendWaiting, .publishCost, .publishWaiting:
             .none
@@ -214,6 +216,7 @@ enum TestScene: String, CaseIterable {
         let navigation = Navigation()
         navigation.showsTransactions = self == .mainTransactions || self == .mainTransactionsCAD
         if self == .mainDetails || self == .mainDetailsCAD { navigation.target = .asset("AERO", .realized) }
+        if self == .mainHoldDetails { navigation.target = .holdComparison }
 
         let isReady: () -> Bool = { [feed] in
             switch feed {
@@ -226,7 +229,9 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .resolve:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
-        case .main, .mainTransactions, .mainDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainCostWithheld, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+        case .holdComparison:
+            return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
+        case .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainCostWithheld, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
@@ -261,6 +266,30 @@ enum TestScene: String, CaseIterable {
     }
 
     private static let recipient = "0x0000000000000000000000000000000000c0ffee"
+}
+
+/// The card in each state it can be in, from what `test/hold.test.ts` wrote.
+private struct HoldComparisonScene: View {
+    private struct Vector: Decodable {
+        let currency: CurrencyCode
+        let comparison: HoldComparison
+    }
+
+    private let vectors: [Vector] = {
+        guard let url = Bundle.main.url(forResource: "hold-vectors", withExtension: "json"), let data = try? Data(contentsOf: url), let vectors = try? JSONDecoder().decode([Vector].self, from: data) else { TestMode.fail("There's no fixture called hold-vectors.") }
+        return vectors
+    }()
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ForEach(vectors.indices, id: \.self) { index in
+                HoldComparisonCard(comparison: vectors[index].comparison, currency: vectors[index].currency, isLive: true) {}
+            }
+        }
+        .padding(16)
+        .frame(width: 800)
+        .background(.background)
+    }
 }
 
 private final class ReadOnce {
@@ -303,7 +332,7 @@ final class FixtureSource: PortfolioSource {
     }
 
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
-        try Self.decode(fixture("demo-explanation", currency))
+        try Self.decode(target == .holdComparison ? "demo-hold-explanation" : fixture("demo-explanation", currency))
     }
 
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {

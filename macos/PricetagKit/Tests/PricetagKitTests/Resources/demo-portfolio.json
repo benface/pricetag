@@ -512,6 +512,24 @@
       "excludedCount": 7
     }
   ],
+  "holdComparison": {
+    "walletMicros": "149301840",
+    "gainThatLeftMicros": "0",
+    "walletLeavesOut": true,
+    "walletEstimated": true,
+    "putInMicros": "199980000",
+    "takenOutMicros": "0",
+    "ethPriceMicros": "2640000000",
+    "unknownAmounts": 4,
+    "ranOut": false,
+    "status": "partial",
+    "unavailable": null,
+    "holdMicros": "15508653",
+    "differenceMicros": null,
+    "ethQty": "81624489795918367",
+    "ethValueMicros": "215488653",
+    "estimated": true
+  },
   "questions": [
     {
       "id": "sender:0x00000000000000000000000000000000000de301",

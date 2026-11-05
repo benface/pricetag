@@ -3,6 +3,7 @@
 
 import { viewWallet, type CurrencyCode, type Rates, type WalletView } from "./currency.ts"
 import type { Method } from "./fold.ts"
+import { compareWithHoldingEth, type HoldComparison } from "./hold.ts"
 import type { PricedLeg, Reference, UnseenEth } from "./legs.ts"
 import type { MarketMarks } from "./market.ts"
 import type { CostNote } from "./notes.ts"
@@ -73,6 +74,8 @@ export type FoldedWallet = {
   pnlStatus: PnlStatus
   /** PnL after each transaction, for a chart. */
   points: PnlPoint[]
+  /** What this wallet made next to what simply holding ETH would have. */
+  holdComparison: HoldComparison
 }
 
 /** With nothing read, there's no sum at all. Adding up no legs would otherwise say $0. */
@@ -83,13 +86,15 @@ export function foldWallet(wallet: WalletData, method: Method, view: WalletView 
   const positions = foldPositions(view.legs, method, view.prices, wallet)
   const unread = unreadAssets(positions, wallet)
   const totals = hasStarted(wallet) ? sumTotals(positions, unread) : noTotals()
+  const status = pnlStatus(totals, wallet.gasUnknownTxs)
   return {
     view,
     positions,
     unreadAssets: unread,
     totals,
-    pnlStatus: pnlStatus(totals, wallet.gasUnknownTxs),
+    pnlStatus: status,
     points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket)),
+    holdComparison: compareWithHoldingEth(positions, totals, status, view.prices, view.markPrice),
   }
 }
 
