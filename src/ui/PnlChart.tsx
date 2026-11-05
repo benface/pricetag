@@ -108,38 +108,40 @@ export function PnlChart({ points, currency, onSelect }: Props) {
         After each transaction: realized PnL, plus unrealized PnL where there's a price at that moment, less network fees. Unknown costs add nothing.
       </p>
       {asTable ? (
-        <table className="table compact">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>What happened</th>
-              <th className="num" title={PNL_HELP}>
-                PnL
-              </th>
-              <th className="num">Excludes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {points.map((p) => (
-              <tr key={`${p.blockNum}-${p.txHash ?? "latest"}`}>
-                <td>
-                  {p.txHash ? (
-                    <button type="button" className="num-button" aria-label={`Explain the transaction at ${formatTime(p.timestamp)}`} onClick={() => onSelect(p)}>
-                      {formatTime(p.timestamp)}
-                    </button>
-                  ) : (
-                    `${formatTime(p.timestamp)} (now)`
-                  )}
-                </td>
-                <td>{p.summary ?? "—"}</td>
-                <td className="num" title={PNL_HELP}>
-                  {showPnl(p)}
-                </td>
-                <td className="num">{p.excludedCount}</td>
+        <div className="table-scroll">
+          <table className="table compact">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>What happened</th>
+                <th className="num" title={PNL_HELP}>
+                  PnL
+                </th>
+                <th className="num">Excludes</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {points.map((p) => (
+                <tr key={`${p.blockNum}-${p.txHash ?? "latest"}`}>
+                  <td>
+                    {p.txHash ? (
+                      <button type="button" className="num-button" aria-label={`Explain the transaction at ${formatTime(p.timestamp)}`} onClick={() => onSelect(p)}>
+                        {formatTime(p.timestamp)}
+                      </button>
+                    ) : (
+                      `${formatTime(p.timestamp)} (now)`
+                    )}
+                  </td>
+                  <td>{p.summary ?? "—"}</td>
+                  <td className="num" title={PNL_HELP}>
+                    {showPnl(p)}
+                  </td>
+                  <td className="num">{p.excludedCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : null}
       {!asTable && !chart.hasData ? <p className="notice warn chart-empty">⚠ {NOTHING_TO_CHART}</p> : null}
       <div
