@@ -28,7 +28,7 @@ public struct PublishCostSheet: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Publish This Cost?")
-                .font(.title2.bold())
+                .font(.sheetTitle)
             Notice(.warning, "Anyone can read this, forever. It publicly ties what you paid to this wallet, and it can't be deleted or changed. Saving it on this Mac keeps it private.")
             LabeledContent("Paid for \(Format.amount(draft.units, decimals: draft.decimals)) \(draft.asset), in USD") {
                 TextField("$0.00", text: $usd)

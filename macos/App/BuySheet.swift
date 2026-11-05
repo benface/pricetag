@@ -58,7 +58,7 @@ struct BuySheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Buy")
-                .font(.title2.bold())
+                .font(.sheetTitle)
             if wallet.address == nil {
                 Notice(.info, "What you buy lands in Spending Money, so that comes first.")
             } else if !hasSavings {
@@ -191,6 +191,8 @@ struct PurchaseRow: View {
                 Text(PurchaseWording.status(phase, beside: main))
                     .font(.caption)
                     .foregroundStyle(PurchaseWording.isWarning(phase) ? Tone.warning.style : AnyShapeStyle(.secondary))
+                    .contentTransition(.opacity)
+                    .animation(Motion.state, value: phase)
             }
             Spacer()
             if !phase.isFinished, !phase.isUpToThem {

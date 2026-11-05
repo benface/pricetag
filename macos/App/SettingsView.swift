@@ -7,7 +7,7 @@ struct SettingsView: View {
 
     let store: PortfolioStore
     let hotWallet: HotWallet
-    @State var tab: Pane = .general
+    @Binding var tab: Pane
     @State var server = ""
     @State var serverError: String?
     @State private var isComparing = false

@@ -3,7 +3,7 @@ import KeyVault
 import PricetagKit
 import SwiftUI
 
-/// This Mac's spending money. It's a hot wallet with a cap, and what's above the cap goes to savings by itself.
+/// This Mac's spending money on its own: the page around a wallet's numbers, or what to say when there's no wallet to show.
 struct HotWalletWindow: View {
     let wallet: HotWallet
     let store: PortfolioStore
@@ -12,7 +12,26 @@ struct HotWalletWindow: View {
     let purchases: PurchaseTracker
 
     var body: some View {
-        Group {
+        if wallet.availability == .ready, wallet.address != nil {
+            ScrollView {
+                HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases, showsHoldings: true) { EmptyView() }
+                    .padding(20)
+            }
+        } else {
+            SpendingMoneySetup(wallet: wallet, store: store)
+                .frame(minWidth: 320, minHeight: 320)
+        }
+    }
+}
+
+/// There's no Spending Money to show. It can't be selected in the list, so this is a sheet.
+struct SpendingMoneySetup: View {
+    let wallet: HotWallet
+    let store: PortfolioStore
+    var onDone: (() -> Void)?
+
+    var body: some View {
+        VStack(spacing: 0) {
             switch wallet.availability {
             case .notProvisioned:
                 ContentUnavailableView {
@@ -27,14 +46,17 @@ struct HotWalletWindow: View {
             case .unavailable(let message):
                 ContentUnavailableView("Can't Open This Wallet", systemImage: "exclamationmark.triangle", description: Text(message))
             case .ready:
-                if wallet.address == nil {
-                    HotWalletSetup(wallet: wallet, store: store)
-                } else {
-                    HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases)
+                HotWalletSetup(wallet: wallet, store: store, onDone: onDone)
+            }
+            if let onDone {
+                HStack {
+                    Spacer()
+                    Button("Cancel", action: onDone)
+                        .keyboardShortcut(.cancelAction)
                 }
+                .padding([.horizontal, .bottom], 16)
             }
         }
-        .frame(minWidth: 320, minHeight: 320)
     }
 }
 
@@ -42,6 +64,7 @@ struct HotWalletWindow: View {
 private struct HotWalletSetup: View {
     let wallet: HotWallet
     let store: PortfolioStore
+    var onDone: (() -> Void)?
     @State private var understands = false
     @State private var showsHowItWorks = false
 
@@ -52,7 +75,7 @@ private struct HotWalletSetup: View {
                     .font(.system(size: 30))
                     .foregroundStyle(.secondary)
                 Text("Spending Money")
-                    .font(.title2.bold())
+                    .font(.sheetTitle)
                 Text("\(HotWalletWording.summary) Anything above your cap moves to your savings.")
                     .fixedSize(horizontal: false, vertical: true)
                 // What can't be undone stays in full, and on screen.
@@ -81,7 +104,10 @@ private struct HotWalletSetup: View {
                 Button("Create Spending Money") {
                     Task {
                         await wallet.createWallet()
-                        if let address = wallet.address { store.showNewWallet(address.lowercased) }
+                        // It's what they asked for, so it's what they see next.
+                        guard let address = wallet.address else { return }
+                        store.setWallet(address.lowercased)
+                        onDone?()
                     }
                 }
                     .buttonStyle(.borderedProminent)
@@ -97,12 +123,16 @@ private struct HotWalletSetup: View {
     }
 }
 
-private struct HotWalletDetails: View {
+/// What only spending money has, around the numbers any wallet has. `overview` goes in the middle, so its actions are in view above them.
+struct HotWalletDetails<Overview: View>: View {
     let wallet: HotWallet
     let store: PortfolioStore
     let siteBridge: SiteBridge
     let navigation: Navigation
     let purchases: PurchaseTracker
+    /// Once the overview has holdings, these would only say the same thing again.
+    let showsHoldings: Bool
+    @ViewBuilder let overview: Overview
     @State private var isAddingCold = false
     @State private var isToppingUp = false
     @State private var isSending = false
@@ -111,29 +141,26 @@ private struct HotWalletDetails: View {
     @State private var isSweeping = false
     @State private var isConfirmingRotation = false
     @State private var isConfirmingAbandon = false
+    @State private var isChangingCap = false
 
     private var address: EthereumAddress? { wallet.address }
 
     var body: some View {
-        Form {
-            if let alarm = wallet.alarm {
-                Section { alarmBanner(alarm) }
-            }
+        VStack(alignment: .leading, spacing: 18) {
+            if let alarm = wallet.alarm { alarmBanner(alarm) }
             ForEach(wallet.notices) { notice in
                 Notice(notice.kind == .warning ? .warning : .info, notice.text, actionTitle: notice.asksForSavings ? HotWalletWording.addSavingsButton : nil) { isAddingCold = true }
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
             }
-            balance
-            actions
+            card
             if !shownPurchases.isEmpty { bought }
-            holdings
+            overview
+            if showsHoldings { holdings }
             if !wallet.unlisted.isEmpty { untouched }
             savings
             if !wallet.connectedSites.isEmpty { sites }
             if !wallet.records.isEmpty { activity }
         }
-        .formStyle(.grouped)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .sheet(isPresented: $isAddingCold, onDismiss: { if testingSavings != nil { isSending = true } }) {
             AddColdWalletSheet(wallet: wallet, wallets: store.walletList(hotWallet: wallet).pickable, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
         }
@@ -170,7 +197,7 @@ private struct HotWalletDetails: View {
     private func alarmBanner(_ alarm: StolenKeyAlarm) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(HotWalletWording.alarmHeadline, systemImage: "exclamationmark.octagon.fill")
-                .font(.title3.bold())
+                .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
             Text(HotWalletWording.alarmAdvice)
                 .foregroundStyle(.white)
@@ -179,18 +206,12 @@ private struct HotWalletDetails: View {
                 .foregroundStyle(.white.opacity(0.85))
                 .textSelection(.enabled)
             HStack {
-                // Its own colors rather than a tint, which fades into the banner when the window isn't in front. An alarm usually finds it that way.
                 Button {
                     Task { await wallet.replaceKey() }
                 } label: {
                     Text(wallet.settings.sweepDestination == nil ? "Move What's Left to a New Key" : "Sweep What's Left and Replace the Key")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AlarmButtonStyle())
                 .disabled(wallet.rotation != nil || wallet.isWorking)
                 Spacer()
                 Button("Dismiss") { wallet.dismissAlarm() }
@@ -201,18 +222,18 @@ private struct HotWalletDetails: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.red, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .listRowInsets(EdgeInsets())
-        .listRowBackground(Color.clear)
     }
 
-    private var balance: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 8) {
+    /// How close to the cap this is, and what can be done about it. It works from what this Mac reads by itself, so it's here even when the server isn't.
+    private var card: some View {
+        DetailsGroup {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
-                    LiveNumber(wallet.plan.map { wallet.money($0.valueUsdMicros) } ?? "—", tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
-                        .font(.system(size: 34, weight: .semibold))
-                    Text("of \(wallet.capText)")
-                        .foregroundStyle(.secondary)
+                    DisplayNumber(wallet.plan.map { wallet.money($0.valueUsdMicros) } ?? "—", size: 20, tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
+                    Button("of \(wallet.capText)") { isChangingCap.toggle() }
+                        .buttonStyle(.link)
+                        .help("Change the cap")
+                        .popover(isPresented: $isChangingCap, arrowEdge: .bottom) { capEditor }
                     Spacer()
                     Label(HotWalletWording.label, systemImage: "flask")
                         .font(.caption)
@@ -223,33 +244,47 @@ private struct HotWalletDetails: View {
                     .gaugeStyle(.accessoryLinearCapacity)
                     .tint(wallet.plan?.excessUsdMicros ?? 0 > 0 ? .orange : .accentColor)
                     .accessibilityHidden(true)
+                    // So what sweeps away visibly leaves. It follows the number above, which is what's real.
+                    .motion(Motion.number, value: gaugeValue)
+                if let plan = wallet.plan, plan.gasKeptWei > 0 {
+                    Text(HotWalletWording.keptOutOfCap(plan.gasKeptWei))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if let address {
                     HStack {
-                        Text(address.checksummed)
-                            .font(.caption.monospaced())
+                        AddressLine(address.checksummed)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
-                        Spacer()
-                        Button("Copy", systemImage: "doc.on.doc") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(address.checksummed, forType: .string)
-                        }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
-                        .help("Copy this address")
-                        Button("Show in Overview", systemImage: "chart.xyaxis.line") {
-                            store.setWallet(address.lowercased)
-                            navigation.section = .overview
-                        }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
-                        .help("Show its cost and PnL in the main window")
+                        CopyButton(title: "Copy", text: address.checksummed, help: "Copy this address")
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
                     }
                 }
+                actions
             }
         }
+    }
+
+    private var capEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LabeledContent("Cap") {
+                HStack {
+                    Slider(value: Binding(get: { Double(wallet.settings.capInDollars) }, set: { wallet.setCap(dollars: Int($0)) }), in: 1...Double(wallet.settings.capCeiling / Money.dollar))
+                    Text(wallet.money(dollars: wallet.settings.capInDollars))
+                        .monospacedDigit()
+                        .frame(width: 56, alignment: .trailing)
+                }
+            }
+            Text("Anything above it moves to your savings.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .frame(width: 320)
     }
 
     private var gaugeValue: Double {
@@ -262,7 +297,7 @@ private struct HotWalletDetails: View {
     }
 
     private var bought: some View {
-        Section("Purchases") {
+        DetailsSection("Purchases") {
             if let problem = purchases.problem {
                 WarningText(problem).font(.callout)
             }
@@ -273,7 +308,7 @@ private struct HotWalletDetails: View {
     }
 
     private var holdings: some View {
-        Section("Holdings") {
+        DetailsSection("Holdings") {
             if wallet.holdings.isEmpty {
                 Text("Reading…").foregroundStyle(.secondary)
             }
@@ -295,33 +330,22 @@ private struct HotWalletDetails: View {
                     }
                 }
             }
-            if let plan = wallet.plan, plan.gasKeptWei > 0 {
-                Text(HotWalletWording.keptOutOfCap(plan.gasKeptWei))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
     }
 
     private var untouched: some View {
-        Section {
+        DetailsSection("Other Tokens", footer: "Not tracked, and never touched. They can be malicious, so don't go looking for what they're worth.") {
             ForEach(wallet.unlisted) { token in
                 Text(token.token)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
-        } header: {
-            Text("Other Tokens")
-        } footer: {
-            Text("Not tracked, and never touched. They can be malicious, so don't go looking for what they're worth.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
     private var savings: some View {
-        Section {
+        DetailsSection("Savings", footer: wallet.settings.coldWallets.isEmpty ? nil : "Sweeps go to the checked one.") {
             if wallet.settings.coldWallets.isEmpty {
                 Text("No savings wallet yet.")
                     .foregroundStyle(.secondary)
@@ -330,67 +354,55 @@ private struct HotWalletDetails: View {
                 HStack {
                     Image(systemName: cold.address == wallet.settings.sweepDestination ? "checkmark.circle.fill" : "circle")
                         .foregroundStyle(cold.address == wallet.settings.sweepDestination ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                        .contentTransition(.symbolEffect(.replace))
+                        .animation(Motion.state, value: wallet.settings.sweepDestination)
                     VStack(alignment: .leading) {
                         Text(cold.name)
-                        Text(cold.address.checksummed)
-                            .font(.caption.monospaced())
+                        AddressLine(cold.address.checksummed)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
                     }
                     Spacer()
-                    Button("Show in Overview", systemImage: "chart.xyaxis.line") {
-                        store.setWallet(cold.address.lowercased)
-                        navigation.section = .overview
+                    Button("Show This Wallet", systemImage: "chart.xyaxis.line") { store.setWallet(cold.address.lowercased) }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .help("Show its cost and PnL")
+                    Button("Remove from Savings…", systemImage: "minus.circle") {
+                        navigation.removingFromSavings = WalletEntry(address: cold.address.lowercased, name: cold.name, kind: .savings)
                     }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
-                        .help("Show its cost and PnL in the main window")
-                    Button("Remove", systemImage: "minus.circle") { wallet.removeColdWallet(cold.address) }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
-                        .help("Remove this wallet")
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help("Remove from savings")
+                    .disabled(wallet.isWorking)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture { wallet.setSweepDestination(cold.address) }
                 .accessibilityAddTraits(cold.address == wallet.settings.sweepDestination ? .isSelected : [])
             }
             Button(HotWalletWording.addSavingsButton, systemImage: "plus") { isAddingCold = true }
-        } header: {
-            Text("Savings")
-        } footer: {
-            if !wallet.settings.coldWallets.isEmpty {
-                Text("Sweeps go to the checked one.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
     }
 
     private var sites: some View {
-        Section {
+        DetailsSection("Connected Sites", footer: "Disconnecting doesn't undo token approvals you already gave them.") {
             ForEach(wallet.connectedSites, id: \.self) { origin in
                 LabeledContent(siteName(origin)) {
                     Button("Disconnect") { siteBridge.disconnect(origin) }
                         .buttonStyle(.borderless)
                 }
             }
-        } header: {
-            Text("Connected Sites")
-        } footer: {
-            Text("Disconnecting doesn't undo token approvals you already gave them.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
     private var actions: some View {
-        Section {
+        Group {
             ViewThatFits(in: .horizontal) {
                 HStack {
                     send
-                    buy
+                    receive
                     topUp
                     sweep
                     Spacer()
@@ -399,20 +411,13 @@ private struct HotWalletDetails: View {
                 VStack(alignment: .leading) {
                     HStack {
                         send
-                        buy
+                        receive
                         topUp
                     }
                     HStack {
                         sweep
                         replaceKey
                     }
-                }
-                VStack(alignment: .leading) {
-                    send
-                    buy
-                    topUp
-                    sweep
-                    replaceKey
                 }
             }
             if wallet.canLeaveOldKeyBehind {
@@ -440,8 +445,8 @@ private struct HotWalletDetails: View {
             .disabled(!wallet.canSend)
     }
 
-    private var buy: some View {
-        Button("Buy…") { navigation.isBuying = true }
+    private var receive: some View {
+        Button("Receive…") { navigation.isReceiving = true }
             .disabled(!wallet.canTopUp)
     }
 
@@ -473,7 +478,7 @@ private struct HotWalletDetails: View {
     }
 
     private var activity: some View {
-        Section("Signed by This Mac") {
+        DetailsSection("Signed by This Mac") {
             ForEach(wallet.records) { record in
                 HStack {
                     VStack(alignment: .leading) {
@@ -484,9 +489,7 @@ private struct HotWalletDetails: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text(statusText(record))
-                        .font(.caption)
-                        .foregroundStyle(record.status == .failed || record.status == .dropped ? Tone.warning.style : AnyShapeStyle(.secondary))
+                    RecordStatus(status: record.status, text: statusText(record))
                     if let url = URL(string: "https://basescan.org/tx/\(record.hash)") {
                         Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                             .foregroundStyle(.secondary)
@@ -518,6 +521,82 @@ private struct HotWalletDetails: View {
     }
 }
 
+/// A rounded group, like a row of a form, for a page that scrolls with the rest of a wallet's numbers.
+private struct DetailsGroup<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) { content }
+            .labeledContentStyle(DetailsRowStyle())
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+/// As a form lays one out, with its value at the far end. Outside a form, the two would sit side by side.
+private struct DetailsRowStyle: LabeledContentStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack {
+            configuration.label
+            Spacer()
+            configuration.content
+        }
+    }
+}
+
+private struct DetailsSection<Content: View>: View {
+    let title: String
+    let footer: String?
+    @ViewBuilder let content: Content
+
+    init(_ title: String, footer: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.footer = footer
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.headline)
+            DetailsGroup { content }
+            if let footer {
+                Text(footer)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// How one signed transaction is doing. The check draws in when its receipt arrives, and one that had already landed just shows it.
+private struct RecordStatus: View {
+    let status: SignedRecord.Status
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            switch status {
+            case .pending:
+                ProgressView().controlSize(.mini)
+            case .confirmed:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Tone.gain.style)
+                    .transition(.symbolEffect(.drawOn))
+            case .failed, .dropped:
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Tone.warning.style)
+            }
+            Text(text)
+                .contentTransition(.opacity)
+                .foregroundStyle(status == .failed || status == .dropped ? Tone.warning.style : AnyShapeStyle(.secondary))
+        }
+        .font(.caption)
+        .animation(Motion.state, value: status)
+    }
+}
+
 /// The Mac app has no device code, so this picks the amount, and the web app's device flow does the rest. The steps by hand are there for when that can't.
 struct TopUpSheet: View {
     let wallet: HotWallet
@@ -543,7 +622,7 @@ struct TopUpSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(HotWalletWording.topUpTitle(hasDestination: hasDestination))
-                .font(.title2.bold())
+                .font(.sheetTitle)
             if room < 1 {
                 Notice(.info, HotWalletWording.topUpAtCap(wallet.capText, hasDestination: hasDestination))
             } else {
@@ -570,8 +649,8 @@ struct TopUpSheet: View {
                         Label("Enter about \(amountText) of ETH or USDC\(tokenHint)", systemImage: "2.circle")
                         Label("Send it to this address", systemImage: "3.circle")
                         if let address = wallet.address {
-                            Text(address.checksummed)
-                                .font(.callout.monospaced())
+                            AddressLine(address.checksummed)
+                                .font(.callout)
                                 .textSelection(.enabled)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.7)
@@ -588,10 +667,8 @@ struct TopUpSheet: View {
             HStack {
                 Spacer()
                 if let address = wallet.address, room >= 1 {
-                    Button("Copy Address") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(address.checksummed, forType: .string)
-                    }
+                    CopyButton(title: "Copy Address", text: address.checksummed)
+                        .labelStyle(.titleOnly)
                 }
                 Button(room >= 1 ? "Cancel" : "Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)

@@ -39,6 +39,7 @@ struct PopoverView: View {
             Divider()
             footer
         }
+        .environment(\.updatingNote, store.updatingNote)
         .frame(width: 320)
         .background(.regularMaterial)
         .focusable()
@@ -66,16 +67,8 @@ struct PopoverView: View {
             Text(HotWalletWording.alarmShort)
                 .font(.headline)
             Spacer(minLength: 0)
-            // Its own colors rather than a tint, as on the window's banner.
-            Button(action: openHotWallet) {
-                Text("Review")
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            }
-            .buttonStyle(.plain)
+            Button("Review", action: openHotWallet)
+                .buttonStyle(AlarmButtonStyle())
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 14)
@@ -126,7 +119,7 @@ struct PopoverView: View {
                     help: store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) ?? problem,
                     // Catching up is still updating, so there's nothing to retry.
                     actionTitle: isCatchingUp ? nil : "Retry",
-                    action: store.start
+                    action: store.refresh
                 )
             }
             if let portfolio, portfolio.progress.started, !portfolio.isEmpty, let attention = portfolio.shortAttention {
@@ -153,7 +146,7 @@ struct PopoverView: View {
         let list = store.walletList(hotWallet: hotWallet)
         let current = list.entry(for: store.address)
         return Menu {
-            WalletPicker(store: store, list: list, navigation: navigation)
+            WalletPicker(store: store, list: list)
             Divider()
             Button("Add Wallet…") {
                 navigation.switchWallet()
@@ -170,7 +163,7 @@ struct PopoverView: View {
                         .fixedSize()
                 }
                 Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.semibold))
+                    .font(.caption.weight(.semibold))
             }
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -206,8 +199,7 @@ struct PopoverView: View {
             Button { open(.total(.value)) } label: {
                 HStack(alignment: .lastTextBaseline, spacing: 5) {
                     if let value = portfolio.totalValueText {
-                        LiveNumber(value)
-                            .font(.system(size: 30, weight: .semibold))
+                        DisplayNumber(value, size: 30)
                             .lineLimit(1)
                             .minimumScaleFactor(0.5)
                         Text(portfolio.currency.rawValue)
@@ -219,6 +211,7 @@ struct PopoverView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                .updatingMark(.trailing)
             }
             .buttonStyle(NumberButtonStyle())
             .help(portfolio.partialValueReason ?? "")
@@ -241,7 +234,8 @@ struct PopoverView: View {
             .accessibilityHint("Shows the activity behind this number")
         }
         .opacity(isLive ? 1 : 0.55)
-        .animation(.easeOut(duration: 0.15), value: isLive)
+        .animation(Motion.state, value: isLive)
+        .motion(Motion.state, value: portfolio.pnlStatus == .partial)
     }
 
     private func attentionRow(_ text: String, _ portfolio: Portfolio) -> some View {
@@ -267,12 +261,8 @@ struct PopoverView: View {
                     HoldingRow(position: position, currency: portfolio.currency, isLive: isLive)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background {
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(.primary.opacity(highlighted == position.asset ? 0.09 : 0))
-                        }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(RowButtonStyle(isHighlighted: highlighted == position.asset))
                 .onHover { highlighted = $0 ? position.asset : nil }
                 .accessibilityHint("Shows this token's activity")
             }
@@ -308,6 +298,7 @@ struct PopoverView: View {
                     .tint(plan.excessUsdMicros > 0 ? .orange : .accentColor)
                     .controlSize(.small)
                     .accessibilityHidden(true)
+                    .motion(Motion.number, value: plan.valueUsdMicros)
             }
             if case .unavailable(let message) = hotWallet.availability {
                 ProblemRow("Can't open this wallet", help: message, actionTitle: "Review", action: openHotWallet)
@@ -325,6 +316,12 @@ struct PopoverView: View {
                         Label("Buy", systemImage: "plus").frame(maxWidth: .infinity)
                     }
                     Button {
+                        navigation.isReceiving = true
+                        openHotWallet()
+                    } label: {
+                        Label("Receive", systemImage: "qrcode").frame(maxWidth: .infinity)
+                    }
+                    Button {
                         navigation.send()
                         openHotWallet()
                     } label: {
@@ -337,6 +334,8 @@ struct PopoverView: View {
                         Label("Top Up", systemImage: "arrow.down").frame(maxWidth: .infinity)
                     }
                 }
+                // Four don't fit with their icons, and words alone say more than icons alone.
+                .labelStyle(.titleOnly)
             }
         }
         .padding(14)
@@ -353,6 +352,8 @@ struct PopoverView: View {
             Text("\(hotWallet.money(plan.valueUsdMicros)) of \(hotWallet.capText)")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+                .contentTransition(.numericText(value: Double(plan.valueUsdMicros)))
+                .motion(Motion.number, value: plan.valueUsdMicros)
                 .help(plan.gasKeptWei > 0 ? HotWalletWording.keptOutOfCap(plan.gasKeptWei) : "")
         } else {
             Text("Reading…").foregroundStyle(.secondary)
@@ -396,7 +397,7 @@ struct PopoverView: View {
     }
 
     private func openHotWallet() {
-        navigation.section = .spendingMoney
+        navigation.showSpendingMoney()
         dismiss()
         openWindow(id: WindowID.main)
         DockPresence.bringForward()

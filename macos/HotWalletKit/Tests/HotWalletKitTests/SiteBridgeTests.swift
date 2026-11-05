@@ -1403,6 +1403,21 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         #expect(asked == 1)
     }
 
+    @Test func thePopupCanOpenReceive() async throws {
+        let rig = SiteRig()
+        var asked = 0
+        rig.bridge.onReceive = { asked += 1 }
+        let path = path()
+        let server = BridgeServer(bridge: rig.bridge, path: path)
+        try server.start()
+        defer { server.stop() }
+        let client = try connect(path)
+        defer { close(client) }
+        send(#"{"kind":"popup","id":"1","method":"receive"}"#, to: client)
+        _ = await receive(from: client)
+        #expect(asked == 1)
+    }
+
     @Test func anAnswerTooBigToPassAlongOnlyFailsItself() async throws {
         let rig = SiteRig()
         let reply = BridgeServer.reply(id: "9", .success(.string(String(repeating: "x", count: BridgeServer.maxFrame + 1))))
