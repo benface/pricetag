@@ -142,6 +142,7 @@ enum TestScene: String, CaseIterable {
     case hotWalletReplacingKeyStuck = "hot-wallet-replacing-key-stuck"
     case hotWalletAddSavings = "hot-wallet-add-savings"
     case hotWalletAddSavingsFilled = "hot-wallet-add-savings-filled"
+    case hotWalletAddSavingsFromDevice = "hot-wallet-add-savings-from-device"
     case hotWalletTopUp = "hot-wallet-top-up"
     case hotWalletTopUpAtCap = "hot-wallet-top-up-at-cap"
     case hotWalletTopUpCAD = "hot-wallet-top-up-cad"
@@ -163,7 +164,7 @@ enum TestScene: String, CaseIterable {
     var chrome: Chrome {
         switch self {
         case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
-             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
+             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
              .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
@@ -207,7 +208,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
+        case .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
         case .sendWaiting: .waitingForTouchID
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
         case .hotWalletNoPrice: .noPrice
@@ -287,8 +288,11 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet)), isReady: isReady)
         case .hotWalletAddSavingsFilled:
             return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet, address: HotWalletFixture.savings.lowercased)), isReady: isReady)
+        case .hotWalletAddSavingsFromDevice:
+            let url = "patina://add-savings?address=\(HotWalletFixture.savings.lowercased)&name=Ledger&linked=0x\(String(repeating: "ab", count: 20))"
+            return TestScreen(view: AnyView(AddColdWalletSheet(wallet: hotWallet, link: AddSavingsLink(url: URL(string: url)!)!)), isReady: isReady)
         case .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD:
-            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet)), isReady: isReady)
+            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!)), isReady: isReady)
         case .send, .sendCAD, .sendKnown, .sendWaiting:
             let model = SendModel(wallet: hotWallet, store: store)
             model.token = Base.tokens.first { $0.symbol == "USDC" }!

@@ -810,9 +810,9 @@ describe("the package boundary", () => {
   })
 
   it("has the app's browser code import only that part", () => {
-    const dirs = ["../src/core/", "../src/ui/"]
+    const dirs = ["../src/core/", "../src/ui/", "../src/ui/devices/"]
     for (const dir of dirs) {
-      for (const name of readdirSync(new URL(dir, import.meta.url))) {
+      for (const name of readdirSync(new URL(dir, import.meta.url), { withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => entry.name)) {
         const source = readFileSync(new URL(`${dir}${name}`, import.meta.url), "utf8")
         assert.ok(!source.includes('from "@pricetag/sdk"'), `${name} imports the Amp client`)
         assert.ok(!source.includes("server/"), `${name} imports the server`)

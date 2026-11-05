@@ -12,6 +12,8 @@ final class Navigation {
     var showsTransactions = false
     /// The extension's Top Up button was pressed. The hot wallet's window takes it from here.
     var wantsTopUp = false
+    /// The web app sent over an account from a device. The hot wallet's window asks the person to check it.
+    var addingSavings: AddSavingsLink?
     var isResolving = false
     /// Which holding Resolve was clicked on, so its questions come first.
     var resolvingAsset: String?

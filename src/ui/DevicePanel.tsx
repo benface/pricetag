@@ -1,0 +1,483 @@
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { ETH_ADDRESS, TOKENS, encodeNote, formatAmount, formatMoney, isAddress, normalizeAddress, shortHash, type Token } from "@pricetag/sdk/core"
+import type { Hex, PublicClient } from "viem"
+import { linkedWallets, type Book } from "../core/book.ts"
+import { readColdRequest, transferRequest, type ColdAccount, type ColdRequest, type ColdSigner, type DevicePrompt } from "../core/cold.ts"
+import { accountsToLink, defaultAccount, isFresh, readCheckedAccounts, rememberCheckedAccount, type AccountActivity, type CheckedAccount, type SeenAccount } from "../core/device-accounts.ts"
+import { addToMacLink, usdMicrosOf, type DeviceLink } from "../core/device-link.ts"
+import { amountForUsd, checkSend, parseAmount, readActivity, readEthPriceMicros, type SendCheck } from "../core/device-read.ts"
+import { CHECK_ADDRESS_WARNING, NEVER_ASKED, PROMPTS, PUBLISH_DETAIL, PUBLISH_DEVICE_NOTE, PUBLISH_WARNING, groupAddress } from "../core/device-wording.ts"
+import type { BrowserWallet } from "./devices/browser.ts"
+import { realConnectors, type Connectors } from "./devices/connectors.ts"
+import type { ScannedCode } from "./devices/keystone.ts"
+
+const CodeScanner = lazy(() => import("./devices/KeystoneCodes.tsx").then((m) => ({ default: m.CodeScanner })))
+const CodeToSign = lazy(() => import("./devices/KeystoneCodes.tsx").then((m) => ({ default: m.CodeToSign })))
+
+const PAGE = 5
+const CONNECT_TYPES = ["crypto-hdkey", "crypto-multi-accounts"]
+const ETH = TOKENS.find((token) => token.address === ETH_ADDRESS) as Token
+
+const messageOf = (error: unknown) => (error instanceof Error && error.message ? error.message : "Something went wrong, and nothing was sent.")
+
+const activityWords = (activity: AccountActivity) => {
+  if (activity === null) return "⚠ Couldn't read this one"
+  if (isFresh(activity)) return "Nothing's happened here yet"
+  const eth = `${formatAmount(activity.ethUnits, 18)} ETH`
+  return activity.tokenCount > 0 ? `${eth} and ${activity.tokenCount === 1 ? "1 token" : `${activity.tokenCount} tokens`}` : eth
+}
+
+/** Waits on the person: what's being shown, and what's expected back. */
+type Exchange = { code: ScannedCode; expected: string; resolve: (code: ScannedCode) => void; reject: (reason: Error) => void }
+
+type Step = "route" | "keystone" | "accounts" | "check" | "ready" | "send" | "publish" | "sent"
+
+type Props = {
+  link: DeviceLink | null
+  book: Book
+  /** Accounts from a device are the user's, with no question. */
+  onLink: (addresses: readonly string[]) => void
+  /** Opens a wallet in the main view. */
+  onView: (address: string) => void
+  onClose: () => void
+  connectors?: Connectors
+  /** A test page starts partway through. */
+  start?: { signer: ColdSigner; accounts: SeenAccount[]; chosen: string; step: Step; lookOnDevice?: boolean }
+}
+
+/** The one place the web app reaches a hardware wallet. Keys stay on the device: this only ever sees addresses and signatures. */
+export function DevicePanel({ link, book, onLink, onView, onClose, connectors = realConnectors, start }: Props) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const closeButton = useRef<HTMLButtonElement>(null)
+  const [step, setStep] = useState<Step>(start?.step ?? "route")
+  const [signer, setSigner] = useState<ColdSigner | null>(start?.signer ?? null)
+  const [wallets, setWallets] = useState<BrowserWallet[]>([])
+  const [accounts, setAccounts] = useState<SeenAccount[]>(start?.accounts ?? [])
+  const [chosen, setChosen] = useState<string | null>(start?.chosen ?? null)
+  const [prompt, setPrompt] = useState<DevicePrompt | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  const [lookOnDevice, setLookOnDevice] = useState(start?.lookOnDevice ?? false)
+  const [matches, setMatches] = useState(false)
+  const [checked, setChecked] = useState<CheckedAccount[]>(readCheckedAccounts)
+  const [exchange, setExchange] = useState<Exchange | null>(null)
+  const [sent, setSent] = useState<{ hash: string; status: "pending" | "done" | "failed"; what: string } | null>(null)
+
+  const purpose = link ? "send" : "receive"
+  const account = accounts.find((a) => a.address === chosen) ?? null
+  // The scanner keeps reading a code for as long as it's held up.
+  const scanned = useRef(false)
+  const client = useRef<PublicClient | null>(null)
+  const clientOf = async () => (client.current ??= await connectors.client())
+
+  useLayoutEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const element = dialog.current
+    if (!element) return
+    if (!element.open) element.showModal()
+    closeButton.current?.focus()
+    return () => {
+      element.close()
+      opener?.focus()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (connectors.canUseUsb()) connectors.preloadLedger()
+    connectors.findWallets().then(setWallets, () => setWallets([]))
+  }, [connectors])
+
+  // A device stays connected for as long as this is open, and no longer.
+  const open = useRef(signer)
+  open.current = signer
+  useEffect(() => () => void open.current?.close(), [])
+
+  const attempt = async (work: () => Promise<void>) => {
+    setBusy(true)
+    setProblem(null)
+    try {
+      await work()
+    } catch (error) {
+      setProblem(messageOf(error))
+    } finally {
+      setBusy(false)
+      setPrompt(null)
+    }
+  }
+
+  const showAccounts = async (next: ColdSigner, from: number) => {
+    const listed = await next.listAccounts(from, PAGE, setPrompt)
+    setPrompt("working")
+    const reader = await clientOf()
+    const read = await Promise.all(listed.map(async (one: ColdAccount): Promise<SeenAccount> => ({ ...one, activity: await readActivity(reader, one.address) })))
+    const all = from === 0 ? read : [...accounts, ...read]
+    setAccounts(all)
+    const wanted = link?.kind === "publish" ? (all.find((a) => a.address === link.wallet) ?? null) : defaultAccount(all, purpose)
+    const pick = chosen ?? wanted?.address ?? all[0]?.address ?? null
+    setChosen(pick)
+    // Everything in use on this device is the user's. Whichever they pick gets added when they pick it.
+    onLink(accountsToLink(all, null))
+    setStep("accounts")
+  }
+
+  const connect = (open: () => Promise<ColdSigner>) =>
+    attempt(async () => {
+      const next = await open()
+      setSigner(next)
+      await showAccounts(next, 0)
+    })
+
+  const pickAccount = () => {
+    if (!account) return
+    onLink([account.address])
+    if (link?.kind === "publish") setStep("publish")
+    else if (link?.kind === "top-up") setStep("send")
+    else if (checked.some((c) => c.address === account.address)) setStep("ready")
+    else checkOnDevice()
+  }
+
+  const checkOnDevice = () => {
+    if (!signer || !account) return
+    setMatches(false)
+    setStep("check")
+    void attempt(async () => {
+      const how = await signer.showAddress(account, setPrompt)
+      setLookOnDevice(how === "look-on-device")
+    })
+  }
+
+  const confirmChecked = () => {
+    if (!signer || !account) return
+    setChecked(rememberCheckedAccount({ address: account.address, path: account.path, ...(account.deviceId ? { deviceId: account.deviceId } : {}), deviceName: signer.name, kind: signer.kind }))
+    setStep("ready")
+  }
+
+  const exchangeCodes = (code: ScannedCode, expected: string) => new Promise<ScannedCode>((resolve, reject) => setExchange({ code, expected, resolve, reject }))
+
+  const send = (request: ColdRequest, what: string, own: ReadonlySet<string>) => {
+    if (!signer || !account) return
+    void attempt(async () => {
+      const hash = await connectors.send({ signer, account, request, own, onPrompt: setPrompt })
+      setExchange(null)
+      setSent({ hash, status: "pending", what })
+      setStep("sent")
+      const receipt = await (await clientOf()).waitForTransactionReceipt({ hash }).catch(() => null)
+      setSent({ hash, what, status: receipt === null ? "pending" : receipt.status === "success" ? "done" : "failed" })
+    })
+  }
+
+  const others = accounts.filter((a) => a.address !== chosen)
+  const name = signer?.name ?? "device"
+
+  return (
+    <dialog ref={dialog} className="panel" aria-label="Hardware wallet" onCancel={(e) => (e.preventDefault(), onClose())}>
+      <div className="panel-body device">
+        <header className="panel-head">
+          <h2>{link?.kind === "top-up" ? "Top up from savings" : link?.kind === "publish" ? "Publish this cost" : "Hardware wallet"}</h2>
+          <button ref={closeButton} type="button" className="link" onClick={onClose}>
+            Close
+          </button>
+        </header>
+
+        {step === "route" ? (
+          <>
+            <p className="muted small">Your device holds the keys and signs everything. {NEVER_ASKED}</p>
+            <button type="button" className="route" disabled={busy || !connectors.canUseUsb()} onClick={() => void connect(() => connectors.ledger())}>
+              <strong>Ledger</strong>
+              <span className="muted small">{connectors.canUseUsb() ? "Plug it in and unlock it" : "Needs Chrome, Brave, Edge or another Chromium browser"}</span>
+            </button>
+            <button type="button" className="route" disabled={busy} onClick={() => {
+              scanned.current = false
+              setStep("keystone")
+            }}>
+              <strong>Keystone</strong>
+              <span className="muted small">With QR codes and your webcam, so it never connects to this computer</span>
+            </button>
+            {wallets.map((wallet) => (
+              <button key={wallet.rdns} type="button" className="route" disabled={busy} onClick={() => void connect(() => connectors.wallet(wallet))}>
+                <strong>{wallet.name}</strong>
+                <span className="muted small">Your browser wallet, with your device behind it</span>
+              </button>
+            ))}
+          </>
+        ) : null}
+
+        {step === "keystone" ? (
+          <>
+            <p className="small">On your Keystone, open <strong>Connect Software Wallet</strong>, choose <strong>MetaMask</strong>, and hold its screen up to your webcam.</p>
+            <Suspense fallback={<p className="muted small">Starting the camera…</p>}>
+              <CodeScanner types={CONNECT_TYPES} onProblem={setProblem} onScan={(code) => {
+                if (scanned.current) return
+                scanned.current = true
+                void connect(() => connectors.keystone(code, exchangeCodes)).then(() => {
+                  scanned.current = false
+                })
+              }} />
+            </Suspense>
+            <button type="button" className="link" onClick={() => setStep("route")}>
+              Back
+            </button>
+          </>
+        ) : null}
+
+        {step === "accounts" ? (
+          <>
+            {link?.kind === "publish" && !account ? <p className="notice warn">⚠ The wallet that has to publish this, {shortHash(link.wallet)}, isn't among these. Connect the device that holds it.</p> : null}
+            <p className="small">{purpose === "receive" ? "Starting on one nothing's happened to keeps this money apart from anything else on the device." : "Choose the account to send from."}</p>
+            <fieldset className="accounts">
+              <legend className="muted small">Accounts on your {name}</legend>
+              {accounts.map((one) => {
+                const wrongOne = link?.kind === "publish" && one.address !== link.wallet
+                return (
+                  <label key={one.address} className={wrongOne ? "account muted" : "account"}>
+                    <input type="radio" name="account" disabled={wrongOne} checked={one.address === chosen} onChange={() => setChosen(one.address)} />
+                    <span className="mono">{shortHash(one.address)}</span>
+                    <span className="muted small">{activityWords(one.activity)}</span>
+                  </label>
+                )
+              })}
+            </fieldset>
+            {purpose === "receive" ? <p className="muted small">These aren't checked yet, so don't send anything to one until the next step.</p> : null}
+            <div className="device-actions">
+              {signer?.kind !== "browser" ? (
+                <button type="button" disabled={busy} onClick={() => signer && void attempt(() => showAccounts(signer, accounts.length))}>
+                  Show more
+                </button>
+              ) : null}
+              <button type="button" className="primary" disabled={busy || !account} onClick={pickAccount}>
+                {link?.kind === "publish" || link?.kind === "top-up" ? "Continue" : "Check it on the device"}
+              </button>
+            </div>
+          </>
+        ) : null}
+
+        {step === "check" && account ? (
+          <>
+            <h3>Does your device show this?</h3>
+            <p className="address-big mono">{groupAddress(account.address)}</p>
+            {busy && prompt ? <p className="notice">{PROMPTS[prompt]}</p> : null}
+            {lookOnDevice ? <p className="small">{signer?.kind === "keystone" ? "This page can't reach your Keystone, so go to its receive screen for Ethereum and find this address there." : `This page can't reach your device through ${name}. Have ${name} show this address on your device, or look it up on the device's receive screen.`}</p> : null}
+            <label className="check-row">
+              <input type="checkbox" checked={matches} disabled={busy} onChange={(e) => setMatches(e.target.checked)} />
+              <span>Every character matches what my device's screen shows</span>
+            </label>
+            <p className="muted small">{CHECK_ADDRESS_WARNING}</p>
+            <div className="device-actions">
+              <button type="button" disabled={busy} onClick={() => setStep("accounts")}>
+                Back
+              </button>
+              <button type="button" className="primary" disabled={busy || !matches || problem !== null} onClick={confirmChecked}>
+                It matches
+              </button>
+            </div>
+          </>
+        ) : null}
+
+        {step === "ready" && account ? (
+          <>
+            <p className="notice">✓ You checked this address on your device.</p>
+            <p className="address-big mono">{groupAddress(account.address)}</p>
+            <div className="device-actions">
+              <button type="button" onClick={() => void navigator.clipboard.writeText(account.address)}>
+                Copy address
+              </button>
+              <button type="button" onClick={() => setStep("send")}>
+                Send to another of my wallets
+              </button>
+              <a className="button-link" href={addToMacLink(account.address, name, accountsToLink(others, null))}>
+                Add to the Mac app as savings
+              </a>
+              <button type="button" onClick={() => onView(account.address)}>
+                See this wallet
+              </button>
+            </div>
+            <p className="muted small">{activityWords(account.activity)}. Its account on your device is linked here, so costs follow what moves between your wallets.</p>
+          </>
+        ) : null}
+
+        {step === "send" && account && signer ? <SendForm link={link?.kind === "top-up" ? link : null} from={account} book={book} checked={checked} accounts={accounts} clientOf={clientOf} busy={busy} onLink={onLink} onSend={send} /> : null}
+
+        {step === "publish" && account && signer && link?.kind === "publish" ? <PublishForm link={link} busy={busy} onBack={() => setStep("accounts")} onSend={send} wallet={account.address} /> : null}
+
+        {step === "sent" && sent ? (
+          <>
+            <p className={sent.status === "failed" ? "notice warn" : "notice"}>{sent.status === "pending" ? "On its way…" : sent.status === "done" ? "✓ Done" : "⚠ It reached the network but failed. Your funds didn't move, apart from the network fee."}</p>
+            <p className="small">{sent.what}</p>
+            <p className="small">
+              <a href={`https://basescan.org/tx/${sent.hash}`} target="_blank" rel="noreferrer noopener">
+                See it on Basescan
+              </a>
+            </p>
+            {link ? <p className="muted small">The Mac app picks this up on its own.</p> : null}
+          </>
+        ) : null}
+
+        {exchange ? (
+          <div className="exchange">
+            <p className="small"><strong>1.</strong> Scan this with your Keystone, then check it there and approve it.</p>
+            <Suspense fallback={null}>
+              <CodeToSign code={exchange.code} />
+            </Suspense>
+            <p className="small"><strong>2.</strong> Hold the code your Keystone shows up to your webcam.</p>
+            <Suspense fallback={null}>
+              <CodeScanner types={[exchange.expected]} onProblem={setProblem} onScan={(code) => (setExchange(null), exchange.resolve(code))} />
+            </Suspense>
+            <button type="button" className="link" onClick={() => (setExchange(null), exchange.reject(new Error("Cancelled, so nothing was sent.")))}>
+              Cancel
+            </button>
+          </div>
+        ) : null}
+
+        {busy && prompt && !exchange && step !== "check" ? <p className="notice">{PROMPTS[prompt]}</p> : null}
+        {busy && !prompt && !exchange && step === "route" ? <p className="notice">Connecting…</p> : null}
+        {problem ? <p className="notice warn">⚠ {problem}</p> : null}
+        {problem && step === "check" ? (
+          <button type="button" onClick={checkOnDevice}>
+            Try again
+          </button>
+        ) : null}
+      </div>
+    </dialog>
+  )
+}
+
+function SendForm({ link, from, book, checked, accounts, clientOf, busy, onLink, onSend }: {
+  link: Extract<DeviceLink, { kind: "top-up" }> | null
+  from: SeenAccount
+  book: Book
+  checked: readonly CheckedAccount[]
+  accounts: readonly SeenAccount[]
+  clientOf: () => Promise<PublicClient>
+  busy: boolean
+  onLink: (addresses: readonly string[]) => void
+  onSend: (request: ColdRequest, what: string, own: ReadonlySet<string>) => void
+}) {
+  const [typed, setTyped] = useState(link?.to ?? "")
+  const [isMine, setIsMine] = useState(false)
+  const [token, setToken] = useState<Token>(ETH)
+  const [amount, setAmount] = useState("")
+  const [touched, setTouched] = useState(false)
+  const [ethPrice, setEthPrice] = useState<bigint | null>(null)
+  const [check, setCheck] = useState<SendCheck | null>(null)
+
+  const knownOwn = useMemo(() => new Set([...linkedWallets(book), ...checked.map((c) => c.address), ...accounts.filter((a) => a.activity !== null && !isFresh(a.activity)).map((a) => a.address)]), [book, checked, accounts])
+  const to = isAddress(typed.trim()) ? normalizeAddress(typed.trim()) : null
+  const needsAnswer = to !== null && !knownOwn.has(to)
+  const own = useMemo(() => (to && isMine ? new Set([...knownOwn, to]) : knownOwn), [knownOwn, to, isMine])
+  const units = parseAmount(amount, token.decimals)
+  const request = to && units ? transferRequest(token, to, units) : null
+  const read = request ? readColdRequest(request, from.address, own) : null
+  const refused = read && "refused" in read ? read.refused : null
+  const usdMicros = token.address === ETH_ADDRESS && units && ethPrice ? (units * ethPrice) / 10n ** 18n : token.symbol === "USDC" && units ? units : null
+  const key = request ? `${request.to}:${request.value}:${request.data ?? ""}` : ""
+
+  useEffect(() => {
+    let current = true
+    clientOf().then(readEthPriceMicros).then((price) => current && setEthPrice(price), () => {})
+    return () => {
+      current = false
+    }
+  }, [])
+
+  // Fills in from the link's dollars until someone types their own.
+  useEffect(() => {
+    if (touched || !link?.usdMicros) return
+    setAmount(amountForUsd(link.usdMicros, token, ethPrice) ?? "")
+  }, [link, token, ethPrice, touched])
+
+  useEffect(() => {
+    setCheck(null)
+    if (!request || refused || !units) return
+    let current = true
+    const timer = setTimeout(() => {
+      clientOf().then((client) => checkSend(client, from.address, request, { token, units })).then((next) => current && setCheck(next), () => {})
+    }, 250)
+    return () => {
+      current = false
+      clearTimeout(timer)
+    }
+  }, [key, refused])
+
+  const what = units && to ? `${amount.trim()} ${token.symbol} from ${shortHash(from.address)} to ${shortHash(to)}` : ""
+  const go = () => {
+    if (!request || !to) return
+    if (isMine) onLink([to])
+    onSend(request, what, own)
+  }
+
+  return (
+    <>
+      <p className="small">
+        <span className="muted">From </span>
+        <span className="mono">{shortHash(from.address)}</span>
+        <span className="muted"> · {activityWords(from.activity)}</span>
+      </p>
+      <label className="field">
+        <span className="small muted">To one of your wallets</span>
+        {link ? <p className="address-big mono">{groupAddress(link.to)}</p> : <input className="mono" spellCheck={false} autoComplete="off" placeholder="0x…" value={typed} onChange={(e) => (setTyped(e.target.value), setIsMine(false))} />}
+      </label>
+      {needsAnswer ? (
+        <label className="check-row">
+          <input type="checkbox" checked={isMine} onChange={(e) => setIsMine(e.target.checked)} />
+          <span>{link ? "This is my wallet. Every character matches the address in my Mac app" : "This is my wallet"}</span>
+        </label>
+      ) : null}
+      {link && needsAnswer ? <p className="muted small">A link filled this in, and anyone can make a link. A hardware wallet only sends to your own wallets here, so this is your check.</p> : null}
+      <div className="send-row">
+        <label className="field">
+          <span className="small muted">Amount</span>
+          <input inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => (setAmount(e.target.value), setTouched(true))} />
+        </label>
+        <label className="field">
+          <span className="small muted">Token</span>
+          <select value={token.address} onChange={(e) => setToken(TOKENS.find((t) => t.address === e.target.value) ?? ETH)}>
+            {TOKENS.map((t) => (
+              <option key={t.address} value={t.address}>
+                {t.symbol}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {usdMicros ? <p className="muted small">About {formatMoney(usdMicros, "USD")}</p> : null}
+      {amount && !units ? <p className="small warn-text">⚠ That isn't an amount of {token.symbol}.</p> : null}
+      {refused && !needsAnswer ? <p className="small warn-text">⚠ {refused}</p> : null}
+      {check?.feeUnits ? <p className="muted small">Network fee: about {formatAmount(check.feeUnits, 18)} ETH</p> : null}
+      {check?.problem ? <p className="small warn-text">⚠ {check.problem}</p> : null}
+      <p className="muted small">Your device shows the same address and amount. Trust what it shows.</p>
+      <button type="button" className="primary" disabled={busy || !request || refused !== null || (needsAnswer && !isMine) || check?.blocks === true} onClick={go}>
+        Send from your device
+      </button>
+    </>
+  )
+}
+
+function PublishForm({ link, wallet, busy, onBack, onSend }: { link: Extract<DeviceLink, { kind: "publish" }>; wallet: string; busy: boolean; onBack: () => void; onSend: (request: ColdRequest, what: string, own: ReadonlySet<string>) => void }) {
+  const [usd, setUsd] = useState(() => (link.usdMicros ? (Number(link.usdMicros) / 1_000_000).toString() : ""))
+  const micros = usdMicrosOf(usd)
+  const amount = link.amount ? `${formatAmount(link.amount.units, link.amount.decimals)} ${link.asset}` : link.asset
+  const go = () => {
+    if (!micros) return
+    onSend({ to: wallet, value: 0n, data: encodeNote(link.txHash, link.asset, micros) as Hex }, `This wallet published that it paid ${formatMoney(micros, "USD")} for ${amount} in transaction ${shortHash(link.txHash)}.`, new Set())
+  }
+  return (
+    <>
+      <p className="notice warn">⚠ {PUBLISH_WARNING}</p>
+      <label className="field">
+        <span className="small muted">Paid for {amount}, in USD</span>
+        <input inputMode="decimal" placeholder="$0.00" value={usd} onChange={(e) => setUsd(e.target.value)} />
+      </label>
+      {micros ? <p className="muted small">This wallet would publish that it paid {formatMoney(micros, "USD")} in transaction {shortHash(link.txHash)}.</p> : null}
+      <p className="muted small">{PUBLISH_DETAIL}</p>
+      <p className="muted small">{PUBLISH_DEVICE_NOTE}</p>
+      <div className="device-actions">
+        <button type="button" disabled={busy} onClick={onBack}>
+          Back
+        </button>
+        <button type="button" className="primary" disabled={busy || !micros} onClick={go}>
+          Publish for everyone
+        </button>
+      </div>
+    </>
+  )
+}

@@ -1,7 +1,7 @@
 # pricetag
 Every transfer gets a price. A Base wallet with real cost and PnL, built on Amp.
 
-This first version is watch-only: paste any Base address to see its holdings, cost and PnL, and click any number to see the activity behind it. There are no keys in it, and it doesn't sign anything.
+Paste any Base address to see its holdings, cost and PnL, and click any number to see the activity behind it. There are no keys in the web app. A hardware wallet can connect to it to send, and signs everything on its own screen: see **[HARDWARE-WALLETS.md](HARDWARE-WALLETS.md)**.
 
 ## Run it
 
@@ -48,8 +48,9 @@ The Mac app has a capped hot wallet, this Mac's "spending money", for everyday u
 - **The key** comes from `SecRandomCopyBytes`, is wrapped by the Secure Enclave, and stays in a device-only Keychain item. It can't be restored or exported: lose the Mac and you lose what's on it, up to the cap.
 - **The cap** is yours to set, $50 by default and $100 at most, or $25 at most until you add a savings wallet. A plain address can't enforce a cap, so it's what triggers a sweep and not a hard limit. It's in USD whatever the main currency is, so with another main currency, this wallet's amounts say `US$`.
 - **Sweeps** send whatever is above the cap, and realized gains unless you turn that off, to your chosen savings wallet. They only move tokens with a trusted price, they keep enough ETH for gas, and they skip dust. Costs carry over as `inherited`, because the app tells the server which wallets are yours: `GET /api/portfolio/<address>?linked=<addresses>`.
+- **Topping up** comes from a savings wallet, through the [hardware wallet flow](HARDWARE-WALLETS.md) in your browser, which this opens with the amount and address filled in. The steps to do it by hand on the device are still there.
 - **Sending** goes to any address, after Touch ID, for ETH and the tokens the app tracks. A new address asks "Is this yours?", and the answer stays on this Mac with the rest. The hot wallet and your savings wallets never ask: they're always linked, for any wallet that's yours, whatever you've answered. A wallet you're only watching doesn't take costs from them, or from a wallet you've answered is yours.
-- **Publishing a cost** writes what you paid onchain, as a zero-value send to itself that the server reads as `self-reported`. Resolve offers it when the answer covers everything of one token that arrived in one transaction in this wallet, and warns first, because it publicly ties the amount to the wallet for good. It's always in USD. A savings wallet's cost needs its device to sign (WORK-325), so Resolve doesn't offer it there.
+- **Publishing a cost** writes what you paid onchain, as a zero-value send to itself that the server reads as `self-reported`. Resolve offers it when the answer covers everything of one token that arrived in one transaction in this wallet, and warns first, because it publicly ties the amount to the wallet for good. It's always in USD. For a savings wallet, Resolve opens the [hardware wallet flow](HARDWARE-WALLETS.md) in your browser, because that takes its device.
 - **The alarm** compares what Amp and the chain say this wallet did with what the app signed. If they differ, it alerts loudly, stops top-ups, and offers to sweep what's left and replace the key.
 
 Holding a key needs a provisioned build, which `pnpm mac` makes when the team pinned in `macos/run.sh` is signed in to Xcode. Without that, the app says it can't hold a key, and everything else works. It reads balances from `https://mainnet.base.org` directly, set in Settings, so sweeps don't depend on the server. Debug builds have their own wallet.
@@ -62,7 +63,7 @@ Holding a key needs a provisioned build, which `pnpm mac` makes when the team pi
 2. In `chrome://extensions`, turn on Developer mode, choose **Load unpacked**, and pick the `extension/` folder. It runs exactly as it is, with no build step.
 3. Pick **Patina** on the site. The app has to be open.
 
-The extension's button shows what's there and has a **Top up** button, which opens the app's top-up flow. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what this protects against and what it doesn't. Pages talk to the extension, which talks to a small host program inside the app bundle (`macos/BridgeHost`), which relays to a socket in the app (`macos/HotWalletKit/Sources/HotWalletKit/Sites`).
+The extension's button shows what's there and has a **Top up** button, which opens the app's top-up sheet, and from there the [hardware wallet flow](HARDWARE-WALLETS.md). **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what this protects against and what it doesn't. Pages talk to the extension, which talks to a small host program inside the app bundle (`macos/BridgeHost`), which relays to a socket in the app (`macos/HotWalletKit/Sources/HotWalletKit/Sites`).
 
 ## Where the data comes from
 

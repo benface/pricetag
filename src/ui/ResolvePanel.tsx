@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEven
 import { formatAmount, formatMoney, formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "../core/api.ts"
 import { answerSender, enterExchangeCosts, linkMessage, walletsBehind, type Book, type Money, type SenderAnswer } from "../core/book.ts"
+import { readCheckedAccounts } from "../core/device-accounts.ts"
+import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
 import { parseCoinbaseCsv } from "../core/exchange-import.ts"
 import { foldBook, isBalanced, previewBook, type Question } from "../core/resolve.ts"
 import { linkedFailedSentence } from "../core/wording.ts"
@@ -52,13 +54,15 @@ type Props = {
   onChange: (book: Book) => void
   onUndo: () => void
   canUndo: boolean
+  /** Publishing a cost takes a device, which has its own panel. */
+  onPublish: (link: DeviceLink) => void
   /** The sender on the card, whose wallet has to be read to say what "My wallet" would do. */
   onCurrentSender: (sender: string | null) => void
   onClose: () => void
 }
 
 /** "Who's this?": one card at a time, with swipes, keys or taps. Each answer shows what it does before you pick it. */
-export function ResolvePanel({ wallet, others, failed, onRetry, method, book, firstAsset, onChange, onUndo, canUndo, onCurrentSender, onClose }: Props) {
+export function ResolvePanel({ wallet, others, failed, onRetry, method, book, firstAsset, onChange, onUndo, canUndo, onPublish, onCurrentSender, onClose }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set())
   const [asking, setAsking] = useState(false)
@@ -88,6 +92,8 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
   const current = questions[0] ?? null
   const sender = current?.sender ?? null
   const takingCost = current !== null && (current.kind === "cost" || asking || current.needsCost)
+  // Only for an account someone checked on a device from this browser, because that's who can sign it.
+  const publishable = current && readCheckedAccounts().some((account) => account.address === current.wallet) ? noteLinkFor(current, costs[current.arrivals[0]?.asset ?? ""] ?? null) : null
   const linkedFailed = failed.filter((address) => walletsBehind(book, wallet).includes(address))
   const balanced = isBalanced(fold.meter) && linkedFailed.length === 0 && fold.withheld.length === 0
   const progress = fold.meter.open + fold.meter.answered === 0 ? 1 : fold.meter.answered / (fold.meter.open + fold.meter.answered)
@@ -237,6 +243,11 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
                       Use the price when it arrived
                     </button>
                   </>
+                ) : null}
+                {publishable ? (
+                  <button type="button" title="Writes what you paid on Base, where anyone can read it" onClick={() => onPublish(publishable)}>
+                    Publish from your device…
+                  </button>
                 ) : null}
               </div>
               <p className="small muted">This stays in this browser. Publishing a cost onchain would tie your wallets together in public, so that's never done without asking.</p>
