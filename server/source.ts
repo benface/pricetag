@@ -3,7 +3,7 @@
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ERC20_ADDRESSES, ETH_USD_FEED, USDC_USD_FEED, WETH_ADDRESS, marketTrades, parseNote, type CostNote, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
+import { ERC20_ADDRESSES, ETH_USD_FEED, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type FeedRound, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
 import { asIso, asNumber, blockFilters, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, type Query, type Row, type Source } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRound, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
 
@@ -31,6 +31,27 @@ export function feedRounds(query: Query, config: { baseDataset: string; network:
   }
 }
 
+/** One query however many feeds, in the same shape: a wallet that holds several asks for them all at once. */
+function readFeedRoundsAt(query: Query, config: { baseDataset: string; network: string }): NonNullable<Source["readFeedRounds"]> {
+  return async (assets, block) => {
+    const feeds = assets.flatMap((asset) => {
+      const feed = TOKEN_FEEDS[asset]
+      return feed ? [{ asset, address: feed.address }] : []
+    })
+    if (feeds.length === 0) return {}
+    const calls = feeds.map(({ address }, i) => `rpc.${config.network}.eth_call(NULL, evm_encode_hex('${address}'), evm_encode_params('latestRoundData()'), block_num) AS f${i}`)
+    const { filter, count } = blockFilters([block])[0] as { filter: string; count: number }
+    const [row] = await query<Row>(`SELECT block_num, timestamp, ${calls.join(", ")} FROM (SELECT block_num, timestamp FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)
+    if (!row) return {}
+    const rounds: Record<string, FeedRound> = {}
+    feeds.forEach(({ asset }, i) => {
+      const round = decodeRound((row[`f${i}`] as { data?: string } | null)?.data)
+      if (round) rounds[asset] = { ...round, blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) }
+    })
+    return rounds
+  }
+}
+
 async function readNotesAt(query: Query, dataset: string, address: string, blocks: readonly number[]): Promise<CostNote[]> {
   const me = hexOf(address)
   const notes: CostNote[] = []
@@ -44,7 +65,10 @@ async function readNotesAt(query: Query, dataset: string, address: string, block
   return notes.sort((a, b) => a.blockNum - b.blockNum)
 }
 
-export function rawSource(query: Query, config: { baseDataset: string; network: string; historyBlocks: number }): Source {
+/** How far back a wallet's history goes when PRICETAG_HISTORY_BLOCKS doesn't say. */
+const DEFAULT_HISTORY_MS = 3_600_000
+
+export function rawSource(query: Query, config: { baseDataset: string; network: string; historyBlocks: number | null }): Source {
   const ds = `"${config.baseDataset}"`
 
   async function inBlocks<T>(blocks: readonly number[], sql: (filter: string, count: number) => string): Promise<T[]> {
@@ -74,7 +98,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
   return {
     mode: "raw",
     startBlock: null,
-    historyBlocks: config.historyBlocks,
+    historyFrom: (head) => (config.historyBlocks === null ? blockBefore(head, DEFAULT_HISTORY_MS) : head - config.historyBlocks),
     head: (after) => readHead(query, config.baseDataset, after),
     // The raw tables are what the head is read from, so they've always reached it.
     processedThrough: async (_after, head) => head,
@@ -83,6 +107,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
     readNotes: (address, blocks) => readNotesAt(query, config.baseDataset, address, blocks),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
+    readFeedRounds: readFeedRoundsAt(query, config),
 
     async readWindow(address, from, to) {
       const me = hexOf(address)
@@ -179,6 +204,7 @@ export function resolvingSource(query: Query, config: { baseDataset: string; dat
   return {
     ...reader,
     readNotes: (address, blocks) => readNotesAt(query, config.baseDataset, address, blocks),
+    readFeedRounds: readFeedRoundsAt(query, config),
 
     async readWindow(address, from, to) {
       const window = await reader.readWindow(address, from, to)
