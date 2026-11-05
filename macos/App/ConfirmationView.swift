@@ -16,6 +16,8 @@ struct ConfirmationRow {
 extension EnvironmentValues {
     /// The tallest an approval can be. Otherwise the smallest screen's, since this doesn't know which one it'll open on.
     @Entry var confirmationHeightLimit: CGFloat?
+    /// Under a title bar with nothing in it but the close button, which is space enough above what's being approved.
+    @Entry var isBelowTitleBar = false
 }
 
 enum ConfirmationHero {
@@ -44,6 +46,7 @@ struct ConfirmationView<Footer: View>: View {
     @ViewBuilder let footer: Footer
 
     @Environment(\.confirmationHeightLimit) private var heightLimit
+    @Environment(\.isBelowTitleBar) private var isBelowTitleBar
     @State private var showsDetails = false
     @State private var pinnedHeight: CGFloat = 0
     @State private var hasMoreBelow = false
@@ -59,7 +62,7 @@ struct ConfirmationView<Footer: View>: View {
                     if !rows.isEmpty { rowsBox }
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 28)
+                .padding(.top, isBelowTitleBar ? 0 : 28)
                 .padding(.bottom, warnings.isEmpty ? 20 : 18)
             }
             .scrollIndicators(.visible)

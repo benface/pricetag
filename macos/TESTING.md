@@ -57,7 +57,7 @@ Not tried, because it would have interrupted: running this while a full-screen a
 
 The `route-*` scenes check more than looks: they press what the menu bar's buttons press, with the window closed and with it open on another section, and fail unless they get where they promise and stay there.
 
-Scenes for the main window and Settings always use a real window, because their sidebar, toolbar and tabs are drawn by the window server. A window can't be larger than the display, so `main-huge` shows as much as this display allows. A test window's toolbar has no room for Settings' tabs, which show properly in the real one. Sheets, including the details in a narrow window, don't appear in a capture.
+Scenes for the main window and Settings always use a real window, because their sidebar, toolbar and tabs are drawn by the window server. So do the scenes that go through the site window (`site-connect`, `site-transaction` and the like), whose top spacing is the title bar. The other `site-*` scenes only draw what's in it. A window can't be larger than the display, so `main-huge` shows as much as this display allows. A test window's toolbar has no room for Settings' tabs, which show properly in the real one. Sheets, including the details in a narrow window, don't appear in a capture.
 
 ## 3. Test behavior with logic tests
 
