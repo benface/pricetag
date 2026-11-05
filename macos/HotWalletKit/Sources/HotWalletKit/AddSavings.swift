@@ -145,7 +145,11 @@ public final class AddSavingsModel {
     }
 
     public var sweepsGoHere: Bool { added != nil && added == wallet.settings.sweepDestination }
-    public var sweepDestinationName: String? { wallet.settings.coldWallets.first { $0.address == wallet.settings.sweepDestination }?.name }
+    /// Nil when it has the same name as the one just added, like a second Ledger, since then it wouldn't say which it is.
+    public var sweepDestinationName: String? {
+        let name = wallet.settings.coldWallets.first { $0.address == wallet.settings.sweepDestination }?.name
+        return name == wallet.settings.coldWallets.first { $0.address == added }?.name ? nil : name
+    }
     public var canSendTest: Bool { wallet.canSend && !mayBeSweeping }
 
     public func choose(_ device: Device) {
