@@ -20,7 +20,7 @@ export type TransactionFacts = {
   amount: TransactionAmount | null
   /** null when nothing was sold. */
   gain: TransactionGain | null
-  /** What arrived with a cost nobody can work out yet. */
+  /** What arrived, or left, with a cost nobody can work out yet. */
   unknownCost: string[]
 }
 
@@ -56,8 +56,20 @@ function amountOf(legs: readonly PricedLeg[]): TransactionAmount | null {
   const left = moved.filter((leg) => !isIncoming(leg))
   if (left.length === 0) return { direction: "in", micros: sumOf(arrived) }
   if (arrived.length === 0) return { direction: "out", micros: sumOf(left) }
-  // Either side says what the trade was worth. What was given up comes first, because what arrived can be something with only a market price.
-  return { direction: "trade", micros: sumOf(left) ?? sumOf(arrived) }
+  // A sale is worth what it brought in, as the fold counts it, which needn't be the market price. Unknown proceeds stay unknown.
+  if (left.every((leg) => leg.kind === "swap")) return { direction: "trade", micros: proceedsOf(left) }
+  // Things went both ways without a trade, so what left is all there is to go on.
+  return { direction: "trade", micros: sumOf(left) }
+}
+
+/** What sales brought in, or null when any of it isn't known. */
+function proceedsOf(sales: readonly PricedLeg[]): string | null {
+  let sum = 0n
+  for (const leg of sales) {
+    if (leg.proceedsMicros === null) return null
+    sum += BigInt(leg.proceedsMicros)
+  }
+  return sum.toString()
 }
 
 function counterpartyOf(legs: readonly PricedLeg[], wallet: string): string | null {
@@ -70,10 +82,15 @@ function counterpartyOf(legs: readonly PricedLeg[], wallet: string): string | nu
   return others.size === 1 ? ([...others][0] as string) : null
 }
 
-/** What selling in this transaction realized, from the fold's own before and after. Only sales: a send or a fee realizes nothing worth showing on its own. */
-function gainOf(legs: readonly PricedLeg[], effects: ReadonlyMap<string, LegEffect>): TransactionGain | null {
+/**
+ * What selling in this transaction realized, from the fold's own before and after. Only sales: a send or a fee realizes
+ * nothing worth showing on its own. An asset whose balance doesn't match, or couldn't be checked, has no realized PnL
+ * in the totals, so none of its sales has a gain here either.
+ */
+function gainOf(legs: readonly PricedLeg[], effects: ReadonlyMap<string, LegEffect>, unconfirmed: ReadonlySet<string>): TransactionGain | null {
   const sales = legs.filter((leg) => leg.kind === "swap" && BigInt(leg.delta) < 0n)
   if (sales.length === 0) return null
+  if (sales.some((leg) => unconfirmed.has(leg.asset))) return { micros: null, estimated: false }
   let gain = 0n
   let known = true
   let estimated = false
@@ -92,6 +109,18 @@ function gainOf(legs: readonly PricedLeg[], effects: ReadonlyMap<string, LegEffe
 const arrivedUnknown = (leg: PricedLeg, method: Method) =>
   isIncoming(leg) && leg.kind !== "gas" && (orderMatters(leg, method) || (leg.pieces ? leg.pieces.some((piece) => piece.costMicros === null) : leg.costLabel === "unknown"))
 
+/**
+ * A debit that took away units with no known cost, so what it realized or carried off isn't known. A missing price is a
+ * different problem, which no answer about a cost fixes, so it isn't counted here. Fees are left to their own row's amount.
+ */
+function leftUnknown(leg: PricedLeg, effects: ReadonlyMap<string, LegEffect>): boolean {
+  if (isIncoming(leg) || leg.kind === "gas" || BigInt(leg.delta) === 0n) return false
+  const effect = effects.get(leg.id)
+  if (!effect) return false
+  const grew = (key: "unknownCostDisposedQty" | "transferredOutUnknownQty") => BigInt(effect.after[key]) > BigInt(effect.before[key])
+  return grew("unknownCostDisposedQty") || grew("transferredOutUnknownQty")
+}
+
 /** A wallet's legs, by the transaction they're in. What it held before the first block read isn't in one. */
 export function legsByTransaction(legs: readonly PricedLeg[]): Map<string, PricedLeg[]> {
   const byTx = new Map<string, PricedLeg[]>()
@@ -104,8 +133,8 @@ export function legsByTransaction(legs: readonly PricedLeg[]): Map<string, Price
   return byTx
 }
 
-/** The facts of each transaction, by hash. */
-export function transactionFacts(byTx: ReadonlyMap<string, readonly PricedLeg[]>, positions: readonly Position[], method: Method, wallet: string): Map<string, TransactionFacts> {
+/** The facts of each transaction, by hash. `unconfirmed` is what `unconfirmedAssets` gives, the assets whose PnL the totals leave out. */
+export function transactionFacts(byTx: ReadonlyMap<string, readonly PricedLeg[]>, positions: readonly Position[], method: Method, wallet: string, unconfirmed: ReadonlySet<string> = new Set()): Map<string, TransactionFacts> {
   const effects = new Map<string, LegEffect>()
   for (const position of positions) for (const effect of position.effects) effects.set(effect.leg.id, effect)
   const me = normalizeAddress(wallet)
@@ -116,8 +145,8 @@ export function transactionFacts(byTx: ReadonlyMap<string, readonly PricedLeg[]>
       assets: [...new Set(moved.map((leg) => leg.asset))],
       counterparty: counterpartyOf(txLegs, me),
       amount: amountOf(txLegs),
-      gain: gainOf(txLegs, effects),
-      unknownCost: [...new Set(txLegs.filter((leg) => arrivedUnknown(leg, method)).map((leg) => leg.asset))],
+      gain: gainOf(txLegs, effects, unconfirmed),
+      unknownCost: [...new Set(txLegs.filter((leg) => arrivedUnknown(leg, method) || leftUnknown(leg, effects)).map((leg) => leg.asset))],
     })
   }
   return facts

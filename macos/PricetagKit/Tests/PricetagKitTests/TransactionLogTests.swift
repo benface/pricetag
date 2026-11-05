@@ -120,12 +120,27 @@ import Testing
         #expect(try item("Sent 0.002 ETH").counterpartyText == "To Savings")
         #expect(try item("Network fee of $0.10").amountText(.USD) == "-$0.10")
         #expect(try item("Sold 300 AERO for 450 USDC").amountText(.USD) == "$449.91")
+        // The fold doesn't know what this sale brought in, so neither does the row.
+        #expect(try item("Bought 50 VIRTUAL for 100 USDC").amountText(.USD) == "No price")
         #expect(try item("Sold 300 AERO for 450 USDC").gainText(.USD) == "+$74.99")
         // Unknown is never $0, and a send realizes nothing to show.
         #expect(try item("Sold 0.5 ETH for 1,300 USDC").gainText(.USD) == "Unknown")
         #expect(try item("Sent 0.002 ETH").gainText(.USD) == nil)
-        // Paid next to nothing, which isn't an unknown amount.
-        #expect(try item("Bought 50,000 DEGEN for 0.000001 USDC").amountText(.USD) == "$0.00")
+    }
+
+    @Test func fillsInFromAnyRowWhoseCostAQuestionCanAnswer() throws {
+        let portfolio = try demoPortfolio()
+        let log = TransactionLog(points: portfolio.points, calendar: utc)
+        func item(_ summary: String) throws -> TransactionItem { try #require(log.items.first { $0.summary == summary }) }
+        #expect(try item("Received 5,000 USDC").answerableAsset(in: portfolio.questions) == "USDC")
+        // What left with an unknown cost leads to the question about where it came from.
+        #expect(try item("Sold 0.5 ETH for 1,300 USDC").unknownCost == ["ETH"])
+        #expect(try item("Sold 0.5 ETH for 1,300 USDC").answerableAsset(in: portfolio.questions) == "ETH")
+        // A token with no market has nothing to ask, so the row only says its cost is unknown.
+        #expect(try item("Bought 50,000 DEGEN for 0.000001 USDC").answerableAsset(in: portfolio.questions) == nil)
+        // Once everything that arrived has been spent, the holding has nothing left to fill in, and the question still stands.
+        let usdc = try #require(portfolio.questions.first { $0.arrivals.contains { $0.asset == "USDC" } })
+        #expect(try item("Received 5,000 USDC").answerableAsset(in: [usdc]) == "USDC")
     }
 
     /// A busy wallet has about 65,000 transactions. Reading them, then searching as someone types, has to stay quick.

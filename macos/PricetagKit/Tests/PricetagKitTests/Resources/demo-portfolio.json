@@ -480,7 +480,9 @@
         "micros": null,
         "estimated": false
       },
-      "unknownCost": []
+      "unknownCost": [
+        "USDC"
+      ]
     },
     {
       "blockNum": 53500900,
@@ -502,7 +504,9 @@
         "micros": null,
         "estimated": false
       },
-      "unknownCost": []
+      "unknownCost": [
+        "USDC"
+      ]
     },
     {
       "blockNum": 53501200,
@@ -594,7 +598,7 @@
       "counterparty": null,
       "amount": {
         "direction": "trade",
-        "micros": "0"
+        "micros": null
       },
       "gain": {
         "micros": null,
@@ -618,13 +622,14 @@
       "counterparty": null,
       "amount": {
         "direction": "trade",
-        "micros": "99980000"
+        "micros": null
       },
       "gain": {
         "micros": null,
         "estimated": false
       },
       "unknownCost": [
+        "USDC",
         "VIRTUAL"
       ]
     },
@@ -642,13 +647,15 @@
       "counterparty": null,
       "amount": {
         "direction": "trade",
-        "micros": "1300000000"
+        "micros": "1299740000"
       },
       "gain": {
         "micros": null,
         "estimated": false
       },
-      "unknownCost": []
+      "unknownCost": [
+        "ETH"
+      ]
     },
     {
       "blockNum": 53505000,
@@ -666,7 +673,9 @@
         "micros": "5240000"
       },
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [
+        "ETH"
+      ]
     },
     {
       "blockNum": 53505400,

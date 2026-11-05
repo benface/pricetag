@@ -485,13 +485,15 @@
       "counterparty": null,
       "amount": {
         "direction": "trade",
-        "micros": "3251380800"
+        "micros": "3251382113"
       },
       "gain": {
         "micros": null,
         "estimated": false
       },
-      "unknownCost": []
+      "unknownCost": [
+        "USDC"
+      ]
     },
     {
       "blockNum": 53500900,
@@ -507,13 +509,15 @@
       "counterparty": null,
       "amount": {
         "direction": "trade",
-        "micros": "1362125000"
+        "micros": "1362125340"
       },
       "gain": {
         "micros": null,
         "estimated": false
       },
-      "unknownCost": []
+      "unknownCost": [
+        "USDC"
+      ]
     },
     {
       "blockNum": 53501200,
@@ -563,7 +567,7 @@
       "counterparty": null,
       "amount": {
         "direction": "trade",
-        "micros": "618008100"
+        "micros": "618008241"
       },
       "gain": {
         "micros": "107211239",
@@ -605,7 +609,7 @@
       "counterparty": null,
       "amount": {
         "direction": "trade",
-        "micros": "1"
+        "micros": null
       },
       "gain": {
         "micros": null,
@@ -629,13 +633,14 @@
       "counterparty": null,
       "amount": {
         "direction": "trade",
-        "micros": "138861100"
+        "micros": null
       },
       "gain": {
         "micros": null,
         "estimated": false
       },
       "unknownCost": [
+        "USDC",
         "VIRTUAL"
       ]
     },
@@ -653,13 +658,15 @@
       "counterparty": null,
       "amount": {
         "direction": "trade",
-        "micros": "1810584958"
+        "micros": "1810222841"
       },
       "gain": {
         "micros": null,
         "estimated": false
       },
-      "unknownCost": []
+      "unknownCost": [
+        "ETH"
+      ]
     },
     {
       "blockNum": 53505000,
@@ -677,7 +684,9 @@
         "micros": "7318435"
       },
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [
+        "ETH"
+      ]
     },
     {
       "blockNum": 53505400,

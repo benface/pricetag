@@ -299,7 +299,7 @@ private struct TransactionsTable: View {
     @ViewBuilder
     private func unknownCost(_ item: TransactionItem) -> some View {
         if !item.unknownCost.isEmpty {
-            let fixable = item.unknownCost.first { asset in portfolio.positions.contains { $0.asset == asset && $0.resolvable } }
+            let fixable = item.answerableAsset(in: portfolio.questions)
             // In a narrow window, what happened needs the room more, and the button's tooltip still says it.
             if !isNarrow || fixable == nil {
                 Text("Cost unknown")
