@@ -3,16 +3,13 @@ import PricetagKit
 import SwiftUI
 
 struct SettingsView: View {
-    enum Pane: Hashable { case general, wallets, spendingMoney, server }
+    enum Pane: Hashable { case general, spendingMoney, server }
 
     let store: PortfolioStore
     let hotWallet: HotWallet
     @State var tab: Pane = .general
     @State private var server = ""
     @State private var serverError: String?
-    @State private var proving = ""
-    @State private var signature = ""
-    @State private var linkResult: String?
     @State private var isComparing = false
     @State private var rpc = ""
     @State private var rpcError: String?
@@ -21,7 +18,6 @@ struct SettingsView: View {
     var body: some View {
         TabView(selection: $tab) {
             Tab("General", systemImage: "gearshape", value: Pane.general) { general }
-            Tab("Wallets", systemImage: "wallet.bifold", value: Pane.wallets) { wallets }
             Tab(HotWalletWording.title, systemImage: "banknote", value: Pane.spendingMoney) { spendingMoney }
             Tab("Server", systemImage: "server.rack", value: Pane.server) { connection }
         }
@@ -43,7 +39,7 @@ struct SettingsView: View {
     }
 
     private var general: some View {
-        pane(height: store.rules.count > 1 ? 360 : 180) {
+        pane(height: store.rules.count > 1 ? 400 : 220) {
             Section {
                 Picker("Main currency", selection: Binding(get: { store.currency }, set: { store.setCurrency($0) })) {
                     ForEach(CurrencyCode.allCases) { Text("\($0.rawValue) · \($0.name)").tag($0) }
@@ -61,53 +57,6 @@ struct SettingsView: View {
                     Button("Compare Side by Side…") { isComparing = true }
                         .disabled(store.address == nil || store.address == WalletAddress.demo)
                 }
-            }
-        }
-    }
-
-    private var wallets: some View {
-        pane(height: 400) {
-            Section("Your Other Wallets") {
-                ForEach(store.book.linkedWallets.filter { $0 != store.address }, id: \.self) { wallet in
-                    LabeledContent(Format.shortHash(wallet)) {
-                        if store.linkedWallets.contains(wallet) {
-                            Text("In this wallet").foregroundStyle(.secondary)
-                        } else {
-                            Button("Unlink") {
-                                var next = store.book
-                                next.senders[wallet] = nil
-                                store.setBook(next)
-                            }
-                        }
-                    }
-                }
-                TextField("Add a wallet", text: $proving, prompt: Text("0x…"))
-                    .font(proving.isEmpty ? .body : .body.monospaced())
-                    .autocorrectionDisabled()
-                if WalletAddress.isValid(proving), store.address.map(WalletAddress.isValid) == true {
-                    LabeledContent("Sign this with that wallet") {
-                        Text(Wording.linkMessage(owner: store.address ?? "", address: proving)).font(.caption).textSelection(.enabled)
-                    }
-                    TextField("Signature, 0x…", text: $signature)
-                        .font(.body.monospaced())
-                        .autocorrectionDisabled()
-                    Button("Link It") {
-                        Task {
-                            do {
-                                let linked = try await store.linkProved(proving, signature: signature.trimmingCharacters(in: .whitespacesAndNewlines))
-                                linkResult = linked ? "Linked." : "That signature isn't from this wallet."
-                                if linked {
-                                    proving = ""
-                                    signature = ""
-                                }
-                            } catch {
-                                linkResult = "Couldn't check it. Is the server running?"
-                            }
-                        }
-                    }
-                    .disabled(signature.isEmpty)
-                }
-                if let linkResult { Text(linkResult).font(.callout) }
             }
             Section {
                 LabeledContent("Who sent what") {

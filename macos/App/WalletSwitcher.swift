@@ -10,6 +10,7 @@ extension PortfolioStore {
             spending: hotWallet?.address.map { NamedWallet(address: $0.lowercased, name: HotWalletWording.title) },
             savings: hotWallet?.settings.coldWallets.map { NamedWallet(address: $0.address.lowercased, name: $0.name) } ?? [],
             linked: book.linkedWallets,
+            accounts: linkedWallets,
             saved: savedWallets,
             current: address,
             offersDemo: WalletList.offersDemo
@@ -110,7 +111,7 @@ struct WalletButton: View {
         .accessibilityLabel(current.map { [$0.title, $0.badge].compactMap(\.self).joined(separator: ", ") } ?? "Add Wallet")
         .accessibilityHint("Switches wallet")
         .popover(isPresented: $navigation.isSwitchingWallet, arrowEdge: .bottom) {
-            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: navigation.pendingWalletName, onOpenSpendingMoney: { navigation.section = .spendingMoney }) { navigation.isSwitchingWallet = false }
+            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: navigation.pendingWalletName, onOpenSpendingMoney: { navigation.section = .spendingMoney }, onProve: { navigation.provingWallet = $0 }) { navigation.isSwitchingWallet = false }
         }
     }
 }
@@ -121,6 +122,7 @@ struct WalletSwitcher: View {
     let hotWallet: HotWallet?
     @Bindable var pendingName: PendingWalletName
     let onOpenSpendingMoney: () -> Void
+    let onProve: (WalletProof) -> Void
     let onDone: () -> Void
     @State var problem: String?
     @State private var highlighted: String?
@@ -307,11 +309,21 @@ struct WalletSwitcher: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(EthereumAddress(entry.address)?.checksummed ?? entry.address, forType: .string)
         }
+        if entry.canProve {
+            Button("This Is My Wallet…") {
+                onDone()
+                onProve(list.proof(of: entry, current: store.address))
+            }
+        }
         if entry.canRemove {
             Divider()
             Button("Remove from List", role: .destructive) {
                 store.removeWallet(entry.address, showing: list.next(afterRemoving: entry.address))
             }
+        }
+        if entry.canUnlink {
+            Divider()
+            Button("Not My Wallet", role: .destructive) { store.unlinkWallet(entry.address) }
         }
     }
 

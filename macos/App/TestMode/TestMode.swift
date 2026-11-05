@@ -193,6 +193,8 @@ enum TestScene: String, CaseIterable {
     case walletSwitcherRenaming = "wallet-switcher-renaming"
     case walletSwitcherProblem = "wallet-switcher-problem"
     case walletSwitcherLong = "wallet-switcher-long"
+    case proveWallet = "prove-wallet"
+    case proveWalletProblem = "prove-wallet-problem"
     case mainShowingSpendingMoney = "main-showing-spending-money"
     case mainSavings = "main-savings"
     case mainWatching = "main-watching"
@@ -233,9 +235,9 @@ enum TestScene: String, CaseIterable {
     case routeDetailsOpen = "route-details-open"
     case routeAnswer = "route-answer"
     case routeAnswerOpen = "route-answer-open"
+    case routeProveWallet = "route-prove-wallet"
     case menuBarLabel = "menu-bar-label"
     case settings
-    case settingsWallets = "settings-wallets"
     case settingsServer = "settings-server"
     case settingsHotWallet = "settings-hot-wallet"
     case settingsCAD = "settings-cad"
@@ -341,7 +343,7 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
+        case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .proveWallet, .proveWalletProblem, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
              .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
@@ -589,7 +591,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 2200, height: 1300), isReady: isReady)
         case .mainMissingPrice:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .routeHoldings, .routeHoldingsOpen, .routeAddWallet, .routeAddWalletOpen, .routeDetails, .routeDetailsOpen, .routeAnswer, .routeAnswerOpen:
+        case .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .routeHoldings, .routeHoldingsOpen, .routeAddWallet, .routeAddWalletOpen, .routeDetails, .routeDetailsOpen, .routeAnswer, .routeAnswerOpen, .routeProveWallet:
             let press: () -> Void
             let hasArrived: () -> Bool
             let hasSheet = { NSApp.windows.contains { $0.attachedSheet != nil } }
@@ -612,6 +614,14 @@ enum TestScene: String, CaseIterable {
                 navigation.section = .spendingMoney
                 press = { navigation.explain(.asset("AERO", .amount)) }
                 hasArrived = { navigation.section == .overview && navigation.target != nil }
+            case .routeProveWallet:
+                // As the list's row does it: the list closes in the same moment, and the sheet still has to appear.
+                navigation.section = .overview
+                press = {
+                    navigation.isSwitchingWallet = false
+                    navigation.provingWallet = WalletProof(address: TestScene.namedWallet, owner: TestScene.namedWallet, title: "Treasury")
+                }
+                hasArrived = { navigation.provingWallet != nil && hasSheet() }
             default:
                 navigation.section = .spendingMoney
                 press = { navigation.resolve() }
@@ -633,15 +643,17 @@ enum TestScene: String, CaseIterable {
                 return Date.now.timeIntervalSince(pressedAt ?? .now) > 0.5 && hasArrived()
             })
         case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong:
-            let switcher = WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: self == .walletSwitcherRenaming ? PendingWalletName(address: TestScene.namedWallet, text: "Treasury") : PendingWalletName(), onOpenSpendingMoney: {}, onDone: {}, problem: self == .walletSwitcherProblem ? Wording.notAnAddress : nil)
+            let switcher = WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: self == .walletSwitcherRenaming ? PendingWalletName(address: TestScene.namedWallet, text: "Treasury") : PendingWalletName(), onOpenSpendingMoney: {}, onProve: { _ in }, onDone: {}, problem: self == .walletSwitcherProblem ? Wording.notAnAddress : nil)
             return TestScreen(view: AnyView(switcher.background(.background)), isReady: isReady)
+        case .proveWallet, .proveWalletProblem:
+            let proof = WalletProof(address: TestScene.namedWallet, owner: TestScene.namedWallet, title: "Treasury")
+            return TestScreen(view: AnyView(ProveWalletSheet(store: store, proof: proof, signature: self == .proveWalletProblem ? "0x1234" : "", problem: self == .proveWalletProblem ? Wording.notASignature : nil)), isReady: isReady)
         case .popoverLongName, .popoverLongNameReading, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
         case .menuBarLabel:
             return TestScreen(view: AnyView(MenuBarLabelScene(portfolio: { store.portfolio })), isReady: isReady)
-        case .settings, .settingsWallets, .settingsServer, .settingsHotWallet, .settingsCAD, .settingsHotWalletCAD, .settingsReplacingKey:
+        case .settings, .settingsServer, .settingsHotWallet, .settingsCAD, .settingsHotWalletCAD, .settingsReplacingKey:
             let pane: SettingsView.Pane = switch self {
-            case .settingsWallets: .wallets
             case .settingsServer: .server
             case .settingsHotWallet, .settingsHotWalletCAD, .settingsReplacingKey: .spendingMoney
             default: .general

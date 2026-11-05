@@ -53,6 +53,8 @@ final class Navigation {
     var wantsSend = false
     /// The web app sent over an account from a device. The hot wallet's window asks the person to check it.
     var addingSavings: AddSavingsLink?
+    /// Asked for from a row in the wallet list, which closes when the person goes off to sign. So it's the window that holds this.
+    var provingWallet: WalletProof?
     var isResolving = false
     /// Which holding Fill In was clicked on, so its questions come first.
     var resolvingAsset: String?

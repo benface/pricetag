@@ -67,6 +67,7 @@ struct MainWindow: View {
         .sheet(isPresented: $navigation.isResolving) {
             ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet)
         }
+        .sheet(item: $navigation.provingWallet) { ProveWalletSheet(store: store, proof: $0) }
         .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: exportName) { result in
             if case .failure(let error) = result { exportError = error.localizedDescription }
             exportDocument = nil
@@ -95,7 +96,10 @@ struct MainWindow: View {
             navigation.isResolving = false
         }
         // Or it would open again by itself with the window.
-        .onDisappear { navigation.isSwitchingWallet = false }
+        .onDisappear {
+            navigation.isSwitchingWallet = false
+            navigation.provingWallet = nil
+        }
     }
 
     private var sidebar: some View {
