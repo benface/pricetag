@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// always there. Skipping is always allowed, and what's skipped stays flagged.
 public struct ResolveFlow: View {
     let store: PortfolioStore
+    let publishFromDevice: ((URL) -> AnyView)?
     @State private var model: ResolveModel
     @State private var drag: CGSize = .zero
     @State private var costs: [String: String] = [:]
@@ -15,8 +16,10 @@ public struct ResolveFlow: View {
     @FocusState private var isFocused: Bool
     @FocusState private var focusedCost: String?
 
-    public init(store: PortfolioStore, firstAsset: String? = nil, noteWriter: (any CostNoteWriter)? = nil) {
+    /// `publishFromDevice` is what opens that page, which takes knowing the browsers on this computer.
+    public init(store: PortfolioStore, firstAsset: String? = nil, noteWriter: (any CostNoteWriter)? = nil, publishFromDevice: ((URL) -> AnyView)? = nil) {
         self.store = store
+        self.publishFromDevice = publishFromDevice
         _model = State(initialValue: ResolveModel(store: store, firstAsset: firstAsset, noteWriter: noteWriter))
     }
 
@@ -255,22 +258,26 @@ public struct ResolveFlow: View {
             if let warning = model.costWarning(costs, for: question) {
                 WarningText(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
             }
-            HStack {
-                Button("Save") { save(question) }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canSave(question))
+            // Two rows, because all of these on one would cut off their names.
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Button("Save") { save(question) }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!canSave(question))
+                    if let draft = model.noteDraft(for: question) {
+                        Button("Publish Onchain…") { publishing = draft }
+                            .help("Writes what you paid on Base, where anyone can read it")
+                    }
+                    if let publishFromDevice, let draft = model.deviceNoteDraft(for: question), let url = DeviceFlow.publish(server: store.serverURL, draft: draft, usd: store.currency == .USD ? costs[draft.asset] : nil) {
+                        publishFromDevice(url)
+                    }
+                }
                 if question.sender != nil {
-                    Button("Import Coinbase History…") { isImporting = true }
-                    Button("Use the Price When It Arrived") { model.usePriceWhenItArrived() }
-                        .help("An estimate, and it's always shown as one")
-                }
-                if let draft = model.noteDraft(for: question) {
-                    Button("Publish Onchain…") { publishing = draft }
-                        .help("Writes what you paid on Base, where anyone can read it")
-                }
-                if let draft = model.deviceNoteDraft(for: question), let url = DeviceFlow.publish(server: store.serverURL, draft: draft, usd: store.currency == .USD ? costs[draft.asset] : nil) {
-                    Link("Publish from Your Device…", destination: url)
-                        .help("Opens your browser, where your hardware wallet signs it. Anyone can read it after that")
+                    HStack {
+                        Button("Import Coinbase History…") { isImporting = true }
+                        Button("Use the Price When It Arrived") { model.usePriceWhenItArrived() }
+                            .help("An estimate, and it's always shown as one")
+                    }
                 }
             }
             Text("This stays on this Mac.")

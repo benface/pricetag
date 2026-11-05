@@ -31,6 +31,7 @@ struct HotWalletFixture {
     private var canActOnChain = false
     private var recordsAreUnreadable = false
     private var isConnectedToSite = false
+    private var hasSiteActivity = false
 
     /// No wallet yet, which is also what every scene that isn't about one gets.
     static let none = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:])
@@ -38,6 +39,8 @@ struct HotWalletFixture {
     static let unreadableRecords = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:], recordsAreUnreadable: true)
     static let funded = HotWalletFixture(hasRecords: true)
     static let connectedToSite = HotWalletFixture(isConnectedToSite: true)
+    /// Connected to a site and to one on this Mac, with the first's transactions: one that went through, and one that fails once it's read.
+    static let usedBySites = HotWalletFixture(hasSiteActivity: true)
     static let noSavings = HotWalletFixture(hasSavings: false, balances: ["ETH": 1_000_000_000_000_000, "USDC": 10_000_000])
     static let noPrice = HotWalletFixture(balances: ["ETH": 5_000_000_000_000_000, "USDC": 20_000_000, "AERO": 12_000_000_000_000_000_000])
     static let nearCap = HotWalletFixture(balances: ["ETH": 5_000_000_000_000_000, "USDC": 36_000_000])
@@ -59,9 +62,9 @@ struct HotWalletFixture {
             portfolioSource: { source },
             costMethod: costMethod,
             mainCurrency: mainCurrency,
-            makeChain: { [snapshot, isConnectedToSite] url -> any ChainClient in
+            makeChain: { [snapshot, isConnectedToSite, failing] url -> any ChainClient in
                 if TestMode.live != nil { return ReadOnlyChain(node: RPCChainClient(url: url)) }
-                return FixtureChain(snapshot: snapshot, canQuote: isConnectedToSite)
+                return FixtureChain(snapshot: snapshot, canQuote: isConnectedToSite, failing: failing)
             },
             now: { TestMode.live == nil ? Self.today : .now }
         )
@@ -80,6 +83,10 @@ struct HotWalletFixture {
         state.rotation = rotation
         if isConnectedToSite { state.connectedSites = [Self.site] }
         if hasRecords, TestMode.live == nil { state.records[Self.spending] = records }
+        if hasSiteActivity, TestMode.live == nil {
+            state.connectedSites = [Self.site, "http://localhost:5173"]
+            state.records[Self.spending] = siteRecords
+        }
         // The demo portfolio is another wallet's history, so what it spent is news to this one unless it's been looked at.
         let history: Portfolio? = TestMode.live == nil ? try? FixtureSource.decode("demo-portfolio") : Self.liveHistory
         state.acknowledged = (history?.outgoingTxs ?? []).dropFirst(unexplainedTransactions).map { .unknownTransaction(hash: $0) }
@@ -92,7 +99,7 @@ struct HotWalletFixture {
         ChainSnapshot(
             chainID: Base.chainID,
             blockNumber: Self.block,
-            nonce: hasRecords ? 3 : 0,
+            nonce: hasRecords ? 3 : hasSiteActivity ? 2 : 0,
             balances: Dictionary(uniqueKeysWithValues: Base.tokens.compactMap { token in balances[token.symbol].map { (token, $0) } }),
             ethUsdMicros: 2_640_000_000,
             usdcUsdMicros: 999_800,
@@ -112,20 +119,34 @@ struct HotWalletFixture {
 
     /// One of each way a transaction can end up, and each reason to send one.
     private var records: [SignedRecord] {
-        func record(_ nonce: UInt64, _ symbol: String, _ decimals: Int, _ amount: String, gain: String = "0", _ reason: SignedRecord.Reason, _ status: SignedRecord.Status) -> SignedRecord {
-            SignedRecord(
-                hash: "0xde4" + String(repeating: "0", count: 59) + String(nonce) + (status == .dropped ? "d" : "0"),
-                nonce: nonce, to: Self.savings, symbol: symbol, decimals: decimals, amount: amount, usdMicros: nil, gainUsdMicros: gain,
-                reason: reason, createdAt: Self.today.addingTimeInterval(TimeInterval(3 - nonce) * -86400), status: status
-            )
-        }
-        return [
+        [
             record(0, "USDC", 6, "12000000", .aboveCap, .confirmed),
             record(1, "ETH", 18, "4000000000000000", gain: "3000000", .aboveCap, .failed),
             record(2, "USDC", 6, "30000000", .manual, .confirmed),
             record(3, "ETH", 18, "1000000000000000", .aboveCap, .dropped),
             record(3, "USDC", 6, "5000000", .aboveCap, .pending),
         ]
+    }
+
+    private var siteRecords: [SignedRecord] {
+        [
+            record(0, "USDC", 6, "12000000", .site, .confirmed, site: Self.site),
+            record(1, "ETH", 18, "1000000000000000", .site, .pending, site: Self.site),
+        ]
+    }
+
+    /// The one transaction a scene's node says failed, which is what makes the wallet warn about it.
+    private var failing: String? {
+        guard hasSiteActivity else { return nil }
+        return siteRecords.first { $0.status == .pending }?.hash
+    }
+
+    private func record(_ nonce: UInt64, _ symbol: String, _ decimals: Int, _ amount: String, gain: String = "0", _ reason: SignedRecord.Reason, _ status: SignedRecord.Status, site: String? = nil) -> SignedRecord {
+        SignedRecord(
+            hash: "0xde4" + String(repeating: "0", count: 59) + String(nonce) + (status == .dropped ? "d" : "0"),
+            nonce: nonce, to: Self.savings, symbol: symbol, decimals: decimals, amount: amount, usdMicros: nil, gainUsdMicros: gain,
+            reason: reason, createdAt: Self.today.addingTimeInterval(TimeInterval(3 - nonce) * -86400), status: status, site: site
+        )
     }
 }
 
@@ -185,6 +206,7 @@ private nonisolated struct ReadOnlyChain: ChainClient {
 private nonisolated struct FixtureChain: ChainClient {
     let snapshot: ChainSnapshot
     let canQuote: Bool
+    let failing: String?
 
     func snapshot(of address: EthereumAddress) async throws -> ChainSnapshot { snapshot }
 
@@ -194,7 +216,7 @@ private nonisolated struct FixtureChain: ChainClient {
     }
 
     func send(_ transaction: SignedTransaction) async throws { TestMode.fail("A scene tried to send a transaction.") }
-    func receipt(of hash: String) async throws -> Receipt? { nil }
+    func receipt(of hash: String) async throws -> Receipt? { hash == failing ? Receipt(succeeded: false, blockNumber: snapshot.blockNumber) : nil }
 
     /// Only what a preview asks. A node that can't simulate is what `site-transaction` shows.
     func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer {

@@ -106,4 +106,28 @@ public struct LedgerBrowserChoice: Equatable, Sendable {
             defaultThatCant = defaultBrowser?.name
         }
     }
+
+    /// Before anything's been asked.
+    public static let unknown = LedgerBrowserChoice(defaultBrowser: nil, installed: [])
+
+    /// The one to send someone to, by name. With nothing that can reach a Ledger, that's still the default: a Keystone only needs a webcam.
+    public var opens: String? { browser?.name ?? defaultThatCant }
+
+    /// The default, when it isn't what opens, for someone with a Keystone who'd rather stay in it.
+    public var defaultForKeystone: String? { browser == nil ? nil : defaultThatCant }
+
+    public var continueTitle: String { "Continue in \(opens ?? "Browser")" }
+
+    /// `outcome` says what happens there, and ends in a period.
+    public func opening(_ outcome: String) -> String {
+        let opening = "This opens \(opens ?? "your browser"), where \(outcome)"
+        if let defaultForKeystone { return "\(opening) \(defaultForKeystone) can't reach a Ledger." }
+        return opens == nil ? "\(opening) A Ledger needs Chrome, Brave, Edge or another Chromium browser." : opening
+    }
+
+    /// When nothing here can reach a Ledger, what someone with one should do about it.
+    public var noLedgerBrowser: String? {
+        guard browser == nil, let defaultThatCant else { return nil }
+        return "\(defaultThatCant) can't reach a Ledger, only a Keystone. For a Ledger, install Chrome, Brave or Edge, then come back."
+    }
 }
