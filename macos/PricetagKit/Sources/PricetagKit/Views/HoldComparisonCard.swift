@@ -25,7 +25,7 @@ public struct HoldComparisonCard: View {
                     .monospacedDigit()
                     .multilineTextAlignment(.trailing)
                 Image(systemName: "chevron.right")
-                    .font(.caption2.bold())
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
             .font(.callout)
@@ -37,7 +37,7 @@ public struct HoldComparisonCard: View {
         }
         .buttonStyle(.plain)
         .opacity(isLive ? 1 : 0.55)
-        .animation(.easeOut(duration: 0.15), value: isLive)
+        .animation(Motion.state, value: isLive)
         // The fine print, a hover or a click away.
         .help([Wording.holdCaveat(comparison, currency), comparison.status == .unavailable ? nil : Wording.holdPast].compactMap(\.self).joined(separator: " "))
         .accessibilityHint("Shows how this is worked out")

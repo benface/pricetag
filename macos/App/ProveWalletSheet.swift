@@ -37,11 +37,8 @@ struct ProveWalletSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
                     .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                Button("Copy Message") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(proof.message, forType: .string)
-                }
-                .controlSize(.small)
+                CopyButton(title: "Copy Message", text: proof.message)
+                    .controlSize(.small)
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text("Then paste the signature here.")

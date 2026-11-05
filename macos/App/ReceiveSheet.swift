@@ -8,7 +8,6 @@ struct ReceiveSheet: View {
     let wallet: HotWallet
     let setUp: () -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var copied = false
 
     /// Nil when it can take money. Otherwise why not, because a key that's going away, or may be stolen, shouldn't get any more.
     private var problem: String? {
@@ -56,7 +55,7 @@ struct ReceiveSheet: View {
                     }
                     .keyboardShortcut(.defaultAction)
                 } else if problem == nil, let address = wallet.address {
-                    Button(copied ? "Copied" : "Copy Address") { copy(address.checksummed) }
+                    CopyButton(title: "Copy Address", text: address.checksummed)
                         .keyboardShortcut(.defaultAction)
                 }
             }
@@ -80,15 +79,5 @@ struct ReceiveSheet: View {
         .background(.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement()
         .accessibilityLabel("QR code of this address")
-    }
-
-    private func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        copied = true
-        Task {
-            try? await Task.sleep(for: .seconds(1.5))
-            copied = false
-        }
     }
 }
