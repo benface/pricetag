@@ -10,6 +10,7 @@ Usage:
   shot.sh all <folder> [--window]    Every scene, in light and dark.
   shot.sh list                       Every scene. "window" ones always use a real window.
 
+--accessibility  Writes what VoiceOver would find, as text, in place of a picture. With all, one file a scene. Needs Accessibility in System Settings.
 --window  Captures a real window behind the desktop, instead of rendering without one. Shows the toolbar, materials and glass.
 --live <server> <wallet>  Real numbers from that server and the real node, in place of fixtures. Read-only: there's still no key.
 --currency <code>  With --live, reads in this currency.
@@ -38,6 +39,7 @@ if [ "$scene" != list ]; then
 fi
 dark=NO
 window=NO
+accessibility=NO
 frames=0
 # Handed on to the test mode as they are, so none of them can have spaces.
 live=
@@ -45,6 +47,7 @@ while [ $# -gt 0 ]; do
   case $1 in
     --dark) dark=YES ;;
     --window) window=YES ;;
+    --accessibility) accessibility=YES ;;
     --live)
       [ $# -ge 3 ] || usage
       live="$live --live-server $2 --live-wallet $3"
@@ -120,6 +123,19 @@ render() { # scene appearance output
   mv "$run/shot.png" "$3"
 }
 
+read_accessibility() { # scene appearance output
+  # shellcheck disable=SC2086
+  if "$binary" --test-scene "$1" --appearance "$2" --accessibility-output "$run/tree.txt" $live 2>"$run/stderr"; then
+    mv "$run/tree.txt" "$3"
+  elif [ "$scene" = all ]; then
+    # Some scenes only work in a real window, like the route-* ones. The rest are still worth reading.
+    { echo "Couldn't read this scene:"; tail -n 1 "$run/stderr"; } >"$3"
+  else
+    cat "$run/stderr" >&2
+    exit 1
+  fi
+}
+
 capture_window() { # scene appearance output
   : >"$run/stdout"
   : >"$run/stderr"
@@ -159,7 +175,9 @@ capture_window() { # scene appearance output
 }
 
 shoot() { # scene appearance output
-  if [ "$window" = YES ] || printf '%s\n' "$scenes" | grep -qx "$1 window"; then
+  if [ "$accessibility" = YES ]; then
+    read_accessibility "$@"
+  elif [ "$window" = YES ] || printf '%s\n' "$scenes" | grep -qx "$1 window"; then
     capture_window "$@"
   else
     render "$@"
@@ -170,6 +188,10 @@ front_before=$(front_app)
 if [ "$scene" = all ]; then
   mkdir -p "$output"
   for each in $(printf '%s\n' "$scenes" | cut -d ' ' -f 1); do
+    if [ "$accessibility" = YES ]; then
+      shoot "$each" light "$output/$each.txt"
+      continue
+    fi
     for appearance in light dark; do
       shoot "$each" "$appearance" "$output/$each-$appearance.png"
     done

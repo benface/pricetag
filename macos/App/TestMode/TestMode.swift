@@ -45,6 +45,15 @@ enum TestMode {
         Motion.playsEntrances = scene == .motionChartDraw
         Motion.slowdown = value(after: "--slowdown").flatMap(Double.init) ?? 1
         let screen = scene.make()
+        if let output = value(after: "--accessibility-output") {
+            do {
+                try AccessibilityTree.text(of: screen.view, size: screen.size, dark: dark, timeout: readyTimeout, settle: settleTime, isReady: screen.isReady).write(to: URL(filePath: output), atomically: true, encoding: .utf8)
+            } catch {
+                fail("Couldn't read \(name)'s accessibility: \(error)")
+            }
+            if NSApp.isActive { fail("This became the active app, which it must never do.") }
+            exit(0)
+        }
         if let output = value(after: "--output") {
             do {
                 try OffscreenRenderer.png(of: screen.view, size: screen.size, dark: dark, timeout: readyTimeout, settle: settleTime, isReady: screen.isReady).write(to: URL(filePath: output))
