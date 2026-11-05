@@ -54,7 +54,7 @@ struct BuySheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Buy")
-                .font(.title2.bold())
+                .font(.sheetTitle)
             if wallet.address == nil {
                 Notice(.info, "What you buy lands in Spending Money, so that comes first.")
             } else if !hasSavings {
@@ -80,6 +80,7 @@ struct BuySheet: View {
         LabeledContent("Amount") {
             HStack(spacing: 4) {
                 Text(wallet.usd(dollars: 0).replacing("0", with: ""))
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
                 TextField("Amount", value: $dollars, format: .number.grouping(.never))
                     .labelsHidden()
@@ -185,6 +186,8 @@ struct PurchaseRow: View {
                 Text(PurchaseWording.status(phase))
                     .font(.caption)
                     .foregroundStyle(PurchaseWording.isWarning(phase) ? Tone.warning.style : AnyShapeStyle(.secondary))
+                    .contentTransition(.opacity)
+                    .animation(Motion.state, value: PurchaseWording.status(phase))
             }
             Spacer()
             if !phase.isFinished, !phase.isUpToThem {
