@@ -5,6 +5,7 @@ import PricetagKit
 public enum HotWalletWording {
     public static let title = "Spending Money"
     public static let label = "Hackathon, small funds only"
+    public static let summary = "A small balance for everyday use, with no recovery phrase to write down."
     public static let cannotBeRestored = "This money lives only on this device. There's no recovery phrase and no backup: if this device is lost or erased, what's on it is gone."
     public static let newDevice = "Getting a new device? Sweep everything to your savings first."
     public static func addSavings(beside main: CurrencyCode) -> String {

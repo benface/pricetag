@@ -92,6 +92,9 @@ enum TestScene: String, CaseIterable {
     case mainDetails = "main-details"
     case mainNarrow = "main-narrow"
     case mainNoWallet = "main-no-wallet"
+    case mainNoWalletSmallest = "main-no-wallet-smallest"
+    case mainNoWalletHasSpendingMoney = "main-no-wallet-has-spending-money"
+    case mainNoWalletNotProvisioned = "main-no-wallet-not-provisioned"
     case mainReading = "main-reading"
     case mainServerDown = "main-server-down"
     case mainNotUpdating = "main-not-updating"
@@ -123,6 +126,7 @@ enum TestScene: String, CaseIterable {
     case popoverHotWalletCAD = "popover-hot-wallet-cad"
     case settings
     case settingsHotWallet = "settings-hot-wallet"
+    case settingsShowingSpendingMoney = "settings-showing-spending-money"
     case settingsCAD = "settings-cad"
     case settingsHotWalletCAD = "settings-hot-wallet-cad"
     case hotWalletSetup = "hot-wallet-setup"
@@ -186,12 +190,15 @@ enum TestScene: String, CaseIterable {
     }
 
     private var hasWallet: Bool {
-        self != .mainNoWallet && self != .popoverNoWallet
+        switch self {
+        case .mainNoWallet, .mainNoWalletSmallest, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .popoverNoWallet: false
+        default: true
+        }
     }
 
     private var usesDemoWallet: Bool {
         switch self {
-        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .mainNotStarted, .popoverNotStarted: false
+        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .mainNotStarted, .popoverNotStarted, .settingsShowingSpendingMoney: false
         default: true
         }
     }
@@ -205,9 +212,9 @@ enum TestScene: String, CaseIterable {
 
     private var hotWalletFixture: HotWalletFixture {
         switch self {
-        case .hotWalletNotProvisioned: .notProvisioned
+        case .hotWalletNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
+        case .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .settingsShowingSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
         case .sendWaiting: .waitingForTouchID
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
         case .hotWalletNoPrice: .noPrice
@@ -263,8 +270,12 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .holdComparison:
             return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
-        case .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+        case .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 1120, height: 760), isReady: isReady)
+        case .mainNoWallet, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet)), size: CGSize(width: 1120, height: 760), isReady: isReady)
+        case .mainNoWalletSmallest:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet)), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .mainSmallestEnd:
             // Starts at the end of the page, because a screenshot can't scroll to it.
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)
@@ -276,7 +287,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
         case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
-        case .settings, .settingsHotWallet, .settingsCAD, .settingsHotWalletCAD:
+        case .settings, .settingsHotWallet, .settingsShowingSpendingMoney, .settingsCAD, .settingsHotWalletCAD:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 720), isReady: isReady)

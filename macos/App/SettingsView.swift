@@ -54,7 +54,7 @@ struct SettingsView: View {
                 Button("Forget This Wallet") { store.setWallet(nil) }
                     .disabled(store.address == nil)
             } footer: {
-                Text("This wallet is only read, and nothing signs for it. The one key in this app is below.")
+                Text(store.address == hotWallet.address?.lowercased ? "This is this Mac's spending money, the one wallet this app holds a key for. Its settings are below." : "This wallet is only read, and nothing signs for it. The one key in this app is below.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
