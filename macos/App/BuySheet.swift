@@ -103,7 +103,7 @@ struct BuySheet: View {
     private var destination: some View {
         switch plan.problem {
         case .belowMinimum:
-            Text("\(PurchaseWording.provider)'s minimum is about \(wallet.usd(dollars: BuyPlan.minimumDollars)).")
+            Text("\(PurchaseWording.provider)'s minimum is about \(wallet.usd(dollars: BuyPlan.minimumDollars)), depending on how you pay.")
                 .foregroundStyle(.secondary)
         case .needsSavings:
             Notice(.info, "There's room for \(wallet.usd(wallet.topUpRoom)) in Spending Money. To buy more, add a savings wallet for the rest to go to.")

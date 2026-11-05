@@ -95,6 +95,8 @@ If this withdrawal pays from a different contract, the app can't name it (WORK-4
 
 **To show a larger amount:** type more than the room left, and the sheet says how much stays and that the rest goes to your savings. Don't buy more than you mean to: what lands above the cap sweeps by itself, with Patina open, and that needs a savings wallet you've checked on a device. Its row in the savings wallet says the same cost and source.
 
+**If about $5 is refused,** suspect Coinbase's trial mode first. New integrations start in it, and no page states its limits. The sheet shows what Coinbase said, as it said it. Use the fallbacks below.
+
 A real card purchase on stage can fail, and a real delivery can take minutes, so don't let the demo depend on one:
 - **Best:** do a real purchase before you go on, and show its finished row and its cost in Transactions. Open with "I bought this an hour ago".
 - **Recording:** add a clip of a real purchase to the backup recording.

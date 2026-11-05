@@ -80,10 +80,26 @@ struct PurchaseTrackerTests {
         #expect(phase(OnrampOrder(id: "x", status: .failed, failure: .delivery)) == .failed(.delivery))
         #expect(phase(OnrampOrder(id: "x", status: .failed)) == .failed(.payment))
         #expect(phase(delivered()) == .recorded(paid))
-        #expect(phase(delivered(cost: nil)) == .costUnknown, "Delivered, and it never said what it cost")
+        #expect(phase(delivered(cost: nil)) == .costNotSaid, "Delivered, and it never said what it cost")
         #expect(phase(OnrampOrder(id: "x", status: .succeeded, asset: "ETH", units: "1", wallet: wallet)) == .onItsWay, "Done, with nothing on the chain yet")
+        let (waiting, _, _, _) = setup(match: .waiting)
+        func arriving(blockNum: Int?, age: TimeInterval) -> PurchasePhase {
+            waiting.phase(of: TrackedPurchase(ref: "r", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now.addingTimeInterval(-age), order: delivered(blockNum: blockNum)))
+        }
+        #expect(arriving(blockNum: nil, age: 60) == .arriving)
+        #expect(arriving(blockNum: 50, age: 2 * 60 * 60) == .arriving, "Its block is known, so it's only that the read is behind")
+        #expect(arriving(blockNum: nil, age: 2 * 60 * 60) == .costUnknown, "Its hash never led anywhere")
         let (unmatched, _, _, _) = setup(match: .unmatched)
         #expect(unmatched.phase(of: TrackedPurchase(ref: "r", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: delivered())) == .costUnknown)
+    }
+
+    @Test func anOrderWithNoCostRecordsNothingAndStopsBeingAskedAbout() async throws {
+        let (tracker, store, source, _) = setup()
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        await source.say([delivered(cost: nil)])
+        await tracker.check()
+        #expect(store.book.purchases.isEmpty, "So what arrived is asked about as usual")
+        #expect(tracker.phase(of: tracker.purchases[0]) == .costNotSaid)
     }
 
     @Test func picksUpWhatWasStillGoingAfterARestart() async throws {

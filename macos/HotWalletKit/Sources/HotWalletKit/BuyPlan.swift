@@ -3,7 +3,7 @@ import Foundation
 /// Where a purchase ends up. It all lands here, and what's above the cap sweeps to savings, so this says how much of each, and whether that can work.
 public struct BuyPlan: Equatable, Sendable {
     public enum Problem: Equatable, Sendable {
-        /// Below what the provider usually takes. Its page has the last word.
+        /// Below what the provider takes for some ways to pay. Its page has the last word.
         case belowMinimum
         /// More than fits, with no savings wallet for the rest to go to.
         case needsSavings

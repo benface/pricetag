@@ -268,6 +268,8 @@ describe("a purchase's cost", () => {
 
 describe("reading an order", () => {
   const raw = {
+    type: "ONRAMP_TRANSACTION_TYPE_BUY_AND_SEND",
+    payment_method: "CARD",
     status: "ONRAMP_TRANSACTION_STATUS_SUCCESS",
     transaction_id: "abc",
     purchase_currency: "USDC",
@@ -300,6 +302,37 @@ describe("reading an order", () => {
     assert.equal(orderOf({}), null)
     assert.equal(unitsOf("1.0000001", 6), null, "it won't round")
     assert.equal(unitsOf("1.0000000", 6), "1000000")
+  })
+
+  describe("that was paid from what's already held", () => {
+    const withUsd = { ...raw, payment_total_usd: { value: "5.07", currency: "USD" } }
+    const costOf = (changes: Record<string, unknown>) => {
+      const order = orderOf({ ...withUsd, ...changes })!
+      return [order.cost, order.costUsdMicros]
+    }
+
+    for (const [what, changes] of [
+      ["a send, which only moves it", { type: "ONRAMP_TRANSACTION_TYPE_SEND" }],
+      ["a send, whatever it says paid", { type: "ONRAMP_TRANSACTION_TYPE_SEND", payment_method: "CARD" }],
+      ["crypto in the account", { payment_method: "CRYPTO_WALLET" }],
+      ["crypto in the account, as the API spec spells it", { payment_method: "CRYPTO_ACCOUNT" }],
+      ["a way to pay it doesn't know", { payment_method: "SOMETHING_NEW" }],
+      ["no way to pay at all", { payment_method: undefined }],
+      ["no type", { type: undefined }],
+    ] as [string, Record<string, unknown>][]) {
+      it(`has no cost, for ${what}`, () => {
+        assert.deepEqual(costOf(changes), [null, null])
+        // Everything else it says is still true, so what arrived is still shown.
+        assert.equal(orderOf({ ...withUsd, ...changes })!.status, "succeeded")
+        assert.equal(orderOf({ ...withUsd, ...changes })!.units, "5000000")
+      })
+    }
+
+    for (const method of ["CARD", "ACH_BANK_ACCOUNT", "APPLE_PAY", "GUEST_CHECKOUT_APPLE_PAY", "GOOGLE_PAY", "GUEST_CHECKOUT_GOOGLE_PAY", "FIAT_WALLET"]) {
+      it(`has its cost, when bought with ${method}`, () => {
+        assert.deepEqual(costOf({ payment_method: method }), [{ micros: "5070000", currency: "USD" }, "5070000"])
+      })
+    }
   })
 
   it("keeps the USD total, for a read that can't convert what was paid", () => {
@@ -455,10 +488,22 @@ describe("the routes", () => {
     }) as typeof fetch
     const unreachable = await call(await serve(createOnramp(env, down)), "POST", "/api/onramp/checkout", SESSION)
     assert.deepEqual([unreachable.status, unreachable.json.error], [502, "Coinbase can't be reached right now."])
-    const refused = await call(await serve(createOnramp(env, stub({ token: () => new Response("internal detail", { status: 401 }) }).send)), "POST", "/api/onramp/checkout", SESSION)
+    const refused = await call(await serve(createOnramp(env, stub({ token: () => new Response("<html>internal detail</html>", { status: 401 }) }).send)), "POST", "/api/onramp/checkout", SESSION)
     assert.deepEqual([refused.status, refused.json.error], [502, "Coinbase said no (401)."])
     const orders = await call(await serve(createOnramp(env, stub({ orders: () => new Response("", { status: 500 }) }).send)), "GET", `/api/onramp/orders/${REF}`)
     assert.equal(orders.status, 502)
+  })
+
+  it("show what Coinbase said when it refuses, as it said it", async () => {
+    const refusing = (body: unknown) => stub({ token: () => Response.json(body, { status: 403 }) }).send
+    for (const body of [{ message: "Trial limit reached." }, { errorMessage: "Trial limit reached." }, { error: "Trial limit reached." }, { code: 7, message: "  Trial limit reached.\n" }]) {
+      const { status, json } = await call(await serve(createOnramp(env, refusing(body))), "POST", "/api/onramp/checkout", SESSION)
+      assert.deepEqual([status, json.error], [502, "Coinbase said: Trial limit reached."], JSON.stringify(body))
+    }
+    assert.equal((await call(await serve(createOnramp(env, refusing({ code: 7 }))), "POST", "/api/onramp/checkout", SESSION)).json.error, "Coinbase said no (403).")
+    assert.equal((await call(await serve(createOnramp(env, refusing({ message: 7 }))), "POST", "/api/onramp/checkout", SESSION)).json.error, "Coinbase said no (403).")
+    const orders = await call(await serve(createOnramp(env, stub({ orders: () => Response.json({ message: "Trial limit reached." }, { status: 429 }) }).send)), "GET", `/api/onramp/orders/${REF}`)
+    assert.equal(orders.json.error, "Coinbase said: Trial limit reached.")
   })
 
   it("read an order, with the block its delivery landed in", async () => {

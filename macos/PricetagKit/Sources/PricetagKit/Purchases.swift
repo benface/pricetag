@@ -90,8 +90,10 @@ public enum PurchasePhase: Equatable, Sendable {
     /// Delivered, and not seen on the chain yet. Its cost is known, and waits for that.
     case arriving
     case recorded(Money)
-    /// What arrived isn't exactly what the order says, or the order doesn't say what it cost. Its cost stays unknown.
+    /// What arrived isn't exactly what the order says, or nothing ever did. Its cost stays unknown.
     case costUnknown
+    /// The order doesn't say what was paid for it, as when it was paid from crypto already held. Its cost stays unknown.
+    case costNotSaid
     case failed(OnrampOrder.Failure)
     /// Nothing came of the page, so nothing was bought.
     case nothingBought
@@ -99,7 +101,7 @@ public enum PurchasePhase: Equatable, Sendable {
     public var isFinished: Bool {
         switch self {
         case .onProvidersPage, .onItsWay, .arriving: false
-        case .recorded, .costUnknown, .failed, .nothingBought: true
+        case .recorded, .costUnknown, .costNotSaid, .failed, .nothingBought: true
         }
     }
 }
@@ -123,7 +125,8 @@ public enum PurchaseWording {
         case .onItsWay: "On its way"
         case .arriving: "Delivered. Waiting to see it arrive"
         case .recorded(let cost): "Cost \(Format.money(cost.micros, cost.currency)), fees included"
-        case .costUnknown: "Arrived, cost unknown. It didn't match the order"
+        case .costUnknown: "Cost unknown. The order didn't match what arrived"
+        case .costNotSaid: "Cost unknown. The order doesn't say what you paid for it"
         case .failed(.payment): "\(provider) couldn't take the payment"
         case .failed(.delivery): "\(provider) couldn't deliver it"
         case .nothingBought: "Nothing was bought"
@@ -132,7 +135,7 @@ public enum PurchaseWording {
 
     public static func isWarning(_ phase: PurchasePhase) -> Bool {
         switch phase {
-        case .costUnknown, .failed: true
+        case .costUnknown, .costNotSaid, .failed: true
         default: false
         }
     }
@@ -190,11 +193,12 @@ public final class PurchaseTracker {
         case .pending: return .onItsWay
         case .succeeded:
             if order.txHash == nil { return .onItsWay }
-            guard let recorded = order.purchase else { return .costUnknown }
+            guard let recorded = order.purchase else { return .costNotSaid }
             switch matchOf(order.id) {
             case .recorded: return .recorded(recorded.cost)
             case .unmatched: return .costUnknown
-            case .waiting, nil: return .arriving
+            // Its hash never led to a block, so it can't be expected to arrive any more than it has.
+            case .waiting, nil: return order.blockNum == nil && now().timeIntervalSince(purchase.startedAt) > Self.blockTimeout ? .costUnknown : .arriving
             }
         }
     }
