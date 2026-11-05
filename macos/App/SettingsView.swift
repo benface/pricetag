@@ -31,6 +31,8 @@ struct SettingsView: View {
         }
         .task { await store.refreshRules() }
         .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
+        // It read one wallet's numbers once, and replacing a key can change the wallet behind it.
+        .onChange(of: store.address) { isComparing = false }
     }
 
     /// A fixed height that fits any display, with the pane scrolling inside it if it ever needs more.
