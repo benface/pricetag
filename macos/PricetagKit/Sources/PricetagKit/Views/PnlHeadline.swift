@@ -246,15 +246,28 @@ extension Portfolio {
     /// Why the value is partial, for its tooltip, by the same causes the SDK counts. nil when it isn't.
     public var partialValueReason: String? {
         guard isValuePartial else { return nil }
+        let gaps = valueGaps
+        return Wording.partialValue(noPrice: gaps.noPrice, unread: gaps.unread, unchecked: gaps.unchecked, incompleteHistory: gaps.incompleteHistory)
+    }
+
+    /// Why the value is partial, by the same causes the SDK counts. The first two are left out of it. The last two are in it,
+    /// as a best estimate, so they're never called left out.
+    public var valueGaps: ValueGaps {
         let listed = listedPositions
-        let unchecked = listed.filter { $0.reconciliation?.status == .unchecked && $0.reconciliation?.heldIsCurrent != true }
-        return Wording.partialValue(
+        return ValueGaps(
             noPrice: listed.filter { $0.isHeld && $0.values.valueMicros == nil }.map(\.asset),
             unread: unreadAssets,
-            unchecked: unchecked.map(\.asset),
+            unchecked: listed.filter { $0.reconciliation?.status == .unchecked && $0.reconciliation?.heldIsCurrent != true }.map(\.asset),
             // Unconfirmed positions already say so, and that's the bigger doubt.
             incompleteHistory: listed.filter { position in position.hasShortfall && position.reconciliation?.status != .unchecked && position.reconciliation?.status != .incomplete }.map(\.asset)
         )
+    }
+
+    public struct ValueGaps: Equatable, Sendable {
+        public let noPrice: [String]
+        public let unread: [String]
+        public let unchecked: [String]
+        public let incompleteHistory: [String]
     }
 
     public var totalPnlTone: Tone {
@@ -262,26 +275,26 @@ extension Portfolio {
     }
 
     /// `attention` in a few words. The full version belongs in a tooltip beside this, and in the window.
-    /// What the value leaves out comes first, because the value is the biggest number beside it. An unknown cost says the PnL
-    /// is incomplete, so what else the PnL leaves out only comes before an estimate.
+    /// What's wrong with the value comes first, because the value is the biggest number beside it. Whatever makes the PnL
+    /// incomplete comes before an estimate, which only says how sure a number is.
     public var shortAttention: String? {
         guard attention != nil else { return nil }
-        if isValuePartial { return Wording.valueLeavesOut(valueLeftOut) }
+        if isValuePartial { return Wording.shortValueGaps(valueGaps) }
         if isPositive(totals.unresolvedMicros) { return Wording.shortLeavesOut(totals, currency) }
-        if pnlStatus == .partial, !pnlLeftOut.isEmpty { return Wording.pnlLeavesOut(pnlLeftOut, also: false) }
+        if pnlStatus == .partial { return pnlLeftOut.isEmpty ? (leavesOutFees ? Wording.pnlLeavesOutFees : Wording.pnlIncomplete) : Wording.pnlLeavesOut(pnlLeftOut, also: false) }
         return Wording.shortLeavesOut(totals, currency) ?? "Some numbers are incomplete"
     }
 
-    /// The holdings a partial value leaves out, as the SDK counts them.
-    private var valueLeftOut: [String] {
-        let reasons: Set = ["no current price", "incomplete history", "balance couldn't be read", "not checked against its actual balance"]
-        return unique(totals.excluded.filter { reasons.contains($0.reason) }.map(\.asset) + unreadAssets)
+    /// Network fees that aren't in the PnL, or are in it for less than they were.
+    private var leavesOutFees: Bool {
+        totals.unpricedGas || !gasUnknownTxs.isEmpty || !l1FeeUnknownTxs.isEmpty
     }
 
     /// What a partial PnL leaves out that "has an unknown cost" doesn't already say, when the headline's line says that.
+    /// A holding whose history is incomplete is still in it, so it's said with the value, not as left out.
     private var pnlLeftOut: [String] {
         let saysUnknownCost = isPositive(totals.unresolvedMicros)
-        return unique(totals.excluded.filter { !saysUnknownCost || $0.reason != "unknown cost" }.map(\.asset))
+        return unique(totals.excluded.filter { $0.reason != "incomplete history" && (!saysUnknownCost || $0.reason != "unknown cost") }.map(\.asset))
     }
 
     private func unique(_ assets: [String]) -> [String] {
@@ -312,7 +325,8 @@ extension Portfolio {
     /// The one place the headline says it's incomplete or estimated, so it's never nil while any of its numbers is.
     /// nil when the numbers leave out nothing and rest on nothing estimated.
     public var attention: Attention? {
-        var lines = Wording.unreadBalances(unreadAssets).map { [$0] } ?? []
+        // A value that's partial says it of what couldn't be read, with what that means for the value.
+        var lines = isValuePartial ? [] : Wording.unreadBalances(unreadAssets).map { [$0] } ?? []
         if totals.unpricedGas { lines.append(Wording.unpricedFees) }
         if !gasUnknownTxs.isEmpty { lines.append(Wording.feesUnknown(gasUnknownTxs.count)) }
         if !l1FeeUnknownTxs.isEmpty { lines.append(Wording.networkFeeUnknown(l1FeeUnknownTxs.count)) }
@@ -322,16 +336,21 @@ extension Portfolio {
         let estimates = totals.estimated
         if !isPositive(totals.estimatedMicros), estimates.value || estimates.realized || estimates.unrealized { lines.append(Wording.marketEstimates) }
         let excludedList = Wording.excluded(totals.excluded)
+        // What the value is missing or can't vouch for. The list below names exclusions from the PnL, and says nothing about which of them the value still holds.
+        let valueLine = isValuePartial ? [Wording.valueGaps(valueGaps)] : []
         if let title = Wording.leavesOut(totals, currency) {
             // That says how much is unknown or estimated, not which totals leave something out, and the numbers above don't say either.
             var omissions: [String] = []
-            if isValuePartial { omissions.append(Wording.valueLeavesOut(valueLeftOut) + ".") }
-            if pnlStatus == .partial, !pnlLeftOut.isEmpty { omissions.append(Wording.pnlLeavesOut(pnlLeftOut, also: isPositive(totals.unresolvedMicros)) + ".") }
-            return Attention(title: title, details: omissions + lines, fullList: excludedList)
+            if pnlStatus == .partial {
+                if !pnlLeftOut.isEmpty { omissions.append(Wording.pnlLeavesOut(pnlLeftOut, also: isPositive(totals.unresolvedMicros)) + ".") }
+                // The fee lines below say it then.
+                else if !isPositive(totals.unresolvedMicros), !leavesOutFees { omissions.append(Wording.pnlIncomplete + ".") }
+            }
+            return Attention(title: title, details: valueLine + omissions + lines, fullList: excludedList)
         }
-        // A value with nothing in the list to say why still says so.
-        if excludedList == nil, isValuePartial { lines.insert(Wording.valueLeavesOut(valueLeftOut) + ".", at: 0) }
+        lines = valueLine + lines
         if let excludedList { return Attention(title: excludedList, details: lines, fullList: nil) }
+        if lines.isEmpty, pnlStatus == .partial { lines.append(Wording.pnlIncomplete + ".") }
         guard let first = lines.first else { return nil }
         return Attention(title: first, details: Array(lines.dropFirst()), fullList: nil)
     }
