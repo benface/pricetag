@@ -423,12 +423,14 @@ struct WalletSwitcher: View {
         }
     }
 
-    /// Does it, and says what changed right away, because the numbers change with it. An account from a device comes back with Undo too.
-    private func change(_ entry: WalletEntry, to text: String, _ action: () -> Void) {
+    /// Does it, and says what changed right away, because the numbers change with it. An account from a device comes back with Undo too,
+    /// here and in the Edit menu.
+    private func change(_ entry: WalletEntry, to text: String, _ action: @escaping () -> Void) {
         let account = hotWallet?.settings.deviceAccounts.first { $0.lowercased == entry.address }
-        let before = store.changeWallet(entry.address, action)
-        note = WalletListNote(text: text) { [store, hotWallet] in
-            if let account { hotWallet?.linkDeviceAccounts([account.lowercased]) }
+        let relink = { [hotWallet] in if let account { hotWallet?.linkDeviceAccounts([account.lowercased]) } }
+        let before = store.changeWallet(entry.address, alsoUndo: relink, action)
+        note = WalletListNote(text: text) { [store] in
+            relink()
             store.restore(before)
         }
     }

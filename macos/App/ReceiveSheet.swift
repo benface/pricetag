@@ -32,12 +32,14 @@ struct ReceiveSheet: View {
                 Notice(wallet.address == nil ? .info : .warning, problem)
             } else if let address = wallet.address {
                 code(address.checksummed)
+                    .contextMenu { AddressActions(address: address.checksummed) }
                 VStack(spacing: 2) {
                     ForEach(Format.groupedAddress(address.checksummed), id: \.self) { Text($0) }
                 }
                 .font(.title3.monospaced())
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(address.checksummed)
+                .contextMenu { AddressActions(address: address.checksummed) }
                 Text(HotWalletWording.receiveNote(cap: wallet.capText, hasDestination: wallet.settings.sweepDestination != nil))
                     .font(.callout)
                     .foregroundStyle(.secondary)

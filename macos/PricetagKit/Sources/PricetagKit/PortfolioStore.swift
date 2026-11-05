@@ -18,6 +18,23 @@ public struct WalletListSnapshot: Sendable {
     let wasShowing: Bool
 }
 
+/// One step Undo can take back: the answers before it, what the Edit menu calls it, and for a change to one wallet, the rest of what it changed.
+private struct HistoryEntry {
+    /// Kept through Undo and Redo, so the wallet list's own Undo can still find the change it made.
+    let id: UUID
+    let name: String
+    /// Before the step while it's in the undo history, and after it while it's in the redo history.
+    var book: Book
+    var wallet: WalletStep?
+}
+
+/// A change to one wallet as the wallet list makes it. Undo puts all of it back, and Redo makes it again.
+private struct WalletStep {
+    var snapshot: WalletListSnapshot
+    let change: () -> Void
+    let alsoUndo: (() -> Void)?
+}
+
 public enum FeedState: Equatable, Sendable {
     case noWallet
     /// Waiting on an answer, which the first time for a wallet can take a minute. Numbers on screen are the last answer, and may be old.
@@ -80,14 +97,14 @@ public final class PortfolioStore {
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
     /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
-    public private(set) var undoStack: [Book] = []
-    /// Which change made each entry of `undoStack`, so one can be found again whatever's been added above it.
-    @ObservationIgnored private var undoIDs: [UUID] = []
-    /// What each entry of `undoStack` takes back, in a menu's words, as in "Undo Answer".
-    public private(set) var undoNames: [String] = []
+    private var history: [HistoryEntry] = []
     /// What Undo took back, newest last, until something else changes.
-    public private(set) var redoStack: [Book] = []
-    public private(set) var redoNames: [String] = []
+    private var future: [HistoryEntry] = []
+    public var undoStack: [Book] { history.map(\.book) }
+    /// What each entry of `undoStack` takes back, in a menu's words, as in "Undo Answer".
+    public var undoNames: [String] { history.map(\.name) }
+    public var redoStack: [Book] { future.map(\.book) }
+    public var redoNames: [String] { future.map(\.name) }
     /// The server's pricing rules. Empty when it has only one, so there's nothing to choose.
     public private(set) var rules: [PricingRule] = []
     /// What to ask the server for, or nil for its default.
@@ -318,8 +335,10 @@ public final class PortfolioStore {
         saveOrder(walletOrder.filter { !addresses.contains($0) } + arranged)
     }
 
-    /// Makes a change to one wallet, and returns what Undo needs to take back that change and nothing else.
-    public func changeWallet(_ address: String, _ change: () -> Void) -> WalletListSnapshot {
+    /// Makes a change to one wallet, and returns what Undo needs to take back that change and nothing else. Edit's Undo takes back the same,
+    /// with `alsoUndo` for what's outside the store, and Redo makes the change again.
+    @discardableResult
+    public func changeWallet(_ address: String, alsoUndo: (() -> Void)? = nil, _ change: @escaping () -> Void) -> WalletListSnapshot {
         var snapshot = WalletListSnapshot(
             address: address,
             answer: answers.senders[address],
@@ -329,15 +348,22 @@ public final class PortfolioStore {
             wasHidden: hiddenWallets.contains(address),
             wasShowing: self.address == address
         )
-        let entriesBefore = undoIDs
+        let entriesBefore = history.map(\.id)
         change()
         snapshot.changedAnswer = answers.senders[address]
-        snapshot.undoEntry = undoIDs.last.flatMap { entriesBefore.contains($0) ? nil : $0 }
+        snapshot.undoEntry = history.last.flatMap { entriesBefore.contains($0.id) ? nil : $0.id }
+        if snapshot.undoEntry != nil { history[history.count - 1].wallet = WalletStep(snapshot: snapshot, change: change, alsoUndo: alsoUndo) }
         return snapshot
     }
 
     /// Takes back one change to one wallet. Whatever else has changed since stays changed, and so does anything said about this wallet since.
     public func restore(_ snapshot: WalletListSnapshot) {
+        putBack(snapshot)
+        // What Undo took back may have the change in it or not, so Redo can't know what it would bring back.
+        future = []
+    }
+
+    private func putBack(_ snapshot: WalletListSnapshot) {
         let address = snapshot.address
         let isUnchanged = { (book: Book) in book.senders[address] == snapshot.changedAnswer }
         if isUnchanged(answers), answers.senders[address] != snapshot.answer {
@@ -347,17 +373,13 @@ public final class PortfolioStore {
         }
         // The change's own entry goes with it, wherever it is now.
         var since = snapshot.undoDepth
-        if let entry = snapshot.undoEntry, let index = undoIDs.firstIndex(of: entry) {
-            undoStack.remove(at: index)
-            undoIDs.remove(at: index)
-            undoNames.remove(at: index)
+        if let entry = snapshot.undoEntry, let index = history.firstIndex(where: { $0.id == entry }) {
+            history.remove(at: index)
             since = index
         }
-        // What Undo took back may have the change in it or not, so Redo can't know what it would bring back.
-        clearRedo()
         // What was saved for Undo since then has the change in it. Undoing something else mustn't bring it back.
-        for index in undoStack.indices where index >= since && isUnchanged(undoStack[index]) {
-            undoStack[index].senders[address] = snapshot.answer
+        for index in history.indices where index >= since && isUnchanged(history[index].book) {
+            history[index].book.senders[address] = snapshot.answer
         }
         var wallets = savedWallets
         if let index = wallets.firstIndex(where: { $0.address == address }) {
@@ -533,8 +555,8 @@ public final class PortfolioStore {
     public func setBook(_ next: Book, action: String = "Answer") {
         let nextAnswers = answers(in: next)
         guard nextAnswers != answers else { return }
-        pushUndo(answers, name: action)
-        clearRedo()
+        history.append(HistoryEntry(id: UUID(), name: action, book: answers))
+        future = []
         store(nextAnswers)
     }
 
@@ -542,35 +564,43 @@ public final class PortfolioStore {
     public func recordPurchase(_ purchase: Purchase) {
         let next = answers.recording(purchase)
         guard next != answers else { return }
-        undoStack = undoStack.map { $0.recording(purchase) }
-        redoStack = redoStack.map { $0.recording(purchase) }
+        for index in history.indices { history[index].book = history[index].book.recording(purchase) }
+        for index in future.indices { future[index].book = future[index].book.recording(purchase) }
         store(next)
     }
 
     public func undo() {
-        guard let previous = undoStack.popLast() else { return }
-        undoIDs.removeLast()
-        let name = undoNames.removeLast()
-        redoStack.append(answers)
-        redoNames.append(name)
-        store(previous)
+        guard var entry = history.last else { return }
+        if let wallet = entry.wallet {
+            // All of it, as the wallet list's own Undo does: its name, its place in the list, and whether it was showing.
+            wallet.alsoUndo?()
+            putBack(wallet.snapshot)
+        } else {
+            history.removeLast()
+            let previous = entry.book
+            entry.book = answers
+            store(previous)
+        }
+        future.append(entry)
     }
 
     public func redo() {
-        guard let next = redoStack.popLast() else { return }
-        pushUndo(answers, name: redoNames.removeLast())
-        store(next)
-    }
-
-    private func pushUndo(_ book: Book, name: String) {
-        undoStack.append(book)
-        undoIDs.append(UUID())
-        undoNames.append(name)
-    }
-
-    private func clearRedo() {
-        redoStack = []
-        redoNames = []
+        guard let entry = future.popLast() else { return }
+        if let wallet = entry.wallet {
+            // Making it again clears what's left to redo, which is still there to redo after it.
+            let rest = future
+            let snapshot = changeWallet(wallet.snapshot.address, alsoUndo: wallet.alsoUndo, wallet.change)
+            future = rest
+            // The same change as before, so the wallet list's Undo, which knows it by its first snapshot, still finds it.
+            if snapshot.undoEntry != nil, let last = history.popLast() {
+                var step = last.wallet
+                step?.snapshot.undoEntry = entry.id
+                history.append(HistoryEntry(id: entry.id, name: last.name, book: last.book, wallet: step))
+            }
+        } else {
+            history.append(HistoryEntry(id: entry.id, name: entry.name, book: answers))
+            store(entry.book)
+        }
     }
 
     private func store(_ next: Book) {
