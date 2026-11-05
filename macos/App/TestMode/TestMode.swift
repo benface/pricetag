@@ -363,7 +363,7 @@ enum TestScene: String, CaseIterable {
         case .mainHuge:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 2200, height: 1300), isReady: isReady)
         case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong:
-            let switcher = WalletSwitcher(store: store, hotWallet: hotWallet, onOpenSpendingMoney: {}, onDone: {}, renaming: self == .walletSwitcherRenaming ? TestScene.namedWallet : nil, problem: self == .walletSwitcherProblem ? Wording.notAnAddress : nil)
+            let switcher = WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: self == .walletSwitcherRenaming ? PendingWalletName(address: TestScene.namedWallet, text: "Treasury") : PendingWalletName(), onOpenSpendingMoney: {}, onDone: {}, problem: self == .walletSwitcherProblem ? Wording.notAnAddress : nil)
             return TestScreen(view: AnyView(switcher.background(.background)), isReady: isReady)
         case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverLongName, .popoverLongNameReading, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)

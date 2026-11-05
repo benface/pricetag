@@ -17,6 +17,31 @@ extension PortfolioStore {
     }
 }
 
+/// A name being typed. It lives with the button that opens the list and not in the list, because a popover's content isn't reliably told when it closes.
+@Observable
+final class PendingWalletName {
+    var address: String?
+    var text: String
+
+    init(address: String? = nil, text: String = "") {
+        self.address = address
+        self.text = text
+    }
+}
+
+extension PortfolioStore {
+    /// Savings wallets keep their name with the rest of what makes them savings.
+    func save(_ pending: PendingWalletName, hotWallet: HotWallet?) {
+        guard let address = pending.address, let entry = walletList(hotWallet: hotWallet).entry(for: address) else { return }
+        pending.address = nil
+        if entry.kind == .savings, let savings = EthereumAddress(address) {
+            hotWallet?.renameColdWallet(savings, to: pending.text)
+        } else {
+            renameWallet(address, to: pending.text)
+        }
+    }
+}
+
 extension WalletList {
     /// For trying things while building the app. A fixture has no place in a release build, and scenes show what one looks like.
     static var offersDemo: Bool {
@@ -56,6 +81,7 @@ struct WalletButton: View {
     @Bindable var navigation: Navigation
     /// Past what the toolbar has room for, it hides the whole button behind its overflow menu. A long name gives way instead.
     var maxWidth: CGFloat = 300
+    @State var pendingName = PendingWalletName()
 
     var body: some View {
         let list = store.walletList(hotWallet: hotWallet)
@@ -85,7 +111,11 @@ struct WalletButton: View {
         .accessibilityLabel(current.map { [$0.title, $0.badge].compactMap(\.self).joined(separator: ", ") } ?? "Add Wallet")
         .accessibilityHint("Switches wallet")
         .popover(isPresented: $navigation.isSwitchingWallet, arrowEdge: .bottom) {
-            WalletSwitcher(store: store, hotWallet: hotWallet, onOpenSpendingMoney: { navigation.section = .spendingMoney }) { navigation.isSwitchingWallet = false }
+            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: pendingName, onOpenSpendingMoney: { navigation.section = .spendingMoney }) { navigation.isSwitchingWallet = false }
+        }
+        // Closing the list keeps what was typed, whichever way it closes. Only Esc cancels.
+        .onChange(of: navigation.isSwitchingWallet) { _, isOpen in
+            if !isOpen { store.save(pendingName, hotWallet: hotWallet) }
         }
     }
 }
@@ -94,11 +124,10 @@ struct WalletButton: View {
 struct WalletSwitcher: View {
     let store: PortfolioStore
     let hotWallet: HotWallet?
+    @Bindable var pendingName: PendingWalletName
     let onOpenSpendingMoney: () -> Void
     let onDone: () -> Void
-    @State var renaming: String?
     @State var problem: String?
-    @State private var newName = ""
     @State private var highlighted: String?
     /// Where the pointer was when the arrows last moved. Rows scrolling under a still pointer report a hover that nobody made.
     @State private var pointerAtLastKey: CGPoint?
@@ -122,7 +151,7 @@ struct WalletSwitcher: View {
                 .onKeyPress(.downArrow) { moveHighlight(by: 1, proxy) }
                 .onKeyPress(.upArrow) { moveHighlight(by: -1, proxy) }
                 // Opens where the wallet showing is, however long the list.
-                .task { if let shown = renaming ?? store.address { proxy.scrollTo(shown) } }
+                .task { if let shown = pendingName.address ?? store.address { proxy.scrollTo(shown) } }
         }
     }
 
@@ -157,14 +186,12 @@ struct WalletSwitcher: View {
         .frame(width: 340)
         .onAppear {
             highlighted = nil
-            focus = renaming == nil ? .add : .rename
-            if let renaming { newName = list.entry(for: renaming)?.name ?? "" }
+            focus = pendingName.address == nil ? .add : .rename
         }
-        // Clicking away keeps what was typed, as it does in Finder. So does closing the list, whichever way it closes. Only Esc cancels.
+        // Clicking away keeps what was typed, as it does in Finder.
         .onChange(of: focus) { old, new in
-            if old == .rename, new != .rename { savePendingName() }
+            if old == .rename, new != .rename { store.save(pendingName, hotWallet: hotWallet) }
         }
-        .onDisappear(perform: savePendingName)
     }
 
     @ViewBuilder
@@ -179,7 +206,7 @@ struct WalletSwitcher: View {
                         .padding(.vertical, 3)
                 }
                 ForEach(entries) { entry in
-                    if renaming == entry.address {
+                    if pendingName.address == entry.address {
                         renameRow(entry)
                     } else {
                         row(entry)
@@ -249,11 +276,17 @@ struct WalletSwitcher: View {
     private func renameRow(_ entry: WalletEntry) -> some View {
         HStack(spacing: 10) {
             WalletIcon(kind: entry.kind)
-            TextField("Name", text: $newName, prompt: Text(entry.shortAddress ?? ""))
+            TextField("Name", text: $pendingName.text, prompt: Text(entry.shortAddress ?? ""))
                 .textFieldStyle(.roundedBorder)
                 .focused($focus, equals: .rename)
-                .onSubmit { finishRenaming(entry) }
-                .onExitCommand { stopRenaming() }
+                .onSubmit {
+                    store.save(pendingName, hotWallet: hotWallet)
+                    focus = .add
+                }
+                .onExitCommand {
+                    pendingName.address = nil
+                    focus = .add
+                }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -269,8 +302,9 @@ struct WalletSwitcher: View {
         }
         if entry.canRename {
             Button(entry.name == nil ? "Name…" : "Rename…") {
-                newName = entry.name ?? ""
-                renaming = entry.address
+                store.save(pendingName, hotWallet: hotWallet)
+                pendingName.text = entry.name ?? ""
+                pendingName.address = entry.address
                 focus = .rename
             }
         }
@@ -327,35 +361,16 @@ struct WalletSwitcher: View {
         onDone()
     }
 
-    /// Savings wallets keep their name with the rest of what makes them savings.
-    private func finishRenaming(_ entry: WalletEntry) {
-        if entry.kind == .savings, let address = EthereumAddress(entry.address) {
-            hotWallet?.renameColdWallet(address, to: newName)
-        } else {
-            store.renameWallet(entry.address, to: newName)
-        }
-        stopRenaming()
-    }
-
-    private func savePendingName() {
-        if let entry = list.entry(for: renaming) { finishRenaming(entry) }
-    }
-
-    private func stopRenaming() {
-        renaming = nil
-        focus = .add
-    }
-
     private func moveHighlight(by step: Int, _ proxy: ScrollViewProxy) -> KeyPress.Result {
         let addresses = list.all.map(\.address)
-        guard !addresses.isEmpty, renaming == nil else { return .ignored }
+        guard !addresses.isEmpty, pendingName.address == nil else { return .ignored }
         // From the wallet showing the first time, because that's where the eye is.
         let current = (highlighted ?? store.address).flatMap(addresses.firstIndex(of:))
         let next = current.map { min(max($0 + step, 0), addresses.count - 1) } ?? (step > 0 ? 0 : addresses.count - 1)
         highlighted = addresses[next]
         pointerAtLastKey = NSEvent.mouseLocation
         // The first row goes all the way up, to show its section's title too.
-        proxy.scrollTo(next == 0 ? Self.top : addresses[next])
+        if next == 0 { proxy.scrollTo(Self.top, anchor: .top) } else { proxy.scrollTo(addresses[next]) }
         return .handled
     }
 }
