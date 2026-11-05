@@ -187,6 +187,13 @@ public enum Format {
         return date.formatted(withYear ? style.year() : style)
     }
 
+    /// In UTC and saying so, like a tax report's file, so a time near midnight is in the same year as there.
+    public static func utcDateTime(_ date: Date) -> String {
+        var style = Date.FormatStyle.dateTime.year().month(.abbreviated).day().hour().minute().locale(locale)
+        style.timeZone = .gmt
+        return "\(date.formatted(style)) UTC"
+    }
+
     /// How long something's been going, to the second, for a count that ticks.
     public static func elapsed(seconds: Int) -> String {
         let seconds = max(0, seconds)
