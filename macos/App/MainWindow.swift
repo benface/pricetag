@@ -722,7 +722,7 @@ private struct Welcome: View {
                         .buttonStyle(.link)
                 }
             }
-            .frame(maxWidth: 340)
+            .frame(width: 340)
         }
     }
 
