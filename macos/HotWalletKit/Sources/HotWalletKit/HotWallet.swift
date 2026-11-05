@@ -560,7 +560,7 @@ public final class HotWallet {
         return SweepPreview(transfers: transfers, feeWei: feeWei, feeUsdMicros: snapshot.ethUsdMicros.map { Money.usdMicros(of: feeWei, priceMicros: $0, decimals: 18) })
     }
 
-    /// True once it's on its way.
+    /// True once all of it's on its way. Otherwise `sweepProblem` says what stopped it, and what went anyway.
     @discardableResult
     public func sweepEverything(in prompt: PresencePrompt? = nil) async -> Bool {
         guard let address, let destination = settings.sweepDestination else { return false }
@@ -575,11 +575,39 @@ public final class HotWallet {
             guard !(state.records[address] ?? []).contains(where: { $0.status == .pending }) else { throw ChainError.rejected("A sweep is still on its way. Try again in a moment.") }
             let everything = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: destination)
             if everything.blockers.contains(.notEnoughGas), everything.transfers.isEmpty { throw ChainError.rejected(HotWalletWording.noGas) }
+            guard !everything.transfers.isEmpty else { throw ChainError.rejected(HotWalletWording.nothingToSweep(tooCostly: everything.notWorthTheGas.map(\.symbol))) }
             pausedUntil = nil
-            try await execute(everything, from: address, to: destination, reason: .manual, snapshot: snapshot)
-            isOnItsWay = true
+            var stoppedBy: ChainError?
+            do {
+                try await execute(everything, from: address, to: destination, reason: .manual, snapshot: snapshot)
+            } catch let error as ChainError {
+                stoppedBy = error
+            }
+            // Nothing was pending before this, so what's pending now is how far down the plan it got. Like a send, that counts a broadcast that may have got through.
+            let sent = (state.records[address] ?? []).filter { $0.status == .pending }.count
+            let left = everything.transfers.dropFirst(sent)
+            guard !left.isEmpty else {
+                isOnItsWay = true
+                return
+            }
+            guard sent > 0 else {
+                // Nothing went, and either this says why or `execute` already has.
+                if let stoppedBy { throw stoppedBy }
+                return
+            }
+            throw ChainError.rejected(HotWalletWording.sweptOnlySome(
+                onItsWay: everything.transfers.prefix(sent).map(\.token.symbol),
+                left: left.map(\.token.symbol),
+                because: stoppedBy.map(HotWalletWording.whatStoppedASweep) ?? sweepProblem ?? ""
+            ))
         }
         return isOnItsWay
+    }
+
+    /// What the confirmation asks for, in its own terms. Only all of it being on its way is done, because done closes the sheet.
+    public func sweepConfirmed(in prompt: PresencePrompt) async -> ApprovalResult {
+        if await sweepEverything(in: prompt) { return .done }
+        return sweepProblem.map(ApprovalResult.failed) ?? .cancelled
     }
 
     /// A new key, with everything moved off the old one, which is deleted once it's empty. After an alarm, what's left goes

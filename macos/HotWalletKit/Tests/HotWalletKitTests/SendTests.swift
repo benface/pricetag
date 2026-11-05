@@ -218,7 +218,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         let wallet = rig.wallet
         await wallet.tick()
         let gate = ApprovalPrompt(sleep: { _ in }) { prompt, _ in
-            await wallet.sweepEverything(in: prompt) ? .done : wallet.sweepProblem.map(ApprovalResult.failed) ?? .cancelled
+            await wallet.sweepConfirmed(in: prompt)
         }
         gate.promptPaired(gate.prompt)
         await rig.chain.hold(snapshots: true)
@@ -249,7 +249,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         let wallet = rig.wallet
         await wallet.tick()
         let gate = ApprovalPrompt(sleep: { _ in }) { prompt, _ in
-            await wallet.sweepEverything(in: prompt) ? .done : wallet.sweepProblem.map(ApprovalResult.failed) ?? .cancelled
+            await wallet.sweepConfirmed(in: prompt)
         }
         presence.whileAsking = { _ in #expect(gate.backOut()) }
         gate.promptPaired(gate.prompt)
@@ -311,6 +311,104 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         #expect(await rig.signer.signed.isEmpty)
         let allowed = await Rig(funded, presence: true)
         #expect(await allowed.wallet.sweepEverything(in: PresencePrompt()))
+    }
+
+    /// Through the same gate as the sheet, up to wherever it stops. Only `.done` closes the sheet and says "On its way".
+    private func approveSweep(on wallet: HotWallet) async -> ApprovalPrompt.Phase {
+        let gate = ApprovalPrompt(sleep: { _ in }) { prompt, _ in await wallet.sweepConfirmed(in: prompt) }
+        gate.promptPaired(gate.prompt)
+        gate.windowChanged(isInFront: true)
+        for _ in 0..<5000 {
+            switch gate.phase {
+            case .done, .stopped: return gate.phase
+            default: try? await Task.sleep(for: .milliseconds(1))
+            }
+        }
+        return gate.phase
+    }
+
+    @Test func aSweepTheNodeRejectsStaysOnTheSheet() async throws {
+        let rig = await Rig(snapshot(tokens: [usdc: usdcUnits(10)]))
+        await rig.chain.setSendFailure(.rejected("insufficient funds"))
+        let phase = await approveSweep(on: rig.wallet)
+        #expect(phase == .stopped(rig.wallet.sweepProblem))
+        #expect(rig.wallet.sweepProblem == "A sweep of USDC didn't go out: insufficient funds")
+        #expect(await rig.chain.sent.isEmpty)
+    }
+
+    @Test func aSweepWhoseEstimateFailsStaysOnTheSheet() async throws {
+        let rig = await Rig(snapshot(tokens: [usdc: usdcUnits(10)]))
+        await rig.chain.setEstimateFailure(.rejected("execution reverted"))
+        #expect(await approveSweep(on: rig.wallet) == .stopped("A sweep of USDC didn't go out: execution reverted"))
+        #expect(await rig.signer.signed.isEmpty)
+    }
+
+    @Test func aSweepAtFeesNoOneWouldChargeStaysOnTheSheet() async throws {
+        let absurd = FeeQuote(maxFeePerGas: FeeQuote.highestPlausibleFeePerGas + 1, maxPriorityFeePerGas: FeeQuote.highestPlausibleFeePerGas, l1FeeWei: 0)
+        let rig = await Rig(snapshot(eth: oneEth, tokens: [usdc: usdcUnits(10)], fees: absurd))
+        #expect(await approveSweep(on: rig.wallet) == .stopped(HotWalletWording.feesLookWrong))
+        #expect(await rig.signer.signed.isEmpty)
+    }
+
+    @Test func sweepingNothingSaysSo() async throws {
+        let rig = await Rig(snapshot(eth: 0))
+        #expect(await approveSweep(on: rig.wallet) == .stopped("There's nothing on this wallet to sweep."))
+        #expect(await rig.signer.signed.isEmpty)
+    }
+
+    @Test func sweepingOnlyWhatsTooCostlyToMoveSaysSo() async throws {
+        let rig = await Rig(snapshot(eth: 0, tokens: [usdc: 1]))
+        #expect(await approveSweep(on: rig.wallet) == .stopped("There's nothing to sweep except some USDC that gas makes too costly to move right now."))
+        #expect(await rig.signer.signed.isEmpty)
+    }
+
+    @Test func aSweepThatStopsPartwaySaysWhatWentAndWhatDidnt() async throws {
+        let rig = await Rig(funded)
+        await rig.chain.setSendFailure(.rejected("nonce too low"), afterSends: 1)
+        #expect(await approveSweep(on: rig.wallet) == .stopped("USDC is on its way, but ETH isn't. A sweep of ETH didn't go out: nonce too low"))
+        #expect(await rig.chain.sent.count == 1)
+        #expect(rig.wallet.records.map(\.status) == [.dropped, .pending])
+
+        // What went has to land first, so trying again can't reuse its nonce. Then only what's left goes.
+        await rig.chain.setSendFailure(nil)
+        #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
+        #expect(rig.wallet.sweepProblem == "A sweep is still on its way. Try again in a moment.")
+        #expect(await rig.chain.sent.count == 1)
+
+        await rig.chain.confirmAll()
+        await rig.chain.set(snapshot(eth: oneEth / 200, nonce: 1))
+        await rig.wallet.tick()
+        #expect(await rig.wallet.sweepEverything(in: PresencePrompt()))
+        #expect(await rig.chain.sent.count == 2)
+        #expect(await rig.signer.signed.last?.to == coldAddress)
+    }
+
+    @Test func aSweepThatLosesTheNetworkPartwayDoesntSayNothingWent() async throws {
+        let rig = await Rig(funded)
+        await rig.chain.setEstimateFailure(.unreachable, afterSends: 1)
+        #expect(await approveSweep(on: rig.wallet) == .stopped("USDC is on its way, but ETH isn't. The network stopped answering. Try again in a moment."))
+        #expect(await rig.chain.sent.count == 1)
+    }
+
+    @Test func aSweepTheNetworkLimitsPartwaySaysSo() async throws {
+        let rig = await Rig(funded)
+        await rig.chain.setSendFailure(.rateLimited, afterSends: 1)
+        #expect(await approveSweep(on: rig.wallet) == .stopped("USDC is on its way, but ETH isn't. \(HotWalletWording.networkBusy)"))
+    }
+
+    @Test func aSweepThatMightHaveGoneCountsAsOnItsWay() async throws {
+        let rig = await Rig(snapshot())
+        await rig.chain.setSendFailure(.unreachable)
+        #expect(await approveSweep(on: rig.wallet) == .done)
+        #expect(rig.wallet.records.map(\.status) == [.pending])
+        #expect(rig.wallet.sweepProblem == nil)
+    }
+
+    @Test func aSweepThatMightHaveGoneButHadMoreLeftSaysSo() async throws {
+        let rig = await Rig(funded)
+        await rig.chain.setSendFailure(.unreachable)
+        #expect(await approveSweep(on: rig.wallet) == .stopped("USDC is on its way, but ETH isn't. The network stopped answering. Try again in a moment."))
+        #expect(rig.wallet.records.map(\.status) == [.pending])
     }
 }
 
