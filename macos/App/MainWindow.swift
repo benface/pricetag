@@ -544,7 +544,7 @@ private struct Welcome: View {
         ContentUnavailableView {
             Label("Every transfer gets a price", systemImage: "tag")
         } description: {
-            Text("Add a Base address to see its holdings, cost and PnL, with every number explained. This is view-only: there are no keys here, and it can't send anything.")
+            Text("Add a Base address to see its holdings, cost and PnL, with every number explained. Looking at a wallet is view-only: nothing here can sign for it.")
                 .help(Wording.pnlHelp)
         } actions: {
             WalletForm(store: store, onDone: {})
@@ -599,21 +599,25 @@ struct WalletForm: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(spacing: 10) {
             HStack {
                 TextField("Paste any Base address, 0x…", text: $input)
                     .textFieldStyle(.roundedBorder)
-                    .font(.body.monospaced())
+                    // Only what's typed: a prompt in a code font reads as a command.
+                    .font(input.isEmpty ? .body : .body.monospaced())
                     .autocorrectionDisabled()
                     .focused($isFocused)
                     .onSubmit(submit)
                 Button("Look Up", action: submit)
+                    .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(input.isEmpty)
                     .fixedSize()
             }
             if let error {
-                WarningText(error).font(.callout)
+                WarningText(error)
+                    .font(.callout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             Button("Try the demo wallet") {
                 store.setWallet(WalletAddress.demo)
