@@ -40,7 +40,7 @@ export type Position = {
   estimates: Estimates
 }
 
-export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "incomplete history" | "doesn't match its actual balance" | "not checked against its actual balance" | "balance couldn't be read" }
+export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold at an unknown cost" | "sold or spent at an unknown price" | "incomplete history" | "doesn't match its actual balance" | "not checked against its actual balance" | "balance couldn't be read" }
 
 /** What a sum is made of. A sum with something missing and nothing known has no answer, which isn't the same as $0. */
 export type Coverage = { known: number; missing: number }
@@ -244,7 +244,8 @@ export function sumTotals(positions: readonly Position[], unread: readonly strin
       realized += BigInt(values.realizedMicros)
     } else {
       coverage.realized.missing++
-      excluded.push({ asset, reason: "sold at an unknown cost" })
+      if (BigInt(state.unknownCostDisposedQty) > 0n) excluded.push({ asset, reason: "sold at an unknown cost" })
+      if (BigInt(state.unknownProceedsQty) > 0n) excluded.push({ asset, reason: "sold or spent at an unknown price" })
     }
     // Only what the sum actually includes counts as known. A position with an unresolved sale is left out whole.
     if (values.realizedMicros !== null && BigInt(state.resolvedDisposedQty) > 0n) coverage.realized.known++

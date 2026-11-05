@@ -145,7 +145,10 @@ describe("a missing rate", () => {
     assert.equal(view.legs[1]?.proceedsMicros, null)
     assert.equal(eth.values.realizedMicros, null)
     assert.equal(eth.values.unrealizedMicros, "1750000000")
-    assert.ok(totals.excluded.some((e) => e.reason === "sold at an unknown cost"))
+    assert.deepEqual(totals.excluded.map((e) => e.reason), ["sold or spent at an unknown price"])
+    const explanation = explainPortfolio(walletWith({ rates: withoutRate(SELL_BLOCK) }), "average", { kind: "asset", asset: "ETH", metric: "realized" })
+    assert.ok(explanation?.lines.some((line) => line.includes("was sold or spent at an unknown price, so its gain can't be known.")))
+    assert.ok(explanation?.lines.every((line) => !line.includes("unknown cost")))
   })
 
   it("never borrows a rate from another block, even the current one", () => {
