@@ -66,6 +66,70 @@ async function serve(forkThrough: number, forkReads: string[] = [], proofs: Proo
   return { server, base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` }
 }
 
+describe("comparing a token priced by its feed", () => {
+  const DAI = "0x50c5725949a6f0c72e6c4a641f24049a917db0cb"
+  const ONE = "1000000000000000000"
+  const NOW = "2026-11-04T00:00:00.000Z"
+
+  /** Holds 1 DAI, with a feed that says $1, as far as these tables have processed. */
+  function daiSource(through: number, changes: Partial<Source> = {}): Source {
+    const holding: LegRow = { ...row("0xd", 5, ME, DAI, "credit", ONE), account: ME }
+    return {
+      ...sourceAt(ETH_ANSWER, through),
+      head: async () => ({ blockNum: 40, timestamp: NOW }),
+      readWindow: async (_, from, to) => ({ rows: from <= 5 && to >= 5 ? [holding] : [], priced: null, gasUnknown: [] }),
+      readBalances: async (_, block) => ({ blockNum: block, amounts: Object.fromEntries(ASSETS.map((asset) => [asset, asset === "DAI" && block >= 5 ? ONE : "0"])) }),
+      marketReady: async () => true,
+      readMarketTrades: async () => [],
+      readFeedRounds: async (assets, block) => Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }])),
+      ...changes,
+    }
+  }
+
+  async function valueRow(first: Source, second: Source) {
+    const api = createApi({}, { source: first, readRates: async () => ({ byBlock: {}, latest: null }), proofs: NO_PROOFS, rules: [{ rule: rule(MARKET_RULE_ID), source: first }, { rule: rule(CAUTIOUS_RULE_ID), source: second }] })
+    const server = createServer((req, res) => void api(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    try {
+      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/portfolio/${ME}`
+      const normal = (await (await fetch(base)).json()) as PortfolioResponse
+      const response = await fetch(`${base}/compare`)
+      const comparison = (await response.json()) as RuleComparison
+      return { status: response.status, normal: normal.positions.find((p) => p.asset === "DAI"), value: comparison.rows.find((r) => r.label === "Value")!, comparison }
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  }
+
+  // Block 30 starts a new bucket, so the common block can be before what the first rule's refresh read.
+  for (const [first, second] of [[31, 31], [31, 29]] as const) {
+    it(`keeps it valued when the rules reach ${first} and ${second}`, async () => {
+      const { status, normal, value } = await valueRow(daiSource(first), daiSource(second))
+      assert.equal(status, 200)
+      assert.equal(normal?.values.valueMicros, "1000000")
+      assert.deepEqual([value.a, value.b, value.aPartial, value.bPartial], ["1000000", "1000000", false, false])
+    })
+  }
+
+  it("says the value leaves it out, rather than $0, when the feed read fails during the comparison", async () => {
+    let reads = 0
+    const failsAfterTheRefresh: Partial<Source> = {
+      readFeedRounds: async (assets, block) => {
+        if (++reads > 1) throw new Error("boom")
+        return Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }]))
+      },
+    }
+    const { status, normal, comparison } = await valueRow(daiSource(31, failsAfterTheRefresh), daiSource(29))
+    assert.equal(status, 200)
+    assert.equal(normal?.values.valueMicros, "1000000")
+    const value = comparison.rows.find((r) => r.label === "Value")!
+    assert.notEqual(value.a, "0")
+    assert.equal(value.a, null, "nothing else is known, so there's no total at all")
+    assert.equal(value.b, null, "both rules read through the same facts")
+  })
+})
+
 describe("reading by a pricing rule", () => {
   let server: Server
   let base: string
@@ -208,7 +272,7 @@ describe("proof by a pricing rule", () => {
   const { block } = JSON.parse(readFileSync(new URL("./support/base-blocks.json", import.meta.url), "utf8")) as { block: BlockData }
   const MAIN_HASH = "c".repeat(64)
   const proofs: Proofs = {
-    ...createProofs((async () => []) as never, { baseDataset: "a/base@0.0.1", dataset: `a/${MARKET_RULE_ID}@0.0.1`, readDeposits: async () => new Map(), readManifestHash: async () => MAIN_HASH }),
+    ...createProofs((async () => []) as never, { baseDataset: "a/base@0.0.1", dataset: { name: `a/${MARKET_RULE_ID}@0.0.1`, reference: `a/${MARKET_RULE_ID}@0.0.1`, hash: null }, readDeposits: async () => new Map(), readManifestHash: async () => MAIN_HASH }),
     readBlock: async () => ({ data: block, deposits: null }),
   }
   const NOTE = ruleNote(RULE_TEXT[CAUTIOUS_RULE_ID]!)
