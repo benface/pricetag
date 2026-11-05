@@ -194,3 +194,27 @@ struct HoldComparisonTests {
         }
     }
 }
+
+@Suite struct AttentionTests {
+    @Test func saysWhatTheNumbersLeaveOutOnce() throws {
+        let portfolio = try demoPortfolio()
+        let attention = try #require(portfolio.attention)
+        #expect(attention.title.hasPrefix("$3,603.42 of what you hold has an unknown cost, so it isn't in your PnL."))
+        #expect(attention.title.hasSuffix("$899.98 is estimated."))
+        #expect(attention.details.first == Wording.excluded(portfolio.totals.excluded))
+    }
+
+    @Test func seeWhyOpensTheBalanceThatDoesntMatch() throws {
+        #expect(try demoPortfolio().attentionTarget == .asset("cbBTC", .onchain))
+    }
+
+    @Test func answeringCountsItsQuestions() {
+        #expect(Wording.answerQuestions(1) == "Answer 1 Question")
+        #expect(Wording.answerQuestions(5) == "Answer 5 Questions")
+    }
+
+    @Test func onlySaysBalancesMatchWhenTheyAllDo() throws {
+        // The demo has one that doesn't.
+        #expect(Wording.allBalancesMatch(try demoPortfolio()) == nil)
+    }
+}

@@ -98,11 +98,11 @@ private struct HotWalletDetails: View {
                     .listRowBackground(Color.clear)
             }
             balance
+            actions
             holdings
             if !wallet.unlisted.isEmpty { untouched }
             savings
             if !wallet.connectedSites.isEmpty { sites }
-            actions
             if !wallet.records.isEmpty { activity }
         }
         .formStyle(.grouped)
@@ -319,6 +319,7 @@ private struct HotWalletDetails: View {
         Section {
             HStack {
                 Button("Send…") { isSending = true }
+                    .buttonStyle(.borderedProminent)
                     .disabled(!wallet.canSend)
                 Button("Top Up from Savings…") { isToppingUp = true }
                     .disabled(!wallet.canTopUp)
@@ -384,6 +385,7 @@ private struct HotWalletDetails: View {
                         .foregroundStyle(record.status == .failed || record.status == .dropped ? Tone.warning.style : AnyShapeStyle(.secondary))
                     if let url = URL(string: "https://basescan.org/tx/\(record.hash)") {
                         Link(destination: url) { Image(systemName: "arrow.up.right.square") }
+                            .foregroundStyle(.secondary)
                             .help("Open this transaction")
                     }
                 }

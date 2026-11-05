@@ -99,7 +99,7 @@ struct MacApp: App {
                 OpenHotWalletCommand()
             }
             CommandGroup(after: .newItem) {
-                Button("Resolve Unknowns…") { navigation.resolve() }
+                Button("Answer Questions…") { navigation.resolve() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(store.portfolio?.questions.isEmpty != false)
                 Button("Export as CSV…") { navigation.isExporting = true }
