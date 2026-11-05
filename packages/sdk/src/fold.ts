@@ -34,6 +34,11 @@ export type FoldLeg = {
   pieces?: CostPiece[]
   /** Its cost or proceeds rest on an estimate, so whatever comes from them does too. */
   estimated?: boolean
+  /**
+   * ETH arrived and left in this block, and nothing says which came first, which changes what each cost. A credit like
+   * this takes no cost, and what a debit like this took has none.
+   */
+  orderUnknown?: boolean
   blockNum?: number
   timestamp?: string
 }
@@ -316,6 +321,18 @@ function take(state: PositionState, qty: bigint): Taken {
   return result
 }
 
+/** What was taken, with no cost anyone can rely on. */
+function withoutCosts(taken: Taken): Taken {
+  return {
+    ...taken,
+    pieces: taken.pieces.map(({ qty, unconfirmedBy, acquiredBlock, acquiredAt }) => ({ qty, costMicros: null, label: "unknown", estimatedCostMicros: "0", ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }) })),
+    knownQty: 0n,
+    knownCost: 0n,
+    estimatedCost: 0n,
+    unknownQty: taken.unknownQty + taken.knownQty,
+  }
+}
+
 /** Applies a leg, and says what a debit took, which is what a transfer to a linked wallet carries with it. */
 export function applyLegTaking(state: PositionState, leg: FoldLeg): { state: PositionState; taken: CostPiece[] } {
   const delta = BigInt(leg.delta)
@@ -323,7 +340,7 @@ export function applyLegTaking(state: PositionState, leg: FoldLeg): { state: Pos
   if (delta > 0n) return { state: { ...state, lots: credit(state, leg, delta) }, taken: [] }
 
   const qty = -delta
-  const taken = take(state, qty)
+  const taken = leg.orderUnknown ? withoutCosts(take(state, qty)) : take(state, qty)
   const next: PositionState = {
     ...state,
     lots: taken.lots,

@@ -475,7 +475,8 @@ function couldBringEth(txRows: readonly LegRow[]): boolean {
  * amount is the balance's, so it can't be ETH the wallet didn't receive, and it's left out whenever something else could
  * explain the change: a claim that stands, or a fee that isn't known. Each credit is a movement of its own, because a
  * balance can't say which transaction it came from. So it never changes what a trade traded, and a trade in the same block
- * isn't valued at all, since this could be part of what it got.
+ * isn't valued at all, since this could be part of what it got. Nothing says where in its block it came either, even with a
+ * transaction named, which is only the likeliest, so `markUnknownOrder` keeps that from deciding what anything cost.
  */
 export function creditUnseenEth({ rows, ethBalances, feeUnknownTxs, gasUnknownBlocks, account, fromBlock, through, payers, timestampOf }: Pick<SettleInput, "rows" | "ethBalances" | "feeUnknownTxs" | "gasUnknownBlocks"> & {
   account: string
@@ -536,6 +537,19 @@ export function payerOf(candidates: readonly PayoutTx[], account: string, amount
   return { txHash: tx.txHash, txIndex: tx.txIndex, sender: sender === normalizeAddress(account) ? null : sender }
 }
 
+/**
+ * Sets apart ETH that arrived unseen in a block where ETH also left, because each one's cost depends on which came first,
+ * and nothing says. Network fees don't count: they're far too small to move a cost by more than a fraction of themselves,
+ * and counting them would leave ETH that a wallet's own transaction claimed with a cost that could never be answered.
+ * Neither do other arrivals, since those come to the same average, and either order is oldest first.
+ */
+function markUnknownOrder(legs: readonly PricedLeg[]): PricedLeg[] {
+  const leftIn = new Set(legs.filter((leg) => leg.asset === "ETH" && leg.kind !== "gas" && BigInt(leg.delta) < 0n).map((leg) => leg.blockNum))
+  const unseenIn = new Set(legs.filter((leg) => leg.parts.some((part) => part.kind === "unseen_eth") && leftIn.has(leg.blockNum)).map((leg) => leg.blockNum))
+  if (unseenIn.size === 0) return [...legs]
+  return legs.map((leg) => (leg.asset === "ETH" && leg.kind !== "gas" && unseenIn.has(leg.blockNum) ? { ...leg, orderUnknown: true } : leg))
+}
+
 export const answerToMicros = (answer: string | undefined): string | null =>
   answer && BigInt(answer) > 0n ? (BigInt(answer) / 100n).toString() : null
 
@@ -577,7 +591,7 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
   const me = normalizeAddress(account)
   const refs = new Map(references.map((r) => [r.blockNum, r]))
   const own = rows.filter((row) => row.account === me)
-  // ETH that arrived with no row is its own movement, ahead of whatever else the block or its transaction did.
+  // ETH that arrived with no row is its own movement. It goes ahead of whatever else its block did, so what left has something to come from.
   const unseen = own.filter((row) => row.kind === "unseen_eth").map((row) => [row])
   const ordered = [...unseen, ...byTx(own.filter((row) => row.kind !== "unseen_eth")).values()].sort((a, b) => a[0]!.block_num - b[0]!.block_num || a[0]!.tx_index - b[0]!.tx_index)
 
@@ -741,5 +755,5 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
       })
     }
   }
-  return legs
+  return markUnknownOrder(legs)
 }

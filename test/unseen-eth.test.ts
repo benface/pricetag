@@ -1,9 +1,10 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, creditUnseenEth, foldPositions, payerOf, unseenEthSearchBlocks, worth, type LegRow, type PayoutTx, type Reference } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, creditUnseenEth, foldPositions, openingLegs, payerOf, unseenEthSearchBlocks, worth, type EthPayer, type LegRow, type PayoutTx, type PricedLeg, type Reference } from "@pricetag/sdk/core"
 import { createWallets, readPayoutTxsAt, type Query, type ReadL1Fees, type Source } from "@pricetag/sdk/internal"
 import { portfolioOf } from "../server/portfolio.ts"
 import { costKey, emptyBook } from "../src/core/book.ts"
+import { describeEffect } from "../src/core/explain.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import type { WalletResponse } from "../src/core/api.ts"
 
@@ -358,5 +359,169 @@ describe("reading who's behind it", () => {
     assert.match(queries[0]!, /status/)
     assert.ok(queries[0]!.includes(`strpos(encode(input, 'hex'), '${ME.slice(2)}') > 0`))
     assert.ok(queries[0]!.includes(`"from" = X'${ME.slice(2)}'`))
+  })
+})
+
+/** One block's worth of a wallet: what it held and what moved, with ETH's balance before and after. */
+function blockOf({ account = ME, rows, before, after, payer, opening = 0n, amounts = {} }: { account?: string; rows: LegRow[]; before: bigint; after: bigint; payer?: EthPayer; opening?: bigint; amounts?: Record<string, string> }): WalletResponse {
+  const BLOCK = 500
+  const timestamp = "2026-11-05T00:00:00.000Z"
+  const settled = creditUnseenEth({ rows, ethBalances: new Map([[BLOCK - 1, before.toString()], [BLOCK, after.toString()]]), feeUnknownTxs: [], gasUnknownBlocks: [], account, fromBlock: BLOCK, through: BLOCK, payers: new Map(payer ? [[BLOCK, payer]] : []), timestampOf: () => timestamp })
+  const reference: Reference = { blockNum: BLOCK, ethUsd: "200000000000", usdcUsd: "100000000" }
+  const legs: PricedLeg[] = [...(opening > 0n ? openingLegs({ blockNum: BLOCK - 1, amounts: { ETH: opening.toString() } }, timestamp) : []), ...buildPricedLegs({ account, rows: settled, references: [reference], priced: [] })]
+  return {
+    address: account,
+    mode: "raw",
+    currency: "USD",
+    rates: null,
+    coverage: { fromBlock: BLOCK, toBlock: BLOCK },
+    latest: { blockNum: BLOCK, timestamp },
+    references: [reference],
+    legs,
+    prices: { ETH: { micros: "2000000000", source: "oracle", blockNum: BLOCK } },
+    balances: { blockNum: BLOCK, amounts: { ETH: after.toString(), ...amounts } },
+    gasUnknownTxs: [],
+    gasUnknownBlocks: [],
+    l1FeeUnknownTxs: [],
+    openingUnread: [],
+    lastBalances: {},
+    lastCheckableEth: null,
+    unreadBalances: [],
+    unseenEth: [],
+    notes: [],
+    marketChecked: true,
+    marketMarks: {},
+    unlisted: [],
+  } as unknown as WalletResponse
+}
+
+const E18 = 10n ** 18n
+const at500 = (tx: string, token: string, side: LegRow["side"], amount: bigint, kind: LegRow["kind"], counterparty?: string): LegRow => ({ ...row(500, tx, token, side, amount, kind), ...(counterparty ? { counterparty } : {}) })
+const UNSEEN = "unseen:500:ETH"
+const usd = (micros: string) => ({ micros, currency: "USD" as const })
+
+describe("ETH that arrived in a block where ETH also left", () => {
+  const OTHER = "0x2222222222222222222222222222222222222222"
+  // 1 ETH costing $1,000, 0.5 sent, and 1 received. Sent first it leaves $2,500 of cost, and received first $2,250 for this much. Nothing says which.
+  const send = [at500("0xa1", ETH_ADDRESS, "debit", E18 / 2n, "eth", OTHER)]
+  const answers = { ...emptyBook(), costs: { [costKey(ME, "opening:ETH")]: usd("1000000000"), [costKey(ME, UNSEEN)]: usd("2000000000") } }
+  const wallet = (payer?: EthPayer) => blockOf({ rows: send, before: E18, after: (3n * E18) / 2n, opening: E18, ...(payer ? { payer } : {}) })
+  const ethOf = (book = answers, method: "average" | "fifo" = "average", w = wallet()) => foldBook(w, [], method, book).positions.find((p) => p.asset === "ETH")!
+
+  for (const method of ["average", "fifo"] as const) {
+    it(`keeps the amount and leaves the cost unresolved, whatever was entered, by ${method}`, () => {
+      const eth = ethOf(answers, method)
+      assert.equal(eth.reconciliation?.status, "reconciled")
+      assert.equal(eth.values.qty, ((3n * E18) / 2n).toString())
+      assert.deepEqual([eth.values.costMicros, eth.values.unrealizedMicros], [null, null])
+      const credit = eth.effects.find(({ leg }) => leg.id === UNSEEN)!.leg
+      assert.deepEqual([credit.costLabel, credit.costMicros, credit.priceMicros], ["unknown", null, "2000000000"])
+    })
+  }
+
+  it("doesn't let a named transaction settle the order, because that's only the likeliest one", () => {
+    // Named as later than the send, and then as earlier. Neither is more than a guess.
+    for (const txIndex of [1, 9]) {
+      const eth = ethOf(answers, "average", wallet({ txHash: "0xpay", txIndex, sender: OTHER }))
+      assert.deepEqual([eth.values.costMicros, eth.values.unrealizedMicros], [null, null])
+    }
+  })
+
+  it("doesn't ask about it, because no answer could help, and says why", () => {
+    const fold = foldBook(wallet(), [], "average", answers)
+    assert.ok(!fold.questions.some((q) => q.receipts.some((r) => r.legId === UNSEEN)))
+    const effect = fold.positions.find((p) => p.asset === "ETH")!.effects.find(({ leg }) => leg.id === UNSEEN)!
+    assert.match(describeEffect(effect, "USD"), /nothing says which came first/)
+  })
+
+  it("leaves what was sent with no known cost, and says why", () => {
+    const eth = ethOf()
+    const sent = eth.effects.find(({ leg }) => BigInt(leg.delta) < 0n)!
+    assert.equal(eth.state.transferredOutCostMicros, "0")
+    assert.equal(eth.state.transferredOutUnknownQty, (E18 / 2n).toString())
+    assert.match(describeEffect(sent, "USD"), /nothing says which came first/)
+  })
+
+  it("carries no cost to a linked wallet, by either method", () => {
+    const received = blockOf({ account: OTHER, rows: [{ ...at500("0xa1", ETH_ADDRESS, "credit", E18 / 2n, "eth", ME), account: OTHER }], before: 0n, after: E18 / 2n })
+    const linked = { ...answers, senders: { [ME]: { kind: "mine" as const }, [OTHER]: { kind: "mine" as const } } }
+    for (const method of ["average", "fifo"] as const) {
+      const eth = foldBook(received, [wallet()], method, linked).positions.find((p) => p.asset === "ETH")!
+      assert.equal(eth.values.costMicros, null)
+      const arrived = eth.effects.find(({ leg }) => BigInt(leg.delta) > 0n)!.leg
+      assert.ok(arrived.pieces?.every((piece) => piece.costMicros === null))
+    }
+  })
+
+  it("keeps the same result when what left was an exchange", () => {
+    const swap = [at500("0xa2", ETH_ADDRESS, "debit", E18 / 2n, "eth"), at500("0xa2", USDC_ADDRESS, "credit", 1_000_000_000n, "erc20")]
+    const eth = foldBook(blockOf({ rows: swap, before: E18, after: (3n * E18) / 2n, opening: E18, amounts: { USDC: "1000000000" } }), [], "average", answers).positions.find((p) => p.asset === "ETH")!
+    assert.deepEqual([eth.values.costMicros, eth.values.realizedMicros], [null, null])
+  })
+
+  it("still takes an answer when only a fee left, since the transaction that claimed it always has one", () => {
+    const claim = blockOf({ rows: [at500("0xa3", ETH_ADDRESS, "debit", 100n, "gas")], before: E18, after: 2n * E18 - 100n, opening: E18, payer: { txHash: "0xa3", txIndex: 5, sender: OTHER } })
+    const eth = foldBook(claim, [], "average", answers).positions.find((p) => p.asset === "ETH")!
+    assert.equal(eth.effects.find(({ leg }) => leg.id === UNSEEN)!.leg.costLabel, "self-reported")
+    assert.notEqual(eth.values.costMicros, null)
+  })
+
+  it("still takes an answer when ETH only arrived, since either order comes to the same", () => {
+    const both = blockOf({ rows: [at500("0xa4", ETH_ADDRESS, "credit", E18, "eth", OTHER)], before: E18, after: 3n * E18, opening: E18 })
+    const book = { ...answers, senders: { [OTHER]: { kind: "someone-else" as const } } }
+    const eth = foldBook(both, [], "average", book).positions.find((p) => p.asset === "ETH")!
+    assert.equal(eth.effects.find(({ leg }) => leg.id === UNSEEN)!.leg.costMicros, "2000000000")
+    assert.notEqual(eth.values.costMicros, null)
+  })
+})
+
+describe("a cost note about a transaction", () => {
+  const TX = `0x${"aa".repeat(32)}`
+  const NOTE = { noteTx: `0x${"bb".repeat(32)}`, blockNum: 501, txHash: TX, asset: "ETH", usdMicros: "1000000000" }
+  const PAYER = "0x2222222222222222222222222222222222222222"
+  // 1,000 USDC sold for 0.4 WETH, with 0.1 ETH rising in the same block, and this transaction named as the likeliest source.
+  const sale = [at500(TX, USDC_ADDRESS, "debit", 1_000_000_000n, "erc20"), at500(TX, WETH_ADDRESS, "credit", (4n * E18) / 10n, "erc20")]
+  const mixed = (notes: unknown[] = []) => ({ ...blockOf({ rows: sale, before: 0n, after: E18 / 10n, payer: { txHash: TX, txIndex: 5, sender: PAYER }, amounts: { ETH: (E18 / 2n).toString(), USDC: "0" } }), notes }) as WalletResponse
+  const ethOf = (wallet: WalletResponse, book = emptyBook()) => foldBook(wallet, [], "average", book).positions.find((p) => p.asset === "ETH")!
+
+  it("isn't offered for either receipt when it could be about both", () => {
+    const { questions } = foldBook(mixed(), [], "average", emptyBook())
+    assert.ok(questions.length >= 2)
+    assert.ok(questions.every((q) => q.noteAbout === null))
+  })
+
+  it("gives neither receipt its cost, so it's never counted twice, or shared out by a guess", () => {
+    const eth = ethOf(mixed([NOTE]))
+    assert.equal(eth.reconciliation?.status, "reconciled")
+    assert.ok(eth.effects.every(({ leg }) => leg.costMicros === null))
+    assert.deepEqual([eth.values.costMicros, eth.values.unrealizedMicros], [null, null])
+  })
+
+  it("leaves each receipt answerable on its own", () => {
+    const book = { ...emptyBook(), costs: { [costKey(ME, `${TX}:ETH`)]: usd("800000000"), [costKey(ME, UNSEEN)]: usd("200000000") } }
+    assert.equal(ethOf(mixed([NOTE]), book).values.costMicros, "1000000000")
+  })
+
+  it("still covers ETH found from a balance when nothing else arrived with it, once", () => {
+    const alone = { ...blockOf({ rows: [], before: 0n, after: E18 / 10n, payer: { txHash: TX, txIndex: 5, sender: PAYER } }), notes: [NOTE] } as WalletResponse
+    const eth = ethOf(alone)
+    assert.equal(eth.effects.find(({ leg }) => leg.id === UNSEEN)!.leg.costMicros, "1000000000")
+    assert.equal(eth.values.costMicros, "1000000000")
+    const unanswered = foldBook({ ...alone, notes: [] } as WalletResponse, [], "average", emptyBook())
+    assert.equal(unanswered.questions[0]!.noteAbout, TX)
+  })
+
+  it("still covers an ordinary receipt when nothing unseen shares its transaction", () => {
+    const receipt = [at500(TX, WETH_ADDRESS, "credit", (4n * E18) / 10n, "erc20")]
+    const plain = blockOf({ rows: receipt, before: 0n, after: 0n, amounts: { ETH: ((4n * E18) / 10n).toString() } })
+    assert.deepEqual(foldBook(plain, [], "average", emptyBook()).questions.map((q) => q.noteAbout), [TX])
+    const eth = ethOf({ ...plain, notes: [NOTE] } as WalletResponse)
+    assert.equal(eth.reconciliation?.status, "reconciled")
+    assert.equal(eth.values.costMicros, "1000000000")
+  })
+
+  it("doesn't reach ETH with no transaction named", () => {
+    const blind = { ...blockOf({ rows: [], before: 0n, after: E18 / 10n }), notes: [NOTE] } as WalletResponse
+    assert.equal(ethOf(blind).values.costMicros, null)
   })
 })

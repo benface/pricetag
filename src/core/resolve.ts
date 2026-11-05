@@ -147,6 +147,12 @@ function exchangeShare(costs: readonly ExchangeCost[], wallet: string, legId: st
 }
 
 /** A credit the chain hasn't confirmed yet stays unknown: its amount is only what the transaction claims, so nothing can rest on it, and there's nothing to ask until it settles. */
+/**
+ * Whether a note about this leg's transaction and asset would be about more than this leg. A note gives one cost for what
+ * arrived in a transaction, and what its balance says arrived may not be part of that, so it can't be shared out or given to either.
+ */
+const noteIsAmbiguous = (leg: PricedLeg, legs: readonly PricedLeg[]) => legs.filter((other) => other.txHash === leg.txHash && other.asset === leg.asset && BigInt(other.delta) > 0n).length > 1
+
 const isOpenCredit = (leg: PricedLeg) => BigInt(leg.delta) > 0n && leg.costLabel === "unknown" && !leg.unsettledCredit
 
 const sum = (pieces: readonly CostPiece[]) => pieces.reduce((total, p) => total + BigInt(p.costMicros ?? "0"), 0n)
@@ -211,11 +217,13 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
   }
 
   const resolve = (side: Side, leg: PricedLeg): PricedLeg => {
-    if (!isOpenCredit(leg)) return leg
+    // Nothing can be answered about one whose cost depends on an order nothing says.
+    if (!isOpenCredit(leg) || leg.orderUnknown) return leg
     const { wallet } = side
     const address = normalizeAddress(wallet.address)
     const units = BigInt(leg.delta)
-    const note = wallet.notes.filter((n) => n.txHash === leg.txHash && n.asset === leg.asset).at(-1)
+    const latestNote = wallet.notes.filter((n) => n.txHash === leg.txHash && n.asset === leg.asset).at(-1)
+    const note = latestNote && !noteIsAmbiguous(leg, side.view.legs) ? latestNote : undefined
     const sources = leg.kind === "transfer" && !leg.opening ? sourcesOf(leg) : null
     const reportedMoney: Money | undefined = book.costs[costKey(address, leg.id)] ?? (note ? { micros: note.usdMicros, currency: "USD" } : undefined) ?? withdrawals.get(costKey(address, leg.id))?.cost
     const report = reportedMoney ? moneyIn(side, reportedMoney, leg) : null
@@ -386,7 +394,7 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
       ...question,
       arrivals: [...arrived.values()],
       valueMicros: priced ? value.toString() : null,
-      noteAbout: question.receipts.length === 1 && !first.leg.opening && first.units === BigInt(first.leg.delta) && first.leg.txHash ? first.leg.txHash : null,
+      noteAbout: question.receipts.length === 1 && !first.leg.opening && first.units === BigInt(first.leg.delta) && first.leg.txHash && !noteIsAmbiguous(first.leg, (sideOf.get(question.wallet) as Side).view.legs) ? first.leg.txHash : null,
     }))
     .sort((a, b) => {
       const [x, y] = [BigInt(a.valueMicros ?? "0"), BigInt(b.valueMicros ?? "0")]

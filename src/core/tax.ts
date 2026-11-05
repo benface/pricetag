@@ -248,6 +248,9 @@ function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = 
 
 const moveKey = (leg: PricedLeg) => `${leg.txHash}:${leg.asset}`
 
+/** ETH found from a balance is never one wallet's transfer to another, whichever transaction is named. */
+const canBeMove = (leg: PricedLeg) => leg.kind === "transfer" && !leg.opening && !leg.parts.some((part) => part.kind === "unseen_eth")
+
 /**
  * Transfers that only went from one of these wallets to another: the same transaction and asset, netting to nothing.
  * Moving between your own wallets isn't a sale in either country. A move that loses some on the way isn't one of these.
@@ -256,7 +259,7 @@ function movesBetween(sources: readonly Source[]): Set<string> {
   const moves = new Map<string, { net: bigint; wallets: Set<string> }>()
   for (const { wallet, view } of sources) {
     for (const leg of view.legs) {
-      if (leg.kind !== "transfer" || leg.opening) continue
+      if (!canBeMove(leg)) continue
       const move = moves.get(moveKey(leg)) ?? { net: 0n, wallets: new Set<string>() }
       move.net += BigInt(leg.delta)
       move.wallets.add(wallet.address)
@@ -266,7 +269,7 @@ function movesBetween(sources: readonly Source[]): Set<string> {
   return new Set([...moves].filter(([, { net, wallets }]) => net === 0n && wallets.size > 1).map(([key]) => key))
 }
 
-const isMove = (leg: PricedLeg, moves: ReadonlySet<string>) => leg.kind === "transfer" && !leg.opening && moves.has(moveKey(leg))
+const isMove = (leg: PricedLeg, moves: ReadonlySet<string>) => canBeMove(leg) && moves.has(moveKey(leg))
 
 /** Whether anything arrived from one of these wallets with a cost that still isn't all known. */
 const hasUnknownMove = (sources: readonly Source[], moves: ReadonlySet<string>) => sources.some(({ view }) => view.legs.some((leg) => isMove(leg, moves) && BigInt(leg.delta) > 0n && leg.costMicros === null))

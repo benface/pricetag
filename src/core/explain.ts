@@ -88,6 +88,9 @@ export function missingRatesLine(count: number, currency: CurrencyCode): string 
   return `${count === 1 ? "1 transaction has" : `${count.toLocaleString("en-US")} transactions have`} no USD to ${currency} rate, so what depends on ${count === 1 ? "it" : "them"} is unavailable in ${currency}.`
 }
 
+/** Why ETH that arrived or left beside ETH nothing shows has an unknown cost. */
+const ORDER_UNKNOWN = "ETH both arrived and left in this block, and nothing says which came first, so what each one cost can't be worked out"
+
 /** What a leg did to its position, in words. */
 export function describeEffect({ leg, before, after }: LegEffect, currency: CurrencyCode): string {
   const money = (micros: string | bigint) => formatMoney(micros, currency)
@@ -102,6 +105,7 @@ export function describeEffect({ leg, before, after }: LegEffect, currency: Curr
     } else if (leg.costLabel === "unknown") parts.push(`Adds ${amount} at an unknown cost`)
     else parts.push(`Adds ${amount} for ${leg.estimated ? "about " : ""}${money(leg.costMicros as string)}${leg.costLabel === "paid" ? "" : `, from ${COST_WORDS[leg.costLabel]}`}`)
     if (leg.parts.some((p) => p.kind === "unseen_eth")) parts.push("Nothing onchain records this amount directly, so it's how far this wallet's balance rose in this block")
+    if (leg.orderUnknown) parts.push(ORDER_UNKNOWN)
     return parts.join(". ")
   }
   const realized = diff(after.realizedMicros, before.realizedMicros)
@@ -118,6 +122,7 @@ export function describeEffect({ leg, before, after }: LegEffect, currency: Curr
     if (unresolved > 0n) parts.push(`PnL unavailable on ${formatAmount(unresolved, leg.decimals)} ${leg.asset}`)
   }
   if (shortfall > 0n) parts.push(`${formatAmount(shortfall, leg.decimals)} ${leg.asset} more than we saw arrive`)
+  if (leg.orderUnknown) return `${parts.join(", ")}. ${ORDER_UNKNOWN}`
   return parts.join(", ")
 }
 
