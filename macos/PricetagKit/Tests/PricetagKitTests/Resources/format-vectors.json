@@ -173,6 +173,8 @@
   "others": [
     {
       "currency": "EUR",
+      "label": "€",
+      "paid": "€25.81",
       "money": [
         {
           "micros": "0",
@@ -390,6 +392,8 @@
     },
     {
       "currency": "GBP",
+      "label": "£",
+      "paid": "£25.81",
       "money": [
         {
           "micros": "0",
@@ -607,6 +611,8 @@
     },
     {
       "currency": "CHF",
+      "label": "CHF ",
+      "paid": "CHF 25.81",
       "money": [
         {
           "micros": "0",
@@ -817,6 +823,1539 @@
             {
               "value": 1500000,
               "label": "CHF 1.5M"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "currency": "AUD",
+      "label": "A$",
+      "paid": "A$25.81",
+      "money": [
+        {
+          "micros": "0",
+          "usd": "$0.00",
+          "signed": "$0.00"
+        },
+        {
+          "micros": "1",
+          "usd": "$0.000001",
+          "signed": "+$0.000001"
+        },
+        {
+          "micros": "1234",
+          "usd": "$0.0012",
+          "signed": "+$0.0012"
+        },
+        {
+          "micros": "9999",
+          "usd": "$0.01",
+          "signed": "+$0.01"
+        },
+        {
+          "micros": "10000",
+          "usd": "$0.01",
+          "signed": "+$0.01"
+        },
+        {
+          "micros": "1005000",
+          "usd": "$1.01",
+          "signed": "+$1.01"
+        },
+        {
+          "micros": "-1234",
+          "usd": "-$0.0012",
+          "signed": "-$0.0012"
+        },
+        {
+          "micros": "-12340000",
+          "usd": "-$12.34",
+          "signed": "-$12.34"
+        },
+        {
+          "micros": "2640000000",
+          "usd": "$2,640.00",
+          "signed": "+$2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "usd": "$1,234,567.89",
+          "signed": "+$1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "usd": "$100.00",
+          "signed": "+$100.00"
+        },
+        {
+          "micros": "999800",
+          "usd": "$1.00",
+          "signed": "+$1.00"
+        }
+      ],
+      "price": [
+        {
+          "micros": "1",
+          "price": "$0.000001"
+        },
+        {
+          "micros": "1234",
+          "price": "$0.001234"
+        },
+        {
+          "micros": "9999",
+          "price": "$0.009999"
+        },
+        {
+          "micros": "10000",
+          "price": "$0.01"
+        },
+        {
+          "micros": "1005000",
+          "price": "$1.01"
+        },
+        {
+          "micros": "2640000000",
+          "price": "$2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "price": "$1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "price": "$100.00"
+        },
+        {
+          "micros": "999800",
+          "price": "$0.9998"
+        }
+      ],
+      "chartTicks": [
+        {
+          "values": [
+            0
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "$0.00"
+            }
+          ]
+        },
+        {
+          "values": [
+            -0.0023
+          ],
+          "ticks": [
+            {
+              "value": -0.003,
+              "label": "-$0.003"
+            },
+            {
+              "value": -0.002,
+              "label": "-$0.002"
+            },
+            {
+              "value": -0.001,
+              "label": "-$0.001"
+            },
+            {
+              "value": 0,
+              "label": "$0.000"
+            }
+          ]
+        },
+        {
+          "values": [
+            0.75
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "$0.00"
+            },
+            {
+              "value": 0.2,
+              "label": "$0.20"
+            },
+            {
+              "value": 0.4,
+              "label": "$0.40"
+            },
+            {
+              "value": 0.6,
+              "label": "$0.60"
+            },
+            {
+              "value": 0.8,
+              "label": "$0.80"
+            }
+          ]
+        },
+        {
+          "values": [
+            120
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "$0"
+            },
+            {
+              "value": 50,
+              "label": "$50"
+            },
+            {
+              "value": 100,
+              "label": "$100"
+            },
+            {
+              "value": 150,
+              "label": "$150"
+            }
+          ]
+        },
+        {
+          "values": [
+            -250000,
+            1250000
+          ],
+          "ticks": [
+            {
+              "value": -500000,
+              "label": "-$500K"
+            },
+            {
+              "value": 0,
+              "label": "$0"
+            },
+            {
+              "value": 500000,
+              "label": "$500K"
+            },
+            {
+              "value": 1000000,
+              "label": "$1M"
+            },
+            {
+              "value": 1500000,
+              "label": "$1.5M"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "currency": "NZD",
+      "label": "NZ$",
+      "paid": "NZ$25.81",
+      "money": [
+        {
+          "micros": "0",
+          "usd": "$0.00",
+          "signed": "$0.00"
+        },
+        {
+          "micros": "1",
+          "usd": "$0.000001",
+          "signed": "+$0.000001"
+        },
+        {
+          "micros": "1234",
+          "usd": "$0.0012",
+          "signed": "+$0.0012"
+        },
+        {
+          "micros": "9999",
+          "usd": "$0.01",
+          "signed": "+$0.01"
+        },
+        {
+          "micros": "10000",
+          "usd": "$0.01",
+          "signed": "+$0.01"
+        },
+        {
+          "micros": "1005000",
+          "usd": "$1.01",
+          "signed": "+$1.01"
+        },
+        {
+          "micros": "-1234",
+          "usd": "-$0.0012",
+          "signed": "-$0.0012"
+        },
+        {
+          "micros": "-12340000",
+          "usd": "-$12.34",
+          "signed": "-$12.34"
+        },
+        {
+          "micros": "2640000000",
+          "usd": "$2,640.00",
+          "signed": "+$2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "usd": "$1,234,567.89",
+          "signed": "+$1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "usd": "$100.00",
+          "signed": "+$100.00"
+        },
+        {
+          "micros": "999800",
+          "usd": "$1.00",
+          "signed": "+$1.00"
+        }
+      ],
+      "price": [
+        {
+          "micros": "1",
+          "price": "$0.000001"
+        },
+        {
+          "micros": "1234",
+          "price": "$0.001234"
+        },
+        {
+          "micros": "9999",
+          "price": "$0.009999"
+        },
+        {
+          "micros": "10000",
+          "price": "$0.01"
+        },
+        {
+          "micros": "1005000",
+          "price": "$1.01"
+        },
+        {
+          "micros": "2640000000",
+          "price": "$2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "price": "$1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "price": "$100.00"
+        },
+        {
+          "micros": "999800",
+          "price": "$0.9998"
+        }
+      ],
+      "chartTicks": [
+        {
+          "values": [
+            0
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "$0.00"
+            }
+          ]
+        },
+        {
+          "values": [
+            -0.0023
+          ],
+          "ticks": [
+            {
+              "value": -0.003,
+              "label": "-$0.003"
+            },
+            {
+              "value": -0.002,
+              "label": "-$0.002"
+            },
+            {
+              "value": -0.001,
+              "label": "-$0.001"
+            },
+            {
+              "value": 0,
+              "label": "$0.000"
+            }
+          ]
+        },
+        {
+          "values": [
+            0.75
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "$0.00"
+            },
+            {
+              "value": 0.2,
+              "label": "$0.20"
+            },
+            {
+              "value": 0.4,
+              "label": "$0.40"
+            },
+            {
+              "value": 0.6,
+              "label": "$0.60"
+            },
+            {
+              "value": 0.8,
+              "label": "$0.80"
+            }
+          ]
+        },
+        {
+          "values": [
+            120
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "$0"
+            },
+            {
+              "value": 50,
+              "label": "$50"
+            },
+            {
+              "value": 100,
+              "label": "$100"
+            },
+            {
+              "value": 150,
+              "label": "$150"
+            }
+          ]
+        },
+        {
+          "values": [
+            -250000,
+            1250000
+          ],
+          "ticks": [
+            {
+              "value": -500000,
+              "label": "-$500K"
+            },
+            {
+              "value": 0,
+              "label": "$0"
+            },
+            {
+              "value": 500000,
+              "label": "$500K"
+            },
+            {
+              "value": 1000000,
+              "label": "$1M"
+            },
+            {
+              "value": 1500000,
+              "label": "$1.5M"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "currency": "SGD",
+      "label": "S$",
+      "paid": "S$25.81",
+      "money": [
+        {
+          "micros": "0",
+          "usd": "$0.00",
+          "signed": "$0.00"
+        },
+        {
+          "micros": "1",
+          "usd": "$0.000001",
+          "signed": "+$0.000001"
+        },
+        {
+          "micros": "1234",
+          "usd": "$0.0012",
+          "signed": "+$0.0012"
+        },
+        {
+          "micros": "9999",
+          "usd": "$0.01",
+          "signed": "+$0.01"
+        },
+        {
+          "micros": "10000",
+          "usd": "$0.01",
+          "signed": "+$0.01"
+        },
+        {
+          "micros": "1005000",
+          "usd": "$1.01",
+          "signed": "+$1.01"
+        },
+        {
+          "micros": "-1234",
+          "usd": "-$0.0012",
+          "signed": "-$0.0012"
+        },
+        {
+          "micros": "-12340000",
+          "usd": "-$12.34",
+          "signed": "-$12.34"
+        },
+        {
+          "micros": "2640000000",
+          "usd": "$2,640.00",
+          "signed": "+$2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "usd": "$1,234,567.89",
+          "signed": "+$1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "usd": "$100.00",
+          "signed": "+$100.00"
+        },
+        {
+          "micros": "999800",
+          "usd": "$1.00",
+          "signed": "+$1.00"
+        }
+      ],
+      "price": [
+        {
+          "micros": "1",
+          "price": "$0.000001"
+        },
+        {
+          "micros": "1234",
+          "price": "$0.001234"
+        },
+        {
+          "micros": "9999",
+          "price": "$0.009999"
+        },
+        {
+          "micros": "10000",
+          "price": "$0.01"
+        },
+        {
+          "micros": "1005000",
+          "price": "$1.01"
+        },
+        {
+          "micros": "2640000000",
+          "price": "$2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "price": "$1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "price": "$100.00"
+        },
+        {
+          "micros": "999800",
+          "price": "$0.9998"
+        }
+      ],
+      "chartTicks": [
+        {
+          "values": [
+            0
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "$0.00"
+            }
+          ]
+        },
+        {
+          "values": [
+            -0.0023
+          ],
+          "ticks": [
+            {
+              "value": -0.003,
+              "label": "-$0.003"
+            },
+            {
+              "value": -0.002,
+              "label": "-$0.002"
+            },
+            {
+              "value": -0.001,
+              "label": "-$0.001"
+            },
+            {
+              "value": 0,
+              "label": "$0.000"
+            }
+          ]
+        },
+        {
+          "values": [
+            0.75
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "$0.00"
+            },
+            {
+              "value": 0.2,
+              "label": "$0.20"
+            },
+            {
+              "value": 0.4,
+              "label": "$0.40"
+            },
+            {
+              "value": 0.6,
+              "label": "$0.60"
+            },
+            {
+              "value": 0.8,
+              "label": "$0.80"
+            }
+          ]
+        },
+        {
+          "values": [
+            120
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "$0"
+            },
+            {
+              "value": 50,
+              "label": "$50"
+            },
+            {
+              "value": 100,
+              "label": "$100"
+            },
+            {
+              "value": 150,
+              "label": "$150"
+            }
+          ]
+        },
+        {
+          "values": [
+            -250000,
+            1250000
+          ],
+          "ticks": [
+            {
+              "value": -500000,
+              "label": "-$500K"
+            },
+            {
+              "value": 0,
+              "label": "$0"
+            },
+            {
+              "value": 500000,
+              "label": "$500K"
+            },
+            {
+              "value": 1000000,
+              "label": "$1M"
+            },
+            {
+              "value": 1500000,
+              "label": "$1.5M"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "currency": "MXN",
+      "label": "MX$",
+      "paid": "MX$25.81",
+      "money": [
+        {
+          "micros": "0",
+          "usd": "$0.00",
+          "signed": "$0.00"
+        },
+        {
+          "micros": "1",
+          "usd": "$0.000001",
+          "signed": "+$0.000001"
+        },
+        {
+          "micros": "1234",
+          "usd": "$0.0012",
+          "signed": "+$0.0012"
+        },
+        {
+          "micros": "9999",
+          "usd": "$0.01",
+          "signed": "+$0.01"
+        },
+        {
+          "micros": "10000",
+          "usd": "$0.01",
+          "signed": "+$0.01"
+        },
+        {
+          "micros": "1005000",
+          "usd": "$1.01",
+          "signed": "+$1.01"
+        },
+        {
+          "micros": "-1234",
+          "usd": "-$0.0012",
+          "signed": "-$0.0012"
+        },
+        {
+          "micros": "-12340000",
+          "usd": "-$12.34",
+          "signed": "-$12.34"
+        },
+        {
+          "micros": "2640000000",
+          "usd": "$2,640.00",
+          "signed": "+$2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "usd": "$1,234,567.89",
+          "signed": "+$1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "usd": "$100.00",
+          "signed": "+$100.00"
+        },
+        {
+          "micros": "999800",
+          "usd": "$1.00",
+          "signed": "+$1.00"
+        }
+      ],
+      "price": [
+        {
+          "micros": "1",
+          "price": "$0.000001"
+        },
+        {
+          "micros": "1234",
+          "price": "$0.001234"
+        },
+        {
+          "micros": "9999",
+          "price": "$0.009999"
+        },
+        {
+          "micros": "10000",
+          "price": "$0.01"
+        },
+        {
+          "micros": "1005000",
+          "price": "$1.01"
+        },
+        {
+          "micros": "2640000000",
+          "price": "$2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "price": "$1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "price": "$100.00"
+        },
+        {
+          "micros": "999800",
+          "price": "$0.9998"
+        }
+      ],
+      "chartTicks": [
+        {
+          "values": [
+            0
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "$0.00"
+            }
+          ]
+        },
+        {
+          "values": [
+            -0.0023
+          ],
+          "ticks": [
+            {
+              "value": -0.003,
+              "label": "-$0.003"
+            },
+            {
+              "value": -0.002,
+              "label": "-$0.002"
+            },
+            {
+              "value": -0.001,
+              "label": "-$0.001"
+            },
+            {
+              "value": 0,
+              "label": "$0.000"
+            }
+          ]
+        },
+        {
+          "values": [
+            0.75
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "$0.00"
+            },
+            {
+              "value": 0.2,
+              "label": "$0.20"
+            },
+            {
+              "value": 0.4,
+              "label": "$0.40"
+            },
+            {
+              "value": 0.6,
+              "label": "$0.60"
+            },
+            {
+              "value": 0.8,
+              "label": "$0.80"
+            }
+          ]
+        },
+        {
+          "values": [
+            120
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "$0"
+            },
+            {
+              "value": 50,
+              "label": "$50"
+            },
+            {
+              "value": 100,
+              "label": "$100"
+            },
+            {
+              "value": 150,
+              "label": "$150"
+            }
+          ]
+        },
+        {
+          "values": [
+            -250000,
+            1250000
+          ],
+          "ticks": [
+            {
+              "value": -500000,
+              "label": "-$500 k"
+            },
+            {
+              "value": 0,
+              "label": "$0"
+            },
+            {
+              "value": 500000,
+              "label": "$500 k"
+            },
+            {
+              "value": 1000000,
+              "label": "$1 M"
+            },
+            {
+              "value": 1500000,
+              "label": "$1.5 M"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "currency": "BRL",
+      "label": "R$",
+      "paid": "R$25.81",
+      "money": [
+        {
+          "micros": "0",
+          "usd": "R$0.00",
+          "signed": "R$0.00"
+        },
+        {
+          "micros": "1",
+          "usd": "R$0.000001",
+          "signed": "+R$0.000001"
+        },
+        {
+          "micros": "1234",
+          "usd": "R$0.0012",
+          "signed": "+R$0.0012"
+        },
+        {
+          "micros": "9999",
+          "usd": "R$0.01",
+          "signed": "+R$0.01"
+        },
+        {
+          "micros": "10000",
+          "usd": "R$0.01",
+          "signed": "+R$0.01"
+        },
+        {
+          "micros": "1005000",
+          "usd": "R$1.01",
+          "signed": "+R$1.01"
+        },
+        {
+          "micros": "-1234",
+          "usd": "-R$0.0012",
+          "signed": "-R$0.0012"
+        },
+        {
+          "micros": "-12340000",
+          "usd": "-R$12.34",
+          "signed": "-R$12.34"
+        },
+        {
+          "micros": "2640000000",
+          "usd": "R$2,640.00",
+          "signed": "+R$2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "usd": "R$1,234,567.89",
+          "signed": "+R$1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "usd": "R$100.00",
+          "signed": "+R$100.00"
+        },
+        {
+          "micros": "999800",
+          "usd": "R$1.00",
+          "signed": "+R$1.00"
+        }
+      ],
+      "price": [
+        {
+          "micros": "1",
+          "price": "R$0.000001"
+        },
+        {
+          "micros": "1234",
+          "price": "R$0.001234"
+        },
+        {
+          "micros": "9999",
+          "price": "R$0.009999"
+        },
+        {
+          "micros": "10000",
+          "price": "R$0.01"
+        },
+        {
+          "micros": "1005000",
+          "price": "R$1.01"
+        },
+        {
+          "micros": "2640000000",
+          "price": "R$2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "price": "R$1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "price": "R$100.00"
+        },
+        {
+          "micros": "999800",
+          "price": "R$0.9998"
+        }
+      ],
+      "chartTicks": [
+        {
+          "values": [
+            0
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "R$0.00"
+            }
+          ]
+        },
+        {
+          "values": [
+            -0.0023
+          ],
+          "ticks": [
+            {
+              "value": -0.003,
+              "label": "-R$0.003"
+            },
+            {
+              "value": -0.002,
+              "label": "-R$0.002"
+            },
+            {
+              "value": -0.001,
+              "label": "-R$0.001"
+            },
+            {
+              "value": 0,
+              "label": "R$0.000"
+            }
+          ]
+        },
+        {
+          "values": [
+            0.75
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "R$0.00"
+            },
+            {
+              "value": 0.2,
+              "label": "R$0.20"
+            },
+            {
+              "value": 0.4,
+              "label": "R$0.40"
+            },
+            {
+              "value": 0.6,
+              "label": "R$0.60"
+            },
+            {
+              "value": 0.8,
+              "label": "R$0.80"
+            }
+          ]
+        },
+        {
+          "values": [
+            120
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "R$0"
+            },
+            {
+              "value": 50,
+              "label": "R$50"
+            },
+            {
+              "value": 100,
+              "label": "R$100"
+            },
+            {
+              "value": 150,
+              "label": "R$150"
+            }
+          ]
+        },
+        {
+          "values": [
+            -250000,
+            1250000
+          ],
+          "ticks": [
+            {
+              "value": -500000,
+              "label": "-R$500K"
+            },
+            {
+              "value": 0,
+              "label": "R$0"
+            },
+            {
+              "value": 500000,
+              "label": "R$500K"
+            },
+            {
+              "value": 1000000,
+              "label": "R$1M"
+            },
+            {
+              "value": 1500000,
+              "label": "R$1.5M"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "currency": "TRY",
+      "label": "₺",
+      "paid": "₺25.81",
+      "money": [
+        {
+          "micros": "0",
+          "usd": "₺0.00",
+          "signed": "₺0.00"
+        },
+        {
+          "micros": "1",
+          "usd": "₺0.000001",
+          "signed": "+₺0.000001"
+        },
+        {
+          "micros": "1234",
+          "usd": "₺0.0012",
+          "signed": "+₺0.0012"
+        },
+        {
+          "micros": "9999",
+          "usd": "₺0.01",
+          "signed": "+₺0.01"
+        },
+        {
+          "micros": "10000",
+          "usd": "₺0.01",
+          "signed": "+₺0.01"
+        },
+        {
+          "micros": "1005000",
+          "usd": "₺1.01",
+          "signed": "+₺1.01"
+        },
+        {
+          "micros": "-1234",
+          "usd": "-₺0.0012",
+          "signed": "-₺0.0012"
+        },
+        {
+          "micros": "-12340000",
+          "usd": "-₺12.34",
+          "signed": "-₺12.34"
+        },
+        {
+          "micros": "2640000000",
+          "usd": "₺2,640.00",
+          "signed": "+₺2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "usd": "₺1,234,567.89",
+          "signed": "+₺1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "usd": "₺100.00",
+          "signed": "+₺100.00"
+        },
+        {
+          "micros": "999800",
+          "usd": "₺1.00",
+          "signed": "+₺1.00"
+        }
+      ],
+      "price": [
+        {
+          "micros": "1",
+          "price": "₺0.000001"
+        },
+        {
+          "micros": "1234",
+          "price": "₺0.001234"
+        },
+        {
+          "micros": "9999",
+          "price": "₺0.009999"
+        },
+        {
+          "micros": "10000",
+          "price": "₺0.01"
+        },
+        {
+          "micros": "1005000",
+          "price": "₺1.01"
+        },
+        {
+          "micros": "2640000000",
+          "price": "₺2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "price": "₺1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "price": "₺100.00"
+        },
+        {
+          "micros": "999800",
+          "price": "₺0.9998"
+        }
+      ],
+      "chartTicks": [
+        {
+          "values": [
+            0
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "TRY 0.00"
+            }
+          ]
+        },
+        {
+          "values": [
+            -0.0023
+          ],
+          "ticks": [
+            {
+              "value": -0.003,
+              "label": "-TRY 0.003"
+            },
+            {
+              "value": -0.002,
+              "label": "-TRY 0.002"
+            },
+            {
+              "value": -0.001,
+              "label": "-TRY 0.001"
+            },
+            {
+              "value": 0,
+              "label": "TRY 0.000"
+            }
+          ]
+        },
+        {
+          "values": [
+            0.75
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "TRY 0.00"
+            },
+            {
+              "value": 0.2,
+              "label": "TRY 0.20"
+            },
+            {
+              "value": 0.4,
+              "label": "TRY 0.40"
+            },
+            {
+              "value": 0.6,
+              "label": "TRY 0.60"
+            },
+            {
+              "value": 0.8,
+              "label": "TRY 0.80"
+            }
+          ]
+        },
+        {
+          "values": [
+            120
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "TRY 0"
+            },
+            {
+              "value": 50,
+              "label": "TRY 50"
+            },
+            {
+              "value": 100,
+              "label": "TRY 100"
+            },
+            {
+              "value": 150,
+              "label": "TRY 150"
+            }
+          ]
+        },
+        {
+          "values": [
+            -250000,
+            1250000
+          ],
+          "ticks": [
+            {
+              "value": -500000,
+              "label": "-TRY 500K"
+            },
+            {
+              "value": 0,
+              "label": "TRY 0"
+            },
+            {
+              "value": 500000,
+              "label": "TRY 500K"
+            },
+            {
+              "value": 1000000,
+              "label": "TRY 1M"
+            },
+            {
+              "value": 1500000,
+              "label": "TRY 1.5M"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "currency": "ZAR",
+      "label": "R",
+      "paid": "R 25.81",
+      "money": [
+        {
+          "micros": "0",
+          "usd": "R 0.00",
+          "signed": "R 0.00"
+        },
+        {
+          "micros": "1",
+          "usd": "R0.000001",
+          "signed": "+R0.000001"
+        },
+        {
+          "micros": "1234",
+          "usd": "R0.0012",
+          "signed": "+R0.0012"
+        },
+        {
+          "micros": "9999",
+          "usd": "R0.01",
+          "signed": "+R0.01"
+        },
+        {
+          "micros": "10000",
+          "usd": "R 0.01",
+          "signed": "+R 0.01"
+        },
+        {
+          "micros": "1005000",
+          "usd": "R 1.01",
+          "signed": "+R 1.01"
+        },
+        {
+          "micros": "-1234",
+          "usd": "-R0.0012",
+          "signed": "-R0.0012"
+        },
+        {
+          "micros": "-12340000",
+          "usd": "-R 12.34",
+          "signed": "-R 12.34"
+        },
+        {
+          "micros": "2640000000",
+          "usd": "R 2,640.00",
+          "signed": "+R 2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "usd": "R 1,234,567.89",
+          "signed": "+R 1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "usd": "R 100.00",
+          "signed": "+R 100.00"
+        },
+        {
+          "micros": "999800",
+          "usd": "R 1.00",
+          "signed": "+R 1.00"
+        }
+      ],
+      "price": [
+        {
+          "micros": "1",
+          "price": "R0.000001"
+        },
+        {
+          "micros": "1234",
+          "price": "R0.001234"
+        },
+        {
+          "micros": "9999",
+          "price": "R0.009999"
+        },
+        {
+          "micros": "10000",
+          "price": "R0.01"
+        },
+        {
+          "micros": "1005000",
+          "price": "R 1.01"
+        },
+        {
+          "micros": "2640000000",
+          "price": "R 2,640.00"
+        },
+        {
+          "micros": "1234567890123",
+          "price": "R 1,234,567.89"
+        },
+        {
+          "micros": "99999999",
+          "price": "R 100.00"
+        },
+        {
+          "micros": "999800",
+          "price": "R0.9998"
+        }
+      ],
+      "chartTicks": [
+        {
+          "values": [
+            0
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "ZAR 0.00"
+            }
+          ]
+        },
+        {
+          "values": [
+            -0.0023
+          ],
+          "ticks": [
+            {
+              "value": -0.003,
+              "label": "-ZAR 0.003"
+            },
+            {
+              "value": -0.002,
+              "label": "-ZAR 0.002"
+            },
+            {
+              "value": -0.001,
+              "label": "-ZAR 0.001"
+            },
+            {
+              "value": 0,
+              "label": "ZAR 0.000"
+            }
+          ]
+        },
+        {
+          "values": [
+            0.75
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "ZAR 0.00"
+            },
+            {
+              "value": 0.2,
+              "label": "ZAR 0.20"
+            },
+            {
+              "value": 0.4,
+              "label": "ZAR 0.40"
+            },
+            {
+              "value": 0.6,
+              "label": "ZAR 0.60"
+            },
+            {
+              "value": 0.8,
+              "label": "ZAR 0.80"
+            }
+          ]
+        },
+        {
+          "values": [
+            120
+          ],
+          "ticks": [
+            {
+              "value": 0,
+              "label": "ZAR 0"
+            },
+            {
+              "value": 50,
+              "label": "ZAR 50"
+            },
+            {
+              "value": 100,
+              "label": "ZAR 100"
+            },
+            {
+              "value": 150,
+              "label": "ZAR 150"
+            }
+          ]
+        },
+        {
+          "values": [
+            -250000,
+            1250000
+          ],
+          "ticks": [
+            {
+              "value": -500000,
+              "label": "-ZAR 500K"
+            },
+            {
+              "value": 0,
+              "label": "ZAR 0"
+            },
+            {
+              "value": 500000,
+              "label": "ZAR 500K"
+            },
+            {
+              "value": 1000000,
+              "label": "ZAR 1M"
+            },
+            {
+              "value": 1500000,
+              "label": "ZAR 1.5M"
             }
           ]
         }
@@ -1757,6 +3296,3854 @@
       "text": "٤٦,٢٠",
       "plain": null
     }
+  ],
+  "typed": [
+    {
+      "currency": "USD",
+      "text": "USD46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "USD",
+      "text": "46 USD",
+      "micros": "46000000"
+    },
+    {
+      "currency": "USD",
+      "text": "$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "USD",
+      "text": "46 $",
+      "micros": "46000000"
+    },
+    {
+      "currency": "USD",
+      "text": "US$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "USD",
+      "text": "46 US$",
+      "micros": "46000000"
+    },
+    {
+      "currency": "USD",
+      "text": "CAD46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 CAD",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 CA$",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "EUR46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 €",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "GBP46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 GBP",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 £",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "CHF46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 CHF",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "AUD46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 AUD",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 A$",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "NZD46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 NZD",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "NZ$46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 NZ$",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "SGD46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 SGD",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "S$46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 S$",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "MXN46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 MXN",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 MX$",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "BRL46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 BRL",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 R$",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "TRY46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 TRY",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 ₺",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "ZAR46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 ZAR",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 R",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46,20",
+      "micros": "46200000"
+    },
+    {
+      "currency": "USD",
+      "text": "$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "USD",
+      "text": "46 $",
+      "micros": "46000000"
+    },
+    {
+      "currency": "USD",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46,20 €",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "US$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "USD",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "CHF 46",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "USD",
+      "text": "46 SEK",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "USD46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 USD",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "CAD",
+      "text": "46 $",
+      "micros": "46000000"
+    },
+    {
+      "currency": "CAD",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 US$",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "CAD46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "CAD",
+      "text": "46 CAD",
+      "micros": "46000000"
+    },
+    {
+      "currency": "CAD",
+      "text": "CA$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "CAD",
+      "text": "46 CA$",
+      "micros": "46000000"
+    },
+    {
+      "currency": "CAD",
+      "text": "EUR46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 €",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "GBP46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 GBP",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 £",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "CHF46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 CHF",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "AUD46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 AUD",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 A$",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "NZD46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 NZD",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "NZ$46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 NZ$",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "SGD46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 SGD",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "S$46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 S$",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "MXN46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 MXN",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 MX$",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "BRL46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 BRL",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 R$",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "TRY46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 TRY",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 ₺",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "ZAR46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 ZAR",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 R",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46,20",
+      "micros": "46200000"
+    },
+    {
+      "currency": "CAD",
+      "text": "$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "CAD",
+      "text": "46 $",
+      "micros": "46000000"
+    },
+    {
+      "currency": "CAD",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46,20 €",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "CA$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "CAD",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "CHF 46",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "CAD",
+      "text": "46 SEK",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "USD46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 USD",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 $",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 US$",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "CAD46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 CAD",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 CA$",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "EUR46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "EUR",
+      "text": "46 EUR",
+      "micros": "46000000"
+    },
+    {
+      "currency": "EUR",
+      "text": "€46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "EUR",
+      "text": "46 €",
+      "micros": "46000000"
+    },
+    {
+      "currency": "EUR",
+      "text": "GBP46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 GBP",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 £",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "CHF46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 CHF",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "AUD46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 AUD",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 A$",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "NZD46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 NZD",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "NZ$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 NZ$",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "SGD46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 SGD",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "S$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 S$",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "MXN46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 MXN",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 MX$",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "BRL46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 BRL",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 R$",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "TRY46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 TRY",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 ₺",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "ZAR46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 ZAR",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 R",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46,20",
+      "micros": "46200000"
+    },
+    {
+      "currency": "EUR",
+      "text": "$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 $",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "€46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "EUR",
+      "text": "46,20 €",
+      "micros": "46200000"
+    },
+    {
+      "currency": "EUR",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "CHF 46",
+      "micros": null
+    },
+    {
+      "currency": "EUR",
+      "text": "46 EUR",
+      "micros": "46000000"
+    },
+    {
+      "currency": "EUR",
+      "text": "46 SEK",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "USD46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 USD",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 $",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 US$",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "CAD46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 CAD",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 CA$",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "EUR46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 €",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "GBP46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "GBP",
+      "text": "46 GBP",
+      "micros": "46000000"
+    },
+    {
+      "currency": "GBP",
+      "text": "£46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "GBP",
+      "text": "46 £",
+      "micros": "46000000"
+    },
+    {
+      "currency": "GBP",
+      "text": "CHF46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 CHF",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "AUD46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 AUD",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 A$",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "NZD46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 NZD",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "NZ$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 NZ$",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "SGD46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 SGD",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "S$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 S$",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "MXN46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 MXN",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 MX$",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "BRL46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 BRL",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 R$",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "TRY46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 TRY",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 ₺",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "ZAR46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 ZAR",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 R",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46,20",
+      "micros": "46200000"
+    },
+    {
+      "currency": "GBP",
+      "text": "$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 $",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46,20 €",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "£46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "GBP",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "CHF 46",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "GBP",
+      "text": "46 SEK",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "USD46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 USD",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 $",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 US$",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "CAD46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 CAD",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 CA$",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "EUR46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 €",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "GBP46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 GBP",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 £",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "CHF46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "CHF",
+      "text": "46 CHF",
+      "micros": "46000000"
+    },
+    {
+      "currency": "CHF",
+      "text": "AUD46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 AUD",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 A$",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "NZD46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 NZD",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "NZ$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 NZ$",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "SGD46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 SGD",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "S$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 S$",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "MXN46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 MXN",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 MX$",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "BRL46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 BRL",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 R$",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "TRY46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 TRY",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 ₺",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "ZAR46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 ZAR",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 R",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46,20",
+      "micros": "46200000"
+    },
+    {
+      "currency": "CHF",
+      "text": "$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 $",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46,20 €",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "CHF 46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "CHF",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "CHF",
+      "text": "46 SEK",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "USD46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 USD",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "AUD",
+      "text": "46 $",
+      "micros": "46000000"
+    },
+    {
+      "currency": "AUD",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 US$",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "CAD46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 CAD",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 CA$",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "EUR46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 €",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "GBP46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 GBP",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 £",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "CHF46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 CHF",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "AUD46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "AUD",
+      "text": "46 AUD",
+      "micros": "46000000"
+    },
+    {
+      "currency": "AUD",
+      "text": "A$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "AUD",
+      "text": "46 A$",
+      "micros": "46000000"
+    },
+    {
+      "currency": "AUD",
+      "text": "NZD46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 NZD",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "NZ$46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 NZ$",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "SGD46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 SGD",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "S$46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 S$",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "MXN46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 MXN",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 MX$",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "BRL46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 BRL",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 R$",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "TRY46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 TRY",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 ₺",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "ZAR46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 ZAR",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 R",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46,20",
+      "micros": "46200000"
+    },
+    {
+      "currency": "AUD",
+      "text": "$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "AUD",
+      "text": "46 $",
+      "micros": "46000000"
+    },
+    {
+      "currency": "AUD",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46,20 €",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "A$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "AUD",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "CHF 46",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "AUD",
+      "text": "46 SEK",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "USD46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 USD",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "NZD",
+      "text": "46 $",
+      "micros": "46000000"
+    },
+    {
+      "currency": "NZD",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 US$",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "CAD46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 CAD",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 CA$",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "EUR46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 €",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "GBP46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 GBP",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 £",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "CHF46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 CHF",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "AUD46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 AUD",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 A$",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "NZD46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "NZD",
+      "text": "46 NZD",
+      "micros": "46000000"
+    },
+    {
+      "currency": "NZD",
+      "text": "NZ$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "NZD",
+      "text": "46 NZ$",
+      "micros": "46000000"
+    },
+    {
+      "currency": "NZD",
+      "text": "SGD46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 SGD",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "S$46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 S$",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "MXN46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 MXN",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 MX$",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "BRL46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 BRL",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 R$",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "TRY46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 TRY",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 ₺",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "ZAR46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 ZAR",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 R",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46,20",
+      "micros": "46200000"
+    },
+    {
+      "currency": "NZD",
+      "text": "$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "NZD",
+      "text": "46 $",
+      "micros": "46000000"
+    },
+    {
+      "currency": "NZD",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46,20 €",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "CHF 46",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "NZD",
+      "text": "46 SEK",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "USD46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 USD",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "SGD",
+      "text": "46 $",
+      "micros": "46000000"
+    },
+    {
+      "currency": "SGD",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 US$",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "CAD46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 CAD",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 CA$",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "EUR46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 €",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "GBP46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 GBP",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 £",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "CHF46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 CHF",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "AUD46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 AUD",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 A$",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "NZD46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 NZD",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "NZ$46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 NZ$",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "SGD46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "SGD",
+      "text": "46 SGD",
+      "micros": "46000000"
+    },
+    {
+      "currency": "SGD",
+      "text": "S$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "SGD",
+      "text": "46 S$",
+      "micros": "46000000"
+    },
+    {
+      "currency": "SGD",
+      "text": "MXN46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 MXN",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 MX$",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "BRL46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 BRL",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 R$",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "TRY46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 TRY",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 ₺",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "ZAR46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 ZAR",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 R",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46,20",
+      "micros": "46200000"
+    },
+    {
+      "currency": "SGD",
+      "text": "$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "SGD",
+      "text": "46 $",
+      "micros": "46000000"
+    },
+    {
+      "currency": "SGD",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46,20 €",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "CHF 46",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "SGD",
+      "text": "46 SEK",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "USD46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 USD",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "MXN",
+      "text": "46 $",
+      "micros": "46000000"
+    },
+    {
+      "currency": "MXN",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 US$",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "CAD46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 CAD",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 CA$",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "EUR46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 €",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "GBP46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 GBP",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 £",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "CHF46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 CHF",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "AUD46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 AUD",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 A$",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "NZD46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 NZD",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "NZ$46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 NZ$",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "SGD46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 SGD",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "S$46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 S$",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "MXN46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "MXN",
+      "text": "46 MXN",
+      "micros": "46000000"
+    },
+    {
+      "currency": "MXN",
+      "text": "MX$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "MXN",
+      "text": "46 MX$",
+      "micros": "46000000"
+    },
+    {
+      "currency": "MXN",
+      "text": "BRL46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 BRL",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 R$",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "TRY46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 TRY",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 ₺",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "ZAR46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 ZAR",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 R",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46,20",
+      "micros": "46200000"
+    },
+    {
+      "currency": "MXN",
+      "text": "$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "MXN",
+      "text": "46 $",
+      "micros": "46000000"
+    },
+    {
+      "currency": "MXN",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46,20 €",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "MX$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "MXN",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "CHF 46",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "MXN",
+      "text": "46 SEK",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "USD46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 USD",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "$46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 $",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 US$",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "CAD46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 CAD",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 CA$",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "EUR46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 €",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "GBP46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 GBP",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 £",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "CHF46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 CHF",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "AUD46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 AUD",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 A$",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "NZD46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 NZD",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "NZ$46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 NZ$",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "SGD46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 SGD",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "S$46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 S$",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "MXN46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 MXN",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 MX$",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "BRL46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "BRL",
+      "text": "46 BRL",
+      "micros": "46000000"
+    },
+    {
+      "currency": "BRL",
+      "text": "R$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "BRL",
+      "text": "46 R$",
+      "micros": "46000000"
+    },
+    {
+      "currency": "BRL",
+      "text": "TRY46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 TRY",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 ₺",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "ZAR46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 ZAR",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 R",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46,20",
+      "micros": "46200000"
+    },
+    {
+      "currency": "BRL",
+      "text": "$46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 $",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46,20 €",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "R$46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "BRL",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "CHF 46",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "BRL",
+      "text": "46 SEK",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "USD46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 USD",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 $",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 US$",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "CAD46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 CAD",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 CA$",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "EUR46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 €",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "GBP46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 GBP",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 £",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "CHF46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 CHF",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "AUD46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 AUD",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 A$",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "NZD46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 NZD",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "NZ$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 NZ$",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "SGD46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 SGD",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "S$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 S$",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "MXN46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 MXN",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 MX$",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "BRL46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 BRL",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 R$",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "TRY46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "TRY",
+      "text": "46 TRY",
+      "micros": "46000000"
+    },
+    {
+      "currency": "TRY",
+      "text": "₺46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "TRY",
+      "text": "46 ₺",
+      "micros": "46000000"
+    },
+    {
+      "currency": "TRY",
+      "text": "ZAR46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 ZAR",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 R",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46,20",
+      "micros": "46200000"
+    },
+    {
+      "currency": "TRY",
+      "text": "$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 $",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46,20 €",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "R46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "₺46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "TRY",
+      "text": "CHF 46",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "TRY",
+      "text": "46 SEK",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "USD46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 USD",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 $",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 US$",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "CAD46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 CAD",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 CA$",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "EUR46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 €",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "GBP46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 GBP",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 £",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "CHF46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 CHF",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "AUD46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 AUD",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 A$",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "NZD46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 NZD",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "NZ$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 NZ$",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "SGD46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 SGD",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "S$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 S$",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "MXN46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 MXN",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 MX$",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "BRL46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 BRL",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 R$",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "TRY46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 TRY",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 ₺",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "ZAR46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 ZAR",
+      "micros": "46000000"
+    },
+    {
+      "currency": "ZAR",
+      "text": "R46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 R",
+      "micros": "46000000"
+    },
+    {
+      "currency": "ZAR",
+      "text": "46,20",
+      "micros": "46200000"
+    },
+    {
+      "currency": "ZAR",
+      "text": "$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 $",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "€46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46,20 €",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "£46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "US$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "CA$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "A$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "MX$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "R$46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "R46",
+      "micros": "46000000"
+    },
+    {
+      "currency": "ZAR",
+      "text": "₺46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "CHF 46",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 EUR",
+      "micros": null
+    },
+    {
+      "currency": "ZAR",
+      "text": "46 SEK",
+      "micros": null
+    }
+  ],
+  "presetFiat": [
+    "USD",
+    "CAD",
+    "GBP",
+    "EUR"
   ],
   "linkMessage": {
     "owner": "0x00000000000000000000000000000000000de300",

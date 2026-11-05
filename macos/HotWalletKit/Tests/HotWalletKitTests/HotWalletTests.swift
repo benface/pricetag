@@ -1331,7 +1331,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     }
 
     @Test func topUpNeverPromisesASweepWithNoSavings() {
-        for sentence in [HotWalletWording.topUpTitle(hasDestination: false), HotWalletWording.topUpRoom("$5.00", hasDestination: false), HotWalletWording.topUpAtCap("$25.00", hasDestination: false), HotWalletWording.topUpNeedsGas(hasDestination: false), HotWalletWording.receiveNote(cap: "$25.00", hasDestination: false)] {
+        for sentence in [HotWalletWording.topUpTitle(hasDestination: false), HotWalletWording.topUpRoom("$5.00", hasDestination: false), HotWalletWording.topUpAtCap("$25.00", hasDestination: false), HotWalletWording.topUpNeedsGas(hasDestination: false), HotWalletWording.receiveNote(cap: "$25.00", hasDestination: false), HotWalletWording.buyWithoutSavings(cap: "$25.00", provider: "Coinbase"), HotWalletWording.buyLands(fits: "$5.00", aboveCap: "$20.00", savings: nil), HotWalletWording.buyLands(fits: nil, aboveCap: "$20.00", savings: nil), HotWalletWording.buyNoGas("USDC", savings: nil)] {
             #expect(!sentence.contains("swept"))
             #expect(!sentence.contains("sweeps"))
             #expect(!sentence.contains("from Savings"))
@@ -1339,6 +1339,8 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(HotWalletWording.topUpRoom("$5.00", hasDestination: true).contains("swept back to your savings"))
         #expect(HotWalletWording.topUpAtCap("$25.00", hasDestination: true).contains("swept straight back"))
         #expect(HotWalletWording.receiveNote(cap: "$25.00", hasDestination: true).contains("swept to your savings"))
+        #expect(!HotWalletWording.buyLands(fits: "$5.00", aboveCap: "$20.00", savings: nil).contains("goes to"))
+        #expect(HotWalletWording.buyLands(fits: "$5.00", aboveCap: "$20.00", savings: "Ledger").contains("goes to Ledger"))
     }
 
     @Test func overTheCapWithNoColdWalletSaysSoOnce() async throws {
