@@ -88,32 +88,26 @@ struct MainWindow: View {
         Binding(get: { navigation.target != nil }, set: { if !$0 { navigation.target = nil } })
     }
 
+    /// Named, because two lone icons didn't say what they did. The status doesn't look like a button, because it isn't one.
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            Button("Change Wallet", systemImage: "wallet.bifold") { navigation.isChangingWallet = true }
-                .help("Change wallet (⌘L)")
-        }
-        ToolbarItem(placement: .navigation) {
-            Button("Spending Money", systemImage: "banknote") { openWindow(id: WindowID.hotWallet) }
-                .help("This Mac's spending money (⇧⌘M)")
-        }
-        ToolbarItem(placement: .principal) {
-            Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
-                ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .help("\(Wording.methodHelp) (⌘1, ⌘2)")
-        }
         ToolbarItem(placement: .primaryAction) {
-            Button("Tax Report", systemImage: "doc.text") { navigation.isExportingTaxReport = true }
-                .disabled(store.address == nil)
-                .help("Export a tax report (⌘E)")
-        }
-        ToolbarItem(placement: .status) {
             FeedBadge(feed: store.feed, portfolio: portfolio)
                 .padding(.horizontal, 6)
+        }
+        .sharedBackgroundVisibility(.hidden)
+        ToolbarSpacer(.fixed, placement: .primaryAction)
+        ToolbarItemGroup(placement: .primaryAction) {
+            Button("Change Wallet", systemImage: "wallet.bifold") { navigation.isChangingWallet = true }
+                .labelStyle(.titleAndIcon)
+                .help("Look at another wallet (⌘L)")
+            Button("Spending Money", systemImage: "banknote") { openWindow(id: WindowID.hotWallet) }
+                .labelStyle(.titleAndIcon)
+                .help("This Mac's spending money (⇧⌘M)")
+            Button("Tax Report", systemImage: "doc.text") { navigation.isExportingTaxReport = true }
+                .labelStyle(.titleAndIcon)
+                .disabled(store.address == nil)
+                .help("Export a tax report (⌘E)")
         }
     }
 
@@ -187,7 +181,11 @@ struct MainWindow: View {
                             HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
                             history(portfolio)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Holdings").font(.headline)
+                                HStack {
+                                    Text("Holdings").font(.headline)
+                                    Spacer()
+                                    CostMethodMenu(store: store)
+                                }
                                 HoldingsTable(portfolio: portfolio, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
                             }
                             .frame(minHeight: 160)
@@ -290,6 +288,27 @@ struct MainWindow: View {
                 .fixedSize(horizontal: false, vertical: true)
             PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
         }
+    }
+}
+
+/// Rarely changed, so it sits quietly by the numbers it affects, and not at the center of the toolbar. It says what's in use, because the numbers depend on it.
+struct CostMethodMenu: View {
+    let store: PortfolioStore
+
+    var body: some View {
+        Menu {
+            Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
+                ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Text("Cost: \(store.method.label)")
+        }
+        .menuStyle(.borderlessButton)
+        .controlSize(.small)
+        .fixedSize()
+        .foregroundStyle(.secondary)
+        .help("\(Wording.methodHelp) (⌘1, ⌘2)")
     }
 }
 

@@ -157,14 +157,7 @@ struct PopoverView: View {
 
     private var footerControls: some View {
         HStack {
-            Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
-                ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-            .fixedSize()
-            .help(Wording.methodHelp)
+            CostMethodMenu(store: store)
             Spacer()
             Button("Open \(AppName.current)") { open(nil) }
                 .keyboardShortcut("o", modifiers: .command)
