@@ -67,7 +67,7 @@ public final class AddSavingsModel {
     public private(set) var isWaitingForBrowser = false
     public private(set) var scanProblem: String?
     public private(set) var added: EthereumAddress?
-    /// Whether adding it gave what was waiting somewhere to go.
+    /// Whether adding it may have given something waiting somewhere to go, as far as could be told then.
     public private(set) var startedSweeps = false
     public var name = ""
     public var address = "" {
@@ -110,8 +110,26 @@ public final class AddSavingsModel {
 
     public var canAdd: Bool { parsed != nil && problem == nil && matches }
 
-    /// The first savings wallet becomes where sweeps go, and they run by themselves. This wallet already has something it wants to sweep.
-    public var wouldStartSweeps: Bool { wallet.settings.sweepDestination == nil && wallet.plan?.blockers.contains(.noDestination) == true }
+    /// The first savings wallet becomes where sweeps go, and they run by themselves. This wallet already has something it wants to sweep,
+    /// or hasn't read its balance yet, so it can't say that it doesn't. Adding doesn't wait for that read, and a sweep can follow right after it.
+    public var wouldStartSweeps: Bool {
+        guard wallet.settings.sweepDestination == nil else { return false }
+        guard let plan = wallet.plan else { return true }
+        return plan.blockers.contains(.noDestination)
+    }
+
+    /// What adding this does to sweeps, if anything. Only the first one changes where they go, and even with nothing to sweep now, more can arrive.
+    public var sweepNotice: String? {
+        guard wallet.settings.sweepDestination == nil else { return nil }
+        guard wouldStartSweeps else { return AddSavingsWording.firstWallet }
+        return wallet.plan == nil ? AddSavingsWording.balanceUnread : AddSavingsWording.startsSweeps
+    }
+
+    /// Whether money may be moving here by itself by now, whatever could be told when it was added.
+    public var mayBeSweeping: Bool {
+        guard let added, added == wallet.settings.sweepDestination else { return false }
+        return startedSweeps || wallet.plan?.transfers.isEmpty == false || wallet.records.contains { $0.reason == .aboveCap && $0.to == added }
+    }
     public var canGoBack: Bool { !earlier.isEmpty && step != .finished }
 
     /// Where this is among the device's steps, for the dots.
@@ -128,7 +146,7 @@ public final class AddSavingsModel {
 
     public var sweepsGoHere: Bool { added != nil && added == wallet.settings.sweepDestination }
     public var sweepDestinationName: String? { wallet.settings.coldWallets.first { $0.address == wallet.settings.sweepDestination }?.name }
-    public var canSendTest: Bool { wallet.canSend }
+    public var canSendTest: Bool { wallet.canSend && !mayBeSweeping }
 
     public func choose(_ device: Device) {
         self.device = device
@@ -250,8 +268,11 @@ public enum AddSavingsWording {
     public static let camera = "Your camera's picture stays on this Mac, and nothing's saved."
     public static let matches = "Every character matches what my device's screen shows"
     public static let startsSweeps = "This Mac's spending money has more than its cap. Once you add this, what's above the cap can move here by itself, right away."
+    public static let balanceUnread = "This Mac's spending money hasn't finished reading its balance. Once you add this, anything above the cap can move here by itself, right away."
+    public static let firstWallet = "This becomes where sweeps go. From now on, anything above your cap, and any realized gains, can move here by itself."
     public static let sweepsStarted = "What's above your cap may already be on its way here. From now on, it goes here by itself."
     public static let testFirst = "Send a few dollars here first, and make sure they arrive before trusting it with more."
+    public static let testAfterSweep = "Make sure it arrives before trusting this wallet with more."
 
     public static func deviceSubtitle(_ device: AddSavingsModel.Device) -> String {
         switch device {

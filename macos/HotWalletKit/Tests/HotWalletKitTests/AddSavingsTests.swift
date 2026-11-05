@@ -221,15 +221,71 @@ import Testing
         #expect(!flow.wouldStartSweeps)
     }
 
-    @Test func anEmptyWalletOrASecondOneStartsNothing() async throws {
-        let (empty, _) = await model()
-        empty.address = address
-        #expect(!empty.wouldStartSweeps)
+    @Test func addingBeforeTheFirstReadStillWarns() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(100)]), withCold: false)
+        await rig.chain.hold(snapshots: true)
+        let firstRead = Task { await rig.wallet.tick() }
+        while await rig.chain.heldCalls == 0 { await Task.yield() }
+        let flow = AddSavingsModel(wallet: rig.wallet)
+        flow.address = address
+        flow.matches = true
+        #expect(rig.wallet.plan == nil)
+        #expect(flow.wouldStartSweeps)
+        #expect(flow.sweepNotice == AddSavingsWording.balanceUnread)
+        do {
+            try flow.add()
+        } catch {
+            await rig.chain.release()
+            await firstRead.value
+            throw error
+        }
+        #expect(flow.startedSweeps)
+        #expect(flow.mayBeSweeping)
+        #expect(!flow.canSendTest)
+        await rig.chain.release()
+        await firstRead.value
+        // It really does go out, which is why this says so.
+        #expect(await rig.chain.sent.count == 1)
+        #expect(flow.mayBeSweeping)
+    }
+
+    @Test func anEmptyFirstWalletStillSaysWhatItBecomes() async throws {
+        let rig = await Rig(snapshot(eth: 0), withCold: false)
+        await rig.wallet.tick()
+        let flow = AddSavingsModel(wallet: rig.wallet)
+        flow.address = address
+        #expect(!flow.wouldStartSweeps)
+        #expect(flow.sweepNotice == AddSavingsWording.firstWallet)
+        flow.matches = true
+        try flow.add()
+        #expect(!flow.startedSweeps)
+        #expect(!flow.mayBeSweeping)
+        #expect(flow.sweepNotice == nil)
+    }
+
+    @Test func theFinishFollowsMoneyThatArrivesAfterAdding() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei), withCold: false)
+        await rig.wallet.tick()
+        let flow = AddSavingsModel(wallet: rig.wallet)
+        flow.address = address
+        flow.matches = true
+        try flow.add()
+        #expect(!flow.mayBeSweeping)
+        await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(500)]))
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.count == 1)
+        #expect(!flow.startedSweeps)
+        #expect(flow.mayBeSweeping)
+        #expect(!flow.canSendTest)
+    }
+
+    @Test func aSecondWalletChangesNothingAboutSweeps() async {
         let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(100)]), withCold: true)
         await rig.wallet.tick()
         let second = AddSavingsModel(wallet: rig.wallet)
         second.address = address
         #expect(!second.wouldStartSweeps)
+        #expect(second.sweepNotice == nil)
     }
 
     // MARK: Wording

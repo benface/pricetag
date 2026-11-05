@@ -78,7 +78,7 @@ Start with **Adding from the Mac app**. Use a fresh account with a few dollars a
 
 **Adding from the Mac app,** with `pnpm mac`. Press **Add a Savings Wallet…**. For each step, note any words that differ from what the device says.
 
-**This only moves no money if you stop before adding, or the spending wallet is empty.** The first savings wallet you add becomes where sweeps go, and the next check sends anything above the cap, and any realized gains, there by itself, with no prompt. So if your spending wallet holds money and you have no savings wallet yet, press **Cancel** instead of **Add Wallet**, at the steps marked below. The check step warns about this when it applies. A second savings wallet changes nothing, unless you press **Send It Here Instead**.
+**This only moves no money if you stop before adding, or the spending wallet is empty.** The first savings wallet you add becomes where sweeps go, and the next check sends anything above the cap, and any realized gains, there by itself, with no prompt. So if your spending wallet holds money and you have no savings wallet yet, press **Cancel** instead of **Add Wallet**, at the steps marked below. The check step says so for any first savings wallet, and warns when money may move right away, which includes when it hasn't finished reading the balance. A second savings wallet changes nothing, unless you press **Send It Here Instead**.
 
 Ledger Nano X:
 
