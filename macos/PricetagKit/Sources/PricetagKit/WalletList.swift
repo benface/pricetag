@@ -68,6 +68,8 @@ public struct WalletEntry: Identifiable, Equatable, Sendable {
     public let address: String
     public let name: String?
     public let kind: WalletKind
+    /// Yours because this Mac's wallet holds it, like a spending key that's been replaced, and not because of anything the user said.
+    public var isAccount = false
 
     public var id: String { address }
 
@@ -95,6 +97,27 @@ public struct WalletEntry: Identifiable, Equatable, Sendable {
     public var canRename: Bool { kind != .spendingMoney && kind != .demo }
     /// Spending money and savings wallets do more than sit in a list, so they're removed where that's explained.
     public var canRemove: Bool { kind == .watching }
+    /// Proving it only moves it to Yours, so there's nothing to prove once it's there.
+    public var canProve: Bool { kind == .watching }
+    /// Only what the user said can be taken back. An account stays for as long as it's an account.
+    public var canUnlink: Bool { kind == .yours && !isAccount }
+}
+
+/// What a wallet signs to show it's the user's, and what that signature gets checked against.
+public struct WalletProof: Identifiable, Equatable, Sendable {
+    public let address: String
+    public let owner: String
+    public let title: String
+
+    public init(address: String, owner: String, title: String) {
+        self.address = address.lowercased()
+        self.owner = owner.lowercased()
+        self.title = title
+    }
+
+    public var id: String { address }
+
+    public var message: String { Wording.linkMessage(owner: owner, address: address) }
 }
 
 /// Every wallet the switcher offers, in the order it offers them. Each address appears once, as the most it is to the user.
@@ -106,12 +129,13 @@ public struct WalletList: Equatable, Sendable {
     public let demo: WalletEntry?
 
     /// `linked` is every wallet the user has said is theirs, which includes the spending money and savings ones.
-    public init(spending: NamedWallet?, savings: [NamedWallet], linked: [String], saved: [SavedWallet], current: String?, offersDemo: Bool = true) {
+    /// `accounts` is the ones among them that this Mac's wallet holds.
+    public init(spending: NamedWallet?, savings: [NamedWallet], linked: [String], accounts: [String] = [], saved: [SavedWallet], current: String?, offersDemo: Bool = true) {
         let savedNames = Dictionary(saved.compactMap { wallet in wallet.name.map { (wallet.address, $0) } }, uniquingKeysWith: { first, _ in first })
         var yours = spending.map { [WalletEntry(address: $0.address, name: $0.name, kind: .spendingMoney)] } ?? []
         yours += savings.filter { $0.address != spending?.address }.map { WalletEntry(address: $0.address, name: $0.name, kind: .savings) }
         let named = Set(yours.map(\.address))
-        yours += linked.filter { !named.contains($0) }.map { WalletEntry(address: $0, name: savedNames[$0], kind: .yours) }
+        yours += linked.filter { !named.contains($0) }.map { WalletEntry(address: $0, name: savedNames[$0], kind: .yours, isAccount: accounts.contains($0)) }
         self.yours = yours
 
         let own = Set(yours.map(\.address))
@@ -135,6 +159,14 @@ public struct WalletList: Equatable, Sendable {
 
     public func entry(for address: String?) -> WalletEntry? {
         address.flatMap { address in all.first { $0.address == address } }
+    }
+
+    /// Links it to the wallet showing if that's the user's, or to another of theirs. With none yet, it speaks for itself. A wallet that's only
+    /// being looked at never comes into it, because one wallet's signature says nothing about another.
+    public func proof(of entry: WalletEntry, current: String?) -> WalletProof {
+        let others = yours.map(\.address).filter { $0 != entry.address }
+        let owner = current.flatMap { others.contains($0) ? $0 : nil } ?? others.first ?? entry.address
+        return WalletProof(address: entry.address, owner: owner, title: entry.title)
     }
 
     /// What to show once this one is gone. Never the demo, which must not quietly stand in for a real wallet.

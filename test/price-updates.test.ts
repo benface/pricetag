@@ -622,5 +622,20 @@ describe("the startup check of the feeds", () => {
       assert.equal(messages.length, 2)
       assert.ok(messages.every((message) => /Couldn't check/.test(message) && !message.includes("secret-key")))
     }
+    assert.ok((await warnings(failures[1] as typeof fetch)).every((message) => message.includes("status 500")), "and it still says what the RPC answered")
+  })
+
+  it("never warns with what a failed read's error says, which can quote the URL and the key in it", async () => {
+    const fake = "fake-password-for-this-test"
+    const rpc = `https://user:${fake}@rpc.example/${fake}`
+    const quoting = (async () => {
+      throw new Error(`couldn't reach ${rpc}`)
+    }) as typeof fetch
+    const messages: string[] = []
+    // Node's own fetch refuses a URL with credentials in it, and quotes it in saying so.
+    await warnOfNewAggregators(rpc, fetch, (message) => messages.push(message))
+    await warnOfNewAggregators(rpc, quoting, (message) => messages.push(message))
+    assert.equal(messages.length, 4)
+    assert.ok(!messages.join(" ").includes(fake))
   })
 })

@@ -3,7 +3,7 @@
 // see that coming, but the proxy can be asked.
 
 import { PRICE_FEEDS } from "@pricetag/sdk/core"
-import { hexOf } from "@pricetag/sdk/internal"
+import { RpcAnswerError, describeRpcError, hexOf } from "@pricetag/sdk/internal"
 
 /** The first four bytes of the Keccak of `aggregator()`. */
 export const AGGREGATOR_SELECTOR = "0x245a7bfc"
@@ -16,15 +16,14 @@ export async function warnOfNewAggregators(url: string, send: typeof fetch = fet
     try {
       const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: feed.proxy, data: AGGREGATOR_SELECTOR }, "latest"] })
       const response = await send(url, { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(TIMEOUT_MS) })
-      if (!response.ok) throw new Error(`status ${response.status}`)
+      if (!response.ok) throw new RpcAnswerError(`status ${response.status}`)
       const { result } = (await response.json()) as { result?: unknown }
-      if (typeof result !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(result)) throw new Error("no address in the answer")
+      if (typeof result !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(result)) throw new RpcAnswerError("no address in the answer")
       const current = result.slice(-40).toLowerCase()
       if (feed.aggregators.some((address) => hexOf(address) === current)) continue
       warn(`Chainlink's ${feed.pair} feed now reads from 0x${current}, which isn't in PRICE_FEEDS. Its price turns unknown within ${(feed.validSeconds / 3600).toLocaleString("en-US", { maximumFractionDigits: 1 })} hours of its last update. Add the address and deploy a new dataset version.`)
     } catch (error) {
-      // Not the URL: a dedicated RPC's has a key in it.
-      warn(`Couldn't check which contract Chainlink's ${feed.pair} feed reads from: ${error instanceof Error ? error.message : "unknown error"}`)
+      warn(`Couldn't check which contract Chainlink's ${feed.pair} feed reads from: ${describeRpcError(error)}`)
     }
   }
 }

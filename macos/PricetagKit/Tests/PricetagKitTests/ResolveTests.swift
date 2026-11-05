@@ -2,12 +2,15 @@ import Foundation
 import Testing
 @testable import PricetagKit
 
+private let goodSignature = "0x" + String(repeating: "ab", count: 65)
+
 /// Hands back whatever portfolio it's told, and remembers the books it was sent.
 actor BookSource: PortfolioSource {
     var portfolios: [Portfolio]
     private(set) var books: [Book] = []
     private(set) var previewed: [[Book]] = []
     private(set) var previewRules: [String?] = []
+    private(set) var signaturesChecked: [String] = []
     var previewAnswers: [BookPreview] = []
 
     init(_ portfolios: [Portfolio]) {
@@ -48,7 +51,34 @@ actor BookSource: PortfolioSource {
     }
 
     func verifyLink(owner: String, address: String, signature: String) async throws -> Bool {
-        signature == "good"
+        signaturesChecked.append(signature)
+        return signature == goodSignature
+    }
+}
+
+/// Holds a signature's check open until it's told how it went, whatever happens to whoever asked.
+actor GatedVerifier: PortfolioSource {
+    private var waiting: CheckedContinuation<Bool, any Error>?
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+        throw FetchError.unreachable
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func verifyLink(owner: String, address: String, signature: String) async throws -> Bool {
+        try await withCheckedThrowingContinuation { waiting = $0 }
+    }
+
+    func waitUntilAsked() async {
+        while waiting == nil { await Task.yield() }
+    }
+
+    func answer(_ verified: Bool) {
+        waiting?.resume(returning: verified)
+        waiting = nil
     }
 }
 
@@ -237,10 +267,63 @@ actor BookSource: PortfolioSource {
 
     @Test func aSignatureOnlyLinksWhenItHoldsUp() async throws {
         let (store, _, _) = try makeStore()
-        #expect(try await store.linkProved(sender, signature: "bad") == false)
+        let proof = WalletProof(address: sender, owner: wallet, title: "")
+        #expect(try await store.linkProved(proof, signature: "0x" + String(repeating: "cd", count: 65)) == false)
         #expect(store.book.isEmpty)
-        #expect(try await store.linkProved(sender, signature: "good") == true)
+        #expect(try await store.linkProved(proof, signature: goodSignature) == true)
         #expect(store.book.linkedWallets.contains(sender))
+    }
+
+    @Test func provingAWalletSaysNothingAboutTheOneShowing() async throws {
+        let (store, _, _) = try makeStore()
+        store.setWallet("0x00000000000000000000000000000000000000cc")
+        #expect(try await store.linkProved(WalletProof(address: sender, owner: sender, title: ""), signature: goodSignature) == true)
+        #expect(store.book.linkedWallets == [sender])
+    }
+
+    @Test func aProofCancelledWhileItsCheckedLinksNothing() async throws {
+        let source = GatedVerifier()
+        let store = PortfolioStore(defaults: UserDefaults(suiteName: "prove-\(UUID().uuidString)")!, makeSource: { _ in source })
+        let proof = WalletProof(address: sender, owner: wallet, title: "")
+        let check = Task { try await store.linkProved(proof, signature: goodSignature) }
+        await source.waitUntilAsked()
+        check.cancel()
+        await source.answer(true)
+        await #expect(throws: CancellationError.self) { try await check.value }
+        #expect(store.book.isEmpty, "the signature was good, but they'd already said no")
+    }
+
+    @Test func onlyWhatLooksLikeASignatureReachesTheServer() async throws {
+        let source = BookSource([])
+        let store = PortfolioStore(defaults: UserDefaults(suiteName: "prove-\(UUID().uuidString)")!, makeSource: { _ in source })
+        let privateKey = "0x" + String(repeating: "ab", count: 32)
+        for pasted in ["", "good", privateKey, "test test test test"] {
+            #expect(try await store.linkProved(WalletProof(address: sender, owner: wallet, title: ""), signature: pasted) == false)
+        }
+        #expect(await source.signaturesChecked.isEmpty)
+        #expect(WalletAddress.isSignature(goodSignature))
+        #expect(!WalletAddress.isSignature(privateKey))
+    }
+
+    @Test func aWalletThatsNoLongerYoursStaysListed() throws {
+        let (store, _, _) = try makeStore()
+        store.setBook(store.book.answering(sender, .mine, focus: nil))
+        let kind = { WalletList(spending: nil, savings: [], linked: store.book.linkedWallets, saved: store.savedWallets, current: nil).entry(for: sender)?.kind }
+        #expect(kind() == .yours)
+        store.unlinkWallet(sender)
+        #expect(store.book.senders[sender] == nil)
+        #expect(kind() == .watching)
+        store.undo()
+        #expect(store.book.senders[sender]?.kind == .mine)
+    }
+
+    @Test func proofsAreForWhatsWatched() {
+        let watched = "0x00000000000000000000000000000000000000cc"
+        let list = WalletList(spending: nil, savings: [], linked: [sender], saved: [SavedWallet(address: watched, lastSeen: .distantPast)], current: watched)
+        #expect(list.entry(for: watched)?.canProve == true)
+        #expect(list.entry(for: watched)?.canUnlink == false)
+        #expect(list.entry(for: sender)?.canProve == false)
+        #expect(list.entry(for: sender)?.canUnlink == true)
     }
 
     @Test func writesTheNoteTheServerReads() throws {

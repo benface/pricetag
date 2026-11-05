@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { formatAmount, formatMoney, formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "../core/api.ts"
-import { answerSender, enterExchangeCosts, linkMessage, walletsBehind, type Book, type Money, type SenderAnswer } from "../core/book.ts"
+import { answerSender, enterExchangeCosts, linkMessage, proofOwner, walletsBehind, type Book, type Money, type SenderAnswer } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
 import { parseCoinbaseCsv } from "../core/exchange-import.ts"
@@ -291,7 +291,7 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
         </div>
       )}
 
-      <LinkByProof owner={wallet.address} book={book} onChange={onChange} />
+      <LinkByProof current={wallet.address} book={book} onChange={onChange} />
 
       <footer className="resolve-foot">
         <button type="button" disabled={!canUndo} onClick={onUndo}>
@@ -313,8 +313,8 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
 
 type Ethereum = { request(args: { method: string; params?: unknown[] }): Promise<unknown> }
 
-/** Signing with a browser wallet proves it's yours, so it links without a question. Hot wallets only: cold ones never connect to a site. */
-function LinkByProof({ owner, book, onChange }: { owner: string; book: Book; onChange: (book: Book) => void }) {
+/** Signing with a browser wallet proves it's yours, so it links without a question, and only that wallet. Hot wallets only: cold ones never connect to a site. */
+function LinkByProof({ current, book, onChange }: { current: string; book: Book; onChange: (book: Book) => void }) {
   const [status, setStatus] = useState<string | null>(null)
   const ethereum = (window as unknown as { ethereum?: Ethereum }).ethereum
   if (!ethereum) return null
@@ -322,12 +322,13 @@ function LinkByProof({ owner, book, onChange }: { owner: string; book: Book; onC
     try {
       const [address] = (await ethereum.request({ method: "eth_requestAccounts" })) as string[]
       if (!address) return
+      const owner = proofOwner(book, address, current)
       const message = linkMessage(owner, address)
       const signature = await ethereum.request({ method: "personal_sign", params: [message, address] })
       const response = await fetch("/api/links/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ owner, address, signature }) })
       const { verified } = (await response.json()) as { verified?: boolean }
       if (!verified) return setStatus("That signature isn't from this wallet.")
-      onChange(answerSender(book, owner, address, { kind: "mine" }))
+      onChange(answerSender(book, null, address, { kind: "mine" }))
       setStatus(`Linked ${shortHash(address)}.`)
     } catch {
       setStatus("Didn't link it. Nothing changed.")

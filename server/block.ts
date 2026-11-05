@@ -1,6 +1,6 @@
 // Reads one block's rows from Amp for `verify.ts`, and what a deposit's hash covers from an RPC.
 
-import { asNumber, decimalString, hexOf, type Query, type Row } from "@pricetag/sdk/internal"
+import { RpcAnswerError, asNumber, decimalString, describeRpcError, hexOf, type Query, type Row } from "@pricetag/sdk/internal"
 import { DEPOSIT_TX_TYPE, type AccessListEntry, type Authorization, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "./verify.ts"
 
 export type BlockData = { block: BlockRow; txs: TxRow[]; logs: LogRow[] }
@@ -139,7 +139,7 @@ export function createDepositReader(url: string, send: typeof fetch = fetch, pau
         await new Promise((resolve) => setTimeout(resolve, pauseAfter429Ms))
         response = await post()
       }
-      if (!response.ok) throw new Error(`status ${response.status}`)
+      if (!response.ok) throw new RpcAnswerError(`status ${response.status}`)
       const results = (await response.json()) as DepositResult[]
       const deposits = new Map<string, DepositDetails>()
       for (const { id, result } of results) {
@@ -148,8 +148,7 @@ export function createDepositReader(url: string, send: typeof fetch = fetch, pau
       }
       return deposits.size === txHashes.length ? deposits : null
     } catch (error) {
-      // Not the URL: a dedicated RPC's has a key in it.
-      console.error("Couldn't read deposits:", error instanceof Error ? error.message : "unknown error")
+      console.error("Couldn't read deposits:", describeRpcError(error))
       return null
     }
   }

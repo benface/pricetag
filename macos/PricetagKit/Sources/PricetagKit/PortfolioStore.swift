@@ -362,12 +362,23 @@ public final class PortfolioStore {
         return imported
     }
 
-    /// Links a wallet that proved it's this user's by signing. Says whether the signature holds up.
-    public func linkProved(_ wallet: String, signature: String) async throws -> Bool {
-        guard let address, WalletAddress.isValid(address) else { return false }
-        guard try await source.verifyLink(owner: address, address: wallet, signature: signature) else { return false }
-        setBook(book.answering(wallet, .mine, focus: address))
+    /// Links a wallet that proved it's this user's by signing. Says whether the signature holds up. Only something shaped like one reaches the
+    /// server, and only that wallet is linked: its signature says nothing about the one showing. Cancelling while it's checked links nothing, however it goes.
+    public func linkProved(_ proof: WalletProof, signature: String) async throws -> Bool {
+        guard WalletAddress.isSignature(signature) else { return false }
+        let verified = try await source.verifyLink(owner: proof.owner, address: proof.address, signature: signature)
+        try Task.checkCancellation()
+        guard verified else { return false }
+        setBook(book.answering(proof.address, .mine, focus: nil))
         return true
+    }
+
+    /// It's not the user's after all. It stays listed as one they're only looking at, so a slip is easy to put right.
+    public func unlinkWallet(_ address: String) {
+        var next = book
+        next.senders[address] = nil
+        setBook(next)
+        saveWallets(SavedWallet.seeing(address, at: now(), in: savedWallets, own: book.linkedWallets))
     }
 
     /// nil with no wallet, when there's nothing to explain.
