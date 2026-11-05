@@ -67,3 +67,61 @@ import Testing
         #expect(try portfolio(points: [point(0, nil), point(300, nil), point(600, "3"), point(900, "3", tx: false)]).isTooNewToChart)
     }
 }
+
+@Suite struct ChartAxisTests {
+    private var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Toronto")!
+        return calendar
+    }
+
+    private func axis(from start: TimeInterval = 1_793_800_000, spanning span: TimeInterval) -> (axis: ChartAxis.TimeAxis, labels: [String]) {
+        let date = Date(timeIntervalSince1970: start)
+        let axis = ChartAxis.TimeAxis(dates: [date, date.addingTimeInterval(span)], calendar: calendar)
+        var format = axis.format
+        format.timeZone = calendar.timeZone
+        format.locale = Locale(identifier: "en_US")
+        return (axis, axis.ticks.map { $0.formatted(format) })
+    }
+
+    @Test func noTwoTimesReadTheSameAtAnySpan() {
+        let hour: TimeInterval = 3600
+        let day: TimeInterval = 86400
+        let spans: [TimeInterval] = [0.5, 1, 7, 42, 60, 75, 150, 400, 1800, 3 * hour, 9 * hour, 20 * hour, 26 * hour, 2.5 * day, 18 * day, 70 * day, 200 * day, 900 * day, 4000 * day]
+        for span in spans {
+            let found = axis(spanning: span)
+            #expect(Set(found.labels).count == found.labels.count, "\(span): \(found.labels)")
+            #expect((1...7).contains(found.labels.count), "\(span): \(found.labels)")
+            #expect(found.axis.ticks.allSatisfy(found.axis.domain.contains), "\(span)")
+        }
+    }
+
+    @Test func aMinuteIsMarkedInSeconds() {
+        let found = axis(spanning: 60)
+        #expect(found.axis.label == .second)
+        #expect(found.labels.allSatisfy { $0.filter { $0 == ":" }.count == 2 }, "\(found.labels)")
+    }
+
+    @Test func weeksAreMarkedInDaysNotTimesOfDay() {
+        #expect(axis(spanning: 18 * 86400).axis.label == .day)
+    }
+
+    @Test func aSingleMomentStillHasAMarkAndAWidth() {
+        let date = Date(timeIntervalSince1970: 1_793_800_000)
+        let axis = ChartAxis.TimeAxis(dates: [date], calendar: calendar)
+        #expect(axis.ticks == [date])
+        #expect(axis.domain.lowerBound < axis.domain.upperBound)
+        #expect(ChartAxis.TimeAxis(dates: [], calendar: calendar).ticks.count == 1)
+    }
+
+    @Test func smallAmountsGetDifferentLabels() {
+        let ticks = ChartAxis.moneyTicks([-0.0023], .USD)
+        #expect(ticks.map(\.label) == ["-$0.003", "-$0.002", "-$0.001", "$0.000"])
+    }
+
+    @Test func nothingKnownIsOneMarkWithAHeight() {
+        let ticks = ChartAxis.moneyTicks([], .USD)
+        #expect(ticks.map(\.label) == ["$0.00"])
+        #expect(ChartAxis.moneyDomain(ticks).lowerBound < ChartAxis.moneyDomain(ticks).upperBound)
+    }
+}
