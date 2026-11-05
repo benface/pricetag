@@ -68,7 +68,7 @@ struct MacApp: App {
         .menuBarExtraStyle(.window)
 
         Window(AppName.current, id: WindowID.main) {
-            MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: siteBridge, noteWriter: hotWallet)
+            MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: siteBridge)
                 .holdsDockPresence()
         }
         .defaultSize(width: 1120, height: 760)

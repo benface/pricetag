@@ -52,7 +52,7 @@ private struct HotWalletSetup: View {
                     .foregroundStyle(.secondary)
                 Text("Spending Money")
                     .font(.title2.bold())
-                Text("A small balance on this Mac for everyday use. Anything above your cap moves to your savings.")
+                Text("\(HotWalletWording.summary) Anything above your cap moves to your savings.")
                     .fixedSize(horizontal: false, vertical: true)
                 // What can't be undone stays in full, and on screen.
                 Notice(.warning, HotWalletWording.cannotBeRestored)

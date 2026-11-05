@@ -104,10 +104,9 @@ enum TestScene: String, CaseIterable {
     case mainTaxReport = "main-tax-report"
     case mainTaxReportSmall = "main-tax-report-small"
     case mainNoWalletSmall = "main-no-wallet-small"
-    case mainNoWallet = "main-no-wallet"
-    case mainNoWalletSmallest = "main-no-wallet-smallest"
     case mainNoWalletHasSpendingMoney = "main-no-wallet-has-spending-money"
     case mainNoWalletNotProvisioned = "main-no-wallet-not-provisioned"
+    case mainNoWallet = "main-no-wallet"
     case mainReading = "main-reading"
     case mainServerDown = "main-server-down"
     case mainNotUpdating = "main-not-updating"
@@ -127,6 +126,7 @@ enum TestScene: String, CaseIterable {
     case mainSmallAmounts = "main-small-amounts"
     case mainSmallAmountsNarrow = "main-small-amounts-narrow"
     case mainLongHistory = "main-long-history"
+    case mainChartWeek = "main-chart-week"
     case mainCAD = "main-cad"
     case mainTransactionsCAD = "main-transactions-cad"
     case mainDetailsCAD = "main-details-cad"
@@ -218,7 +218,7 @@ enum TestScene: String, CaseIterable {
         case .mainLinkedFailed: .linkedFails
         case .mainCostWithheld, .resolveCostWithheld: .costWithheld
         case .mainSmallAmounts, .mainSmallAmountsNarrow: .smallAmounts
-        case .mainLongHistory: .longHistory
+        case .mainLongHistory, .mainChartWeek: .longHistory
         case .resolveAnsweredWallet: .answeredWallet
         case .mainEmpty, .mainEmptySmallest: .empty
         case .mainEmptyNotice: .emptyReadingLinked
@@ -230,7 +230,7 @@ enum TestScene: String, CaseIterable {
 
     private var hasWallet: Bool {
         switch self {
-        case .mainNoWallet, .mainNoWalletSmallest, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .mainNoWalletSmall, .popoverNoWallet, .walletSwitcherFirstRun: false
+        case .mainNoWallet, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .mainNoWalletSmall, .popoverNoWallet, .walletSwitcherFirstRun: false
         default: true
         }
     }
@@ -321,6 +321,7 @@ enum TestScene: String, CaseIterable {
             }
         }
         let navigation = Navigation()
+        if self == .mainChartWeek { navigation.chartRange = .week }
         if self == .mainTransactions || self == .mainTransactionsCAD || self == .mainTransactionsSmall { navigation.section = .transactions }
         if self == .mainSpendingMoney || self == .mainSpendingMoneySmall { navigation.section = .spendingMoney }
         if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
@@ -352,9 +353,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: MainWindow.minimumSize, isReady: isReady)
         case .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .mainNoWalletSmallest:
-            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 780, height: 560), isReady: isReady)
-        case .mainFirstRun, .mainFirstRunDetails, .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+        case .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainSmallestEnd:
             // Starts at the end of the page, because a screenshot can't scroll to it.
@@ -507,7 +506,12 @@ final class FixtureSource: PortfolioSource {
             }
         case .longHistory:
             // Weeks of history, where a time of day on the axis would say nothing.
-            return try demo { $0["points"] = Self.points(every: 3 * 86_400, pnl: [1_000_000, 250_000_000, 1_250_000_000, 900_000_000, 400_000_000, 1_100_000_000, 800_000_000]) }
+            return try demo {
+                let points = Self.points(every: 3 * 86_400, pnl: [1_000_000, 250_000_000, 1_250_000_000, 900_000_000, 400_000_000, 1_100_000_000, 800_000_000])
+                $0["points"] = points
+                // At 2 s a block, so what's offered goes back as far as these do.
+                $0["coverage"] = ["fromBlock": 53_500_000 - points.count * 3 * 86_400 / 2, "toBlock": 53_500_000]
+            }
         case .answeredWallet:
             // What a wallet being read gets asked about one of the user's own wallets, which isn't what the demo itself would ask.
             return try demo { object in

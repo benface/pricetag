@@ -27,7 +27,6 @@ struct MainWindow: View {
     @Bindable var navigation: Navigation
     let hotWallet: HotWallet
     let siteBridge: SiteBridge
-    var noteWriter: (any CostNoteWriter)?
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var width: CGFloat = 1120
     @State private var exporting = false
@@ -66,7 +65,7 @@ struct MainWindow: View {
         }
         .sheet(isPresented: detailsSheetBinding) { detailsSheet }
         .sheet(isPresented: $navigation.isResolving) {
-            ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: noteWriter)
+            ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet)
         }
         .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: exportName) { result in
             if case .failure(let error) = result { exportError = error.localizedDescription }
@@ -450,7 +449,7 @@ private struct HoldingsTable: View {
     /// What each column needs, for what's usually in it. A column can always grow if there's room.
     private enum Column {
         static let asset: CGFloat = 130
-        static let amount: CGFloat = 90
+        static let amount: CGFloat = 100
         static let averagePrice: CGFloat = 90
         static let value: CGFloat = 90
         static let realized: CGFloat = 85
@@ -592,6 +591,8 @@ private struct HoldingsTable: View {
         } label: {
             LiveNumber(text, tone: isLive ? tone : .neutral)
                 .lineLimit(1)
+                // A long amount gets smaller rather than losing digits.
+                .minimumScaleFactor(0.7)
                 .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
         }
         .buttonStyle(NumberButtonStyle())
@@ -698,7 +699,7 @@ private struct Welcome: View {
             Label("See What a Wallet Is Worth", systemImage: "wallet.bifold")
         } description: {
             Text("See the holdings, cost and PnL of any Base wallet.")
-                .help(Wording.pnlHelp)
+                .help("A wallet you watch is only read, and nothing signs for it.")
         } actions: {
             VStack(spacing: 16) {
                 spendingMoney
@@ -722,22 +723,14 @@ private struct Welcome: View {
     @ViewBuilder
     private var spendingMoney: some View {
         if hotWallet.availability == .ready {
-            VStack(spacing: 6) {
-                if let address = hotWallet.address {
-                    Button("Show \(HotWalletWording.title)") { store.setWallet(address.lowercased) }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                } else {
-                    // That section says what this is and what can go wrong, and only it makes the key.
-                    Button("Create \(HotWalletWording.title)…") { navigation.section = .spendingMoney }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                    Text(HotWalletWording.summary)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            if let address = hotWallet.address {
+                Button("Show \(HotWalletWording.title)") { store.setWallet(address.lowercased) }
+                    .buttonStyle(.borderedProminent)
+            } else {
+                // That section says what this is and what can go wrong, and only it makes the key.
+                Button("Create \(HotWalletWording.title)…") { navigation.section = .spendingMoney }
+                    .buttonStyle(.borderedProminent)
+                    .help(HotWalletWording.summary)
             }
             HStack {
                 VStack { Divider() }
