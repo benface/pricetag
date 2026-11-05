@@ -97,6 +97,12 @@ enum TestScene: String, CaseIterable {
     case mainSmall = "main-small"
     case mainMedium = "main-medium"
     case mainHuge = "main-huge"
+    // Around where the holdings table changes shape, with the sidebar open.
+    case mainWidth660 = "main-width-660"
+    case mainWidth760 = "main-width-760"
+    case mainWidth860 = "main-width-860"
+    case mainWidth960 = "main-width-960"
+    case mainWidth1040 = "main-width-1040"
     case mainFirstRunSmall = "main-first-run-small"
     case mainTransactionsSmall = "main-transactions-small"
     case mainSpendingMoney = "main-spending-money"
@@ -326,6 +332,9 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: MainWindow.minimumSize, isReady: isReady)
         case .mainMedium, .mainSpendingMoney, .mainTaxReport:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 900, height: 640), isReady: isReady)
+        case .mainWidth660, .mainWidth760, .mainWidth860, .mainWidth960, .mainWidth1040:
+            let width = CGFloat(Int(rawValue.split(separator: "-").last ?? "") ?? 900)
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: width, height: 760), isReady: isReady)
         case .mainHuge:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 2200, height: 1300), isReady: isReady)
         case .changeWallet:
