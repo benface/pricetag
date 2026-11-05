@@ -364,6 +364,101 @@ describe("the background script", () => {
     assert.equal(native.messages[0].kind, "popup")
   })
 
+  test("a popup opens with what the last one heard, and then what the app says", async () => {
+    const { connect, native } = await loadBackground()
+    const sender = { id: "ours", url: "chrome-extension://ours/popup.html" }
+    const first = fakePort("popup", sender)
+    connect(first)
+    first.receive({ id: 1, method: "status" })
+    assert.equal(first.messages.length, 0)
+    native.receive({ id: native.messages[0].id, result: { value: "$1.00" } })
+
+    const second = fakePort("popup", sender)
+    connect(second)
+    second.receive({ id: 1, method: "status" })
+    assert.equal(JSON.stringify(second.messages), JSON.stringify([{ event: "last", result: { value: "$1.00" } }]))
+    native.receive({ id: native.messages[1].id, result: { value: "$2.00" } })
+    assert.equal(JSON.stringify(second.messages[1]), JSON.stringify({ id: 1, result: { value: "$2.00" } }))
+
+    // Anything else it asks has no effect on that.
+    second.receive({ id: 2, method: "topUp" })
+    native.receive({ id: native.messages[2].id, result: null })
+    const third = fakePort("popup", sender)
+    connect(third)
+    third.receive({ id: 1, method: "status" })
+    assert.equal(JSON.stringify(third.messages), JSON.stringify([{ event: "last", result: { value: "$2.00" } }]))
+  })
+
+  test("a popup forgets what it heard when the app goes, and doesn't answer a closed popup", async () => {
+    const { connect, native } = await loadBackground()
+    const sender = { id: "ours", url: "chrome-extension://ours/popup.html" }
+    const first = fakePort("popup", sender)
+    connect(first)
+    first.receive({ id: 1, method: "status" })
+    native.receive({ id: native.messages[0].id, result: { value: "$1.00" } })
+    native.close()
+
+    const second = fakePort("popup", sender)
+    connect(second)
+    second.receive({ id: 1, method: "status" })
+    assert.equal(second.messages.length, 0)
+    second.close()
+    second.postMessage = () => assert.fail("That popup is closed.")
+    native.receive({ id: native.messages[1].id, result: { value: "$2.00" } })
+
+    // An error isn't worth remembering either.
+    const third = fakePort("popup", sender)
+    connect(third)
+    third.receive({ id: 1, method: "status" })
+    assert.equal(JSON.stringify(third.messages), JSON.stringify([{ event: "last", result: { value: "$2.00" } }]))
+    native.receive({ id: native.messages[2].id, error: { code: 1, message: "No" } })
+    const fourth = fakePort("popup", sender)
+    connect(fourth)
+    fourth.receive({ id: 1, method: "status" })
+    assert.equal(fourth.messages.length, 0)
+  })
+
+  test("its text is readable in light and dark, including on the label and the button", () => {
+    const css = read("extension/popup.css")
+    const light = Object.fromEntries([...css.match(/:root \{[^}]*\}/)![0].matchAll(/--([a-z-]+): ([^;]+);/g)].map((match) => [match[1], match[2]!]))
+    const dark = { ...light, ...Object.fromEntries([...css.match(/prefers-color-scheme: dark\) \{\s*:root \{[^}]*\}/)![0].matchAll(/--([a-z-]+): ([^;]+);/g)].map((match) => [match[1], match[2]!])) }
+    const hex = (color: string) => [1, 3, 5].map((start) => Number.parseInt(color.length === 4 ? color[(start + 1) / 2]!.repeat(2) : color.slice(start, start + 2), 16))
+    /** A translucent `rgb(r g b / a)` over what's behind it, or a plain hex color. */
+    const solid = (color: string, behind: number[]) => {
+      const parts = color.match(/rgb\((\d+) (\d+) (\d+) \/ ([\d.]+)\)/)
+      if (!parts) return hex(color)
+      const alpha = Number(parts[4])
+      return [1, 2, 3].map((index) => Number(parts[index]) * alpha + behind[index - 1]! * (1 - alpha))
+    }
+    const luminance = (rgb: number[]) => {
+      const [red, green, blue] = rgb.map((channel) => (channel / 255 <= 0.03928 ? channel / 255 / 12.92 : ((channel / 255 + 0.055) / 1.055) ** 2.4))
+      return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!
+    }
+    const contrast = (one: number[], other: number[]) => {
+      const [high, low] = [luminance(one), luminance(other)].sort((a, b) => b - a)
+      return (high! + 0.05) / (low! + 0.05)
+    }
+    for (const [theme, colors] of Object.entries({ light, dark }) as [string, Record<string, string>][]) {
+      const background = hex(colors.background!)
+      const fill = solid(colors.fill!, background)
+      const white = [255, 255, 255]
+      for (const [what, text, behind] of [
+        ["text", hex(colors.text!), background],
+        ["quiet text", hex(colors.secondary!), background],
+        ["the label and a disabled button", hex(colors.secondary!), fill],
+        ["the button", white, hex(colors.accent!)],
+        ["the button, hovered", white, hex(colors["accent-hover"]!)],
+      ] as [string, number[], number[]][]) {
+        assert.ok(contrast(text, behind) >= 4.5, `${what} in ${theme}: ${contrast(text, behind).toFixed(2)}`)
+      }
+    }
+  })
+
+  test("never breaks an address across lines", () => {
+    assert.match(read("extension/popup.css"), /\.address \{[^}]*white-space: nowrap/)
+    assert.doesNotMatch(read("extension/popup.css"), /overflow-wrap: anywhere|word-break/)
+  })
+
   test("sends each answer back to the page that asked, under its own ID", async () => {
     const { connect, native } = await loadBackground()
     const first = fakePort("site", tabSender("https://one.example"))

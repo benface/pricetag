@@ -62,7 +62,7 @@ Holding a key needs a provisioned build, which `pnpm mac` makes when the team pi
 2. In `chrome://extensions`, turn on Developer mode, choose **Load unpacked**, and pick the `extension/` folder. It runs exactly as it is, with no build step.
 3. Pick **Patina** on the site. The app has to be open.
 
-The extension's button shows what's there and has a **Top up** button, which opens the app's top-up flow. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what this protects against and what it doesn't. Pages talk to the extension, which talks to a small host program inside the app bundle (`macos/BridgeHost`), which relays to a socket in the app (`macos/HotWalletKit/Sources/HotWalletKit/Sites`).
+The extension's button shows what's there, with the address to copy, and has a **Top Up…** button, which opens the app's top-up flow. It opens without waiting for the app, and fills in when the app answers. **[HOT-WALLET-SECURITY.md](macos/HOT-WALLET-SECURITY.md)** says what this protects against and what it doesn't. Pages talk to the extension, which talks to a small host program inside the app bundle (`macos/BridgeHost`), which relays to a socket in the app (`macos/HotWalletKit/Sources/HotWalletKit/Sites`).
 
 ## Where the data comes from
 
