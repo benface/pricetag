@@ -757,9 +757,9 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     @Test func valueSaysWhenItLeavesSomethingOut() throws {
         let portfolio = try realPortfolio(at: Date(), status: .complete)
         let summary = FeedSummary(feed: .live, portfolio: portfolio, shows: .value)
-        #expect(summary.text == portfolio.totalValueText)
+        #expect(summary.text == "≈$7,571.03")
         #expect(summary.isWarning == portfolio.isValuePartial)
-        #expect(FeedSummary(feed: .live, portfolio: try demoPortfolio(), shows: .value).text == "Demo " + (portfolio.totalValueText ?? ""))
+        #expect(FeedSummary(feed: .live, portfolio: try demoPortfolio(), shows: .value).text == "Demo ≈$7,571.03")
     }
 
     @Test func anUnknownValueHasNoNumber() throws {

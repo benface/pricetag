@@ -88,6 +88,13 @@ struct AccessibilityTreeTests {
         #expect(try lines(HoldingRow(position: eth, currency: portfolio.currency, isLive: false)) == ["ETH, value, $1,366.68, Cost unknown, not updating"])
     }
 
+    @Test func aHoldingsPriceAndReturnSayWhatTheyAre() throws {
+        let portfolio = try demoPortfolio()
+        let aero = try #require(portfolio.positions.first { $0.asset == "AERO" })
+        let label = HoldingRow.spokenLabel(aero, portfolio.currency, isLive: true, amount: "500", price: "≈$1.40", returnText: "≈+27%")
+        #expect(label == "AERO, amount, 500, price, about $1.40, value, about $700.00, PnL, about +$150.11, return, about +27%")
+    }
+
     @Test func eachComparedNumberSaysWhatItIsAndByWhichRule() throws {
         let comparison = try resource("demo-rule-comparison", as: RuleComparison.self)
         let tree = try lines(RuleComparisonTable(comparison: comparison))
