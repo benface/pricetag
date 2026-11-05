@@ -42,6 +42,8 @@ public final class HotWallet {
     /// What's keeping a rotation from deleting the old key. The user can still choose to leave it behind.
     public private(set) var rotationHold: RotationHold?
     public var onLinkedWalletsChange: (([String]) -> Void)?
+    /// A key is gone, and this one took over from it, if any did. A rotation can finish with nothing open, so this isn't left to a view.
+    public var onKeyRetired: ((EthereumAddress, EthereumAddress?) -> Void)?
 
     public var address: EthereumAddress? { state.active }
     public var alarm: StolenKeyAlarm? { state.alarm }
@@ -576,9 +578,7 @@ public final class HotWallet {
     }
 
     private func finishRotation(_ rotation: Rotation) async throws {
-        state.retired.append(rotation.from)
-        state.active = rotation.to
-        forgetTheOldKeysState()
+        retire(rotation.from, activating: rotation.to)
         try persist()
         try await signer.deleteKey(rotation.from)
         publishLinkedWallets()
@@ -589,12 +589,17 @@ public final class HotWallet {
         guard let address else { return }
         await work(confirming: "delete this wallet's key, which can't be undone") { [self] in
             try await signer.deleteKey(address)
-            state.retired.append(address)
-            state.active = nil
-            forgetTheOldKeysState()
+            retire(address, activating: nil)
             try persist()
             publishLinkedWallets()
         }
+    }
+
+    private func retire(_ key: EthereumAddress, activating next: EthereumAddress?) {
+        state.retired.append(key)
+        state.active = next
+        forgetTheOldKeysState()
+        onKeyRetired?(key, next)
     }
 
     /// Everything that was about one key, whose alarms, dismissals, block numbers and reads say nothing about the next one.
