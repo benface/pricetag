@@ -70,6 +70,12 @@ public struct Rotation: Codable, Equatable, Sendable {
     public let to: EthereumAddress
     /// Where what's left goes. After an alarm, that's savings rather than the new key, if there's a cold wallet.
     public let destination: EthereumAddress
+
+    public init(from: EthereumAddress, to: EthereumAddress, destination: EthereumAddress) {
+        self.from = from
+        self.to = to
+        self.destination = destination
+    }
 }
 
 /// What only this device can know. Unlike settings, this never syncs, because each device has its own key and history.

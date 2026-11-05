@@ -53,7 +53,7 @@ Amounts are in a token's smallest unit, and USD values are in micros (millionths
 | --- | --- |
 | `createPricetag(config)` | A client. See [the config](#the-config). |
 | `getPortfolio(address, { method?, from?, to? })` | A wallet's holdings, cost and PnL, matching the app. `method` is `"average"`, the default, or `"fifo"`. With a `to`, it's the wallet as of that block, at that block's prices. See [what it returns](#what-getportfolio-returns). |
-| `getLegs(address, { from?, to? })` | `{ legs, blocks, references, gasUnknownTxs }`: what moved in the range, priced and labeled, in the order the fold reads them. It doesn't include opening balances or L1 fees. |
+| `getLegs(address, { from?, to? })` | `{ legs, blocks, references, gasUnknownTxs, l1Fees, l1FeeUnknownTxs }`: what moved in the range, priced and labeled, in the order the fold reads them. It doesn't include opening balances. With an `rpcUrl`, these are the same legs as the app's and `getPortfolio`'s, L1 fees included. Without one, gas leaves out L1 fees, and a swap paid out in unwrapped ETH stays unknown. |
 | `getPrices(token, { from?, to? })` | `{ token, prices, blocks }`: a token's prices, by symbol or address. It throws on a token off the allowlist, which has no prices to give. |
 | `getLatestPrices()` | The current prices to value positions at. Only ETH and USDC have one, and only with a recent oracle read. |
 | `buildPortfolio(legs, method, prices?)` | `{ method, positions, totals }` from `getLegs`' legs. It's pure, so it needs no Amp. Nothing in it is checked against the chain, so prefer `getPortfolio`. |
@@ -81,7 +81,7 @@ There are three entry points:
 | `token` | A local Amp doesn't need one, but a hosted one does. |
 | `dataset` | The Pricetag dataset, like `benface/pricetag@0.0.1`. |
 | `startBlock` | The dataset's first block. Reads start here unless they pass a `from`. With neither, they throw. |
-| `rpcUrl` | Where `getPortfolio` reads L1 fees from. See below. |
+| `rpcUrl` | Where `getPortfolio` and `getLegs` read L1 fees from. See below. |
 | `baseDataset` | The raw dataset the chain's head is read from. It defaults to `edgeandnode/base_mainnet@0.0.2`. |
 | `network` | Amp's name for the chain, used to read onchain balances. It defaults to `base_mainnet`. |
 | `timeoutMs` | How long one query can take. It defaults to 60 s. |
@@ -89,7 +89,7 @@ There are three entry points:
 
 Queries always run one at a time, because a hosted Amp is shared.
 
-L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anything can't have its ETH checked against the chain, so ETH is `unchecked`, `l1Fees` is `"no rpc url"`, and `missing` says so. The public RPC is `https://mainnet.base.org`, and it rate-limits.
+L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anything can't have its ETH checked against the chain, so ETH is `unchecked`, `l1Fees` is `"no rpc url"`, and `missing` says so. `getLegs` can't confirm a swap paid out in unwrapped ETH either, so `l1Fees` says the same there and the swap stays unknown. The public RPC is `https://mainnet.base.org`, and it rate-limits.
 
 ### What `getPortfolio` returns
 
@@ -107,9 +107,9 @@ L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anyt
 | `l1Fees`, `l1FeeUnknownTxs` | `read`, `pending` (some couldn't be read yet, and the next call tries again) or `no rpc url`, and the transactions affected. |
 | `openingUnread`, `unreadAssets` | Assets whose balance before the first block couldn't be read, and assets with no position because nothing could be read about them, which isn't the same as holding none. |
 
-A position's `reconciliation.status` is `reconciled` when its legs add up to its onchain balance to the smallest unit, `incomplete` when they don't, and `unchecked` when a read is missing. Only a reconciled position shows PnL. Otherwise its amount and value come from the chain, and its cost and PnL are `null`.
+A position's `reconciliation.status` is `reconciled` when its legs add up to its onchain balance to the smallest unit, `incomplete` when they don't, and `unchecked` when a read is missing. Only a reconciled position shows PnL. Otherwise its amount and value come from the chain, and its cost and PnL are `null`. On ETH that's `incomplete`, `reconciliation.unseenEth` lists blocks where ETH rose with nothing to explain it, and the transactions that took a token from the wallet there. Those transactions' proceeds stay unknown.
 
-A client keeps each wallet's rows in memory, so another call on the same client only reads new blocks. A read with a `to` is re-read on each new block until `to` is 30 blocks behind the chain's head, because a reorg can still change it. After that, it's fixed. It also reads at most 200 L1 fees per call, so a busy wallet's ETH stays `unchecked` for its first few calls while they catch up.
+A client keeps each wallet's rows in memory, so another call on the same client only reads new blocks. A read with a `to` is re-read on each new block until `to` is 30 blocks behind the chain's head, because a reorg can still change it. After that, it's fixed. It also reads at most 200 L1 fees per call, so a busy wallet's ETH stays `unchecked` for its first few calls while they catch up. With an `rpcUrl`, `getLegs` shares all of this with `getPortfolio`, so a swap paid out in unwrapped ETH can stay unknown for those first few calls too.
 
 ### Other things to check
 
@@ -127,10 +127,11 @@ The dataset reference is `benface/pricetag@0.0.1`, and it reads `edgeandnode/bas
 | --- | --- | --- |
 | `legs` | One account's signed movement of an allowlisted token, ETH, or gas | `account`, `token`, `side` (`debit` or `credit`), `amount`, `kind` (`erc20`, `eth`, `gas`, `wrap` or `unwrap`), `tx_hash` |
 | `unlisted_legs` | The same for a token off the allowlist. It has no price, but it shows money went somewhere else | Same as `legs`, with `kind` `unlisted` or `unlisted_nft`. An NFT's `amount` is its ID |
-| `reference_prices` | One block's Chainlink ETH/USD and USDC/USD reads | `eth_round` and `usdc_round`. Field `c1` is the answer, in 1e8 USD |
-| `priced_legs` | An account's only pair in a transaction, after netting each token: what it sold and what it bought | `sold_token`, `sold_amount`, `bought_token`, `bought_amount`, and `priced` (`source`, `token`, `usd_micros`) |
+| `reference_prices` | One block's latest Chainlink ETH/USD and USDC/USD updates | `eth_answer` and `usdc_answer`, in 1e8 USD, null when a feed has no recent update. `eth_tx` and `usdc_tx` are the transactions they came from |
+| `price_updates` | One Chainlink update, from its `AnswerUpdated` log. It starts a day before the dataset, except on a local Amp, whose first row per feed is read from the contract, with an all-zero `tx_hash` | `feed` (`eth` or `usdc`), `answer`, `tx_hash`, `log_index`, `round_id`, `updated_at`, `valid_until` |
+| `priced_legs` | An account's only pair in a transaction, after netting each token: what it sold and what it bought | `sold_token`, `sold_amount`, `bought_token`, `bought_amount`, `priced` (`source`, `token`, `usd_micros`), and the prices it used: `eth_usd`, `usdc_usd`, `eth_tx`, `usdc_tx` |
 
-The other tables are steps on the way to these: `base_legs`, `gas_legs`, `tx_gas`, `unwrap_legs`, `net_legs`, `unlisted_moves`, `pairs`, `pair_counts` and `single_pairs`.
+The other tables are steps on the way to these: `base_legs`, `gas_legs`, `tx_gas`, `unwrap_legs`, `net_legs`, `unlisted_moves`, `pairs`, `pair_counts`, `single_pairs` and `carried`.
 
 A price and a cost are separate. The dataset carries the price, a shared fact about a transaction. Cost is personal, so each client works it out: `cost = fold(pricedLegs, method)`. That's why the dataset has no cost column.
 
@@ -177,7 +178,7 @@ A negative `net` means the wallet held more than the range shows. In `buildPortf
 **Oracle prices:** divide by 100 for micros.
 
 ```sql
-SELECT block_num, timestamp, get_field(eth_round, 'c1') AS eth_usd, get_field(usdc_round, 'c1') AS usdc_usd
+SELECT block_num, timestamp, eth_answer AS eth_usd, usdc_answer AS usdc_usd
 FROM "benface/pricetag@0.0.1".reference_prices
 WHERE block_num BETWEEN 53515266 AND 53515658
 ORDER BY block_num
@@ -208,7 +209,7 @@ SQL stops at cost, because a cost depends on every earlier leg. To get cost and 
 
 - `getPortfolio` is in USD. The app can also show CAD, converting at each transaction's rate, and the SDK doesn't read those rates yet.
 - An old wallet's cost is unknown for whatever it held before the first block read, so its PnL stays unavailable, and that's the common case on a short range. Its amounts and value are still right, because they come from the chain.
-- `getLegs` and `getPrices` leave a sender's swap paid out in unwrapped ETH unknown, with a note saying why. An `unwrap` credit in `legs` only says a contract turned WETH into ETH in that transaction, not that the ETH reached the sender, and its amount can be wrong. Confirming it takes balances and L1 fees, so only `getPortfolio` does, like the app. `priced_legs` still has a row for them, so if you query it directly, don't take a `bought_token` of ETH on trust.
+- A sender's swap paid out in unwrapped ETH stays unknown, with a note saying why, in `getLegs` without an `rpcUrl`, and always in `getPrices`. An `unwrap` credit in `legs` only says a contract turned WETH into ETH in that transaction, not that the ETH reached the sender, and its amount can be wrong. Confirming it takes balances and L1 fees, so only `getPortfolio`, and `getLegs` with an `rpcUrl`, do, like the app. `getPrices` would need those reads for every swap's wallet, and another account's row in the same transaction, like the pool's, usually still prices it. `priced_legs` still has a row for them, so if you query it directly, don't take a `bought_token` of ETH on trust.
 - Only tokens on the allowlist in [`src/tokens.ts`](src/tokens.ts) get a position or a price.
 - Only ETH and USDC have a current price, so other tokens show a cost but no value yet.
 - `getLegs` with `buildPortfolio` is only what moved in the range, so its numbers won't match `getPortfolio`'s. Read them as what those legs add up to, not as the wallet's PnL.

@@ -8,6 +8,7 @@ export const DEPOSIT_TOPIC = "e1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2
 export const WITHDRAWAL_TOPIC = "7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65"
 export const TRANSFER_SINGLE_TOPIC = "c3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62"
 export const TRANSFER_BATCH_TOPIC = "4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb"
+export const ANSWER_UPDATED_TOPIC = "0559884fd3a460db3073b7fc896cc77986f16e378210ded43186175bf646fc5f"
 
 /** OP Stack deposits are paid for on L1, so they cost no L2 gas. */
 const DEPOSIT_TX_TYPE = 126
@@ -186,8 +187,8 @@ export function withCounterparties(rows: readonly LegRow[], logs: readonly Pick<
   })
 }
 
-/** Rows' blocks worth looking up, so a wallet's first read doesn't scan every block for the few that touch it. */
-export const counterpartyBlocks = (rows: readonly LegRow[]): number[] => [...new Set(rows.filter((r) => r.kind === "erc20" || r.kind === "eth").map((r) => r.block_num))]
+/** The blocks worth looking up for one kind of row, so a wallet's first read doesn't scan every block for the few that touch it. */
+export const counterpartyBlocks = (rows: readonly LegRow[], kind: "erc20" | "eth"): number[] => [...new Set(rows.filter((r) => r.kind === kind).map((r) => r.block_num))]
 
 /** The `answer` word of a `latestRoundData()` result, or "" when the read failed. */
 export function decodeRoundAnswer(data: string | null | undefined): string {

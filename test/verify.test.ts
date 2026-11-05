@@ -480,8 +480,8 @@ describe("a dataset's fingerprint", () => {
       asked.push({ url, auth: (init.headers as Record<string, string>).authorization })
       return new Response(JSON.stringify({ manifest_hash: HASH }), { status: 200 })
     }) as unknown as typeof fetch
-    assert.equal(await createManifestReader("https://amp.example/controller/", "tok", send)("benface/pricetag_scratch@0.0.5"), HASH)
-    assert.deepEqual(asked, [{ url: "https://amp.example/controller/datasets/benface/pricetag_scratch/versions/0.0.5", auth: "Bearer tok" }])
+    assert.equal(await createManifestReader("https://amp.example/controller/", "tok", send)("benface/pricetag@0.0.1"), HASH)
+    assert.deepEqual(asked, [{ url: "https://amp.example/controller/datasets/benface/pricetag/versions/0.0.1", auth: "Bearer tok" }])
   })
 
   it("is null, never made up, when it can't be read", async () => {

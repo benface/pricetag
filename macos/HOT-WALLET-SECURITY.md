@@ -55,8 +55,9 @@ The RPC is configurable and untrusted.
 - [x] The cap is at most $100, and at most $25 without a cold wallet. Tests cover both.
 - [x] Gas is kept back, exempt from the cap and from sweeps. A wallet with tokens and no ETH says so.
 - [x] Only tokens with a trusted price count or sweep. No price means left out, never $0. Sweep Everything still moves them.
-- [x] Today only ETH, WETH and USDC have a trusted current price, from the same Chainlink feeds as the dataset, read straight from the chain with age and range checks. Others count once the server has a price for them.
+- [x] Every allowlisted token has a Chainlink feed on Base, read straight from the chain with age and range checks, so a price never depends on our server. wstETH's is in ETH, so it's only as good as ETH's. ETH and USDC use the same feeds as the dataset, and a test reads each feed's `description()` onchain.
 - [x] Dust is skipped: under $1, or when gas would be more than a tenth of the amount.
+- [x] Replacing a key never deletes the old one because of what gas costs. Any token that wasn't worth moving keeps the key until gas falls or the user chooses to leave it. Only ETH under $1 doesn't, because paying for the last transfer always leaves a little.
 - [x] Realized gains only sweep when the realized total is fully known, and only count as swept once the transaction lands.
 - [x] Only one thing signs at a time, so two can't take the same nonce.
 

@@ -104,13 +104,6 @@ private struct HotWalletDetails: View {
         .sheet(isPresented: $isAddingCold) { AddColdWalletSheet(wallet: wallet) }
         .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet) }
         .sheet(isPresented: $isSending) { SendSheet(model: SendModel(wallet: wallet, store: store)) }
-        #if DEBUG
-        .onAppear {
-            isAddingCold = HotWalletDebug.sheet == "add-cold"
-            isToppingUp = HotWalletDebug.sheet == "top-up"
-            isSending = HotWalletDebug.sheet == "send"
-        }
-        #endif
     }
 
     private func alarmBanner(_ alarm: StolenKeyAlarm) -> some View {
@@ -328,7 +321,7 @@ private struct HotWalletDetails: View {
                 Button("Sweep Everything to Savings Instead") { Task { await wallet.sweepEverything() } }
             }
         } message: {
-            Text("Makes a new key, moves every token this app tracks to it, then deletes the old one. If the old key holds other tokens, it stays until you choose to leave them. This costs gas, and publicly links the two addresses. It also clears any token approvals the old key gave.")
+            Text("Makes a new key, moves every token this app tracks to it, then deletes the old one. If the old key holds other tokens, or some that gas makes too costly to move, it stays until you choose to leave them. This costs gas, and publicly links the two addresses. It also clears any token approvals the old key gave.")
         }
         .confirmationDialog("Delete the old key?", isPresented: $isConfirmingAbandon) {
             Button("Delete and Leave It Behind", role: .destructive) { Task { await wallet.finishRotationLeavingFundsBehind() } }
@@ -342,6 +335,7 @@ private struct HotWalletDetails: View {
         return switch wallet.rotationHold {
         case .otherTokens(let count): "It holds \(count) \(count == 1 ? "token" : "tokens") this app doesn't track. \(lost)"
         case .cantCheckOtherTokens: "This app can't check right now whether it holds other tokens. \(lost)"
+        case .notWorthTheGas(let symbols): "It holds \(HotWalletWording.tooCostlyToMove(symbols)). \(lost)"
         case .notEnoughGas, nil: "It holds tokens with no ETH to move them. \(lost)"
         }
     }
@@ -391,13 +385,18 @@ private struct HotWalletDetails: View {
 }
 
 /// The Mac app has no device code, so the user is the one who checks the address against the device.
-private struct AddColdWalletSheet: View {
+struct AddColdWalletSheet: View {
     let wallet: HotWallet
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
-    @State private var address = ""
+    @State private var address: String
     @State private var matches = false
     @State private var problem: String?
+
+    init(wallet: HotWallet, address: String = "") {
+        self.wallet = wallet
+        _address = State(initialValue: address)
+    }
 
     private var parsed: EthereumAddress? {
         EthereumAddress(address.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -461,10 +460,14 @@ private struct AddColdWalletSheet: View {
 }
 
 /// Until the web app's device flow lands (WORK-325), this says what to do on the device by hand.
-private struct TopUpSheet: View {
+struct TopUpSheet: View {
     let wallet: HotWallet
     @Environment(\.dismiss) private var dismiss
     @State private var dollars = 0.0
+
+    init(wallet: HotWallet) {
+        self.wallet = wallet
+    }
 
     private var room: Int { Int(wallet.topUpRoom / Money.dollar) }
 

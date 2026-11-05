@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, PRICE_NOTES, TOKENS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, buildPricedLegs, derivePricedRows, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, buildPricedLegs, derivePricedRows, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
@@ -28,7 +28,7 @@ function assertMatchesFile(name: string, actual: unknown) {
 describe("the hot wallet's allowlist", () => {
   it("matches what the Swift package has compiled in", () => {
     const url = new URL("../macos/HotWalletKit/Tests/HotWalletKitTests/Resources/tokens.json", import.meta.url)
-    const actual = { tokens: TOKENS.map(({ address, symbol, decimals, asset }) => ({ address, symbol, decimals, asset })), ethUsdFeed: ETH_USD_FEED.toLowerCase(), usdcUsdFeed: USDC_USD_FEED.toLowerCase() }
+    const actual = { tokens: TOKENS.map(({ address, symbol, decimals, asset, sanity }) => ({ address, symbol, decimals, asset, sanity })), ethUsdFeed: ETH_USD_FEED.toLowerCase(), usdcUsdFeed: USDC_USD_FEED.toLowerCase(), feeds: TOKEN_FEEDS }
     const text = `${JSON.stringify(actual, null, 2)}\n`
     if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
     assert.equal(readFileSync(url, "utf8"), text, "tokens.json is out of date. Run with UPDATE_FIXTURES=1, and change Tokens.swift to match.")
@@ -357,6 +357,11 @@ describe("the formatters the Swift package repeats", () => {
   })
 })
 
+const UNSEEN_ETH_CASES = [
+  [{ blockNum: 53517245, amount: "827782101642000000", txHashes: [`0xde3a${"0".repeat(60)}`] }],
+  [{ blockNum: 1, amount: "5", txHashes: [`0xaaaa${"0".repeat(60)}`, `0xbbbb${"0".repeat(60)}`] }, ...[2, 3, 4, 5, 6].map((blockNum) => ({ blockNum, amount: "1000000000000000000", txHashes: [`0x${String(blockNum).repeat(64)}`] }))],
+]
+
 describe("wording", () => {
   const costLabels = ["paid", "inherited", "received at market", "self-reported", "unknown"] as const
   const kinds = ["swap", "transfer", "gas"] as const
@@ -397,6 +402,7 @@ describe("wording", () => {
       rulesTitle: wording.RULES_TITLE,
       rulesHelp: wording.RULES_HELP,
     },
+    unseenEth: UNSEEN_ETH_CASES.map((unseen) => ({ unseen, text: wording.unseenEthCause(unseen) })),
     manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
   }
 

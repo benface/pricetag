@@ -39,6 +39,15 @@ public enum HotWalletWording {
         "The old key still holds \(count) \(count == 1 ? "token" : "tokens") this app doesn't track, and it won't touch them. It keeps the old key until you choose to leave \(count == 1 ? "it" : "them") behind."
     }
 
+    /// Not "worth less than the gas": ETH is held at up to twice the gas to send it, whether or not it has a price.
+    public static func tooCostlyToMove(_ symbols: [String]) -> String {
+        "some \(symbols.joined(separator: ", ")) that gas makes too costly to move right now"
+    }
+
+    public static func rotationHeldByGas(_ symbols: [String]) -> String {
+        "The old key still holds \(tooCostlyToMove(symbols)). It keeps the old key, and moves \(symbols.count == 1 ? "it" : "them") if that changes, until you choose to leave \(symbols.count == 1 ? "it" : "them") behind."
+    }
+
     public static let rotationCantCheck = "Everything this app tracks has moved, but it can't check the old key for other tokens right now. It keeps the old key until it can, or until you choose to delete it."
 
     public static let notEnoughToSend = "That's more than this wallet holds."

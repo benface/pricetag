@@ -1,8 +1,8 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { CURRENCIES, TOKENS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatSignedMoney, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatSignedMoney, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
-import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, METHOD_LABELS, NETWORK_FEES, currentPriceSource, tokenLabel } from "./wording.ts"
+import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, METHOD_LABELS, NETWORK_FEES, currentPriceSource, tokenLabel, unseenEthCause } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"
 
@@ -151,6 +151,7 @@ function onchainLines({ asset, decimals, reconciliation, effects }: Position): s
     `Actual balance at block ${block}: ${amount(reconciliation.actualQty)}.`,
     `Difference: ${BigInt(reconciliation.differenceQty) > 0n ? "+" : ""}${amount(reconciliation.differenceQty)}.`,
     mismatchCause(asset, reconciliation.differenceQty),
+    ...(reconciliation.unseenEth ? [unseenEthCause(reconciliation.unseenEth)] : []),
     ...(unconfirmed.length > 0 ? [`We couldn't confirm how much ETH reached this wallet in: ${[...new Set(unconfirmed)].join(", ")}.`] : []),
     "Value uses the actual balance. PnL is unavailable, because we know some of this wallet's activity is missing.",
   ]
@@ -195,7 +196,7 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
     ? `Current price: ${formatPrice(price.micros, currency)}${price.usdMicros ? ` (${formatPrice(price.usdMicros, "USD")} USD)` : ""}, from ${currentPriceSource(price.source)} at block ${price.blockNum.toLocaleString("en-US")}.${price.source === "market" ? " That makes it an estimate." : ""}`
     : currency !== "USD" && !view.latestRate
       ? `There's no current USD to ${currency} rate, so ${asset} has no current value here.`
-      : TOKENS.some((t) => t.symbol === asset && t.oracle)
+      : TOKENS.some((t) => t.symbol === asset && t.oracle) || TOKEN_FEEDS[asset]
       ? `There's no current price for ${asset}, because the market price feed's latest answer failed or is too old. An old price would quietly be wrong.`
       : `There's no current price for ${asset}, because it hasn't traded enough recently for a price to be trusted.`
   const lines: string[] = []

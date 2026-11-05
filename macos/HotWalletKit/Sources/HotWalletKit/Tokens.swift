@@ -12,6 +12,7 @@ public struct Token: Hashable, Sendable, Identifiable {
 
     public var id: String { symbol }
     public var isNative: Bool { contract == nil }
+    public var isStablecoin: Bool { ["USDC", "USDT", "DAI"].contains(symbol) }
 }
 
 public enum Base {
