@@ -59,6 +59,11 @@ public final class ResolveModel {
     }
 
     public var current: Question? { questions.first }
+    /// What's already said to be a wallet can't also be an exchange account, and what's asked is about the wallet it reached.
+    public var options: [Ownership] {
+        guard let sender = current?.sender, store.book.senders[sender.lowercased()]?.kind == .mine else { return Ownership.allCases }
+        return Ownership.allCases.filter { $0 != .myExchange }
+    }
     public var meter: Meter? { store.portfolio?.meter }
     public var canUndo: Bool { !store.undoStack.isEmpty }
     /// Every question's answered. Anything skipped doesn't count.
@@ -80,7 +85,7 @@ public final class ResolveModel {
             previews = [:]
             return
         }
-        let options = Ownership.allCases.filter { candidate($0, for: question) != nil }
+        let options = self.options.filter { candidate($0, for: question) != nil }
         while !Task.isCancelled, question.id == current?.id {
             guard let answers = try? await store.previews(of: options.compactMap { candidate($0, for: question) }), answers.count == options.count else { return }
             guard !Task.isCancelled, question.id == current?.id else { return }
@@ -91,7 +96,7 @@ public final class ResolveModel {
     }
 
     public func answer(_ ownership: Ownership) {
-        guard let question = current, let sender = question.sender else { return }
+        guard let question = current, let sender = question.sender, options.contains(ownership) else { return }
         switch ownership {
         case .myExchange:
             // What was entered for this sender before stays, because it covers what had arrived by then.

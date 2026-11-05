@@ -206,6 +206,19 @@ describe("the portfolio endpoint with linked wallets", () => {
     assert.deepEqual(portfolio.linkedReading, [])
   })
 
+  it("doesn't carry an answered wallet's cost onto one nobody's said is theirs, or read it for that", async () => {
+    const post = async (body: unknown) => (await (await fetch(`${base}/api/portfolio/${COLD}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json()) as PortfolioResponse
+    const book = { senders: { [HOT]: { kind: "mine" }, [NEXT]: { kind: "mine" } } }
+    const watched = await post({ method: "average", book })
+    assert.equal(watched.positions.find((p) => p.asset === "ETH")?.values.costMicros, null)
+    assert.deepEqual(watched.questions.map((q) => q.sender), [HOT])
+    assert.deepEqual([watched.linkedReading, watched.linkedFailed, watched.meter.waiting, watched.meter.answered], [[], [], 0, 0])
+    const theirs = { senders: { ...book.senders, [COLD]: { kind: "mine" } } }
+    await post({ method: "average", book: theirs })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal((await post({ method: "average", book: theirs })).positions.find((p) => p.asset === "ETH")?.values.costMicros, "3000000000")
+  })
+
   it("refuses a linked list it can't read", async () => {
     const response = await fetch(`${base}/api/portfolio/${COLD}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method: "average", linked: ["nope"] }) })
     assert.equal(response.status, 400)

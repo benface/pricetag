@@ -577,9 +577,14 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
         self.withdrawals = withdrawals
     }
 
-    /// Saying a sender's yours says the wallet you're looking at is yours too.
+    /// Saying a sender's yours says the wallet you're looking at is yours too. Saying someone else sent what arrived from a wallet
+    /// that's already yours is about the wallet you're looking at, and yours stays yours.
     public func answering(_ sender: String, _ answer: SenderAnswer, focus: String?) -> Book {
         var next = self
+        if answer.kind == .someoneElse, senders[sender.lowercased()]?.kind == .mine, let focus, WalletAddress.isValid(focus), senders[focus.lowercased()]?.kind != .mine {
+            next.senders[focus.lowercased()] = answer
+            return next
+        }
         next.senders[sender.lowercased()] = answer
         if answer.kind == .mine, let focus, WalletAddress.isValid(focus) { next.senders[focus.lowercased()] = .mine }
         return next

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { formatAmount, formatMoney, formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "../core/api.ts"
-import { answerSender, enterExchangeCosts, linkMessage, linkedWallets, type Book, type Money, type SenderAnswer } from "../core/book.ts"
+import { answerSender, enterExchangeCosts, linkMessage, walletsBehind, type Book, type Money, type SenderAnswer } from "../core/book.ts"
 import { parseCoinbaseCsv } from "../core/exchange-import.ts"
 import { foldBook, isBalanced, previewBook, type Question } from "../core/resolve.ts"
 import { linkedFailedSentence } from "../core/wording.ts"
@@ -88,7 +88,7 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
   const current = questions[0] ?? null
   const sender = current?.sender ?? null
   const takingCost = current !== null && (current.kind === "cost" || asking || current.needsCost)
-  const linkedFailed = failed.filter((address) => linkedWallets(book).includes(address))
+  const linkedFailed = failed.filter((address) => walletsBehind(book, wallet).includes(address))
   const balanced = isBalanced(fold.meter) && linkedFailed.length === 0 && fold.withheld.length === 0
   const progress = fold.meter.open + fold.meter.answered === 0 ? 1 : fold.meter.answered / (fold.meter.open + fold.meter.answered)
 
@@ -98,8 +98,11 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
     setMessage(null)
   }, [current?.id])
 
+  // What's already said to be a wallet can't also be an exchange account, and what's asked here is about the wallet it reached.
+  const options = sender && book.senders[sender]?.kind === "mine" ? OWNERSHIP.filter(({ kind }) => kind !== "my-exchange") : OWNERSHIP
   const answer = (next: SenderAnswer) => sender && onChange(answerSender(book, wallet.address, sender, next))
   const choose = (kind: Ownership) => {
+    if (!options.some((option) => option.kind === kind)) return
     // What was entered for this sender before stays, because it covers what had arrived by then.
     const earlier = sender ? book.senders[sender] : undefined
     answer(kind === "my-exchange" && earlier?.kind === "my-exchange" ? earlier : { kind })
@@ -126,7 +129,7 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
       if (e.target instanceof HTMLInputElement || !current) return
       if (e.key === "ArrowDown") return skip()
       if (takingCost) return
-      const kind = ({ "1": "mine", "2": "my-exchange", "3": "someone-else", ArrowRight: "mine", ArrowUp: "my-exchange", ArrowLeft: "someone-else" } as Record<string, Ownership>)[e.key]
+      const kind = options[Number(e.key) - 1]?.kind ?? ({ ArrowRight: "mine", ArrowUp: "my-exchange", ArrowLeft: "someone-else" } as Record<string, Ownership>)[e.key]
       if (kind) choose(kind)
     }
     window.addEventListener("keydown", onKey)
@@ -240,7 +243,7 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
             </div>
           ) : (
             <div className="answers">
-              {OWNERSHIP.map(({ kind, title, swipe }, i) => (
+              {options.map(({ kind, title, swipe }, i) => (
                 <button key={kind} type="button" onClick={() => choose(kind)}>
                   <span className="answer-title">{title}</span>
                   <span className="muted small">{kind === "my-exchange" ? "Then asks what you paid" : previews ? consequence(previews[kind], currency) : "…"}</span>

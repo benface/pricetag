@@ -45,7 +45,7 @@ import { RulesPanel } from "./RulesPanel.tsx"
 import { useRules } from "./useRules.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
-import { linkedWallets } from "../core/book.ts"
+import { linkedWallets, walletsBehind } from "../core/book.ts"
 import { exportCsv } from "../core/export.ts"
 import { foldBook } from "../core/resolve.ts"
 
@@ -201,7 +201,7 @@ export function App() {
   const [cardSender, setCardSender] = useState<string | null>(null)
   const wanted = useMemo(() => [...new Set([...linkedWallets(book), ...(cardSender ? [cardSender] : [])])].filter((a) => a !== wallet?.address), [book, cardSender, wallet?.address])
   const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, wallet?.latest.blockNum ?? null, wallet)
-  const linkedFailed = useMemo(() => failed.filter((address) => linkedWallets(book).includes(address)), [failed, book])
+  const linkedFailed = useMemo(() => (wallet ? failed.filter((address) => walletsBehind(book, wallet).includes(address)) : []), [failed, book, wallet])
 
   useEffect(() => {
     const onPop = () => {
