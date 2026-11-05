@@ -3,7 +3,7 @@
   color-scheme: light dark;
   --background: #fff;
   --text: #1d1d1f;
-  --secondary: #6e6e73;
+  --secondary: #636366;
   --line: rgb(0 0 0 / 0.1);
   --fill: rgb(0 0 0 / 0.06);
   --accent: #267f73;
@@ -16,10 +16,9 @@
   :root {
     --background: #262626;
     --text: #f5f5f7;
-    --secondary: #a1a1a6;
+    --secondary: #aeaeb2;
     --line: rgb(255 255 255 / 0.12);
     --fill: rgb(255 255 255 / 0.1);
-    --accent-hover: #2e9385;
     --over: #f4a460;
   }
 }
