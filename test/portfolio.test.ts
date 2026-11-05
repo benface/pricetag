@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, derivePricedRows, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, derivePricedRows, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
@@ -12,7 +12,7 @@ import { createApi } from "../server/app.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
 import { emptyBook, linkMessage } from "../src/core/book.ts"
 import { foldBook } from "../src/core/resolve.ts"
-import { RULE_TEXT, differenceOf, ruleNote, whySentence, type RuleComparison } from "../src/core/rules.ts"
+import { RULE_TEXT, differenceOf, ruleNote, showRuleDifference, showRuleValue, whySentence, type RuleComparison } from "../src/core/rules.ts"
 import { proofOf, verificationOf } from "../server/proof.ts"
 
 const RESOURCES = new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/", import.meta.url)
@@ -363,6 +363,7 @@ describe("the formatters the Swift package repeats", () => {
       usd: usd.map((micros) => ({ micros, usd: formatMoney(micros, "USD"), signed: formatSignedMoney(micros, "USD") })),
       cad: usd.map((micros) => ({ micros, usd: formatMoney(micros, "CAD"), signed: formatSignedMoney(micros, "CAD") })),
       price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, "USD"), cad: formatPrice(micros, "CAD") })),
+      labeledUsd: ["$2,376.00", "+$24.00", "-$24.00", "$0.004", "-$0.004"].map((text) => ({ text, usd: labelUsd(text, "USD"), cad: labelUsd(text, "CAD") })),
       amount: units.map(([value, decimals]) => ({ units: value, decimals, amount: formatAmount(value, decimals), signed: formatSignedAmount(value, decimals) })),
       duration: [0, 60_000, 3_600_000, 7_198_000, 7_200_000, 10_800_000, 200_000_000].map((ms) => ({ ms, duration: formatDuration(ms) })),
       blockSpans: [[100, 130], [LAST_2S_BLOCK - 5, LAST_2S_BLOCK], [LAST_2S_BLOCK - 5, LAST_2S_BLOCK + 10], [LAST_2S_BLOCK, LAST_2S_BLOCK + 300], [LAST_2S_BLOCK + 5, LAST_2S_BLOCK + 305], [130, 100]].map(([from, to]) => ({ from, to, ms: msBetweenBlocks(from as number, to as number) })),
@@ -490,6 +491,18 @@ describe("comparing pricing rules", () => {
 
   it("says what ETH is worth by each rule", () => {
     assert.deepEqual(row("ETH price"), { label: "ETH price", format: "usdPrice", a: "2400000000", b: "2376000000", difference: "-24000000", aPartial: false, bPartial: false, aEstimated: false, bEstimated: false })
+  })
+
+  it("says which dollars ETH's price is in, only when the rest aren't USD", () => {
+    const { a, difference } = row("ETH price")!
+    assert.equal(showRuleValue(a, "usdPrice", "USD"), "$2,400.00")
+    assert.equal(showRuleDifference(difference, "usdPrice", "USD"), "-$24.00")
+    assert.equal(showRuleValue(a, "usdPrice", "CAD"), "US$2,400.00")
+    assert.equal(showRuleDifference(difference, "usdPrice", "CAD"), "-US$24.00")
+    assert.equal(showRuleDifference("24000000", "usdPrice", "CAD"), "+US$24.00")
+    assert.equal(showRuleValue(a, "usdPrice", "CAD", true), "≈US$2,400.00")
+    assert.equal(showRuleValue("1500000", "money", "CAD"), "$1.50")
+    assert.equal(showRuleDifference("1500000", "signed", "CAD"), "+$1.50")
   })
 
   it("gets each side from the same fold the app shows", () => {
@@ -670,6 +683,8 @@ describe("comparing pricing rules", () => {
 
   it("sends the Mac app what it can read", () => {
     assertMatchesFile("demo-rule-comparison.json", compared)
+    const inCad = (wallet: WalletResponse) => ({ ...wallet, currency: "CAD" as const, rates: demoRates("CAD") })
+    assertMatchesFile("demo-rule-comparison-cad.json", compareRules({ rule: market, wallet: inCad(walletWith({})), reference: reference("240000000000") }, { rule: cautious, wallet: inCad(forked), reference: reference("237600000000") }, "average", 1))
   })
 
   it("keeps the rule's words plain", () => {

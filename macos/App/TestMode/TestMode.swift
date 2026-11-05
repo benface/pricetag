@@ -112,6 +112,7 @@ enum TestScene: String, CaseIterable {
     case popover
     case popoverNoWallet = "popover-no-wallet"
     case popoverNotUpdating = "popover-not-updating"
+    case popoverNotStarted = "popover-not-started"
     case popoverCAD = "popover-cad"
     case popoverHotWallet = "popover-hot-wallet"
     case popoverHotWalletOverCap = "popover-hot-wallet-over-cap"
@@ -146,7 +147,10 @@ enum TestScene: String, CaseIterable {
     case sendKnown = "send-known"
     case sendWaiting = "send-waiting"
     case publishCost = "publish-cost"
+    case publishCAD = "publish-cost-cad"
     case publishWaiting = "publish-cost-waiting"
+    case ruleComparison = "rule-comparison"
+    case ruleComparisonCAD = "rule-comparison-cad"
 
     enum Chrome { case titled, none }
 
@@ -155,9 +159,9 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
+        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
-             .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishWaiting:
+             .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
         }
@@ -173,7 +177,7 @@ enum TestScene: String, CaseIterable {
         case .resolveAnsweredWallet: .answeredWallet
         case .mainEmpty, .mainEmptySmallest: .empty
         case .mainEmptyNotice: .emptyReadingLinked
-        case .mainNotStarted: .notStarted
+        case .mainNotStarted, .popoverNotStarted: .notStarted
         default: .demo
         }
     }
@@ -184,14 +188,14 @@ enum TestScene: String, CaseIterable {
 
     private var usesDemoWallet: Bool {
         switch self {
-        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .mainNotStarted: false
+        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .mainNotStarted, .popoverNotStarted: false
         default: true
         }
     }
 
     private var currency: CurrencyCode {
         switch self {
-        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .hotWalletCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD: .CAD
+        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .hotWalletCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD, .publishCAD, .ruleComparisonCAD: .CAD
         default: .USD
         }
     }
@@ -262,7 +266,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation)), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .changeWallet:
             return TestScreen(view: AnyView(WalletSheet(store: store)), isReady: isReady)
-        case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
+        case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
         case .settings, .settingsHotWallet, .settingsCAD, .settingsHotWalletCAD:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
@@ -286,9 +290,12 @@ enum TestScene: String, CaseIterable {
             // It never gets past the prompt, and there's no key behind it anyway.
             if isWaiting { Task { _ = await model.send() } }
             return TestScreen(view: AnyView(SendSheet(model: model)), isReady: { !isWaiting || model.isSending })
-        case .publishCost, .publishWaiting:
+        case .publishCost, .publishCAD, .publishWaiting:
             let draft = CostNoteDraft(wallet: "0x00000000000000000000000000000000000de301", txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
-            return TestScreen(view: AnyView(PublishCostSheet(draft: draft, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
+            return TestScreen(view: AnyView(PublishCostSheet(draft: draft, currency: currency, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
+        case .ruleComparison, .ruleComparisonCAD:
+            guard let comparison: RuleComparison = try? FixtureSource.decode(self == .ruleComparison ? "demo-rule-comparison" : "demo-rule-comparison-cad") else { TestMode.fail("There's no comparison fixture.") }
+            return TestScreen(view: AnyView(RuleComparisonTable(comparison: comparison).padding(20).frame(width: 720).background(.background)), isReady: { true })
         }
     }
 

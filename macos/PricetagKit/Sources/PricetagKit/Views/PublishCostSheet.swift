@@ -3,6 +3,8 @@ import SwiftUI
 /// Says what publishing a cost gives away before anything's signed, because nothing can take it back.
 public struct PublishCostSheet: View {
     let draft: CostNoteDraft
+    /// What the rest of the app is showing. A note's always in USD, whatever this is.
+    let currency: CurrencyCode
     let publish: (String) async -> Bool
     /// Why it didn't go out, if it was anything but them changing their mind.
     let problem: () -> String?
@@ -12,8 +14,9 @@ public struct PublishCostSheet: View {
     @State private var shownProblem: String?
     @Environment(\.dismiss) private var dismiss
 
-    public init(draft: CostNoteDraft, typed: String, publish: @escaping (String) async -> Bool, problem: @escaping () -> String?, isPublishing: @escaping () -> Bool) {
+    public init(draft: CostNoteDraft, currency: CurrencyCode, typed: String, publish: @escaping (String) async -> Bool, problem: @escaping () -> String?, isPublishing: @escaping () -> Bool) {
         self.draft = draft
+        self.currency = currency
         self.publish = publish
         self.problem = problem
         self.isPublishing = isPublishing
@@ -35,7 +38,7 @@ public struct PublishCostSheet: View {
                     .disabled(isPublishing())
             }
             if let micros {
-                Text("This wallet would publish that it paid \(Format.money(micros, .USD)) in transaction \(Format.shortHash(draft.txHash)).")
+                Text("This wallet would publish that it paid \(Format.usd(Format.money(micros, .USD), beside: currency)) in transaction \(Format.shortHash(draft.txHash)).")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

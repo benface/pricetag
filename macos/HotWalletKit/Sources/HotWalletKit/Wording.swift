@@ -13,18 +13,14 @@ public enum HotWalletWording {
 
     public static let sweepsOnlyWhileOpen = "Sweeps only run while the app is open. If it's closed, whatever arrives stays here until it opens again."
 
-    /// The cap, and everything measured against it, stays in USD. Beside another main currency's "$", it has to say which dollars.
+    /// The cap, and everything measured against it, stays in USD.
     public static func usd(_ micros: UInt128, beside main: CurrencyCode) -> String {
-        labeled(Format.money(String(micros), .USD), beside: main)
+        Format.usd(Format.money(String(micros), .USD), beside: main)
     }
 
     /// For the whole dollars a slider moves in.
     public static func usd(dollars: Int, beside main: CurrencyCode) -> String {
-        labeled("$\(dollars)", beside: main)
-    }
-
-    private static func labeled(_ text: String, beside main: CurrencyCode) -> String {
-        main == .USD ? text : "US\(text)"
+        Format.usd("$\(dollars)", beside: main)
     }
 
     public static func overCap(by excess: UInt128, hasDestination: Bool, beside main: CurrencyCode) -> String {

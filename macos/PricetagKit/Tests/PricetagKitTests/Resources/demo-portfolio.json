@@ -361,7 +361,7 @@
       },
       {
         "asset": "USDC",
-        "reason": "sold at an unknown cost"
+        "reason": "sold or spent at an unknown cost"
       },
       {
         "asset": "USDC",
@@ -373,7 +373,7 @@
       },
       {
         "asset": "ETH",
-        "reason": "sold at an unknown cost"
+        "reason": "sold or spent at an unknown cost"
       },
       {
         "asset": "ETH",

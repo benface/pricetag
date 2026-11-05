@@ -36,11 +36,16 @@ public enum Format {
         isPositive(micros) ? "+\(money(micros, currency))" : money(micros, currency)
     }
 
+    /// USD beside amounts in the main currency. If that's another kind of dollar, a bare "$" doesn't say which. Takes what's already formatted, sign and all.
+    public static func usd(_ text: String, beside main: CurrencyCode) -> String {
+        main == .USD ? text : text.replacing("$", with: "US$", maxReplacements: 1)
+    }
+
     /// One side of a comparison. A nil is unavailable, not zero.
     public static func ruleValue(_ micros: String?, format: String, currency: CurrencyCode, isEstimate: Bool = false) -> String {
         guard let micros else { return "Unavailable" }
         switch format {
-        case "usdPrice": return estimate(price(micros, .USD), isEstimate)
+        case "usdPrice": return estimate(usd(price(micros, .USD), beside: currency), isEstimate)
         case "money": return estimate(money(micros, currency), isEstimate)
         default: return estimate(signedMoney(micros, currency), isEstimate)
         }
@@ -52,7 +57,7 @@ public enum Format {
         if whole(micros) == 0 { return "Same" }
         guard format == "usdPrice" else { return estimate(signedMoney(micros, currency), isEstimate) }
         let isNegative = micros.hasPrefix("-")
-        return estimate("\(isNegative ? "-" : "+")\(price(isNegative ? String(micros.dropFirst()) : micros, .USD))", isEstimate)
+        return estimate(usd("\(isNegative ? "-" : "+")\(price(isNegative ? String(micros.dropFirst()) : micros, .USD))", beside: currency), isEstimate)
     }
 
     /// Whole tokens from smallest units, cut to a readable length. Cuts instead of rounding, so it never shows more than there is.

@@ -15,7 +15,7 @@ export type MarketRow = Pick<PricedRow, "block_num" | "tx_hash" | "sold_token" |
 /** Older than this, a trade doesn't say what a token's worth now. */
 export const MARKET_MAX_AGE_MS = 1_800_000
 /** No priced_legs row says how deep a pool is, so these stand in for it: real size, from several transactions. */
-const MIN_TRADE_USD_MICROS = 100_000_000n
+export const MIN_TRADE_USD_MICROS = 100_000_000n
 const MIN_TRADES = 3
 const MIN_VOLUME_USD_MICROS = 1_000_000_000n
 /** The median of the last few, so one odd trade can't set the price. */
@@ -62,7 +62,7 @@ export function marketPrice(trades: readonly MarketTrade[], asset: string, block
   return { usdMicros: median(last.map((tx) => median(tx.prices))).toString(), blockNum: (last[0] as (typeof last)[number]).blockNum }
 }
 
-/** What a wallet's market-priced tokens traded at, in USD, by block and then asset. A price too little trading backs isn't in it. */
+/** What a wallet's tokens without oracle reads were worth, in USD, by block and then asset: by their feed, or else their market. One with neither isn't in it. */
 export type MarketMarks = Record<string, Record<string, string>>
 
 /**
