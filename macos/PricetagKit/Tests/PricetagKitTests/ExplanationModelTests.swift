@@ -85,7 +85,7 @@ final class ExplanationGate {
         gate.answer(fifo, .failure(.unreachable))
         await task.value
         #expect(model.explanation == nil)
-        #expect(model.failure == "Can't reach the server.")
+        #expect(model.failure == Wording.cantReachServer)
     }
 
     @Test func aNewServerDoesntKeepTheOldAnswer() async {
