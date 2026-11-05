@@ -1,5 +1,6 @@
 import Foundation
 import KeyVault
+import PricetagKit
 
 /// A token this wallet is willing to touch. It's `src/core/tokens.ts`, and a test compares the two.
 public struct Token: Hashable, Sendable, Identifiable {
@@ -72,8 +73,7 @@ public enum Money {
 
     /// An amount as typed. nil when it isn't one, including when it's finer than the token can hold, because rounding someone's money isn't this app's call.
     public static func units(fromText text: String, decimals: Int) -> UInt128? {
-        let clean = text.filter { !" ,".contains($0) }
-        guard clean.wholeMatch(of: /\d+(\.\d*)?|\.\d+/) != nil else { return nil }
+        guard let clean = Format.plainAmount(text), clean.wholeMatch(of: /\d+(\.\d*)?|\.\d+/) != nil else { return nil }
         let parts = clean.split(separator: ".", omittingEmptySubsequences: false)
         let whole = parts.first.map(String.init) ?? ""
         let fraction = parts.count > 1 ? String(parts[1]) : ""

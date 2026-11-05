@@ -527,6 +527,15 @@ actor BookSource: PortfolioSource {
         #expect(Format.micros(fromDollars: "1.1234567") == "1123456")
         for bad in ["", "-5", "abc", "1.2.3", "1e5"] { #expect(Format.micros(fromDollars: bad) == nil, "\(bad)") }
     }
+
+    @Test func aDecimalCommaIsntThousands() {
+        #expect(Format.micros(fromDollars: "46,20") == "46200000")
+        #expect(Format.micros(fromDollars: "$46,2") == "46200000")
+        #expect(Format.micros(fromDollars: "1 234,50 $") == "1234500000")
+        #expect(Format.micros(fromDollars: "1,234") == "1234000000")
+        #expect(Format.micros(fromDollars: "1,234,567.50") == "1234567500000")
+        for bad in ["1.234,50", "12,3456", "1,23,456", "0,125", ",5"] { #expect(Format.micros(fromDollars: bad) == nil, "\(bad)") }
+    }
 }
 
 @MainActor
