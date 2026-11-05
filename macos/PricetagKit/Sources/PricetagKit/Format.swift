@@ -117,6 +117,16 @@ public enum Format {
         number.formatted(.number.locale(locale))
     }
 
+    /// An address in groups of four, in two lines of five, so it can be checked a piece at a time. The "0x" stays on the first group.
+    public static func groupedAddress(_ address: String) -> [String] {
+        let digits = Array(address.hasPrefix("0x") ? address.dropFirst(2) : Substring(address))
+        let groups = stride(from: 0, to: digits.count, by: 4).map { String(digits[$0..<min($0 + 4, digits.count)]) }
+        guard !groups.isEmpty else { return [] }
+        let prefixed = [(address.hasPrefix("0x") ? "0x" : "") + groups[0]] + groups.dropFirst()
+        let half = (prefixed.count + 1) / 2
+        return [prefixed[..<half], prefixed[half...]].filter { !$0.isEmpty }.map { $0.joined(separator: " ") }
+    }
+
     public static func shortHash(_ hash: String) -> String {
         "\(hash.prefix(6))…\(hash.suffix(4))"
     }

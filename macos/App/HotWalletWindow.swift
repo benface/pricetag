@@ -402,6 +402,7 @@ struct HotWalletDetails<Overview: View>: View {
             ViewThatFits(in: .horizontal) {
                 HStack {
                     send
+                    receive
                     topUp
                     sweep
                     Spacer()
@@ -410,6 +411,7 @@ struct HotWalletDetails<Overview: View>: View {
                 VStack(alignment: .leading) {
                     HStack {
                         send
+                        receive
                         topUp
                     }
                     HStack {
@@ -441,6 +443,11 @@ struct HotWalletDetails<Overview: View>: View {
         Button("Send…") { isSending = true }
             .buttonStyle(.borderedProminent)
             .disabled(!wallet.canSend)
+    }
+
+    private var receive: some View {
+        Button("Receive…") { navigation.isReceiving = true }
+            .disabled(!wallet.canTopUp)
     }
 
     private var topUp: some View {
