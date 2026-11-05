@@ -4,6 +4,16 @@
 import Foundation
 import Observation
 
+/// The wallet list and what it depends on, as it was before a change.
+public struct WalletListSnapshot: Sendable {
+    let answers: Book
+    let undoDepth: Int
+    let saved: [SavedWallet]
+    let order: [String]
+    let hidden: [String]
+    let address: String?
+}
+
 public enum FeedState: Equatable, Sendable {
     case noWallet
     /// Waiting on an answer, which the first time for a wallet can take a minute. Numbers on screen are the previous answer.
@@ -72,6 +82,10 @@ public final class PortfolioStore {
     public private(set) var linkedWallets: [String] = []
     /// Wallets the user has looked at, for the switcher. Addresses and names only.
     public private(set) var savedWallets: [SavedWallet]
+    /// How the user arranged the list.
+    public private(set) var walletOrder: [String]
+    /// Taken off the list, but still the user's, so costs keep following their money.
+    public private(set) var hiddenWallets: [String]
 
     @ObservationIgnored private var source: any PortfolioSource
     @ObservationIgnored private let makeSource: @Sendable (URL) -> any PortfolioSource
@@ -122,6 +136,8 @@ public final class PortfolioStore {
             saved.append(SavedWallet(address: address, lastSeen: now()))
         }
         self.savedWallets = saved
+        self.walletOrder = defaults.stringArray(forKey: Keys.walletOrder) ?? []
+        self.hiddenWallets = defaults.stringArray(forKey: Keys.hiddenWallets) ?? []
         self.feed = address == nil ? .noWallet : .reading
         self.source = makeSource(serverURL)
     }
@@ -193,17 +209,12 @@ public final class PortfolioStore {
         defaults.set(next, forKey: Keys.wallet)
         if let next, next != WalletAddress.demo {
             saveWallets(SavedWallet.seeing(next, at: now(), in: savedWallets, own: book.linkedWallets))
+            saveHidden(hiddenWallets.filter { $0 != next })
         }
         portfolio = nil
         updatedAt = nil
         feed = next == nil ? .noWallet : .reading
         start()
-    }
-
-    /// A wallet the user just made is what they want to see, unless they're already looking at a real one. Only the user replaces that.
-    public func showNewWallet(_ address: String) {
-        guard self.address == nil || self.address == WalletAddress.demo else { return }
-        setWallet(address)
     }
 
     /// Keeps it in the list under this name, or makes it a recent one again with an empty name.
@@ -212,21 +223,84 @@ public final class PortfolioStore {
         var next = savedWallets
         if let index = next.firstIndex(where: { $0.address == address }) {
             next[index].name = clean.isEmpty ? nil : clean
+            if clean.isEmpty { next[index].isKept = nil }
         } else if !clean.isEmpty {
             next.append(SavedWallet(address: address, name: clean, lastSeen: now()))
         }
         saveWallets(next)
     }
 
-    /// Takes it off the list, and shows `next` if it was the one showing.
+    /// Takes it off the list, and shows `next` if it was the one showing. Saying it's the user's goes with it, but an account this Mac's wallet
+    /// holds stays theirs, so that one is only hidden.
     public func removeWallet(_ address: String, showing next: String?) {
+        if linkedWallets.contains(address) {
+            saveHidden(hiddenWallets + [address])
+        } else if book.senders[address]?.kind == .mine {
+            var answers = book
+            answers.senders[address] = nil
+            setBook(answers)
+        }
         saveWallets(savedWallets.filter { $0.address != address })
+        saveOrder(walletOrder.filter { $0 != address })
         if self.address == address { setWallet(next) }
+    }
+
+    /// The user says it's theirs, which is what answering "My wallet" says: from now on costs follow money between it and their other wallets.
+    /// This is only ever about costs. It can't sign, and it isn't a savings wallet, which takes the device check.
+    public func moveToYours(_ address: String) {
+        setBook(book.answering(address, .mine, focus: nil))
+    }
+
+    /// It's not the user's after all, so costs stop following its money. It stays listed under Watching, so a slip is easy to put right.
+    public func moveToWatching(_ address: String) {
+        var answers = book
+        answers.senders[address] = nil
+        setBook(answers)
+        keepWallet(address)
+    }
+
+    /// Stays under Watching, instead of falling off the list once enough others have been looked at.
+    public func keepWallet(_ address: String) {
+        var next = SavedWallet.seeing(address, at: now(), in: savedWallets, own: book.linkedWallets)
+        if let index = next.firstIndex(where: { $0.address == address }) { next[index].isKept = true }
+        saveWallets(next)
+    }
+
+    /// `addresses` is a section as it's listed. Each section keeps its own order, so one moving doesn't disturb another.
+    public func moveWallets(in addresses: [String], from source: IndexSet, to destination: Int) {
+        let moved = source.map { addresses[$0] }
+        var arranged = addresses.filter { !moved.contains($0) }
+        arranged.insert(contentsOf: moved, at: destination - source.count { $0 < destination })
+        saveOrder(walletOrder.filter { !addresses.contains($0) } + arranged)
+    }
+
+    /// Puts the list back as it was when this was taken. It's for an Undo right after a change, because anything since goes with it.
+    public var walletListSnapshot: WalletListSnapshot {
+        WalletListSnapshot(answers: answers, undoDepth: undoStack.count, saved: savedWallets, order: walletOrder, hidden: hiddenWallets, address: address)
+    }
+
+    public func restore(_ snapshot: WalletListSnapshot) {
+        if snapshot.answers != answers { store(snapshot.answers) }
+        undoStack.removeLast(max(undoStack.count - snapshot.undoDepth, 0))
+        saveWallets(snapshot.saved)
+        saveOrder(snapshot.order)
+        saveHidden(snapshot.hidden)
+        if snapshot.address != address { setWallet(snapshot.address) }
     }
 
     private func saveWallets(_ wallets: [SavedWallet]) {
         savedWallets = wallets
         defaults.set(try? JSONEncoder().encode(wallets), forKey: Keys.savedWallets)
+    }
+
+    private func saveOrder(_ order: [String]) {
+        walletOrder = order
+        defaults.set(order, forKey: Keys.walletOrder)
+    }
+
+    private func saveHidden(_ hidden: [String]) {
+        hiddenWallets = hidden
+        defaults.set(hidden, forKey: Keys.hiddenWallets)
     }
 
     /// A key is gone, and `next` took over from it, if anything did. Whoever's looking at its wallet follows, or they'd see an empty address and
@@ -375,25 +449,6 @@ public final class PortfolioStore {
         return imported
     }
 
-    /// Links a wallet that proved it's this user's by signing. Says whether the signature holds up. Only something shaped like one reaches the
-    /// server, and only that wallet is linked: its signature says nothing about the one showing. Cancelling while it's checked links nothing, however it goes.
-    public func linkProved(_ proof: WalletProof, signature: String) async throws -> Bool {
-        guard WalletAddress.isSignature(signature) else { return false }
-        let verified = try await source.verifyLink(owner: proof.owner, address: proof.address, signature: signature)
-        try Task.checkCancellation()
-        guard verified else { return false }
-        setBook(book.answering(proof.address, .mine, focus: nil))
-        return true
-    }
-
-    /// It's not the user's after all. It stays listed as one they're only looking at, so a slip is easy to put right.
-    public func unlinkWallet(_ address: String) {
-        var next = book
-        next.senders[address] = nil
-        setBook(next)
-        saveWallets(SavedWallet.seeing(address, at: now(), in: savedWallets, own: book.linkedWallets))
-    }
-
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
         address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), serverURL: serverURL, book: bookToSend(book, for: $0)) }
@@ -526,5 +581,7 @@ public final class PortfolioStore {
         static let book = "answers"
         static let rule = "pricingRule"
         static let savedWallets = "savedWallets"
+        static let walletOrder = "walletOrder"
+        static let hiddenWallets = "hiddenWallets"
     }
 }

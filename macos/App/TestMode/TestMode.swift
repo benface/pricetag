@@ -198,8 +198,8 @@ enum TestScene: String, CaseIterable {
     case walletSwitcherRenaming = "wallet-switcher-renaming"
     case walletSwitcherProblem = "wallet-switcher-problem"
     case walletSwitcherLong = "wallet-switcher-long"
-    case proveWallet = "prove-wallet"
-    case proveWalletProblem = "prove-wallet-problem"
+    case walletSwitcherNote = "wallet-switcher-note"
+    case spendingMoneySetupSheet = "spending-money-setup-sheet"
     case mainShowingSpendingMoney = "main-showing-spending-money"
     case mainSavings = "main-savings"
     case mainWatching = "main-watching"
@@ -243,7 +243,7 @@ enum TestScene: String, CaseIterable {
     case routeDetailsOpen = "route-details-open"
     case routeAnswer = "route-answer"
     case routeAnswerOpen = "route-answer-open"
-    case routeProveWalletOpen = "route-prove-wallet-open"
+    case routeRemoveFromSavingsOpen = "route-remove-from-savings-open"
     case menuBarLabel = "menu-bar-label"
     case settings
     case settingsServer = "settings-server"
@@ -375,7 +375,7 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .proveWallet, .proveWalletProblem, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
+        case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .walletSwitcherNote, .spendingMoneySetupSheet, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .buy, .buyCAD, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
              .publishFromDevice, .publishFromDeviceSafari, .publishFromDeviceNoChromium, .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
@@ -424,7 +424,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading: TestScene.namedWallet
         case .walletSwitcherLong: TestScene.manyWallets.last?.address
-        case .mainShowingSpendingMoney: HotWalletFixture.spending.lowercased
+        case .mainShowingSpendingMoney, .mainSpendingMoney, .mainSpendingMoneySmall, .routeRemoveFromSavingsOpen: HotWalletFixture.spending.lowercased
         case .mainSavings: HotWalletFixture.savings.lowercased
         case .mainWatching: TestScene.recentWallet
         default: nil
@@ -602,10 +602,9 @@ enum TestScene: String, CaseIterable {
                 RunLoop.main.run(until: .now.addingTimeInterval(0.01))
             }
         }
-        let navigation = Navigation()
+        let navigation = Navigation(store: store, hotWallet: hotWallet)
         if self == .mainChartWeek { navigation.chartRange = .week }
         if self == .mainTransactions || self == .mainTransactionsCAD || self == .mainTransactionsSmall { navigation.section = .transactions }
-        if self == .mainSpendingMoney || self == .mainSpendingMoneySmall { navigation.section = .spendingMoney }
         if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
         // Once the window has its size, as when someone clicks. Before that it's too small for the details to fit beside the section.
         let opened: ExplainTarget? = switch self {
@@ -658,46 +657,47 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 2200, height: 1300), isReady: isReady)
         case .mainMissingPrice:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .routeBuy, .routeBuyOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .routeHoldings, .routeHoldingsOpen, .routeAddWallet, .routeAddWalletOpen, .routeDetails, .routeDetailsOpen, .routeAnswer, .routeAnswerOpen, .routeProveWalletOpen:
+        case .routeBuy, .routeBuyOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .routeHoldings, .routeHoldingsOpen, .routeAddWallet, .routeAddWalletOpen, .routeDetails, .routeDetailsOpen, .routeAnswer, .routeAnswerOpen, .routeRemoveFromSavingsOpen:
             let press: () -> Void
             let hasArrived: () -> Bool
             let hasSheet = { NSApp.windows.contains { $0.attachedSheet != nil } }
+            let isOnSpendingMoney = { navigation.section == .overview && store.address == hotWallet.address?.lowercased }
             switch self {
             case .routeSend, .routeSendOpen:
                 press = navigation.send
-                hasArrived = { !navigation.wantsSend && navigation.section == .spendingMoney && hasSheet() }
+                hasArrived = { !navigation.wantsSend && isOnSpendingMoney() && hasSheet() }
             case .routeTopUp, .routeTopUpOpen:
                 press = navigation.topUp
-                hasArrived = { !navigation.wantsTopUp && navigation.section == .spendingMoney && hasSheet() }
+                hasArrived = { !navigation.wantsTopUp && isOnSpendingMoney() && hasSheet() }
             case .routeBuy, .routeBuyOpen:
                 press = { navigation.isBuying = true }
                 hasArrived = { navigation.isBuying && hasSheet() }
             case .routeAddSavings:
                 press = navigation.addSavings
-                hasArrived = { !navigation.wantsAddSavings && navigation.section == .spendingMoney && hasSheet() }
+                hasArrived = { !navigation.wantsAddSavings && isOnSpendingMoney() && hasSheet() }
             case .routeHoldings, .routeHoldingsOpen:
-                navigation.section = .spendingMoney
+                navigation.section = .transactions
                 press = navigation.showOverview
                 hasArrived = { navigation.section == .overview }
             case .routeAddWallet, .routeAddWalletOpen:
-                navigation.section = .spendingMoney
+                navigation.section = .transactions
                 press = navigation.showOverview
                 hasArrived = { navigation.section == .overview && store.feed == .noWallet }
             case .routeDetails, .routeDetailsOpen:
-                navigation.section = .spendingMoney
+                navigation.section = .transactions
                 press = { navigation.explain(.asset("AERO", .amount)) }
                 hasArrived = { navigation.section == .overview && navigation.target != nil }
-            case .routeProveWalletOpen:
-                // As the list's row does it: the list closes in the same moment, and the sheet still has to appear.
+            case .routeRemoveFromSavingsOpen:
+                // As the list's row does it: the list closes in the same moment, and the question still has to appear.
                 navigation.section = .overview
                 navigation.isSwitchingWallet = true
                 press = {
                     navigation.isSwitchingWallet = false
-                    navigation.provingWallet = WalletProof(address: TestScene.namedWallet, owner: TestScene.namedWallet, title: "Treasury")
+                    navigation.removingFromSavings = WalletEntry(address: HotWalletFixture.savings.lowercased, name: "Ledger", kind: .savings)
                 }
-                hasArrived = { !navigation.isSwitchingWallet && navigation.provingWallet != nil && hasSheet() }
+                hasArrived = { !navigation.isSwitchingWallet && navigation.removingFromSavings != nil && NSApp.windows.contains { $0.attachedSheet != nil } }
             default:
-                navigation.section = .spendingMoney
+                navigation.section = .transactions
                 press = { navigation.resolve() }
                 hasArrived = { navigation.isResolving && hasSheet() }
             }
@@ -716,12 +716,11 @@ enum TestScene: String, CaseIterable {
                 // Long enough for whatever reacts to the change to have run, because arriving doesn't count if something then undoes it.
                 return Date.now.timeIntervalSince(pressedAt ?? .now) > 0.5 && hasArrived()
             })
-        case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong:
-            let switcher = WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: self == .walletSwitcherRenaming ? PendingWalletName(address: TestScene.namedWallet, text: "Treasury") : PendingWalletName(), onOpenSpendingMoney: {}, onProve: { _ in }, onDone: {}, problem: self == .walletSwitcherProblem ? Wording.notAnAddress : nil)
+        case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .walletSwitcherNote:
+            let switcher = WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: self == .walletSwitcherRenaming ? PendingWalletName(address: TestScene.namedWallet, text: "Treasury") : PendingWalletName(), onOpenSpendingMoney: {}, onRemoveFromSavings: { _ in }, onDeleteSpendingMoney: {}, onDone: {}, problem: self == .walletSwitcherProblem ? Wording.notAnAddress : nil, note: self == .walletSwitcherNote ? WalletListNote(text: Wording.movedToYours, undo: {}) : nil)
             return TestScreen(view: AnyView(switcher.background(.background)), isReady: isReady)
-        case .proveWallet, .proveWalletProblem:
-            let proof = WalletProof(address: TestScene.namedWallet, owner: TestScene.namedWallet, title: "Treasury")
-            return TestScreen(view: AnyView(ProveWalletSheet(store: store, proof: proof, signature: self == .proveWalletProblem ? "0x1234" : "", problem: self == .proveWalletProblem ? Wording.notASignature : nil)), isReady: isReady)
+        case .spendingMoneySetupSheet:
+            return TestScreen(view: AnyView(SpendingMoneySetup(wallet: hotWallet, store: store, onDone: {}).frame(width: 480, height: 460)), isReady: isReady)
         case .popoverLongName, .popoverLongNameReading, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
         case .menuBarLabel:
@@ -732,7 +731,7 @@ enum TestScene: String, CaseIterable {
             case .settingsHotWallet, .settingsHotWalletCAD, .settingsReplacingKey: .spendingMoney
             default: .general
             }
-            return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet, tab: pane)), isReady: isReady)
+            return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet, tab: .constant(pane))), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation, purchases: purchases)), size: CGSize(width: 560, height: 720), isReady: isReady)
         case .hotWallet, .hotWalletCAD, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck, .hotWalletReplacingKeyMissing, .hotWalletSites:
