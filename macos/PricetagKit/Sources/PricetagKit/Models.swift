@@ -281,6 +281,8 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let linkedReading: [String]
     /// Linked wallets whose last read failed. It's tried again with each read, and what they sent stays unresolved or out of date until it works.
     public let linkedFailed: [String]
+    /// Other wallets' history that can't be confirmed, which leaves what they sent here with an unknown cost.
+    public let withheld: [WithheldCost]
     public let marketChecked: Bool
 
     /// What the holdings table lists. Tokens with no market go in a group of their own, so real warnings stay noticeable.
@@ -454,6 +456,12 @@ public struct Question: Codable, Sendable, Equatable, Identifiable {
     /// Facts that might help. Never a preselected answer.
     public let evidence: [String]
     public let valueMicros: String?
+}
+
+/// A wallet's asset whose cost couldn't carry over to where it was sent.
+public struct WithheldCost: Codable, Sendable, Equatable, Hashable {
+    public let wallet: String
+    public let asset: String
 }
 
 public struct Meter: Codable, Sendable, Equatable {

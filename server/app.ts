@@ -3,7 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { isAddress, isCurrencyCode, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createWallets, describeError, sharedMarket, type AmpQuery, type Source } from "@pricetag/sdk/internal"
+import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createWallets, describeError, followChain, followRawSql, followSql, readHeadMark, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -22,7 +22,6 @@ import { TAX_COUNTRIES, isTaxCountryCode, taxReportOf, type TaxScope } from "../
 
 type Env = Record<string, string | undefined>
 
-const POLL_MS = 2000
 const DEMO_UNVERIFIABLE = "This is the demo wallet, so there's no real block to check."
 
 function parseMethod(value: string | null): Method | null {
@@ -53,11 +52,13 @@ function pinned(dataset: string, hash: string | undefined): string {
   return `${dataset.split("@")[0]}@${hash}`
 }
 
-export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs } | null {
+export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs; follow: FollowConfig } | null {
   if (!query) return null
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
   const readRates = createRates(feedRounds(query, { baseDataset, network }))
+  // How the server hears about new blocks. Amp's block ranges name a network with a dash, and its RPC functions with an underscore.
+  const followOf = (sql: string): FollowConfig => ({ stream: env.AMP_QUERY_URL ? createRangeStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")) : null, sql, readMark: (after) => readHeadMark(query, baseDataset, after) })
   // Only a fork pins the default. Without one, a hash left in the env can be a hosted Amp's, which a local Amp doesn't have.
   const pin = env.PRICETAG_DATASET && env.PRICETAG_FORK_DATASET ? pinned(env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH) : null
   const proofs = createProofs(pin ? query.aliased({ pricetag: pin }) : query, {
@@ -81,13 +82,13 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, pin),
         ruleSource(CAUTIOUS_RULE_ID, env.PRICETAG_FORK_DATASET!, env.PRICETAG_FORK_HASH, pinned(env.PRICETAG_FORK_DATASET!, env.PRICETAG_FORK_HASH)),
       ]
-      return { source: rules[0]!.source, rules, readRates, proofs }
+      return { source: rules[0]!.source, rules, readRates, proofs, follow: followOf(followSql(pin)) }
     }
-    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates, proofs }
+    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET)) }
   }
   const historyBlocks = env.PRICETAG_HISTORY_BLOCKS ? Number(env.PRICETAG_HISTORY_BLOCKS) : null
   if (historyBlocks !== null && (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0)) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
-  return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates, proofs }
+  return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates, proofs, follow: followOf(followRawSql(baseDataset)) }
 }
 
 /** Each one is a wallet read, so this stays well under what the server keeps in memory. */
@@ -146,12 +147,24 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 
 const recordOf = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
 
-export function createApi(env: Env, created: ReturnType<typeof createSource> = createSource(env)) {
+/** For a source with nothing to stream. */
+const pollingOnly = (source: Source): FollowConfig => ({
+  stream: null,
+  sql: "",
+  readMark: async (after) => {
+    const head = await source.head(after)
+    return head && { blockNum: head.blockNum, hash: "" }
+  },
+})
+
+type Created = Omit<NonNullable<ReturnType<typeof createSource>>, "follow"> & { follow?: FollowConfig | undefined }
+
+export function createApi(env: Env, created: Created | null = createSource(env)) {
   const source = created?.source ?? null
 
   let head: Head | null = null
   const subscribers = new Set<ServerResponse>()
-  let polling = false
+  let following: AbortController | null = null
 
   async function pollHead(): Promise<Head> {
     if (!source) throw new Error("No Amp source")
@@ -161,29 +174,41 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
     return head
   }
 
-  // Only polls while a browser is watching, one query at a time.
-  async function pollLoop() {
-    if (polling) return
-    polling = true
-    let last = head?.blockNum ?? null
-    while (subscribers.size > 0) {
-      const started = Date.now()
-      let message: string
-      try {
-        const current = await pollHead()
-        if (current.blockNum === last) message = ""
-        else {
-          last = current.blockNum
-          message = `event: head\ndata: ${JSON.stringify(current)}\n\n`
-        }
-      } catch (error) {
-        console.error("Head poll failed:", describeError(error))
-        message = `event: down\ndata: {}\n\n`
+  const send = (message: string) => {
+    for (const subscriber of subscribers) subscriber.write(message)
+  }
+
+  /** Blocks some already-read wallets hold were replaced. The next read of each replaces them, however far back it was. */
+  async function rewindTo(block: number, tip: number) {
+    await Promise.all([...new Set([wallets, ...rules.map((r) => r.wallets)])].map((w) => w?.rewind(block, Math.max(head?.blockNum ?? 0, tip))))
+    created?.readRates.rewind?.(block)
+    // The new chain can be shorter, and the head is only read from the last one on.
+    if (head && head.blockNum >= block) head = { ...head, blockNum: block - 1 }
+  }
+
+  // Only follows the chain while something is watching.
+  async function followLoop() {
+    if (following || !source) return
+    const stop = new AbortController()
+    following = stop
+    for await (const tick of followChain(created?.follow ?? pollingOnly(source), stop.signal)) {
+      if (tick.kind === "down") {
+        console.error("Head read failed:", tick.message)
+        send(`event: down\ndata: {}\n\n`)
+        continue
       }
-      if (message) for (const subscriber of subscribers) subscriber.write(message)
-      await new Promise((resolve) => setTimeout(resolve, Math.max(0, POLL_MS - (Date.now() - started))))
+      try {
+        if (tick.reorgFrom !== null) await rewindTo(tick.reorgFrom, tick.blockNum)
+        // Every tick, even under the same head: it can be a block the dataset has only now finished.
+        const current = await pollHead()
+        send(`event: head\ndata: ${JSON.stringify({ ...current, via: tick.via })}\n\n`)
+      } catch (error) {
+        console.error("Head read failed:", describeError(error))
+        send(`event: down\ndata: {}\n\n`)
+      }
     }
-    polling = false
+    following = null
+    if (subscribers.size > 0) void followLoop()
   }
 
   const readL1Fees = createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL)
@@ -474,8 +499,11 @@ export function createApi(env: Env, created: ReturnType<typeof createSource> = c
       res.write(": connected\n\n")
       if (!source) return true
       subscribers.add(res)
-      req.on("close", () => subscribers.delete(res))
-      void pollLoop()
+      req.on("close", () => {
+        subscribers.delete(res)
+        if (subscribers.size === 0) following?.abort()
+      })
+      void followLoop()
       return true
     }
 

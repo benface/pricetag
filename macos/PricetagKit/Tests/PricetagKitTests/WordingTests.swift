@@ -59,6 +59,7 @@ struct WordingVectors: Decodable {
     let feedDetail: [String]
     let pnlHelp: [PnlHelp]
     let linkedFailed: [FeesUnknown]
+    let withheld: String
     let sentences: Sentences
 }
 
@@ -95,6 +96,7 @@ struct WordingVectors: Decodable {
         for vector in vectors.pnlHelp { #expect(Wording.pnlHelp(for: vector.text) == vector.help) }
         let sentences = vectors.sentences
         for vector in vectors.linkedFailed { #expect(Wording.linkedFailed(vector.count) == vector.text) }
+        #expect(Wording.withheld(wallet: "0x1234567890abcdef1234567890abcdef12345678", asset: "ETH") == vectors.withheld)
         #expect(Wording.methodName == sentences.methodName)
         #expect(Wording.rulesTitle == sentences.rulesTitle)
         #expect(Wording.rulesHelp == sentences.rulesHelp)

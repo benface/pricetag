@@ -147,6 +147,7 @@ const common = {
   openingUnread: [],
   unseenEth: [],
   lastBalances: {},
+  lastCheckableEth: null,
   unreadBalances: [],
   currency: "USD" as const,
   rates: null,

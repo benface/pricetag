@@ -62,6 +62,7 @@ function wallet(address: string, rows: LegRow[], changes: Partial<WalletResponse
     balances: { blockNum: 100, amounts },
     openingUnread: [],
     lastBalances: {},
+    lastCheckableEth: null,
     unreadBalances: [],
     unseenEth: [],
     notes: [],
@@ -108,6 +109,150 @@ describe("the cost of an incoming leg", () => {
       const fold = foldBook(wallet(B, rows), [], "average", book({ [A]: { kind: "mine" } }))
       assert.equal(fold.positions[0]?.values.costMicros, null)
       assert.deepEqual(fold.questions, [], "the answer's already in, so there's nothing to ask")
+    })
+
+    describe("from a wallet whose history can't be confirmed", () => {
+      const linked = book({ [A]: { kind: "mine" } })
+      const amount = (1000n * E6).toString()
+      const fold = (from: WalletResponse, method: Method = "average") => foldBook(wallet(B, rows), [from], method, linked)
+      // Its history says the USDC left, and the chain says it's still there.
+      const mismatched = () => wallet(A, rows, { balances: { blockNum: 100, amounts: { USDC: amount, ETH: "0" } } })
+      const unread = (changes: Partial<WalletResponse> = {}) => wallet(A, rows, { balances: null, unreadBalances: ["USDC", "ETH"], ...changes })
+      const unknown = (result: ReturnType<typeof fold>) => [result.positions[0]?.values.costMicros, result.positions[0]?.effects[0]?.leg.costLabel, result.withheld]
+      const withheld = [null, "unknown", [{ wallet: A, asset: "USDC" }]]
+      const known = ["1000000000", "inherited", []]
+
+      it("isn't known when the balance doesn't match", () => {
+        const result = fold(mismatched())
+        assert.deepEqual(unknown(result), withheld)
+        assert.equal(result.positions[0]?.reconciliation?.status, "reconciled", "the wallet it arrived in adds up, which isn't what's in doubt")
+        assert.deepEqual(result.questions, [], "there's nothing to ask about it")
+      })
+
+      it("says the same in both apps", () => {
+        const response = portfolioOf(wallet(B, rows), "average", [mismatched()], linked)
+        assert.deepEqual(response.withheld, [{ wallet: A, asset: "USDC" }])
+        assert.equal(response.positions[0]?.values.costMicros, null)
+      })
+
+      it("stays unknown through another wallet, and names the first", () => {
+        const chain = [...rows, ...send(30, "0x3", B, C, 400n * E6)]
+        const links = book({ [A]: { kind: "mine" }, [B]: { kind: "mine" } })
+        const from = wallet(A, chain, { balances: { blockNum: 100, amounts: { USDC: amount, ETH: "0" } } })
+        const result = foldBook(wallet(C, chain), [from, wallet(B, chain)], "average", links)
+        assert.equal(result.positions[0]?.values.costMicros, null)
+        assert.deepEqual(result.withheld, [{ wallet: A, asset: "USDC" }])
+      })
+
+      it("only touches that asset, and only what came from there", () => {
+        const eth = wallet(A, rows, { balances: { blockNum: 100, amounts: { USDC: "0", ETH: "5" } } })
+        assert.deepEqual(unknown(fold(eth)), known)
+        const both = [...rows, ...buy(25, "0x4", B, 500n)]
+        assert.equal(foldBook(wallet(B, both), [mismatched()], "fifo", linked).positions.find((p) => p.asset === "USDC")?.effects[1]?.leg.costLabel, "paid")
+      })
+
+      it("doesn't warn about a wallet on its own screen, or about what didn't reach this one", () => {
+        assert.deepEqual(foldBook(mismatched(), [wallet(B, rows)], "average", book({ [B]: { kind: "mine" } })).withheld, [])
+        const other = [...send(30, "0x3", A, C, 5n * E6), ...buy(5, "0x0", A, 5n)]
+        const elsewhere = wallet(A, other, { balances: { blockNum: 100, amounts: { USDC: "1", ETH: "0" } } })
+        const links = book({ [A]: { kind: "mine" }, [C]: { kind: "mine" } })
+        const paid = foldBook(wallet(B, buy(40, "0x5", B, 5n)), [elsewhere, wallet(C, other)], "average", links)
+        assert.deepEqual(paid.withheld, [])
+        const fromStranger = send(40, "0x5", STRANGER, B, 10n * E6)
+        const unrelated = foldBook(wallet(B, fromStranger), [elsewhere, wallet(C, other)], "average", links)
+        assert.equal(unrelated.positions[0]?.values.costMicros, null, "it has an unknown cost of its own")
+        assert.deepEqual(unrelated.withheld, [])
+        assert.deepEqual(foldBook(wallet(C, other), [elsewhere], "average", book({ [A]: { kind: "mine" } })).withheld, [{ wallet: A, asset: "USDC" }], "the wallet it did reach still says so")
+      })
+
+      describe("through another wallet", () => {
+        const links = book({ [A]: { kind: "mine" }, [B]: { kind: "mine" } })
+        const stranger = send(5, "0x0", STRANGER, B, 1000n * E6)
+        // B holds what a stranger sent first, then what A sent, and passes on only the first 1,000.
+        const moved = [...rows, ...stranger, ...send(30, "0x3", B, C, 1000n * E6)]
+        const from = wallet(A, moved, { balances: { blockNum: 100, amounts: { USDC: amount, ETH: "0" } } })
+
+        it("follows the units that actually moved, oldest first", () => {
+          assert.deepEqual(foldBook(wallet(C, moved), [from, wallet(B, moved)], "fifo", links).withheld, [])
+          assert.deepEqual(foldBook(wallet(B, moved), [from, wallet(C, moved)], "fifo", links).withheld, [{ wallet: A, asset: "USDC" }], "B did receive it")
+          const after = [...stranger, ...rows, ...send(30, "0x3", B, C, 1500n * E6)]
+          assert.deepEqual(foldBook(wallet(C, after), [wallet(A, after, { balances: { blockNum: 100, amounts: { USDC: amount, ETH: "0" } } }), wallet(B, after)], "fifo", links).withheld, [{ wallet: A, asset: "USDC" }], "and past the first 1,000, some of what moved is A's")
+        })
+
+        it("goes along with an average, where every unit shares what's unknown", () => {
+          assert.deepEqual(foldBook(wallet(C, moved), [from, wallet(B, moved)], "average", links).withheld, [{ wallet: A, asset: "USDC" }])
+        })
+
+        it("names everyone behind an average, and only them", () => {
+          const D = addr(0xe1)
+          const two = [...rows, ...buy(12, "0x6", D, 1000n), ...send(22, "0x7", D, B, 1000n * E6), ...send(30, "0x3", B, C, 500n * E6)]
+          const off = (address: string) => wallet(address, two, { balances: { blockNum: 100, amounts: { USDC: amount, ETH: "0" } } })
+          const three = book({ [A]: { kind: "mine" }, [B]: { kind: "mine" }, [D]: { kind: "mine" } })
+          assert.deepEqual(foldBook(wallet(C, two), [off(A), off(D), wallet(B, two)], "average", three).withheld, [{ wallet: A, asset: "USDC" }, { wallet: D, asset: "USDC" }])
+          const fine = wallet(D, two)
+          assert.deepEqual(foldBook(wallet(C, two), [off(A), fine, wallet(B, two)], "average", three).withheld, [{ wallet: A, asset: "USDC" }])
+        })
+      })
+
+      it("keeps a cost the user entered for it", () => {
+        const answered: Book = { ...linked, costs: { [costKey(B, wallet(B, rows).legs[0]?.id as string)]: usd("900000000") } }
+        const result = foldBook(wallet(B, rows), [mismatched()], "average", answered)
+        assert.equal(result.positions[0]?.values.costMicros, "900000000")
+        assert.deepEqual(result.withheld, [], "so there's nothing to warn about")
+      })
+
+      it("isn't balanced while a cost is withheld, though nothing's left to ask", () => {
+        const answers = { ...linked, senders: { ...linked.senders, [STRANGER]: { kind: "someone-else" as const } } }
+        const result = foldBook(wallet(B, rows), [mismatched()], "average", answers)
+        assert.equal(isBalanced(result.meter), true, "the meter only knows about questions")
+        assert.equal(result.withheld.length, 1, "which is why both apps check this too")
+      })
+
+      describe("a read that fails", () => {
+        const last = (block: number, units: string) => ({ USDC: { blockNum: block, amount: units }, ETH: { blockNum: block, amount: "0" } })
+
+        it("doesn't turn a known cost unknown when the last read added up", () => {
+          assert.deepEqual(unknown(fold(wallet(A, rows))), known)
+          assert.deepEqual(unknown(fold(unread({ lastBalances: last(50, "0") }))), known)
+          assert.deepEqual(unknown(fold(unread({ lastBalances: last(100, "0") }))), known)
+          assert.deepEqual(unknown(fold(wallet(A, rows))), known)
+        })
+
+        it("is the same for one asset's read, with the whole read still there", () => {
+          const partial = wallet(A, rows, { balances: { blockNum: 100, amounts: { ETH: "0" } }, unreadBalances: ["USDC"], lastBalances: { USDC: { blockNum: 50, amount: "0" } } })
+          assert.deepEqual(unknown(fold(partial)), known)
+        })
+
+        it("can't bring back a cost the last read already ruled out", () => {
+          assert.deepEqual(unknown(fold(unread({ lastBalances: last(50, amount) }))), withheld)
+        })
+
+        it("doesn't vouch for what left after it", () => {
+          assert.deepEqual(unknown(fold(unread({ lastBalances: last(15, amount) }))), withheld)
+        })
+
+        it("has nothing to fall back on before a first read, then settles for good", () => {
+          assert.deepEqual(unknown(fold(unread())), withheld)
+          assert.deepEqual(unknown(fold(wallet(A, rows))), known)
+        })
+
+        it("doesn't vouch for a wallet whose starting balance is still unread", () => {
+          assert.deepEqual(unknown(fold(wallet(A, rows, { openingUnread: ["USDC"] }))), withheld)
+          assert.deepEqual(unknown(fold(unread({ openingUnread: ["USDC"], lastBalances: last(50, "0") }))), withheld)
+        })
+      })
+
+      describe("a network fee that can't be read yet", () => {
+        const ethRows = [...send(10, "0x1", STRANGER, A, E18, ETH_ADDRESS), ...send(20, "0x2", A, B, E18, ETH_ADDRESS)]
+        const reasons = (lastCheckableEth: WalletResponse["lastCheckableEth"]) => foldBook(wallet(B, ethRows), [wallet(A, ethRows, { l1FeeUnknownTxs: ["0x9"], lastCheckableEth })], "average", linked).withheld
+
+        it("goes by the last ETH balance its legs could be compared with", () => {
+          assert.deepEqual(reasons({ blockNum: 30, amount: "0" }), [])
+          assert.deepEqual(reasons({ blockNum: 15, amount: E18.toString() }), [{ wallet: A, asset: "ETH" }], "what left after it isn't vouched for")
+          assert.deepEqual(reasons({ blockNum: 30, amount: E18.toString() }), [{ wallet: A, asset: "ETH" }], "and it didn't add up")
+          assert.deepEqual(reasons(null), [{ wallet: A, asset: "ETH" }], "with nothing to go on")
+        })
+      })
     })
 
     it("follows a chain of linked wallets", () => {

@@ -86,6 +86,9 @@ public struct PnlCaveats: View {
             if !portfolio.l1FeeUnknownTxs.isEmpty {
                 WarningText(Wording.networkFeeUnknown(portfolio.l1FeeUnknownTxs.count)).help(Wording.pnlHelp)
             }
+            ForEach(portfolio.withheld, id: \.self) { withheld in
+                WarningText(Wording.withheld(wallet: withheld.wallet, asset: withheld.asset))
+            }
             ForEach(Wording.missingRates(portfolio), id: \.self) { line in
                 WarningText(line)
             }

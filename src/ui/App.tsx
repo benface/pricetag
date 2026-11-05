@@ -34,6 +34,7 @@ import {
   holdDifferenceSentence,
   linkedFailedSentence,
   networkFeeUnknownSentence,
+  withheldSentence,
   staleSentence,
   unseenEthCause,
 } from "../core/wording.ts"
@@ -330,6 +331,7 @@ export function App() {
               </button>
             </p>
           ) : null}
+          {fold?.withheld.map(({ wallet: from, asset }) => <p className="notice warn" key={`${from}:${asset}`}>⚠ {withheldSentence(from, asset)}</p>)}
           {view && view.missingRateTxs.length > 0 ? <p className="notice warn">⚠ {missingRatesLine(view.missingRateTxs.length, currency)}</p> : null}
           {currency !== "USD" && view && !view.latestRate ? <p className="notice warn">⚠ There's no current USD to {currency} rate, so what's held has no current value.</p> : null}
           {wallet.l1FeeUnknownTxs.length > 0 ? <p className="notice warn" title={PNL_HELP}>⚠ {networkFeeUnknownSentence(wallet.l1FeeUnknownTxs.length)}</p> : null}

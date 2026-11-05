@@ -62,7 +62,7 @@ public final class ResolveModel {
     public var meter: Meter? { store.portfolio?.meter }
     public var canUndo: Bool { !store.undoStack.isEmpty }
     /// Every question's answered. Anything skipped doesn't count.
-    public var isBalanced: Bool { meter?.isBalanced == true }
+    public var isBalanced: Bool { meter?.isBalanced == true && store.portfolio?.withheld.isEmpty == true }
 
     /// The books each answer leads to. "My exchange account" changes nothing until there's a cost, so it isn't one.
     private func candidate(_ ownership: Ownership, for question: Question) -> Book? {
