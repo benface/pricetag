@@ -28,6 +28,11 @@ public enum SiteWording {
         "This lets \(spender) take all of your \(asset), now or at any time later, without asking again. Scams rely on this. Only approve it if you trust this site and meant to do this."
     }
 
+    /// One warning however many, so a call can't push everything else off the screen with them. The rows say which they are.
+    static func unlimited(count: Int) -> String {
+        "This lets others take all of \(count) different tokens or collections, now or at any time later, without asking again. Scams rely on this. Only approve it if you trust this site and meant to do this."
+    }
+
     static func typedPermit(spender: String?) -> String {
         "This signature lets \(spender ?? "someone else") spend your tokens or act for you, with no transaction and no fee, so you won't see it happen. Scams rely on this. Only approve it if you trust this site and meant to do this."
     }
@@ -36,6 +41,8 @@ public enum SiteWording {
     static let anyChain = "This signature isn't tied to a network, so it could be used anywhere, not just on Base."
     static let burn = "This sends to the zero address, where nothing can ever be recovered."
     static let unreadableCall = "This app can't read what this contract call does. All it can tell you is the ETH it sends."
+    static let previewIsAnEstimate = "This is only an estimate of what would happen if it ran right now. The contract can do something else when it really runs."
+    static let previewHasUnknownToken = "This moves a token this app doesn't know, so there's no telling how much of it, or what it's worth."
     static let notEnoughEth = "This wallet doesn't hold enough ETH for this and its fee, so it will probably fail. Top up first."
 
     static func signInForOtherSite(_ domain: String) -> String {
@@ -96,6 +103,8 @@ public struct SiteQuote: Equatable, Sendable {
     public let ethBalance: UInt128
     /// When the destination is a token this app has a price for.
     public var tokenUsdMicros: UInt128?
+    /// When this is a call nothing else can read, and the node could say what it would do.
+    public var preview: CallPreview?
 }
 
 /// Something leaving this wallet, to the last digit.
@@ -127,6 +136,11 @@ public struct TransactionReview: Equatable, Sendable {
     public var spender: EthereumAddress?
     /// What leaves, when that's something this app can read. Otherwise the headline is all there is to say.
     public var moved: ReviewAmount?
+    /// What a call this app can't read would do, as an estimate.
+    public var preview: CallPreview?
+
+    /// Whether all there is to say about this is what the node can work out.
+    var isUnreadableCall: Bool { preview != nil || warnings.contains(SiteWarning(SiteWording.unreadableCall)) }
 
     /// Any ETH that goes along with what `moved` or the headline already says.
     public var alsoSendsEth: Bool { value > 0 && moved?.symbol != "ETH" }
@@ -144,7 +158,7 @@ extension String {
 
 extension TransactionReview {
     /// Past this it's unlimited in practice: no token anyone holds has that many units, and it covers the maximums in common use.
-    private static let unlimitedAt: UInt128 = 1 << 96
+    static let unlimitedAt: UInt128 = 1 << 96
 
     private enum Selectors {
         static let transfer = Calldata.selector("transfer(address,uint256)")
@@ -186,6 +200,7 @@ extension TransactionReview {
         var recipient: EthereumAddress?
         var spender: EthereumAddress?
         var moved: ReviewAmount?
+        var preview: CallPreview?
         let valueUsd = quote.ethUsdMicros.map { Money.usdMicros(of: transaction.value, priceMicros: $0, decimals: 18) }
         let movedEth = ReviewAmount(text: Money.text(ofUnits: transaction.value, decimals: 18), symbol: "ETH", usdMicros: valueUsd)
 
@@ -273,7 +288,19 @@ extension TransactionReview {
         if headline == nil {
             if transaction.value > 0 { moved = movedEth }
             headline = transaction.value > 0 ? "Send \(Money.text(ofUnits: transaction.value, decimals: 18)) ETH in a contract call" : "Make a contract call"
-            warnings.append(SiteWarning(SiteWording.unreadableCall))
+            preview = quote.preview
+            if let preview {
+                warnings.append(SiteWarning(SiteWording.previewIsAnEstimate))
+                if preview.movesUnknownToken { warnings.append(SiteWarning(SiteWording.previewHasUnknownToken)) }
+                let unlimited = preview.allowances.filter(\.isUnlimited)
+                if unlimited.count > 1 {
+                    warnings.append(SiteWarning(SiteWording.unlimited(count: unlimited.count), isStrong: true))
+                } else if let allowance = unlimited.first {
+                    warnings.append(SiteWarning(SiteWording.unlimited(spender: SiteWording.address(allowance.spender), asset: allowance.asset), isStrong: true))
+                }
+            } else {
+                warnings.append(SiteWarning(SiteWording.unreadableCall))
+            }
         }
         if transaction.to == .zero { warnings.append(SiteWarning(SiteWording.burn, isStrong: true)) }
         if transaction.value + quote.feeWei > quote.ethBalance { warnings.append(SiteWarning(SiteWording.notEnoughEth)) }
@@ -294,7 +321,8 @@ extension TransactionReview {
             usdMicros: recorded == nil ? valueUsd.map { String($0) } : nil,
             recipient: recipient,
             spender: spender,
-            moved: moved
+            moved: moved,
+            preview: preview
         )
     }
 }

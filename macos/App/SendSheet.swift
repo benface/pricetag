@@ -197,8 +197,7 @@ struct SweepSheet: View {
     init(wallet: HotWallet, gate: ApprovalPrompt? = nil) {
         self.wallet = wallet
         _gate = State(initialValue: gate ?? ApprovalPrompt(notBefore: { wallet.nextPromptAt }) { prompt, _ in
-            if await wallet.sweepEverything(in: prompt) { return .done }
-            return wallet.sweepProblem.map(ApprovalResult.failed) ?? .cancelled
+            await wallet.sweepConfirmed(in: prompt)
         })
     }
 
@@ -215,11 +214,17 @@ struct SweepSheet: View {
                         dismiss()
                     }
             } else {
-                TouchIDFooter(gate: gate, verb: "sweep", doing: "Sweeping…", leaveTitle: "Cancel") { dismiss() }
+                TouchIDFooter(gate: gate, verb: "sweep", doing: "Sweeping…", leaveTitle: hasFailed ? "Close" : "Cancel") { dismiss() }
             }
         }
         .frame(width: 460)
         .interactiveDismissDisabled(wallet.isWorking)
+    }
+
+    /// Part of it may have gone by then, and that can't be cancelled.
+    private var hasFailed: Bool {
+        if case .stopped(.some) = gate.phase { return true }
+        return false
     }
 
     private var hero: ConfirmationHero {
