@@ -116,6 +116,11 @@ struct MainWindow: View {
         .onChange(of: store.address) {
             navigation.forgetDetails()
             navigation.isResolving = false
+            navigation.openPendingQuestions()
+        }
+        .onChange(of: store.portfolio?.address) { navigation.openPendingQuestions() }
+        .onChange(of: navigation.isResolving) { _, open in
+            if !open { navigation.returnFromQuestions() }
         }
         // Or it would open again by itself with the window.
         .onDisappear {
@@ -246,7 +251,7 @@ struct MainWindow: View {
             if store.address == nil {
                 NoWalletYet(navigation: navigation)
             } else {
-                TaxReportView(store: store, wallets: store.walletList(hotWallet: hotWallet).pickable, readAddress: AddressText.readAnywhere)
+                TaxReportView(store: store, wallets: store.walletList(hotWallet: hotWallet).pickable, readAddress: AddressText.readAnywhere, onResolve: { navigation.resolve(in: $0) }, onOpen: { navigation.explain($0) })
             }
         }
     }
