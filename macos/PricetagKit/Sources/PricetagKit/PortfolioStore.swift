@@ -48,6 +48,8 @@ public final class PortfolioStore {
     public static let defaultServerURL = URL(string: "http://127.0.0.1:8787")!
     /// Past this, the newest block is too old to call live.
     static let behindAfterSeconds = 120
+    /// As long as a read of a wallet the server hasn't read yet can take.
+    static let firstReadTimeout: Duration = .seconds(180)
 
     /// What the store holds, which may not be current: read `feed` before calling it live. While a new method's, currency's
     /// or rule's numbers are on their way, the feed is `.reading` and this still holds the old ones, so the screen doesn't jump.
@@ -68,6 +70,8 @@ public final class PortfolioStore {
     public private(set) var selectedRule: String?
     /// The user's own wallets. Transfers between them carry their cost, and aren't new purchases.
     public private(set) var linkedWallets: [String] = []
+    /// Wallets the user has looked at, for the switcher. Addresses and names only.
+    public private(set) var savedWallets: [SavedWallet]
 
     @ObservationIgnored private var source: any PortfolioSource
     @ObservationIgnored private let makeSource: @Sendable (URL) -> any PortfolioSource
@@ -107,6 +111,12 @@ public final class PortfolioStore {
         self.serverURL = serverURL
         self.answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.selectedRule = defaults.string(forKey: Keys.rule)
+        var saved = defaults.data(forKey: Keys.savedWallets).flatMap { try? JSONDecoder().decode([SavedWallet].self, from: $0) } ?? []
+        // From before there was a list, the wallet being shown is all there is to remember.
+        if let address, address != WalletAddress.demo, !saved.contains(where: { $0.address == address }) {
+            saved.append(SavedWallet(address: address, lastSeen: now()))
+        }
+        self.savedWallets = saved
         self.feed = address == nil ? .noWallet : .reading
         self.source = makeSource(serverURL)
     }
@@ -176,6 +186,9 @@ public final class PortfolioStore {
         guard next != self.address else { return }
         self.address = next
         defaults.set(next, forKey: Keys.wallet)
+        if let next, next != WalletAddress.demo {
+            saveWallets(SavedWallet.seeing(next, at: now(), in: savedWallets, own: book.linkedWallets))
+        }
         portfolio = nil
         updatedAt = nil
         feed = next == nil ? .noWallet : .reading
@@ -186,6 +199,29 @@ public final class PortfolioStore {
     public func showNewWallet(_ address: String) {
         guard self.address == nil || self.address == WalletAddress.demo else { return }
         setWallet(address)
+    }
+
+    /// Keeps it in the list under this name, or makes it a recent one again with an empty name.
+    public func renameWallet(_ address: String, to name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        var next = savedWallets
+        if let index = next.firstIndex(where: { $0.address == address }) {
+            next[index].name = clean.isEmpty ? nil : clean
+        } else if !clean.isEmpty {
+            next.append(SavedWallet(address: address, name: clean, lastSeen: now()))
+        }
+        saveWallets(next)
+    }
+
+    /// Takes it off the list, and shows `next` if it was the one showing.
+    public func removeWallet(_ address: String, showing next: String?) {
+        saveWallets(savedWallets.filter { $0.address != address })
+        if self.address == address { setWallet(next) }
+    }
+
+    private func saveWallets(_ wallets: [SavedWallet]) {
+        savedWallets = wallets
+        defaults.set(try? JSONEncoder().encode(wallets), forKey: Keys.savedWallets)
     }
 
     /// A key is gone, and `next` took over from it, if anything did. Whoever's looking at its wallet follows, or they'd see an empty address and
@@ -383,9 +419,12 @@ public final class PortfolioStore {
         let isOtherRule = rule != nil && portfolio?.rule != rule
         // The first read in a currency also reads its rate at each of this wallet's transactions, and the first by a rule
         // reads the wallet again, so they get as long as a first read.
-        let timeout: Duration = portfolio?.currency == currency && !isOtherRule ? .seconds(15) : .seconds(180)
+        let timeout: Duration = portfolio?.currency == currency && !isOtherRule ? .seconds(15) : Self.firstReadTimeout
+        let read = { [self] (timeout: Duration) in
+            try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address), timeout: timeout)
+        }
         do {
-            let next = try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address), timeout: timeout)
+            let next = try await patiently(read, timeout: timeout, isCurrent: isCurrent)
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
@@ -397,6 +436,32 @@ public final class PortfolioStore {
             if portfolio?.method != method || portfolio?.currency != currency || isOtherRule { portfolio = nil }
             feed = state(of: error)
             return feed == .serverUnreachable ? unreachableDelay : reachableDelay
+        }
+    }
+
+    /// A read that runs out of time says nothing about the server, which may only be slow to catch up on this wallet, say when a Mac wakes up.
+    /// If it's still answering, the read gets as long as a first read, with the numbers on screen marked as on their way.
+    private func patiently(_ read: (Duration) async throws -> Portfolio, timeout: Duration, isCurrent: () -> Bool) async throws -> Portfolio {
+        do {
+            return try await read(timeout)
+        } catch FetchError.timedOut {
+            guard await serverAnswers() else { throw FetchError.unreachable }
+            guard timeout < Self.firstReadTimeout else { throw FetchError.ampUnavailable(Wording.readTooSlow) }
+            guard isCurrent() else { throw CancellationError() }
+            feed = .reading
+            return try await patiently(read, timeout: Self.firstReadTimeout, isCurrent: isCurrent)
+        }
+    }
+
+    /// Whether anything's there, even to say no. The rules don't depend on Amp, so they come straight back.
+    private func serverAnswers() async -> Bool {
+        do {
+            _ = try await source.rules()
+            return true
+        } catch let error as FetchError {
+            return error != .unreachable && error != .timedOut
+        } catch {
+            return false
         }
     }
 
@@ -412,7 +477,7 @@ public final class PortfolioStore {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
         case .rejected(let message): .rejected(message)
-        case .unreachable, nil: .serverUnreachable
+        case .unreachable, .timedOut, nil: .serverUnreachable
         }
     }
 
@@ -423,5 +488,6 @@ public final class PortfolioStore {
         static let server = "serverURL"
         static let book = "answers"
         static let rule = "pricingRule"
+        static let savedWallets = "savedWallets"
     }
 }

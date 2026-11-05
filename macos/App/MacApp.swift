@@ -31,6 +31,7 @@ struct MacApp: App {
         let navigation = Navigation()
         let siteBridge = SiteBridge(wallet: hotWallet)
         siteBridge.onTopUp = { navigation.wantsTopUp = true }
+        navigation.onSwitcherClosed = { store.save(navigation.pendingWalletName, hotWallet: hotWallet) }
         AppLinks.onOpen = { url in
             if let link = AddSavingsLink(url: url) { navigation.addingSavings = link }
         }
@@ -104,8 +105,9 @@ struct MacApp: App {
                 }
                 Button("Refresh") { store.start() }
                     .keyboardShortcut("r", modifiers: .command)
-                Button("Change Wallet…") { navigation.isChangingWallet = true }
-                    .keyboardShortcut("l", modifiers: .command)
+            }
+            CommandMenu("Wallet") {
+                WalletCommands(store: store, hotWallet: hotWallet, navigation: navigation)
             }
             CommandGroup(after: .newItem) {
                 Button("Answer Questions…") { navigation.resolve() }
@@ -143,6 +145,29 @@ struct MacApp: App {
 enum WindowID {
     static let main = "main"
     static let siteApproval = "site-approval"
+}
+
+/// The window may be closed, so this opens it too.
+private struct WalletCommands: View {
+    let store: PortfolioStore
+    let hotWallet: HotWallet
+    let navigation: Navigation
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Switch Wallet…") {
+            openMainWindow()
+            navigation.switchWallet()
+        }
+        .keyboardShortcut("l", modifiers: .command)
+        Divider()
+        WalletPicker(store: store, list: store.walletList(hotWallet: hotWallet), navigation: navigation, onChoose: openMainWindow)
+    }
+
+    private func openMainWindow() {
+        openWindow(id: WindowID.main)
+        DockPresence.bringForward()
+    }
 }
 
 /// The window may be closed, so this opens it too.

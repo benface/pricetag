@@ -35,7 +35,14 @@ actor FakeChain: ChainClient {
     var estimate: UInt64 = 60000
     var sendFailure: ChainError?
     var estimateFailure: ChainError?
+    /// How many sends get through before those two start failing.
+    private var sendFailureAfter = 0
+    private var estimateFailureAfter = 0
     var readFailure: ChainError?
+    /// What a node says to `eth_simulateV1`, and to reading a price feed.
+    var simulation: RPCAnswer = .failure(SiteError(code: -32601, message: "the method eth_simulateV1 does not exist/is not available"))
+    var feedRound: RPCAnswer = .failure(SiteError(code: 3, message: "execution reverted"))
+    private(set) var simulationParameters: JSONValue?
     private(set) var sent: [SignedTransaction] = []
     private(set) var reads: [String] = []
     private(set) var l1FeePayloads: [[UInt8]] = []
@@ -63,9 +70,17 @@ actor FakeChain: ChainClient {
     /// Receipts land in the block after the current read, like a node that's moved on since then.
     func setReceipt(_ hash: String, succeeded: Bool) { receipts[hash] = Receipt(succeeded: succeeded, blockNumber: current.blockNumber + 1) }
     func confirmAll() { for transaction in sent { setReceipt(transaction.hash, succeeded: true) } }
-    func setSendFailure(_ failure: ChainError?) { sendFailure = failure }
-    func setEstimateFailure(_ failure: ChainError?) { estimateFailure = failure }
+    func setSendFailure(_ failure: ChainError?, afterSends: Int = 0) {
+        sendFailure = failure
+        sendFailureAfter = afterSends
+    }
+    func setEstimateFailure(_ failure: ChainError?, afterSends: Int = 0) {
+        estimateFailure = failure
+        estimateFailureAfter = afterSends
+    }
     func setReadFailure(_ failure: ChainError?) { readFailure = failure }
+    func setSimulation(_ answer: RPCAnswer) { simulation = answer }
+    func setFeedRound(_ answer: RPCAnswer) { feedRound = answer }
     func failSnapshots(_ times: Int, with failure: ChainError) { snapshotFailures = Array(repeating: failure, count: times) }
     func setOnSend(_ body: @escaping @Sendable (SignedTransaction) -> Void) { onSend = body }
 
@@ -97,12 +112,12 @@ actor FakeChain: ChainClient {
 
     func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64 {
         if holdsEstimates { await wait() }
-        if let estimateFailure { throw estimateFailure }
+        if let estimateFailure, sent.count >= estimateFailureAfter { throw estimateFailure }
         return data.isEmpty ? 21000 : estimate
     }
 
     func send(_ transaction: SignedTransaction) throws {
-        if let sendFailure { throw sendFailure }
+        if let sendFailure, sent.count >= sendFailureAfter { throw sendFailure }
         sent.append(transaction)
         onSend?(transaction)
     }
@@ -115,6 +130,11 @@ actor FakeChain: ChainClient {
 
     func read(_ method: String, _ parameters: JSONValue) -> RPCAnswer {
         reads.append(method)
+        if method == "eth_simulateV1" {
+            simulationParameters = parameters
+            return simulation
+        }
+        if method == "eth_call", case .string(let to)? = parameters[0]?["to"], Oracle.others.values.contains(where: { $0.address.lowercased == to }) { return feedRound }
         return .success(.string("0xread"))
     }
 

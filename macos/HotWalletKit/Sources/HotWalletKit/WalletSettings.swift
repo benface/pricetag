@@ -84,6 +84,11 @@ public struct WalletSettings: Codable, Equatable, Sendable {
         if sweepDestination == address { sweepDestination = coldWallets.first?.address }
     }
 
+    public mutating func renameColdWallet(_ address: EthereumAddress, to name: String) {
+        guard let index = coldWallets.firstIndex(where: { $0.address == address }) else { return }
+        coldWallets[index].name = name
+    }
+
     public mutating func setSweepDestination(_ address: EthereumAddress) {
         guard coldWallets.contains(where: { $0.address == address }) else { return }
         sweepDestination = address

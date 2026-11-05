@@ -67,19 +67,6 @@ struct SettingsView: View {
 
     private var wallets: some View {
         pane(height: 400) {
-            Section {
-                LabeledContent("Wallet") {
-                    HStack {
-                        Text(store.address.map { $0 == WalletAddress.demo ? "Demo wallet" : Format.shortHash($0) } ?? "None")
-                            .textSelection(.enabled)
-                            .help(store.address ?? "")
-                        Button("Forget") { store.setWallet(nil) }
-                            .controlSize(.small)
-                            .disabled(store.address == nil)
-                    }
-                }
-                .help(HotWalletWording.shownWallet(store.address, spendingMoney: hotWallet.address?.lowercased))
-            }
             Section("Your Other Wallets") {
                 ForEach(store.book.linkedWallets.filter { $0 != store.address }, id: \.self) { wallet in
                     LabeledContent(Format.shortHash(wallet)) {
