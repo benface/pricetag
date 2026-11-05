@@ -115,13 +115,13 @@ struct MainWindow: View {
                     exportDocument = CSVDocument(text: try await store.exportCSV())
                     exporting = true
                 } catch {
-                    exportError = "The server couldn't make this file."
+                    exportError = "The price service couldn't make this file."
                 }
             }
         }
         // What's open belongs to the wallet it was opened on.
         .onChange(of: store.address) {
-            navigation.target = nil
+            navigation.forgetDetails()
             navigation.isResolving = false
         }
         // Or it would open again by itself with the window.
@@ -141,7 +141,7 @@ struct MainWindow: View {
         // A status, so it looks like one: it's text, and it's down here with nothing around it that suggests a click.
         .safeAreaInset(edge: .bottom) {
             if store.feed != .noWallet {
-                FeedBadge(feed: store.feed, portfolio: portfolio)
+                FeedBadge(feed: store.feed, portfolio: portfolio, readingSince: store.readingSince)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
@@ -181,13 +181,6 @@ struct MainWindow: View {
                     // A plus on its own could mean adding anything.
                     .labelStyle(.titleAndIcon)
                     .help("Buy crypto")
-            }
-        }
-        // In a narrow window Buy's label takes its room, and pushing either into the overflow menu would hide Buy. ⌘R and the View menu still refresh.
-        if store.address != nil, navigation.section == .overview || navigation.section == .transactions, width >= Self.sidebarWidth || hotWallet.availability != .ready {
-            ToolbarItem(placement: .primaryAction) {
-                Button("Refresh", systemImage: "arrow.clockwise") { store.refresh() }
-                    .help("Refresh (⌘R)")
             }
         }
     }
@@ -284,7 +277,10 @@ struct MainWindow: View {
             }
         } else if let portfolio {
             Group {
-                if !portfolio.progress.started {
+                // A failure says what's wrong even before there's anything to show, rather than only that the data hasn't reached this wallet.
+                if !portfolio.progress.started, store.feed.isStale {
+                    Unavailable(store: store)
+                } else if !portfolio.progress.started {
                     ContentUnavailableView("Almost There", systemImage: "hourglass", description: Text(Wording.notStarted))
                 } else if portfolio.isEmpty {
                     NoActivity(portfolio: portfolio, entry: store.walletList(hotWallet: hotWallet).entry(for: store.address), hotWallet: hotWallet, navigation: navigation, notices: notices(portfolio))
@@ -298,7 +294,11 @@ struct MainWindow: View {
             ContentUnavailableView {
                 ProgressView().controlSize(.large)
             } description: {
-                Text(Wording.reading)
+                // Says how long it's been once that's worth saying, without promising when it ends.
+                ReadingClock(since: store.readingSince ?? .now) { seconds in
+                    Text(seconds < FeedState.longReadSeconds ? Wording.reading : Wording.stillReading(seconds: seconds))
+                        .contentTransition(.numericText())
+                }
             }
         } else {
             Unavailable(store: store)
@@ -381,9 +381,20 @@ struct MainWindow: View {
 
     @ViewBuilder
     private func notices(_ portfolio: Portfolio) -> some View {
-        if let notice = store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) {
+        if let problem = store.feed.problem(serverURL: store.serverURL, portfolio: portfolio) {
+            Notice(.warning, problem.message, detail: problem.detail, actionTitle: "Try Again", action: store.refresh)
+        } else if let notice = store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) {
             Notice(.warning, notice)
                 .arrives()
+        }
+        // Each number that may change has a spinner by it. This says how long it's been, once that's worth saying. After a failure, the
+        // retry says so too, while the warning above still says how old these numbers are.
+        if store.feed == .reading || store.feed.isStale, let since = store.readingSince {
+            ReadingClock(since: since) { seconds in
+                if seconds >= FeedState.longReadSeconds {
+                    Notice(.info, store.feed == .reading ? Wording.stillUpdating(seconds: seconds, lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp) : Wording.tryingAgain(seconds: seconds))
+                }
+            }
         }
         if portfolio.mode == .demo {
             Notice(.info, Wording.demo)
@@ -502,9 +513,29 @@ private struct HoldingsSection: View {
                         .justKnown(justKnown.contains(position.asset))
                 }
                 .buttonStyle(RowButtonStyle())
+                .contextMenu {
+                    HoldingActions(position: position, currency: portfolio.currency, onShow: { target = .asset(position.asset, .amount) }, onResolve: { onResolve(position.asset) })
+                }
                 Divider()
             }
         }
+    }
+}
+
+/// What a right-click on a holding offers. Each is also in the interface: the row opens its details, and Fill In is in the row.
+private struct HoldingActions: View {
+    let position: Position
+    let currency: CurrencyCode
+    let onShow: () -> Void
+    let onResolve: () -> Void
+
+    var body: some View {
+        Button("Show Details", action: onShow)
+        if position.resolvable {
+            Button("Fill In Cost…", action: onResolve)
+        }
+        Divider()
+        Button("Copy") { Clipboard.copy(position.copyText(currency: currency)) }
     }
 }
 
@@ -682,6 +713,15 @@ private struct HoldingsTable: View {
         .tableStyle(.inset)
         .alternatingRowBackgrounds(.disabled)
         .scrollDisabled(true)
+        .contextMenu(forSelectionType: Position.ID.self) { assets in
+            if let position = assets.first.flatMap(position) {
+                HoldingActions(position: position, currency: currency, onShow: { target = .asset(position.asset, .amount) }, onResolve: { onResolve(position.asset) })
+            }
+        }
+        .onCopyCommand {
+            guard let position = selection.flatMap(position) else { return [] }
+            return [NSItemProvider(object: position.copyText(currency: currency) as NSString)]
+        }
         // Not `if` around the column: a column that comes back that way lands at the end, under another column's header.
         .onChange(of: showsAverage, initial: true) {
             columns[visibility: Column.averagePriceID] = showsAverage ? .visible : .hidden
@@ -702,6 +742,10 @@ private struct HoldingsTable: View {
 
     private var targetAsset: String? {
         if case .asset(let asset, _) = target { asset } else { nil }
+    }
+
+    private func position(_ asset: String) -> Position? {
+        portfolio.listedPositions.first { $0.asset == asset }
     }
 
     private var dash: some View {
@@ -747,6 +791,10 @@ private struct TransactionsTable: View {
         if case .transaction(let hash) = target { hash } else { nil }
     }
 
+    private func hash(_ id: PnlPoint.ID) -> String? {
+        transactions.first { $0.id == id }?.txHash
+    }
+
     var body: some View {
         Table(transactions, selection: $selection) {
             TableColumn("Time") { point in
@@ -784,6 +832,15 @@ private struct TransactionsTable: View {
         }
         .tableStyle(.inset)
         .alternatingRowBackgrounds(.disabled)
+        .contextMenu(forSelectionType: PnlPoint.ID.self) { ids in
+            if let hash = ids.first.flatMap(hash) {
+                TransactionActions(hash: hash) { target = .transaction(hash) }
+            }
+        }
+        .onCopyCommand {
+            guard let hash = selection.flatMap(hash) else { return [] }
+            return [NSItemProvider(object: hash as NSString)]
+        }
         .focused($isFocused)
         .onAppear { isFocused = true }
         .onChange(of: selection) { _, id in
@@ -923,13 +980,25 @@ private struct Unavailable: View {
     let store: PortfolioStore
 
     var body: some View {
+        let problem = store.feed.problem(serverURL: store.serverURL, portfolio: nil)
         ContentUnavailableView {
-            Label("Can't Show This Wallet", systemImage: "exclamationmark.triangle")
+            Label(problem?.title ?? "Can't Show This Wallet", systemImage: "exclamationmark.triangle")
         } description: {
-            Text(store.feed.staleNotice(serverURL: store.serverURL, portfolio: nil) ?? "")
+            Text(problem?.message ?? "")
+            if let since = store.readingSince {
+                ReadingClock(since: since) { seconds in
+                    if seconds >= FeedState.longReadSeconds {
+                        Label(Wording.tryingAgain(seconds: seconds), systemImage: "arrow.clockwise")
+                            .contentTransition(.numericText())
+                    }
+                }
+            }
         } actions: {
             Button("Try Again") { store.refresh() }
                 .buttonStyle(.borderedProminent)
+            if let detail = problem?.detail {
+                DetailsButton(detail: detail)
+            }
         }
     }
 }

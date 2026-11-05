@@ -368,7 +368,7 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public var date: Date? { parseTimestamp(timestamp) }
     /// What the wallet already held has no transaction behind it, and neither does ETH that arrived with none to name.
     public var hasTransaction: Bool { !opening && !txHash.isEmpty }
-    public var transactionURL: URL? { hasTransaction ? URL(string: "https://basescan.org/tx/\(txHash)") : nil }
+    public var transactionURL: URL? { hasTransaction ? Basescan.transaction(txHash) : nil }
 }
 
 public struct Explanation: Codable, Sendable, Equatable {

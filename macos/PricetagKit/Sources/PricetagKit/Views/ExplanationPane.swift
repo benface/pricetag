@@ -1,9 +1,4 @@
 import SwiftUI
-#if canImport(AppKit)
-import AppKit
-#else
-import UIKit
-#endif
 
 /// What's behind a number: how it's worked out, in the server's words, then its legs, their prices and transactions.
 public struct ExplanationPane: View {
@@ -171,7 +166,7 @@ public struct LegRow: View {
             }
             if leg.hasTransaction {
                 Divider()
-                transactionActions
+                TransactionActions(hash: leg.txHash)
             }
         }
     }
@@ -211,7 +206,7 @@ public struct LegRow: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .help(leg.txHash)
-                HStack(spacing: 12) { transactionActions }
+                HStack(spacing: 12) { TransactionActions(hash: leg.txHash) }
                     .font(.caption)
                     .buttonStyle(.plain)
                     .foregroundStyle(.tint)
@@ -221,23 +216,6 @@ public struct LegRow: View {
             }
         }
         .padding(.top, 2)
-    }
-
-    @ViewBuilder
-    private var transactionActions: some View {
-        Button("Copy Hash") { Self.copy(leg.txHash) }
-        if let url = leg.transactionURL {
-            Link("View on Basescan", destination: url)
-        }
-    }
-
-    private static func copy(_ text: String) {
-        #if canImport(AppKit)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        #else
-        UIPasteboard.general.string = text
-        #endif
     }
 
     private var tags: some View {
