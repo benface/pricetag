@@ -365,6 +365,10 @@
       },
       {
         "asset": "USDC",
+        "reason": "sold or spent at an unknown price"
+      },
+      {
+        "asset": "USDC",
         "reason": "unknown cost"
       },
       {

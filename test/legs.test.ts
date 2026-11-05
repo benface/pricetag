@@ -542,6 +542,26 @@ describe("an entirely unknown result stays unavailable", () => {
     assert.equal(totals.realizedMicros, "0")
   })
 
+  describe("a sale's reason names what's unknown", () => {
+    const bought = [row("0x1", USDC_ADDRESS, "debit", 100n * E6), row("0x1", AERO, "credit", 200n * E18)]
+    const absurdSale = (qty: bigint) => [{ ...row("0x2", AERO, "debit", qty), block_num: 101 }, { ...row("0x2", USDC_ADDRESS, "credit", 1n), block_num: 101 }]
+    const received = { ...row("0x3", AERO, "credit", 200n * E18), block_num: 99 }
+    const references = [REF, { ...REF, blockNum: 101 }, { ...REF, blockNum: 99 }]
+    const reasons = (rows: LegRow[]) => sumTotals(foldPositions(legsOf(rows, references).filter((l) => l.asset === "AERO"), "fifo", {})).excluded.filter((e) => e.reason.startsWith("sold")).map((e) => e.reason)
+
+    it("the price, when a swap's value is rejected", () => {
+      assert.deepEqual(reasons([...bought, ...absurdSale(200n * E18)]), ["sold or spent at an unknown price"])
+    })
+
+    it("the cost, when what's sold arrived from elsewhere", () => {
+      assert.deepEqual(reasons([received, { ...row("0x2", AERO, "debit", 200n * E18), block_num: 101 }, { ...row("0x2", USDC_ADDRESS, "credit", 100n * E6), block_num: 101 }]), ["sold at an unknown cost"])
+    })
+
+    it("both, when neither is known", () => {
+      assert.deepEqual(reasons([received, ...absurdSale(200n * E18)]), ["sold at an unknown cost", "sold or spent at an unknown price"])
+    })
+  })
+
   it("the chart agrees, at every point", () => {
     const points = pnlOverTime(unknownHolding, "average", {}, marks([REF]), { blockNum: 101, timestamp: "2026-11-04T00:00:00.000Z" })
     assert.ok(points.length > 0)

@@ -85,6 +85,10 @@ export type PositionState = {
   resolvedDisposedQty: string
   /** Units disposed of with an unknown cost or unknown proceeds. Realized PnL is unavailable while this is above 0. */
   unresolvedDisposedQty: string
+  /** The units in `unresolvedDisposedQty` with an unknown cost. A unit can have both unknowns. */
+  unknownCostDisposedQty: string
+  /** The units in `unresolvedDisposedQty` with unknown proceeds. */
+  unknownProceedsQty: string
   gasMicros: string
   /** Units spent on gas with no price at that block, so their value isn't in `gasMicros`. */
   unpricedGasQty: string
@@ -108,6 +112,8 @@ export function emptyPosition(method: Method, decimals: number): PositionState {
     realizedMicros: "0",
     resolvedDisposedQty: "0",
     unresolvedDisposedQty: "0",
+    unknownCostDisposedQty: "0",
+    unknownProceedsQty: "0",
     gasMicros: "0",
     unpricedGasQty: "0",
     shortfallQty: "0",
@@ -277,9 +283,13 @@ export function applyLegTaking(state: PositionState, leg: FoldLeg): { state: Pos
   else proceeds = leg.proceedsMicros === null ? null : (BigInt(leg.proceedsMicros) * taken.knownQty) / qty
 
   // What left with no cost we can see: its PnL can't be known, whatever it sold for.
-  let unresolved = taken.unknownQty + taken.shortfall
-  if (proceeds === null) unresolved += taken.knownQty
-  else {
+  const unknownCost = taken.unknownQty + taken.shortfall
+  let unresolved = unknownCost
+  next.unknownCostDisposedQty = (BigInt(state.unknownCostDisposedQty) + unknownCost).toString()
+  if (proceeds === null) {
+    unresolved += taken.knownQty
+    next.unknownProceedsQty = (BigInt(state.unknownProceedsQty) + qty).toString()
+  } else {
     next.realizedMicros = (BigInt(state.realizedMicros) + proceeds - taken.knownCost).toString()
     next.resolvedDisposedQty = (BigInt(state.resolvedDisposedQty) + taken.knownQty).toString()
     const estimated = taken.estimatedCost + (leg.estimated ? proceeds : 0n)
