@@ -55,6 +55,7 @@ public final class HotWallet {
     @ObservationIgnored private let presence: any UserPresence
     @ObservationIgnored private let portfolioSource: @MainActor () -> any PortfolioSource
     @ObservationIgnored private let costMethod: @MainActor () -> CostMethod
+    @ObservationIgnored private let mainCurrency: @MainActor () -> CurrencyCode
     @ObservationIgnored private let makeChain: @Sendable (URL) -> any ChainClient
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let tickDelay: Duration
@@ -93,6 +94,7 @@ public final class HotWallet {
         presence: any UserPresence = DeviceOwnerPresence(),
         portfolioSource: @escaping @MainActor () -> any PortfolioSource,
         costMethod: @escaping @MainActor () -> CostMethod = { .average },
+        mainCurrency: @escaping @MainActor () -> CurrencyCode = { .USD },
         makeChain: @escaping @Sendable (URL) -> any ChainClient = { RPCChainClient(url: $0) },
         now: @escaping @Sendable () -> Date = { Date() },
         tickDelay: Duration = .seconds(15),
@@ -105,6 +107,7 @@ public final class HotWallet {
         self.presence = presence
         self.portfolioSource = portfolioSource
         self.costMethod = costMethod
+        self.mainCurrency = mainCurrency
         self.makeChain = makeChain
         self.now = now
         self.tickDelay = tickDelay
@@ -415,7 +418,7 @@ public final class HotWallet {
         if let plan {
             if plan.blockers.contains(.notEnoughGas) || rotationHold == .notEnoughGas { notices.append(.init(.warning, HotWalletWording.noGas)) }
             if plan.excessUsdMicros > 0, !plan.excessIsDust || plan.blockers.contains(.noDestination) {
-                notices.append(.init(.warning, HotWalletWording.overCap(by: plan.excessUsdMicros, hasDestination: settings.sweepDestination != nil)))
+                notices.append(.init(.warning, HotWalletWording.overCap(by: plan.excessUsdMicros, hasDestination: settings.sweepDestination != nil, beside: mainCurrency())))
             } else if plan.excessIsDust {
                 notices.append(.init(.info, HotWalletWording.excessIsDust))
             }
@@ -423,9 +426,18 @@ public final class HotWallet {
         if snapshot != nil, snapshot?.ethUsdMicros == nil { notices.append(.init(.warning, HotWalletWording.noEthPrice)) }
         if !unpricedSymbols.isEmpty { notices.append(.init(.warning, HotWalletWording.noPrice(unpricedSymbols))) }
         // Being over the cap with nowhere to sweep already says to add one.
-        if settings.coldWallets.isEmpty, plan?.blockers.contains(.noDestination) != true { notices.append(.init(.warning, HotWalletWording.addSavings)) }
+        if settings.coldWallets.isEmpty, plan?.blockers.contains(.noDestination) != true { notices.append(.init(.warning, HotWalletWording.addSavings(beside: mainCurrency()))) }
         if ampProblem { notices.append(.init(.info, HotWalletWording.cantCheckAmp)) }
         return notices
+    }
+
+    /// An amount of this wallet's, as the user should read it. See `HotWalletWording.usd`.
+    public func usd(_ micros: UInt128) -> String {
+        HotWalletWording.usd(micros, beside: mainCurrency())
+    }
+
+    public func usd(dollars: Int) -> String {
+        HotWalletWording.usd(dollars: dollars, beside: mainCurrency())
     }
 
     /// Whether something needs the user, for places with room for only a triangle.

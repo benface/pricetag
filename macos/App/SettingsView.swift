@@ -126,9 +126,9 @@ struct SettingsView: View {
             LabeledContent("Cap") {
                 HStack {
                     Slider(value: Binding(get: { Double(hotWallet.settings.capInDollars) }, set: { hotWallet.setCap(dollars: Int($0)) }), in: 1...Double(hotWallet.settings.capCeiling / Money.dollar), step: 1)
-                    Text("$\(hotWallet.settings.capInDollars)")
+                    Text(hotWallet.usd(dollars: hotWallet.settings.capInDollars))
                         .monospacedDigit()
-                        .frame(width: 40, alignment: .trailing)
+                        .frame(width: 56, alignment: .trailing)
                 }
             }
             Toggle("Sweep realized gains to savings", isOn: Binding(get: { hotWallet.settings.sweepsRealizedGains }, set: { hotWallet.setSweepsRealizedGains($0) }))
@@ -151,7 +151,7 @@ struct SettingsView: View {
         } header: {
             Text(HotWalletWording.title)
         } footer: {
-            Text("The cap is $\(Int(hotWallet.settings.capCeiling / Money.dollar)) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build"). The network address only reads balances and passes on what this app signed. It can't move anything by itself.")
+            Text("The cap is \(hotWallet.usd(dollars: Int(hotWallet.settings.capCeiling / Money.dollar))) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build"). The network address only reads balances and passes on what this app signed. It can't move anything by itself.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

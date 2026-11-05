@@ -125,6 +125,8 @@ public final class SendModel {
         return wallet.holdings.first { $0.token == token }?.priceUsdMicros.map { Money.usdMicros(of: amount, priceMicros: $0, decimals: token.decimals) }
     }
 
+    public var usdText: String? { usdMicros.map(wallet.usd) }
+
     public var maximum: UInt128 { wallet.maximumSend(of: token) }
 
     public func useMaximum() {
