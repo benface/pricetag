@@ -28,7 +28,7 @@ Send, Sweep Everything and site requests ask with no click, as soon as what's be
 - [x] The next prompt waits 2 seconds after any answer, yes or no, so a second touch can't approve what comes next. This holds across windows, and for a request that arrives after the last one has gone.
 - [x] Each ask has its own `LAContext`, with no reuse window, so no touch counts twice.
 - [x] A cancelled prompt leaves the request waiting, and only a click asks again. Rejecting is one click, and Escape does the same.
-- [x] Backing out works up to the touch, and wins if it lands at the same moment. Past it, nothing offers to back out, because what's been approved is on its way.
+- [x] Backing out works up to the touch. It calls off the prompt the moment it's accepted, before anything changes on screen, so a touch landing just after can't send what's been left. Past the touch, nothing offers to back out, because what's been approved is on its way.
 - [x] An interrupted prompt doesn't ask again until the view on screen is paired with its new context, or it would be a dialog over the details. `macos/shot.sh site-refocused` fails if that doesn't happen.
 
 - [ ] **It isn't enforced by the enclave.** The same wrapping key has to open with no prompt for sweeps, so the prompt lives in the app. It stops someone at an unlocked Mac, not malware running as this user.

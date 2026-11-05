@@ -68,7 +68,7 @@ struct SiteApprovalView: View {
             }
         }
         // Reject has this shortcut already, once it can take it. This is for when focus is in the text.
-        .onExitCommand(perform: reject)
+        .onExitCommand { if gate.backOut() { reject() } }
     }
 
     private var isMessage: Bool {

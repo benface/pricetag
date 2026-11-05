@@ -175,7 +175,7 @@ struct SendConfirmation: View {
                 TouchIDFooter(gate: gate, verb: "send", doing: "Sending…", leaveTitle: "Edit") { model.backToEditing() }
             }
         }
-        .onExitCommand { if model.stage == .confirming, gate.phase != .working { model.backToEditing() } }
+        .onExitCommand { if gate.backOut() { model.backToEditing() } }
     }
 
     private var rows: [ConfirmationRow] {

@@ -342,23 +342,28 @@ struct TouchIDFooter: View {
         }
     }
 
+    /// Calls off the prompt before anything else, so nothing the user's just left can still go through.
+    private func backOut() {
+        if gate.backOut() { leave() }
+    }
+
     @ViewBuilder
     private var buttons: some View {
         switch gate.phase {
         case .needsAcknowledgment:
             Button("I Trust This Site", action: gate.acknowledge)
                 .disabled(!isArmed)
-            Button(leaveTitle, action: leave)
+            Button(leaveTitle, action: backOut)
                 .keyboardShortcut(.cancelAction)
                 .buttonStyle(.borderedProminent)
         case .waiting, .asking:
-            Button(leaveTitle, action: leave)
+            Button(leaveTitle, action: backOut)
                 .keyboardShortcut(.cancelAction)
         case .working, .done:
             // Past Touch ID, there's no calling it back, so nothing here offers to.
             EmptyView()
         case .stopped:
-            Button(leaveTitle, action: leave)
+            Button(leaveTitle, action: backOut)
                 .keyboardShortcut(.cancelAction)
             Button("Try Again", action: gate.tryAgain)
                 .buttonStyle(.borderedProminent)

@@ -165,14 +165,17 @@ public final class SendModel {
         stage = .confirming
     }
 
-    /// Not once Touch ID has said yes, when it's on its way whatever this shows.
+    /// Not once Touch ID has said yes, when it's on its way whatever this shows. Before that, it calls off the prompt here and now, because
+    /// the view going away comes later, and a touch landing in between would send what's just been left.
     public func backToEditing() {
-        guard askingPrompt?.isConfirmed != true else { return }
+        guard stage == .confirming, askingPrompt?.isConfirmed != true else { return }
+        askingPrompt?.cancel()
         stage = .composing
     }
 
     /// What the confirmation asks for, in its own terms.
     public func sendConfirmed(in prompt: PresencePrompt) async -> ApprovalResult {
+        guard stage == .confirming else { return .cancelled }
         if await send(in: prompt) { return .done }
         return failure.map(ApprovalResult.failed) ?? .cancelled
     }

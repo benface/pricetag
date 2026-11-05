@@ -98,6 +98,15 @@ public final class ApprovalPrompt {
         askAfterAMoment()
     }
 
+    /// The user chose to leave. It calls off the prompt here and now, before anything changes on screen, because the view going away comes
+    /// later, and a touch landing in between would go through. False once Touch ID has said yes, when there's no leaving what's underway.
+    @discardableResult
+    public func backOut() -> Bool {
+        guard phase != .working, phase != .done else { return false }
+        stop()
+        return true
+    }
+
     /// A view holds the system's view for this prompt now. It only counts for the prompt that's current.
     public func promptPaired(_ paired: PresencePrompt) {
         guard paired === prompt, pairedPrompt !== paired else { return }
