@@ -145,29 +145,49 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
   })
 }
 
+/** Where an asset's legs stop adding up to its balance. */
+export type HistoryGap = {
+  /** The last block they're known to add up at, which is -Infinity when there's no such block. */
+  through: number
+  /** A balance they were compared with doesn't match, and nothing that's still unclear could be why, so it won't clear by itself. */
+  mismatch: boolean
+}
+
 /**
- * For each asset whose legs don't currently add up to its balance, the last block they're known to have, which is -Infinity
- * when there's no such block. An asset that isn't here adds up.
+ * Each asset whose legs don't currently add up to its balance. An asset that isn't here adds up.
  *
  * A read that failed says nothing about the history, so it falls back on the last one that worked, as of that block. That
  * way a failed read can't turn a known cost unknown and back, and can't bring back one a mismatch already ruled out. A wallet
  * with no read to go on stays unconfirmed until it has one, which only ever goes one way.
  */
-export function vouchedThrough(legs: readonly PricedLeg[], method: Method, onchain: Onchain): Map<string, number> {
-  const through = new Map<string, number>()
+export function historyGaps(legs: readonly PricedLeg[], method: Method, onchain: Onchain): Map<string, HistoryGap> {
+  const gaps = new Map<string, HistoryGap>()
+  const l1FeeUnknown = new Set(onchain.l1FeeUnknownTxs)
   for (const { asset, reconciliation } of foldPositions(legs, method, {}, onchain)) {
     if (reconciliation === null || reconciliation.status === "reconciled") continue
-    through.set(asset, Number.NEGATIVE_INFINITY)
-    // A mismatch is a mismatch, and without the starting balance there are no legs to compare, whatever a read says.
-    if (reconciliation.status === "incomplete" || onchain.openingUnread?.includes(asset)) continue
+    const incomplete = reconciliation.status === "incomplete"
+    const unreadStart = onchain.openingUnread?.includes(asset) ?? false
     const last = asset === "ETH" && onchain.l1FeeUnknownTxs.length > 0 ? onchain.lastCheckableEth : onchain.lastBalances?.[asset]
-    if (!last) continue
-    const then = legs.filter((leg) => leg.asset === asset && leg.blockNum <= last.blockNum)
-    const [position] = foldPositions(then, method, {}, { balances: { blockNum: last.blockNum, amounts: { [asset]: last.amount } }, l1FeeUnknownTxs: [] })
-    // With nothing moved by then and nothing held, there's no position, and nothing to disagree with.
-    if (!position || position.reconciliation?.status === "reconciled") through.set(asset, last.blockNum)
+    const adds = ({ blockNum, amount }: { blockNum: number; amount: string }) => {
+      const then = legs.filter((leg) => leg.asset === asset && leg.blockNum <= blockNum)
+      const [position] = foldPositions(then, method, {}, { balances: { blockNum, amounts: { [asset]: amount } }, l1FeeUnknownTxs: [] })
+      // With nothing moved by then and nothing held, there's no position, and nothing to disagree with.
+      return !position || position.reconciliation?.status === "reconciled"
+    }
+    // A mismatch is a mismatch, and without the starting balance there are no legs to compare, whatever a read says.
+    if (!incomplete && !unreadStart && last && adds(last)) {
+      gaps.set(asset, { through: last.blockNum, mismatch: false })
+      continue
+    }
+    // ETH's legs can still be wrong where a claim hasn't settled, or a fee is missing. What happened after a balance can't explain it.
+    const clearAt = (block: number) =>
+      asset !== "ETH" || !((onchain.gasUnknownBlocks ?? []).some((gas) => gas <= block) || legs.some((leg) => leg.asset === "ETH" && leg.blockNum <= block && (leg.unsettledCredit || l1FeeUnknown.has(leg.txHash))))
+    const compared = incomplete ? reconciliation.blockNum : last?.blockNum
+    const clear = asset === "ETH" ? onchain.lastCheckableEth : null
+    const mismatch = !unreadStart && ((compared !== undefined && clearAt(compared)) || (!!clear && clearAt(clear.blockNum) && !adds(clear)))
+    gaps.set(asset, { through: Number.NEGATIVE_INFINITY, mismatch })
   }
-  return through
+  return gaps
 }
 
 /** Without a recent read, the price is gone rather than old: an old one would quietly mark the position wrong. */

@@ -1366,6 +1366,7 @@ describe("settling unwrap credits", () => {
       const wallet = await wallets.get(ME)
       assert.equal(saleLeg(wallet.legs).unsettledCredit, true)
       assert.deepEqual(wallet.gasUnknownTxs, ["0xnorows"])
+      assert.equal(wallet.gasUnknownBlocks.length, 1, "with its block, since it has no legs to tell from")
     })
 
     it("recovers when the transaction stays and its gas becomes known, the same as a fresh read", async () => {

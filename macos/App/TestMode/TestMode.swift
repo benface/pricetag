@@ -106,6 +106,7 @@ enum TestScene: String, CaseIterable {
     case mainTransactionsCAD = "main-transactions-cad"
     case mainDetailsCAD = "main-details-cad"
     case resolve
+    case resolveCostWithheld = "resolve-cost-withheld"
     case changeWallet = "change-wallet"
     case popover
     case popoverNoWallet = "popover-no-wallet"
@@ -153,7 +154,7 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
+        case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .resolve, .resolveCostWithheld, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
              .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishWaiting:
             .none
@@ -167,7 +168,7 @@ enum TestScene: String, CaseIterable {
         case .mainServerDown: .serverDown
         case .mainNotUpdating, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
-        case .mainCostWithheld: .costWithheld
+        case .mainCostWithheld, .resolveCostWithheld: .costWithheld
         case .mainEmpty, .mainEmptySmallest: .empty
         case .mainEmptyNotice: .emptyReadingLinked
         case .mainNotStarted: .notStarted
@@ -248,7 +249,7 @@ enum TestScene: String, CaseIterable {
             }
         }
         switch self {
-        case .resolve:
+        case .resolve, .resolveCostWithheld:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .holdComparison:
             return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
@@ -343,7 +344,11 @@ final class FixtureSource: PortfolioSource {
             return try demo { $0["linkedFailed"] = ["0x00000000000000000000000000000000000de301"] }
         case .costWithheld:
             // The demo, with what one of its linked wallets sent left unknown.
-            return try demo { $0["withheld"] = [["wallet": "0x00000000000000000000000000000000000de301", "asset": "USDC"]] }
+            return try demo { object in
+                object["withheld"] = [["wallet": "0x00000000000000000000000000000000000de301", "asset": "USDC"]]
+                let asked: [String: Any] = ["id": "cost:0xdemo:0xwithheld:USDC", "kind": "cost", "wallet": object["address"] ?? "", "receipts": [["wallet": object["address"] ?? "", "legId": "0xwithheld:USDC", "asset": "USDC", "units": "500000000"]], "costKey": "0xdemo:0xwithheld:USDC", "noteAbout": NSNull(), "needsCost": false, "arrivals": [["asset": "USDC", "decimals": 6, "units": "500000000"]], "transfers": 1, "firstAt": "2026-11-04T12:00:00.000Z", "lastAt": "2026-11-04T12:00:00.000Z", "evidence": ["0x0000…e301, your wallet, sent this, and its USDC history can't be confirmed"], "valueMicros": "500000000"]
+                object["questions"] = [asked] + (object["questions"] as? [[String: Any]] ?? [])
+            }
         case .empty: return try newWallet(started: true, readingLinked: false, address: address)
         case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: address)
         case .notStarted: return try newWallet(started: false, readingLinked: false, address: address)
