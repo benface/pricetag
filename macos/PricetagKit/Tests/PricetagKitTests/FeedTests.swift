@@ -218,7 +218,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         }
         #expect(store.feed == .reading)
         #expect(store.portfolio == held)
-        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Reading…")
+        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: $0).text == "Reading…" })
         let later = now.addingTimeInterval(1)
         await gate.answer(.success(try realPortfolio(at: later)))
         await _ = second.value
@@ -312,7 +312,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         let (store, _, _) = makeStore([.success(try realPortfolio(at: old))])
         await _ = store.poll()
         #expect(store.feed == .behind(seconds: 600))
-        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Behind")
+        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: $0).text == "Behind" })
     }
 
     @Test func aDatasetBehindTheChainIsntLive() async throws {
@@ -323,7 +323,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(!store.feed.isStale)
         let notice = try #require(store.feed.staleNotice(serverURL: store.serverURL, portfolio: store.portfolio))
         #expect(notice.contains("about 2 min behind"))
-        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Catching up")
+        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: $0).text == "Catching up" })
     }
 
     @Test func aDatasetThatHasntStartedIsntLive() async throws {
@@ -558,20 +558,22 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         let portfolio = try demoPortfolio()
         let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .ampUnavailable("x"), .noAmpConfigured("x"), .rejected("x")]
         for state in states {
-            let summary = FeedSummary(feed: state, portfolio: portfolio)
-            #expect(summary.isWarning)
-            #expect(!summary.text.contains("$"), "\(state)")
+            for shows in MenuBarShows.allCases {
+                let summary = FeedSummary(feed: state, portfolio: portfolio, shows: shows)
+                #expect(summary.isWarning)
+                #expect(!summary.text.contains("$"), "\(state)")
+            }
         }
     }
 
     @Test func aPartialTotalWarns() throws {
-        let summary = FeedSummary(feed: .live, portfolio: try demoPortfolio())
+        let summary = FeedSummary(feed: .live, portfolio: try demoPortfolio(), shows: .pnl)
         #expect(summary.isWarning)
         #expect(summary.text == "Demo ≈+$149.30")
     }
 
     @Test func anUnavailableTotalHasNoNumber() throws {
-        let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .unavailable))
+        let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .unavailable), shows: .pnl)
         #expect(summary.isWarning)
         #expect(summary.text == "PnL unavailable")
     }
@@ -582,7 +584,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         totals["pnlMicros"] = NSNull()
         object["totals"] = totals
         let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
-        let summary = FeedSummary(feed: .live, portfolio: portfolio)
+        let summary = FeedSummary(feed: .live, portfolio: portfolio, shows: .pnl)
         #expect(summary.isWarning)
         #expect(!summary.text.contains("$"))
     }
@@ -707,9 +709,43 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
     }
 
     @Test func aCompleteTotalDoesntWarn() throws {
-        let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .complete))
+        let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .complete), shows: .pnl)
         #expect(!summary.isWarning)
         #expect(summary.text == "≈+$149.30")
+    }
+
+    @MainActor @Test func showsValueUnlessAskedOtherwise() throws {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        let store = PortfolioStore(defaults: defaults)
+        #expect(store.menuBarShows == .value)
+        store.setMenuBarShows(.icon)
+        #expect(PortfolioStore(defaults: defaults).menuBarShows == .icon)
+    }
+
+    @Test func valueSaysWhenItLeavesSomethingOut() throws {
+        let portfolio = try realPortfolio(at: Date(), status: .complete)
+        let summary = FeedSummary(feed: .live, portfolio: portfolio, shows: .value)
+        #expect(summary.text == portfolio.totalValueText)
+        #expect(summary.isWarning == portfolio.isValuePartial)
+        #expect(FeedSummary(feed: .live, portfolio: try demoPortfolio(), shows: .value).text == "Demo " + (portfolio.totalValueText ?? ""))
+    }
+
+    @Test func anUnknownValueHasNoNumber() throws {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(realPortfolio(at: Date(), status: .complete))) as! [String: Any]
+        var totals = object["totals"] as! [String: Any]
+        totals["valueMicros"] = NSNull()
+        object["totals"] = totals
+        let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        let summary = FeedSummary(feed: .live, portfolio: portfolio, shows: .value)
+        #expect(summary.isWarning)
+        #expect(summary.text == "Value unavailable")
+    }
+
+    @Test func iconOnlyShowsNoNumber() throws {
+        let real = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .unavailable), shows: .icon)
+        #expect(real.text.isEmpty)
+        #expect(!real.isWarning)
+        #expect(FeedSummary(feed: .live, portfolio: try demoPortfolio(), shows: .icon).text == "Demo")
     }
 }
 

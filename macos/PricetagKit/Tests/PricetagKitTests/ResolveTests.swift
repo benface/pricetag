@@ -112,7 +112,8 @@ actor GatedVerifier: PortfolioSource {
         let caveat = try #require(Wording.headlineCaveat(portfolio.totals, portfolio.currency))
         #expect(caveat.contains("cost unknown"))
         #expect(caveat.contains("estimated"))
-        #expect(FeedSummary(feed: .live, portfolio: portfolio).text.contains("≈"))
+        #expect(FeedSummary(feed: .live, portfolio: portfolio, shows: .pnl).text.contains("≈"))
+        #expect(FeedSummary(feed: .live, portfolio: portfolio, shows: .value).text.contains("≈") == portfolio.totals.estimated.value)
     }
 
     @Test func saysWhatHasNoMarket() throws {
