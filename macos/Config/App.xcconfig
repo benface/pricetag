@@ -25,11 +25,13 @@ INFOPLIST_KEY_LSUIElement = YES
 INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.finance
 INFOPLIST_KEY_NSHumanReadableCopyright =
 
-// Sandboxed, and its only permissions are to open connections and to read or write a file the user picks in a dialog,
-// which is how an exchange history comes in and a CSV goes out. It touches no other files but its own.
+// Sandboxed, and its only permissions are to open connections, to read or write a file the user picks in a dialog, which is how an
+// exchange history comes in and a CSV goes out, and the camera, which reads a Keystone's address. It touches no other files but its own.
 ENABLE_APP_SANDBOX = YES
 ENABLE_USER_SELECTED_FILES = readwrite
 ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES
+ENABLE_RESOURCE_ACCESS_CAMERA = YES
+INFOPLIST_KEY_NSCameraUsageDescription = Reads the address on your hardware wallet's screen. The picture stays on this Mac, and nothing's saved.
 ENABLE_HARDENED_RUNTIME = YES
 
 // run.sh swaps in a real identity when there is one, so a rebuild keeps access to the app's saved settings. With the team

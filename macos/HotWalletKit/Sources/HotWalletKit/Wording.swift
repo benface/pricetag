@@ -30,6 +30,25 @@ public enum HotWalletWording {
             : "\(usd(excess, beside: main)) over the cap, with nowhere to sweep it. Add a savings wallet."
     }
 
+    public static func shortOverCap(by excess: UInt128, beside main: CurrencyCode) -> String {
+        "\(usd(excess, beside: main)) over the cap"
+    }
+
+    public static func shortNoPrice(_ symbols: [String]) -> String {
+        "No price for \(symbols.joined(separator: ", "))"
+    }
+
+    public static let shortKeyMissing = "Key missing"
+    public static let shortOldKeyHolds = "Old key still holds tokens"
+    public static let shortOldKeyUnchecked = "Can't check the old key"
+    public static let shortNetworkBusy = "Network busy"
+    public static let shortCantReachChain = "Can't reach the network"
+    public static let shortWrongChain = "Wrong network"
+    public static let shortLastActionFailed = "Last action failed"
+    public static let shortNoGas = "Needs ETH for gas"
+    public static let shortNoEthPrice = "No ETH price"
+    public static let shortNoSavings = "No savings wallet"
+
     public static let noGas = "This wallet can't pay for a sweep, because it doesn't have enough ETH. Send it a little ETH so it can move its tokens."
     public static let excessIsDust = "A little over the cap, by less than it makes sense to spend gas on."
 
@@ -44,6 +63,7 @@ public enum HotWalletWording {
     public static let feesLookWrong = "The network is quoting far higher fees than Base ever charges, so nothing was signed. Check the network address in Settings."
     public static let keyMissing = "This device no longer has this wallet's key, so nothing here can be moved. This can happen after restoring onto a different device."
     public static let rotating = "Moving everything off the old key. It's deleted once there's nothing left on it."
+    public static let deleteWaitsForRotation = "This wallet's key is being replaced, and some of its money may already be on the new key. You can delete it once that's finished."
 
     public static func rotationHeldByOtherTokens(_ count: Int) -> String {
         "The old key still holds \(count) \(count == 1 ? "token" : "tokens") this app doesn't track, and it won't touch them. It keeps the old key until you choose to leave \(count == 1 ? "it" : "them") behind."
@@ -65,11 +85,17 @@ public enum HotWalletWording {
         "That would use the \(Format.amount(String(reserve), decimals: 18)) ETH this wallet keeps for gas."
     }
 
+    /// Why the total against the cap is less than the holdings add up to.
+    public static func keptOutOfCap(_ kept: UInt128) -> String {
+        "\(Format.amount(String(kept), decimals: 18)) ETH is kept for gas, and doesn't count toward the cap."
+    }
+
     public static let noGasToSend = "This wallet doesn't have enough ETH to pay the network fee."
     public static let sendingToItself = "That's this wallet."
     public static let sendingToARetiredKey = "That's an old key from this Mac, whose private key is gone. Nothing could ever move what's sent there."
     public static let sendingToNobody = "Nobody can use that address. What's sent there is gone."
     public static let sendingToAToken = "That's a token's contract, not a wallet. What's sent there is usually gone for good."
+    public static let touchIDDidNotConfirm = "Touch ID didn't confirm this, so nothing happened."
     public static let lastOneStillShowingUp = "The last transaction is still showing up. Try again in a moment."
     public static let lastOneOnItsWay = "The last transaction is still on its way. Try again in a moment."
     public static let networkBusy = "The network is limiting how often this app can ask it things. Try again in a moment, or set a dedicated network address in Settings."
@@ -94,6 +120,8 @@ public enum HotWalletWording {
         }.joined(separator: " ")
     }
 
+    /// For places with room for only a few words, like the menu bar.
+    public static let alarmShort = "Key may be stolen"
     public static let alarmHeadline = "This wallet's key may be stolen"
     public static let alarmAdvice = "Top-ups and sends are stopped. Move what's left and replace the key now. Anything sent here can be taken."
 }

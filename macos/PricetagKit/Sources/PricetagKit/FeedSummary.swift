@@ -53,6 +53,19 @@ extension FeedState {
         return "\(problem) \(Wording.stale(lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp))"
     }
 
+    /// `staleNotice` in a few words, for the menu bar's view. nil when nothing is wrong.
+    public func shortProblem(portfolio: Portfolio?) -> String? {
+        switch self {
+        case .noWallet, .reading, .live: nil
+        case .catchingUp: portfolio.flatMap(Wording.shortCatchingUp)
+        case .behind(let seconds): "Data is \(Self.age(seconds)) old"
+        case .serverUnreachable: "Can't reach the server"
+        case .ampUnavailable: "Can't reach the data"
+        case .noAmpConfigured: "No data source"
+        case .rejected: "Couldn't read this wallet"
+        }
+    }
+
     private static func age(_ seconds: Int) -> String {
         if seconds < 3600 { return "\(max(1, seconds / 60)) min" }
         return "\(seconds / 3600) h"

@@ -687,7 +687,7 @@ private struct NoActivity<Notices: View>: View {
                 Text("Nothing has moved for this wallet in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
                     .help(Wording.coverage(portfolio))
             } actions: {
-                Button("Change Wallet") { navigation.switchWallet() }
+                Button("Switch Wallet") { navigation.switchWallet() }
             }
             // Fills what's left, so a notice stays at the top instead of floating over it.
             .frame(maxHeight: .infinity)

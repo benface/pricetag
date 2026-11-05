@@ -63,10 +63,15 @@ public enum SendPlanner {
 }
 
 /// What the Send sheet needs: what's been typed, whether to ask about the address, and sending it. The answer's only saved once
-/// something's on its way, and a skipped question just comes back next time.
+/// something's on its way, and a skipped question just comes back next time. What's typed can't change once it's being confirmed.
 @MainActor
 @Observable
 public final class SendModel {
+    public enum Stage: Equatable, Sendable {
+        case composing, confirming, sent
+    }
+
+    public private(set) var stage = Stage.composing
     public var token: Token
     public var amountText = ""
     public var addressText = "" {
@@ -79,6 +84,7 @@ public final class SendModel {
 
     private let wallet: HotWallet
     private let store: PortfolioStore
+    private var askingPrompt: PresencePrompt?
 
     public init(wallet: HotWallet, store: PortfolioStore) {
         self.wallet = wallet
@@ -127,6 +133,20 @@ public final class SendModel {
 
     public var usdText: String? { usdMicros.map(wallet.usd) }
 
+    /// What it should cost to send this token right now. It's read again before anything's signed.
+    public var feeText: String? {
+        guard let snapshot = wallet.snapshot else { return nil }
+        let wei = snapshot.fees.costWei(of: token)
+        return snapshot.ethUsdMicros.map { wallet.usd(Money.usdMicros(of: wei, priceMicros: $0, decimals: 18)) } ?? "\(Format.amount(String(wei), decimals: 18)) ETH"
+    }
+
+    /// The name of a savings wallet, when that's what this is.
+    public var recipientName: String? {
+        wallet.settings.coldWallets.first { $0.address == recipient }?.name
+    }
+
+    public var nextPromptAt: Date? { wallet.nextPromptAt }
+
     public var maximum: UInt128 { wallet.maximumSend(of: token) }
 
     public func useMaximum() {
@@ -138,18 +158,45 @@ public final class SendModel {
         return recipientProblem == nil && amountProblem == nil
     }
 
+    /// On to what Touch ID will be asked about.
+    public func confirm() {
+        guard canSend else { return }
+        failure = nil
+        stage = .confirming
+    }
+
+    /// Not once Touch ID has said yes, when it's on its way whatever this shows. Before that, it calls off the prompt here and now, because
+    /// the view going away comes later, and a touch landing in between would send what's just been left.
+    public func backToEditing() {
+        guard stage == .confirming, askingPrompt?.isConfirmed != true else { return }
+        askingPrompt?.cancel()
+        stage = .composing
+    }
+
+    /// What the confirmation asks for, in its own terms.
+    public func sendConfirmed(in prompt: PresencePrompt) async -> ApprovalResult {
+        guard stage == .confirming else { return .cancelled }
+        if await send(in: prompt) { return .done }
+        return failure.map(ApprovalResult.failed) ?? .cancelled
+    }
+
     /// True once it's on its way, and the answer's been saved.
-    public func send() async -> Bool {
+    public func send(in prompt: PresencePrompt? = nil) async -> Bool {
         guard canSend, let recipient, let amount else { return false }
         // Together, because the answer is about this address, whatever's on screen by the time this lands.
         let answer = asksIfItsYours ? ownership?.answer : nil
         isSending = true
-        defer { isSending = false }
+        askingPrompt = prompt
+        defer {
+            isSending = false
+            askingPrompt = nil
+        }
         failure = nil
-        guard await wallet.send(SendRequest(token: token, amount: amount, to: recipient)) else {
+        guard await wallet.send(SendRequest(token: token, amount: amount, to: recipient), in: prompt) else {
             failure = wallet.sweepProblem
             return false
         }
+        stage = .sent
         if let answer, store.book.senders[recipient.lowercased] == nil {
             store.setBook(store.book.answering(recipient.lowercased, answer, focus: wallet.address?.lowercased))
         }

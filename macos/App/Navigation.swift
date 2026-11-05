@@ -49,6 +49,8 @@ final class Navigation {
     @ObservationIgnored var onSwitcherClosed: (() -> Void)?
     /// The extension's Top Up button was pressed. The hot wallet's section takes it from here.
     var wantsTopUp = false
+    /// The menu bar's Send button was pressed. The hot wallet's section takes it from here.
+    var wantsSend = false
     /// The web app sent over an account from a device. The hot wallet's window asks the person to check it.
     var addingSavings: AddSavingsLink?
     var isResolving = false
@@ -64,6 +66,29 @@ final class Navigation {
 
     func showChosenWallet() {
         if section == .spendingMoney { section = .overview }
+    }
+
+    /// What the wallet's page shows: its holdings, or where to enter a wallet when there isn't one.
+    func showOverview() {
+        section = .overview
+    }
+
+    /// Opens the details of a number, which belong to the overview.
+    func explain(_ target: ExplainTarget) {
+        section = .overview
+        self.target = target
+    }
+
+    /// Goes to spending money and asks for its Send sheet, which appears once the section is on screen.
+    func send() {
+        section = .spendingMoney
+        wantsSend = true
+    }
+
+    /// Goes to spending money and asks for its Top Up sheet, which appears once the section is on screen.
+    func topUp() {
+        section = .spendingMoney
+        wantsTopUp = true
     }
 
     func resolve(_ asset: String? = nil) {

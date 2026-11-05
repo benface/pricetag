@@ -7,15 +7,25 @@ actor ScriptedSource: PortfolioSource {
     var answers: [Result<Portfolio, FetchError>]
     private(set) var methods: [CostMethod] = []
     private(set) var currencies: [CurrencyCode] = []
+    private(set) var timeouts: [Duration] = []
+    /// What asking for the rules runs into, if anything.
+    var rulesFailure: FetchError?
 
-    init(_ answers: [Result<Portfolio, FetchError>]) {
+    init(_ answers: [Result<Portfolio, FetchError>], rulesFailure: FetchError? = nil) {
         self.answers = answers
+        self.rulesFailure = rulesFailure
     }
 
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         methods.append(method)
         currencies.append(currency)
+        timeouts.append(timeout)
         return try answers.removeFirst().get()
+    }
+
+    func rules() async throws -> [PricingRule] {
+        if let rulesFailure { throw rulesFailure }
+        return []
     }
 
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
@@ -69,6 +79,42 @@ actor GatedSource: PortfolioSource {
     }
 }
 
+/// Answers once, runs out of time once, then holds the next read open until it's told how to answer.
+actor TimedOutThenGatedSource: PortfolioSource {
+    private var first: Portfolio?
+    private var hasTimedOut = false
+    private var waiting: CheckedContinuation<Portfolio, any Error>?
+
+    init(first: Portfolio) {
+        self.first = first
+    }
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+        if let first {
+            self.first = nil
+            return first
+        }
+        if !hasTimedOut {
+            hasTimedOut = true
+            throw FetchError.timedOut
+        }
+        return try await withCheckedThrowingContinuation { waiting = $0 }
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func waitUntilAsked() async {
+        while waiting == nil { await Task.yield() }
+    }
+
+    func answer(_ result: Result<Portfolio, FetchError>) {
+        waiting?.resume(with: result.mapError { $0 as any Error })
+        waiting = nil
+    }
+}
+
 /// `demoPortfolio()`, but from a real source, and with its newest block at a given time.
 func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod = .average, currency: CurrencyCode = .USD, progress: ReadProgress? = nil) throws -> Portfolio {
     var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
@@ -85,10 +131,10 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 @Suite struct FeedTests {
     let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    func makeStore(_ answers: [Result<Portfolio, FetchError>]) -> (PortfolioStore, ScriptedSource, UserDefaults) {
+    func makeStore(_ answers: [Result<Portfolio, FetchError>], rulesFailure: FetchError? = nil) -> (PortfolioStore, ScriptedSource, UserDefaults) {
         let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
         defaults.set("0xabc", forKey: "wallet")
-        let source = ScriptedSource(answers)
+        let source = ScriptedSource(answers, rulesFailure: rulesFailure)
         let now = now
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now })
         return (store, source, defaults)
@@ -120,6 +166,68 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(store.feed == .serverUnreachable)
         await _ = store.poll()
         #expect(store.feed == .live)
+    }
+
+    @Test func aSlowReadFromAServerThatsAnsweringIsntOffline() async throws {
+        let later = now.addingTimeInterval(1)
+        let (store, source, _) = makeStore([.success(try realPortfolio(at: now)), .failure(.timedOut), .success(try realPortfolio(at: later))])
+        await _ = store.poll()
+        await _ = store.poll()
+        #expect(store.feed == .live)
+        #expect(store.portfolio?.latest.date == later)
+        // Told to take as long as a first read, the second time.
+        #expect(await source.timeouts == [.seconds(180), .seconds(15), .seconds(180)])
+    }
+
+    @Test func aSlowReadSaysItsOnItsWayWithoutCallingOldNumbersCurrent() async throws {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let gate = TimedOutThenGatedSource(first: try realPortfolio(at: now))
+        let now = now
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in gate }, now: { now })
+        await _ = store.poll()
+        let read = Task { await store.poll() }
+        await gate.waitUntilAsked()
+        #expect(store.feed == .reading)
+        #expect(store.portfolio != nil)
+        await gate.answer(.success(try realPortfolio(at: now)))
+        await _ = read.value
+        #expect(store.feed == .live)
+    }
+
+    @Test func aReadThatTimesOutWithNothingAnsweringIsOffline() async throws {
+        for rulesFailure in [FetchError.unreachable, .timedOut] {
+            let (store, source, _) = makeStore([.success(try realPortfolio(at: now)), .failure(.timedOut)], rulesFailure: rulesFailure)
+            await _ = store.poll()
+            await _ = store.poll()
+            #expect(store.feed == .serverUnreachable)
+            #expect(store.portfolio != nil)
+            #expect(await source.timeouts.count == 2)
+        }
+    }
+
+    @Test func aServerThatSaysNoStillAnswers() async throws {
+        let (store, source, _) = makeStore([.success(try realPortfolio(at: now)), .failure(.timedOut), .success(try realPortfolio(at: now))], rulesFailure: .rejected("No."))
+        await _ = store.poll()
+        await _ = store.poll()
+        #expect(store.feed == .live)
+        #expect(await source.timeouts.count == 3)
+    }
+
+    @Test func aReadThatNeverFinishesFromAnAnsweringServerIsntOffline() async throws {
+        let (store, source, _) = makeStore([.success(try realPortfolio(at: now)), .failure(.timedOut), .failure(.timedOut)])
+        await _ = store.poll()
+        await _ = store.poll()
+        #expect(store.feed == .ampUnavailable(Wording.readTooSlow))
+        #expect(store.portfolio != nil)
+        #expect(await source.timeouts == [.seconds(180), .seconds(15), .seconds(180)])
+    }
+
+    @Test func aFirstReadThatTimesOutFromAnAnsweringServerIsntOffline() async throws {
+        let (store, source, _) = makeStore([.failure(.timedOut)])
+        await _ = store.poll()
+        #expect(store.feed == .ampUnavailable(Wording.readTooSlow))
+        #expect(await source.timeouts == [.seconds(180)])
     }
 
     @Test func tellsTheServerApartFromAmp() async throws {
@@ -410,6 +518,125 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(!summary.text.contains("$"))
     }
 
+    @Test func aProblemFitsInAFewWords() throws {
+        let portfolio = try demoPortfolio()
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x")]
+        for state in states {
+            let problem = try #require(state.shortProblem(portfolio: portfolio))
+            #expect(problem.count <= 26, "\(state)")
+            #expect(!problem.contains("."), "\(state)")
+        }
+        #expect(FeedState.behind(seconds: 600).shortProblem(portfolio: portfolio) == "Data is 10 min old")
+    }
+
+    @Test func nothingWrongHasNoProblem() throws {
+        let portfolio = try demoPortfolio()
+        for state in [FeedState.noWallet, .reading, .live] { #expect(state.shortProblem(portfolio: portfolio) == nil) }
+    }
+
+    @Test func theGlanceListsWhatsHeldLargestFirst() throws {
+        let portfolio = try demoPortfolio()
+        let top = portfolio.largestHoldings(3)
+        #expect(top.map(\.asset) == ["USDC", "cbBTC", "ETH"])
+        #expect(portfolio.largestHoldings(100).allSatisfy { $0.isHeld })
+    }
+
+    @Test func aPositionWithNoPriceRanksLastInsteadOfAsNothing() throws {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
+        var positions = object["positions"] as! [[String: Any]]
+        let index = try #require(positions.firstIndex { $0["asset"] as? String == "USDC" })
+        var values = positions[index]["values"] as! [String: Any]
+        values["valueMicros"] = NSNull()
+        positions[index]["values"] = values
+        object["positions"] = positions
+        let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        let all = portfolio.largestHoldings(100)
+        #expect(all.last?.asset == "USDC")
+        #expect(all.first?.asset == "cbBTC")
+    }
+
+    /// The demo, changed, with its value counted as partial the way the SDK counts it.
+    private func partialPortfolio(valueCoverage: [String: Int] = ["known": 6, "missing": 1], _ change: (inout [String: Any]) -> Void) throws -> Portfolio {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
+        var totals = object["totals"] as! [String: Any]
+        var coverage = totals["coverage"] as! [String: Any]
+        coverage["value"] = valueCoverage
+        totals["coverage"] = coverage
+        object["totals"] = totals
+        change(&object)
+        return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func changing(_ asset: String, in object: inout [String: Any], _ change: (inout [String: Any]) -> Void) {
+        var positions = object["positions"] as! [[String: Any]]
+        for index in positions.indices where positions[index]["asset"] as? String == asset { change(&positions[index]) }
+        object["positions"] = positions
+    }
+
+    private func removingPrice(of asset: String, in object: inout [String: Any]) {
+        changing(asset, in: &object) { position in
+            var values = position["values"] as! [String: Any]
+            values["valueMicros"] = NSNull()
+            position["values"] = values
+        }
+    }
+
+    @Test func aValueMissingAHoldingSaysSoEvenWhenThatHoldingIsntListed() throws {
+        let portfolio = try partialPortfolio { removingPrice(of: "USDC", in: &$0) }
+        #expect(!portfolio.largestHoldings(5).map(\.asset).contains("USDC"))
+        #expect(portfolio.isValuePartial)
+        #expect(portfolio.partialValueReason == "USDC has no price right now.")
+    }
+
+    @Test func anUnreadBalanceIsntCalledAMissingPrice() throws {
+        let portfolio = try partialPortfolio(valueCoverage: ["known": 7, "missing": 1]) { $0["unreadAssets"] = ["wstETH"] }
+        #expect(portfolio.partialValueReason == "Couldn't read the balance of wstETH.")
+    }
+
+    @Test func anUncheckedBalanceSaysSoUnlessItsStillCurrent() throws {
+        let unchecked: (Bool) throws -> Portfolio = { isCurrent in
+            try self.partialPortfolio { object in
+                self.changing("AERO", in: &object) { $0["reconciliation"] = ["status": "unchecked", "heldIsCurrent": isCurrent] }
+            }
+        }
+        #expect(try unchecked(false).partialValueReason == "Couldn't check the balance of AERO.")
+        #expect(try unchecked(true).partialValueReason == "This value isn't complete.")
+    }
+
+    @Test func incompleteHistorySaysSo() throws {
+        let portfolio = try partialPortfolio { object in
+            changing("AERO", in: &object) { $0["shortfallQty"] = "5" }
+        }
+        #expect(portfolio.partialValueReason == "Incomplete history for AERO.")
+    }
+
+    @Test func aValueWithSeveralCausesNamesEach() throws {
+        let portfolio = try partialPortfolio(valueCoverage: ["known": 5, "missing": 3]) { object in
+            removingPrice(of: "USDC", in: &object)
+            removingPrice(of: "DAI", in: &object)
+            object["unreadAssets"] = ["wstETH"]
+        }
+        let reason = try #require(portfolio.partialValueReason)
+        #expect(reason.contains("have no price right now."))
+        #expect(reason.contains("USDC") && reason.contains("DAI"))
+        #expect(reason.contains("Couldn't read the balance of wstETH."))
+    }
+
+    @Test func noKnownCauseDoesntGuessOne() throws {
+        #expect(try partialPortfolio { _ in }.partialValueReason == "This value isn't complete.")
+    }
+
+    @Test func aWholeValueIsntPartial() throws {
+        let portfolio = try demoPortfolio()
+        #expect(!portfolio.isValuePartial)
+        #expect(portfolio.partialValueReason == nil)
+    }
+
+    @Test func attentionFitsInAFewWords() throws {
+        #expect(try demoPortfolio().shortAttention == "$3,603.42 has an unknown cost")
+        #expect(try realPortfolio(at: Date(), status: .complete).shortAttention?.contains("\n") != true)
+    }
+
     @Test func aCompleteTotalDoesntWarn() throws {
         let summary = FeedSummary(feed: .live, portfolio: try realPortfolio(at: Date(), status: .complete))
         #expect(!summary.isWarning)
@@ -644,6 +871,31 @@ final class EventsProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(Self.body.utf8))
         client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+/// Fails every request the way a test says, without opening a socket.
+final class FailingProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var code = URLError.Code.timedOut
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+
+    override func startLoading() {
+        client?.urlProtocol(self, didFailWithError: URLError(Self.code))
+    }
+}
+
+@Suite(.serialized) struct ClientFailureTests {
+    @Test func toldApartFromATimeout() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FailingProtocol.self]
+        let client = PricetagClient(serverURL: URL(string: "http://127.0.0.1:8787")!, configuration: configuration)
+        FailingProtocol.code = .timedOut
+        await #expect(throws: FetchError.timedOut) { try await client.rules() }
+        FailingProtocol.code = .cannotConnectToHost
+        await #expect(throws: FetchError.unreachable) { try await client.rules() }
     }
 }
 

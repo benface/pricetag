@@ -94,6 +94,8 @@ public struct Reconciliation: Codable, Sendable, Equatable {
     public let reason: String?
     /// On ETH that doesn't match: the transactions most likely behind it.
     public let unseenEth: [UnseenEth]?
+    /// On a balance that couldn't be checked: whether what's shown is still what the chain last said it holds. Without this, its value is only a best estimate.
+    public let heldIsCurrent: Bool?
 }
 
 public struct Position: Codable, Sendable, Equatable, Identifiable {
@@ -299,6 +301,20 @@ public struct Portfolio: Codable, Sendable, Equatable {
     /// What the holdings table lists. Tokens with no market go in a group of their own, so real warnings stay noticeable.
     public var listedPositions: [Position] { positions.filter { !$0.noMarket } }
     public var noMarketPositions: [Position] { positions.filter(\.noMarket) }
+
+    /// What a glance lists: what's held, most valuable first. One with no price can't be ranked, so it goes last, and it isn't treated as worth nothing.
+    public func largestHoldings(_ limit: Int) -> [Position] {
+        func value(_ position: Position) -> Decimal? { position.values.valueMicros.flatMap { Decimal(string: $0) } }
+        let sorted = listedPositions.filter(\.isHeld).sorted { a, b in
+            switch (value(a), value(b)) {
+            case let (a?, b?) where a != b: a > b
+            case (_?, nil): true
+            case (nil, _?): false
+            default: a.asset < b.asset
+            }
+        }
+        return Array(sorted.prefix(limit))
+    }
 
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
     /// A balance that couldn't be read doesn't count as nothing.

@@ -41,7 +41,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     @Test func twoAtOnceDontUseTheSameNonce() async throws {
         let rig = await Rig(snapshot(eth: oneEth / 100, tokens: [usdc: usdcUnits(500)]))
         async let tick: Void = rig.wallet.tick()
-        async let sweep: Void = rig.wallet.sweepEverything()
+        async let sweep = rig.wallet.sweepEverything()
         _ = await (tick, sweep)
         let nonces = await rig.signer.signed.map(\.nonce)
         #expect(Set(nonces).count == nonces.count)
@@ -1093,6 +1093,119 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.address == nextAddress)
     }
 
+    @Test func aRotationKeepsTheWalletFromBeingDeleted() async throws {
+        let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(10)]))
+        #expect(rig.wallet.canDelete)
+        await rig.wallet.replaceKey()
+        #expect(!rig.wallet.canDelete)
+        await rig.wallet.deleteWallet()
+        await rig.wallet.tick()
+        #expect(rig.wallet.address == hotAddress)
+        #expect(rig.wallet.rotation != nil)
+        #expect(await rig.signer.addresses() == [hotAddress, nextAddress])
+    }
+
+    @Test func aWalletDeletedAfterItsRotationStaysDeleted() async throws {
+        let rig = await Rig(snapshot(eth: 0))
+        await rig.wallet.replaceKey()
+        await rig.wallet.finishRotationLeavingFundsBehind()
+        #expect(rig.wallet.canDelete)
+        await rig.wallet.deleteWallet()
+        await rig.wallet.tick()
+        #expect(rig.wallet.address == nil)
+        #expect(await rig.signer.addresses().isEmpty)
+    }
+
+    @Test func aRotationThatStartsDuringTheDeletePromptStopsTheDelete() async throws {
+        let prompt = OpenPrompt()
+        let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(10)]), userPresence: prompt)
+        prompt.whileOpen = { await rig.wallet.replaceKey() }
+        await rig.wallet.deleteWallet()
+        #expect(rig.wallet.address == hotAddress)
+        #expect(rig.wallet.rotation != nil)
+        #expect(await rig.signer.addresses() == [hotAddress, nextAddress])
+        #expect(rig.wallet.sweepProblem == HotWalletWording.deleteWaitsForRotation)
+    }
+
+    @Test func aRotationThatFinishesDuringTheDeletePromptLeavesTheNewKey() async throws {
+        let prompt = OpenPrompt()
+        let rig = await Rig(snapshot(eth: 0), userPresence: prompt)
+        prompt.whileOpen = {
+            await rig.wallet.replaceKey()
+            await rig.wallet.finishRotationLeavingFundsBehind()
+        }
+        await rig.wallet.deleteWallet()
+        #expect(rig.wallet.address == nextAddress, "not just after the next tick, which would bring a forgotten key back")
+        #expect(rig.wallet.sweepProblem == HotWalletWording.changedWhileWaiting)
+        #expect(await rig.signer.addresses() == [nextAddress])
+    }
+
+    @Test func aDeleteDuringTheReplacePromptMakesNoNewKey() async throws {
+        let prompt = OpenPrompt()
+        let rig = await Rig(snapshot(eth: 0), userPresence: prompt)
+        prompt.whileOpen = { await rig.wallet.deleteWallet() }
+        await rig.wallet.replaceKey()
+        await rig.wallet.tick()
+        #expect(rig.wallet.address == nil)
+        #expect(rig.wallet.rotation == nil)
+        #expect(await rig.signer.addresses().isEmpty)
+    }
+
+    @Test func aDeleteDuringTheLeaveBehindPromptStaysDeleted() async throws {
+        let prompt = OpenPrompt()
+        let rig = await Rig(snapshot(eth: 0), userPresence: prompt, portfolio: .success(portfolio(toBlock: 2000)))
+        await rig.wallet.replaceKey()
+        prompt.whileOpen = {
+            await rig.wallet.readHistory()
+            for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+            #expect(rig.wallet.address == nextAddress, "the rotation finished by itself")
+            await rig.wallet.deleteWallet()
+        }
+        await rig.wallet.finishRotationLeavingFundsBehind()
+        #expect(rig.wallet.address == nil)
+        #expect(rig.stateStore.saved.active == nil)
+        #expect(await rig.signer.addresses().isEmpty)
+    }
+
+    @Test func aRotationThatFinishesDuringTheLeaveBehindPromptOnlyFinishesOnce() async throws {
+        let prompt = OpenPrompt()
+        let rig = await Rig(snapshot(eth: 0), userPresence: prompt, portfolio: .success(portfolio(toBlock: 2000)))
+        await rig.wallet.replaceKey()
+        prompt.whileOpen = {
+            await rig.wallet.readHistory()
+            for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await rig.wallet.tick() }
+        }
+        await rig.wallet.finishRotationLeavingFundsBehind()
+        #expect(rig.wallet.address == nextAddress)
+        #expect(rig.stateStore.saved.retired == [hotAddress])
+        #expect(await rig.signer.addresses() == [nextAddress])
+    }
+
+    @Test func aSweepAfterItsWalletIsDeletedReadsNothing() async throws {
+        let prompt = OpenPrompt()
+        let rig = await Rig(snapshot(tokens: [usdc: usdcUnits(10)]), userPresence: prompt)
+        prompt.whileOpen = { await rig.wallet.deleteWallet() }
+        await rig.wallet.sweepEverything()
+        #expect(rig.wallet.snapshot == nil)
+        #expect(rig.wallet.sweepProblem == HotWalletWording.changedWhileWaiting)
+        #expect(await rig.chain.sent.isEmpty)
+    }
+
+    @Test func aRotationMissingTheOldKeyCanStillEnd() async throws {
+        let rig = await Rig(snapshot(eth: oneEth / 100, tokens: [usdc: usdcUnits(10)]))
+        await rig.wallet.replaceKey()
+        #expect(!rig.wallet.canLeaveOldKeyBehind, "it's still moving things")
+        await rig.signer.deleteKey(hotAddress)
+        await rig.wallet.tick()
+        #expect(rig.wallet.canLeaveOldKeyBehind)
+        #expect(rig.wallet.rotationHold == nil)
+        #expect(rig.wallet.notices.contains { $0.text == HotWalletWording.keyMissing })
+        #expect(!rig.wallet.notices.contains { $0.text == HotWalletWording.rotating })
+        await rig.wallet.finishRotationLeavingFundsBehind()
+        #expect(rig.wallet.address == nextAddress)
+        #expect(rig.wallet.rotation == nil)
+    }
+
     @Test func deletingAsksFirstAndForgetsTheKey() async throws {
         let rig = await Rig(presence: false)
         await rig.wallet.deleteWallet()
@@ -1143,6 +1256,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     }
 
     @Test func overTheCapSaysWhichDollars() {
+        #expect(HotWalletWording.shortOverCap(by: 10 * Money.dollar, beside: .CAD) == "US$10.00 over the cap")
         #expect(HotWalletWording.overCap(by: 10 * Money.dollar, hasDestination: true, beside: .CAD).hasPrefix("US$10.00 over the cap."))
         #expect(HotWalletWording.overCap(by: 10 * Money.dollar, hasDestination: false, beside: .USD).hasPrefix("$10.00 over the cap,"))
     }
@@ -1152,6 +1266,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.wallet.tick()
         #expect(texts(rig.wallet) == [HotWalletWording.addSavings(beside: .USD)])
         #expect(rig.wallet.needsAttention)
+        #expect(rig.wallet.notices.first?.short == HotWalletWording.shortNoSavings)
     }
 
     @Test func overTheCapWithNoColdWalletSaysSoOnce() async throws {

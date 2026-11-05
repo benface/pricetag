@@ -1,9 +1,10 @@
-// What a link can ask the hardware wallet flow to do. The Mac app has no device code, so its Top Up and Publish buttons open
+// What a link can ask the hardware wallet flow to do. The Mac app has no device code, so its Add, Top Up and Publish buttons open
 // these. Anyone can make a link, so a link only ever fills in a form: nothing here is treated as true until the person says so.
 
 import { isAddress, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
 
 export type DeviceLink =
+  | { kind: "add-savings"; device: "ledger" | null }
   | { kind: "top-up"; to: string; usdMicros: string | null }
   | { kind: "publish"; wallet: string; txHash: string; asset: string; usdMicros: string | null; amount: { units: string; decimals: number } | null }
 
@@ -24,6 +25,7 @@ const DECIMALS = /^\d{1,2}$/
 /** The request in a page's address, or null if there's none or it doesn't make sense. */
 export function parseDeviceLink(search: string): DeviceLink | null {
   const params = new URLSearchParams(search)
+  if (params.has("addsavings")) return { kind: "add-savings", device: params.get("addsavings") === "ledger" ? "ledger" : null }
   const to = params.get("topup")
   if (to !== null) return isAddress(to) ? { kind: "top-up", to: normalizeAddress(to), usdMicros: usdMicrosOf(params.get("usd")) } : null
   const txHash = params.get("publish")?.toLowerCase()

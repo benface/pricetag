@@ -21,6 +21,16 @@ To check it yourself: `pnpm check:mac` for the logic, `pnpm check:keychain` for 
 
 Manual sends (Send, Publish a Cost, Sweep Everything, Replace Key, Delete) and anything a site asks to send or sign ask for Touch ID, or the login password where there's none. Automatic sweeps don't, because they have to run with nobody there.
 
+Send, Sweep Everything and site requests ask with no click, as soon as what's being approved is on screen, inside the same window (`LAAuthenticationView`), so nothing covers it. Where that isn't possible, like with no sensor in reach or after too many tries, macOS's own dialog asks, and its text names the site and what leaves. What keeps a touch from approving something unseen (`ApprovalPrompt`):
+
+- [x] Nothing asks until its window is visible, key, and in the active app, and an inline prompt stops if that changes. The approval window floats, so another window can't cover it.
+- [x] Nothing asks until a strong warning has been acknowledged. Acknowledging is a click that waits a second after the window opens.
+- [x] The next prompt waits 2 seconds after any answer, yes or no, so a second touch can't approve what comes next. This holds across windows, and for a request that arrives after the last one has gone.
+- [x] Each ask has its own `LAContext`, with no reuse window, so no touch counts twice.
+- [x] A cancelled prompt leaves the request waiting, and only a click asks again. Rejecting is one click, and Escape does the same.
+- [x] Backing out works up to the touch. It calls off the prompt the moment it's accepted, before anything changes on screen, so a touch landing just after can't send what's been left. Past the touch, nothing offers to back out, because what's been approved is on its way.
+- [x] An interrupted prompt doesn't ask again until the view on screen is paired with its new context, or it would be a dialog over the details. `macos/shot.sh site-refocused` fails if that doesn't happen.
+
 - [ ] **It isn't enforced by the enclave.** The same wrapping key has to open with no prompt for sweeps, so the prompt lives in the app. It stops someone at an unlocked Mac, not malware running as this user.
 
 ## Where money can go
@@ -34,7 +44,8 @@ Manual sends (Send, Publish a Cost, Sweep Everything, Replace Key, Delete) and a
 - [x] Unknown tokens are never called, not even to read their balance. They're listed separately, from Amp's data.
 - [x] Every signature includes chain ID 8453, so nothing signed can be replayed on another chain. Nothing is signed if the node says it's on another chain.
 - [x] Sweeps move tokens as they are, with no selling.
-- [x] A cold wallet's address must be confirmed by the user against the device's screen. The app has no device code, so it can't check that itself. It does check the EIP-55 checksum, and refuses this wallet's own address, retired keys and zero. A `patina://add-savings` link from the web app's device flow can fill in that sheet, but anyone can make one, so it still adds nothing until the user says the address matches. Any other accounts it names are listed, and only link costs if the user ticks them. Nothing's ever swept to them.
+- [x] A cold wallet's address must be confirmed by the user against the device's screen. The app has no device code, so it can't check that itself. It does check the EIP-55 checksum, and refuses this wallet's own address, retired keys and zero. A `patina://add-savings` link from the web app's device flow can fill in that sheet, and so can the camera reading a Keystone's receive screen, but anyone can make a link and a compromised Mac could change what's read, so it still adds nothing until the user says the address matches. A new link takes that answer back. Any other accounts a link names are listed, and only link costs if the user ticks them. Nothing's ever swept to them.
+- [x] The camera entitlement is only for that read. It starts on that step and stops when it's left. Frames stay in memory while they're read and are never saved, and only a plain address counts: any other code's contents are dropped without being shown.
 - [ ] **Savings wallets aren't locked down.** Malware running as this user could edit the settings to add its own address, then wait for a sweep. Protecting that needs a contract account (WORK-332).
 - [ ] **Sweeps need the app running.** Nothing runs while it's closed. A plain address can't enforce a cap onchain: it's a trigger for sweeping, not a limit.
 
@@ -44,13 +55,13 @@ A browser extension lets websites use this wallet. A site can do real damage wit
 
 - [x] The extension never sees a key, and doesn't log or store anything. It runs as it's committed, with no build step and no dependencies, and asks only for `nativeMessaging`.
 - [x] Approvals only appear in the app's own window, showing the site and what's being signed. The wire protocol has no message for answering one, and a test sends the attempts anyone would try.
-- [x] Rejecting is the default: Return, Esc and closing the window all reject. Approve can't be pressed for the first second, so a window opening under the pointer can't catch a click, and it has no keyboard shortcut.
-- [x] Sending and signing also ask for Touch ID. A refused prompt leaves the request waiting, and signs nothing.
+- [x] Rejecting is one click, and Esc and closing the window do the same. Nothing approves with a key: Return only asks Touch ID again after a cancelled prompt. Connect and acknowledging a strong warning can't be pressed for the first second, so a window opening under the pointer can't catch a click. Everything else takes a touch, and Touch ID asks about 400 ms after the window's in front.
+- [x] Sending and signing also ask for Touch ID, right away, with the site and what's being signed on screen. A refused prompt leaves the request waiting, and signs nothing.
 - [x] The origin comes from the browser (`sender.origin`), not the page, and is checked again in the app. Only top-level pages on HTTPS or this Mac can ask: no iframes, and no plain HTTP that anyone on the network could change.
 - [x] Only the hot wallet is ever exposed. Nothing in the bridge can read a cold wallet, and a request naming any other address is refused.
 - [x] Only Base. Other chains are refused for switching, sending and typed data, and what's signed always carries chain ID 8453. A signature with no chain in its data gets a strong warning.
 - [x] `eth_sign` is refused outright, and the vault has no way to sign a bare hash: every message's digest starts with 0x19, which can't begin a transaction. So is anything else not on a short list, including EIP-7702 authorizations and contract creation.
-- [x] Unlimited token approvals, approve-for-all, typed-data permits and orders, unreadable messages, and sign-ins for a different site all get a strong warning, and approving takes ticking that you understand. It looks for what these have in common, so a contract call it can't read just says it can't read it.
+- [x] Unlimited token approvals, approve-for-all, typed-data permits and orders, unreadable messages, and sign-ins for a different site all get a strong warning, and approving takes saying you trust the site, before Touch ID asks. It looks for what these have in common, so a contract call it can't read just says it can't read it.
 - [x] The site doesn't choose the fee, gas or nonce. What's signed keeps to the gas and fee per gas that were approved. If fees rise, it keeps that limit, and if the base fee passes it, the transaction couldn't land, so nothing's signed.
 - [x] The amount being sent is shown to the last digit, so a margin a site adds can't be rounded out of sight.
 - [x] If something approved doesn't happen, the app's window says why, since a site's own message about it can say anything. It only says nothing was sent when that's certain. If a broadcast gets no clear answer, the transaction stays on its way and the receipt check settles it. Each failure stays up until it's been seen, even with other approvals going on.
@@ -78,6 +89,7 @@ The RPC is configurable and untrusted.
 - [x] A failed read fails the whole tick, so it can't look like an empty wallet.
 - [x] Every read in a tick is pinned to one block, and nothing is signed from a read older than the last receipt, so a slow node can't cause the same excess to be swept twice.
 - [x] Deleting a key during a rotation takes three reads in a row saying it's empty, plus an answer from Amp that it holds no tokens off the allowlist. That answer has to reach the block where the key first read as empty, and be within a minute of now. Without that, the old key stays until the user chooses to leave what's on it.
+- [x] The wallet can't be deleted during a rotation, because the new key may already hold what was moved, and would take over anyway. That's checked again after the prompt, in case a rotation started or finished while it was open. A rotation that's stuck can end by leaving what's on the old key, which includes when this device no longer has that key.
 - [x] The block of the last receipt is on disk, so the wait for newer balances survives a restart.
 - [x] While a transaction is on its way, its receipt is checked about once a second. That check only settles receipts and updates what's shown. Signing, giving up on a transaction, and the reads behind alarms and deleting a key stay on the 15 s tick, so checking faster doesn't make them any quicker to trigger.
 - [ ] **A lying node can still cost something.** It can claim false balances, which wastes gas on sweeps that fail. It can raise a false alarm, or hide activity from the nonce check, though not from the comparison with Amp. If it and the server both say the old key is empty during a rotation, the key is deleted and whatever's still there is lost.
@@ -121,7 +133,7 @@ The RPC is configurable and untrusted.
 
 These need a person at the Mac:
 
-- [ ] The Touch ID prompt itself, on Sweep Everything, Replace Key and site requests. The logic around it is tested with a stand-in.
+- [ ] The Touch ID prompt itself, inline on Send, Sweep Everything and site requests, and in macOS's dialog everywhere else. The logic around it is tested with a stand-in.
 - [ ] The approval window with a person at it. `pnpm check:extension` answers it through a debug build's stand-in, which a release build doesn't have.
 - [ ] A site with real funds on a real browser.
 - [ ] Reading an address on a real Ledger or Keystone screen.

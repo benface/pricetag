@@ -43,11 +43,27 @@ public struct SweepPlan: Equatable, Sendable {
     public var valueUsdMicros: UInt128 = 0
     public var excessUsdMicros: UInt128 = 0
     public var gasReserveWei: UInt128 = 0
+    /// What's actually held back: the reserve, or all the ETH there is when there's less than that.
+    public var gasKeptWei: UInt128 = 0
     /// Over the cap, but by less than it makes sense to spend gas on.
     public var excessIsDust = false
     /// What moving everything skipped because of what gas costs, which can change. It's still there, so it never
     /// counts as empty. ETH under `minimumSweep` isn't here, because paying for its own last transfer always leaves a little.
     public var notWorthTheGas: [Token] = []
+}
+
+public struct SweepPreview: Equatable, Sendable {
+    public let transfers: [PlannedTransfer]
+    public let feeWei: UInt128
+    public let feeUsdMicros: UInt128?
+
+    /// What it's all worth, unless something in it has no price, which isn't counted as $0.
+    public var valueUsdMicros: UInt128? {
+        transfers.reduce(UInt128?(0)) { total, transfer in
+            guard let total, let usd = transfer.usdMicros else { return nil }
+            return total + usd
+        }
+    }
 }
 
 public enum SweepPlanner {
@@ -67,6 +83,7 @@ public enum SweepPlanner {
     public static func automatic(holdings: [Holding], capUsdMicros: UInt128, fees: FeeQuote, destination: EthereumAddress?, pendingGainUsdMicros: UInt128) -> SweepPlan {
         var plan = SweepPlan()
         plan.gasReserveWei = gasReserve(fees)
+        plan.gasKeptWei = min(holdings.first { $0.token.isNative }?.balance ?? 0, plan.gasReserveWei)
         let ethPrice = holdings.first { $0.token.isNative }?.priceUsdMicros
 
         var available: [Token: UInt128] = [:]

@@ -12,7 +12,7 @@ public enum OffscreenRenderer {
     }
 
     /// `size` is the view's own size if it's nil. `isReady` says when whatever the view loads has arrived.
-    public static func png(of view: some View, size: CGSize? = nil, dark: Bool = false, isReady: () -> Bool = { true }) throws -> Data {
+    public static func png(of view: some View, size: CGSize? = nil, dark: Bool = false, timeout: TimeInterval = 5, settle: TimeInterval = 0.5, isReady: () -> Bool = { true }) throws -> Data {
         // The one policy that can't become the active app, whatever the view does.
         NSApplication.shared.setActivationPolicy(.prohibited)
         let controller = NSHostingController(rootView: view)
@@ -21,13 +21,13 @@ public enum OffscreenRenderer {
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.contentViewController = controller
 
-        let deadline = Date.now.addingTimeInterval(5)
+        let deadline = Date.now.addingTimeInterval(timeout)
         while !isReady() {
             guard Date.now < deadline else { throw Failure.neverReady }
             RunLoop.main.run(until: .now.addingTimeInterval(0.05))
         }
         // Lets what just arrived lay out, and what that starts loading arrive too.
-        RunLoop.main.run(until: .now.addingTimeInterval(0.5))
+        RunLoop.main.run(until: .now.addingTimeInterval(settle))
         window.setContentSize(size ?? controller.view.fittingSize)
         window.layoutIfNeeded()
 

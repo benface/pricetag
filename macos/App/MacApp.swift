@@ -124,9 +124,14 @@ struct MacApp: App {
 
         Window(SiteApprovalWindow.title, id: WindowID.siteApproval) {
             SiteApprovalWindow(bridge: siteBridge)
+                .windowMinimizeBehavior(.disabled)
                 .holdsDockPresence()
         }
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+        // It stays where it can be seen, so Touch ID's prompt is never about something covered up.
+        .windowLevel(.floating)
+        .defaultPosition(.center)
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
 
@@ -189,7 +194,7 @@ struct MenuBarLabel: View {
     @Environment(\.dismissWindow) private var dismissWindow
 
     var body: some View {
-        label
+        MenuBarLabelContent(summary: summary, isAlarm: alarm != nil)
             // In the label because it's the one view that's always there. A possibly stolen key can't wait for someone to look.
             .onChange(of: alarm?.findings.count) { _, count in
                 guard count != nil else { return }
@@ -205,7 +210,11 @@ struct MenuBarLabel: View {
                 if HotWalletDebug.isQuiet { return }
                 #endif
                 if id == nil {
-                    dismissWindow(id: WindowID.siteApproval)
+                    // A moment to see that it went through, unless something else has come up by then.
+                    Task {
+                        if siteBridge.finished != nil { try? await Task.sleep(for: .seconds(1.1)) }
+                        if siteBridge.windowID == nil { dismissWindow(id: WindowID.siteApproval) }
+                    }
                 } else {
                     openWindow(id: WindowID.siteApproval)
                     DockPresence.bringForward()
@@ -230,11 +239,16 @@ struct MenuBarLabel: View {
                 DockPresence.bringForward()
             }
     }
+}
 
-    @ViewBuilder
-    private var label: some View {
-        if alarm != nil {
-            Text("\u{26A0}\u{FE0E} Key may be stolen")
+/// What the menu bar item says. It has no colors of its own, so the system draws it to suit any menu bar: light, dark or tinted.
+struct MenuBarLabelContent: View {
+    let summary: FeedSummary
+    let isAlarm: Bool
+
+    var body: some View {
+        if isAlarm {
+            Text("\u{26A0}\u{FE0E} \(HotWalletWording.alarmShort)")
         } else if summary.text.isEmpty {
             Image(systemName: "tag")
                 .accessibilityLabel(AppName.current)

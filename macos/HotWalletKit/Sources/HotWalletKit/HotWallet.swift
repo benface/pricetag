@@ -55,6 +55,7 @@ public final class HotWallet {
     @ObservationIgnored private let settingsStore: any WalletSettingsStore
     @ObservationIgnored private let stateStore: any DeviceStateStore
     @ObservationIgnored private let presence: any UserPresence
+    @ObservationIgnored private var lastAnswerAt: Date?
     @ObservationIgnored private let portfolioSource: @MainActor () -> any PortfolioSource
     @ObservationIgnored private let costMethod: @MainActor () -> CostMethod
     @ObservationIgnored private let mainCurrency: @MainActor () -> CurrencyCode
@@ -380,6 +381,12 @@ public final class HotWallet {
     /// Whether the person using this can have it sign something. A key that may be stolen, or that's being replaced, only moves to safety.
     public var canSend: Bool { availability == .ready && canTopUp }
 
+    /// Not during a rotation. What's been moved may already be on the new key, which would take over on the next tick anyway.
+    public var canDelete: Bool { address != nil && rotation == nil }
+
+    /// Whether a rotation is waiting on the user. Without the old key it can't move anything, so that always is.
+    public var canLeaveOldKeyBehind: Bool { rotation != nil && (rotationHold != nil || isKeyMissing) }
+
     /// Holdings it can't value, which the cap can't see.
     public var unpricedSymbols: [String] {
         holdings.filter { $0.priceUsdMicros == nil && !$0.token.isNative }.map(\.token.symbol)
@@ -411,29 +418,29 @@ public final class HotWallet {
     public var notices: [Notice] {
         guard address != nil, availability == .ready else { return [] }
         var notices: [Notice] = []
-        if isKeyMissing { notices.append(.init(.warning, HotWalletWording.keyMissing)) }
+        if isKeyMissing { notices.append(.init(.warning, HotWalletWording.keyMissing, short: HotWalletWording.shortKeyMissing)) }
         switch rotationHold {
-        case .otherTokens(let count): notices.append(.init(.warning, HotWalletWording.rotationHeldByOtherTokens(count)))
-        case .cantCheckOtherTokens: notices.append(.init(.warning, HotWalletWording.rotationCantCheck))
-        case .notWorthTheGas(let symbols): notices.append(.init(.warning, HotWalletWording.rotationHeldByGas(symbols)))
+        case .otherTokens(let count): notices.append(.init(.warning, HotWalletWording.rotationHeldByOtherTokens(count), short: HotWalletWording.shortOldKeyHolds))
+        case .cantCheckOtherTokens: notices.append(.init(.warning, HotWalletWording.rotationCantCheck, short: HotWalletWording.shortOldKeyUnchecked))
+        case .notWorthTheGas(let symbols): notices.append(.init(.warning, HotWalletWording.rotationHeldByGas(symbols), short: HotWalletWording.shortOldKeyHolds))
         case .notEnoughGas, nil:
-            if rotation != nil { notices.append(.init(.info, HotWalletWording.rotating)) }
+            if rotation != nil, !isKeyMissing { notices.append(.init(.info, HotWalletWording.rotating)) }
         }
-        if let chainProblem { notices.append(.init(.warning, chainProblem == .rateLimited ? HotWalletWording.networkBusy : HotWalletWording.cantReachChain)) }
-        if let snapshot, snapshot.chainID != Base.chainID { notices.append(.init(.warning, HotWalletWording.wrongChain)) }
-        if let sweepProblem { notices.append(.init(.warning, sweepProblem)) }
+        if let chainProblem { notices.append(.init(.warning, chainProblem == .rateLimited ? HotWalletWording.networkBusy : HotWalletWording.cantReachChain, short: chainProblem == .rateLimited ? HotWalletWording.shortNetworkBusy : HotWalletWording.shortCantReachChain)) }
+        if let snapshot, snapshot.chainID != Base.chainID { notices.append(.init(.warning, HotWalletWording.wrongChain, short: HotWalletWording.shortWrongChain)) }
+        if let sweepProblem { notices.append(.init(.warning, sweepProblem, short: HotWalletWording.shortLastActionFailed)) }
         if let plan {
-            if plan.blockers.contains(.notEnoughGas) || rotationHold == .notEnoughGas { notices.append(.init(.warning, HotWalletWording.noGas)) }
+            if plan.blockers.contains(.notEnoughGas) || rotationHold == .notEnoughGas { notices.append(.init(.warning, HotWalletWording.noGas, short: HotWalletWording.shortNoGas)) }
             if plan.excessUsdMicros > 0, !plan.excessIsDust || plan.blockers.contains(.noDestination) {
-                notices.append(.init(.warning, HotWalletWording.overCap(by: plan.excessUsdMicros, hasDestination: settings.sweepDestination != nil, beside: mainCurrency())))
+                notices.append(.init(.warning, HotWalletWording.overCap(by: plan.excessUsdMicros, hasDestination: settings.sweepDestination != nil, beside: mainCurrency()), short: HotWalletWording.shortOverCap(by: plan.excessUsdMicros, beside: mainCurrency())))
             } else if plan.excessIsDust {
                 notices.append(.init(.info, HotWalletWording.excessIsDust))
             }
         }
-        if snapshot != nil, snapshot?.ethUsdMicros == nil { notices.append(.init(.warning, HotWalletWording.noEthPrice)) }
-        if !unpricedSymbols.isEmpty { notices.append(.init(.warning, HotWalletWording.noPrice(unpricedSymbols))) }
+        if snapshot != nil, snapshot?.ethUsdMicros == nil { notices.append(.init(.warning, HotWalletWording.noEthPrice, short: HotWalletWording.shortNoEthPrice)) }
+        if !unpricedSymbols.isEmpty { notices.append(.init(.warning, HotWalletWording.noPrice(unpricedSymbols), short: HotWalletWording.shortNoPrice(unpricedSymbols))) }
         // Being over the cap with nowhere to sweep already says to add one.
-        if settings.coldWallets.isEmpty, plan?.excessUsdMicros ?? 0 == 0 { notices.append(.init(.warning, HotWalletWording.addSavings(beside: mainCurrency()))) }
+        if settings.coldWallets.isEmpty, plan?.excessUsdMicros ?? 0 == 0 { notices.append(.init(.warning, HotWalletWording.addSavings(beside: mainCurrency()), short: HotWalletWording.shortNoSavings)) }
         if ampProblem { notices.append(.init(.info, HotWalletWording.cantCheckAmp)) }
         return notices
     }
@@ -459,11 +466,14 @@ public final class HotWallet {
 
         public let kind: Kind
         public let text: String
+        /// A warning in a few words, for places with room for only that.
+        public let short: String?
         public var id: String { text }
 
-        init(_ kind: Kind, _ text: String) {
+        init(_ kind: Kind, _ text: String, short: String? = nil) {
             self.kind = kind
             self.text = text
+            self.short = short
         }
     }
 
@@ -494,12 +504,17 @@ public final class HotWallet {
         case notAnAddress, isThisHotWallet, isARetiredKey, isZero
     }
 
+    /// Why this can't be a savings wallet, whatever the device shows.
+    public func problem(addingColdWallet address: EthereumAddress) -> ColdWalletProblem? {
+        if address == .zero { return .isZero }
+        if address == self.address { return .isThisHotWallet }
+        return state.retired.contains(address) ? .isARetiredKey : nil
+    }
+
     /// The address has to be what the user read on the device's screen. Nothing here can check that, so the sheet makes them say so.
     public func addColdWallet(address text: String, name: String) throws(ColdWalletProblem) {
         guard let address = EthereumAddress(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw .notAnAddress }
-        guard address != .zero else { throw .isZero }
-        guard address != self.address else { throw .isThisHotWallet }
-        guard !state.retired.contains(address) else { throw .isARetiredKey }
+        if let problem = problem(addingColdWallet: address) { throw problem }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         updateSettings { $0.add(ColdWallet(address: address, name: cleanName.isEmpty ? "Savings" : cleanName, confirmedOnDeviceAt: now())) }
     }
@@ -543,9 +558,22 @@ public final class HotWallet {
     }
 
     /// Everything on the allowlist, to the chosen savings wallet, after asking the person at the device.
-    public func sweepEverything() async {
-        guard let address, let destination = settings.sweepDestination else { return }
-        await work(confirming: "sweep everything to your savings") { [self] in
+    /// What sweeping everything would move right now, for showing. It's worked out again from a fresh read before anything's signed.
+    public var sweepPreview: SweepPreview? {
+        guard let snapshot, let destination = settings.sweepDestination else { return nil }
+        let transfers = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: destination).transfers
+        let feeWei = transfers.reduce(UInt128(0)) { $0 + snapshot.fees.costWei(of: $1.token) }
+        return SweepPreview(transfers: transfers, feeWei: feeWei, feeUsdMicros: snapshot.ethUsdMicros.map { Money.usdMicros(of: feeWei, priceMicros: $0, decimals: 18) })
+    }
+
+    /// True once it's on its way.
+    @discardableResult
+    public func sweepEverything(in prompt: PresencePrompt? = nil) async -> Bool {
+        guard let address, let destination = settings.sweepDestination else { return false }
+        var isOnItsWay = false
+        let name = settings.coldWallets.first { $0.address == destination }?.name ?? "your savings"
+        await work(confirming: "sweep everything to \(name)", in: prompt) { [self] in
+            guard self.address == address else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
             let snapshot = try await patientSnapshot(of: address)
             self.snapshot = snapshot
             guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
@@ -555,7 +583,9 @@ public final class HotWallet {
             if everything.blockers.contains(.notEnoughGas), everything.transfers.isEmpty { throw ChainError.rejected(HotWalletWording.noGas) }
             pausedUntil = nil
             try await execute(everything, from: address, to: destination, reason: .manual, snapshot: snapshot)
+            isOnItsWay = true
         }
+        return isOnItsWay
     }
 
     /// A new key, with everything moved off the old one, which is deleted once it's empty. After an alarm, what's left goes
@@ -563,6 +593,8 @@ public final class HotWallet {
     public func replaceKey() async {
         guard let address, rotation == nil else { return }
         await work(confirming: "replace this wallet's key") { [self] in
+            // The wallet can be deleted or replaced while the prompt's open, and then this isn't its key anymore.
+            guard self.address == address, rotation == nil else { return }
             let next = try await signer.createKey()
             let destination = alarm != nil ? settings.sweepDestination ?? next : next
             state.rotation = Rotation(from: address, to: next, destination: destination)
@@ -576,6 +608,8 @@ public final class HotWallet {
     public func finishRotationLeavingFundsBehind() async {
         guard let rotation else { return }
         await work(confirming: "delete the old key and leave what's on it behind") { [self] in
+            // The rotation can finish while the prompt's open, and the new key can be deleted after that. This mustn't undo either.
+            guard state.rotation == rotation, self.address == rotation.from else { return }
             try await finishRotation(rotation)
         }
     }
@@ -589,8 +623,11 @@ public final class HotWallet {
 
     /// Deletes the key for good. What's still on it is lost, so the view offers a sweep first.
     public func deleteWallet() async {
-        guard let address else { return }
+        guard canDelete, let address else { return }
         await work(confirming: "delete this wallet's key, which can't be undone") { [self] in
+            // A rotation can start or finish while the prompt's open, and then this key isn't all there is.
+            guard self.address == address else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
+            guard canDelete else { throw ChainError.rejected(HotWalletWording.deleteWaitsForRotation) }
             try await signer.deleteKey(address)
             retire(address, activating: nil)
             try persist()
@@ -638,12 +675,12 @@ public final class HotWallet {
     }
 
     /// The prompt comes first and waits outside the line, so an open prompt doesn't hold up automatic sweeps.
-    private func work(confirming reason: String? = nil, _ body: @escaping @MainActor () async throws -> Void) async {
+    private func work(confirming reason: String? = nil, in prompt: PresencePrompt? = nil, _ body: @escaping @MainActor () async throws -> Void) async {
         isWorking = true
         defer { isWorking = false }
         do {
             sweepProblem = nil
-            if let reason { try await presence.confirm(reason: reason) }
+            if let reason { try await confirmPresence(reason: reason, in: prompt) }
             var failure: (any Error)?
             await inTurn {
                 do {
@@ -655,6 +692,8 @@ public final class HotWallet {
             if let failure { throw failure }
         } catch let error as LAError where [.userCancel, .appCancel, .systemCancel].contains(error.code) {
             // They changed their mind, which isn't a problem to report.
+        } catch is LAError {
+            sweepProblem = HotWalletWording.touchIDDidNotConfirm
         } catch let error as ChainError {
             switch error {
             case .rejected(let message): sweepProblem = message
@@ -697,9 +736,27 @@ public final class HotWallet {
         try? persist()
     }
 
-    func confirmPresence(reason: String) async throws {
-        try await presence.confirm(reason: reason)
+    func confirmPresence(reason: String, in prompt: PresencePrompt? = nil) async throws {
+        if let prompt {
+            try await presence.confirm(reason: reason, in: prompt)
+            // They backed out as the touch landed. Backing out wins, because it's what's on screen.
+            if prompt.isCancelled { throw LAError(.appCancel) }
+            prompt.markConfirmed()
+        } else {
+            try await presence.confirm(reason: reason)
+        }
+        noteAnswer()
     }
+
+    /// The user just answered something, so whatever's next waits a moment. A touch that's still on the sensor can't count for it.
+    func noteAnswer() {
+        lastAnswerAt = now()
+    }
+
+    /// Asking again before this could catch a second touch meant for what's just gone.
+    public var nextPromptAt: Date? { lastAnswerAt?.addingTimeInterval(Self.pauseBetweenPrompts) }
+
+    static let pauseBetweenPrompts: TimeInterval = 2
 
     func readForSite(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer {
         // A node on another chain would tell a site things that aren't true of Base.
@@ -740,7 +797,8 @@ public final class HotWallet {
             maxFeePerGas: snapshot.fees.maxFeePerGas,
             feeWei: fees.costWei(gas: UInt128(gasLimit)),
             ethUsdMicros: snapshot.ethUsdMicros,
-            ethBalance: snapshot.balances[Base.eth] ?? 0
+            ethBalance: snapshot.balances[Base.eth] ?? 0,
+            tokenUsdMicros: Base.tokens.first { $0.contract == transaction.to }.flatMap { price(of: $0, snapshot: snapshot) }
         )
     }
 
@@ -821,10 +879,10 @@ public final class HotWallet {
 
     /// Asks the person at the device, then signs exactly this, and checks it again against a fresh read. True once it's on its way.
     @discardableResult
-    public func send(_ request: SendRequest) async -> Bool {
+    public func send(_ request: SendRequest, in prompt: PresencePrompt? = nil) async -> Bool {
         guard let address, canSend else { return false }
         var isOnItsWay = false
-        await work(confirming: "send \(Money.text(ofUnits: request.amount, decimals: request.token.decimals)) \(request.token.symbol) to \(request.to.checksummed)") { [self] in
+        await work(confirming: "send \(Money.text(ofUnits: request.amount, decimals: request.token.decimals)) \(request.token.symbol) to \(request.to.checksummed)", in: prompt) { [self] in
             let snapshot = try await readToSign(address)
             if let problem = self.problem(sendingTo: request.to) ?? SendPlanner.problem(with: request, snapshot: snapshot) { throw ChainError.rejected(problem.message) }
             let price = self.price(of: request.token, snapshot: snapshot)

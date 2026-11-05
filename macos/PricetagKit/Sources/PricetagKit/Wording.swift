@@ -178,6 +178,14 @@ public enum Wording {
         return behind(ms: BlockTime.msBetween(head - portfolio.progress.behindBlocks, head))
     }
 
+    /// `catchingUp` in a few words.
+    public static func shortCatchingUp(_ portfolio: Portfolio) -> String? {
+        if !portfolio.progress.started || portfolio.progress.behindBlocks == 0 { return nil }
+        let head = portfolio.latest.blockNum
+        let ms = BlockTime.msBetween(head - portfolio.progress.behindBlocks, head)
+        return ms < 30_000 ? "Less than a minute behind" : "About \(Format.duration(ms: ms)) behind"
+    }
+
     static func behind(ms: Int) -> String {
         // Under half a minute would round to "0 min", which reads as not behind at all.
         "The data is still catching up, \(ms < 30_000 ? "less than a minute" : "about \(Format.duration(ms: ms))") behind the network. Anything newer isn't in these numbers yet."
@@ -211,6 +219,24 @@ public enum Wording {
     /// What answering takes, on the button that starts it.
     public static func answerQuestions(_ count: Int) -> String {
         count == 1 ? "Answer 1 Question" : "Answer \(Format.block(count)) Questions"
+    }
+
+    /// Why a value is partial, for its tooltip. Names the holdings, because they may not be on screen. With no cause known, it only says what's sure.
+    public static func partialValue(noPrice: [String], unread: [String], unchecked: [String], incompleteHistory: [String]) -> String {
+        func list(_ assets: [String]) -> String { assets.joined(separator: ", ") }
+        var causes: [String] = []
+        if !noPrice.isEmpty { causes.append("\(list(noPrice)) \(noPrice.count == 1 ? "has" : "have") no price right now.") }
+        if !unread.isEmpty { causes.append("Couldn't read the balance of \(list(unread)).") }
+        if !unchecked.isEmpty { causes.append("Couldn't check the balance of \(list(unchecked)).") }
+        if !incompleteHistory.isEmpty { causes.append("Incomplete history for \(list(incompleteHistory)).") }
+        return causes.isEmpty ? "This value isn't complete." : causes.joined(separator: " ")
+    }
+
+    /// `leavesOut` in a few words. The biggest thing it leaves out, because the rest is a click away.
+    public static func shortLeavesOut(_ totals: Totals, _ currency: CurrencyCode) -> String? {
+        if isPositive(totals.unresolvedMicros) { return "\(Format.money(totals.unresolvedMicros, currency)) has an unknown cost" }
+        if isPositive(totals.estimatedMicros) { return "\(Format.money(totals.estimatedMicros, currency)) is estimated" }
+        return nil
     }
 
     /// What isn't listed with the holdings, and why it doesn't matter to the numbers. nil when there's nothing.
@@ -285,6 +311,8 @@ public enum Wording {
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
     public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet. The first read can take a minute."
+    public static let readTooSlow = "The server is answering, but this wallet is taking too long to read."
+    public static let serverTooSlow = "The server took too long to answer."
     public static let notAnAddress = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 }
 

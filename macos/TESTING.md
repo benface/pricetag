@@ -21,6 +21,19 @@ What rendering can't draw, so don't judge it from a render:
 - Materials, glass and vibrancy. The popover's background comes out flat, and vibrant text can come out in the wrong color. That's why the inspector (`main-details`) always uses a real window.
 - Whether a window is active, focus rings, hover and anything else that needs an event.
 
+### With real data
+
+```sh
+pnpm start   # or PORT=8749 node --env-file=<a .env.local> server/index.ts, so it can't clash with one already running
+macos/shot.sh main out.png --live http://127.0.0.1:8749 0x…
+macos/shot.sh main-details out.png --live http://127.0.0.1:8749 0x… --asset USDC --currency CAD
+macos/shot.sh rule-comparison out.png --live http://127.0.0.1:8749 0x… --settle 30
+```
+
+Any scene that reads the wallet, in place of its fixtures, from a real server and the real node. A scene's state is whatever that wallet's is, so `main-reading` or `hot-wallet-over-cap` shows nothing special here. Only the scene's currency and sections still apply. It's read-only: the wallet in the scene is the address you gave, with no key behind it, and it reads the node but can't send. A wallet's first read can take minutes, and what a scene loads after it appears has `--settle` seconds, 6 by default.
+
+Never run a release build to look at something: it starts the real hot wallet, which can sweep by itself, and reads the real settings. Check one with `strings` and `nm` instead.
+
 ## 2. Capture a real window
 
 ```sh
@@ -40,6 +53,8 @@ What macOS allows, found by trying it on macOS 27.2:
 
 Not tried, because it would have interrupted: running this while a full-screen app or another Space is in front.
 
+The `route-*` scenes check more than looks: they press what the menu bar's buttons press, with the window closed and with it open on another section, and fail unless they get where they promise and stay there.
+
 Scenes for the main window and Settings always use a real window, because their sidebar, toolbar and tabs are drawn by the window server. A window can't be larger than the display, so `main-huge` shows as much as this display allows. A test window's toolbar has no room for Settings' tabs, which show properly in the real one. Sheets, including the details in a narrow window, don't appear in a capture.
 
 ## 3. Test behavior with logic tests
@@ -56,14 +71,14 @@ Don't do it yourself. Finish, and put a short checklist for benface in your hand
 - The real popover under the menu bar, and that clicking outside it closes it.
 - Opening the window from the popover brings it to the front, and adds the Dock icon and menus. Closing it takes them away.
 - Keyboard shortcuts, keyboard focus, and sheets opening over the window.
-- The spending money window's confirmation dialogs, and Touch ID. Its sheets are scenes, without the window behind them.
+- The spending money window's confirmation dialogs, and Touch ID, which asks inside the window. Its sheets are scenes, without the window behind them.
 - The app's look when it's active and in front.
 
 ## How it's kept apart from the real app
 
 - All of it is in `App/TestMode/` and `OffscreenRenderer.swift`, inside `#if DEBUG`. The fixtures are left out of release builds in `App.xcconfig`.
 - Debug builds have their own bundle ID, and the test mode's settings are only registered in memory, so it never reads or writes anyone's settings.
-- It never touches a key. Its hot wallet (`HotWalletFixture.swift`) reads once from a fake node and the fixtures and is never started, keeps nothing, and has a signer with no key behind it, so it never reaches the Keychain or the Secure Enclave. A scene that gets as far as making a key, signing, sending a transaction or asking for Touch ID fails instead of drawing it. `send-waiting` is the one that asks, and its prompt never answers, to show the sheet in the meantime. The `site-*` scenes send a real request through `SiteBridge`, with a fake node that can say what a transaction would cost, and stop at the approval window, where nothing answers. Approving them would reach that same signer and fail.
+- It never touches a key. Its hot wallet (`HotWalletFixture.swift`) reads once from a fake node and the fixtures and is never started, keeps nothing, and has a signer with no key behind it, so it never reaches the Keychain or the Secure Enclave. A scene that gets as far as making a key, signing, sending a transaction or asking for Touch ID fails instead of drawing it. The approval scenes (`site-*`, `send-waiting`, `sweep`) only draw what's around Touch ID: they're given a state, never ask, and show a stand-in for the system's glyph, which draws nothing until it's really asking. The `site-connect`, `site-transaction`, `site-transaction-cad`, `site-unlimited-approval` and `site-typed-permit` scenes send a real request through `SiteBridge`, with a fake node that can say what a transaction would cost, and stop at the approval window, which is never in front, so it never asks. Approving them would reach that same signer and fail.
 - `shot.sh` builds without the sandbox. A sandboxed build's container is tied to its signature, and macOS stops the launch to ask about it when that changes.
 - A real window quits itself after 60 seconds if `shot.sh` is gone by then.
 
