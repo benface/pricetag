@@ -9,7 +9,7 @@ export type KnownSender = { name: string; kind: "exchange" | "bridge" }
 const KNOWN: Readonly<Record<string, KnownSender>> = {
   "0x71660c4005ba85c37ccec55d0c4493e66fe775d3": { name: "Coinbase", kind: "exchange" },
   // No name tag on either. The first paid a real Coinbase withdrawal (0x82a62dd6…3a26). The second has the same deployer,
-  // its only caller has the same Coinbase-tagged funder, and in a day of ETH payouts the two shared 239 recipients.
+  // the only caller of its payouts has the same Coinbase-tagged funder, and in a day of ETH payouts the two shared 239 recipients.
   "0x4b5c71082d027d16d2a146465d66f9eec11634f6": { name: "Coinbase", kind: "exchange" },
   "0xbf2f1213f47e76f1c1d9b7a536f2cb8b347d59b4": { name: "Coinbase", kind: "exchange" },
   "0x4200000000000000000000000000000000000010": { name: "the Base bridge", kind: "bridge" },
