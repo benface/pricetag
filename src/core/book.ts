@@ -31,6 +31,28 @@ export type ExchangeWithdrawal = {
   toAddress: string | null
 }
 
+/** The providers a purchase can come from. Each one's name for people is in `wording.ts`. */
+export type PurchaseProvider = "coinbase"
+
+/**
+ * Something bought through a provider, as its order says. It's only the cost of a movement it matches exactly: see
+ * `purchasedLegs` in `resolve.ts`. Anything else leaves that movement unknown, so it's asked about as usual.
+ */
+export type Purchase = {
+  provider: PurchaseProvider
+  order: string
+  wallet: string
+  asset: string
+  units: string
+  txHash: string
+  /** The transaction's block, which is how ETH inside a batched payout is found, since no row names it. Null until it's read. */
+  blockNum: number | null
+  /** Everything paid, fees included, in what it was paid in. */
+  cost: Money
+  /** The same in USD, when the provider says, for a read in a currency `cost` can't be converted to. */
+  costUsdMicros: string | null
+}
+
 export type Book = {
   senders: Record<string, SenderAnswer>
   /** A cost entered for one movement, by `<wallet>:<leg id>`. */
@@ -38,6 +60,7 @@ export type Book = {
   withdrawals: ExchangeWithdrawal[]
   /** The wallets a client already knows are the user's, like the Mac app's hot and cold ones. Nobody answered for these. */
   linked?: string[]
+  purchases?: Purchase[]
 }
 
 export const emptyBook = (): Book => ({ senders: {}, costs: {}, withdrawals: [] })
@@ -132,6 +155,17 @@ function parseWithdrawal(value: unknown): ExchangeWithdrawal | null {
   return { exchange: row.exchange, asset: row.asset, units: row.units, at: row.at, cost, toAddress: row.toAddress === null ? null : normalizeAddress(row.toAddress) }
 }
 
+function parsePurchase(value: unknown): Purchase | null {
+  const row = plainRecord(value)
+  if (!row || row.provider !== "coinbase" || typeof row.order !== "string" || typeof row.wallet !== "string" || !isAddress(row.wallet) || typeof row.asset !== "string" || !isMicros(row.units) || typeof row.txHash !== "string") return null
+  const cost = parseMoney(row.cost)
+  // The Mac app's encoder leaves out what it doesn't have.
+  const blockNum = row.blockNum ?? null
+  const costUsdMicros = row.costUsdMicros ?? null
+  if (!cost || (blockNum !== null && !Number.isSafeInteger(blockNum)) || (costUsdMicros !== null && !isMicros(costUsdMicros))) return null
+  return { provider: row.provider, order: row.order, wallet: normalizeAddress(row.wallet), asset: row.asset, units: row.units, txHash: row.txHash.toLowerCase(), blockNum: blockNum as number | null, cost, costUsdMicros: costUsdMicros as string | null }
+}
+
 /** A book from a request, or null when it isn't one. Clients can send anything here. */
 export function parseBook(value: unknown): Book | null {
   const book = plainRecord(value)
@@ -155,6 +189,13 @@ export function parseBook(value: unknown): Book | null {
     const withdrawal = parseWithdrawal(raw)
     if (!withdrawal) return null
     parsed.withdrawals.push(withdrawal)
+  }
+  const purchases = book.purchases ?? []
+  if (!Array.isArray(purchases)) return null
+  for (const raw of purchases) {
+    const purchase = parsePurchase(raw)
+    if (!purchase) return null
+    parsed.purchases = [...(parsed.purchases ?? []), purchase]
   }
   return parsed
 }

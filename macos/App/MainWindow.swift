@@ -27,6 +27,7 @@ struct MainWindow: View {
     @Bindable var navigation: Navigation
     let hotWallet: HotWallet
     let siteBridge: SiteBridge
+    let purchases: PurchaseTracker
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var width: CGFloat = 1120
     @State private var exporting = false
@@ -64,6 +65,13 @@ struct MainWindow: View {
             if wasWide != isWide { columns = isWide ? .all : .detailOnly }
         }
         .sheet(isPresented: detailsSheetBinding) { detailsSheet }
+        // Coming back from the provider's page is when there's news, whichever section this is on.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await purchases.check() }
+        }
+        .sheet(isPresented: $navigation.isBuying) {
+            BuySheet(wallet: hotWallet, purchases: purchases) { navigation.section = .spendingMoney } addSavings: { navigation.addSavings() }
+        }
         .sheet(isPresented: $navigation.isResolving) {
             ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet) { AnyView(PublishFromDeviceButton(link: $0, browsers: .real)) }
         }
@@ -148,6 +156,12 @@ struct MainWindow: View {
         }
         // With no title in a small window, nothing else would hold the rest at the far end.
         ToolbarSpacer(.flexible)
+        if hotWallet.availability == .ready {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Buy", systemImage: "plus") { navigation.isBuying = true }
+                    .help("Buy crypto")
+            }
+        }
         if store.address != nil, navigation.section == .overview || navigation.section == .transactions {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh", systemImage: "arrow.clockwise") { store.start() }
@@ -211,7 +225,7 @@ struct MainWindow: View {
         switch navigation.section {
         case .overview: walletPage(overview)
         case .transactions: walletPage(transactions)
-        case .spendingMoney: HotWalletWindow(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation)
+        case .spendingMoney: HotWalletWindow(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases)
         case .taxReport:
             if store.address == nil {
                 NoWalletYet(navigation: navigation)

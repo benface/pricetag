@@ -99,7 +99,8 @@ export function currentPriceSource(source: PriceSource): string {
 }
 
 /** Where a leg's cost came from. */
-export function costTag(label: CostLabel): string {
+export function costTag(label: CostLabel, source: string | null = null): string {
+  if (source) return label === "inherited" ? `Cost: ${source}, from your other wallet` : `Cost: ${source}`
   return {
     paid: "Cost: what you paid",
     inherited: "Cost: from your other wallet",
@@ -108,6 +109,9 @@ export function costTag(label: CostLabel): string {
     unknown: "Cost unknown",
   }[label]
 }
+
+/** How a purchase's provider is named wherever its cost shows up. */
+export const purchaseSource = (provider: "coinbase") => ({ coinbase: "Bought on Coinbase" })[provider]
 
 /** A cost's source, to finish "from …". */
 export const COST_WORDS: Record<CostLabel, string> = {

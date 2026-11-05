@@ -51,8 +51,9 @@ public enum Wording {
     }
 
     /// Where a leg's cost came from.
-    public static func costTag(_ label: String) -> String {
-        switch label {
+    public static func costTag(_ label: String, source: String? = nil) -> String {
+        if let source { return label == "inherited" ? "Cost: \(source), from your other wallet" : "Cost: \(source)" }
+        return switch label {
         case "paid": "Cost: what you paid"
         case "inherited": "Cost: from your other wallet"
         case "received at market": "Cost: market price when received"
@@ -60,6 +61,13 @@ public enum Wording {
         case "unknown": "Cost unknown"
         default: "Cost: \(label)"
         }
+    }
+
+    /// Where a bought cost comes from. Only the movement that arrived is what the order matches, and not what later moved it.
+    public static func costProof(source: String, label: String) -> String {
+        label == "inherited"
+            ? "\(source), by your other wallet. This transaction only moved it here, so the order isn't for this one. What's shown is this amount's share of what you paid, fees included."
+            : "\(source). The order says what you paid, fees included, and matches this transaction exactly."
     }
 
     /// What a list of movements is called, with how much of it is showing.

@@ -7,6 +7,24 @@ import type { Meter, Question } from "./resolve.ts"
 import type { TaxCountryCode, TaxScope } from "./tax.ts"
 
 export { hasStarted }
+
+/** A provider's order, as it says. What it doesn't say, or says in a way that can't be read, is null. */
+export type OnrampOrder = {
+  provider: "coinbase"
+  id: string
+  status: "pending" | "succeeded" | "failed"
+  failure: "payment" | "delivery" | null
+  asset: string | null
+  units: string | null
+  wallet: string | null
+  network: string | null
+  txHash: string | null
+  /** The block `txHash` landed in, once that can be read. */
+  blockNum: number | null
+  /** Everything paid, fees included. */
+  cost: { micros: string; currency: CurrencyCode } | null
+  costUsdMicros: string | null
+}
 export type { Head, Mode, PnlStatus }
 
 export type { UnlistedToken }
@@ -84,6 +102,8 @@ export type PortfolioResponse = {
   linkedFailed: string[]
   /** Other wallets' history that can't be confirmed, which leaves what they sent here with an unknown cost. */
   withheld: { wallet: string; asset: string }[]
+  /** What became of each purchase in the book, among the wallets read. */
+  purchases: { order: string; state: "recorded" | "waiting" | "unmatched" }[]
   marketChecked: boolean
 }
 
@@ -123,6 +143,8 @@ export type ExplanationLeg = {
   priceSource: PricedLeg["priceSource"]
   priceNote: string | null
   costLabel: PricedLeg["costLabel"]
+  /** Who says what was paid, when it isn't the chain. */
+  costSource: string | null
   /** Its cost or proceeds rest on an estimate. */
   estimated: boolean
   /** Some of what arrived has a known cost and some doesn't. */
