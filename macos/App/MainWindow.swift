@@ -24,6 +24,7 @@ struct CSVDocument: FileDocument {
 struct MainWindow: View {
     let store: PortfolioStore
     @Bindable var navigation: Navigation
+    var noteWriter: (any CostNoteWriter)?
     @State private var exporting = false
     @State private var exportDocument: CSVDocument?
     @State private var exportError: String?
@@ -43,7 +44,7 @@ struct MainWindow: View {
                 WalletSheet(store: store)
             }
             .sheet(isPresented: $navigation.isResolving) {
-                ResolveFlow(store: store, firstAsset: navigation.resolvingAsset)
+                ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: noteWriter)
             }
             .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: "\(AppName.current) \(subtitle)") { result in
                 if case .failure(let error) = result { exportError = error.localizedDescription }

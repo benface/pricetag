@@ -9,14 +9,15 @@ public struct ResolveFlow: View {
     @State private var drag: CGSize = .zero
     @State private var costs: [String: String] = [:]
     @State private var isImporting = false
+    @State private var publishing: CostNoteDraft?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
     @FocusState private var focusedCost: String?
 
-    public init(store: PortfolioStore, firstAsset: String? = nil) {
+    public init(store: PortfolioStore, firstAsset: String? = nil, noteWriter: (any CostNoteWriter)? = nil) {
         self.store = store
-        _model = State(initialValue: ResolveModel(store: store, firstAsset: firstAsset))
+        _model = State(initialValue: ResolveModel(store: store, firstAsset: firstAsset, noteWriter: noteWriter))
     }
 
     private static let swipeDistance: CGFloat = 110
@@ -79,6 +80,9 @@ public struct ResolveFlow: View {
                 return
             }
             Task { await _ = model.importCoinbase(csv: csv) }
+        }
+        .sheet(item: $publishing) { draft in
+            PublishCostSheet(draft: draft, typed: store.currency == .USD ? costs[draft.asset] ?? "" : "", publish: { await model.publish(draft, usd: $0) }, problem: { model.failure }, isPublishing: { model.isPublishing })
         }
     }
 
@@ -259,6 +263,10 @@ public struct ResolveFlow: View {
                     Button("Import Coinbase History…") { isImporting = true }
                     Button("Use the Price When It Arrived") { model.usePriceWhenItArrived() }
                         .help("An estimate, and it's always shown as one")
+                }
+                if let draft = model.noteDraft(for: question) {
+                    Button("Publish Onchain…") { publishing = draft }
+                        .help("Writes what you paid on Base, where anyone can read it")
                 }
             }
             Text("This stays on this Mac. Publishing a cost onchain would tie your wallets together in public, so that's never done without asking.")

@@ -76,6 +76,7 @@ private struct HotWalletDetails: View {
     let store: PortfolioStore
     @State private var isAddingCold = false
     @State private var isToppingUp = false
+    @State private var isSending = false
     @State private var isConfirmingSweep = false
     @State private var isConfirmingRotation = false
     @State private var isConfirmingAbandon = false
@@ -102,6 +103,7 @@ private struct HotWalletDetails: View {
         .formStyle(.grouped)
         .sheet(isPresented: $isAddingCold) { AddColdWalletSheet(wallet: wallet) }
         .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet) }
+        .sheet(isPresented: $isSending) { SendSheet(model: SendModel(wallet: wallet, store: store)) }
     }
 
     private func alarmBanner(_ alarm: StolenKeyAlarm) -> some View {
@@ -289,6 +291,8 @@ private struct HotWalletDetails: View {
     private var actions: some View {
         Section {
             HStack {
+                Button("Send…") { isSending = true }
+                    .disabled(!wallet.canSend)
                 Button("Top Up from Savings…") { isToppingUp = true }
                     .disabled(!wallet.canTopUp)
                 Button("Sweep Everything…") { isConfirmingSweep = true }
@@ -341,7 +345,7 @@ private struct HotWalletDetails: View {
             ForEach(wallet.records) { record in
                 HStack {
                     VStack(alignment: .leading) {
-                        Text("\(Format.amount(record.amount, decimals: record.decimals)) \(record.symbol)")
+                        Text(record.reason == .note ? "What you paid for \(record.symbol)" : "\(Format.amount(record.amount, decimals: record.decimals)) \(record.symbol)")
                             .monospacedDigit()
                         Text("\(reasonText(record)) · \(Format.time(record.createdAt))")
                             .font(.caption)
@@ -365,6 +369,8 @@ private struct HotWalletDetails: View {
         case .aboveCap: record.gainUsdMicros == "0" ? "Above the cap" : "Above the cap or realized gains"
         case .manual: "Swept by you"
         case .rotation: "Replacing the key"
+        case .sent: "Sent to \(Format.shortHash(record.to.checksummed))"
+        case .note: "Published for anyone to read"
         }
     }
 
@@ -411,7 +417,7 @@ struct AddColdWalletSheet: View {
                 }
             if let parsed {
                 // In groups, because nobody really compares 40 characters in one run.
-                Text(grouped(parsed.checksummed))
+                Text(AddressText.grouped(parsed.checksummed))
                     .font(.title3.monospaced())
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -437,12 +443,6 @@ struct AddColdWalletSheet: View {
         }
         .padding(20)
         .frame(width: 460)
-    }
-
-    private func grouped(_ address: String) -> String {
-        let digits = Array(address.dropFirst(2))
-        let groups = stride(from: 0, to: digits.count, by: 4).map { String(digits[$0..<min($0 + 4, digits.count)]) }
-        return "0x " + groups.joined(separator: " ")
     }
 
     private func add() {
