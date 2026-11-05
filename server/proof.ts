@@ -170,7 +170,7 @@ function scopeOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: CurrencyC
   if (note) scope.push(note)
   if (hasEthereumFee) scope.push("It doesn't cover the fee paid to Ethereum, which only Base's receipts have.")
   if (partsBehind(leg, legs).some(reliesOnSender)) scope.push("It doesn't confirm who sent this transaction: the sender Amp stored isn't checked against the transaction's signature.")
-  if (currency !== "USD") scope.push(`It doesn't cover the USD to ${currency} rate, which also comes from calling Chainlink's contract.`)
+  if (currency !== "USD") scope.push(`It doesn't cover the USD to ${currency} rate from Chainlink, which isn't checked against a block yet.`)
   return scope
 }
 

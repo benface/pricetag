@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// "Who's this?": one card at a time, with swipes, keys or taps. Each answer shows what it does before you pick it, and Undo is
+/// Answering questions: one card at a time, with swipes, keys or taps. Each answer shows what it does before you pick it, and Undo is
 /// always there. Skipping is always allowed, and what's skipped stays flagged.
 public struct ResolveFlow: View {
     let store: PortfolioStore
@@ -110,6 +110,9 @@ public struct ResolveFlow: View {
                     Text("\(meter.open) left").font(.callout).secondaryText().monospacedDigit().contentTransition(.numericText(value: Double(meter.open))).motion(Motion.number, value: meter.open)
                 }
             }
+            if let why {
+                Text(why).font(.callout).secondaryText().fixedSize(horizontal: false, vertical: true)
+            }
             ProgressView(value: model.meter?.progress ?? 0)
                 .tint(model.isBalanced ? Tone.gain.color : .accentColor)
                 .motion(Motion.state, value: model.meter)
@@ -128,9 +131,15 @@ public struct ResolveFlow: View {
     }
 
     private var headline: String {
-        guard let question = model.current else { return model.isBalanced ? "All answered" : "That's all for now" }
-        if isTakingCost(question) { return "What did this cost?" }
-        return "Who's this?"
+        guard let question = model.current else { return model.isBalanced ? Wording.allAnswered : Wording.nothingLeft }
+        return isTakingCost(question) ? Wording.costQuestion : Wording.senderQuestion
+    }
+
+    /// Why it's asking, right under the question, so nobody has to guess what an answer is for.
+    private var why: String? {
+        guard let question = model.current else { return store.hasAnswers ? Wording.answersPlace : nil }
+        guard isTakingCost(question) else { return Wording.senderWhy }
+        return question.sender == nil ? Wording.costWhy : Wording.exchangeCostWhy
     }
 
     private func nowText(_ portfolio: Portfolio) -> String {
@@ -147,7 +156,9 @@ public struct ResolveFlow: View {
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
             }
-            Text(detail(question)).font(.callout).secondaryText().textSelection(.enabled)
+            if let detail = detail(question) {
+                Text(detail).font(.callout).secondaryText().textSelection(.enabled)
+            }
             ForEach(question.evidence, id: \.self) { fact in
                 Label(fact, systemImage: "lightbulb").font(.callout).secondaryText()
             }
@@ -155,11 +166,12 @@ public struct ResolveFlow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func detail(_ question: Question) -> String {
+    /// What it can say about where this came from. With no sender, the line under the question already says why it's asked.
+    private func detail(_ question: Question) -> String? {
         let transfers = question.transfers == 1 ? "1 transfer" : "\(question.transfers) transfers"
-        let elsewhere = question.wallet != store.portfolio?.address.lowercased() ? " · arrived in your other wallet \(Format.shortHash(question.wallet))" : ""
-        guard let sender = question.sender else { return "We can't tell what you paid for this\(elsewhere)." }
-        return "From \(Format.shortHash(sender)) · \(transfers)\(elsewhere)"
+        let isElsewhere = question.wallet != store.portfolio?.address.lowercased()
+        guard let sender = question.sender else { return isElsewhere ? "Arrived in your other wallet \(Format.shortHash(question.wallet))" : nil }
+        return "From \(Format.shortHash(sender)) · \(transfers)\(isElsewhere ? " · arrived in your other wallet \(Format.shortHash(question.wallet))" : "")"
     }
 
     private func senderCard(_ question: Question) -> some View {
@@ -247,7 +259,7 @@ public struct ResolveFlow: View {
             arrived(question)
             ForEach(question.arrivals) { arrival in
                 LabeledContent("Paid for \(Format.amount(arrival.units, decimals: arrival.decimals)) \(arrival.asset), in \(store.currency.rawValue)") {
-                    TextField("$0.00", text: Binding(get: { costs[arrival.asset] ?? "" }, set: { costs[arrival.asset] = $0 }))
+                    TextField(Format.money("0", store.currency), text: Binding(get: { costs[arrival.asset] ?? "" }, set: { costs[arrival.asset] = $0 }))
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 140)
@@ -299,7 +311,7 @@ public struct ResolveFlow: View {
     }
 
     private func canSave(_ question: Question) -> Bool {
-        question.arrivals.allSatisfy { Format.micros(fromDollars: costs[$0.asset] ?? "") != nil }
+        question.arrivals.allSatisfy { Format.micros(fromDollars: costs[$0.asset] ?? "", in: store.currency) != nil }
     }
 
     private func save(_ question: Question) {
