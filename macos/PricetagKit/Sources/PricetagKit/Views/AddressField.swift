@@ -15,6 +15,8 @@ public struct AddressField<Focus: Hashable>: View {
     private let onAddress: ((String) -> Void)?
     /// What Return was last pressed on, so what it found wrong goes away as soon as that changes.
     @State private var submitted: String?
+    /// What a paste of several couldn't add. It stays in the field, saying what's wrong with it, because it's something the user meant to add.
+    @State private var leftOver: String?
     @State private var highlighted: String?
     @State private var hovered: String?
 
@@ -47,12 +49,13 @@ public struct AddressField<Focus: Hashable>: View {
     private var suggestions: [WalletEntry] { AddressInput.suggestions(for: text, in: wallets) }
 
     private var input: AddressInput {
-        AddressInput(text: text, isSubmitted: submitted == text, hasMatches: !suggestions.isEmpty, read: read)
+        let isLeftOver = leftOver == text
+        return AddressInput(text: text, isSubmitted: isLeftOver || submitted == text, hasMatches: !isLeftOver && !suggestions.isEmpty, takesSeveral: takesSeveral, read: read)
     }
 
     /// Typing something makes its first match what Return picks, so a few letters of a name and Return is enough.
     private var highlightedWallet: WalletEntry? {
-        suggestions.first { $0.address == highlighted } ?? (text.isEmpty ? nil : suggestions.first)
+        suggestions.first { $0.address == highlighted } ?? (text.isEmpty || leftOver == text ? nil : suggestions.first)
     }
 
     public var body: some View {
@@ -163,14 +166,11 @@ public struct AddressField<Focus: Hashable>: View {
 
     /// Whatever arrived, by typing or pasting, once it's an address. The field then holds only that, so what's checked is what's seen.
     private func take() {
-        if takesSeveral, let onAddress {
-            let found = WalletAddress.all(in: text)
-            if found.count > 1 {
-                let readable = found.filter { read($0) != nil }
-                readable.forEach { onAddress($0.lowercased()) }
-                text = found.first { read($0) == nil } ?? ""
-                return
-            }
+        if takesSeveral, let onAddress, let several = AddressInput.sort(text, read: read) {
+            several.addresses.forEach { onAddress($0.lowercased()) }
+            leftOver = several.rest
+            text = several.rest
+            return
         }
         guard let address = read(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
         if let onAddress {

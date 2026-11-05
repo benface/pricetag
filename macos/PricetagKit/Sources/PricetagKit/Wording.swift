@@ -325,6 +325,7 @@ public enum Wording {
     public static let addressHasATypo = "That address has a typo in it. Check it, or paste it again."
     public static let addressIsShortened = "That's a shortened address. Paste the whole thing."
     public static let addressWithExtras = "Paste just the address, with nothing around it."
+    public static let notAllAddresses = "These aren't Base addresses. Fix them, or clear them."
     public static let notASignature = "That isn't a signature. It should start with 0x, then 130 letters and numbers."
     public static let wrongSignature = "That signature isn't from this wallet."
     public static let couldntCheckSignature = "Couldn't check it. Is the server running?"

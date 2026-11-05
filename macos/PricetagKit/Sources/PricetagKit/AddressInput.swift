@@ -12,10 +12,14 @@ public enum AddressInput: Equatable, Sendable {
 
     /// `read` finds the one address in the text, or says there isn't one. A place that moves money is pickier about that than one that only looks.
     /// Nothing's wrong with a half-typed address until the user says it's finished, by pressing Return.
-    public init(text: String, isSubmitted: Bool = false, hasMatches: Bool = false, read: (String) -> String? = WalletAddress.pasted(in:)) {
+    /// With `takesSeveral`, more than one entry is fine, and what's left of them after the good ones are taken is a problem as a group.
+    public init(text: String, isSubmitted: Bool = false, hasMatches: Bool = false, takesSeveral: Bool = false, read: (String) -> String? = WalletAddress.pasted(in:)) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let entries = Self.entries(in: text)
         if text.isEmpty {
             self = .empty
+        } else if takesSeveral, !hasMatches, entries.count > 1, isSubmitted || entries.contains(where: { $0.hasPrefix("0x") }) {
+            self = .problem(Wording.notAllAddresses)
         } else if read(text) != nil {
             self = .address
         } else if WalletAddress.isValid(text) {
@@ -35,6 +39,19 @@ public enum AddressInput: Equatable, Sendable {
         } else {
             self = .searching
         }
+    }
+
+    /// Sorts a paste of several wallets one entry at a time, so that nothing around the good ones goes missing with them.
+    /// Nil unless there's more than one entry and at least one is an address: it's still a name being typed, or nothing that can be added yet.
+    public static func sort(_ text: String, read: (String) -> String?) -> (addresses: [String], rest: String)? {
+        let entries = entries(in: text)
+        let addresses = entries.compactMap(read)
+        guard entries.count > 1, !addresses.isEmpty else { return nil }
+        return (addresses, entries.filter { read($0) == nil }.joined(separator: " "))
+    }
+
+    private static func entries(in text: String) -> [String] {
+        text.split(whereSeparator: { $0.isWhitespace || $0 == "," }).map(String.init)
     }
 
     /// The wallets to offer for what's typed: all of them until there's something to go on, and none once it's a whole address.

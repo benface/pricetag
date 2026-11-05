@@ -7,12 +7,13 @@ public struct TaxReportView: View {
     let wallets: [WalletEntry]
     let readAddress: (String) -> String?
     @State private var model: TaxReportModel
-    @State private var addingWallet = ""
+    @State private var addingWallet: String
     @State private var document: TaxReportDocument?
     @State private var saveError: String?
 
-    public init(store: PortfolioStore, wallets: [WalletEntry] = [], readAddress: @escaping (String) -> String? = WalletAddress.pasted(in:), model: TaxReportModel? = nil) {
+    public init(store: PortfolioStore, wallets: [WalletEntry] = [], readAddress: @escaping (String) -> String? = WalletAddress.pasted(in:), addingWallet: String = "", model: TaxReportModel? = nil) {
         self.store = store
+        _addingWallet = State(initialValue: addingWallet)
         self.wallets = wallets
         self.readAddress = readAddress
         _model = State(initialValue: model ?? TaxReportModel(currency: store.currency, fetch: { try await store.taxReport($0) }))
