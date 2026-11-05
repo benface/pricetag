@@ -3,6 +3,7 @@
 
 import { hasStarted, msBetweenBlocks, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type UnlistedToken, type WalletData } from "@pricetag/sdk/core"
 import type { Estimates, HoldComparison } from "@pricetag/sdk/core"
+import type { TransactionFacts } from "./activity.ts"
 import type { Meter, Question } from "./resolve.ts"
 import type { TaxCountryCode, TaxScope } from "./tax.ts"
 
@@ -62,8 +63,8 @@ export type PortfolioExchange = {
   missingRateTxs: string[]
 }
 
-/** A point on the PnL chart, and what its transaction did. The last point has no transaction, so no summary. */
-export type BookPoint = PnlPoint & { summary: string | null }
+/** A point on the PnL chart, and what its transaction did. The last point has no transaction, so no summary and no facts. */
+export type BookPoint = PnlPoint & { summary: string | null } & TransactionFacts
 
 /** A wallet's holdings, cost and PnL, already folded by one method, in one currency. */
 export type PortfolioResponse = {

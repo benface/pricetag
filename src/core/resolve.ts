@@ -5,6 +5,7 @@
 // An unanswered sender stays unknown: it could be the user's own wallet, so assuming otherwise would be a guess.
 
 import { applyLegTaking, emptyPosition, foldWallet, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
 import { costKey, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
@@ -504,8 +505,8 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
   const markPrice: MarkPrice = (blockNum, asset) => sides.map((side) => side.view.markPrice(blockNum, asset)).find((price) => price !== null) ?? null
   const { positions, unreadAssets: unread, totals, pnlStatus, points, holdComparison } = foldWallet(focus, method, { ...view, legs, markPrice })
   const questions = questionsOf(open, sides, book)
-  const legsByTx = new Map<string, PricedLeg[]>()
-  for (const leg of legs) if (!leg.opening) legsByTx.set(leg.txHash, [...(legsByTx.get(leg.txHash) ?? []), leg])
+  const legsByTx = legsByTransaction(legs)
+  const facts = transactionFacts(legsByTx, positions, method, address)
   return {
     view,
     legs,
@@ -513,7 +514,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
     unread,
     totals,
     pnlStatus,
-    points: points.map((point) => ({ ...point, summary: point.txHash ? describeTransaction(legsByTx.get(point.txHash) ?? [], view.currency) : null })),
+    points: points.map((point) => ({ ...point, summary: point.txHash ? describeTransaction(legsByTx.get(point.txHash) ?? [], view.currency) : null, ...((point.txHash && facts.get(point.txHash)) || NO_FACTS) })),
     holdComparison,
     questions,
     meter: meterOf(questions, book, focus, missingWallets(book, focus, others).length),
