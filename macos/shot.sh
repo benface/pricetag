@@ -15,6 +15,8 @@ Usage:
 --currency <code>  With --live, reads in this currency.
 --asset <symbol>   With --live, what the details open on. ETH by default.
 --settle <seconds> With --live, how long to wait for what a scene loads after it appears. 6 by default.
+--frames <n>       <output> is a folder: captures n frames from a real window while a motion-* scene plays, as fast as capturing goes.
+--slowdown <x>     With --frames, plays the app's animations x times slower, because capturing takes about 100 ms a frame.
 USAGE
   exit 64
 }
@@ -36,6 +38,7 @@ if [ "$scene" != list ]; then
 fi
 dark=NO
 window=NO
+frames=0
 # Handed on to the test mode as they are, so none of them can have spaces.
 live=
 while [ $# -gt 0 ]; do
@@ -55,6 +58,16 @@ while [ $# -gt 0 ]; do
     --settle)
       [ $# -ge 2 ] || usage
       live="$live --settle $2"
+      shift
+      ;;
+    --frames)
+      [ $# -ge 2 ] || usage
+      frames=$2
+      shift
+      ;;
+    --slowdown)
+      [ $# -ge 2 ] || usage
+      live="$live --slowdown $2"
       shift
       ;;
     *) usage ;;
@@ -110,7 +123,8 @@ render() { # scene appearance output
 capture_window() { # scene appearance output
   : >"$run/stdout"
   : >"$run/stderr"
-  open -g -j -n --stdout "$run/stdout" --stderr "$run/stderr" "$run/$name.app" --args --test-scene "$1" --appearance "$2" $live
+  rm -f "$run/play"
+  open -g -j -n --stdout "$run/stdout" --stderr "$run/stderr" "$run/$name.app" --args --test-scene "$1" --appearance "$2" --play-when "$run/play" $live
   tries=0
   until grep -q '^WINDOW ' "$run/stdout"; do
     tries=$((tries + 1))
@@ -125,10 +139,21 @@ capture_window() { # scene appearance output
   pid=$(awk '/^WINDOW /{print $3}' "$run/stdout")
   started="$started $pid"
   # -o leaves out the shadow, -x the sound. This needs Screen Recording for whatever's running this script.
-  screencapture -o -x -l "$window_id" "$3" || {
-    echo "Couldn't capture window $window_id. Does whatever's running this have Screen Recording in System Settings?" >&2
-    exit 1
-  }
+  if [ "$frames" -gt 0 ]; then
+    mkdir -p "$3"
+    frame=0
+    while [ "$frame" -lt "$frames" ]; do
+      screencapture -o -x -l "$window_id" "$3/$(printf 'frame-%03d' "$frame").png"
+      frame=$((frame + 1))
+      # A couple of frames of how it starts.
+      [ "$frame" -ne 2 ] || touch "$run/play"
+    done
+  else
+    screencapture -o -x -l "$window_id" "$3" || {
+      echo "Couldn't capture window $window_id. Does whatever's running this have Screen Recording in System Settings?" >&2
+      exit 1
+    }
+  fi
   kill "$pid"
   while kill -0 "$pid" 2>/dev/null; do sleep 0.05; done
 }

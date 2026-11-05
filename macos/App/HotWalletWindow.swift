@@ -28,7 +28,7 @@ struct HotWalletWindow: View {
                 ContentUnavailableView("Can't Open This Wallet", systemImage: "exclamationmark.triangle", description: Text(message))
             case .ready:
                 if wallet.address == nil {
-                    HotWalletSetup(wallet: wallet, store: store)
+                    HotWalletSetup(wallet: wallet, store: store, navigation: navigation)
                 } else {
                     HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases)
                 }
@@ -42,6 +42,7 @@ struct HotWalletWindow: View {
 private struct HotWalletSetup: View {
     let wallet: HotWallet
     let store: PortfolioStore
+    let navigation: Navigation
     @State private var understands = false
     @State private var showsHowItWorks = false
 
@@ -52,7 +53,7 @@ private struct HotWalletSetup: View {
                     .font(.system(size: 30))
                     .foregroundStyle(.secondary)
                 Text("Spending Money")
-                    .font(.title2.bold())
+                    .font(.sheetTitle)
                 Text("\(HotWalletWording.summary) Anything above your cap moves to your savings.")
                     .fixedSize(horizontal: false, vertical: true)
                 // What can't be undone stays in full, and on screen.
@@ -81,7 +82,11 @@ private struct HotWalletSetup: View {
                 Button("Create Spending Money") {
                     Task {
                         await wallet.createWallet()
-                        if let address = wallet.address { store.showNewWallet(address.lowercased) }
+                        // Straight to the new wallet, where Receive and Buy are the next step.
+                        if let address = wallet.address {
+                            store.setWallet(address.lowercased)
+                            navigation.section = .overview
+                        }
                     }
                 }
                     .buttonStyle(.borderedProminent)
@@ -170,7 +175,7 @@ private struct HotWalletDetails: View {
     private func alarmBanner(_ alarm: StolenKeyAlarm) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(HotWalletWording.alarmHeadline, systemImage: "exclamationmark.octagon.fill")
-                .font(.title3.bold())
+                .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
             Text(HotWalletWording.alarmAdvice)
                 .foregroundStyle(.white)
@@ -179,18 +184,12 @@ private struct HotWalletDetails: View {
                 .foregroundStyle(.white.opacity(0.85))
                 .textSelection(.enabled)
             HStack {
-                // Its own colors rather than a tint, which fades into the banner when the window isn't in front. An alarm usually finds it that way.
                 Button {
                     Task { await wallet.replaceKey() }
                 } label: {
                     Text(wallet.settings.sweepDestination == nil ? "Move What's Left to a New Key" : "Sweep What's Left and Replace the Key")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AlarmButtonStyle())
                 .disabled(wallet.rotation != nil || wallet.isWorking)
                 Spacer()
                 Button("Dismiss") { wallet.dismissAlarm() }
@@ -209,8 +208,7 @@ private struct HotWalletDetails: View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
-                    LiveNumber(wallet.plan.map { wallet.money($0.valueUsdMicros) } ?? "—", tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
-                        .font(.system(size: 34, weight: .semibold))
+                    DisplayNumber(wallet.plan.map { wallet.money($0.valueUsdMicros) } ?? "—", size: 30, tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
                     Text("of \(wallet.capText)")
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -223,22 +221,20 @@ private struct HotWalletDetails: View {
                     .gaugeStyle(.accessoryLinearCapacity)
                     .tint(wallet.plan?.excessUsdMicros ?? 0 > 0 ? .orange : .accentColor)
                     .accessibilityHidden(true)
+                    // So what sweeps away visibly leaves. It follows the number above, which is what's real.
+                    .motion(Motion.number, value: gaugeValue)
                 if let address {
                     HStack {
-                        Text(address.checksummed)
-                            .font(.caption.monospaced())
+                        AddressLine(address.checksummed)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
                         Spacer()
-                        Button("Copy", systemImage: "doc.on.doc") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(address.checksummed, forType: .string)
-                        }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
-                        .help("Copy this address")
+                        CopyButton(title: "Copy", text: address.checksummed, help: "Copy this address")
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
                         Button("Show in Overview", systemImage: "chart.xyaxis.line") {
                             store.setWallet(address.lowercased)
                             navigation.section = .overview
@@ -330,10 +326,12 @@ private struct HotWalletDetails: View {
                 HStack {
                     Image(systemName: cold.address == wallet.settings.sweepDestination ? "checkmark.circle.fill" : "circle")
                         .foregroundStyle(cold.address == wallet.settings.sweepDestination ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                        .contentTransition(.symbolEffect(.replace))
+                        .animation(Motion.state, value: wallet.settings.sweepDestination)
                     VStack(alignment: .leading) {
                         Text(cold.name)
-                        Text(cold.address.checksummed)
-                            .font(.caption.monospaced())
+                        AddressLine(cold.address.checksummed)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                             .lineLimit(1)
@@ -390,6 +388,7 @@ private struct HotWalletDetails: View {
             ViewThatFits(in: .horizontal) {
                 HStack {
                     send
+                    receive
                     buy
                     topUp
                     sweep
@@ -399,6 +398,7 @@ private struct HotWalletDetails: View {
                 VStack(alignment: .leading) {
                     HStack {
                         send
+                        receive
                         buy
                         topUp
                     }
@@ -409,6 +409,7 @@ private struct HotWalletDetails: View {
                 }
                 VStack(alignment: .leading) {
                     send
+                    receive
                     buy
                     topUp
                     sweep
@@ -438,6 +439,11 @@ private struct HotWalletDetails: View {
         Button("Send…") { isSending = true }
             .buttonStyle(.borderedProminent)
             .disabled(!wallet.canSend)
+    }
+
+    private var receive: some View {
+        Button("Receive…") { navigation.isReceiving = true }
+            .disabled(!wallet.canTopUp)
     }
 
     private var buy: some View {
@@ -484,9 +490,7 @@ private struct HotWalletDetails: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text(statusText(record))
-                        .font(.caption)
-                        .foregroundStyle(record.status == .failed || record.status == .dropped ? Tone.warning.style : AnyShapeStyle(.secondary))
+                    RecordStatus(status: record.status, text: statusText(record))
                     if let url = URL(string: "https://basescan.org/tx/\(record.hash)") {
                         Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                             .foregroundStyle(.secondary)
@@ -518,6 +522,33 @@ private struct HotWalletDetails: View {
     }
 }
 
+/// How one signed transaction is doing. The check draws in when its receipt arrives, and one that had already landed just shows it.
+private struct RecordStatus: View {
+    let status: SignedRecord.Status
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            switch status {
+            case .pending:
+                ProgressView().controlSize(.mini)
+            case .confirmed:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Tone.gain.style)
+                    .transition(.symbolEffect(.drawOn))
+            case .failed, .dropped:
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Tone.warning.style)
+            }
+            Text(text)
+                .contentTransition(.opacity)
+                .foregroundStyle(status == .failed || status == .dropped ? Tone.warning.style : AnyShapeStyle(.secondary))
+        }
+        .font(.caption)
+        .animation(Motion.state, value: status)
+    }
+}
+
 /// The Mac app has no device code, so this picks the amount, and the web app's device flow does the rest. The steps by hand are there for when that can't.
 struct TopUpSheet: View {
     let wallet: HotWallet
@@ -543,7 +574,7 @@ struct TopUpSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(HotWalletWording.topUpTitle(hasDestination: hasDestination))
-                .font(.title2.bold())
+                .font(.sheetTitle)
             if room < 1 {
                 Notice(.info, HotWalletWording.topUpAtCap(wallet.capText, hasDestination: hasDestination))
             } else {
@@ -570,8 +601,8 @@ struct TopUpSheet: View {
                         Label("Enter about \(amountText) of ETH or USDC\(tokenHint)", systemImage: "2.circle")
                         Label("Send it to this address", systemImage: "3.circle")
                         if let address = wallet.address {
-                            Text(address.checksummed)
-                                .font(.callout.monospaced())
+                            AddressLine(address.checksummed)
+                                .font(.callout)
                                 .textSelection(.enabled)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.7)
@@ -588,10 +619,8 @@ struct TopUpSheet: View {
             HStack {
                 Spacer()
                 if let address = wallet.address, room >= 1 {
-                    Button("Copy Address") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(address.checksummed, forType: .string)
-                    }
+                    CopyButton(title: "Copy Address", text: address.checksummed)
+                        .labelStyle(.titleOnly)
                 }
                 Button(room >= 1 ? "Cancel" : "Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)

@@ -159,5 +159,82 @@ struct FormatVectors: Decodable {
 
     @Test func shortensHashes() {
         #expect(Format.shortHash("0x1234567890abcdef") == "0x1234…cdef")
+        #expect(Format.groupedAddress("0x52908400098527886E0F7030069857D2E4169EE7") == ["0x5290 8400 0985 2788 6E0F", "7030 0698 57D2 E416 9EE7"])
+        // Every character is still there, in order, so nothing is lost by grouping.
+        #expect(Format.groupedAddress("0x52908400098527886E0F7030069857D2E4169EE7").joined().filter { !$0.isWhitespace } == "0x52908400098527886E0F7030069857D2E4169EE7")
+    }
+}
+
+struct DisplayFormatTests {
+    @Test func splitsOnlyCentsOffABigAmount() {
+        func joined(_ text: String) -> String {
+            let parts = Format.amountParts(text)
+            return parts.mark + parts.main + parts.cents
+        }
+        #expect(Format.amountParts("$7,571.03") == ("", "$7,571", ".03"))
+        #expect(Format.amountParts("≈+$149.30") == ("≈", "+$149", ".30"))
+        #expect(Format.amountParts("US$12.50") == ("", "US$12", ".50"))
+        // On these, the decimals are the amount, or there aren't any.
+        #expect(Format.amountParts("$0.0023") == ("", "$0.0023", ""))
+        #expect(Format.amountParts("$1,234") == ("", "$1,234", ""))
+        #expect(Format.amountParts("Unknown") == ("", "Unknown", ""))
+        #expect(Format.amountParts("—") == ("", "—", ""))
+        for text in ["$7,571.03", "≈-$0.81", "$0.0023", "≈$1,000,000.00", "No price", ""] {
+            #expect(joined(text) == text)
+        }
+    }
+
+    @Test func groupsAnAddressWithoutChangingIt() {
+        let address = "0x00000000000000000000000000000000000dE302"
+        let groups = Format.addressGroups(address)
+        #expect(groups.first == "0x")
+        #expect(groups.count == 11)
+        #expect(groups.joined() == address)
+    }
+
+    @Test func onlyReadsADirectionFromNumbers() {
+        #expect(Format.direction(of: "≈+$1,149.30") == 1149.30)
+        #expect(Format.direction(of: "-$0.81") == -0.81)
+        #expect(Format.direction(of: "Unknown") == nil)
+        #expect(Format.direction(of: "—") == nil)
+    }
+}
+
+struct CostArrivalTests {
+    private func portfolio(_ change: (inout [String: Any]) -> Void = { _ in }) throws -> Portfolio {
+        let url = try #require(Bundle.module.url(forResource: "demo-portfolio", withExtension: "json", subdirectory: "Resources"))
+        var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        change(&object)
+        return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func knowing(_ asset: String) -> (inout [String: Any]) -> Void {
+        { object in
+            var positions = object["positions"] as? [[String: Any]] ?? []
+            for index in positions.indices where positions[index]["asset"] as? String == asset {
+                var values = positions[index]["values"] as? [String: Any] ?? [:]
+                values["unknownCostQty"] = "0"
+                values["averageCostMicros"] = "1000000"
+                positions[index]["values"] = values
+            }
+            object["positions"] = positions
+        }
+    }
+
+    @Test func saysOnlyWhatJustBecameKnown() throws {
+        let before = try portfolio().costWatch
+        #expect(before.arrivals(since: before).isEmpty)
+        #expect(try portfolio(knowing("DAI")).costWatch.arrivals(since: before) == ["DAI"])
+        // Going the other way isn't an arrival.
+        #expect(try before.arrivals(since: portfolio(knowing("DAI")).costWatch).isEmpty)
+    }
+
+    @Test func anotherWalletIsNotAnArrival() throws {
+        let before = try portfolio().costWatch
+        let other = try portfolio {
+            knowing("DAI")(&$0)
+            $0["address"] = "0x00000000000000000000000000000000000de999"
+        }.costWatch
+        #expect(other.arrivals(since: before).isEmpty)
     }
 }

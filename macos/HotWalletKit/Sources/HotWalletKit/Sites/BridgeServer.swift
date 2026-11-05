@@ -114,6 +114,9 @@ public final class BridgeServer {
             case "topUp":
                 bridge.requestTopUp()
                 connection.send(Self.reply(id: requestID, .success(.null)))
+            case "receive":
+                bridge.requestReceive()
+                connection.send(Self.reply(id: requestID, .success(.null)))
             default:
                 connection.send(Self.reply(id: requestID, .failure(.unsupported(message["method"]?.string ?? "that"))))
             }

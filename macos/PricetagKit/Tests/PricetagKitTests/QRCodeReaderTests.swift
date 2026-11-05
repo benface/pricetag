@@ -17,6 +17,12 @@ import Testing
         #expect(await QRCodeReader.read(try code(address)) == [address])
     }
 
+    /// What Receive shows, read back the way a phone would: scaled up, as it is on screen.
+    @Test func aMadeCodeReadsBackAsTheAddress() async throws {
+        let made = try #require(QRCodeMaker.image(for: address, moduleSize: 8))
+        #expect(await QRCodeReader.read(made) == [address])
+    }
+
     @Test func aPictureWithNoCodeReadsAsNothing() async throws {
         let blank = CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 200, height: 200))
         let image = try #require(CIContext().createCGImage(blank, from: blank.extent))

@@ -379,30 +379,6 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(store.feed == .reading)
     }
 
-    @Test func aNewWalletShowsWhenThereIsNoWallet() {
-        let (store, _, _) = makeStore([])
-        store.setWallet(nil)
-        store.showNewWallet("0xDEF")
-        store.stop()
-        #expect(store.address == "0xdef")
-        #expect(store.feed == .reading)
-    }
-
-    @Test func aNewWalletReplacesTheDemoWallet() {
-        let (store, _, _) = makeStore([])
-        store.setWallet(WalletAddress.demo)
-        store.showNewWallet("0xdef")
-        store.stop()
-        #expect(store.address == "0xdef")
-    }
-
-    @Test func aNewWalletLeavesARealWalletShowing() {
-        let (store, _, _) = makeStore([])
-        store.showNewWallet("0xdef")
-        store.stop()
-        #expect(store.address == "0xabc")
-    }
-
     @Test func aReplacedWalletIsFollowed() {
         let (store, _, defaults) = makeStore([])
         store.followRetiredWallet("0xABC", to: "0xDEF")

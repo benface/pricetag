@@ -31,6 +31,11 @@ public enum HotWalletWording {
         "Send some of it as ETH. This wallet needs a little to pay for its \(hasDestination ? "sweeps" : "transactions")."
     }
 
+    /// Receive's one line. An address can't turn money away, so it says what happens to anything over the cap.
+    public static func receiveNote(cap: String, hasDestination: Bool) -> String {
+        "Send only on Base. Anything above your \(cap) cap " + (hasDestination ? "gets swept to your savings." : "stays here until you add a savings wallet.")
+    }
+
     public static let sweepsOnlyWhileOpen = "Sweeps only run while the app is open. If it's closed, whatever arrives stays here until it opens again."
 
     /// The cap's held in USD, so its number here moves with the rate, and what it does doesn't.
