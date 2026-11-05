@@ -51,6 +51,8 @@ struct MainWindow: View {
             page
                 .frame(minWidth: 320, minHeight: 320)
                 .navigationTitle(navigation.section.title)
+                // The wallet needs that room when the window's narrow, and the wallet's what the toolbar can't do without.
+                .toolbar(removing: width < Self.sidebarWidth ? .title : nil)
                 .toolbar { toolbar }
                 .inspector(isPresented: inspectorBinding) { inspector }
         }
@@ -138,9 +140,11 @@ struct MainWindow: View {
     private var toolbar: some ToolbarContent {
         if navigation.section != .spendingMoney {
             ToolbarItem(placement: .navigation) {
-                WalletButton(store: store, hotWallet: hotWallet, navigation: navigation)
+                WalletButton(store: store, hotWallet: hotWallet, navigation: navigation, maxWidth: width < Self.sidebarWidth ? 230 : 300)
             }
         }
+        // With no title, nothing else would hold what follows at the far end.
+        if width < Self.sidebarWidth { ToolbarSpacer(.flexible) }
         if navigation.section == .overview || navigation.section == .transactions {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh", systemImage: "arrow.clockwise") { store.start() }

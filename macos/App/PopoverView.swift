@@ -46,8 +46,9 @@ struct PopoverView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 walletMenu
-                Spacer()
+                Spacer(minLength: 8)
                 FeedBadge(feed: store.feed, portfolio: portfolio)
+                    .fixedSize()
             }
             if let notice = store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) {
                 Notice(.warning, notice)
@@ -91,12 +92,24 @@ struct PopoverView: View {
                 open(nil)
             }
         } label: {
-            Text(current.map { [$0.title, $0.badge].compactMap(\.self).joined(separator: " · ") } ?? AppName.current)
+            // A long name gives way, and what kind of wallet this is doesn't.
+            HStack(spacing: 4) {
+                Text(current?.title ?? AppName.current)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let badge = current?.badge {
+                    Text(badge)
+                        .fixedSize()
+                }
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
         }
-        .menuStyle(.borderlessButton)
-        .controlSize(.small)
-        .fixedSize()
-        .foregroundStyle(.secondary)
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
     }
 
     private func holdings(_ portfolio: Portfolio) -> some View {

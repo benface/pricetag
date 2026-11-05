@@ -137,6 +137,7 @@ enum TestScene: String, CaseIterable {
     case walletSwitcherFirstRun = "wallet-switcher-first-run"
     case walletSwitcherRenaming = "wallet-switcher-renaming"
     case walletSwitcherProblem = "wallet-switcher-problem"
+    case walletSwitcherLong = "wallet-switcher-long"
     case mainShowingSpendingMoney = "main-showing-spending-money"
     case mainSavings = "main-savings"
     case mainWatching = "main-watching"
@@ -147,6 +148,8 @@ enum TestScene: String, CaseIterable {
     case popoverNotUpdating = "popover-not-updating"
     case popoverNotStarted = "popover-not-started"
     case popoverFirstRun = "popover-first-run"
+    case popoverLongName = "popover-long-name"
+    case popoverLongNameReading = "popover-long-name-reading"
     case popoverCAD = "popover-cad"
     case popoverHotWallet = "popover-hot-wallet"
     case popoverHotWalletOverCap = "popover-hot-wallet-over-cap"
@@ -197,7 +200,7 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
+        case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
              .send, .sendCAD, .sendKnown, .sendWaiting, .siteConnect, .siteUnlimited, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
@@ -207,7 +210,7 @@ enum TestScene: String, CaseIterable {
 
     private var feed: FixtureSource.Feed {
         switch self {
-        case .mainReading: .neverAnswers
+        case .mainReading, .popoverLongNameReading: .neverAnswers
         case .mainServerDown: .serverDown
         case .mainNotUpdating, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
@@ -218,7 +221,7 @@ enum TestScene: String, CaseIterable {
         case .mainEmpty, .mainEmptySmallest: .empty
         case .mainEmptyNotice: .emptyReadingLinked
         case .mainNotStarted, .popoverNotStarted: .notStarted
-        case .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunSmall, .mainFirstRunDetails, .popoverFirstRun, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest: .firstRun
+        case .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunSmall, .mainFirstRunDetails, .popoverFirstRun, .popoverLongName, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest: .firstRun
         default: .demo
         }
     }
@@ -239,7 +242,8 @@ enum TestScene: String, CaseIterable {
 
     private var shownWallet: String? {
         switch self {
-        case .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .mainWatchingNamed, .mainWatchingNamedSmallest: TestScene.namedWallet
+        case .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading: TestScene.namedWallet
+        case .walletSwitcherLong: TestScene.manyWallets.last?.address
         case .mainShowingSpendingMoney: HotWalletFixture.spending.lowercased
         case .mainSavings: HotWalletFixture.savings.lowercased
         case .mainWatching: TestScene.recentWallet
@@ -249,7 +253,7 @@ enum TestScene: String, CaseIterable {
 
     private var listsWallets: Bool {
         switch self {
-        case .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest: true
+        case .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading: true
         default: false
         }
     }
@@ -265,7 +269,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .mainSpendingMoney, .mainSpendingMoneySmall, .mainNoWalletHasSpendingMoney, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
+        case .mainSpendingMoney, .mainSpendingMoneySmall, .mainNoWalletHasSpendingMoney, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .hotWallet, .hotWalletCAD, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown: .funded
         case .sendWaiting: .waitingForTouchID
         case .hotWalletTopUpOneDollar: .nearCap
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD: .noSavings
@@ -286,7 +290,11 @@ enum TestScene: String, CaseIterable {
         var registered: [String: Any] = ["currency": currency.rawValue]
         if hasWallet { registered["wallet"] = shownWallet ?? (usesDemoWallet ? WalletAddress.demo : TestScene.emptyWallet) }
         // The longest name anyone's likely to give, where there's the least room for it.
-        let wallets = self == .mainWatchingNamedSmallest ? [SavedWallet(address: TestScene.namedWallet, name: "The Long-Term Family Treasury Wallet on Base", lastSeen: .distantPast)] : TestScene.savedWallets
+        let wallets = switch self {
+        case .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading: [SavedWallet(address: TestScene.namedWallet, name: "The Long-Term Family Treasury Wallet on Base", lastSeen: .distantPast)]
+        case .walletSwitcherLong: TestScene.manyWallets
+        default: TestScene.savedWallets
+        }
         if listsWallets, let saved = try? JSONEncoder().encode(wallets) { registered["savedWallets"] = saved }
         if self == .sendKnown, let book = try? JSONEncoder().encode(Book().answering(TestScene.recipient, .someoneElse, focus: nil)) { registered["answers"] = book }
         if self == .resolveAnsweredWallet, let book = try? JSONEncoder().encode(Book().answering(TestScene.answeredWallet, .mine, focus: nil)) { registered["answers"] = book }
@@ -354,10 +362,10 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 900, height: 640), isReady: isReady)
         case .mainHuge:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet))), size: CGSize(width: 2200, height: 1300), isReady: isReady)
-        case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem:
+        case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong:
             let switcher = WalletSwitcher(store: store, hotWallet: hotWallet, onOpenSpendingMoney: {}, onDone: {}, renaming: self == .walletSwitcherRenaming ? TestScene.namedWallet : nil, problem: self == .walletSwitcherProblem ? Wording.notAnAddress : nil)
             return TestScreen(view: AnyView(switcher.background(.background)), isReady: isReady)
-        case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
+        case .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverLongName, .popoverLongNameReading, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
         case .settings, .settingsHotWallet, .settingsCAD, .settingsHotWalletCAD:
             return TestScreen(view: AnyView(SettingsView(store: store, hotWallet: hotWallet)), isReady: isReady)
@@ -404,6 +412,8 @@ enum TestScene: String, CaseIterable {
     private static let answeredWallet = "0x00000000000000000000000000000000000de301"
     private static let namedWallet = "0x00000000000000000000000000000000c0ffee01"
     private static let recentWallet = "0x00000000000000000000000000000000c0ffee02"
+    /// More than the list has room for, with the wallet showing at the far end.
+    private static let manyWallets = (1...20).map { SavedWallet(address: "0x" + String(format: "%040x", 0xc0ffee00 + $0), name: String(format: "Wallet %02d", $0), lastSeen: Date(timeIntervalSince1970: 1_793_750_400)) }
     private static let savedWallets = [
         SavedWallet(address: namedWallet, name: "Treasury", lastSeen: Date(timeIntervalSince1970: 1_793_750_400)),
         SavedWallet(address: recentWallet, lastSeen: Date(timeIntervalSince1970: 1_793_750_300)),

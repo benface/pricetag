@@ -54,6 +54,8 @@ struct WalletButton: View {
     let store: PortfolioStore
     let hotWallet: HotWallet?
     @Bindable var navigation: Navigation
+    /// Past what the toolbar has room for, it hides the whole button behind its overflow menu. A long name gives way instead.
+    var maxWidth: CGFloat = 300
 
     var body: some View {
         let list = store.walletList(hotWallet: hotWallet)
@@ -76,7 +78,7 @@ struct WalletButton: View {
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 4)
-            .frame(maxWidth: 300)
+            .frame(maxWidth: maxWidth)
             .fixedSize()
         }
         .help(current.map { $0.shortAddress == nil ? "Switch wallet (⌘L)" : "\($0.address)\nSwitch wallet (⌘L)" } ?? "Add a wallet (⌘L)")
@@ -98,11 +100,15 @@ struct WalletSwitcher: View {
     @State var problem: String?
     @State private var newName = ""
     @State private var highlighted: String?
+    /// Where the pointer was when the arrows last moved. Rows scrolling under a still pointer report a hover that nobody made.
+    @State private var pointerAtLastKey: CGPoint?
     @FocusState private var focus: Field?
 
     private enum Field: Hashable {
         case add, rename
     }
+
+    private static let top = "top"
 
     private var list: WalletList { store.walletList(hotWallet: hotWallet) }
     private var offersSpendingMoney: Bool {
@@ -111,6 +117,16 @@ struct WalletSwitcher: View {
     }
 
     var body: some View {
+        ScrollViewReader { proxy in
+            content
+                .onKeyPress(.downArrow) { moveHighlight(by: 1, proxy) }
+                .onKeyPress(.upArrow) { moveHighlight(by: -1, proxy) }
+                // Opens where the wallet showing is, however long the list.
+                .task { if let shown = renaming ?? store.address { proxy.scrollTo(shown) } }
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -120,6 +136,7 @@ struct WalletSwitcher: View {
                     section(nil, list.demo.map { [$0] } ?? [])
                 }
                 .padding(6)
+                .id(Self.top)
             }
             .frame(maxHeight: 440)
             .fixedSize(horizontal: false, vertical: true)
@@ -143,12 +160,11 @@ struct WalletSwitcher: View {
             focus = renaming == nil ? .add : .rename
             if let renaming { newName = list.entry(for: renaming)?.name ?? "" }
         }
-        .onKeyPress(.downArrow) { moveHighlight(by: 1) }
-        .onKeyPress(.upArrow) { moveHighlight(by: -1) }
-        // Clicking away keeps what was typed, as it does in Finder.
+        // Clicking away keeps what was typed, as it does in Finder. So does closing the list, whichever way it closes. Only Esc cancels.
         .onChange(of: focus) { old, new in
-            if old == .rename, new != .rename, let entry = list.entry(for: renaming) { finishRenaming(entry) }
+            if old == .rename, new != .rename { savePendingName() }
         }
+        .onDisappear(perform: savePendingName)
     }
 
     @ViewBuilder
@@ -221,6 +237,8 @@ struct WalletSwitcher: View {
                 .fill(.primary.opacity(isHighlighted ? 0.09 : 0))
         }
         .onHover { hovering in
+            if let pointerAtLastKey, pointerAtLastKey == NSEvent.mouseLocation { return }
+            pointerAtLastKey = nil
             if hovering { highlighted = entry.address } else if highlighted == entry.address { highlighted = nil }
         }
         .contextMenu {
@@ -319,18 +337,25 @@ struct WalletSwitcher: View {
         stopRenaming()
     }
 
+    private func savePendingName() {
+        if let entry = list.entry(for: renaming) { finishRenaming(entry) }
+    }
+
     private func stopRenaming() {
         renaming = nil
         focus = .add
     }
 
-    private func moveHighlight(by step: Int) -> KeyPress.Result {
+    private func moveHighlight(by step: Int, _ proxy: ScrollViewProxy) -> KeyPress.Result {
         let addresses = list.all.map(\.address)
         guard !addresses.isEmpty, renaming == nil else { return .ignored }
         // From the wallet showing the first time, because that's where the eye is.
         let current = (highlighted ?? store.address).flatMap(addresses.firstIndex(of:))
         let next = current.map { min(max($0 + step, 0), addresses.count - 1) } ?? (step > 0 ? 0 : addresses.count - 1)
         highlighted = addresses[next]
+        pointerAtLastKey = NSEvent.mouseLocation
+        // The first row goes all the way up, to show its section's title too.
+        proxy.scrollTo(next == 0 ? Self.top : addresses[next])
         return .handled
     }
 }
