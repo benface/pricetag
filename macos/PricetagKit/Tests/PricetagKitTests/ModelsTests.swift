@@ -1,3 +1,4 @@
+import Synchronization
 import Foundation
 import Testing
 @testable import PricetagKit
@@ -150,6 +151,24 @@ import Testing
         #expect(approvals.unlimitedCount == 3)
         #expect(approvals.approvals.contains { $0.kind == .permit2 && $0.expiry != nil && $0.amountText == "250 USDC" })
         #expect(approvals.approvals.allSatisfy { $0.grantedDate != nil })
+    }
+
+    @MainActor @Test func aFailedRefreshKeepsTheListButSaysItsOld() async throws {
+        let approvals = try resource("demo-approvals", as: WalletApprovals.self)
+        let fails = Mutex(false)
+        let model = ApprovalsModel(address: approvals.address) { _ in
+            if fails.withLock({ $0 }) { throw FetchError.unreachable }
+            return approvals
+        }
+        await model.load()
+        #expect(model.refreshFailure == nil)
+        fails.withLock { $0 = true }
+        await model.load()
+        #expect(model.approvals == approvals)
+        #expect(model.refreshFailure == "Can't reach the server.")
+        fails.withLock { $0 = false }
+        await model.load()
+        #expect(model.refreshFailure == nil)
     }
 
     @MainActor @Test func neverShowsAnotherWalletsList() async throws {

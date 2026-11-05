@@ -245,7 +245,7 @@ export type ApprovalView = {
   /** The amount in the token, when it's tracked and not unlimited. */
   amountText: string | null
   unlimited: boolean
-  /** When a Permit2 allowance stops working. */
+  /** When a Permit2 allowance stops working. Null when it never will, including an expiry past the year 9999. */
   expiresAt: string | null
   /** The newest transaction that set it, when the history has it. */
   grantedTx: string | null

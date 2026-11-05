@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { describe, it } from "node:test"
 import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult, parseAbi, type Hex } from "viem"
 import { APPROVAL_FOR_ALL_TOPIC, APPROVAL_TOPIC, PERMIT2, PERMIT2_APPROVAL_TOPIC, PERMIT2_PERMIT_TOPIC, USDC_ADDRESS, WETH_ADDRESS, candidatesFromLogs, isActive, knownSpenderCandidates, mergeCandidates, type ApprovalLog, type Candidate } from "@pricetag/sdk/core"
-import { createApprovals, decodeChecks, demoApprovals, encodeChecks, sortViews, viewOf } from "../server/approvals.ts"
+import { createApprovals, decodeChecks, demoApprovals, encodeChecks, expiryOf, isTrustedCheck, sortViews, viewOf } from "../server/approvals.ts"
 import { tablesSql } from "../dataset/build.ts"
 import { DEMO_SAVINGS_WALLET, DEMO_WALLET } from "../src/core/fixtures.ts"
 
@@ -163,6 +163,62 @@ describe("reading a wallet's approvals", () => {
     await approvals.read(ME, { ...head, blockNum: 1_010 })
     assert.deepEqual(queries.filter((sql) => sql.includes(".logs")).map((sql) => /BETWEEN (\d+) AND (\d+)/.exec(sql)!.slice(1)), [["1001", "1010"]])
     assert.ok(!queries.some((sql) => sql.includes(".approvals")), "it doesn't ask for the missing table again")
+  })
+})
+
+describe("checking contracts nobody vouches for", () => {
+  const head = { blockNum: 1_000, timestamp: new Date(1_800_000_000_000).toISOString() }
+  const UNTRACKED = "0x000000000000000000000000000000000000f00d"
+
+  it("only lets tracked tokens and Permit2 share a batch", () => {
+    assert.ok(isTrustedCheck({ kind: "token", token: USDC_ADDRESS }))
+    assert.ok(isTrustedCheck({ kind: "permit2", token: UNTRACKED }))
+    assert.ok(!isTrustedCheck({ kind: "token", token: UNTRACKED }))
+    assert.ok(!isTrustedCheck({ kind: "collection", token: COLLECTION }))
+  })
+
+  it("reads each of them in a call of its own, so one can't change what another answers", async () => {
+    const queries: string[] = []
+    const query = async <T>(sql: string): Promise<T[]> => {
+      queries.push(sql)
+      if (sql.includes("ORDER BY block_num DESC")) return [{ block_num: 990 }] as T[]
+      if (sql.includes(".approvals"))
+        return [
+          { ...log(500, UNTRACKED, APPROVAL_TOPIC, ME, SPENDER), timestamp: 1 },
+          { ...log(501, COLLECTION, APPROVAL_FOR_ALL_TOPIC, ME, SPENDER), timestamp: 1 },
+        ] as T[]
+      if (sql.includes(" AS r")) {
+        const calldata = /X'([0-9a-f]+)', 1000\) AS r/.exec(sql)![1]!
+        return [{ r: { data: answer(calldata, () => encodeAbiParameters([{ type: "uint256" }], [0n])) } }] as T[]
+      }
+      // An untracked token's own call answers for itself, and the collection's call fails.
+      const row: Record<string, unknown> = {}
+      for (const [, target, column] of sql.matchAll(/evm_encode_hex\('(0x[0-9a-f]+)'\), X'[0-9a-f]+', 1000\) AS (c\d+)/g)) {
+        row[column!] = target === UNTRACKED ? { data: encodeAbiParameters([{ type: "uint256" }], [100n]).slice(2) } : { data: null }
+      }
+      return [row] as T[]
+    }
+    const approvals = createApprovals(query, { baseDataset: "base", dataset: { reference: "pt", name: "pt" }, network: "base_mainnet", historyFrom: () => 100 })
+    const read = await approvals.read(ME, head)
+    const batch = queries.find((sql) => sql.includes(" AS r"))!
+    const batched = decodeFunctionData({ abi: MULTICALL, data: `0x${/X'([0-9a-f]+)', 1000\) AS r/.exec(batch)![1]}` }).args[0].map((call) => call.target.toLowerCase())
+    assert.ok(!batched.includes(UNTRACKED) && !batched.includes(COLLECTION), "nothing untrusted shares the batch")
+    const isolated = queries.filter((sql) => sql.includes(" AS c0"))
+    assert.equal(isolated.length, 1)
+    assert.equal([...isolated[0]!.matchAll(/eth_call/g)].length, 2)
+    assert.deepEqual(read.approvals.map((a) => [a.token, a.amount]), [[UNTRACKED, "100"]])
+    // The collection's check failed, so what it allows isn't known, and the page has to say so.
+    assert.equal(read.unreadable, 1)
+  })
+})
+
+describe("a Permit2 expiry", () => {
+  it("that never comes is null rather than an error, however far off", () => {
+    assert.equal(expiryOf(null), null)
+    assert.equal(expiryOf(2 ** 48 - 1), null)
+    assert.equal(expiryOf(1_900_000_000), new Date(1_900_000_000_000).toISOString())
+    const view = viewOf({ kind: "permit2", token: USDC_ADDRESS, spender: SPENDER, grant: null, amount: 5n, expiresAt: 2 ** 48 - 1 }, false)
+    assert.equal(view.expiresAt, null)
   })
 })
 

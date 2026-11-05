@@ -116,6 +116,8 @@ struct SecurityPage: View {
             walletTitle: entry?.title,
             unlimitedApprovals: model?.approvals?.unlimitedCount,
             approvalsFailed: { if case .failed = model?.state { true } else { false } }(),
+            approvalsUnreadable: model?.approvals?.unreadable ?? 0,
+            approvalsStale: model?.refreshFailure != nil,
             hasPassword: basics.hasPassword,
             fileVaultOn: basics.fileVaultOn
         )
@@ -185,7 +187,11 @@ struct SecurityPage: View {
             }
             switch model?.state {
             case .read(let read):
+                if let failure = model?.refreshFailure {
+                    Notice(.warning, "Couldn't check again: \(failure) This list is from block \(Format.block(read.checkedAt.blockNum)), and may be out of date.", actionTitle: "Try Again") { Task { await model?.load() } }
+                }
                 list(read, entry: entry)
+                    .opacity(model?.refreshFailure == nil ? 1 : 0.6)
             case .failed(let message):
                 SecurityGroup {
                     HStack {
@@ -299,12 +305,12 @@ struct SecurityPage: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("What No One Can List").font(.headline)
             SecurityGroup {
-                Text("A permit you signed that hasn't been used yet isn't onchain, so no app can find it, \(AppName.current) included. It becomes an approval once it's used.")
+                Text("A permit you signed that hasn't been used yet isn't onchain, so no app can find it, \(AppName.current) included. Once it's used, some permits set an approval, and others move the tokens right away.")
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 6) {
                     Label("Only sign permits on sites you trust. \(AppName.current) shows what one allows before you sign it.", systemImage: "signature")
-                    Label("Revoking Permit2's approval for a token also cancels every Permit2 signature for it.", systemImage: "xmark.seal")
-                    Label("For any other permit, moving the token to another of your wallets is the only sure way.", systemImage: "arrow.right.circle")
+                    Label("Revoking a token's approval for Permit2 stops any Permit2 signature from moving that token, but only while it stays revoked. Approving Permit2 again lets a signature that hasn't expired work again.", systemImage: "xmark.seal")
+                    Label("Moving the token to another of your wallets is the only sure way to stop a permit you signed.", systemImage: "arrow.right.circle")
                 }
                 .font(.callout)
                 .foregroundStyle(.secondary)

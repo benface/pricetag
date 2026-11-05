@@ -60,10 +60,14 @@ public struct SecurityFacts: Equatable, Sendable {
     public var walletTitle: String?
     public var unlimitedApprovals: Int?
     public var approvalsFailed: Bool
+    /// Approvals in the history whose contract didn't answer, so none found isn't the same as none there.
+    public var approvalsUnreadable: Int
+    /// The list showing is from an earlier read, because the last one failed.
+    public var approvalsStale: Bool
     public var hasPassword: Bool?
     public var fileVaultOn: Bool?
 
-    public init(hasSpendingMoney: Bool, savingsWallets: Int, capUsdMicros: UInt128, capText: String, alarm: Alarm, connectedSites: Int, walletTitle: String?, unlimitedApprovals: Int?, approvalsFailed: Bool, hasPassword: Bool?, fileVaultOn: Bool?) {
+    public init(hasSpendingMoney: Bool, savingsWallets: Int, capUsdMicros: UInt128, capText: String, alarm: Alarm, connectedSites: Int, walletTitle: String?, unlimitedApprovals: Int?, approvalsFailed: Bool, approvalsUnreadable: Int = 0, approvalsStale: Bool = false, hasPassword: Bool?, fileVaultOn: Bool?) {
         self.hasSpendingMoney = hasSpendingMoney
         self.savingsWallets = savingsWallets
         self.capUsdMicros = capUsdMicros
@@ -73,6 +77,8 @@ public struct SecurityFacts: Equatable, Sendable {
         self.walletTitle = walletTitle
         self.unlimitedApprovals = unlimitedApprovals
         self.approvalsFailed = approvalsFailed
+        self.approvalsUnreadable = approvalsUnreadable
+        self.approvalsStale = approvalsStale
         self.hasPassword = hasPassword
         self.fileVaultOn = fileVaultOn
     }
@@ -121,9 +127,19 @@ public enum SecurityChecklist {
         guard let count = facts.unlimitedApprovals else {
             return SecurityCheck(id: .approvals, title: title, status: .unknown, detail: facts.approvalsFailed ? "Couldn't read \(walletTitle)'s approvals." : "Reading \(walletTitle)'s approvals…", fix: nil)
         }
-        return count == 0
-            ? SecurityCheck(id: .approvals, title: title, status: .done, detail: "None found on \(walletTitle).", fix: nil)
-            : SecurityCheck(id: .approvals, title: title, status: .todo, detail: "\(count == 1 ? "One approval" : "\(count) approvals") on \(walletTitle) \(count == 1 ? "has" : "have") no limit. They're below.", fix: nil)
+        if count > 0 {
+            let some = count == 1 ? "One approval" : "\(count) approvals"
+            let verb = facts.approvalsStale ? "had no limit at the last check" : count == 1 ? "has no limit" : "have no limit"
+            return SecurityCheck(id: .approvals, title: title, status: .todo, detail: "\(some) on \(walletTitle) \(verb). They're below.", fix: nil)
+        }
+        // None found only counts when everything was read, and just now.
+        if facts.approvalsStale {
+            return SecurityCheck(id: .approvals, title: title, status: .unknown, detail: "Couldn't check \(walletTitle) again just now.", fix: nil)
+        }
+        if facts.approvalsUnreadable > 0 {
+            return SecurityCheck(id: .approvals, title: title, status: .unknown, detail: "None found on \(walletTitle), but \(facts.approvalsUnreadable == 1 ? "one" : "\(facts.approvalsUnreadable)") couldn't be checked.", fix: nil)
+        }
+        return SecurityCheck(id: .approvals, title: title, status: .done, detail: "None found on \(walletTitle).", fix: nil)
     }
 
     private static func alarm(_ facts: SecurityFacts) -> SecurityCheck {
@@ -131,7 +147,7 @@ public enum SecurityChecklist {
         return switch facts.alarm {
         case .watching: SecurityCheck(id: .alarm, title: title, status: .done, detail: "It checks every transaction while \(SiteWording.appName) is open.", fix: nil)
         case .raised: SecurityCheck(id: .alarm, title: title, status: .todo, detail: "It went off. \(HotWalletWording.title) shows what it found.", fix: .showSpendingMoney)
-        case .cantCheck: SecurityCheck(id: .alarm, title: title, status: .unknown, detail: "It can't check right now, because the network isn't answering.", fix: nil)
+        case .cantCheck: SecurityCheck(id: .alarm, title: title, status: .unknown, detail: "It isn't checking right now, because it can't read the chain or this wallet's history yet.", fix: nil)
         }
     }
 
@@ -164,9 +180,11 @@ public enum SecurityChecklist {
 }
 
 extension HotWallet {
-    /// What the alarm can say right now.
+    /// What the alarm can say right now. It's only watching once it has read both the chain, on Base, and this wallet's history from Amp,
+    /// and the last of each worked, since it compares the two.
     public var alarmFact: SecurityFacts.Alarm {
         if alarm != nil { return .raised }
-        return chainProblem != nil ? .cantCheck : .watching
+        guard let address, let snapshot, snapshot.chainID == Base.chainID, chainProblem == nil, !ampProblem, historyReadFor == address else { return .cantCheck }
+        return .watching
     }
 }

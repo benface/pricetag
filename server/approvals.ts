@@ -19,6 +19,9 @@ const COLLECTION_ABI = parseAbi(["function isApprovedForAll(address owner, addre
 /** Each call is a few hundred bytes of SQL, so a wallet with many approvals is checked in a few reads. */
 const CALLS_PER_READ = 150
 
+/** Contracts nobody vouches for are each read in a call of their own, and this many go in one query. */
+const ISOLATED_PER_READ = 40
+
 /** How many blocks of raw logs one query reads. Staging read about 3,500 blocks a second of them. */
 const RAW_BLOCKS_PER_QUERY = 50_000
 
@@ -39,6 +42,39 @@ export function encodeChecks(owner: string, candidates: readonly Candidate[]): s
   return encodeFunctionData({ abi: MULTICALL_ABI, functionName: "aggregate3", args: [candidates.map((candidate) => callOf(owner, candidate))] }).slice(2)
 }
 
+/**
+ * Whether a candidate's check can share one `aggregate3` with others. Multicall3 runs each with CALL, so a contract in the
+ * batch could change state before a later one is read, like spending an allowance it holds only inside the simulation. So
+ * only Permit2 and tracked tokens, whose `allowance` only reads, share it. Everything else gets a call of its own.
+ */
+export const isTrustedCheck = ({ kind, token }: Pick<Candidate, "kind" | "token">) => kind === "permit2" || (kind === "token" && tokenByAddress(token) !== undefined)
+
+/** What one candidate allows, from what its call returned, or null when that isn't the answer it asked for. */
+export function decodeCheck(candidate: Candidate, returnData: string | null | undefined): CheckedApproval | null {
+  if (!returnData) return null
+  const data = `0x${returnData.replace(/^0x/, "")}` as Hex
+  // A contract that doesn't have the function can still answer with something. Only exactly the right size counts.
+  try {
+    switch (candidate.kind) {
+      case "token": {
+        if (data.length !== 66) return null
+        return { ...candidate, amount: decodeFunctionResult({ abi: ERC20_ABI, functionName: "allowance", data }), expiresAt: null }
+      }
+      case "permit2": {
+        if (data.length !== 2 + 3 * 64) return null
+        const [amount, expiration] = decodeFunctionResult({ abi: PERMIT2_ABI, functionName: "allowance", data })
+        return { ...candidate, amount, expiresAt: Number(expiration) }
+      }
+      case "collection": {
+        if (data.length !== 66) return null
+        return { ...candidate, amount: decodeFunctionResult({ abi: COLLECTION_ABI, functionName: "isApprovedForAll", data }) ? 1n : 0n, expiresAt: null }
+      }
+    }
+  } catch {
+    return null
+  }
+}
+
 /** What each candidate allows, in order, or null where its call failed or answered something else. Null overall when the bytes aren't `aggregate3`'s. */
 export function decodeChecks(data: string | null | undefined, candidates: readonly Candidate[]): (CheckedApproval | null)[] | null {
   if (!data) return null
@@ -49,30 +85,21 @@ export function decodeChecks(data: string | null | undefined, candidates: readon
     return null
   }
   if (results.length !== candidates.length) return null
-  return candidates.map((candidate, i) => {
-    const { success, returnData } = results[i]!
-    // A contract that doesn't have the function can still answer with something. Only exactly the right size counts.
-    if (!success) return null
-    try {
-      switch (candidate.kind) {
-        case "token": {
-          if (returnData.length !== 66) return null
-          return { ...candidate, amount: decodeFunctionResult({ abi: ERC20_ABI, functionName: "allowance", data: returnData }), expiresAt: null }
-        }
-        case "permit2": {
-          if (returnData.length !== 2 + 3 * 64) return null
-          const [amount, expiration] = decodeFunctionResult({ abi: PERMIT2_ABI, functionName: "allowance", data: returnData })
-          return { ...candidate, amount, expiresAt: Number(expiration) }
-        }
-        case "collection": {
-          if (returnData.length !== 66) return null
-          return { ...candidate, amount: decodeFunctionResult({ abi: COLLECTION_ABI, functionName: "isApprovedForAll", data: returnData }) ? 1n : 0n, expiresAt: null }
-        }
-      }
-    } catch {
-      return null
-    }
-  })
+  return candidates.map((candidate, i) => (results[i]!.success ? decodeCheck(candidate, results[i]!.returnData) : null))
+}
+
+/** Calldata for one candidate's own check, as hex with no prefix, and the contract it goes to. */
+export function isolatedCall(owner: string, candidate: Candidate): { target: string; data: string } {
+  const { target, callData } = callOf(owner, candidate)
+  return { target: target.toLowerCase(), data: callData.slice(2) }
+}
+
+/** Past this, a date can't be written as one, and an expiry that far off is as good as never. */
+const LATEST_DATE_SECONDS = Date.UTC(9999, 11, 31, 23, 59, 59) / 1000
+
+/** When a Permit2 allowance runs out. Null when it has none, or when it's so far off it never will, like the largest `uint48`. */
+export function expiryOf(seconds: number | null): string | null {
+  return seconds === null || seconds > LATEST_DATE_SECONDS ? null : new Date(seconds * 1000).toISOString()
 }
 
 /** What the apps show of one approval that still allows something. */
@@ -90,7 +117,7 @@ export function viewOf(approval: CheckedApproval, found: boolean): ApprovalView 
     amount: approval.kind === "collection" ? null : String(approval.amount),
     amountText: unlimited ? null : token ? `${formatAmount(String(approval.amount), token.decimals)} ${token.symbol}` : null,
     unlimited,
-    expiresAt: approval.expiresAt === null ? null : new Date(approval.expiresAt * 1000).toISOString(),
+    expiresAt: expiryOf(approval.expiresAt),
     grantedTx: approval.grant?.txHash ?? null,
     grantedBlock: approval.grant?.blockNum ?? null,
     grantedAt: approval.grant?.timestamp ?? null,
@@ -208,16 +235,30 @@ export function createApprovals(query: Query, config: ApprovalsConfig) {
   async function check(address: string, candidates: readonly Candidate[], head: Head): Promise<{ checked: CheckedApproval[]; unreadable: number }> {
     const checked: CheckedApproval[] = []
     let unreadable = 0
-    for (let i = 0; i < candidates.length; i += CALLS_PER_READ) {
-      const part = candidates.slice(i, i + CALLS_PER_READ)
+    const keep = (candidate: Candidate, result: CheckedApproval | null) => {
+      if (result) checked.push(result)
+      // A known spender that isn't in the history was only a guess, so a token that can't answer isn't missing anything.
+      else if (candidate.grant) unreadable += 1
+    }
+    const trusted = candidates.filter(isTrustedCheck)
+    for (let i = 0; i < trusted.length; i += CALLS_PER_READ) {
+      const part = trusted.slice(i, i + CALLS_PER_READ)
       const [row] = await query<Row>(`SELECT rpc.${config.network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeChecks(address, part)}', ${head.blockNum}) AS r`)
       const results = decodeChecks((row?.r as { data?: string } | null | undefined)?.data, part)
       if (!results) throw new Error("The approval check didn't answer")
-      for (const [j, result] of results.entries()) {
-        if (result) checked.push(result)
-        // A known spender that isn't in the history was only a guess, so a token that can't answer isn't missing anything.
-        else if (part[j]!.grant) unreadable += 1
-      }
+      part.forEach((candidate, j) => keep(candidate, results[j]!))
+    }
+    // Each its own simulation, so nothing one does can change what another answers.
+    const isolated = candidates.filter((candidate) => !isTrustedCheck(candidate))
+    for (let i = 0; i < isolated.length; i += ISOLATED_PER_READ) {
+      const part = isolated.slice(i, i + ISOLATED_PER_READ)
+      const columns = part.map((candidate, j) => {
+        const { target, data } = isolatedCall(address, candidate)
+        return `rpc.${config.network}.eth_call(NULL, evm_encode_hex('${target}'), X'${data}', ${head.blockNum}) AS c${j}`
+      })
+      const [row] = await query<Row>(`SELECT ${columns.join(", ")}`)
+      if (!row) throw new Error("The approval check didn't answer")
+      part.forEach((candidate, j) => keep(candidate, decodeCheck(candidate, (row[`c${j}`] as { data?: string } | null | undefined)?.data)))
     }
     return { checked, unreadable }
   }

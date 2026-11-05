@@ -89,8 +89,36 @@ private func hex(_ bytes: [UInt8]) -> String { Hex.encode(bytes) }
         #expect(status(.fileVault, facts { $0.fileVaultOn = false }) == .todo)
     }
 
+    @Test func noneFoundOnlyCountsWhenEverythingWasReadJustNow() {
+        #expect(status(.approvals, facts { $0.approvalsUnreadable = 1 }) == .unknown)
+        #expect(status(.approvals, facts { $0.approvalsStale = true }) == .unknown)
+        // What was there last time is still worth saying.
+        #expect(status(.approvals, facts { $0.approvalsStale = true; $0.unlimitedApprovals = 2 }) == .todo)
+        #expect(status(.approvals, facts { $0.approvalsFailed = true; $0.unlimitedApprovals = nil }) == .unknown)
+    }
+
     @Test func withoutSpendingMoneyOnlyWhatStillApplies() {
         let ids = SecurityChecklist.checks(facts { $0.hasSpendingMoney = false; $0.walletTitle = nil }).map(\.id)
         #expect(ids == [.password, .fileVault])
+    }
+}
+
+@MainActor
+@Suite struct AlarmFactTests {
+    @Test func isntWatchingBeforeItHasReadAnything() async {
+        let rig = await Rig()
+        #expect(rig.wallet.alarmFact == .cantCheck)
+        await rig.wallet.tick()
+        #expect(rig.wallet.alarmFact == .cantCheck, "the chain alone isn't enough: it compares it with the history")
+        await rig.wallet.readHistory()
+        #expect(rig.wallet.alarmFact == .watching)
+    }
+
+    @Test func isntWatchingWhileTheHistoryCantBeRead() async {
+        let rig = await Rig(portfolio: .failure(.unreachable))
+        await rig.wallet.tick()
+        await rig.wallet.readHistory()
+        #expect(rig.wallet.ampProblem)
+        #expect(rig.wallet.alarmFact == .cantCheck)
     }
 }

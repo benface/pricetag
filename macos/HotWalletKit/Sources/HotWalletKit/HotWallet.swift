@@ -36,6 +36,8 @@ public final class HotWallet {
     public private(set) var isKeyMissing = false
     public private(set) var chainProblem: ChainError?
     public private(set) var ampProblem = false
+    /// The address whose history Amp last answered for. The alarm only compares once there's one.
+    public private(set) var historyReadFor: EthereumAddress?
     /// Why the last sweep didn't go out. Automatic sweeps wait a while before trying again.
     public private(set) var sweepProblem: String?
     /// Every transaction the last send or sweep asked for put on its way, in order, a rebroadcast of one it had before included.
@@ -270,6 +272,7 @@ public final class HotWallet {
             guard !Task.isCancelled, address == self.address else { return }
             self.portfolio = portfolio
             ampProblem = false
+            historyReadFor = address
             let findings = AlarmCheck.findings(outgoingTxs: portfolio.outgoingTxs, records: state.records[address] ?? [])
             if !findings.isEmpty { raise(findings, address: address) }
             if let snapshot { refreshPlan(snapshot: snapshot, address: address) }

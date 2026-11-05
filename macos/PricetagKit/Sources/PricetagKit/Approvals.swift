@@ -79,6 +79,8 @@ public final class ApprovalsModel {
     public private(set) var state = State.reading
     /// A read is under way while the last one's still showing.
     public private(set) var isRefreshing = false
+    /// Why the last read failed, while an older one is still showing. That one may be out of date, so it can't vouch for anything.
+    public private(set) var refreshFailure: String?
     public let address: String
     @ObservationIgnored private let fetch: @Sendable (String) async throws -> WalletApprovals
 
@@ -102,13 +104,18 @@ public final class ApprovalsModel {
                 return
             }
             state = .read(read)
+            refreshFailure = nil
         } catch is CancellationError {
             return
         } catch let error as FetchError {
-            if approvals == nil { state = .failed(Self.message(error)) }
+            failed(Self.message(error))
         } catch {
-            if approvals == nil { state = .failed("Couldn't read this wallet's approvals.") }
+            failed("Couldn't read this wallet's approvals.")
         }
+    }
+
+    private func failed(_ message: String) {
+        if approvals == nil { state = .failed(message) } else { refreshFailure = message }
     }
 
     static func message(_ error: FetchError) -> String {
