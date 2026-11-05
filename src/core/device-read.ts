@@ -1,6 +1,6 @@
 // What the chain says, read directly from Base's public RPC. The money is on the line here, and this doesn't depend on our server.
 
-import { ERC20_ADDRESSES, ETH_ADDRESS, PRICE_FEEDS, formatAmount, type Token } from "@pricetag/sdk/core"
+import { ERC20_ADDRESSES, ETH_ADDRESS, PRICE_FEEDS, formatAmount, plainAmount, type Token } from "@pricetag/sdk/core"
 import { erc20Abi, parseAbi, parseUnits, type Address, type PublicClient } from "viem"
 import { estimateL1Fee } from "viem/op-stack"
 import type { ColdRequest } from "./cold.ts"
@@ -39,8 +39,8 @@ export async function readEthPriceMicros(client: PublicClient, nowMs = Date.now(
 
 /** An amount as typed, in a token's own units. Null if it isn't one, or has more digits than the token can hold. Nothing gets rounded on its way to the device. */
 export function parseAmount(text: string, decimals: number): bigint | null {
-  const clean = text.replace(/[,\s]/g, "")
-  if (!/^(\d{1,30}(\.\d*)?|\.\d+)$/.test(clean)) return null
+  const clean = plainAmount(text)
+  if (clean === null || !/^(\d{1,30}(\.\d*)?|\.\d+)$/.test(clean)) return null
   if ((clean.split(".")[1]?.length ?? 0) > decimals) return null
   const units = parseUnits(clean as `${number}`, decimals)
   return units > 0n ? units : null
