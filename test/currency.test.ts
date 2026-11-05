@@ -9,7 +9,7 @@ import { describeConversion, describeEffect, explainContext, explainTarget, type
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
 import { createRates } from "../server/rates.ts"
-import { feedRounds, type RoundReader } from "../server/source.ts"
+import { feedRounds, updateRounds, type RoundReader } from "../server/source.ts"
 import { decodeRound } from "../server/raw.ts"
 
 const E18 = 10n ** 18n
@@ -377,6 +377,66 @@ describe("reading rates", () => {
     assert.equal(decodeRound(null), null)
   })
 
+  describe("from the rates dataset", () => {
+    const update = (block: number, currency: string, answer: string) => ({ block_num: String(block), currency, answer, updated_at: String(1_800_000_000 + block) })
+    /** A table whose rows can change between reads, and a contract that answers `onchain` at the blocks it's asked about. */
+    const reader = (table: { rows: object[] | Error }, onchain: (block: number) => string | null = () => null) => {
+      const sql: string[] = []
+      const exactly: number[][] = []
+      const exact: RoundReader = async (_currency, blocks) => {
+        exactly.push([...blocks])
+        return new Map(blocks.flatMap((block) => {
+          const answer = onchain(block)
+          return answer ? [[block, { answer, updatedAt: 1_800_000_000 + block }]] : []
+        }))
+      }
+      const read = updateRounds((async <T>(text: string) => {
+        sql.push(text)
+        if (table.rows instanceof Error) throw table.rows
+        return table.rows as T[]
+      }) as never, "benface/pricetag_rates@0.1.0", exact)
+      return { sql, exactly, read }
+    }
+
+    it("takes each block's latest update of that currency at or before it, and leaves out a block before any", async () => {
+      const { sql, exactly, read } = reader({ rows: [update(90, "CAD", "71000000"), update(95, "EUR", "112000000"), update(100, "CAD", "72000000"), update(100, "CAD", "73000000"), update(150, "EUR", "113000000")] })
+      const rounds = await read("CAD", [120, 80, 100, 99])
+      assert.deepEqual(Object.fromEntries(rounds), { 99: { answer: "71000000", updatedAt: 1_800_000_090 }, 100: { answer: "73000000", updatedAt: 1_800_000_100 }, 120: { answer: "73000000", updatedAt: 1_800_000_100 } })
+      assert.deepEqual(exactly, [], "every block is before the table's newest row")
+      assert.match(sql[0] as string, /FROM "benface\/pricetag_rates@0\.1\.0"\.rate_updates WHERE block_num >= \d+ ORDER BY block_num, log_index$/)
+    })
+
+    it("reads the contract from the table's newest row on, so a lagging table never gives an old rate, and stops once it catches up", async () => {
+      // The table has reached 900. CAD changed at 950, which is onchain but not in the table yet.
+      const table = { rows: [update(800, "CAD", "71000000"), update(900, "EUR", "113000000")] as object[] }
+      const { exactly, read } = reader(table, (block) => (block >= 950 ? "72000000" : "71000000"))
+      const lagging = await read("CAD", [850, 900, 1000])
+      assert.equal(lagging.get(850)?.answer, "71000000")
+      assert.equal(lagging.get(1000)?.answer, "72000000", "not the table's older answer")
+      assert.deepEqual(exactly, [[900, 1000]])
+      table.rows = [...table.rows, update(950, "CAD", "72000000"), update(1010, "EUR", "114000000")]
+      const caughtUp = await read("CAD", [850, 900, 1000])
+      assert.deepEqual([caughtUp.get(900)?.answer, caughtUp.get(1000)?.answer], ["71000000", "72000000"])
+      assert.deepEqual(exactly, [[900, 1000]], "nothing more from the contract")
+    })
+
+    it("reads the contract for everything before the table's job has written, and passes on other failures", async () => {
+      const notStarted = reader({ rows: new Error("no common canonical watermark") }, () => "71000000")
+      assert.equal((await notStarted.read("CAD", [100])).get(100)?.answer, "71000000")
+      assert.deepEqual(notStarted.exactly, [[100]])
+      await assert.rejects(reader({ rows: new Error("connection reset") }).read("CAD", [100]), /connection reset/)
+    })
+
+    it("gives the current rate at a head the table hasn't reached, on the first read and the next one at the same head", async () => {
+      let onchain = "71000000"
+      const ratesFor = createRates(reader({ rows: [update(800, "CAD", "70000000")] }, () => onchain).read)
+      const wallet = { legs: [], latest: { blockNum: 1000, timestamp: time(1000) } }
+      assert.equal((await ratesFor("CAD", wallet))?.latest?.round.answer, "71000000")
+      onchain = "72000000"
+      assert.equal((await ratesFor("CAD", wallet))?.latest?.round.answer, "71000000", "the same block's answer doesn't change")
+    })
+  })
+
   it("reads the feed through the same query shape as the oracle, leaving out failed reads", async () => {
     const sql: string[] = []
     const read = feedRounds(
@@ -386,9 +446,9 @@ describe("reading rates", () => {
       }),
       { baseDataset: "base", network: "base_mainnet" },
     )
-    const rounds = await read("0xfeed", [5, 6, 7])
+    const rounds = await read("CAD", [5, 6, 7])
     assert.deepEqual([...rounds.keys()], [5])
-    assert.match(sql[0] as string, /rpc\.base_mainnet\.eth_call\(NULL, evm_encode_hex\('0xfeed'\), evm_encode_params\('latestRoundData\(\)'\), block_num\)/)
+    assert.match(sql[0] as string, /rpc\.base_mainnet\.eth_call\(NULL, evm_encode_hex\('0xA840145F87572E82519d578b1F36340368a25D5d'\), evm_encode_params\('latestRoundData\(\)'\), block_num\)/)
     assert.match(sql[0] as string, /FROM \(SELECT block_num FROM "base"\.blocks WHERE block_num BETWEEN 5 AND 7 AND block_num IN \(5, 6, 7\) LIMIT 3\)/)
   })
 
@@ -521,7 +581,7 @@ describe("GET /api/rate", () => {
     assert.deepEqual((await read("?currency=CAD")).body, { currency: "CAD", rateMicros: null })
     assert.deepEqual((await read("?currency=USD")).body, { currency: "USD", rateMicros: null })
     assert.equal((await read("?currency=XYZ")).status, 400)
-    assert.equal((await read("?currency=EUR")).status, 400, "only what's paid in so far, and not a main currency")
+    assert.equal((await read("?currency=SEK")).status, 400, "no feed, so not a currency here")
     assert.equal((await read("")).status, 400)
     server.close()
   })

@@ -11,7 +11,8 @@ public enum Format {
     }
 
     private static func twoDecimals(_ value: Decimal, _ currency: CurrencyCode) -> String {
-        value.formatted(.currency(code: currency.rawValue).locale(currency.locale).rounded(rule: .toNearestOrAwayFromZero))
+        let style = Decimal.FormatStyle.Currency(code: currency.rawValue).locale(currency.locale).rounded(rule: .toNearestOrAwayFromZero)
+        return value.formatted(currency.isNarrow ? style.presentation(.narrow) : style)
     }
 
     private static func significant(_ value: Decimal, _ digits: Int, _ currency: CurrencyCode) -> String {
@@ -121,9 +122,20 @@ public enum Format {
         return clean.replacing(",", with: "")
     }
 
-    /// Micro-USD from what someone typed, like "$1,234.50" or "46,20". nil when it isn't an amount. Cents past six places are cut.
-    public static func micros(fromDollars text: String) -> String? {
-        guard let clean = plainAmount(text.filter { $0 != "$" }), clean.wholeMatch(of: /\d+(\.\d*)?|\.\d+/) != nil else { return nil }
+    /// A cost as someone typed it, without the main currency's own symbol or code, before or after. Any other symbol stays, so it isn't read as an amount in this currency.
+    static func withoutCurrency(_ text: String, _ currency: CurrencyCode) -> String {
+        let clean = text.trimmingCharacters(in: .whitespaces)
+        // Longest first, so "46 ZAR" isn't read as "46 ZA" and an R.
+        for mark in [currency.label, currency.symbol, currency.rawValue].map({ $0.trimmingCharacters(in: .whitespaces) }).sorted(by: { $0.count > $1.count }) {
+            if clean.hasPrefix(mark) { return String(clean.dropFirst(mark.count)) }
+            if clean.hasSuffix(mark) { return String(clean.dropLast(mark.count)) }
+        }
+        return clean
+    }
+
+    /// Millionths of `currency` from what someone typed, like "$1,234.50" or "46,20". nil when it isn't an amount, which includes one in another currency's symbol: "€46" isn't 46 dollars. Cents past six places are cut.
+    public static func micros(fromDollars text: String, in currency: CurrencyCode = .USD) -> String? {
+        guard let clean = plainAmount(withoutCurrency(text, currency)), clean.wholeMatch(of: /\d+(\.\d*)?|\.\d+/) != nil else { return nil }
         let parts = clean.split(separator: ".", omittingEmptySubsequences: false)
         let whole = parts.first.map(String.init) ?? ""
         let fraction = parts.count > 1 ? String(parts[1].prefix(6)) : ""
