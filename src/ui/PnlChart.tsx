@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { chartMoneyTicks, formatChartSpan, formatSignedMoney, formatTime, type CurrencyCode, type PnlPoint } from "@pricetag/sdk/core"
-import { placeChartTimes } from "../core/chart-times.ts"
+import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../core/chart-times.ts"
 import { NOTHING_TO_CHART, PNL_HELP } from "../core/wording.ts"
 
 const HEIGHT = 220
@@ -17,6 +17,9 @@ export function PnlChart({ points, currency, onSelect }: Props) {
   const [asTable, setAsTable] = useState(false)
   const times = useRef<SVGGElement>(null)
   const [timeWidths, setTimeWidths] = useState<number[]>([])
+  const tickLabels = useRef<SVGGElement>(null)
+  const [tickWidths, setTickWidths] = useState<number[]>([])
+  const left = chartLeftMargin(tickWidths, MARGIN.left)
 
   useEffect(() => {
     if (!box.current) return
@@ -34,9 +37,9 @@ export function PnlChart({ points, currency, onSelect }: Props) {
     const high = ticks[ticks.length - 1]?.value ?? 1
     const start = times[0] ?? 0
     const end = times[times.length - 1] ?? 1
-    const plotWidth = Math.max(40, width - MARGIN.left - MARGIN.right)
+    const plotWidth = Math.max(40, width - left - MARGIN.right)
     const plotHeight = HEIGHT - MARGIN.top - MARGIN.bottom
-    const x = (t: number) => MARGIN.left + (end === start ? plotWidth : ((t - start) / (end - start)) * plotWidth)
+    const x = (t: number) => left + (end === start ? plotWidth : ((t - start) / (end - start)) * plotWidth)
     const y = (v: number) => MARGIN.top + (1 - (v - low) / (high - low || 1)) * plotHeight
     // PnL holds still between transactions in this series, so it's drawn as steps. Where it's unavailable, the line
     // stops rather than passing through $0.
@@ -53,7 +56,7 @@ export function PnlChart({ points, currency, onSelect }: Props) {
       drawing = true
     })
     return { times, values, ticks, x, y, path, plotWidth, hasData: known.length > 0 }
-  }, [points, width, currency])
+  }, [points, width, left, currency])
 
   const nearest = (clientX: number) => {
     const rect = box.current?.getBoundingClientRect()
@@ -84,7 +87,12 @@ export function PnlChart({ points, currency, onSelect }: Props) {
     setTimeWidths(Array.from(times.current?.querySelectorAll("text") ?? [], (text) => text.getComputedTextLength()))
   }, [firstTime, lastTime, asTable, chart.hasData])
 
-  const placedTimes = placeChartTimes(xLabels.map((_, i) => timeWidths[i] ?? 0), { start: MARGIN.left, end: MARGIN.left + chart.plotWidth, width })
+  const tickText = chart.ticks.map((tick) => tick.label).join()
+  useLayoutEffect(() => {
+    setTickWidths(Array.from(tickLabels.current?.querySelectorAll("text") ?? [], (text) => text.getComputedTextLength()))
+  }, [tickText, asTable, chart.hasData])
+
+  const placedTimes = placeChartTimes(xLabels.map((_, i) => timeWidths[i] ?? 0), { start: left, end: left + chart.plotWidth, width })
   const rows = Math.max(0, ...placedTimes.map(({ row }) => row))
 
   return (
@@ -144,14 +152,16 @@ export function PnlChart({ points, currency, onSelect }: Props) {
         }}
       >
         <svg width={width} height={HEIGHT + rows * TIME_ROW} role="img" aria-label="Total PnL after each transaction">
-          {chart.ticks.map((tick) => (
-            <g key={tick.value}>
-              <line x1={MARGIN.left} x2={MARGIN.left + chart.plotWidth} y1={chart.y(tick.value)} y2={chart.y(tick.value)} className={tick.value === 0 ? "axis-zero" : "grid"} />
-              <text x={MARGIN.left - 8} y={chart.y(tick.value)} dy="0.32em" textAnchor="end" className="tick">
-                {tick.label}
-              </text>
-            </g>
-          ))}
+          <g ref={tickLabels}>
+            {chart.ticks.map((tick) => (
+              <g key={tick.value}>
+                <line x1={left} x2={left + chart.plotWidth} y1={chart.y(tick.value)} y2={chart.y(tick.value)} className={tick.value === 0 ? "axis-zero" : "grid"} />
+                <text x={left - TICK_GAP} y={chart.y(tick.value)} dy="0.32em" textAnchor="end" className="tick">
+                  {tick.label}
+                </text>
+              </g>
+            ))}
+          </g>
           <g ref={times}>
             {xLabels.map(({ index, text }, i) => (
               <text key={index} x={placedTimes[i]?.x} y={HEIGHT - 6 + (placedTimes[i]?.row ?? 0) * TIME_ROW} className="tick">
