@@ -12,7 +12,9 @@ kill_timeout = 15
   PRICETAG_CLIENT_IP_HEADER = "fly-client-ip"
   PRICETAG_MAX_WALLETS = "200"
 
-# One machine that stays up: wallet reads are kept in its memory, and the Mac app holds a stream open to it.
+# One machine that stays up: wallet reads are kept in its memory, and the Mac app holds a stream open to it. The limits and the
+# day's checkouts are counted in that memory too, so a second machine would double them. Fly starts two on a first deploy unless
+# told not to, so always deploy with `fly deploy --ha=false`, and check `fly machine list` shows one.
 [http_service]
   internal_port = 8080
   force_https = true
