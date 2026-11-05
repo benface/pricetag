@@ -183,13 +183,8 @@ private struct HotWalletDetails: View {
                     Task { await wallet.replaceKey() }
                 } label: {
                     Text(wallet.settings.sweepDestination == nil ? "Move What's Left to a New Key" : "Sweep What's Left and Replace the Key")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-        
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AlarmButtonStyle())
                 .disabled(wallet.rotation != nil || wallet.isWorking)
                 Spacer()
                 Button("Dismiss") { wallet.dismissAlarm() }
