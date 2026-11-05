@@ -159,9 +159,10 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
      * Reads never go past this. A derived table can lag the chain, and a block read before it's processed looks empty.
      */
     async processedThrough(after: number, head: number, tables: readonly string[] = WALLET_TABLES): Promise<number | null> {
+      // Together, because this is on every wallet read, and a slow minute on staging makes each one take seconds.
+      const newest = await Promise.all(tables.map((table) => readOrEmpty(`SELECT block_num FROM ${PRICE_TABLES.includes(table) ? prices : ds}.${table} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`)))
       let through = head
-      for (const table of tables) {
-        const rows = await readOrEmpty(`SELECT block_num FROM ${PRICE_TABLES.includes(table) ? prices : ds}.${table} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`)
+      for (const rows of newest) {
         if (!rows[0]) return null
         through = Math.min(through, asNumber(rows[0].block_num))
       }

@@ -64,6 +64,7 @@ public struct PortfolioSummary: View {
         VStack(alignment: .leading, spacing: 2) {
             statLabel("Value · \(portfolio.currency.rawValue)", isPartial: portfolio.isValuePartial)
                 .help(portfolio.partialValueReason ?? "")
+                .updatingMark(.trailing)
             Button { onOpen(.value) } label: {
                 big(value, size: size, tone: .neutral)
             }
@@ -77,6 +78,7 @@ public struct PortfolioSummary: View {
         VStack(alignment: .leading, spacing: 2) {
             statLabel("Total PnL", isPartial: portfolio.pnlStatus == .partial)
                 .help(Wording.pnlHelp)
+                .updatingMark(.trailing)
             Button { onOpen(.pnl) } label: {
                 big(pnl, size: size * 0.6, tone: isLive ? portfolio.totalPnlTone : .neutral)
             }

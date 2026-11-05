@@ -218,7 +218,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         }
         #expect(store.feed == .reading)
         #expect(store.portfolio == held)
-        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Reading…")
+        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Updating…")
         let later = now.addingTimeInterval(1)
         await gate.answer(.success(try realPortfolio(at: later)))
         await _ = second.value

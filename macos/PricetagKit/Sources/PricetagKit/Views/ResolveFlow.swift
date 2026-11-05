@@ -321,7 +321,7 @@ public struct ResolveFlow: View {
             }
             if let failed = store.portfolio?.linkedFailed.count, failed > 0 {
                 WarningText(Wording.linkedFailed(failed)).font(.callout).fixedSize(horizontal: false, vertical: true)
-                Button("Try Again") { store.start() }
+                Button("Try Again") { store.refresh() }
             }
             if let portfolio = store.portfolio, !portfolio.linkedReading.isEmpty {
                 let waiting = portfolio.linkedReading.count

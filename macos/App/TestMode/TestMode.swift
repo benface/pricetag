@@ -255,6 +255,12 @@ enum TestScene: String, CaseIterable {
     case mainNoWalletSaved = "main-no-wallet-saved"
     case mainNoWalletSavedSmall = "main-no-wallet-saved-small"
     case mainReading = "main-reading"
+    /// Another wallet's just been picked, or a setting changed: what was last known, while the read runs.
+    case mainUpdating = "main-updating"
+    case mainUpdatingNarrow = "main-updating-narrow"
+    case mainUpdatingSmall = "main-updating-small"
+    case mainUpdatingCAD = "main-updating-cad"
+    case mainTransactionsUpdating = "main-transactions-updating"
     case mainServerDown = "main-server-down"
     case mainNotUpdating = "main-not-updating"
     case mainLinkedFailed = "main-linked-failed"
@@ -306,6 +312,7 @@ enum TestScene: String, CaseIterable {
     case popoverHotWalletAlarm = "popover-hot-wallet-alarm"
     case popoverHotWalletCAD = "popover-hot-wallet-cad"
     case popoverReading = "popover-reading"
+    case popoverUpdating = "popover-updating"
     case popoverServerDown = "popover-server-down"
     case popoverEmpty = "popover-empty"
     case popoverHotWalletNoSavings = "popover-hot-wallet-no-savings"
@@ -497,7 +504,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .motionChartDraw, .motionChartRange, .motionChartScrub, .motionSend, .chartHover:
             .none
-        case .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .proveWallet, .proveWalletProblem, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
+        case .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .proveWallet, .proveWalletProblem, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
              .publishFromDevice, .publishFromDeviceSafari, .publishFromDeviceNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
@@ -512,6 +519,7 @@ enum TestScene: String, CaseIterable {
         case .popoverMissingPrice, .mainMissingPrice: .missingPrice
         case .popoverUnreadBalance: .unreadBalance
         case .mainReading, .popoverReading, .popoverLongNameReading: .neverAnswers
+        case .mainUpdating, .mainUpdatingNarrow, .mainUpdatingSmall, .mainUpdatingCAD, .mainTransactionsUpdating, .popoverUpdating: .updating
         case .mainServerDown, .popoverServerDown: .serverDown
         case .mainNotUpdating, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
@@ -563,7 +571,7 @@ enum TestScene: String, CaseIterable {
 
     private var currency: CurrencyCode {
         switch self {
-        case .mainCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .settingsHotWalletNoRate, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .hotWalletCAD, .hotWalletNoRate, .hotWalletPurchasesCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD, .sweepCAD, .publishCAD, .ruleComparisonCAD, .siteTransactionCAD: .CAD
+        case .mainCAD, .mainUpdatingCAD, .mainTransactionsCAD, .mainDetailsCAD, .popoverCAD, .settingsCAD, .popoverHotWalletCAD, .settingsHotWalletCAD, .settingsHotWalletNoRate, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .hotWalletCAD, .hotWalletNoRate, .hotWalletPurchasesCAD, .hotWalletNoSavingsCAD, .hotWalletOverCapCAD, .hotWalletTopUpCAD, .sendCAD, .sweepCAD, .publishCAD, .ruleComparisonCAD, .siteTransactionCAD: .CAD
         default: .USD
         }
     }
@@ -742,7 +750,7 @@ enum TestScene: String, CaseIterable {
         }
         let navigation = Navigation()
         if self == .mainChartWeek { navigation.chartRange = .week }
-        if self == .mainTransactions || self == .mainTransactionsCAD || self == .mainTransactionsSmall { navigation.section = .transactions }
+        if self == .mainTransactions || self == .mainTransactionsCAD || self == .mainTransactionsSmall || self == .mainTransactionsUpdating { navigation.section = .transactions }
         if self == .mainSpendingMoney || self == .mainSpendingMoneySmall { navigation.section = .spendingMoney }
         if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
         // Once the window has its size, as when someone clicks. Before that it's too small for the details to fit beside the section.
@@ -758,6 +766,7 @@ enum TestScene: String, CaseIterable {
             if TestMode.live != nil { return store.feed == .noWallet || store.portfolio != nil }
             return switch feed {
             case .demo, .costBecomesKnown, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .costOnSavings, .smallAmounts, .longHistory, .answeredWallet, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
+            case .updating: store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
             case .stopsAnswering: store.feed == .serverUnreachable && store.portfolio != nil
@@ -815,16 +824,16 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: MainWindow.minimumSize, isReady: isReady)
         case .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+        case .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainUpdating, .mainUpdatingCAD, .mainTransactionsUpdating, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainSmallestEnd:
             // Starts at the end of the page, because a screenshot can't scroll to it.
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .mainEmptySmallest, .mainSmallest, .mainFirstRunSmallest:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 780, height: 560), isReady: isReady)
-        case .mainNarrow, .mainSmallAmountsNarrow:
+        case .mainNarrow, .mainSmallAmountsNarrow, .mainUpdatingNarrow:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 780, height: 760), isReady: isReady)
-        case .mainSmall, .mainFirstRunSmall, .mainTransactionsSmall, .mainSpendingMoneySmall, .mainTaxReportSmall, .mainNoWalletSmall, .mainNoWalletSavedSmall:
+        case .mainSmall, .mainUpdatingSmall, .mainFirstRunSmall, .mainTransactionsSmall, .mainSpendingMoneySmall, .mainTaxReportSmall, .mainNoWalletSmall, .mainNoWalletSavedSmall:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: MainWindow.minimumSize, isReady: isReady)
         case .mainMedium, .mainSpendingMoney, .mainTaxReport:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 900, height: 640), isReady: isReady)
@@ -902,7 +911,7 @@ enum TestScene: String, CaseIterable {
         case .proveWallet, .proveWalletProblem:
             let proof = WalletProof(address: TestScene.namedWallet, owner: TestScene.namedWallet, title: "Treasury")
             return TestScreen(view: AnyView(ProveWalletSheet(store: store, proof: proof, signature: self == .proveWalletProblem ? "0x1234" : "", problem: self == .proveWalletProblem ? Wording.notASignature : nil)), isReady: isReady)
-        case .popoverLongName, .popoverLongNameReading, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance:
+        case .popoverLongName, .popoverLongNameReading, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
         case .menuBarLabel:
             return TestScreen(view: AnyView(MenuBarLabelScene(portfolio: { store.portfolio })), isReady: isReady)
@@ -1170,7 +1179,7 @@ private final class ReadOnce {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, costBecomesKnown, missingPrice, unreadBalance, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, answeredWallet, empty, emptyReadingLinked, notStarted, firstRun }
+    enum Feed { case demo, costBecomesKnown, missingPrice, unreadBalance, neverAnswers, updating, serverDown, stopsAnswering, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, answeredWallet, empty, emptyReadingLinked, notStarted, firstRun }
 
     private let feed: Feed
     private let hasRate: Bool
@@ -1300,11 +1309,15 @@ final class FixtureSource: PortfolioSource {
         case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: address)
         case .notStarted: return try newWallet(started: false, readingLinked: false, address: address)
         case .firstRun: return try firstRun(address: address)
-        case .neverAnswers: try await Task.sleep(for: .seconds(600))
+        case .neverAnswers, .updating: try await Task.sleep(for: .seconds(600))
         case .serverDown: throw FetchError.unreachable
         case .stopsAnswering: if read > 1 { throw FetchError.unreachable }
         }
         return try Self.decode(fixture("demo-portfolio", currency))
+    }
+
+    func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio? {
+        feed == .updating ? try Self.decode(fixture("demo-portfolio", currency)) : nil
     }
 
     /// Chart points this many seconds apart, the last one being now.
