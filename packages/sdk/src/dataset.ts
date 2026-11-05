@@ -5,7 +5,7 @@
 import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type BlockMark, type Query } from "./amp.ts"
 import { blockBefore } from "./chain.ts"
 import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
-import type { LegRow, PricedRow, Reference } from "./legs.ts"
+import type { LegRow, PayoutTx, PricedRow, Reference } from "./legs.ts"
 import type { Head } from "./portfolio.ts"
 import type { PriceFeed } from "./tokens.ts"
 import type { Source } from "./wallets.ts"
@@ -253,6 +253,26 @@ export async function readEthBalancesAt(query: Query, network: string, baseDatas
   return balances
 }
 
+/** The successful transactions that name this wallet in their calldata, or that it sent, in these blocks. */
+export async function readPayoutTxsAt(query: Query, baseDataset: string, address: string, blocks: readonly number[]): Promise<PayoutTx[]> {
+  const me = hexOf(address)
+  const txs: PayoutTx[] = []
+  for (const { filter } of blockFilters(blocks)) {
+    const rows = await query<Row>(`SELECT block_num, tx_hash, tx_index, "from", "to", input FROM "${baseDataset}".transactions WHERE ${filter} AND status AND ("from" = X'${me}' OR strpos(encode(input, 'hex'), '${me}') > 0)`)
+    for (const row of rows) {
+      txs.push({
+        blockNum: asNumber(row.block_num),
+        txHash: prefixed(String(row.tx_hash)),
+        txIndex: asNumber(row.tx_index),
+        from: prefixed(String(row.from)),
+        to: row.to == null ? null : prefixed(String(row.to)),
+        input: String(row.input ?? ""),
+      })
+    }
+  }
+  return txs
+}
+
 export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock: number | null; network: string }): Source {
   return {
     mode: "dataset",
@@ -260,6 +280,7 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
     historyFrom: null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
+    readPayoutTxs: (address, blocks) => readPayoutTxsAt(query, config.baseDataset, address, blocks),
     ...datasetReader(query, config),
   }
 }

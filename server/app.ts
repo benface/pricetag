@@ -543,7 +543,7 @@ export function createApi(env: Env, created: Created | null = createSource(env))
       const wallet = await readWallet(proofMatch[1] as string, res, { fresh: false, rule })
       if (!wallet) return true
       const leg = wallet.legs.find(({ id }) => id === params.get("leg"))
-      if (!leg || leg.opening) {
+      if (!leg || leg.opening || !leg.txHash) {
         sendJson(res, 404, { error: "There's no transaction behind that." })
         return true
       }

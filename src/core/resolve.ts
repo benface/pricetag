@@ -323,6 +323,9 @@ export const isBalanced = ({ open, answered, waiting }: Meter) => open === 0 && 
 
 const day = (timestamp: string) => new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
 
+/** Why this is being asked about at all, when no transaction shows it arriving. A balance can't say who sent it, so an address is only the likeliest. */
+const unseenEvidence = (sender: string | null) => `This wallet's ETH rose in this block with no transaction showing it${sender ? ". This is the contract most likely behind it" : ""}`
+
 function evidenceFor(sender: string, sides: readonly Side[], known: KnownSender | null, book: Book): string[] {
   const evidence = [...(known ? [`From a ${known.name} address`] : []), ...(book.senders[sender]?.kind === "mine" ? ["You've said this is your wallet. Choose My wallet if the one you're looking at is yours too, or Someone else if it isn't."] : [])]
   const sends = sides
@@ -358,7 +361,7 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
       transfers: 0,
       firstAt: leg.timestamp,
       lastAt: leg.timestamp,
-      evidence: sender ? evidenceFor(sender, sides, known, book) : (evidence ?? []),
+      evidence: [...(sender ? evidenceFor(sender, sides, known, book) : (evidence ?? [])), ...(leg.parts.some((p) => p.kind === "unseen_eth") ? [unseenEvidence(sender)] : [])],
       valueMicros: null,
       first: { leg, units },
       arrived: new Map<string, Arrival>(),
@@ -383,7 +386,7 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
       ...question,
       arrivals: [...arrived.values()],
       valueMicros: priced ? value.toString() : null,
-      noteAbout: question.receipts.length === 1 && !first.leg.opening && first.units === BigInt(first.leg.delta) ? first.leg.txHash : null,
+      noteAbout: question.receipts.length === 1 && !first.leg.opening && first.units === BigInt(first.leg.delta) && first.leg.txHash ? first.leg.txHash : null,
     }))
     .sort((a, b) => {
       const [x, y] = [BigInt(a.valueMicros ?? "0"), BigInt(b.valueMicros ?? "0")]
