@@ -19,7 +19,7 @@
   "why": "8 transactions' cost, sale value or network fee changed. Both read the same transactions, balances and exchange rates at the same block, so the only difference is what ETH is worth, which also sets what ETH held counts for and what a token priced against ETH is worth.",
   "warnings": [
     "$899.98 of this is an estimate, from market prices.",
-    "Excludes DAI, USDC, ETH, VIRTUAL (unknown cost); USDC, ETH (sold at an unknown cost); USDC (sold or spent at an unknown price); cbBTC (doesn't match its actual balance)."
+    "Excludes DAI, USDC, ETH, VIRTUAL (unknown cost); USDC, ETH (sold or spent at an unknown cost); USDC (sold or spent at an unknown price); cbBTC (doesn't match its actual balance)."
   ],
   "rows": [
     {

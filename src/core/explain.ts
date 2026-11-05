@@ -305,8 +305,8 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
   if (totals.unpricedGas && (metric === "gas" || metric === "pnl")) lines.push("Some network fees had no price at the time, so they aren't included.")
   const relevant = totals.excluded.filter(({ reason }) => {
     if (metric === "value") return reason === "no current price" || reason === "incomplete history" || reason === "balance couldn't be read"
-    if (metric === "realized") return reason === "sold at an unknown cost" || reason === "sold or spent at an unknown price" || reason === "doesn't match its actual balance" || reason === "not checked against its actual balance"
-    if (metric === "unrealized") return reason !== "sold at an unknown cost" && reason !== "sold or spent at an unknown price"
+    if (metric === "realized") return reason === "sold or spent at an unknown cost" || reason === "sold or spent at an unknown price" || reason === "doesn't match its actual balance" || reason === "not checked against its actual balance"
+    if (metric === "unrealized") return reason !== "sold or spent at an unknown cost" && reason !== "sold or spent at an unknown price"
     return metric === "pnl"
   })
   for (const { asset, reason } of relevant) lines.push(`Not included: ${asset} (${reason}).`)
