@@ -86,7 +86,8 @@ public final class PortfolioStore {
     /// What one USD buys right now in `currency`, for what isn't part of a wallet's own read. Nil in USD, or with no current rate.
     private var currentRate: CurrentRate?
     public private(set) var serverURL: URL
-    /// What Patina's own server knows this person by, or nil. It's only sent over HTTPS.
+    /// What the server at `serverURL` knows this person by, or nil. Each invite belongs to the server it was given for, so it never
+    /// follows the user to another one, and it's only sent over HTTPS.
     public private(set) var invite: String?
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
@@ -107,7 +108,7 @@ public final class PortfolioStore {
     /// Taken off the list, but still the user's, so costs keep following their money.
     public private(set) var hiddenWallets: [String]
 
-    @ObservationIgnored private var source: any PortfolioSource
+    @ObservationIgnored private(set) var source: any PortfolioSource
     @ObservationIgnored private var cache: PortfolioCache
     /// Something changed, so the server can answer from what it last read while the real read runs.
     @ObservationIgnored private var wantsLastRead = true
@@ -137,7 +138,7 @@ public final class PortfolioStore {
         defaults: UserDefaults = .standard,
         /// Where each wallet's last numbers stay across launches, or nil to keep them only in memory.
         cacheDirectory: URL? = nil,
-        /// Nil reads the server with the invite in `defaults`.
+        /// Nil reads the server with its invite in `defaults`.
         makeSource: (@Sendable (URL) -> any PortfolioSource)? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
         reachableDelay: Duration = .seconds(2),
@@ -161,7 +162,7 @@ public final class PortfolioStore {
         self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
         self.currency = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
         self.serverURL = serverURL
-        let invite = defaults.string(forKey: Keys.invite)
+        let invite = Self.invites(in: defaults)[Self.origin(of: serverURL)]
         self.invite = invite
         self.answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.selectedRule = defaults.string(forKey: Keys.rule)
@@ -480,8 +481,17 @@ public final class PortfolioStore {
     }
 
     /// The numbers on screen aren't what they'd be now, so they can't be called live, and the next ones are on their way.
+    /// Who an invite is for: the scheme, host and port, which is what a browser would call the same site.
+    nonisolated public static func origin(of url: URL) -> String {
+        "\(url.scheme?.lowercased() ?? "")://\(url.host()?.lowercased() ?? "")\(url.port.map { ":\($0)" } ?? "")"
+    }
+
+    private static func invites(in defaults: UserDefaults) -> [String: String] {
+        defaults.dictionary(forKey: Keys.invites) as? [String: String] ?? [:]
+    }
+
     private func makeSource(_ url: URL) -> any PortfolioSource {
-        customSource?(url) ?? PricetagClient(serverURL: url, invite: invite)
+        customSource?(url) ?? PricetagClient(serverURL: url, invite: Self.invites(in: defaults)[Self.origin(of: url)])
     }
 
     private func answersChanged() {
@@ -530,6 +540,7 @@ public final class PortfolioStore {
         guard url != serverURL else { return }
         serverURL = url
         defaults.set(url.absoluteString, forKey: Keys.server)
+        invite = Self.invites(in: defaults)[Self.origin(of: url)]
         source = makeSource(url)
         rules = []
         // Another server's numbers can be different facts, so these aren't kept even for a moment. What's known is this server's own.
@@ -545,7 +556,9 @@ public final class PortfolioStore {
         let next = value?.isEmpty == false ? value : nil
         guard next != invite else { return }
         invite = next
-        defaults.set(next, forKey: Keys.invite)
+        var invites = Self.invites(in: defaults)
+        invites[Self.origin(of: serverURL)] = next
+        defaults.set(invites, forKey: Keys.invites)
         source = makeSource(serverURL)
         rules = []
         answersChanged()
@@ -759,7 +772,7 @@ public final class PortfolioStore {
         static let method = "method"
         static let currency = "currency"
         static let server = "serverURL"
-        static let invite = "serverInvite"
+        static let invites = "serverInvites"
         static let book = "answers"
         static let rule = "pricingRule"
         static let savedWallets = "savedWallets"

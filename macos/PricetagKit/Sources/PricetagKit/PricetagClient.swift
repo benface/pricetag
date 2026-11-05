@@ -60,7 +60,7 @@ extension PortfolioSource {
 public struct PricetagClient: PortfolioSource {
     public let serverURL: URL
     /// What a shared server knows this person by. It only goes over HTTPS, so a server on this Mac, or any other plain address, never gets it.
-    private let invite: String?
+    let invite: String?
     private let session: URLSession
 
     /// A block every 2 s means the events are never quiet for this long, unless something's wrong.

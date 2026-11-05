@@ -115,15 +115,15 @@ struct SettingsView: View {
         pane(.server) {
             Section {
                 TextField("Server", text: $server, prompt: Text(PortfolioStore.defaultServerURL.absoluteString))
-                    .onSubmit(applyServer)
+                    .onSubmit(applyConnection)
                     // Leaving the tab or closing the window counts as being done, because there's no Save button to say otherwise.
-                    .onDisappear(perform: applyServer)
+                    .onDisappear(perform: applyConnection)
                 if let serverError {
                     WarningText(serverError).font(.callout)
                 }
                 SecureField("Invite", text: $invite, prompt: Text("Only for a shared server"))
-                    .onSubmit { store.setInvite(invite) }
-                    .onDisappear { store.setInvite(invite) }
+                    .onSubmit(applyConnection)
+                    .onDisappear(perform: applyConnection)
                     .help("Only sent over HTTPS, to the server above.")
             } footer: {
                 Text("\(AppName.current) only talks to this server.")
@@ -187,14 +187,23 @@ struct SettingsView: View {
         hotWallet.setRPC(url)
     }
 
-    private func applyServer() {
+    /// Both fields at once, whichever was left last, so an invite is always saved for the server beside it. One that was only
+    /// still showing from the last server stays that server's, and the new one's own shows instead.
+    private func applyConnection() {
         let value = server.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https", url.host() != nil else {
             serverError = "That isn't a server address. It should look like \(PortfolioStore.defaultServerURL.absoluteString)."
             return
         }
         serverError = nil
+        let shownFor = store.invite ?? ""
+        let moved = PortfolioStore.origin(of: url) != PortfolioStore.origin(of: store.serverURL)
         store.setServerURL(url)
+        if moved && invite == shownFor {
+            invite = store.invite ?? ""
+        } else {
+            store.setInvite(invite)
+        }
     }
 }
 

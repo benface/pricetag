@@ -46,6 +46,35 @@ final class RecordingProtocol: URLProtocol, @unchecked Sendable {
         #expect(PortfolioStore.defaultServerURL == PortfolioStore.localServerURL)
     }
 
+    @MainActor @Test func neverTakesAnInviteToAnotherServer() throws {
+        let defaults = try #require(UserDefaults(suiteName: "HostedServerTests-\(UUID())"))
+        let patina = URL(string: "https://patina.example")!
+        let other = URL(string: "https://other.example")!
+        let store = PortfolioStore(defaults: defaults)
+        store.setServerURL(patina)
+        store.setInvite("patina-invite")
+        store.setServerURL(other)
+        #expect(store.invite == nil)
+        #expect(try authorization(of: store) == nil, "The other server never sees it")
+        store.setInvite("other-invite")
+        store.setServerURL(patina)
+        #expect(store.invite == "patina-invite")
+        #expect(try authorization(of: store) == "Bearer patina-invite")
+        // Restarted on the other server, with both saved.
+        store.setServerURL(other)
+        let restarted = PortfolioStore(defaults: defaults)
+        #expect(restarted.invite == "other-invite")
+        #expect(PortfolioStore.origin(of: URL(string: "https://Patina.example/api")!) == PortfolioStore.origin(of: patina))
+        #expect(PortfolioStore.origin(of: URL(string: "https://patina.example:8443")!) != PortfolioStore.origin(of: patina))
+        store.stop()
+        restarted.stop()
+    }
+
+    /// What the store's own client would send, by the invite it was made with. `sendsTheInviteOnlyOverHTTPS` covers the header.
+    @MainActor private func authorization(of store: PortfolioStore) throws -> String? {
+        try #require(store.source as? PricetagClient).invite.map { "Bearer \($0)" }
+    }
+
     @MainActor @Test func keepsTheInviteAcrossLaunches() throws {
         let defaults = try #require(UserDefaults(suiteName: "HostedServerTests-\(UUID())"))
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in FixtureFree() })
