@@ -158,6 +158,11 @@ public enum Format {
         date.formatted(.dateTime.month(.abbreviated).day().hour().minute().locale(locale))
     }
 
+    /// With the year, for where that matters, like a tax report.
+    public static func dateTime(_ date: Date) -> String {
+        date.formatted(.dateTime.year().month(.abbreviated).day().hour().minute().locale(locale))
+    }
+
     public static func duration(ms: Int) -> String {
         let minutes = Int((Double(ms) / 60_000).rounded())
         if minutes < 120 { return "\(minutes) min" }

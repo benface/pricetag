@@ -253,7 +253,7 @@ struct MainWindow: View {
             if store.address == nil {
                 NoWalletYet(navigation: navigation)
             } else {
-                TaxReportView(store: store, wallets: store.walletList(hotWallet: hotWallet).pickable, readAddress: AddressText.readAnywhere)
+                TaxReportView(store: store, wallets: store.walletList(hotWallet: hotWallet).pickable, readAddress: AddressText.readAnywhere, onResolve: { navigation.resolve() }, onOpen: { navigation.explain($0) })
             }
         }
     }

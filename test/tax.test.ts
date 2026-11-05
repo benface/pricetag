@@ -458,7 +458,8 @@ describe("taxReportOf", () => {
 
   it("matches what the Swift tests read", () => {
     const url = new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/demo-tax-report.json", import.meta.url)
-    const text = `${JSON.stringify(taxReportOf([{ ...DEMO_WALLET, currency: "CAD", rates: demoRates("CAD") }], { country: "CA", method: "average", scope: "pooled" }), null, 2)}\n`
+    // The newest year, as the app asks for it.
+    const text = `${JSON.stringify(taxReportOf([{ ...DEMO_WALLET, currency: "CAD", rates: demoRates("CAD") }], { country: "CA", method: "average", scope: "pooled", year: "latest" }), null, 2)}\n`
     if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
     assert.equal(readFileSync(url, "utf8"), text, "demo-tax-report.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.")
   })

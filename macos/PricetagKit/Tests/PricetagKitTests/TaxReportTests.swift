@@ -165,6 +165,36 @@ import Testing
         #expect(model.state == .ready(report))
     }
 
+    @Test func startsOnTheNewestYearAndShowsWhichOneThatIs() async throws {
+        let report = try resource("demo-tax-report", as: TaxReport.self)
+        let model = model(fetch: { _ in report })
+        #expect(model.year == .latest)
+        #expect(model.shownYear == .latest, "Until a report says which years there are")
+        let request = model.request(address: "demo", currency: .CAD, serverURL: server)!
+        #expect(request.year == .latest)
+        await model.load(request)
+        #expect(model.years == report.years)
+        #expect(model.shownYear == .year(2026))
+        model.setYear(.year(2026))
+        #expect(model.year == .latest, "Picking the year already showing asks nothing new")
+        model.setYear(.all)
+        #expect(model.request(address: "demo", currency: .CAD, serverURL: server)?.year == .all)
+    }
+
+    @Test func sendsTheYearTheServerReads() throws {
+        let encode = { (year: TaxYear) in String(decoding: try JSONEncoder().encode(year), as: UTF8.self) }
+        #expect(try encode(.latest) == "\"latest\"")
+        #expect(try encode(.all) == "\"all\"")
+        #expect(try encode(.year(2026)) == "2026")
+    }
+
+    @Test func readsTheCountsAndPreview() throws {
+        let report = try resource("demo-tax-report", as: TaxReport.self)
+        #expect(report.soldCount + report.feeCount + report.sentCount == report.rowCount)
+        #expect(report.preview.count == min(5, report.rowCount))
+        #expect(report.years == [2026])
+    }
+
     @Test func theFileIsTheServersWordForWord() throws {
         let report = try resource("demo-tax-report", as: TaxReport.self)
         let document = TaxReportDocument(report)
