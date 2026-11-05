@@ -311,6 +311,43 @@ struct AnvilTests {
         #expect(waited < .seconds(15), "the one tick here sent it, and the next is an hour away")
     }
 
+    /// A real swap of ETH to USDC through Uniswap, which the node runs without it happening.
+    @Test func aCallItCantReadIsPreviewedFromARealSimulation() async throws {
+        let vault = KeyVault(store: MemoryKeys())
+        let hot = try await vault.createKey()
+        let client = RPCChainClient(url: rpc!)
+        let stateStore = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hot
+        try stateStore.save(state)
+        let unreachable = ScriptedPortfolios(.failure(.unreachable))
+        let wallet = HotWallet(signer: vault, settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { unreachable }, makeChain: { _ in client })
+        _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth)])
+
+        let router = EthereumAddress("0x2626664c2603336e57b271c5c0b26f421741e481")!
+        let amount = oneEth / 100
+        let word = { (address: EthereumAddress) in [UInt8](repeating: 0, count: 12) + address.bytes }
+        let number = { (value: UInt128) in [UInt8](repeating: 0, count: 16) + (0..<16).reversed().map { UInt8(truncatingIfNeeded: value >> UInt128($0 * 8)) } }
+        // `exactInputSingle((tokenIn, tokenOut, fee, recipient, amountIn, amountOutMinimum, sqrtPriceLimitX96))`
+        let swap = Calldata.selector("exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))") + word(weth.contract!) + word(usdc.contract!) + number(500) + word(hot) + number(amount) + number(0) + number(0)
+        let transaction = SiteTransaction(to: router, value: amount, data: swap)
+        let review = TransactionReview(transaction, quote: try await wallet.quoteForSite(transaction))
+
+        let preview = try #require(review.preview)
+        #expect(preview.gives.count == 1)
+        #expect(preview.gets.count == 1)
+        guard case .known(let gave) = try #require(preview.gives.first), case .known(let got) = try #require(preview.gets.first) else {
+            Issue.record("Both of these are on the allowlist.")
+            return
+        }
+        #expect(gave.symbol == "ETH")
+        #expect(gave.text == "0.01")
+        #expect(got.symbol == "USDC")
+        #expect((got.usdMicros ?? 0) > 0)
+        // It's a simulation, so nothing moved.
+        #expect(try await client.snapshot(of: hot).balances[Base.eth] == oneEth)
+    }
+
     @Test func sweepsEverythingIncludingEth() async throws {
         let vault = KeyVault(store: MemoryKeys())
         let hot = try await vault.createKey()

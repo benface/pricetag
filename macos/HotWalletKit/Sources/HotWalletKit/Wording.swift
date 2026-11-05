@@ -82,6 +82,26 @@ public enum HotWalletWording {
         "some \(symbols.joined(separator: ", ")) that gas makes too costly to move right now"
     }
 
+    public static func nothingToSweep(tooCostly symbols: [String]) -> String {
+        symbols.isEmpty ? "There's nothing on this wallet to sweep." : "There's nothing to sweep except \(tooCostlyToMove(symbols))."
+    }
+
+    /// A sweep that stopped partway. The rest stays on this wallet, and sweeping again moves it once this has landed.
+    public static func sweptOnlySome(onItsWay: [String], left: [String], because reason: String) -> String {
+        let going = onItsWay.formatted(.list(type: .and))
+        let staying = left.formatted(.list(type: .and))
+        return "\(going) \(onItsWay.count == 1 ? "is on its way" : "are on their way"), but \(staying) \(left.count == 1 ? "isn't" : "aren't"). \(reason)"
+    }
+
+    /// Why a sweep stopped after something already went, so it can't say nothing is being swept.
+    static func whatStoppedASweep(_ error: ChainError) -> String {
+        switch error {
+        case .rejected(let message): message
+        case .rateLimited: networkBusy
+        case .unreachable, .unreadable: "The network stopped answering. Try again in a moment."
+        }
+    }
+
     public static func rotationHeldByGas(_ symbols: [String]) -> String {
         "The old key still holds \(tooCostlyToMove(symbols)). It keeps the old key, and moves \(symbols.count == 1 ? "it" : "them") if that changes, until you choose to leave \(symbols.count == 1 ? "it" : "them") behind."
     }
@@ -91,6 +111,11 @@ public enum HotWalletWording {
     public static let notEnoughToSend = "That's more than this wallet holds."
     public static func keptForGas(_ reserve: UInt128) -> String {
         "That would use the \(Format.amount(String(reserve), decimals: 18)) ETH this wallet keeps for gas."
+    }
+
+    /// Why the total against the cap is less than the holdings add up to.
+    public static func keptOutOfCap(_ kept: UInt128) -> String {
+        "\(Format.amount(String(kept), decimals: 18)) ETH is kept for gas, and doesn't count toward the cap."
     }
 
     public static let noGasToSend = "This wallet doesn't have enough ETH to pay the network fee."

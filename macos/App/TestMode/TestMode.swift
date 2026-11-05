@@ -9,9 +9,26 @@ import Synchronization
 /// What `macos/shot.sh` runs: one screen of the app, from fixtures, without ever taking focus. See `macos/TESTING.md`.
 /// None of this is in a release build.
 enum TestMode {
-    private static func value(after flag: String) -> String? {
+    private nonisolated static func value(after flag: String) -> String? {
         CommandLine.arguments.firstIndex(of: flag).flatMap { CommandLine.arguments.indices.contains($0 + 1) ? CommandLine.arguments[$0 + 1] : nil }
     }
+
+    /// Real numbers in place of fixtures, from `shot.sh --live`. It only reads: the hot wallet still has no key, and can't send.
+    nonisolated struct Live: Sendable {
+        let server: URL
+        let wallet: String
+        /// What the scenes that open the details open them on.
+        let asset: String
+    }
+
+    nonisolated static let live: Live? = value(after: "--live-server").flatMap(URL.init(string:)).flatMap { server in
+        value(after: "--live-wallet").map { Live(server: server, wallet: $0.lowercased(), asset: value(after: "--live-asset") ?? "ETH") }
+    }
+    static let liveCurrency = value(after: "--live-currency").flatMap(CurrencyCode.init(rawValue:))
+    /// A wallet's first read can take minutes.
+    static let readyTimeout: TimeInterval = live == nil ? 5 : 240
+    /// Live scenes load more after they appear, like the details and the tax report, and nothing here can tell when that's done.
+    static let settleTime = value(after: "--settle").flatMap(TimeInterval.init) ?? (live == nil ? 0.5 : 6)
 
     static let isRunning = CommandLine.arguments.contains("--test-scene")
 
@@ -27,7 +44,7 @@ enum TestMode {
         let screen = scene.make()
         if let output = value(after: "--output") {
             do {
-                try OffscreenRenderer.png(of: screen.view, size: screen.size, dark: dark, isReady: screen.isReady).write(to: URL(filePath: output))
+                try OffscreenRenderer.png(of: screen.view, size: screen.size, dark: dark, timeout: readyTimeout, settle: settleTime, isReady: screen.isReady).write(to: URL(filePath: output))
             } catch {
                 fail("Couldn't render \(name): \(error)")
             }
@@ -59,12 +76,12 @@ enum TestMode {
         window.setFrameOrigin(.zero)
         window.orderBack(nil)
 
-        let deadline = Date.now.addingTimeInterval(5)
+        let deadline = Date.now.addingTimeInterval(readyTimeout)
         while !screen.isReady() {
             guard Date.now < deadline else { fail("This scene's fixtures never arrived.") }
             RunLoop.main.run(until: .now.addingTimeInterval(0.05))
         }
-        RunLoop.main.run(until: .now.addingTimeInterval(0.8))
+        RunLoop.main.run(until: .now.addingTimeInterval(settleTime + 0.3))
         if screen.size == nil { window.setContentSize(controller.view.fittingSize) }
         RunLoop.main.run(until: .now.addingTimeInterval(0.2))
         if NSApp.isActive { fail("This became the active app, which it must never do.") }
@@ -275,6 +292,7 @@ enum TestScene: String, CaseIterable {
     case sendStopped = "send-stopped"
     case sweep
     case sweepCAD = "sweep-cad"
+    case sweepStopped = "sweep-stopped"
     case siteSend = "site-send"
     case siteSendToken = "site-send-token"
     case siteLongAmount = "site-long-amount"
@@ -302,6 +320,9 @@ enum TestScene: String, CaseIterable {
     case siteConnect = "site-connect"
     case siteTransaction = "site-transaction"
     case siteTransactionCAD = "site-transaction-cad"
+    case sitePreview = "site-preview"
+    case sitePreviewUnknown = "site-preview-unknown"
+    case sitePreviewLong = "site-preview-long"
     case siteUnlimitedApproval = "site-unlimited-approval"
     case siteTypedPermit = "site-typed-permit"
 
@@ -314,7 +335,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
-             .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
+             .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
         }
@@ -365,9 +386,9 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned, .popoverNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .settingsShowingSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD: .funded
+        case .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .settingsShowingSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped: .funded
         case .siteConnect: .funded
-        case .siteTransaction, .siteTransactionCAD, .siteUnlimitedApproval, .siteTypedPermit: .connectedToSite
+        case .siteTransaction, .siteTransactionCAD, .sitePreview, .sitePreviewUnknown, .sitePreviewLong, .siteUnlimitedApproval, .siteTypedPermit: .connectedToSite
         case .hotWalletTopUpOneDollar: .nearCap
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD, .popoverHotWalletNoSavings, .addSavingsFinished, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet: .noSavings
         case .hotWalletNoPrice: .noPrice
@@ -457,13 +478,13 @@ enum TestScene: String, CaseIterable {
     func make() -> TestScreen {
         // Registered values stay in memory, so this never reads or writes anyone's settings, as long as nothing here changes one.
         let defaults = UserDefaults(suiteName: "com.benface.pricetag.mac.test-mode")!
-        var registered: [String: Any] = ["currency": currency.rawValue]
-        if hasWallet { registered["wallet"] = usesDemoWallet ? WalletAddress.demo : TestScene.emptyWallet }
+        var registered: [String: Any] = ["currency": (TestMode.liveCurrency ?? currency).rawValue]
+        if hasWallet { registered["wallet"] = TestMode.live?.wallet ?? (usesDemoWallet ? WalletAddress.demo : TestScene.emptyWallet) }
         if self == .sendKnown, let book = try? JSONEncoder().encode(Book().answering(TestScene.recipient, .someoneElse, focus: nil)) { registered["answers"] = book }
         if self == .resolveAnsweredWallet, let book = try? JSONEncoder().encode(Book().answering(TestScene.answeredWallet, .mine, focus: nil)) { registered["answers"] = book }
         defaults.register(defaults: registered)
-        let source = FixtureSource(feed: feed)
-        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: .milliseconds(50), unreachableDelay: .seconds(30))
+        let source: any PortfolioSource = TestMode.live.map { PricetagClient(serverURL: $0.server) } ?? FixtureSource(feed: feed)
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: TestMode.live == nil ? .milliseconds(50) : .seconds(30), unreachableDelay: .seconds(30))
         store.start()
         let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method }, mainCurrency: { store.currency })
         // Before there's a view, which is how it'd be for anyone opening a sheet: a sheet works out what it offers when it appears.
@@ -476,7 +497,7 @@ enum TestScene: String, CaseIterable {
         // Adding a wallet doesn't wait for this read, and neither does that scene.
         if self != .hotWalletTopUpFirstRead, self != .addSavingsCheckBalanceUnread {
             Task { await readHotWallet() }
-            let deadline = Date.now.addingTimeInterval(5)
+            let deadline = Date.now.addingTimeInterval(TestMode.readyTimeout)
             while !hotWalletHasRead.isDone {
                 guard Date.now < deadline else { TestMode.fail("This scene's hot wallet never finished reading.") }
                 RunLoop.main.run(until: .now.addingTimeInterval(0.01))
@@ -489,7 +510,7 @@ enum TestScene: String, CaseIterable {
         if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
         // Once the window has its size, as when someone clicks. Before that it's too small for the details to fit beside the section.
         let opened: ExplainTarget? = switch self {
-        case .mainDetails, .mainDetailsCAD: .asset("AERO", .realized)
+        case .mainDetails, .mainDetailsCAD: .asset(TestMode.live?.asset ?? "AERO", .realized)
         case .mainHoldDetails: .holdComparison
         case .mainFirstRunDetails: .asset("ETH", .onchain)
         default: nil
@@ -497,7 +518,8 @@ enum TestScene: String, CaseIterable {
         if let opened { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { navigation.target = opened } }
 
         let isReady: () -> Bool = { [feed] in
-            switch feed {
+            if TestMode.live != nil { return store.feed == .noWallet || store.portfolio != nil }
+            return switch feed {
             case .demo, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .smallAmounts, .longHistory, .answeredWallet, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
@@ -613,22 +635,28 @@ enum TestScene: String, CaseIterable {
             }
         case .sweep, .sweepCAD:
             return TestScreen(view: AnyView(SweepSheet(wallet: hotWallet, gate: .scene(.asking))), isReady: isReady)
+        case .sweepStopped:
+            let problem = HotWalletWording.sweptOnlySome(onItsWay: ["USDC"], left: ["ETH"], because: "A sweep of ETH didn't go out: insufficient funds")
+            return TestScreen(view: AnyView(SweepSheet(wallet: hotWallet, gate: .scene(.stopped(problem)))), isReady: isReady)
         case .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage:
             return siteScreen(hotWallet: hotWallet, isReady: isReady)
         case .publishCost, .publishCAD, .publishWaiting:
             let draft = CostNoteDraft(wallet: "0x00000000000000000000000000000000000de301", txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
             return TestScreen(view: AnyView(PublishCostSheet(draft: draft, currency: currency, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
         case .ruleComparison, .ruleComparisonCAD:
+            if TestMode.live != nil { return TestScreen(view: AnyView(RuleComparisonSheet(store: store)), isReady: isReady) }
             guard let comparison: RuleComparison = try? FixtureSource.decode(self == .ruleComparison ? "demo-rule-comparison" : "demo-rule-comparison-cad") else { TestMode.fail("There's no comparison fixture.") }
             return TestScreen(view: AnyView(RuleComparisonTable(comparison: comparison).padding(20).frame(width: 720).background(.background)), isReady: { true })
-        case .siteConnect, .siteTransaction, .siteTransactionCAD, .siteUnlimitedApproval, .siteTypedPermit:
+        case .siteConnect, .siteTransaction, .siteTransactionCAD, .sitePreview, .sitePreviewUnknown, .sitePreviewLong, .siteUnlimitedApproval, .siteTypedPermit:
             guard let wallet = hotWallet.address?.lowercased else { TestMode.fail("This scene's hot wallet has no address.") }
             let bridge = SiteBridge(wallet: hotWallet)
             let request = siteRequest(from: wallet)
             // Through the real checks and wording, up to the window. Nothing answers it there, so it goes no further.
             _ = bridge.begin(SiteRequest(connection: UUID(), id: "1", origin: HotWalletFixture.site, method: request.method, parameters: request.parameters))
             let armed = ContinuousClock.now + SiteApprovalView.armingDelay
-            return TestScreen(view: AnyView(SiteApprovalWindow(bridge: bridge).navigationTitle(SiteApprovalWindow.title)), isReady: { bridge.current != nil && ContinuousClock.now >= armed })
+            // The long one as a laptop would show it, whatever screen this runs on.
+            let heightLimit: CGFloat? = self == .sitePreviewLong ? 760 : nil
+            return TestScreen(view: AnyView(SiteApprovalWindow(bridge: bridge).environment(\.confirmationHeightLimit, heightLimit).navigationTitle(SiteApprovalWindow.title)), isReady: { bridge.current != nil && ContinuousClock.now >= armed })
         }
     }
 
@@ -642,6 +670,12 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .siteTransaction, .siteTransactionCAD:
             return transaction(to: "0x3333333333333333333333333333333333333333", value: "0x71afd498d0000", data: "0x12345678" + String(repeating: "0", count: 24) + spender)
+        case .sitePreview:
+            return transaction(to: HotWalletFixture.swapRouter, value: "0x0", data: "0x12345678")
+        case .sitePreviewUnknown:
+            return transaction(to: HotWalletFixture.unknownRouter, value: "0x71afd498d0000", data: "0x12345678")
+        case .sitePreviewLong:
+            return transaction(to: HotWalletFixture.longRouter, value: "0x0", data: "0x12345678")
         case .siteUnlimitedApproval:
             return transaction(to: usdc, value: "0x0", data: "0x095ea7b3" + String(repeating: "0", count: 24) + spender + String(repeating: "f", count: 64))
         case .siteTypedPermit:

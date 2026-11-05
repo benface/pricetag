@@ -309,6 +309,7 @@ struct PopoverView: View {
             Text("\(hotWallet.usd(plan.valueUsdMicros)) of \(hotWallet.usd(hotWallet.settings.capUsdMicros))")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+                .help(plan.gasKeptWei > 0 ? HotWalletWording.keptOutOfCap(plan.gasKeptWei) : "")
         } else {
             Text("Reading…").foregroundStyle(.secondary)
         }

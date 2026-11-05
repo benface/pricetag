@@ -23,7 +23,7 @@ public final class ApprovalPrompt {
         case asking
         /// Touch ID said yes and it's on its way, which nothing can call back, so nothing should offer to.
         case working
-        /// Nothing happened, and it won't ask again until told to. With what went wrong, if it was more than changing their mind.
+        /// It isn't all done, and it won't ask again until told to. With what went wrong, if it was more than changing their mind.
         case stopped(String?)
         case done
     }

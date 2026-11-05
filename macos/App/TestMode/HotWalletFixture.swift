@@ -9,13 +9,17 @@ import PricetagKit
 struct HotWalletFixture {
     enum KeyAnswer { case hasIt, isMissing, notProvisioned }
 
-    private static let spending = EthereumAddress("0x00000000000000000000000000000000000de301")!
+    private static let spending = TestMode.live.flatMap { EthereumAddress($0.wallet) } ?? EthereumAddress("0x00000000000000000000000000000000000de301")!
     private static let replacement = EthereumAddress("0x00000000000000000000000000000000000de303")!
     private static let block: UInt64 = 53_505_400
     /// Fixed, so a scene looks the same whenever it's taken.
     private nonisolated static let today = Date(timeIntervalSince1970: 1_793_750_400)
     static let savings = EthereumAddress("0x00000000000000000000000000000000000de302")!
     static let site = "https://app.example.com"
+    /// What a simulation says these do, in `FixtureChain`.
+    static let swapRouter = "0x2626664c2603336e57b271c5c0b26f421741e481"
+    static let unknownRouter = "0x00000000000000000000000000000000000de305"
+    static let longRouter = "0x00000000000000000000000000000000000de307"
 
     private var hasWallet = true
     private var hasSavings = true
@@ -49,7 +53,7 @@ struct HotWalletFixture {
     static let replacingKeyStuck = HotWalletFixture(balances: ["USDC": 20_000_000], rotation: Rotation(from: spending, to: replacement, destination: replacement), canActOnChain: true)
     static let replacingKeyMissing = HotWalletFixture(keys: .isMissing, rotation: Rotation(from: spending, to: replacement, destination: replacement))
 
-    func make(source: FixtureSource, costMethod: @escaping @MainActor () -> CostMethod, mainCurrency: @escaping @MainActor () -> CurrencyCode) -> HotWallet {
+    func make(source: any PortfolioSource, costMethod: @escaping @MainActor () -> CostMethod, mainCurrency: @escaping @MainActor () -> CurrencyCode) -> HotWallet {
         HotWallet(
             signer: NoKeys(answer: keys),
             settingsStore: FixedSettings(settings: settings),
@@ -58,8 +62,11 @@ struct HotWalletFixture {
             portfolioSource: { source },
             costMethod: costMethod,
             mainCurrency: mainCurrency,
-            makeChain: { [snapshot, isConnectedToSite, failing] _ in FixtureChain(snapshot: snapshot, canQuote: isConnectedToSite, failing: failing) },
-            now: { Self.today }
+            makeChain: { [snapshot, isConnectedToSite, failing] url -> any ChainClient in
+                if TestMode.live != nil { return ReadOnlyChain(node: RPCChainClient(url: url)) }
+                return FixtureChain(snapshot: snapshot, canQuote: isConnectedToSite, failing: failing)
+            },
+            now: { TestMode.live == nil ? Self.today : .now }
         )
     }
 
@@ -75,16 +82,16 @@ struct HotWalletFixture {
         state.active = Self.spending
         state.rotation = rotation
         if isConnectedToSite { state.connectedSites = [Self.site] }
-        if hasRecords { state.records[Self.spending] = records }
-        if hasSiteActivity {
+        if hasRecords, TestMode.live == nil { state.records[Self.spending] = records }
+        if hasSiteActivity, TestMode.live == nil {
             state.connectedSites = [Self.site, "http://localhost:5173"]
             state.records[Self.spending] = siteRecords
         }
         // The demo portfolio is another wallet's history, so what it spent is news to this one unless it's been looked at.
-        let history: Portfolio? = try? FixtureSource.decode("demo-portfolio")
+        let history: Portfolio? = TestMode.live == nil ? try? FixtureSource.decode("demo-portfolio") : Self.liveHistory
         state.acknowledged = (history?.outgoingTxs ?? []).dropFirst(unexplainedTransactions).map { .unknownTransaction(hash: $0) }
         // Reads as older than its last sweep, which is what makes a wallet wait instead of signing. A plan to sweep still shows.
-        if !canActOnChain { state.settledThroughBlock = Self.block + 1 }
+        if !canActOnChain { state.settledThroughBlock = TestMode.live == nil ? Self.block + 1 : .max }
         return state
     }
 
@@ -98,6 +105,16 @@ struct HotWalletFixture {
             usdcUsdMicros: 999_800,
             fees: FeeQuote(maxFeePerGas: 10_000_000, maxPriorityFeePerGas: 1_000_000, l1FeeWei: 100_000_000_000)
         )
+    }
+
+    /// What the wallet has spent, which this has no records of, so it isn't taken for a stolen key. Blocks until it's read, because a scene needs it before it starts.
+    private static var liveHistory: Portfolio? {
+        guard let live = TestMode.live else { return nil }
+        // A first read can outlast one request, and the server keeps going, so another picks it up. Without this, everything it ever spent would raise the alarm.
+        for _ in 0..<4 {
+            if let data = try? Data(contentsOf: live.server.appending(path: "/api/portfolio/\(live.wallet)")), let history = try? JSONDecoder().decode(Portfolio.self, from: data) { return history }
+        }
+        TestMode.fail("Couldn't read this wallet's history from the server.")
     }
 
     /// One of each way a transaction can end up, and each reason to send one.
@@ -173,6 +190,18 @@ private nonisolated struct NoOneThere: UserPresence {
     func confirm(reason: String) async throws { TestMode.fail("A scene asked for Touch ID: \(reason).") }
 }
 
+/// The real node, for `shot.sh --live`, with everything that isn't a read taken away.
+private nonisolated struct ReadOnlyChain: ChainClient {
+    let node: RPCChainClient
+
+    func snapshot(of address: EthereumAddress) async throws -> ChainSnapshot { try await node.snapshot(of: address) }
+    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64 { try await node.estimateGas(from: from, to: to, value: value, data: data) }
+    func send(_ transaction: SignedTransaction) async throws { TestMode.fail("A scene tried to send a transaction.") }
+    func receipt(of hash: String) async throws -> Receipt? { try await node.receipt(of: hash) }
+    func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer { TestMode.fail("A scene tried to read for a site.") }
+    func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128 { try await node.l1Fee(ofPayload: payload) }
+}
+
 /// Stands in for the node. It only ever answers reads, and what a transaction would cost only for a site's scenes, which need it to show one.
 private nonisolated struct FixtureChain: ChainClient {
     let snapshot: ChainSnapshot
@@ -188,7 +217,49 @@ private nonisolated struct FixtureChain: ChainClient {
 
     func send(_ transaction: SignedTransaction) async throws { TestMode.fail("A scene tried to send a transaction.") }
     func receipt(of hash: String) async throws -> Receipt? { hash == failing ? Receipt(succeeded: false, blockNumber: snapshot.blockNumber) : nil }
-    func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer { TestMode.fail("A scene tried to read for a site.") }
+
+    /// Only what a preview asks. A node that can't simulate is what `site-transaction` shows.
+    func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer {
+        guard canQuote, method == "eth_simulateV1" else { TestMode.fail("A scene tried to read for a site.") }
+        guard let call = parameters[0]?["blockStateCalls"]?[0]?["calls"]?[0], let wallet = call["from"]?.string, let to = call["to"]?.string else { TestMode.fail("That isn't a simulation.") }
+        let usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+        let eth = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        let unknownToken = "0x00000000000000000000000000000000000de306"
+        let logs: [JSONValue]
+        switch to {
+        case HotWalletFixture.swapRouter:
+            logs = [Self.log(usdc, .transfer, wallet, to, 200_000_000), Self.log(eth, .transfer, to, wallet, 75_700_000_000_000_000)]
+        case HotWalletFixture.unknownRouter:
+            logs = [
+                Self.log(eth, .transfer, wallet, to, 2_000_000_000_000_000),
+                Self.log(unknownToken, .transfer, to, wallet, 1_000_000_000_000_000_000),
+                Self.log(usdc, .approval, wallet, to, UInt128.max),
+            ]
+        case HotWalletFixture.longRouter:
+            let dai = "0x50c5725949a6f0c72e6c4a641f24049a917db0cb"
+            let unknownTokens = (0..<12).map { index in "0x00000000000000000000000000000000000de4" + String(format: "%02x", index) }
+            logs = [
+                Self.log(usdc, .transfer, wallet, to, 200_000_000),
+                Self.log(usdc, .approval, wallet, to, 5_000_000),
+                Self.log(dai, .approval, wallet, to, 5_000_000_000_000_000_000),
+                Self.log(unknownToken, .approval, wallet, to, UInt128.max),
+            ] + unknownTokens.map { Self.log($0, .transfer, to, wallet, 1) }
+        default:
+            return .failure(SiteError(code: -32601, message: "the method eth_simulateV1 does not exist/is not available"))
+        }
+        return .success(.array([.object(["timestamp": .string("0x6aec0daf"), "calls": .array([.object(["status": .string("0x1"), "logs": .array(logs)])])])]))
+    }
+
+    private enum LogKind: String {
+        case transfer = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        case approval = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"
+    }
+
+    private static func log(_ address: String, _ kind: LogKind, _ from: String, _ to: String, _ amount: UInt128) -> JSONValue {
+        func topic(_ address: String) -> JSONValue { .string("0x" + String(repeating: "0", count: 24) + address.dropFirst(2)) }
+        let digits = String(amount, radix: 16)
+        return .object(["address": .string(address), "topics": .array([.string(kind.rawValue), topic(from), topic(to)]), "data": .string("0x" + String(repeating: "0", count: 64 - digits.count) + digits)])
+    }
 
     func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128 {
         guard canQuote else { TestMode.fail("A scene tried to price a transaction.") }
