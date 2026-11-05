@@ -97,6 +97,13 @@ struct PurchaseTrackerTests {
         #expect(PurchaseWording.checkoutNote(MoneyDisplay(main: .USD)) == "You'll need a Coinbase account. Its fees are added, and that total becomes the cost here.")
         #expect(PurchaseWording.checkoutNote(MoneyDisplay(main: .CAD, rateMicros: "1400000")).contains("starts at this amount in CAD"))
         #expect(PurchaseWording.checkoutNote(MoneyDisplay(main: .CAD)).hasPrefix("There's no current USD to CAD rate, so this is in US dollars"))
+        // Its page only starts from an amount in USD, CAD, GBP and EUR, so in anything else it doesn't promise to.
+        for main in [CurrencyCode.CHF, .AUD, .MXN, .ZAR] {
+            let note = PurchaseWording.checkoutNote(MoneyDisplay(main: main, rateMicros: "1400000"))
+            #expect(note.contains("can't start from an amount in \(main.rawValue)"), "\(main)")
+            #expect(!note.contains("starts at this amount"), "\(main)")
+        }
+        #expect(PurchaseWording.checkoutNote(MoneyDisplay(main: .EUR, rateMicros: "900000")).contains("starts at this amount in EUR"))
     }
 
     @Test func followsAnOrderFromThePageToItsCost() async throws {

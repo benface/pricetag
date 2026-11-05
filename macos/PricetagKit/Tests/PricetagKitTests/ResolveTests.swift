@@ -609,6 +609,18 @@ actor GatedVerifier: PortfolioSource {
         for bad in ["1.234,50", "12,3456", "1,23,456", "0,125", ",5"] { #expect(Format.micros(fromDollars: bad) == nil, "\(bad)") }
     }
 
+    @Test func aCostTakesOnlyTheMainCurrencysOwnSymbol() {
+        #expect(Format.micros(fromDollars: "€46,20", in: .EUR) == "46200000")
+        #expect(Format.micros(fromDollars: "46,20 €", in: .EUR) == "46200000")
+        #expect(Format.micros(fromDollars: "CHF 46", in: .CHF) == "46000000")
+        #expect(Format.micros(fromDollars: "A$46", in: .AUD) == "46000000")
+        #expect(Format.micros(fromDollars: "$46", in: .AUD) == "46000000")
+        // Another currency's amount isn't one in this currency, and a note's USD stays in dollars.
+        #expect(Format.micros(fromDollars: "$46", in: .EUR) == nil)
+        #expect(Format.micros(fromDollars: "US$46", in: .CAD) == nil)
+        #expect(Format.micros(fromDollars: "€46") == nil)
+    }
+
     @Test func signsTheSameWordsTheServerChecks() throws {
         struct Vector: Decodable { let owner: String; let address: String; let message: String }
         struct Vectors: Decodable { let linkMessage: Vector }

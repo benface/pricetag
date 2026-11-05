@@ -9,7 +9,7 @@ import { describeConversion, describeEffect, explainContext, explainTarget, type
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
 import { createRates } from "../server/rates.ts"
-import { feedRounds, type RoundReader } from "../server/source.ts"
+import { feedRounds, updateRounds, type RoundReader } from "../server/source.ts"
 import { decodeRound } from "../server/raw.ts"
 
 const E18 = 10n ** 18n
@@ -377,6 +377,46 @@ describe("reading rates", () => {
     assert.equal(decodeRound(null), null)
   })
 
+  describe("from the rates dataset", () => {
+    const update = (block: number, currency: string, answer: string) => ({ block_num: String(block), currency, answer, updated_at: String(1_800_000_000 + block) })
+    const reader = (rows: object[] | Error) => {
+      const sql: string[] = []
+      const read = updateRounds((async <T>(text: string) => {
+        sql.push(text)
+        if (rows instanceof Error) throw rows
+        return rows as T[]
+      }) as never, "benface/pricetag_rates@0.1.0")
+      return { sql, read }
+    }
+
+    it("takes each block's latest update of that currency at or before it, and leaves out a block before any", async () => {
+      const { sql, read } = reader([update(90, "CAD", "71000000"), update(95, "EUR", "112000000"), update(100, "CAD", "72000000"), update(100, "CAD", "73000000"), update(150, "EUR", "113000000")])
+      const rounds = await read("CAD", [120, 80, 100, 99])
+      assert.deepEqual(Object.fromEntries(rounds), { 99: { answer: "71000000", updatedAt: 1_800_000_090 }, 100: { answer: "73000000", updatedAt: 1_800_000_100 }, 120: { answer: "73000000", updatedAt: 1_800_000_100 } })
+      assert.match(sql[0] as string, /FROM "benface\/pricetag_rates@0\.1\.0"\.rate_updates WHERE block_num >= \d+ ORDER BY block_num, log_index$/)
+    })
+
+    it("says a rate past the table's newest row could still change, since an update for it may not be in yet", async () => {
+      const { read } = reader([update(90, "CAD", "71000000"), update(150, "EUR", "113000000")])
+      const rounds = await read("CAD", [140, 150, 160])
+      assert.equal(rounds.get(150)?.unconfirmed, undefined)
+      assert.equal(rounds.get(160)?.unconfirmed, true)
+      assert.equal(rounds.get(160)?.answer, "71000000")
+    })
+
+    it("has no rate rather than an old one when the table has stopped", async () => {
+      const { read } = reader([update(90, "CAD", "71000000")])
+      const rounds = await read("CAD", [100, 90 + 2 * 60 * 30 + 10])
+      assert.ok(rounds.has(100))
+      assert.equal(rounds.size, 1)
+    })
+
+    it("has nothing before the table's job has written, and passes on other failures", async () => {
+      assert.equal((await reader(new Error("no common canonical watermark")).read("CAD", [100])).size, 0)
+      await assert.rejects(reader(new Error("connection reset")).read("CAD", [100]), /connection reset/)
+    })
+  })
+
   it("reads the feed through the same query shape as the oracle, leaving out failed reads", async () => {
     const sql: string[] = []
     const read = feedRounds(
@@ -386,9 +426,9 @@ describe("reading rates", () => {
       }),
       { baseDataset: "base", network: "base_mainnet" },
     )
-    const rounds = await read("0xfeed", [5, 6, 7])
+    const rounds = await read("CAD", [5, 6, 7])
     assert.deepEqual([...rounds.keys()], [5])
-    assert.match(sql[0] as string, /rpc\.base_mainnet\.eth_call\(NULL, evm_encode_hex\('0xfeed'\), evm_encode_params\('latestRoundData\(\)'\), block_num\)/)
+    assert.match(sql[0] as string, /rpc\.base_mainnet\.eth_call\(NULL, evm_encode_hex\('0xA840145F87572E82519d578b1F36340368a25D5d'\), evm_encode_params\('latestRoundData\(\)'\), block_num\)/)
     assert.match(sql[0] as string, /FROM \(SELECT block_num FROM "base"\.blocks WHERE block_num BETWEEN 5 AND 7 AND block_num IN \(5, 6, 7\) LIMIT 3\)/)
   })
 
@@ -430,6 +470,18 @@ describe("reading rates", () => {
     assert.deepEqual(asked.at(-1), [100, 1000])
     assert.ok(second?.byBlock[100])
     assert.equal(second?.latest?.blockNum, 1000)
+  })
+
+  it("doesn't keep a rate that a newer update could still change", async () => {
+    const asked: number[][] = []
+    const read: RoundReader = async (_currency, blocks) => {
+      asked.push([...blocks])
+      return new Map(blocks.map((b) => [b, b === 100 ? { ...round(b, 1.4), unconfirmed: true as const } : round(b, 1.4)]))
+    }
+    const ratesFor = createRates(read)
+    await ratesFor("CAD", walletAt(1000, [100, 200]))
+    await ratesFor("CAD", walletAt(1002, [100, 200]))
+    assert.deepEqual(asked, [[100, 200, 1000], [100, 1002]])
   })
 
   it("reads nothing for USD", async () => {
@@ -521,7 +573,7 @@ describe("GET /api/rate", () => {
     assert.deepEqual((await read("?currency=CAD")).body, { currency: "CAD", rateMicros: null })
     assert.deepEqual((await read("?currency=USD")).body, { currency: "USD", rateMicros: null })
     assert.equal((await read("?currency=XYZ")).status, 400)
-    assert.equal((await read("?currency=EUR")).status, 400, "only what's paid in so far, and not a main currency")
+    assert.equal((await read("?currency=SEK")).status, 400, "no feed, so not a currency here")
     assert.equal((await read("")).status, 400)
     server.close()
   })

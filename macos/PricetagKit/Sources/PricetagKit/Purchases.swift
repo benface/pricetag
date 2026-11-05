@@ -133,9 +133,15 @@ public enum PurchaseWording {
         return "\(chosen) of \(purchase.order?.asset ?? purchase.asset)"
     }
 
+    /// What its page can start from a typed amount in: `PRESET_FIAT` in `server/coinbase.ts`. In anything else, it starts from a token amount.
+    static let startsFromAmountIn: Set<CurrencyCode> = [.USD, .CAD, .GBP, .EUR]
+
     /// What the amount in the sheet will do once it's on the provider's page, so what it charges is no surprise.
     public static func checkoutNote(_ display: MoneyDisplay) -> String {
         let account = "You'll need a \(provider) account."
+        if display.isConverted, !startsFromAmountIn.contains(display.currency) {
+            return "\(account) Its page can't start from an amount in \(display.currency.rawValue), so it starts from about that much of the token, and shows its own price and fees before you pay. What it charges, fees included, becomes the cost here."
+        }
         if display.isConverted {
             return "\(account) Its page starts at this amount in \(display.currency.rawValue) and shows its fees before you pay. What it charges, fees included, becomes the cost here."
         }

@@ -113,7 +113,7 @@ public final class ResolveModel {
     private func candidate(costs dollars: [String: String], in currency: CurrencyCode? = nil, for question: Question) -> Book? {
         var micros: [String: Money] = [:]
         for arrival in question.arrivals {
-            guard let amount = Format.micros(fromDollars: dollars[arrival.asset] ?? "") else { return nil }
+            guard let amount = Format.micros(fromDollars: dollars[arrival.asset] ?? "", in: currency ?? store.currency) else { return nil }
             micros[arrival.asset] = Money(micros: amount, currency: currency ?? store.currency)
         }
         if let sender = question.sender {
@@ -126,7 +126,7 @@ public final class ResolveModel {
     /// A typed cost next to what it was worth, to catch a slip. It's only ever a warning: what someone paid is theirs to say.
     public func costWarning(_ dollars: [String: String], for question: Question) -> String? {
         guard question.arrivals.count == 1, let asset = question.arrivals.first?.asset, let value = question.valueMicros, isPositive(value) else { return nil }
-        guard let text = dollars[asset], let entered = Format.micros(fromDollars: text).flatMap({ Decimal(string: $0) }), let worth = Decimal(string: value) else { return nil }
+        guard let text = dollars[asset], let entered = Format.micros(fromDollars: text, in: store.currency).flatMap({ Decimal(string: $0) }), let worth = Decimal(string: value) else { return nil }
         guard entered > worth * 5 || entered * 5 < worth else { return nil }
         return "That's far from what it was worth when it arrived, about \(Format.money(value, store.currency)). Double-check it."
     }

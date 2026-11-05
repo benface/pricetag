@@ -379,6 +379,15 @@ describe("taxReportOf", () => {
     assert.ok(report.warnings.some((warning) => /Canada reports in CAD/.test(warning)))
   })
 
+  it("says first that its rules may not apply in a currency neither country reports in, and doesn't suggest switching to one", () => {
+    for (const country of ["CA", "US"] as const) {
+      const report = taxReportOf([{ ...wallet, currency: "EUR", rates: demoRates("EUR") }], { country, method: TAX_COUNTRIES[country].method, scope: TAX_COUNTRIES[country].scope })
+      assert.equal(report.currency, "EUR")
+      assert.match(report.warnings[0] ?? "", /only knows Canada and the US, and neither reports in EUR\. If you report in EUR, these rules and this layout may not apply/)
+      assert.ok(!report.warnings.some((warning) => /Change your main currency/.test(warning)))
+    }
+  })
+
   it("converts at each transaction's rate, and a missing rate is unknown rather than guessed", () => {
     // USD for one CAD, with 8 decimals: 0.50 at the buy and 0.25 at the sale.
     const round = (answer: string, block: number) => ({ answer, updatedAt: Date.parse(leg(block, 0n).timestamp) / 1000 })
@@ -811,7 +820,7 @@ describe("POST /api/tax-report", () => {
     assert.equal((await post("demo", { country: "CA", method: "lifo" })).status, 400)
     assert.equal((await post("demo", { country: "CA", method: 1 })).status, 400)
     assert.equal((await post("demo", { country: "CA", scope: "everything" })).status, 400)
-    assert.equal((await post("demo", { country: "CA", currency: "EUR" })).status, 400)
+    assert.equal((await post("demo", { country: "CA", currency: "SEK" })).status, 400)
     assert.equal((await post("demo", { country: "CA", book: { costs: { x: "nope" } } })).status, 400)
     assert.equal((await post(A, { country: "CA", also: "nope" })).status, 400)
     assert.equal((await post(A, { country: "CA", also: [1] })).status, 400)
@@ -941,7 +950,7 @@ describe("GET /api/tax-report", () => {
     assert.equal((await get("demo?country=FR")).status, 400)
     assert.equal((await get("demo?country=CA&method=lifo")).status, 400)
     assert.equal((await get("demo?country=CA&scope=everything")).status, 400)
-    assert.equal((await get("demo?country=CA&currency=EUR")).status, 400)
+    assert.equal((await get("demo?country=CA&currency=SEK")).status, 400)
     assert.equal((await get(`demo?country=CA&also=${A}`)).status, 400)
     assert.equal((await get(`${DEMO_ADDRESS}?country=CA&also=${A}`)).status, 400)
     assert.equal((await get(`${A}?country=CA&also=nope`)).status, 400)

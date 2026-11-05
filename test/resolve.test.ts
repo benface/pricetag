@@ -1631,4 +1631,17 @@ describe("a cost as typed", () => {
   it("refuses a comma it can't tell apart", () => {
     for (const bad of ["1.234,50", "12,3456", "1,23,456", "0,125", ",5", ""]) assert.equal(microsOf(bad), null, bad)
   })
+
+  it("takes the main currency's own symbol, before or after, and refuses any other", () => {
+    assert.equal(microsOf("€46,20", "EUR"), "46200000")
+    assert.equal(microsOf("46,20 €", "EUR"), "46200000")
+    assert.equal(microsOf("46.20 EUR", "EUR"), "46200000")
+    assert.equal(microsOf("CHF 46", "CHF"), "46000000")
+    assert.equal(microsOf("$46", "AUD"), "46000000")
+    assert.equal(microsOf("A$46", "AUD"), "46000000")
+    assert.equal(microsOf("R$46", "BRL"), "46000000")
+    // `€46` published as 46 dollars can't be taken back, so a note's USD stays in dollars.
+    assert.equal(microsOf("€46"), null)
+    for (const [text, currency] of [["$46", "EUR"], ["US$46", "CAD"], ["£46", "EUR"], ["R$46", "ZAR"], ["CA$46", "AUD"]] as const) assert.equal(microsOf(text, currency), null, `${text} in ${currency}`)
+  })
 })

@@ -5,7 +5,7 @@ import type { WalletResponse } from "../src/core/api.ts"
 import type { Book } from "../src/core/book.ts"
 import { CURRENCIES, normalizeAddress, type CurrencyCode, type PaidRates, type Rates, type RateRound } from "@pricetag/sdk/core"
 import { settledThrough } from "@pricetag/sdk/internal"
-import type { RoundReader } from "./source.ts"
+import type { ReadRound, RoundReader } from "./source.ts"
 
 type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletResponse, "legs" | "latest">) => Promise<Rates | null>
 
@@ -20,8 +20,7 @@ export function createRates(readRounds: RoundReader): RatesReader {
 
   /** A read that fails throws. A block the feed had no answer for is just left out, and isn't remembered, so it's tried again. */
   const ratesFor: ReadRates = async (currency, wallet) => {
-    const feed = CURRENCIES[currency].feed
-    if (!feed) return null
+    if (!CURRENCIES[currency].feed) return null
     const known = settled.get(currency) ?? new Map<number, RateRound>()
     settled.set(currency, known)
     const head = wallet.latest.blockNum
@@ -30,9 +29,9 @@ export function createRates(readRounds: RoundReader): RatesReader {
     const wanted = blocks.filter((block) => !known.has(block))
     if (current?.blockNum !== head) wanted.push(head)
     const startedAt = rewinds
-    const read = wanted.length > 0 ? await readRounds(feed.address, wanted) : new Map<number, RateRound>()
+    const read = wanted.length > 0 ? await readRounds(currency, wanted) : new Map<number, ReadRound>()
     const isSameChain = startedAt === rewinds
-    if (isSameChain) for (const [block, round] of read) if (block <= settledThrough(head)) known.set(block, round)
+    if (isSameChain) for (const [block, round] of read) if (block <= settledThrough(head) && !round.unconfirmed) known.set(block, round)
 
     const byBlock: Rates["byBlock"] = {}
     for (const block of blocks) {

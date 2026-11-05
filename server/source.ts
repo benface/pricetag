@@ -3,29 +3,71 @@
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type FeedRound, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
+import { CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, MAX_ROUND_AGE_SECONDS, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, msBetweenBlocks, parseNote, type CostNote, type CurrencyCode, type FeedRound, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
 import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, readPayoutTxsAt, settledThrough, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRound, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
 
-/** A feed's answer at each block, leaving out blocks where the read failed. */
-export type RoundReader = (feed: string, blocks: readonly number[]) => Promise<Map<number, RateRound>>
+/** A rate at a block. `unconfirmed` means a newer update could still turn up for that block, so it's only good for now. */
+export type ReadRound = RateRound & { unconfirmed?: true }
+
+/** A currency's answer at each block, leaving out blocks where the read failed. */
+export type RoundReader = (currency: CurrencyCode, blocks: readonly number[]) => Promise<Map<number, ReadRound>>
 
 /**
- * Exchange rates read the way `rawSource` reads the oracle, whichever source a wallet comes from: the Pricetag dataset's
- * base is USD, so it doesn't hold them. See the note on the query's shape in `readReferences`.
+ * Exchange rates read from each feed's contract, the way `rawSource` reads the oracle, for an Amp with no rates dataset. It leans on
+ * an RPC, and it's what a local Amp has to do, because it has no logs from before its start. See the note on the query's shape in `readReferences`.
  */
 export function feedRounds(query: Query, config: { baseDataset: string; network: string }): RoundReader {
-  return async (feed, blocks) => {
-    const rounds = new Map<number, RateRound>()
+  return async (currency, blocks) => {
+    const rounds = new Map<number, ReadRound>()
+    const address = CURRENCIES[currency].feed?.address
+    if (!address) return rounds
     for (const { filter, count } of blockFilters(blocks)) {
       const rows = await query<Row>(
-        `SELECT block_num, rpc.${config.network}.eth_call(NULL, evm_encode_hex('${feed}'), evm_encode_params('latestRoundData()'), block_num) AS round
+        `SELECT block_num, rpc.${config.network}.eth_call(NULL, evm_encode_hex('${address}'), evm_encode_params('latestRoundData()'), block_num) AS round
          FROM (SELECT block_num FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`,
       )
       for (const row of rows) {
         const round = decodeRound((row.round as { data?: string } | null)?.data)
         if (round) rounds.set(asNumber(row.block_num), round)
       }
+    }
+    return rounds
+  }
+}
+
+/** Some feed or other updated at least every 41 minutes over 23 days of logs. With nothing newer in the table than this, its job has stopped, and a rate read from it could quietly be old. */
+const MAX_RATES_LAG_MS = 2 * 60 * 60 * 1000
+
+/**
+ * Exchange rates from Chainlink's `AnswerUpdated` logs, in the rates dataset. A rate at a block is the feed's latest update at or
+ * before it, which is what the contract answers there. It reads one small table, and needs no RPC.
+ *
+ * The table only has a row when a feed updates, so its newest row, from any feed, is the only sign of how far it's reached. It
+ * writes in block order, so at or before that row it's complete. Past it, an update could still arrive, so a rate is `unconfirmed`.
+ */
+export function updateRounds(query: Query, dataset: string): RoundReader {
+  return async (currency, blocks) => {
+    const rounds = new Map<number, ReadRound>()
+    const wanted = [...blocks].sort((a, b) => a - b)
+    const first = wanted[0]
+    if (first === undefined) return rounds
+    const sql = `SELECT block_num, currency, answer, updated_at FROM "${dataset}".rate_updates WHERE block_num >= ${blockBefore(first, MAX_ROUND_AGE_SECONDS * 1000)} ORDER BY block_num, log_index`
+    const rows = await query<Row>(sql).catch((error: unknown) => {
+      if (isNotStarted(error)) return [] as Row[]
+      throw error
+    })
+    const newest = asNumber(rows.at(-1)?.block_num ?? 0)
+    let at = 0
+    let latest: Row | null = null
+    for (const block of wanted) {
+      while (at < rows.length && asNumber((rows[at] as Row).block_num) <= block) {
+        const row = rows[at++] as Row
+        if (row.currency === currency) latest = row
+      }
+      if (!latest || msBetweenBlocks(newest, block) > MAX_RATES_LAG_MS) continue
+      const round = { answer: String(latest.answer), updatedAt: Number(latest.updated_at) }
+      rounds.set(block, block > newest ? { ...round, unconfirmed: true } : round)
     }
     return rounds
   }

@@ -5,7 +5,7 @@ import { CURRENCIES, atCurrentRate, type CurrencyCode } from "./currency.ts"
 
 const UNKNOWN = "unknown"
 
-const whole = new Map(Object.values(CURRENCIES).map((c) => [c.code, new Intl.NumberFormat(c.locale, { style: "currency", currency: c.code })]))
+const whole = new Map(Object.values(CURRENCIES).map((c) => [c.code, new Intl.NumberFormat(c.locale, { style: "currency", currency: c.code, ...(c.narrow ? { currencyDisplay: "narrowSymbol" } : {}) })]))
 
 const twoDecimals = (value: number, currency: CurrencyCode) => (whole.get(currency) as Intl.NumberFormat).format(value)
 
@@ -55,9 +55,21 @@ export function plainAmount(text: string): string | null {
   return clean.replaceAll(",", "")
 }
 
-/** What was paid, beside amounts in another currency, so no kind of dollar is left bare. This locale says US$, CA$, €, £ and CHF. */
+/** What was paid, beside amounts in another currency, so no kind of dollar is left bare. */
 export function formatPaid(micros: string, currency: CurrencyCode): string {
-  return new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(Number(micros) / 1e6)
+  const { symbol, label } = CURRENCIES[currency]
+  return formatMoney(micros, currency).replace(symbol, label)
+}
+
+/** A cost as someone typed it, without the main currency's own symbol or code, before or after. Any other symbol stays, so it isn't read as an amount in this currency. */
+export function withoutCurrency(text: string, currency: CurrencyCode): string {
+  const { code, symbol, label } = CURRENCIES[currency]
+  const clean = text.trim()
+  for (const mark of [label.trim(), symbol.trim(), code]) {
+    if (clean.startsWith(mark)) return clean.slice(mark.length)
+    if (clean.endsWith(mark)) return clean.slice(0, -mark.length)
+  }
+  return clean
 }
 
 /** What one USD buys, to four decimals, which is how far exchange rates are usually quoted. */
