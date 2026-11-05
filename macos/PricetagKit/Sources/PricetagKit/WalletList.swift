@@ -162,9 +162,10 @@ public struct WalletList: Equatable, Sendable {
     }
 
     /// Links it to the wallet showing if that's the user's, or to another of theirs. With none yet, it speaks for itself. A wallet that's only
-    /// being looked at never comes into it, because one wallet's signature says nothing about another.
+    /// being looked at never comes into it, because one wallet's signature says nothing about another, and neither does the demo, whose
+    /// wallets nobody owns even after answering for them.
     public func proof(of entry: WalletEntry, current: String?) -> WalletProof {
-        let others = yours.map(\.address).filter { $0 != entry.address }
+        let others = yours.map(\.address).filter { $0 != entry.address && !WalletAddress.isDemo($0) }
         let owner = current.flatMap { others.contains($0) ? $0 : nil } ?? others.first ?? entry.address
         return WalletProof(address: entry.address, owner: owner, title: entry.title)
     }
