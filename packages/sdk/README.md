@@ -53,6 +53,7 @@ Amounts are in a token's smallest unit, and USD values are in micros (millionths
 | --- | --- |
 | `createPricetag(config)` | A client. See [the config](#the-config). |
 | `getPortfolio(address, { method?, from?, to? })` | A wallet's holdings, cost and PnL, matching the app. `method` is `"average"`, the default, or `"fifo"`. With a `to`, it's the wallet as of that block, at that block's prices. See [what it returns](#what-getportfolio-returns). |
+| `watchWallet(address, { method?, from?, signal? })` | The same portfolio now, then again after each new block, as an async iterable. See [watching a wallet](#watching-a-wallet). |
 | `getLegs(address, { from?, to? })` | `{ legs, blocks, references, gasUnknownTxs, l1Fees, l1FeeUnknownTxs }`: what moved in the range, priced and labeled, in the order the fold reads them. It doesn't include opening balances. With an `rpcUrl`, these are the same legs as the app's and `getPortfolio`'s, L1 fees included. Without one, gas leaves out L1 fees, and a swap paid out in unwrapped ETH stays unknown. |
 | `getPrices(token, { from?, to? })` | `{ token, prices, blocks }`: a token's prices, by symbol or address. It throws on a token off the allowlist, which has no prices to give. |
 | `getLatestPrices()` | The current prices to value positions at. Only ETH and USDC have one, and only with a recent oracle read. |
@@ -105,11 +106,33 @@ L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anyt
 | `points` | PnL after each transaction, for a chart. |
 | `gasUnknownTxs` | Transactions whose gas couldn't be worked out, so ETH is overstated by that much. |
 | `l1Fees`, `l1FeeUnknownTxs` | `read`, `pending` (some couldn't be read yet, and the next call tries again) or `no rpc url`, and the transactions affected. |
+| `unsettledFrom` | The first block a reorg replaced that the dataset may not have rewritten yet, or null. The numbers can still hold the old blocks from there on, and later reads replace them. |
 | `openingUnread`, `unreadAssets` | Assets whose balance before the first block couldn't be read, and assets with no position because nothing could be read about them, which isn't the same as holding none. |
 
 A position's `reconciliation.status` is `reconciled` when its legs add up to its onchain balance to the smallest unit, `incomplete` when they don't, and `unchecked` when a read is missing. Only a reconciled position shows PnL. Otherwise its amount and value come from the chain, and its cost and PnL are `null`. On ETH that's `incomplete`, `reconciliation.unseenEth` lists blocks where ETH rose with nothing to explain it, and the transactions that took a token from the wallet there. Those transactions' proceeds stay unknown.
 
 A client keeps each wallet's rows in memory, so another call on the same client only reads new blocks. A read with a `to` is re-read on each new block until `to` is a minute behind the chain's head, because a reorg can still change it. After that, it's fixed. It also reads at most 200 L1 fees per call, so a busy wallet's ETH stays `unchecked` for its first few calls while they catch up. With an `rpcUrl`, `getLegs` shares all of this with `getPortfolio`, so a swap paid out in unwrapped ETH can stay unknown for those first few calls too.
+
+### Watching a wallet
+
+```ts
+for await (const { blocks, totals, pnlStatus, reorgFrom, via } of pricetag.watchWallet(address)) {
+  console.log(blocks.toBlock, formatSignedMoney(totals.pnlMicros), pnlStatus)
+}
+```
+
+[`examples/watch.ts`](examples/watch.ts) is a whole one: `pnpm example:watch <address> [how many updates]`.
+
+Each update is everything `getPortfolio` returns, for the whole wallet, so replace the last one with it. That's what makes a reorg safe: an update after one has what the reorg changed, and nothing it took away. `reorgFrom` says from which block, if you want to tell someone. `via` says what reported the block, `stream` or `polling`, and is null on the first update.
+
+- **Where it comes from:** Amp's stream says when `priced_legs`, the last table to finish a block, has finished one, and when blocks were replaced. It sends no rows. The wallet is then read the same way `getPortfolio` reads it, since balances, L1 fees and current prices aren't in any one stream.
+- **When the stream fails:** it polls every 2 s and tries the stream again every 30 s. A stream with no new block for 60 s counts as failed, even if it's still connected. While polling, a new reorg is only seen at the head, and a deeper one is replaced by the same re-read of the last 30 blocks that every read does. One the stream reported before it failed is still replaced in full, as below.
+- **After a reorg:** being told about one doesn't mean the dataset has rewritten those blocks yet, and until it has, a read gets the old ones back. So every read goes back to the reorg's first block until the tables are a minute past the old chain's tip, if they're keeping up, and `unsettledFrom` says that block until then. That goes for a read with a `to` too, if the reorg reached it. The update that has the new blocks can come after the one with `reorgFrom`, with `reorgFrom` null.
+- **Failed reads:** they go to `logger`, and the next block tries again, so the iterable doesn't end because Amp had a bad moment. It ends when you leave the loop or abort `signal`.
+- **Fast blocks:** Base makes 5 blocks a second from its 200 ms upgrade on, and each update is a whole read, so updates come at most every 2 s, for the newest block.
+- **Slow code:** a loop that takes longer than that doesn't fall behind. It gets the newest block next, with any reorg it missed.
+
+Each watch holds one streaming request open, apart from the one-at-a-time queries.
 
 ### Other things to check
 

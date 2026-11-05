@@ -2,7 +2,7 @@
 //
 // Every query is bounded by block, because a hosted Amp is shared.
 
-import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type Query } from "./amp.ts"
+import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type BlockMark, type Query } from "./amp.ts"
 import { blockBefore } from "./chain.ts"
 import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
 import type { LegRow, PricedRow, Reference } from "./legs.ts"
@@ -46,6 +46,23 @@ export async function readHead(query: Query, dataset: string, after: number | nu
   const row = rows[0]
   return row ? { blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) } : null
 }
+
+/** The head with its hash, which a stream resumes from. */
+export async function readHeadMark(query: Query, dataset: string, after: number | null): Promise<BlockMark | null> {
+  const where = after === null ? "" : `WHERE block_num >= ${after}`
+  const rows = await query<Row>(`SELECT block_num, hash FROM "${dataset}".blocks ${where} ORDER BY block_num DESC LIMIT 1`, 15_000)
+  const row = rows[0]
+  return row ? { blockNum: asNumber(row.block_num), hash: prefixed(hexOf(String(row.hash))) } : null
+}
+
+/**
+ * What to stream to know a block has been processed. `priced_legs` is the last table to finish one, so a wallet read can
+ * reach that block by then. No row matches: rows come from bounded queries, and a stream's progress is in its metadata.
+ */
+export const followSql = (dataset: string) => `SELECT block_num FROM "${dataset}".priced_legs WHERE block_num < 0`
+
+/** The same for reading the raw dataset, which has no tables to wait for. */
+export const followRawSql = (baseDataset: string) => `SELECT block_num FROM "${baseDataset}".blocks WHERE block_num < 0`
 
 /** A derived table runs a few seconds behind the head, and older than this isn't a current price. */
 const MAX_PRICE_AGE_MS = 120_000
