@@ -171,6 +171,10 @@ enum TestScene: String, CaseIterable {
     case siteTransactionCAD = "site-transaction-cad"
     case siteUnlimitedApproval = "site-unlimited-approval"
     case siteTypedPermit = "site-typed-permit"
+    case siteSending = "site-sending"
+    case siteSigning = "site-signing"
+    case siteTransactionFailed = "site-transaction-failed"
+    case siteMessageFailed = "site-message-failed"
 
     enum Chrome { case titled, none }
 
@@ -350,6 +354,13 @@ enum TestScene: String, CaseIterable {
             _ = bridge.begin(SiteRequest(connection: UUID(), id: "1", origin: HotWalletFixture.site, method: request.method, parameters: request.parameters))
             let armed = ContinuousClock.now + SiteApprovalView.armingDelay
             return TestScreen(view: AnyView(SiteApprovalWindow(bridge: bridge).navigationTitle(SiteApprovalWindow.title)), isReady: { bridge.current != nil && ContinuousClock.now >= armed })
+        // The bridge only gets to these by approving, which asks for Touch ID and signs, so they're drawn from values and it's never involved.
+        case .siteSending, .siteSigning:
+            return TestScreen(view: AnyView(SiteWorkingView(origin: HotWalletFixture.site, isTransaction: self == .siteSending).frame(width: SiteApprovalWindow.width).navigationTitle(SiteApprovalWindow.title)), isReady: { true })
+        case .siteTransactionFailed, .siteMessageFailed:
+            let isTransaction = self == .siteTransactionFailed
+            let reason = isTransaction ? HotWalletWording.networkBusy : HotWalletWording.keyMissing
+            return TestScreen(view: AnyView(SiteFailureView(origin: HotWalletFixture.site, isTransaction: isTransaction, reason: reason, dismiss: {}).frame(width: SiteApprovalWindow.width).navigationTitle(SiteApprovalWindow.title)), isReady: { true })
         }
     }
 

@@ -7,13 +7,14 @@ import SwiftUI
 /// this window or press its buttons. Rejecting is the default, and closing the window rejects too.
 struct SiteApprovalWindow: View {
     static let title = "Site Request"
+    static let width: CGFloat = 480
 
     let bridge: SiteBridge
 
     var body: some View {
         Group {
             if let failure = bridge.failure {
-                SiteFailureView(failure: failure) { bridge.dismissFailure() }
+                SiteFailureView(origin: failure.origin, isTransaction: failure.isTransaction, reason: failure.reason) { bridge.dismissFailure() }
             } else if let approval = bridge.current {
                 SiteApprovalView(approval: approval, waitingBehind: bridge.pending.count - 1, usd: bridge.usd) { acknowledged in
                     await bridge.approve(approval.id, acknowledged: acknowledged)
@@ -22,10 +23,10 @@ struct SiteApprovalWindow: View {
                 }
                 .id(approval.id)
             } else if let working = bridge.working {
-                SiteWorkingView(work: working)
+                SiteWorkingView(origin: working.origin, isTransaction: working.isTransaction)
             }
         }
-        .frame(width: 480)
+        .frame(width: Self.width)
         // Closing it answers what's on show. If that was a failure, what's waiting behind it comes up next, because nobody has seen it yet.
         .onDisappear {
             if bridge.failure != nil {
@@ -212,13 +213,14 @@ struct SiteApprovalView: View {
 }
 
 /// Between approving and the transaction going out, which can take a few seconds when the network is busy.
-private struct SiteWorkingView: View {
-    let work: SiteWork
+struct SiteWorkingView: View {
+    let origin: String
+    let isTransaction: Bool
 
     var body: some View {
         HStack(spacing: 10) {
             ProgressView().controlSize(.small)
-            Text(work.isTransaction ? "Sending for \(work.origin)…" : "Signing for \(work.origin)…")
+            Text(isTransaction ? "Sending for \(origin)…" : "Signing for \(origin)…")
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
@@ -227,22 +229,24 @@ private struct SiteWorkingView: View {
 }
 
 /// It's approved, and it didn't happen. The site will say something too, but only this knows why.
-private struct SiteFailureView: View {
-    let failure: SiteFailure
+struct SiteFailureView: View {
+    let origin: String
+    let isTransaction: Bool
+    let reason: String
     let dismiss: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(failure.isTransaction ? "This Transaction Didn't Go Out" : "This Wasn't Signed")
+                Text(isTransaction ? "This Transaction Didn't Go Out" : "This Wasn't Signed")
                     .font(.title2.bold())
-                Text(failure.origin)
+                Text(origin)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
-            Notice(.warning, failure.reason)
+            Notice(.warning, reason)
                 .textSelection(.enabled)
-            if failure.isTransaction {
+            if isTransaction {
                 Text("Nothing was sent, so no money moved.")
             }
             HStack {
