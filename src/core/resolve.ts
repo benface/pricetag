@@ -179,15 +179,6 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const gap = known.get(asset)
     return gap && blockNum > gap.through ? gap : null
   }
-  /**
-   * Whether a mismatch at this block won't clear by itself, which is what's worth asking about. ETH's still can while a claim
-   * hasn't settled or a transaction's gas is missing, as of that balance. What happened after it can't explain it.
-   */
-  const staysMismatched = (sender: string, asset: string, at: number) => {
-    const { wallet, view } = read.get(sender) as Side
-    return asset !== "ETH" || !(wallet.gasUnknownBlocks.some((block) => block <= at) || view.legs.some((leg) => leg.asset === "ETH" && leg.unsettledCredit && leg.blockNum <= at))
-  }
-
   // Everything that could be an exchange withdrawal, across every wallet read, so one withdrawal can't explain two of them.
   const arrivals: ExchangeArrival[] = sides.flatMap(({ wallet, view }) =>
     view.legs.flatMap((leg) => {
@@ -238,7 +229,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
         }
         const gap = sender === address ? null : gapAt(sender, leg)
         if (gap) {
-          unvouched.push({ sender, settled: gap.mismatchAt !== null && staysMismatched(sender, leg.asset, gap.mismatchAt) })
+          unvouched.push({ sender, settled: gap.mismatch })
           return [{ ...unknown, unconfirmedBy: [sender] }]
         }
         return pull(leg, sender, address, part)

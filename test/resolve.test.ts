@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { verifyLink } from "../server/links.ts"
 import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
-import { ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, shortHash, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
+import { createWallets, type Source } from "@pricetag/sdk/internal"
+import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, shortHash, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
 import { answerSender, costKey, emptyBook, enterExchangeCosts, linkMessage, parseBook, type Book, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
 import { matchWithdrawals, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -370,6 +371,106 @@ describe("the cost of an incoming leg", () => {
             const named = foldBook(wallet(B, withStranger), [off], "average", book({ [A]: { kind: "mine" }, [STRANGER]: { kind: "someone-else" } }))
             assert.deepEqual(named.questions.map((q) => q.kind), ["cost"], "that part's answered, and the rest still isn't known")
           })
+        })
+      })
+
+      describe("as a wallet's refreshed, from what's actually read", () => {
+        const start = [...send(10, "0x1", STRANGER, A, E18, ETH_ADDRESS), ...send(20, "0x2", A, B, E18, ETH_ADDRESS)]
+        // Half an ETH that no leg explains shows up at block 25, and never goes away.
+        const heldByA = (at: number) => (at < 10 ? 0n : at < 20 ? E18 : at < 25 ? 0n : E18 / 2n)
+        const gasAt = (block: number, tx: string) => move(block, tx, A, "debit", 1000n, null, ETH_ADDRESS)
+        const gasRow = (block: number, tx: string): LegRow => ({ ...gasAt(block, tx), kind: "gas" })
+        const claimRow = (block: number, tx: string): LegRow => ({ ...move(block, tx, A, "credit", 1000n, null, ETH_ADDRESS), kind: "unwrap" })
+        const answers = book({ [A]: { kind: "mine" }, [STRANGER]: { kind: "someone-else" } })
+
+        type World = {
+          rows?: (head: number) => LegRow[]
+          gasUnknown?: (head: number) => { tx_hash: string; block_num: number }[]
+          balance?: (at: number, head: number) => bigint | null
+          ethReads?: (head: number) => boolean
+        }
+
+        /** What's asked about B's ETH at each head, in order. */
+        async function askedAt(heads: number[], { rows = () => [], gasUnknown = () => [], balance = (at) => heldByA(at), ethReads = () => true }: World) {
+          let head = heads[0] as number
+          const reference = (blockNum: number): Reference => ({ blockNum, ethUsd: "200000000000", usdcUsd: "100000000" })
+          const at = () => ({ blockNum: head, timestamp: new Date(Date.UTC(2026, 10, 4) + head * 2000).toISOString() })
+          const source: Source = {
+            mode: "raw",
+            startBlock: 1,
+            historyFrom: null,
+            head: async () => at(),
+            processedThrough: async (_, through) => through,
+            readWindow: async (address, from, to) => {
+              const inWindow = (block: number) => block >= from && block <= to
+              return { rows: [...start, ...rows(head)].filter((r) => r.account === address && inWindow(r.block_num)), priced: null, gasUnknown: address === A ? gasUnknown(head).filter((tx) => inWindow(tx.block_num)) : [] }
+            },
+            readReferences: async (blocks) => blocks.map(reference),
+            readLatestReference: async (block) => reference(block),
+            readBalances: async (address, block) => {
+              const eth = address === A ? balance(block, head) : block >= 20 ? E18 : 0n
+              if (eth === null) throw new Error("no answer")
+              return { blockNum: block, amounts: { ...Object.fromEntries(ASSETS.map((asset) => [asset, "0"])), ETH: eth.toString() } }
+            },
+            readEthBalances: async (_, blocks) => {
+              if (!ethReads(head)) throw new Error("no answer")
+              return new Map(blocks.map((block) => [block, (balance(block, head) as bigint).toString()]))
+            },
+          }
+          const wallets = createWallets(source, async () => at(), async (requests) => new Map(requests.map((r) => [r.txHash, "0"])), { warn: () => {} } as never)
+          const asked: string[][] = []
+          for (const next of heads) {
+            head = next
+            const [recipient, sender] = [await wallets.get(B), await wallets.get(A)]
+            asked.push(foldBook(recipient, [sender], "average", answers).questions.filter((q) => q.wallet === B).map((q) => q.kind))
+          }
+          return asked
+        }
+
+        // These run with every read working, so nothing here is about a read that failed.
+        it("keeps asking while newer gas is missing, and after it's read", async () => {
+          const unknown = (head: number) => (head >= 40 && head < 46 ? [{ tx_hash: "0x9", block_num: 40 }] : [])
+          assert.deepEqual(await askedAt([30, 45, 46], { gasUnknown: unknown, rows: (head) => (head >= 46 ? [gasRow(40, "0x9")] : []), balance: (block) => heldByA(block) - (block >= 40 ? 1000n : 0n) }), [["cost"], ["cost"], ["cost"]])
+        })
+
+        it("keeps asking while a newer claim hasn't settled, and after it has", async () => {
+          assert.deepEqual(await askedAt([30, 45, 46], { rows: (head) => (head >= 40 ? [claimRow(40, "0x9")] : []), ethReads: (head) => head !== 45, balance: (block) => heldByA(block) + (block >= 40 ? 1000n : 0n) }), [["cost"], ["cost"], ["cost"]])
+        })
+
+        it("doesn't ask while what's missing is older than any balance that disagrees", async () => {
+          const unknown = (head: number) => (head < 46 ? [{ tx_hash: "0x9", block_num: 17 }] : [])
+          assert.deepEqual(await askedAt([30, 45, 46], { gasUnknown: unknown }), [[], [], ["cost"]])
+          assert.deepEqual(await askedAt([30, 45, 46], { rows: () => [claimRow(17, "0x9")], ethReads: (head) => head >= 46, balance: (block) => heldByA(block) + (block >= 17 ? 1000n : 0n) }), [[], [], ["cost"]])
+        })
+
+        it("doesn't ask at all when newer gas is all that's wrong", async () => {
+          const unknown = (head: number) => (head >= 40 ? [{ tx_hash: "0x9", block_num: 40 }] : [])
+          assert.deepEqual(await askedAt([30, 45], { gasUnknown: unknown, balance: (block) => (block < 10 ? 0n : block < 20 ? E18 : 0n) - (block >= 40 ? 1000n : 0n) }), [[], []])
+        })
+
+        it("stops asking when its block is replaced and the new balance adds up", async () => {
+          const unknown = (head: number) => (head >= 40 ? [{ tx_hash: "0x9", block_num: 40 }] : [])
+          // Until head 45, block 30 said it held half an ETH. After a reorg, it held none, and the legs add up.
+          const balance = (block: number, head: number) => (head >= 45 ? (block < 10 ? 0n : block < 20 ? E18 : 0n) : heldByA(block))
+          assert.deepEqual(await askedAt([30, 45], { gasUnknown: unknown, balance }), [["cost"], []])
+        })
+
+        it("stops asking when corrected legs add up to what it read", async () => {
+          const unknown = (head: number) => (head >= 40 ? [{ tx_hash: "0x9", block_num: 40 }] : [])
+          const corrected = (head: number) => (head >= 45 ? send(25, "0x7", STRANGER, A, E18 / 2n, ETH_ADDRESS).filter((r) => r.account === A) : [])
+          assert.deepEqual(await askedAt([30, 45], { gasUnknown: unknown, rows: corrected }), [["cost"], []])
+        })
+
+        it("keeps what it read when its block can't be read again, until it can", async () => {
+          const unknown = (head: number) => (head >= 40 ? [{ tx_hash: "0x9", block_num: 40 }] : [])
+          const balance = (block: number, head: number) => (head === 45 && block === 30 ? null : head >= 46 ? (block < 10 ? 0n : block < 20 ? E18 : 0n) : heldByA(block))
+          assert.deepEqual(await askedAt([30, 45, 46], { gasUnknown: unknown, balance }), [["cost"], ["cost"], []])
+        })
+
+        it("recovers from a failed read with newer gas missing", async () => {
+          const unknown = (head: number) => (head >= 40 && head < 50 ? [{ tx_hash: "0x9", block_num: 40 }] : [])
+          const balance = (block: number, head: number) => (head === 45 ? null : heldByA(block))
+          assert.deepEqual(await askedAt([30, 44, 45, 46], { gasUnknown: unknown, balance }), [["cost"], ["cost"], ["cost"], ["cost"]])
         })
       })
 

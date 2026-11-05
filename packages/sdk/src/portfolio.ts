@@ -148,8 +148,8 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
 export type HistoryGap = {
   /** The last block they're known to add up at, which is -Infinity when there's no such block. */
   through: number
-  /** The block of the balance they don't match. Null when there's nothing to compare them with yet. */
-  mismatchAt: number | null
+  /** A balance they were compared with doesn't match, and nothing that's still unclear could be why, so it won't clear by itself. */
+  mismatch: boolean
 }
 
 /**
@@ -161,17 +161,30 @@ export type HistoryGap = {
  */
 export function historyGaps(legs: readonly PricedLeg[], method: Method, onchain: Onchain): Map<string, HistoryGap> {
   const gaps = new Map<string, HistoryGap>()
+  const l1FeeUnknown = new Set(onchain.l1FeeUnknownTxs)
   for (const { asset, reconciliation } of foldPositions(legs, method, {}, onchain)) {
     if (reconciliation === null || reconciliation.status === "reconciled") continue
-    gaps.set(asset, { through: Number.NEGATIVE_INFINITY, mismatchAt: reconciliation.status === "incomplete" ? reconciliation.blockNum : null })
-    // A mismatch is a mismatch, and without the starting balance there are no legs to compare, whatever a read says.
-    if (reconciliation.status === "incomplete" || onchain.openingUnread?.includes(asset)) continue
+    const incomplete = reconciliation.status === "incomplete"
+    const unreadStart = onchain.openingUnread?.includes(asset) ?? false
     const last = asset === "ETH" && onchain.l1FeeUnknownTxs.length > 0 ? onchain.lastCheckableEth : onchain.lastBalances?.[asset]
-    if (!last) continue
-    const then = legs.filter((leg) => leg.asset === asset && leg.blockNum <= last.blockNum)
-    const [position] = foldPositions(then, method, {}, { balances: { blockNum: last.blockNum, amounts: { [asset]: last.amount } }, l1FeeUnknownTxs: [] })
-    // With nothing moved by then and nothing held, there's no position, and nothing to disagree with.
-    gaps.set(asset, !position || position.reconciliation?.status === "reconciled" ? { through: last.blockNum, mismatchAt: null } : { through: Number.NEGATIVE_INFINITY, mismatchAt: last.blockNum })
+    const adds = ({ blockNum, amount }: { blockNum: number; amount: string }) => {
+      const then = legs.filter((leg) => leg.asset === asset && leg.blockNum <= blockNum)
+      const [position] = foldPositions(then, method, {}, { balances: { blockNum, amounts: { [asset]: amount } }, l1FeeUnknownTxs: [] })
+      // With nothing moved by then and nothing held, there's no position, and nothing to disagree with.
+      return !position || position.reconciliation?.status === "reconciled"
+    }
+    // A mismatch is a mismatch, and without the starting balance there are no legs to compare, whatever a read says.
+    if (!incomplete && !unreadStart && last && adds(last)) {
+      gaps.set(asset, { through: last.blockNum, mismatch: false })
+      continue
+    }
+    // ETH's legs can still be wrong where a claim hasn't settled, or a fee is missing. What happened after a balance can't explain it.
+    const clearAt = (block: number) =>
+      asset !== "ETH" || !((onchain.gasUnknownBlocks ?? []).some((gas) => gas <= block) || legs.some((leg) => leg.asset === "ETH" && leg.blockNum <= block && (leg.unsettledCredit || l1FeeUnknown.has(leg.txHash))))
+    const compared = incomplete ? reconciliation.blockNum : last?.blockNum
+    const clear = asset === "ETH" ? onchain.lastCheckableEth : null
+    const mismatch = !unreadStart && ((compared !== undefined && clearAt(compared)) || (!!clear && clearAt(clear.blockNum) && !adds(clear)))
+    gaps.set(asset, { through: Number.NEGATIVE_INFINITY, mismatch })
   }
   return gaps
 }
