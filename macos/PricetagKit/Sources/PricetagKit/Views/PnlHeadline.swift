@@ -98,7 +98,7 @@ public struct PortfolioSummary: View {
             if isPartial { Text("partial").fontWeight(.medium).transition(.opacity) }
         }
         .font(.subheadline)
-        .foregroundStyle(.secondary)
+        .secondaryText()
         .motion(Motion.state, value: isPartial)
     }
 
@@ -210,9 +210,9 @@ public struct TotalStat: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                Text(label).foregroundStyle(.secondary).help(help ?? "")
+                Text(label).secondaryText().help(help ?? "")
                 if text != nil, coverage?.isPartial == true {
-                    Text("partial").foregroundStyle(.secondary).fontWeight(.medium).transition(.opacity)
+                    Text("partial").secondaryText().fontWeight(.medium).transition(.opacity)
                 }
             }
             .font(.subheadline)

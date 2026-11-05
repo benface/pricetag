@@ -15,16 +15,26 @@ public enum Tone {
     public var style: AnyShapeStyle {
         switch self {
         case .neutral: AnyShapeStyle(.primary)
-        case .secondary: AnyShapeStyle(.secondary)
+        case .secondary: AnyShapeStyle(Self.readableSecondary(.standard))
         case .gain, .loss, .warning: AnyShapeStyle(color)
         }
     }
+
+    /// Quieter than the text, for what still says something: "Unknown", the label over a number, "partial", a comparison.
+    /// The system's secondary color measured 3.1:1 in light, so this is the text color, faded only as far as 4.5:1 allows, measured from a render.
+    /// Captions and fine print keep the system's. See `secondaryText()` and `ContrastTests`.
+    public static func readableSecondary(_ contrast: ColorSchemeContrast) -> Color {
+        Color.primary.opacity(contrast == .increased ? 0.92 : secondaryOpacity)
+    }
+
+    static let secondaryOpacity = 0.78
 
     /// With Increase Contrast on, the color stays but moves closer to the text's.
     func style(_ contrast: ColorSchemeContrast) -> AnyShapeStyle {
         guard contrast == .increased else { return style }
         return switch self {
-        case .neutral, .secondary: style
+        case .neutral: style
+        case .secondary: AnyShapeStyle(Self.readableSecondary(contrast))
         case .gain, .loss, .warning: AnyShapeStyle(color.mix(with: .primary, by: 0.25))
         }
     }
@@ -36,7 +46,7 @@ public enum Tone {
     var color: Color {
         switch self {
         case .neutral: .primary
-        case .secondary: .secondary
+        case .secondary: Self.readableSecondary(.standard)
         // Mixed with the text color, so they read at 4.5:1 or more on the window, in light and dark. Light is the harder one. See `ContrastTests`.
         case .gain: Color.green.mix(with: .primary, by: 0.45)
         case .loss: Color.red.mix(with: .primary, by: 0.3)
@@ -122,10 +132,24 @@ private struct UpdatingMark: View {
 }
 
 extension View {
+    /// Secondary text that says something, readable at 4.5:1. Faded with numbers that stopped updating, it's the text color instead, as they are.
+    public func secondaryText() -> some View {
+        modifier(SecondaryText())
+    }
+
     /// Numbers that have stopped updating, or a holding that's gone, faded so they read as old while staying readable: at least 4.5:1 in light and dark.
     /// They lose their color too, which is about how things are going now. With Increase Contrast on, they don't fade at all, and the banner above them still says so.
     public func stale(_ isStale: Bool) -> some View {
         modifier(StaleModifier(isStale: isStale))
+    }
+}
+
+private struct SecondaryText: ViewModifier {
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.isStale) private var isStale
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(isStale ? Tone.neutral.style : AnyShapeStyle(Tone.readableSecondary(contrast)))
     }
 }
 

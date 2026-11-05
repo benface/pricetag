@@ -50,7 +50,7 @@ public struct RuleComparisonTable: View {
                     Text("Difference")
                 }
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 Divider()
                 ForEach(comparison.rows) { row in
                     line(row.label, format: row.format, a: row.a, b: row.b, difference: row.difference, aPartial: row.aPartial, bPartial: row.bPartial, aEstimated: row.aEstimated, bEstimated: row.bEstimated)
@@ -78,19 +78,26 @@ public struct RuleComparisonTable: View {
     }
 
     private func line(_ label: String, format: String, a: String?, b: String?, difference: String?, aPartial: Bool = false, bPartial: Bool = false, aEstimated: Bool, bEstimated: Bool) -> some View {
-        GridRow {
+        let difference = Format.ruleDifference(difference, format: format, currency: comparison.currency, isEstimate: aEstimated || bEstimated)
+        return GridRow {
             Text(label).gridColumnAlignment(.leading)
-            value(a, format: format, isPartial: aPartial, isEstimate: aEstimated)
-            value(b, format: format, isPartial: bPartial, isEstimate: bEstimated)
-            Text(Format.ruleDifference(difference, format: format, currency: comparison.currency, isEstimate: aEstimated || bEstimated))
+            value(a, label: label, rule: comparison.a.name, format: format, isPartial: aPartial, isEstimate: aEstimated)
+            value(b, label: label, rule: comparison.b.name, format: format, isPartial: bPartial, isEstimate: bEstimated)
+            Text(difference)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Spoken.number("\(label), difference", difference))
         }
     }
 
-    private func value(_ micros: String?, format: String, isPartial: Bool, isEstimate: Bool) -> some View {
-        HStack(spacing: 4) {
-            if isPartial { Text("partial").font(.caption.weight(.medium)).foregroundStyle(.secondary) }
-            Text(Format.ruleValue(micros, format: format, currency: comparison.currency, isEstimate: isEstimate))
+    /// Each value says what it is and by which rule, since a column header is a long way off for VoiceOver.
+    private func value(_ micros: String?, label: String, rule: String, format: String, isPartial: Bool, isEstimate: Bool) -> some View {
+        let text = Format.ruleValue(micros, format: format, currency: comparison.currency, isEstimate: isEstimate)
+        return HStack(spacing: 4) {
+            if isPartial { Text("partial").font(.caption.weight(.medium)).secondaryText() }
+            Text(text)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Spoken.number("\(label), by \(rule)", micros == nil ? nil : text, isPartial: isPartial))
     }
 }
 

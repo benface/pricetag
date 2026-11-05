@@ -203,18 +203,18 @@ struct PopoverView: View {
                             .minimumScaleFactor(0.5)
                         Text(portfolio.currency.rawValue)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .secondaryText()
                         // As readable as what it qualifies, because it changes what the number means.
                         if portfolio.isValuePartial {
                             Text("partial")
                                 .font(.caption.weight(.medium))
-                                .foregroundStyle(.secondary)
+                                .secondaryText()
                                 .transition(.opacity)
                         }
                     } else {
                         Text("Value unavailable")
                             .font(.title3.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                            .secondaryText()
                     }
                 }
                 .updatingMark(.trailing)
@@ -228,13 +228,13 @@ struct PopoverView: View {
                     if let pnl = portfolio.totalPnlText {
                         LiveNumber(pnl, tone: isLive ? portfolio.totalPnlTone : .neutral)
                             .fontWeight(.medium)
-                        Text("PnL").foregroundStyle(.secondary)
+                        Text("PnL").secondaryText()
                         // As readable as what it qualifies, because it changes what the number means.
                         if portfolio.pnlStatus == .partial {
-                            Text("partial").fontWeight(.medium).foregroundStyle(.secondary).transition(.opacity)
+                            Text("partial").fontWeight(.medium).secondaryText().transition(.opacity)
                         }
                     } else {
-                        Text(Wording.pnlUnavailable).foregroundStyle(.secondary)
+                        Text(Wording.pnlUnavailable).secondaryText()
                     }
                 }
             }

@@ -32,25 +32,29 @@ public enum Spoken {
     }
 
     /// The chart in a sentence: how long it covers, where it started and ended, and how high and low it went.
-    /// What it can't know is said, never left out.
+    /// What it can't know is said, never left out: an end that's unknown is "unknown", and an amount that leaves something out is "partial".
     static func chartSummary(_ series: PnlSeries, _ currency: CurrencyCode, isLive: Bool) -> String {
-        let known = series.plotted.filter { $0.point.pnlMicros != nil }
-        guard let first = known.first, let last = known.last, let firstPnl = first.point.pnlMicros, let lastPnl = last.point.pnlMicros else {
-            return "Total PnL over time: unknown"
+        let freshness = isLive ? "" : " Not updating."
+        guard let first = series.plotted.first, let last = series.plotted.last else { return "Total PnL over time: nothing to show yet.\(freshness)" }
+        let money = { (point: PnlPoint) in
+            point.pnlMicros.map { Format.signedMoney($0, currency) + (point.excludedCount > 0 ? " (partial)" : "") } ?? "unknown"
         }
-        let money = { (micros: String) in Format.signedMoney(micros, currency) }
-        let values = known.compactMap { plotted in plotted.value.map { (plotted, $0) } }
-        var sentence = "Total PnL over time, from \(Format.time(first.date)) to \(Format.time(last.date)). It went from \(money(firstPnl)) to \(money(lastPnl))"
-        if let high = values.max(by: { $0.1 < $1.1 }), let low = values.min(by: { $0.1 < $1.1 }), high.0.id != low.0.id,
-            let highPnl = high.0.point.pnlMicros, let lowPnl = low.0.point.pnlMicros, highPnl != lastPnl || lowPnl != firstPnl {
-            sentence += ", with a high of \(money(highPnl)) and a low of \(money(lowPnl))"
+        var sentence = "Total PnL over time, from \(Format.time(first.date)) to \(Format.time(last.date))."
+        let known = series.plotted.filter { $0.value != nil }
+        if known.isEmpty {
+            sentence += " It's unknown for all of it."
+        } else {
+            sentence += " It went from \(money(first.point)) to \(money(last.point))"
+            if known.count > 2, let high = known.max(by: { $0.value! < $1.value! }), let low = known.min(by: { $0.value! < $1.value! }), high.id != low.id {
+                sentence += ", with a high of \(money(high.point)) and a low of \(money(low.point))"
+            }
+            sentence += "."
         }
-        sentence += "."
         let transactions = series.plotted.filter { $0.point.txHash != nil }.count
         sentence += " \(transactions == 1 ? "1 transaction" : "\(transactions) transactions")."
-        if !series.gaps.isEmpty { sentence += " Unknown for part of it." }
-        if !isLive { sentence += " Not updating." }
-        return sentence
+        if !known.isEmpty, !series.gaps.isEmpty { sentence += " Unknown for part of it." }
+        if known.contains(where: { $0.point.excludedCount > 0 }) { sentence += " Some of it leaves out what's unknown." }
+        return sentence + freshness
     }
 
     /// One transaction on the chart, for stepping through it.

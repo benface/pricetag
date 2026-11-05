@@ -326,7 +326,7 @@ struct HotWalletDetails<Overview: View>: View {
                         if let value = holding.valueUsdMicros {
                             Text(wallet.money(value))
                                 .monospacedDigit()
-                                .foregroundStyle(.secondary)
+                                .secondaryText()
                                 .frame(minWidth: 72, alignment: .trailing)
                         } else {
                             WarningText("No price")

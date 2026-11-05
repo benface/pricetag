@@ -30,8 +30,35 @@ struct SpokenTests {
         #expect(summary.hasPrefix("Total PnL over time, from "))
         #expect(summary.contains("transactions."))
         #expect(summary.hasSuffix("Not updating."))
-        let empty = PnlSeries(points: [PnlPoint(blockNum: 1, timestamp: "2026-11-04T03:00:00Z", txHash: "0x1", pnlMicros: nil, excludedCount: 1)])
-        #expect(Spoken.chartSummary(empty, .USD, isLive: true) == "Total PnL over time: unknown")
+    }
+
+    private func point(_ minute: Int, _ micros: String?, excluded: Int = 0, tx: Bool = true) -> PnlPoint {
+        PnlPoint(blockNum: minute, timestamp: "2026-11-04T03:\(String(format: "%02d", minute)):00Z", txHash: tx ? "0x\(minute)" : nil, pnlMicros: micros, excludedCount: excluded)
+    }
+
+    @Test func aChartThatLeavesThingsOutSaysSo() {
+        let series = PnlSeries(points: [point(0, "1000000", excluded: 1), point(10, "2000000", excluded: 1), point(20, "3000000", excluded: 2)])
+        let summary = Spoken.chartSummary(series, .USD, isLive: true)
+        #expect(summary.contains("It went from +$1.00 (partial) to +$3.00 (partial)"), "\(summary)")
+        #expect(summary.contains("Some of it leaves out what's unknown."))
+    }
+
+    /// Its end is where it ends, even when what it says there is unknown.
+    @Test func anUnknownEndIsTheEndAndSaysUnknown() throws {
+        let series = PnlSeries(points: [point(0, "1000000"), point(10, "2000000"), point(20, nil)])
+        let summary = Spoken.chartSummary(series, .USD, isLive: true)
+        let end = try #require(series.plotted.last?.date)
+        #expect(summary.contains("to \(Format.time(end))."), "\(summary)")
+        #expect(summary.contains("It went from +$1.00 to unknown."))
+        #expect(summary.contains("Unknown for part of it."))
+    }
+
+    @Test func aChartThatsAllUnknownStillSaysWhenAndHowFresh() {
+        let series = PnlSeries(points: [point(0, nil, excluded: 1), point(10, nil, excluded: 1)])
+        let summary = Spoken.chartSummary(series, .USD, isLive: false)
+        #expect(summary.contains("It's unknown for all of it."))
+        #expect(summary.hasSuffix("Not updating."))
+        #expect(Spoken.chartSummary(PnlSeries(points: []), .USD, isLive: false) == "Total PnL over time: nothing to show yet. Not updating.")
     }
 }
 
@@ -59,6 +86,25 @@ struct AccessibilityTreeTests {
         #expect(try lines(HoldingRow(position: aero, currency: portfolio.currency, isLive: true)) == ["AERO, value, about $700.00, PnL, about +$150.11"])
         let eth = try #require(portfolio.positions.first { $0.asset == "ETH" })
         #expect(try lines(HoldingRow(position: eth, currency: portfolio.currency, isLive: false)) == ["ETH, value, $1,366.68, Cost unknown, not updating"])
+    }
+
+    @Test func eachComparedNumberSaysWhatItIsAndByWhichRule() throws {
+        let comparison = try resource("demo-rule-comparison", as: RuleComparison.self)
+        let tree = try lines(RuleComparisonTable(comparison: comparison))
+        #expect(tree.contains("Total PnL, by Market price, about +$149.30, partial"), "\(tree)")
+        #expect(tree.contains { $0.hasPrefix("Total PnL, by Cautious ETH, ") && $0.hasSuffix(", partial") })
+        #expect(tree.contains { $0.hasPrefix("Total PnL, difference, ") })
+        // No bare "partial" or amount on its own.
+        #expect(!tree.contains("partial"))
+    }
+
+    @Test func theHoldComparisonSaysWhenItStoppedUpdating() throws {
+        let portfolio = try demoPortfolio()
+        let live = try lines(HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: true) {})
+        let old = try lines(HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: false) {})
+        let summary = Spoken.text(Wording.holdSummary(portfolio.holdComparison, portfolio.currency))
+        #expect(live == ["Compared with holding ETH, \(summary)"])
+        #expect(old == ["Compared with holding ETH, \(summary), not updating"])
     }
 
     @Test func theChartIsOneSummaryNotItsMarks() throws {

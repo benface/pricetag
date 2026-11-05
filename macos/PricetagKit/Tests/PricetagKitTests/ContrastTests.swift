@@ -50,6 +50,26 @@ struct ContrastTests {
         }
     }
 
+    /// "Unknown", the labels over numbers and comparisons. Faded or not, and with Increase Contrast on.
+    @Test(arguments: [false, true])
+    func secondaryTextThatSaysSomethingCanBeRead(dark: Bool) throws {
+        let big = Font.system(size: 60, weight: .bold)
+        let cases: [(String, AnyView)] = [
+            ("a secondary number", AnyView(LiveNumber("8888", tone: .secondary).font(big))),
+            ("secondary text", AnyView(Text("8888").font(big).secondaryText())),
+            ("faded secondary text", AnyView(Text("8888").font(big).secondaryText().stale(true))),
+            ("faded secondary number", AnyView(LiveNumber("8888", tone: .secondary).font(big).stale(true))),
+            ("secondary text with Increase Contrast", AnyView(Text("8888").font(big).secondaryText().environment(\._colorSchemeContrast, .increased))),
+            ("a secondary number with Increase Contrast", AnyView(LiveNumber("8888", tone: .secondary).font(big).environment(\._colorSchemeContrast, .increased))),
+        ]
+        for (name, view) in cases {
+            let measured = try rendered(view, dark: dark)
+            #expect(measured >= 4.5, "\(name) in \(dark ? "dark" : "light") measured \(measured)")
+        }
+        // The system's own, so this test means something.
+        if !dark { #expect(try rendered(Text("8888").font(big).foregroundStyle(.secondary), dark: false) < 4.5) }
+    }
+
     /// They lose their color as they fade, so it's the text color that has to hold. Measured from a render, because text comes out lighter
     /// than its color says: 0.7 measured 4.3:1 in light.
     @Test(arguments: [false, true])

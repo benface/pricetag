@@ -48,7 +48,7 @@ public struct ExplanationPane: View {
                         WarningText("Unavailable").font(.title3.weight(.semibold))
                     }
                     if let sourceValue = explanation.sourceValue {
-                        Text(sourceValue).font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                        Text(sourceValue).font(.callout).monospacedDigit().secondaryText()
                     }
                     ForEach(explanation.lines, id: \.self) { line in
                         Text(line)
@@ -185,6 +185,6 @@ struct Tag: View {
             .font(.caption.weight(.medium))
             .monospacedDigit()
             .lineLimit(1)
-            .foregroundStyle(isWarning ? Tone.warning.style : AnyShapeStyle(.secondary))
+            .foregroundStyle(isWarning ? Tone.warning.style : Tone.secondary.style)
     }
 }
