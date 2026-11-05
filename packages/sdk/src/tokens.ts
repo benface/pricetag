@@ -12,7 +12,7 @@ export const USDC_USD_FEED = "0x7e860098F58bBFC8648a4311b374B1D669a2bc6B"
 const SHORT_HEARTBEAT = 3600
 const DAILY_HEARTBEAT = 26 * 3600
 
-/** A Chainlink feed for a token the dataset has no oracle reads for. It only gives current prices, and its bounds are the token's `sanity`. */
+/** A Chainlink feed for a token the dataset has no oracle reads for. It only gives current prices and a chart's marks, and its bounds are the token's `sanity`. */
 export type TokenFeed = {
   address: string
   /** What `description()` says onchain. */

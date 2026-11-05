@@ -30,6 +30,8 @@ export type WalletData = {
   latest: Head
   /** Transactions this wallet sent whose gas couldn't be worked out, so the fees are too low, and ETH worked out from its legs is too high. */
   gasUnknownTxs: string[]
+  /** The blocks they're in, since one of them can have no legs to tell from. */
+  gasUnknownBlocks: number[]
   /** The pricing rule this was read through, when the server has more than one. */
   rule?: string
   /** Set when that rule isn't the default, because the prices it shows aren't what their labels alone would say. */
@@ -47,7 +49,7 @@ export type WalletData = {
   openingUnread: string[]
   /** The last balance read for each asset in `unreadBalances` that has one. */
   lastBalances: Record<string, { blockNum: number; amount: string }>
-  /** The last ETH balance read with every fee up to it known. A fee that can't be read yet says nothing about what came before it. */
+  /** The last ETH balance read with everything up to it known, every fee and claim. Something that can't be read yet says nothing about what came before it. */
   lastCheckableEth: { blockNum: number; amount: string } | null
   /** Assets with no balance read at `coverage.toBlock`, which isn't the same as holding none. Empty until reads start. */
   unreadBalances: string[]
@@ -57,7 +59,7 @@ export type WalletData = {
   notes: CostNote[]
   /** Whether market prices were read successfully, so a token without one really has no market. */
   marketChecked: boolean
-  /** What this wallet's tokens without a feed traded at, at the blocks of its transactions, for a chart. Some can still be unread. */
+  /** What this wallet's tokens the dataset has no oracle reads for were worth at the blocks of its transactions, by their feed or else their market, for a chart. Some can still be unread. */
   marketMarks: MarketMarks
 }
 

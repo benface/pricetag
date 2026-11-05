@@ -4,14 +4,14 @@
 // The rest come from here, and the fold then runs on the result. An unanswered sender stays unknown: it could be the user's
 // own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, emptyPosition, foldWallet, formatAmount, lessPaidAt, normalizeAddress, sharePaidAt, usableAnswer, usdView, vouchedThrough, viewWallet, worth, type CostPiece, type HoldComparison, type MarkPrice, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, emptyPosition, foldWallet, formatAmount, historyGaps, lessPaidAt, normalizeAddress, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, worth, type CostPiece, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlPoint, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "./api.ts"
 import { costKey, linkedWallets, type Book, type ExchangeCost, type Money, type Receipt } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
 
 /** What arrived with no cost, and who could say. A null sender means there's no one to ask about, only what it cost. */
-type OpenItem = { wallet: string; leg: PricedLeg; sender: string | null; units: bigint }
+type OpenItem = { wallet: string; leg: PricedLeg; sender: string | null; units: bigint; evidence?: string[] }
 
 export type Resolved = {
   legs: Map<string, PricedLeg[]>
@@ -170,18 +170,18 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
   const linked = new Set(linkedWallets(book))
   const read = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
   const open: OpenItem[] = []
-  const vouched = new Map<string, Map<string, number>>()
+  const gaps = new Map<string, Map<string, HistoryGap>>()
   /**
    * A cost can only carry over from a wallet whose history of that asset is confirmed as of when it left. Otherwise it could
    * be anything, however well the wallet it arrived in adds up. Only worked out for wallets that sent something, since most don't.
    */
-  const confirmed = (sender: string, { asset, blockNum }: PricedLeg) => {
+  const gapAt = (sender: string, { asset, blockNum }: PricedLeg) => {
     const { wallet, view } = read.get(sender) as Side
-    const through = vouched.get(sender) ?? vouchedThrough(view.legs, method, wallet)
-    vouched.set(sender, through)
-    return blockNum <= (through.get(asset) ?? Number.POSITIVE_INFINITY)
+    const known = gaps.get(sender) ?? historyGaps(view.legs, method, wallet)
+    gaps.set(sender, known)
+    const gap = known.get(asset)
+    return gap && blockNum > gap.through ? gap : null
   }
-
   // Everything that could be an exchange withdrawal, across every wallet read, so one withdrawal can't explain two of them.
   const arrivals: ExchangeArrival[] = sides.flatMap(({ wallet, view }) =>
     view.legs.flatMap((leg) => {
@@ -221,12 +221,20 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const report = reportedMoney ? moneyIn(side, reportedMoney, leg) : null
 
     const pending: OpenItem[] = []
+    const unvouched: { sender: string; settled: boolean }[] = []
     const pieces = (sources ?? []).flatMap(({ address: sender, units: part }): CostPiece[] => {
       const unknown: CostPiece = { qty: part.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" }
       const answer = book.senders[sender]
       if (answer?.kind === "mine" || linked.has(sender) || sender === address) {
-        if (!read.has(sender)) return [unknown]
-        if (sender !== address && !confirmed(sender, leg)) return [{ ...unknown, unconfirmedBy: [sender] }]
+        if (!read.has(sender)) {
+          unvouched.push({ sender, settled: false })
+          return [unknown]
+        }
+        const gap = sender === address ? null : gapAt(sender, leg)
+        if (gap) {
+          unvouched.push({ sender, settled: gap.mismatch })
+          return [{ ...unknown, unconfirmedBy: [sender] }]
+        }
         return pull(leg, sender, address, part)
       }
       if (answer?.kind === "my-exchange") {
@@ -248,13 +256,17 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
       return [unknown]
     })
 
-    if (!pieces.some((p) => p.label === "inherited" && p.costMicros !== null) && report !== null) return reported(leg, report)
+    // What's inherited wins, unless part of it can't be, or can't be yet, since an entered cost is for all of what arrived.
+    if ((unvouched.length > 0 || !pieces.some((p) => p.label === "inherited" && p.costMicros !== null)) && report !== null) return reported(leg, report)
     if (sources === null) {
       // What it cost is known, in USD, and only the rate is missing. Nobody can answer that, and it may yet be read.
       if (leg.conversion?.rateMicros !== null || leg.conversion.costUsdMicros === null) open.push({ wallet: address, leg, sender: null, units })
       return leg
     }
     open.push(...pending)
+    // Only once it's settled, or a card could appear for an unread balance and vanish when it's read.
+    const settled = unvouched.filter((w) => w.settled)
+    if (settled.length > 0) open.push({ wallet: address, leg, sender: null, units, evidence: settled.map((w) => `${shortHash(w.sender)}, your wallet, sent ${sources.length === 1 ? "" : "some of "}this, and its ${leg.asset} history can't be confirmed`) })
     return withPieces(leg, pieces)
   }
 
@@ -326,7 +338,7 @@ function evidenceFor(sender: string, sides: readonly Side[], known: KnownSender 
 export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], book: Book): Question[] {
   const sideOf = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
   const questions = new Map<string, Omit<Question, "noteAbout"> & { arrived: Map<string, Arrival>; value: bigint; priced: boolean; first: { leg: PricedLeg; units: bigint } }>()
-  for (const { wallet, leg, sender, units } of open) {
+  for (const { wallet, leg, sender, units, evidence } of open) {
     const owner = sideOf.get(wallet) as Side
     // A missing exchange rate takes the price away in this currency, but it's still a real token worth asking about.
     if (leg.priceMicros === null && leg.conversion?.priceUsdMicros == null && owner.wallet.prices[leg.asset] === undefined && owner.wallet.marketChecked) continue
@@ -345,7 +357,7 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
       transfers: 0,
       firstAt: leg.timestamp,
       lastAt: leg.timestamp,
-      evidence: sender ? evidenceFor(sender, sides, known) : [],
+      evidence: sender ? evidenceFor(sender, sides, known) : (evidence ?? []),
       valueMicros: null,
       first: { leg, units },
       arrived: new Map<string, Arrival>(),

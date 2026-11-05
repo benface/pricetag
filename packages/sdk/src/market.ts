@@ -62,7 +62,7 @@ export function marketPrice(trades: readonly MarketTrade[], asset: string, block
   return { usdMicros: median(last.map((tx) => median(tx.prices))).toString(), blockNum: (last[0] as (typeof last)[number]).blockNum }
 }
 
-/** What a wallet's market-priced tokens traded at, in USD, by block and then asset. A price too little trading backs isn't in it. */
+/** What a wallet's tokens without oracle reads were worth, in USD, by block and then asset: by their feed, or else their market. One with neither isn't in it. */
 export type MarketMarks = Record<string, Record<string, string>>
 
 /**
