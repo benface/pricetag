@@ -65,27 +65,28 @@ export function marketPrice(trades: readonly MarketTrade[], asset: string, block
 export type MarketMarks = Record<string, Record<string, string>>
 
 /**
- * Each market-priced token at each block where this wallet has a transaction, while it holds that token. Newest first,
- * because reads can run out. Held before or after the block, because each transaction in a block gets its own chart point.
+ * Each market-priced token at each block where it's held after one of this wallet's transactions, because each of those
+ * gets a chart point. In the order the fold reads them, since a token can arrive and leave in different transactions of
+ * one block. Newest first, because reads can run out.
  */
 export function markNeeds(account: string, rows: readonly LegRow[], opening: Pick<BalanceSnapshot, "amounts"> | null): { asset: string; block: number }[] {
-  const moved = new Map<number, Map<string, bigint>>()
+  const txs = new Map<string, { block: number; index: number; changes: Map<string, bigint> }>()
   for (const row of rows) {
     if (row.account !== account) continue
-    const changes = moved.get(row.block_num) ?? new Map<string, bigint>()
-    moved.set(row.block_num, changes)
+    const tx = txs.get(row.tx_hash) ?? { block: row.block_num, index: row.tx_index, changes: new Map<string, bigint>() }
+    txs.set(row.tx_hash, tx)
     const token = tokenByAddress(row.token)
-    if (token && !token.oracle) changes.set(token.asset, (changes.get(token.asset) ?? 0n) + (row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)))
+    if (token && !token.oracle) tx.changes.set(token.asset, (tx.changes.get(token.asset) ?? 0n) + (row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)))
   }
   const held = new Map(TOKENS.filter((t) => !t.oracle).map((t) => [t.asset, BigInt(opening?.amounts[t.asset] ?? "0")]))
-  const needs: { asset: string; block: number }[] = []
-  for (const [block, changes] of [...moved].sort(([a], [b]) => a - b)) {
-    for (const [asset, before] of held) {
-      const after = before + (changes.get(asset) ?? 0n)
-      if (before > 0n || after > 0n) needs.push({ asset, block })
+  const needs = new Map<string, { asset: string; block: number }>()
+  for (const { block, changes } of [...txs.values()].sort((a, b) => a.block - b.block || a.index - b.index)) {
+    for (const [asset, change] of changes) {
+      const after = (held.get(asset) ?? 0n) + change
       // More can leave than we saw arrive, and what's left then is nothing, as in the fold.
       held.set(asset, after > 0n ? after : 0n)
     }
+    for (const [asset, qty] of held) if (qty > 0n) needs.set(`${asset}:${block}`, { asset, block })
   }
-  return needs.reverse()
+  return [...needs.values()].reverse()
 }

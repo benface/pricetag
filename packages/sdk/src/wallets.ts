@@ -158,6 +158,7 @@ const MARKET_READS_PER_REFRESH = 20
 const bucketOf = (block: number, size = MARKET_BUCKET_BLOCKS) => block - (block % size)
 const MARKET_ASSETS = TOKENS.filter((t) => !t.oracle).map((t) => t.asset)
 type MarketRead = { asset: string; bucket: number }
+const marketKey = ({ asset, bucket }: MarketRead) => `${asset}:${bucket}`
 /** Whether a reorg could have changed any opening balance since it was read. */
 function openingMayChange(wallet: Cached | undefined, chain: Head): boolean {
   if (!wallet) return false
@@ -214,7 +215,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       return false
     }
     if (!marketReady) return false
-    const missing = [...new Map([...wanted, ...extra].map((w) => [`${w.asset}:${w.bucket}`, w])).entries()].filter(([key]) => !market.has(key))
+    const missing = [...new Map([...wanted, ...extra].map((w) => [marketKey(w), w])).entries()].filter(([key]) => !market.has(key))
     for (const [key, { asset, bucket }] of missing.slice(0, MARKET_READS_PER_REFRESH)) {
       try {
         market.set(key, marketPrice(await source.readMarketTrades(asset, bucket - MARKET_MAX_AGE_BLOCKS, bucket), asset, bucket))
@@ -223,7 +224,29 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         break
       }
     }
-    return wanted.every((w) => market.has(`${w.asset}:${w.bucket}`))
+    return wanted.every((w) => market.has(marketKey(w)))
+  }
+
+  /**
+   * What a wallet needs from the market. A price at the end of what's covered, for what's held, and one for each movement
+   * a trade doesn't already price, which its numbers depend on, then what's held at each point on its chart.
+   */
+  function marketReadsOf(address: string, { rows, priced, opening, closing, coveredTo, latest }: Pick<Cached, "rows" | "priced" | "opening" | "closing" | "coveredTo" | "latest">) {
+    const headBucket = bucketOf(Math.min(coveredTo, latest.blockNum), MARKET_HEAD_BUCKET_BLOCKS)
+    const heldAssets = MARKET_ASSETS.filter((asset) => rows.some((r) => tokenByAddress(r.token)?.asset === asset) || BigInt(opening?.amounts[asset] ?? "0") > 0n || BigInt(closing?.amounts[asset] ?? "0") > 0n)
+    return {
+      headBucket,
+      heldAssets,
+      wanted: [...heldAssets.map((asset) => ({ asset, bucket: headBucket })), ...marketNeeds(rows, priced).map(({ asset, block }) => ({ asset, bucket: bucketOf(block) }))],
+      chart: markNeeds(address, rows, opening).map(({ asset, block }) => ({ asset, bucket: bucketOf(block) })),
+    }
+  }
+
+  /** Whether a read could still add a price this wallet needs. A failed read or the limit leaves some for the next refresh. */
+  function hasMarketReadsLeft(address: string, wallet: Cached): boolean {
+    if (!source.readMarketTrades || !source.marketReady || marketReady === false) return false
+    const { wanted, chart } = marketReadsOf(address, wallet)
+    return [...wanted, ...chart].some((read) => !market.has(marketKey(read)))
   }
 
   /** What's been read for a wallet's chart so far. Prices come from this source's own trades, like the rest of what's priced. */
@@ -289,7 +312,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     unwrapBalanceBlocks(wallet.rows).every((block) => wallet.ethBalances.has(block)) &&
     !fixedMayChange(wallet, chain) &&
     !openingMayChange(wallet, chain) &&
-    unreadSendBlocks(address, wallet).length === 0
+    unreadSendBlocks(address, wallet).length === 0 &&
+    !hasMarketReadsLeft(address, wallet)
 
   async function refresh(address: string, key: string, range: WalletRange): Promise<Cached> {
     const chain = await currentHead()
@@ -369,13 +393,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
     const prices = latestPrices(await source.readLatestReference(head.blockNum))
 
-    // A price at the end of what's covered, for what's held, and one for each movement a trade doesn't already price.
-    const headBucket = bucketOf(Math.min(coveredTo, head.blockNum), MARKET_HEAD_BUCKET_BLOCKS)
-    const heldAssets = MARKET_ASSETS.filter((asset) => rows.some((r) => tokenByAddress(r.token)?.asset === asset) || BigInt(opening?.amounts[asset] ?? "0") > 0n || BigInt(closing?.amounts[asset] ?? "0") > 0n)
-    const marketChecked = await loadMarket(
-      [...heldAssets.map((asset) => ({ asset, bucket: headBucket })), ...marketNeeds(rows, priced).map(({ asset, block }) => ({ asset, bucket: bucketOf(block) }))],
-      markNeeds(address, rows, opening).map(({ asset, block }) => ({ asset, bucket: bucketOf(block) })),
-    )
+    const { headBucket, heldAssets, wanted, chart } = marketReadsOf(address, { rows, priced, opening, closing, coveredTo, latest: head })
+    const marketChecked = await loadMarket(wanted, chart)
     for (const asset of heldAssets) {
       const price = market.get(`${asset}:${headBucket}`)
       if (price) prices[asset] = { micros: price.usdMicros, source: "market", blockNum: price.blockNum }
