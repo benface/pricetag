@@ -3,7 +3,7 @@ import PricetagKit
 import SwiftUI
 
 struct SettingsView: View {
-    enum Pane: Hashable { case general, spendingMoney, server }
+    enum Pane: Hashable { case general, answers, spendingMoney, server }
 
     let store: PortfolioStore
     let hotWallet: HotWallet
@@ -22,6 +22,8 @@ struct SettingsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Stands in for a small display in a test scene.
     var displayRoom: CGFloat?
+    /// Where a menu asks for a tab.
+    var navigation: Navigation?
 
     /// What's left of the display under the title bar and the tabs.
     private static var roomOnDisplay: CGFloat {
@@ -37,6 +39,7 @@ struct SettingsView: View {
     var body: some View {
         TabView(selection: $tab) {
             Tab("General", systemImage: "gearshape", value: Pane.general) { general }
+            Tab("Answers", systemImage: "checklist", value: Pane.answers) { pane(.answers) { AnswersList(store: store) } }
             Tab(HotWalletWording.title, systemImage: "banknote", value: Pane.spendingMoney) { spendingMoney }
             Tab("Server", systemImage: "server.rack", value: Pane.server) { connection }
         }
@@ -46,6 +49,11 @@ struct SettingsView: View {
             if rpcError == nil { rpc = hotWallet.settings.rpcURL.absoluteString }
         }
         .task { await store.refreshRules() }
+        .onChange(of: navigation?.settingsPane, initial: true) { _, pane in
+            guard let pane else { return }
+            tab = pane
+            navigation?.settingsPane = nil
+        }
         .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
         // It read one wallet's numbers once, and replacing a key can change the wallet behind it.
         .onChange(of: store.address) { isComparing = false }
@@ -95,16 +103,6 @@ struct SettingsView: View {
                     Button("Compare Side by Side…") { isComparing = true }
                         .disabled(store.address == nil || store.address == WalletAddress.demo)
                 }
-            }
-            Section {
-                LabeledContent("Who sent what") {
-                    Button("Forget All My Answers", role: .destructive) { store.setBook(Book()) }
-                        .controlSize(.small)
-                        .disabled(!store.hasAnswers)
-                }
-                .help("They stay on this Mac. They're only sent to your server to work out your numbers, and it doesn't keep them.")
-            } header: {
-                Text("Your Answers")
             }
         }
     }

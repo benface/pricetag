@@ -60,9 +60,11 @@ final class Navigation {
     /// Asked for from a row in the wallet list, which closes when the person goes off to sign. So it's the window that holds this.
     var provingWallet: WalletProof?
     var isResolving = false
-    /// Which holding Fill In was clicked on, so its questions come first.
+    /// Which holding's questions were asked for, so they come first.
     var resolvingAsset: String?
     var isExporting = false
+    /// The Settings tab something asked to open on. Settings takes it once it's showing.
+    var settingsPane: SettingsView.Pane?
 
     /// Spending Money is always this Mac's, so the wallet button isn't there. Every other section shows the wallet chosen.
     func switchWallet() {

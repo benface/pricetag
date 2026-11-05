@@ -1,4 +1,4 @@
-// What the "Who's this?" cards need: which one's up, what each answer would do, and answering it. The server does the math.
+// What the question cards need: which one's up, what each answer would do, and answering it. The server does the math.
 
 import Foundation
 import Observation
@@ -97,6 +97,7 @@ public final class ResolveModel {
 
     public func answer(_ ownership: Ownership) {
         guard let question = current, let sender = question.sender, options.contains(ownership) else { return }
+        describe(question)
         switch ownership {
         case .myExchange:
             // What was entered for this sender before stays, because it covers what had arrived by then.
@@ -145,6 +146,7 @@ public final class ResolveModel {
     @discardableResult
     public func enterCost(_ dollars: [String: String]) -> Bool {
         guard let question = current, let book = candidate(costs: dollars, for: question) else { return false }
+        describe(question)
         store.setBook(book)
         advance()
         return true
@@ -178,14 +180,18 @@ public final class ResolveModel {
             return false
         }
         // Worked out now, because answers can change during the wait, and this shouldn't undo them.
-        if let book = candidate(costs: [draft.asset: usd], in: .USD, for: question) { store.setBook(book) }
+        if let book = candidate(costs: [draft.asset: usd], in: .USD, for: question) {
+            describe(question)
+            store.setBook(book)
+        }
         advance()
         return true
     }
 
     /// They own the account but don't have what they paid, so the price when it arrived will do, as an estimate.
     public func usePriceWhenItArrived() {
-        guard let sender = current?.sender else { return }
+        guard let question = current, let sender = question.sender else { return }
+        describe(question)
         store.setBook(store.book.answering(sender, .someoneElse, focus: store.portfolio?.address))
         advance()
     }
@@ -219,6 +225,19 @@ public final class ResolveModel {
     public func revisitSkipped() {
         skipped = []
         advance()
+    }
+
+    /// What the question was about, so the list of answers can say it once the question's gone. Only the first time: a sender asked about
+    /// again later is still the one that was answered first.
+    private func describe(_ question: Question) {
+        let arrived = question.arrivals.map { "\(Format.amount($0.units, decimals: $0.decimals)) \($0.asset)" }.formatted(.list(type: .and))
+        if let sender = question.sender {
+            let id = AnswerEntry.senderID(sender)
+            guard store.about(id: id) == nil else { return }
+            store.describe(id, as: question.known.map { "\(arrived) from \($0.name)" } ?? arrived)
+        } else if let key = question.costKey {
+            store.describe(AnswerEntry.costID(key), as: arrived)
+        }
     }
 
     private func advance() {

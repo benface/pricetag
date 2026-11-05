@@ -66,6 +66,8 @@ public final class PortfolioStore {
     private var answers: Book
     /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
     public private(set) var undoStack: [Book] = []
+    /// When each answer was given and what it was about, for the list of answers. Never sent anywhere.
+    public private(set) var answerDetails: AnswerDetails
     /// The server's pricing rules. Empty when it has only one, so there's nothing to choose.
     public private(set) var rules: [PricingRule] = []
     /// What to ask the server for, or nil for its default.
@@ -122,7 +124,9 @@ public final class PortfolioStore {
         self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
         self.currency = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
         self.serverURL = serverURL
-        self.answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
+        let answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
+        self.answers = answers
+        self.answerDetails = (defaults.data(forKey: Keys.answerDetails).flatMap { try? JSONDecoder().decode(AnswerDetails.self, from: $0) } ?? AnswerDetails()).keeping([answers])
         self.selectedRule = defaults.string(forKey: Keys.rule)
         var saved = defaults.data(forKey: Keys.savedWallets).flatMap { try? JSONDecoder().decode([SavedWallet].self, from: $0) } ?? []
         // From before there was a list, the wallet being shown is all there is to remember.
@@ -240,6 +244,10 @@ public final class PortfolioStore {
         if self.address == address { setWallet(next) }
     }
 
+    private func saveDetails() {
+        defaults.set(try? JSONEncoder().encode(answerDetails), forKey: Keys.answerDetails)
+    }
+
     private func saveWallets(_ wallets: [SavedWallet]) {
         savedWallets = wallets
         defaults.set(try? JSONEncoder().encode(wallets), forKey: Keys.savedWallets)
@@ -276,6 +284,51 @@ public final class PortfolioStore {
     /// Whether there's anything of the user's own to forget.
     public var hasAnswers: Bool {
         !answers.isEmpty
+    }
+
+    /// What the user has said, newest first. Accounts this Mac knows are theirs aren't answers, so they aren't here, even if something was said
+    /// about one before it was an account.
+    public var answerEntries: [AnswerEntry] {
+        answers.answerEntries
+            .filter { entry in
+                if case .sender(let address, _) = entry.said { !linkedWallets.contains(address) } else { true }
+            }
+            .sorted { (answeredAt($0) ?? .distantPast) > (answeredAt($1) ?? .distantPast) }
+    }
+
+    /// nil for one given before answers had dates.
+    public func answeredAt(_ entry: AnswerEntry) -> Date? {
+        answerDetails.dates[entry.stamp]
+    }
+
+    public func about(_ entry: AnswerEntry) -> String? {
+        about(id: entry.id)
+    }
+
+    public func about(id: String) -> String? {
+        answerDetails.about[id]
+    }
+
+    /// What a question was about, in its own words, for the answer about to be given to it.
+    public func describe(_ id: String, as text: String) {
+        answerDetails.about[id] = text
+        saveDetails()
+    }
+
+    /// Takes back one answer, wherever it is in the list, so its question comes back. Undo brings it back.
+    public func removeAnswer(_ entry: AnswerEntry) {
+        setBook(answers.removing(entry))
+    }
+
+    /// A different answer about who a sender is.
+    public func changeAnswer(_ entry: AnswerEntry, to kind: SenderAnswer.Kind) {
+        guard case .sender(let address, _) = entry.said else { return }
+        setBook(answers.changing(address, to: kind))
+    }
+
+    /// A different amount for what was paid, in the currency it was given in. `index` is which of an exchange account's costs.
+    public func changeCost(_ entry: AnswerEntry, index: Int = 0, to micros: String) {
+        setBook(answers.changingCost(of: entry, index: index, to: micros))
     }
 
     /// USD amounts as they should read right now.
@@ -364,6 +417,8 @@ public final class PortfolioStore {
     public func setBook(_ next: Book) {
         let nextAnswers = answers(in: next)
         guard nextAnswers != answers else { return }
+        let given = Set(answers.answerEntries.map(\.stamp))
+        for entry in nextAnswers.answerEntries where !given.contains(entry.stamp) { answerDetails.dates[entry.stamp] = now() }
         undoStack.append(answers)
         store(nextAnswers)
     }
@@ -384,6 +439,8 @@ public final class PortfolioStore {
     private func store(_ next: Book) {
         answers = next
         defaults.set(try? JSONEncoder().encode(next), forKey: Keys.book)
+        answerDetails = answerDetails.keeping([next] + undoStack)
+        saveDetails()
         start()
     }
 
@@ -569,6 +626,7 @@ public final class PortfolioStore {
         static let currency = "currency"
         static let server = "serverURL"
         static let book = "answers"
+        static let answerDetails = "answerDetails"
         static let rule = "pricingRule"
         static let savedWallets = "savedWallets"
     }

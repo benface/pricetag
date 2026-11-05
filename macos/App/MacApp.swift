@@ -115,7 +115,7 @@ struct MacApp: App {
                 WalletCommands(store: store, hotWallet: hotWallet, navigation: navigation)
             }
             CommandGroup(after: .newItem) {
-                Button("Answer Questions…") { navigation.resolve() }
+                Button("\(Wording.answerQuestions)…") { navigation.resolve() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(store.portfolio?.questions.isEmpty != false)
                 Button("Export as CSV…") { navigation.isExporting = true }
@@ -124,6 +124,7 @@ struct MacApp: App {
                 Button("Undo Last Answer") { store.undo() }
                     .keyboardShortcut("z", modifiers: [.command, .option])
                     .disabled(store.undoStack.isEmpty)
+                YourAnswersCommand(navigation: navigation)
             }
         }
 
@@ -141,7 +142,7 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
 
         Settings {
-            SettingsView(store: store, hotWallet: hotWallet)
+            SettingsView(store: store, hotWallet: hotWallet, navigation: navigation)
                 .holdsDockPresence()
         }
     }
@@ -181,6 +182,20 @@ private struct WalletCommands: View {
 }
 
 /// The window may be closed, so this opens it too.
+/// Opens Settings on the list of answers.
+private struct YourAnswersCommand: View {
+    let navigation: Navigation
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        Button("Your Answers…") {
+            navigation.settingsPane = .answers
+            openSettings()
+            DockPresence.bringForward()
+        }
+    }
+}
+
 private struct OpenSectionCommand: View {
     let section: AppSection
     let navigation: Navigation
