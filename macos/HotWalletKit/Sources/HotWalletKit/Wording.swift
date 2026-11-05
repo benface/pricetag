@@ -94,8 +94,8 @@ public enum HotWalletWording {
     }
 
     /// Why the total against the cap is less than the holdings add up to.
-    public static func keptOutOfCap(_ reserve: UInt128) -> String {
-        "\(Format.amount(String(reserve), decimals: 18)) ETH is kept for gas, and doesn't count toward the cap."
+    public static func keptOutOfCap(_ kept: UInt128) -> String {
+        "\(Format.amount(String(kept), decimals: 18)) ETH is kept for gas, and doesn't count toward the cap."
     }
 
     public static let noGasToSend = "This wallet doesn't have enough ETH to pay the network fee."

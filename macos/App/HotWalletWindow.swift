@@ -265,8 +265,8 @@ private struct HotWalletDetails: View {
                     }
                 }
             }
-            if let plan = wallet.plan, plan.gasReserveWei > 0 {
-                Text(HotWalletWording.keptOutOfCap(plan.gasReserveWei))
+            if let plan = wallet.plan, plan.gasKeptWei > 0 {
+                Text(HotWalletWording.keptOutOfCap(plan.gasKeptWei))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

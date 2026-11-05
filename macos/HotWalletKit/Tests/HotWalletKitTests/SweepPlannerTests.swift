@@ -20,6 +20,19 @@ private func plan(_ holdings: [Holding], cap: UInt128 = cap, fees: FeeQuote = ch
         #expect(result.excessUsdMicros == 0)
     }
 
+    @Test func saysHowMuchGasIsKeptOutOfTheCap() {
+        let reserve = SweepPlanner.minimumGasReserveWei
+        let usdcOnly = Money.dollar * 40
+        for (eth, kept) in [(UInt128(0), UInt128(0)), (reserve / 4, reserve / 4), (reserve, reserve), (reserve * 3, reserve)] {
+            let result = plan(holdings(eth: eth, (usdc, usdcUnits(40), Money.dollar)))
+            #expect(result.gasReserveWei == reserve)
+            #expect(result.gasKeptWei == kept)
+            // What the holdings add up to, less what's kept, is the total against the cap.
+            #expect(result.valueUsdMicros == usdcOnly + Money.usdMicros(of: eth - kept, priceMicros: ethPrice, decimals: 18))
+        }
+        #expect(HotWalletWording.keptOutOfCap(reserve / 4) == "0.000025 ETH is kept for gas, and doesn't count toward the cap.")
+    }
+
     @Test func sweepsWhatsAboveTheCapAndLeavesExactlyTheCap() throws {
         let result = plan(holdings(eth: SweepPlanner.minimumGasReserveWei, (usdc, usdcUnits(500), Money.dollar)))
         let transfer = try #require(result.transfers.first)
