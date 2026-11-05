@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, derivePricedRows, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
@@ -372,12 +372,43 @@ describe("the formatters the Swift package repeats", () => {
       price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, "USD"), cad: formatPrice(micros, "CAD") })),
       labeledUsd: ["$2,376.00", "+$24.00", "-$24.00", "$0.004", "-$0.004"].map((text) => ({ text, usd: labelUsd(text, "USD"), cad: labelUsd(text, "CAD") })),
       amount: units.map(([value, decimals]) => ({ units: value, decimals, amount: formatAmount(value, decimals), signed: formatSignedAmount(value, decimals) })),
+      chartTicks: [[], [0], [-0.0023], [-0.0015, -0.0023], [0.000001], [-0.2], [0.75], [8.5], [-3, 12], [120], [1250], [8000], [-250000, 1250000], [12000000]].map((values) => ({ values, usd: chartMoneyTicks(values, "USD"), cad: chartMoneyTicks(values, "CAD") })),
       duration: [0, 60_000, 3_600_000, 7_198_000, 7_200_000, 10_800_000, 200_000_000].map((ms) => ({ ms, duration: formatDuration(ms) })),
       blockSpans: [[100, 130], [LAST_2S_BLOCK - 5, LAST_2S_BLOCK], [LAST_2S_BLOCK - 5, LAST_2S_BLOCK + 10], [LAST_2S_BLOCK, LAST_2S_BLOCK + 300], [LAST_2S_BLOCK + 5, LAST_2S_BLOCK + 305], [130, 100]].map(([from, to]) => ({ from, to, ms: msBetweenBlocks(from as number, to as number) })),
       blocksBefore: [[130, 60_000], [LAST_2S_BLOCK, 60_000], [LAST_2S_BLOCK + 10, 60_000], [LAST_2S_BLOCK + 300, 60_000], [LAST_2S_BLOCK + 301, 60_000], [LAST_2S_BLOCK + 300, 60_100], [10, 60_000]].map(([block, ms]) => ({ block, ms, before: blockBefore(block as number, ms as number) })),
       linkMessage: { owner: DEMO_WALLET.address, address: "0x00000000000000000000000000000000000DE301", message: linkMessage(DEMO_WALLET.address, "0x00000000000000000000000000000000000DE301") },
       note: { txHash: `0x${"ab".repeat(32)}`, asset: "USDC", usdMicros: "250000000", calldata: encodeNote(`0x${"ab".repeat(32)}`, "USDC", "250000000") },
     })
+  })
+})
+
+describe("a chart's axes", () => {
+  it("never labels two money marks the same, or labels one with what it isn't", () => {
+    for (const values of [[-0.0023], [0.000001], [-0.2], [8.5], [1250], [8000], [-250000, 1250000]]) {
+      const labels = chartMoneyTicks(values).map(({ label }) => label)
+      assert.equal(new Set(labels).size, labels.length, labels.join(" "))
+    }
+    assert.deepEqual(chartMoneyTicks([-0.0023]).map(({ label }) => label), ["-$0.003", "-$0.002", "-$0.001", "$0.000"])
+    assert.deepEqual(chartMoneyTicks([8.5]).map(({ label }) => label), ["$0.00", "$2.50", "$5.00", "$7.50", "$10.00"])
+    assert.deepEqual(chartMoneyTicks([1_000_000], "CAD").map(({ label }) => label), ["$0", "$250K", "$500K", "$750K", "$1M"])
+  })
+
+  it("says as much of a time as it takes to tell the two ends apart", () => {
+    const at = (ms: number) => new Date(1_793_800_020_000 + ms).toISOString()
+    for (const narrow of [false, true]) {
+      for (const ms of [20_000, 90_000, 3_600_000, 26 * 3_600_000, 86_400_000, 30 * 86_400_000]) {
+        const [first, last] = formatChartSpan(at(0), at(ms), narrow)
+        assert.notEqual(first, last, `${ms} ${narrow}`)
+      }
+    }
+    assert.match(formatChartSpan(at(0), at(20_000))[0], /:\d\d:\d\d/)
+    assert.doesNotMatch(formatChartSpan(at(0), at(90_000))[0], /:\d\d:\d\d/)
+    assert.doesNotMatch(formatChartSpan(at(0), at(3 * 86_400_000), true)[0], /:/)
+  })
+
+  it("says one moment once", () => {
+    const [first, last] = formatChartSpan("2026-11-05T02:57:05.000Z", "2026-11-05T02:57:05.000Z")
+    assert.equal(first, last)
   })
 })
 

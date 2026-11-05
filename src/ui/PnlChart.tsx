@@ -1,26 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { CURRENCIES, formatClock, formatSignedMoney, formatTime, type CurrencyCode, type PnlPoint } from "@pricetag/sdk/core"
+import { chartMoneyTicks, formatChartSpan, formatSignedMoney, formatTime, type CurrencyCode, type PnlPoint } from "@pricetag/sdk/core"
 import { NOTHING_TO_CHART, PNL_HELP } from "../core/wording.ts"
 
 const HEIGHT = 220
 const MARGIN = { top: 16, right: 84, bottom: 26, left: 64 }
-
-function niceTicks(min: number, max: number, count = 4): { ticks: number[]; step: number } {
-  const span = max - min || 1
-  const raw = span / count
-  const magnitude = 10 ** Math.floor(Math.log10(raw))
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((s) => s >= raw) ?? raw
-  const ticks: number[] = []
-  const last = Math.ceil(max / step)
-  for (let i = Math.floor(min / step); i <= last; i++) ticks.push(Number((i * step).toFixed(9)))
-  return { ticks, step }
-}
-
-/** Ticks are as precise as their step, so a chart of cents doesn't label every line $0. */
-function tickFormat(step: number, currency: CurrencyCode): (value: number) => string {
-  const digits = step >= 1 ? 0 : Math.ceil(-Math.log10(step)) + (step * 10 ** Math.ceil(-Math.log10(step)) % 1 > 0.001 ? 1 : 0)
-  return new Intl.NumberFormat(CURRENCIES[currency].locale, { style: "currency", currency, notation: step >= 1000 ? "compact" : "standard", minimumFractionDigits: digits, maximumFractionDigits: digits }).format
-}
 
 type Props = { points: PnlPoint[]; currency: CurrencyCode; onSelect: (point: PnlPoint) => void }
 
@@ -42,9 +25,9 @@ export function PnlChart({ points, currency, onSelect }: Props) {
     const times = points.map((p) => new Date(p.timestamp).getTime())
     const values = points.map((p) => (p.pnlMicros === null ? null : Number(p.pnlMicros) / 1e6))
     const known = values.filter((v) => v !== null)
-    const { ticks, step } = niceTicks(Math.min(0, ...known), Math.max(0, ...known))
-    const low = ticks[0] ?? 0
-    const high = ticks[ticks.length - 1] ?? 1
+    const ticks = chartMoneyTicks(known, currency)
+    const low = ticks[0]?.value ?? 0
+    const high = ticks[ticks.length - 1]?.value ?? 1
     const start = times[0] ?? 0
     const end = times[times.length - 1] ?? 1
     const plotWidth = Math.max(40, width - MARGIN.left - MARGIN.right)
@@ -65,7 +48,7 @@ export function PnlChart({ points, currency, onSelect }: Props) {
       path += drawing ? `H${px}V${y(value)}` : `M${px},${y(value)}`
       drawing = true
     })
-    return { times, values, ticks, x, y, path, plotWidth, hasData: known.length > 0, formatTick: tickFormat(step, currency) }
+    return { times, values, ticks, x, y, path, plotWidth, hasData: known.length > 0 }
   }, [points, width, currency])
 
   const nearest = (clientX: number) => {
@@ -87,7 +70,9 @@ export function PnlChart({ points, currency, onSelect }: Props) {
   const point = active === null ? null : (points[active] ?? null)
   const last = points[points.length - 1]
   const lastValue = chart.values[points.length - 1]
-  const xLabels = points.length > 1 ? [0, points.length - 1] : [0]
+  const [firstTime, lastTime] = formatChartSpan(points[0]?.timestamp ?? "", last?.timestamp ?? "", width < 520)
+  // Everything at one moment only needs saying once, and that's at the end of the axis.
+  const xLabels = firstTime === lastTime ? [{ index: points.length - 1, text: lastTime }] : [{ index: 0, text: firstTime }, { index: points.length - 1, text: lastTime }]
   const showMarkers = points.length <= 60
 
   return (
@@ -148,18 +133,20 @@ export function PnlChart({ points, currency, onSelect }: Props) {
       >
         <svg width={width} height={HEIGHT} role="img" aria-label="Total PnL after each transaction">
           {chart.ticks.map((tick) => (
-            <g key={tick}>
-              <line x1={MARGIN.left} x2={MARGIN.left + chart.plotWidth} y1={chart.y(tick)} y2={chart.y(tick)} className={tick === 0 ? "axis-zero" : "grid"} />
-              <text x={MARGIN.left - 8} y={chart.y(tick)} dy="0.32em" textAnchor="end" className="tick">
-                {chart.formatTick(tick)}
+            <g key={tick.value}>
+              <line x1={MARGIN.left} x2={MARGIN.left + chart.plotWidth} y1={chart.y(tick.value)} y2={chart.y(tick.value)} className={tick.value === 0 ? "axis-zero" : "grid"} />
+              <text x={MARGIN.left - 8} y={chart.y(tick.value)} dy="0.32em" textAnchor="end" className="tick">
+                {tick.label}
               </text>
             </g>
           ))}
-          {xLabels.map((i) => (
-            <text key={i} x={chart.x(chart.times[i] as number)} y={HEIGHT - 6} textAnchor={i === 0 ? "start" : "end"} className="tick">
-              {width < 520 ? formatClock((points[i] as PnlPoint).timestamp) : formatTime((points[i] as PnlPoint).timestamp)}
-            </text>
-          ))}
+          {points.length > 0
+            ? xLabels.map(({ index, text }) => (
+                <text key={index} x={chart.x(chart.times[index] as number)} y={HEIGHT - 6} textAnchor={index === 0 && xLabels.length > 1 ? "start" : "end"} className="tick">
+                  {text}
+                </text>
+              ))
+            : null}
           <path d={chart.path} className="line" />
           {showMarkers
             ? points.map((p, i) => {
