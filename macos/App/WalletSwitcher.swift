@@ -123,7 +123,7 @@ struct WalletButton: View {
         .accessibilityLabel(current.map { [$0.title, $0.badge].compactMap(\.self).joined(separator: ", ") } ?? "Add Wallet")
         .accessibilityHint("Switches wallet")
         .popover(isPresented: $navigation.isSwitchingWallet, arrowEdge: .bottom) {
-            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: navigation.pendingWalletName, onOpenSpendingMoney: navigation.showSpendingMoney, onRemoveFromSavings: { navigation.removingFromSavings = $0 }, onDeleteSpendingMoney: { navigation.settingsPane = .spendingMoney }) { navigation.isSwitchingWallet = false }
+            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: navigation.pendingWalletName, onOpenSpendingMoney: navigation.showSpendingMoney, onRemoveFromSavings: { navigation.removingFromSavings = $0 }, onDeleteSpendingMoney: navigation.deleteSpendingMoney) { navigation.isSwitchingWallet = false }
         }
     }
 }
@@ -144,7 +144,6 @@ struct WalletSwitcher: View {
     /// Where the pointer was when the arrows last moved. Rows scrolling under a still pointer report a hover that nobody made.
     @State private var pointerAtLastKey: CGPoint?
     @FocusState private var focus: Field?
-    @Environment(\.openSettings) private var openSettings
 
     private enum Field: Hashable {
         case add, rename
@@ -399,12 +398,10 @@ struct WalletSwitcher: View {
         }
         if entry.kind == .spendingMoney {
             Divider()
-            // It holds a key, so deleting it is never one click away, and only Settings does it.
-            Button("Delete in Settings…") {
-                onDeleteSpendingMoney()
+            // It holds a key, so deleting it is never one click away: its page asks first, and offers to sweep it.
+            Button("Delete…", role: .destructive) {
                 onDone()
-                openSettings()
-                DockPresence.bringForward()
+                onDeleteSpendingMoney()
             }
         }
     }

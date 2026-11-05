@@ -1,19 +1,15 @@
-import HotWalletKit
 import PricetagKit
 import SwiftUI
 
 struct SettingsView: View {
-    enum Pane: Hashable { case general, spendingMoney, server }
+    /// What applies to the whole app. What belongs to one wallet, like Spending Money's cap, is on that wallet's page.
+    enum Pane: Hashable { case general, server }
 
     let store: PortfolioStore
-    let hotWallet: HotWallet
     @Binding var tab: Pane
     @State var server = ""
     @State var serverError: String?
     @State private var isComparing = false
-    @State var rpc = ""
-    @State var rpcError: String?
-    @State private var isConfirmingDelete = false
     /// How tall what's in each tab wants to be. A tab has no answer until it's first shown.
     @State private var contentHeights: [Pane: CGFloat] = [:]
     /// How tall the tab is right now, which is what moves the window. It's one number for all the tabs, so it can animate from one to the next.
@@ -37,13 +33,11 @@ struct SettingsView: View {
     var body: some View {
         TabView(selection: $tab) {
             Tab("General", systemImage: "gearshape", value: Pane.general) { general }
-            Tab(HotWalletWording.title, systemImage: "banknote", value: Pane.spendingMoney) { spendingMoney }
             Tab("Server", systemImage: "server.rack", value: Pane.server) { connection }
         }
         .onAppear {
             // What didn't save stays, next to what's wrong with it.
             if serverError == nil { server = store.serverURL.absoluteString }
-            if rpcError == nil { rpc = hotWallet.settings.rpcURL.absoluteString }
         }
         .task { await store.refreshRules() }
         .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
@@ -125,60 +119,6 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private var spendingMoney: some View {
-        pane(.spendingMoney) {
-            Section {
-                LabeledContent("Cap") {
-                    HStack {
-                        Slider(value: Binding(get: { Double(hotWallet.settings.capInDollars) }, set: { hotWallet.setCap(dollars: Int($0)) }), in: 1...Double(hotWallet.settings.capCeiling / Money.dollar))
-                        Text(hotWallet.money(dollars: hotWallet.settings.capInDollars))
-                            .monospacedDigit()
-                            .frame(width: 56, alignment: .trailing)
-                    }
-                }
-                Toggle("Sweep realized gains to savings", isOn: Binding(get: { hotWallet.settings.sweepsRealizedGains }, set: { hotWallet.setSweepsRealizedGains($0) }))
-                TextField("Network", text: $rpc, prompt: Text(Base.publicRPC.absoluteString))
-                    .onSubmit(applyRPC)
-                    .onDisappear(perform: applyRPC)
-                    .help("Only reads balances and passes on what this app signed. It can't move anything by itself.")
-                if let rpcError {
-                    WarningText(rpcError).font(.callout)
-                }
-                if hotWallet.address != nil {
-                    Button("Delete This Mac's Spending Money…", role: .destructive) { isConfirmingDelete = true }
-                        .disabled(!hotWallet.canDelete)
-                        .confirmationDialog("Delete this wallet's key?", isPresented: $isConfirmingDelete) {
-                            if hotWallet.settings.sweepDestination != nil {
-                                Button("Sweep Everything to Savings First") { Task { await hotWallet.sweepEverything() } }
-                            }
-                            Button("Delete Forever", role: .destructive) { Task { await hotWallet.deleteWallet() } }
-                        } message: {
-                            Text("There's no recovery phrase and no backup. Whatever is still on this wallet is lost for good.")
-                        }
-                    if !hotWallet.canDelete {
-                        Text(HotWalletWording.deleteWaitsForRotation)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            } footer: {
-                Text("The cap is \(hotWallet.display.whole(hotWallet.settings.capCeiling)) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build").\(hotWallet.display.isConverted ? " \(HotWalletWording.capFollowsRate(hotWallet.display.main))" : "")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func applyRPC() {
-        let value = rpc.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https", url.host() != nil else {
-            rpcError = "That isn't a network address. It should look like \(Base.publicRPC.absoluteString)."
-            return
-        }
-        rpcError = nil
-        hotWallet.setRPC(url)
     }
 
     private func applyServer() {

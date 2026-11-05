@@ -358,12 +358,12 @@ struct PopoverView: View {
         } else if hotWallet.address == nil {
             Button("Set Up…", action: openHotWallet)
                 .controlSize(.small)
-        } else if let plan = hotWallet.plan {
-            Text("\(hotWallet.money(plan.valueUsdMicros)) of \(hotWallet.capText)")
+        } else if let plan = hotWallet.plan, let value = hotWallet.valueUsdMicros {
+            Text("\(hotWallet.money(value)) of \(hotWallet.capText)")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
-                .contentTransition(.numericText(value: Double(plan.valueUsdMicros)))
-                .motion(Motion.number, value: plan.valueUsdMicros)
+                .contentTransition(.numericText(value: Double(value)))
+                .motion(Motion.number, value: value)
                 .help(plan.gasKeptWei > 0 ? HotWalletWording.keptOutOfCap(plan.gasKeptWei) : "")
         } else {
             Text("Reading…").foregroundStyle(.secondary)

@@ -60,6 +60,8 @@ final class Navigation {
     var isReceiving = false
     /// The extension's Receive button was pressed. The menu bar item opens the window for it, since nothing else may be open.
     var wantsReceive = false
+    /// Delete was chosen in the wallet list. Spending Money's page asks to confirm it.
+    var wantsDelete = false
     /// Buy needs a savings wallet first. Spending Money's page takes it from here.
     var wantsAddSavings = false
     /// The web app sent over an account from a device. Spending Money's page asks the person to check it.
@@ -116,6 +118,12 @@ final class Navigation {
     func addSavings() {
         showSpendingMoney()
         wantsAddSavings = true
+    }
+
+    /// Goes to spending money and asks to confirm deleting it, which appears once the page is on screen.
+    func deleteSpendingMoney() {
+        showSpendingMoney()
+        wantsDelete = true
     }
 
     func resolve(_ asset: String? = nil) {

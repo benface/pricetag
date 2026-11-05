@@ -141,7 +141,7 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
 
         Settings {
-            SettingsView(store: store, hotWallet: hotWallet, tab: Bindable(navigation).settingsPane)
+            SettingsView(store: store, tab: Bindable(navigation).settingsPane)
                 .holdsDockPresence()
         }
     }
