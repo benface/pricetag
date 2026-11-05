@@ -367,3 +367,43 @@ struct PurchaseBookTests {
         #expect(book.purchases.map(\.blockNum) == [50])
     }
 }
+
+@Suite struct PurchaseNoticeTests {
+    private let purchase = TrackedPurchase(ref: "ref", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: delivered())
+
+    private func notice(_ from: PurchasePhase?, _ to: PurchasePhase) -> MoneyNotice? {
+        PurchaseWording.notice(for: purchase, from: from, to: to, beside: .USD)
+    }
+
+    @Test func nothingForAFirstLookOrForWhatsStillOnThePage() {
+        #expect(notice(nil, .recorded(paid)) == nil)
+        #expect(notice(.onProvidersPage, .onItsWay) == nil)
+        #expect(notice(.onItsWay, .onItsWay) == nil)
+        #expect(notice(.onProvidersPage, .noOrderYet) == nil)
+    }
+
+    @Test func deliveredThenRecordedIsOneNotificationThatsReplaced() {
+        let delivered = notice(.onItsWay, .arriving)
+        let recorded = notice(.arriving, .recorded(paid))
+        #expect(delivered?.title == "Purchase Delivered")
+        #expect(delivered?.body == "0.008 ETH arrived from Coinbase. Its cost is recorded once it shows up here.")
+        #expect(recorded?.title == "Purchase Cost Recorded")
+        #expect(recorded?.body == "0.008 ETH arrived. It cost $25.81, fees included.")
+        #expect(delivered?.id == recorded?.id, "the second replaces the first")
+        #expect(recorded?.row == MoneyNotice.purchaseRow("ref"))
+    }
+
+    @Test func skippingStraightToTheCostIsStillADelivery() {
+        #expect(notice(.onItsWay, .recorded(paid))?.title == "Purchase Delivered")
+    }
+
+    @Test func anUnknownCostSaysSo() {
+        #expect(notice(.arriving, .costUnknown)?.title == "Purchase Cost Unknown")
+        #expect(notice(.onItsWay, .noRateFor("SEK"))?.body == "0.008 ETH arrived, but its cost is unknown: there's no exchange rate for SEK.")
+    }
+
+    @Test func aFailureSaysNothingWasBought() {
+        #expect(notice(.onItsWay, .failed(.payment))?.body == "Coinbase couldn't take the payment for 0.008 ETH. Nothing was bought.")
+        #expect(notice(.onItsWay, .failed(.delivery))?.title == "Purchase Didn't Arrive")
+    }
+}
