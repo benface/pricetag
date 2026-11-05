@@ -216,12 +216,6 @@ public final class PortfolioStore {
         start()
     }
 
-    /// A wallet the user just made is what they want to see, unless they're already looking at a real one. Only the user replaces that.
-    public func showNewWallet(_ address: String) {
-        guard self.address == nil || self.address == WalletAddress.demo else { return }
-        setWallet(address)
-    }
-
     /// Keeps it in the list under this name, or makes it a recent one again with an empty name.
     public func renameWallet(_ address: String, to name: String) {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)

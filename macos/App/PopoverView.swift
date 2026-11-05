@@ -334,6 +334,12 @@ struct PopoverView: View {
                         Label("Buy", systemImage: "plus").frame(maxWidth: .infinity)
                     }
                     Button {
+                        navigation.isReceiving = true
+                        openHotWallet()
+                    } label: {
+                        Label("Receive", systemImage: "qrcode").frame(maxWidth: .infinity)
+                    }
+                    Button {
                         navigation.send()
                         openHotWallet()
                     } label: {
@@ -346,6 +352,8 @@ struct PopoverView: View {
                         Label("Top Up", systemImage: "arrow.down").frame(maxWidth: .infinity)
                     }
                 }
+                // Four don't fit with their icons, and words alone say more than icons alone.
+                .labelStyle(.titleOnly)
             }
         }
         .padding(14)
