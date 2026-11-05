@@ -3,7 +3,7 @@ import { describe, it } from "node:test"
 import { portfolioOf } from "../server/portfolio.ts"
 import { USD_CONTEXT, explainMetric } from "../src/core/explain.ts"
 import { createWallets, sharedMarket, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
-import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, foldWallet, shortHash, type FeedRound, type LegRow, type Reference } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, USDC_ADDRESS, foldWallet, msBetweenBlocks, shortHash, type FeedRound, type LegRow, type Reference } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 
@@ -35,7 +35,7 @@ function fake(
   const source: Source = {
     mode: "raw",
     startBlock: null,
-    historyBlocks: 100,
+    historyFrom: (head) => head - 100,
     head: async () => null,
     processedThrough: async (_, head) => processed(head),
     async readWindow(_, from, to): Promise<WindowRows> {
@@ -248,6 +248,69 @@ describe("reconciling", () => {
     const { legs } = await createWallets(source, headAt(1000), noFees).get(ME)
     assert.deepEqual(legs.map((l) => [l.id, l.delta]).slice(0, 2), [["opening:ETH", "7"], ["0x3b6:ETH", "5000"]])
     assert.equal(legs[0]!.timestamp, new Date(Date.parse("2026-11-04T00:00:00.000Z") - 101 * 2000).toISOString())
+  })
+
+  it("re-reads about a minute of chain for reorgs, whatever the block time", async () => {
+    let head = LAST_2S_BLOCK + 1000
+    const { source, windows } = fake(new Map(), () => reference(head))
+    const wallets = createWallets(source, async () => headAt(head)(), noFees)
+    await wallets.get(ME, { from: LAST_2S_BLOCK })
+    head += 5
+    await wallets.get(ME, { from: LAST_2S_BLOCK })
+    // 300 blocks at 200 ms, ending at the last block covered.
+    assert.deepEqual(windows.at(-1), [LAST_2S_BLOCK + 701, head])
+  })
+
+  describe("dating blocks at 200 ms", () => {
+    // Block `LAST_2S_BLOCK` at 18:00:01.000, and the chain's timestamps in whole seconds after it.
+    const FIRST_MS = Date.UTC(2026, 10, 5, 18, 0, 1)
+    const secondOf = (block: number) => new Date(FIRST_MS + Math.floor(((block - LAST_2S_BLOCK) * 200) / 1000) * 1000).toISOString()
+    const headOf = (block: number) => async () => ({ blockNum: block, timestamp: secondOf(block) })
+    const balances = async (): Promise<Record<string, string>> => ({ ETH: "7", USDC: "0" })
+    const BLOCK = LAST_2S_BLOCK + 5
+
+    it("keeps a fixed read's block on its own second, wherever the head is in its second", async () => {
+      for (let head = BLOCK + 1; head <= BLOCK + 10; head++) {
+        const { source } = fake(new Map(), () => reference(head), undefined, balances)
+        const { latest } = await createWallets(source, headOf(head), noFees).get(ME, { from: BLOCK - 2, to: BLOCK })
+        assert.deepEqual(latest, { blockNum: BLOCK, timestamp: secondOf(BLOCK) }, `head ${head}`)
+      }
+    })
+
+    it("keeps a wallet's opening on its own second as the head moves", async () => {
+      for (let head = BLOCK + 1; head <= BLOCK + 10; head++) {
+        const { source } = fake(new Map(), () => reference(head), undefined, balances)
+        const { legs } = await createWallets(source, headOf(head), noFees).get(ME, { from: BLOCK + 1 })
+        assert.equal(legs[0]?.timestamp, secondOf(BLOCK), `head ${head}`)
+      }
+    })
+
+    it("keeps factsAt's block on its own second too", async () => {
+      for (let head = BLOCK + 1; head <= BLOCK + 10; head++) {
+        const { source } = fake(new Map(), () => reference(head), undefined, balances)
+        const wallets = createWallets(source, headOf(head), noFees)
+        await wallets.get(ME)
+        const facts = await wallets.factsAt(ME, BLOCK, { withBalances: false })
+        assert.deepEqual(facts?.latest, { blockNum: BLOCK, timestamp: secondOf(BLOCK) }, `head ${head}`)
+      }
+    })
+
+    it("puts an opening just past midnight on the new day", async () => {
+      const midnight = LAST_2S_BLOCK + ((Date.UTC(2026, 10, 6) - FIRST_MS) / 1000) * 5
+      for (let head = midnight + 1; head <= midnight + 5; head++) {
+        const { source } = fake(new Map(), () => reference(head), undefined, balances)
+        const { legs } = await createWallets(source, headOf(head), noFees).get(ME, { from: midnight + 1 })
+        assert.equal(legs[0]?.timestamp, "2026-11-06T00:00:00.000Z", `head ${head}`)
+      }
+    })
+  })
+
+  it("dates a wallet's opening across the change to 200 ms blocks", async () => {
+    const head = LAST_2S_BLOCK + 50
+    const { source } = fake(new Map(), () => reference(head), undefined, async (): Promise<Record<string, string>> => ({ ETH: "7", USDC: "0" }))
+    const { legs } = await createWallets(source, headAt(head), noFees).get(ME, { from: LAST_2S_BLOCK - 9 })
+    // 10 blocks at 2 s, then 50 at 200 ms.
+    assert.equal(legs[0]!.timestamp, new Date(Date.parse("2026-11-04T00:00:00.000Z") - 30_000).toISOString())
   })
 
   it("a failed read takes down neither the wallet nor the check's retry", () =>
@@ -857,7 +920,7 @@ describe("looking for ETH a token's sale brought in", () => {
     let head = 1000
     const chain = new Map(Array.from({ length: 300 }, (_, i) => [i * 3 + 100, [send(i * 3 + 100)]] as [number, LegRow[]]))
     const { source, ethReads } = fake(chain, () => reference(head), undefined, async (block) => (block < 100 ? every("0") : { ...every("0"), ETH: "800" }), rises(10_000, 0n))
-    const wallets = createWallets({ ...source, historyBlocks: 950 }, async () => headAt(head)(), allFees)
+    const wallets = createWallets({ ...source, historyFrom: (head) => head - 950 }, async () => headAt(head)(), allFees)
     await wallets.get(ME)
     assert.equal(ethReads[0]!.length, 400)
     head = 1001
@@ -933,6 +996,14 @@ describe("market prices, notes and unlisted tokens", () => {
     assert.equal(wallet.prices.AERO?.source, "market")
     assert.ok(reads.every(([, , to]) => to <= 1000))
     assert.ok(reads.some(([, , to]) => to <= 950), "the leg's own price comes from at or before its block")
+  })
+
+  it("keeps a market read's bucket and age about as long in time after the 200 ms upgrade", async () => {
+    const head = LAST_2S_BLOCK + 20_000
+    const { source, reads } = marketFake(new Map([[LAST_2S_BLOCK + 19_000, [aeroRow(LAST_2S_BLOCK + 19_000)]]]), { startBlock: LAST_2S_BLOCK + 18_000 })
+    await createWallets(source, headAt(head), noFees).get(ME)
+    const bucket = head - (head % 300)
+    assert.ok(reads.some(([, from, to]) => to === bucket && msBetweenBlocks(from, to) === 1_800_000), JSON.stringify(reads))
   })
 
   it("doesn't read a dataset whose priced_legs can't be trusted, and doesn't call that no market", async () => {

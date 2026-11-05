@@ -69,8 +69,8 @@ export function formatClock(iso: string): string {
   return new Date(iso).toLocaleString("en-US", { hour: "numeric", minute: "2-digit" })
 }
 
-export function formatDuration(blocks: number): string {
-  const minutes = Math.round((blocks * 2) / 60)
+export function formatDuration(ms: number): string {
+  const minutes = Math.round(ms / 60_000)
   if (minutes < 120) return `${minutes} min`
   return `${Math.round(minutes / 60)} h`
 }
