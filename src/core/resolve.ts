@@ -180,12 +180,12 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     return gap && blockNum > gap.through ? gap : null
   }
   /**
-   * A mismatch that won't clear by itself, which is what's worth asking about. ETH's still can while a claim hasn't settled or
-   * a transaction's gas is missing, since either one leaves its legs wrong until it's read.
+   * Whether a mismatch at this block won't clear by itself, which is what's worth asking about. ETH's still can while a claim
+   * hasn't settled or a transaction's gas is missing, as of that balance. What happened after it can't explain it.
    */
-  const staysMismatched = (sender: string, asset: string) => {
+  const staysMismatched = (sender: string, asset: string, at: number) => {
     const { wallet, view } = read.get(sender) as Side
-    return asset !== "ETH" || (wallet.gasUnknownTxs.length === 0 && !view.legs.some((leg) => leg.asset === "ETH" && leg.unsettledCredit))
+    return asset !== "ETH" || !(wallet.gasUnknownBlocks.some((block) => block <= at) || view.legs.some((leg) => leg.asset === "ETH" && leg.unsettledCredit && leg.blockNum <= at))
   }
 
   // Everything that could be an exchange withdrawal, across every wallet read, so one withdrawal can't explain two of them.
@@ -227,15 +227,18 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const report = reportedMoney ? moneyIn(side, reportedMoney, leg) : null
 
     const pending: OpenItem[] = []
-    const withheld: { sender: string; settled: boolean }[] = []
+    const unvouched: { sender: string; settled: boolean }[] = []
     const pieces = (sources ?? []).flatMap(({ address: sender, units: part }): CostPiece[] => {
       const unknown: CostPiece = { qty: part.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" }
       const answer = book.senders[sender]
       if (answer?.kind === "mine" || linked.has(sender) || sender === address) {
-        if (!read.has(sender)) return [unknown]
+        if (!read.has(sender)) {
+          unvouched.push({ sender, settled: false })
+          return [unknown]
+        }
         const gap = sender === address ? null : gapAt(sender, leg)
         if (gap) {
-          withheld.push({ sender, settled: gap.mismatch && staysMismatched(sender, leg.asset) })
+          unvouched.push({ sender, settled: gap.mismatchAt !== null && staysMismatched(sender, leg.asset, gap.mismatchAt) })
           return [{ ...unknown, unconfirmedBy: [sender] }]
         }
         return pull(leg, sender, address, part)
@@ -259,8 +262,8 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
       return [unknown]
     })
 
-    // What's inherited wins, unless part of it can't be, since an entered cost is for all of what arrived.
-    if ((withheld.length > 0 || !pieces.some((p) => p.label === "inherited" && p.costMicros !== null)) && report !== null) return reported(leg, report)
+    // What's inherited wins, unless part of it can't be, or can't be yet, since an entered cost is for all of what arrived.
+    if ((unvouched.length > 0 || !pieces.some((p) => p.label === "inherited" && p.costMicros !== null)) && report !== null) return reported(leg, report)
     if (sources === null) {
       // What it cost is known, in USD, and only the rate is missing. Nobody can answer that, and it may yet be read.
       if (leg.conversion?.rateMicros !== null || leg.conversion.costUsdMicros === null) open.push({ wallet: address, leg, sender: null, units })
@@ -268,8 +271,8 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     }
     open.push(...pending)
     // Only once it's settled, or a card could appear for an unread balance and vanish when it's read.
-    const settled = withheld.filter((w) => w.settled)
-    if (settled.length > 0) open.push({ wallet: address, leg, sender: null, units, evidence: settled.map((w) => `${shortHash(w.sender)}, your wallet, sent ${withheld.length === sources.length ? "" : "some of "}this, and its ${leg.asset} history can't be confirmed`) })
+    const settled = unvouched.filter((w) => w.settled)
+    if (settled.length > 0) open.push({ wallet: address, leg, sender: null, units, evidence: settled.map((w) => `${shortHash(w.sender)}, your wallet, sent ${sources.length === 1 ? "" : "some of "}this, and its ${leg.asset} history can't be confirmed`) })
     return withPieces(leg, pieces)
   }
 

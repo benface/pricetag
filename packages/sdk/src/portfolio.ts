@@ -148,8 +148,8 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
 export type HistoryGap = {
   /** The last block they're known to add up at, which is -Infinity when there's no such block. */
   through: number
-  /** They were compared with a balance and don't match, rather than having nothing to compare with yet. */
-  mismatch: boolean
+  /** The block of the balance they don't match. Null when there's nothing to compare them with yet. */
+  mismatchAt: number | null
 }
 
 /**
@@ -163,7 +163,7 @@ export function historyGaps(legs: readonly PricedLeg[], method: Method, onchain:
   const gaps = new Map<string, HistoryGap>()
   for (const { asset, reconciliation } of foldPositions(legs, method, {}, onchain)) {
     if (reconciliation === null || reconciliation.status === "reconciled") continue
-    gaps.set(asset, { through: Number.NEGATIVE_INFINITY, mismatch: reconciliation.status === "incomplete" })
+    gaps.set(asset, { through: Number.NEGATIVE_INFINITY, mismatchAt: reconciliation.status === "incomplete" ? reconciliation.blockNum : null })
     // A mismatch is a mismatch, and without the starting balance there are no legs to compare, whatever a read says.
     if (reconciliation.status === "incomplete" || onchain.openingUnread?.includes(asset)) continue
     const last = asset === "ETH" && onchain.l1FeeUnknownTxs.length > 0 ? onchain.lastCheckableEth : onchain.lastBalances?.[asset]
@@ -171,7 +171,7 @@ export function historyGaps(legs: readonly PricedLeg[], method: Method, onchain:
     const then = legs.filter((leg) => leg.asset === asset && leg.blockNum <= last.blockNum)
     const [position] = foldPositions(then, method, {}, { balances: { blockNum: last.blockNum, amounts: { [asset]: last.amount } }, l1FeeUnknownTxs: [] })
     // With nothing moved by then and nothing held, there's no position, and nothing to disagree with.
-    gaps.set(asset, !position || position.reconciliation?.status === "reconciled" ? { through: last.blockNum, mismatch: false } : { through: Number.NEGATIVE_INFINITY, mismatch: true })
+    gaps.set(asset, !position || position.reconciliation?.status === "reconciled" ? { through: last.blockNum, mismatchAt: null } : { through: Number.NEGATIVE_INFINITY, mismatchAt: last.blockNum })
   }
   return gaps
 }
