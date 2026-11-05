@@ -128,7 +128,7 @@ private struct SiteRequestSummary<Footer: View>: View {
                 footer
             }
         case .transaction(let review):
-            ConfirmationView(asker: .site(approval.site), hero: hero(review), worth: review.moved?.usdMicros.map(usd), rows: rows(review), warnings: approval.warnings, details: details(review), data: review.data.isEmpty ? nil : "0x" + Hex.encode(review.data)) {
+            ConfirmationView(asker: .site(approval.site), hero: hero(review), worth: review.preview == nil ? review.moved?.usdMicros.map(usd) : nil, rows: rows(review), warnings: approval.warnings, details: details(review), data: review.data.isEmpty ? nil : "0x" + Hex.encode(review.data)) {
                 footer
             }
         case .message(let review):
@@ -138,12 +138,31 @@ private struct SiteRequestSummary<Footer: View>: View {
         }
     }
 
+    /// A big number says that's the whole of it, which it isn't when something comes back. The preview's rows say what goes each way.
     private func hero(_ review: TransactionReview) -> ConfirmationHero {
-        review.moved.map { .amount($0.text, symbol: $0.symbol) } ?? .words(review.headline)
+        guard review.preview == nil, let moved = review.moved else { return .words(review.headline) }
+        return .amount(moved.text, symbol: moved.symbol)
+    }
+
+    /// "You'd" because it's an estimate, and the note under the rows says so too.
+    private func previewRows(_ preview: CallPreview) -> [ConfirmationRow] {
+        func row(_ label: String, _ asset: CallPreview.Asset) -> ConfirmationRow {
+            switch asset {
+            case .known(let amount):
+                ConfirmationRow(label: label, value: amount.usdMicros.map { "\(amount.text) \(amount.symbol) (\(usd($0)))" } ?? "\(amount.text) \(amount.symbol)")
+            case .unknown(let contract):
+                ConfirmationRow(label: label, value: AddressText.grouped(contract.checksummed), isAddress: true, name: "Unknown token")
+            }
+        }
+        let allowances = preview.allowances.map {
+            ConfirmationRow(label: "You'd allow", value: AddressText.grouped($0.spender.checksummed), isAddress: true, name: "This address to spend \($0.words)")
+        }
+        let rows = preview.gives.map { row("You'd give", $0) } + preview.gets.map { row("You'd get", $0) } + allowances
+        return rows.isEmpty ? [ConfirmationRow(label: "Your balances", value: "No change")] : rows
     }
 
     private func rows(_ review: TransactionReview) -> [ConfirmationRow] {
-        var rows: [ConfirmationRow] = []
+        var rows = review.preview.map(previewRows) ?? []
         if let recipient = review.recipient {
             rows.append(ConfirmationRow(label: "To", value: AddressText.grouped(recipient.checksummed), isAddress: true))
         } else if let spender = review.spender {

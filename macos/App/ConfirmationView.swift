@@ -11,7 +11,8 @@ struct ConfirmationRow: Identifiable {
     var isAddress = false
     /// Who an address belongs to, above it, when that's known.
     var name: String?
-    var id: String { label }
+    /// With its value, since a call can give or get more than one thing.
+    var id: String { label + value }
 }
 
 enum ConfirmationHero {

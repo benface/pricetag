@@ -16,6 +16,9 @@ struct HotWalletFixture {
     private nonisolated static let today = Date(timeIntervalSince1970: 1_793_750_400)
     static let savings = EthereumAddress("0x00000000000000000000000000000000000de302")!
     static let site = "https://app.example.com"
+    /// What a simulation says these do, in `FixtureChain`.
+    static let swapRouter = "0x2626664c2603336e57b271c5c0b26f421741e481"
+    static let unknownRouter = "0x00000000000000000000000000000000000de305"
 
     private var hasWallet = true
     private var hasSavings = true
@@ -165,7 +168,40 @@ private nonisolated struct FixtureChain: ChainClient {
 
     func send(_ transaction: SignedTransaction) async throws { TestMode.fail("A scene tried to send a transaction.") }
     func receipt(of hash: String) async throws -> Receipt? { nil }
-    func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer { TestMode.fail("A scene tried to read for a site.") }
+
+    /// Only what a preview asks. A node that can't simulate is what `site-transaction` shows.
+    func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer {
+        guard canQuote, method == "eth_simulateV1" else { TestMode.fail("A scene tried to read for a site.") }
+        guard let call = parameters[0]?["blockStateCalls"]?[0]?["calls"]?[0], let wallet = call["from"]?.string, let to = call["to"]?.string else { TestMode.fail("That isn't a simulation.") }
+        let usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+        let eth = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        let unknownToken = "0x00000000000000000000000000000000000de306"
+        let logs: [JSONValue]
+        switch to {
+        case HotWalletFixture.swapRouter:
+            logs = [Self.log(usdc, .transfer, wallet, to, 200_000_000), Self.log(eth, .transfer, to, wallet, 75_700_000_000_000_000)]
+        case HotWalletFixture.unknownRouter:
+            logs = [
+                Self.log(eth, .transfer, wallet, to, 2_000_000_000_000_000),
+                Self.log(unknownToken, .transfer, to, wallet, 1_000_000_000_000_000_000),
+                Self.log(usdc, .approval, wallet, to, UInt128.max),
+            ]
+        default:
+            return .failure(SiteError(code: -32601, message: "the method eth_simulateV1 does not exist/is not available"))
+        }
+        return .success(.array([.object(["timestamp": .string("0x6aec0daf"), "calls": .array([.object(["status": .string("0x1"), "logs": .array(logs)])])])]))
+    }
+
+    private enum LogKind: String {
+        case transfer = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        case approval = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"
+    }
+
+    private static func log(_ address: String, _ kind: LogKind, _ from: String, _ to: String, _ amount: UInt128) -> JSONValue {
+        func topic(_ address: String) -> JSONValue { .string("0x" + String(repeating: "0", count: 24) + address.dropFirst(2)) }
+        let digits = String(amount, radix: 16)
+        return .object(["address": .string(address), "topics": .array([.string(kind.rawValue), topic(from), topic(to)]), "data": .string("0x" + String(repeating: "0", count: 64 - digits.count) + digits)])
+    }
 
     func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128 {
         guard canQuote else { TestMode.fail("A scene tried to price a transaction.") }
