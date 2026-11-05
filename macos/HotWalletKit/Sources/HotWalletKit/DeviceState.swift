@@ -2,6 +2,21 @@ import Foundation
 import KeyVault
 
 /// A transaction this device signed. It's written down before it's broadcast, so nothing the app sent can ever look like a thief's.
+/// What's become of what was just signed, from its receipts. Nothing counts as landed until every one of them says so, and it's only ever read here.
+public enum Landing: Equatable, Sendable {
+    case onItsWay, landed, didntLand
+
+    public init(_ records: [SignedRecord]) {
+        if records.contains(where: { $0.status == .failed || $0.status == .dropped }) {
+            self = .didntLand
+        } else if records.isEmpty || records.contains(where: { $0.status == .pending }) {
+            self = .onItsWay
+        } else {
+            self = .landed
+        }
+    }
+}
+
 public struct SignedRecord: Codable, Equatable, Identifiable, Sendable {
     public enum Status: String, Codable, Sendable {
         case pending, confirmed, failed

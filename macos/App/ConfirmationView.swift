@@ -140,9 +140,10 @@ struct ConfirmationView<Footer: View>: View {
             case .amount(let amount, let symbol):
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(amount)
-                        .font(.system(size: 46, weight: .semibold, design: .rounded))
+                        .font(.displayLarge)
                     Text(symbol)
-                        .font(.system(size: 24, weight: .medium, design: .rounded))
+                        .font(.displaySmall)
+                        .fontWeight(.medium)
                         .foregroundStyle(.secondary)
                 }
                 .monospacedDigit()
@@ -152,7 +153,7 @@ struct ConfirmationView<Footer: View>: View {
                 .textSelection(.enabled)
             case .words(let words):
                 Text(words)
-                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                    .font(.displaySmall)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -257,8 +258,8 @@ private struct RowView: View {
     }
 
     private var address: some View {
-        Text(row.value)
-            .font(.system(size: 11, design: .monospaced))
+        AddressLine(row.value)
+            .font(.subheadline)
             .fixedSize()
     }
 }
@@ -290,7 +291,7 @@ private struct LongText: View {
         }
         .frame(maxHeight: 200)
         .fixedSize(horizontal: false, vertical: true)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .softBox()
     }
 }
 
@@ -332,7 +333,7 @@ struct TouchIDFooter: View {
         .frame(minHeight: 56)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .softBox(cornerRadius: 18)
         // The two together: where the window is decides when this asks, and it never asks while it isn't seen.
         .background(WindowInFrontReader { gate.windowChanged(isInFront: $0) })
         .onDisappear(perform: gate.stop)
@@ -416,30 +417,81 @@ struct TouchIDFooter: View {
     }
 }
 
-/// After Touch ID, while it goes out and once it has.
+/// After Touch ID, while it goes out and until it's landed. The green check is only for what's really finished: a receipt for a transaction, or a signature for a message.
 struct ProgressFooter: View {
-    let doing: String
-    let done: String
-    let isDone: Bool
+    enum Stage: Equatable {
+        /// Still being signed or sent from here.
+        case working(String)
+        /// Sent, and nothing has said yet what became of it.
+        case onItsWay
+        /// Sent, and this won't be here to see it land.
+        case handedOff
+        case finished(String)
+        case didntLand(String)
+    }
+
+    let stage: Stage
+    /// Closing doesn't stop what's on its way, and nobody needs to wait for it.
+    var close: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 10) {
-            if isDone {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.green)
-                    .transition(.symbolEffect(.drawOn))
-            } else {
-                ProgressView().controlSize(.small)
-            }
-            Text(isDone ? done : doing)
+            icon
+            Text(text)
                 .font(.headline)
                 .contentTransition(.opacity)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, minHeight: 56)
+        .overlay(alignment: .trailing) {
+            if let close, stage == .onItsWay || isFailure {
+                Button("Close", action: close)
+                    .keyboardShortcut(.cancelAction)
+                    .controlSize(.large)
+                    .padding(.trailing, 14)
+                    .transition(.opacity)
+            }
+        }
         .padding(.vertical, 8)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .animation(.snappy, value: isDone)
+        .softBox(cornerRadius: 18)
+        .animation(Motion.state, value: stage)
+        .sensoryFeedback(.success, trigger: stage) { _, stage in
+            if case .finished = stage { true } else { false }
+        }
+    }
+
+    private var isFailure: Bool {
+        if case .didntLand = stage { true } else { false }
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        switch stage {
+        case .working, .onItsWay:
+            ProgressView().controlSize(.small)
+        case .handedOff:
+            Image(systemName: "paperplane.fill")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        case .finished:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.title2)
+                .foregroundStyle(.green)
+                .transition(.symbolEffect(.drawOn))
+        case .didntLand:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.title3)
+                .foregroundStyle(Tone.warning.style)
+        }
+    }
+
+    private var text: String {
+        switch stage {
+        case .working(let doing): doing
+        case .onItsWay, .handedOff: "On its way"
+        case .finished(let done): done
+        case .didntLand(let why): why
+        }
     }
 }
 

@@ -147,6 +147,12 @@ public final class SendModel {
 
     public var nextPromptAt: Date? { wallet.nextPromptAt }
 
+    /// What became of this send, once it's gone. The newest to this address, because that's the one that was just signed.
+    public var landing: Landing {
+        guard stage == .sent else { return .onItsWay }
+        return Landing(wallet.records.first { $0.reason == .sent && $0.to == recipient }.map { [$0] } ?? [])
+    }
+
     public var maximum: UInt128 { wallet.maximumSend(of: token) }
 
     public func useMaximum() {

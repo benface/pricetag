@@ -40,7 +40,7 @@ private struct SendForm: View {
                 TextField("Amount", text: $model.amountText, prompt: Text("0"))
                     .labelsHidden()
                     .textFieldStyle(.plain)
-                    .font(.system(size: 46, weight: .semibold, design: .rounded))
+                    .font(.displayLarge)
                     .monospacedDigit()
                     .multilineTextAlignment(.center)
                     .focused($focus, equals: .amount)
@@ -112,9 +112,8 @@ private struct SendForm: View {
     @ViewBuilder
     private var recipient: some View {
         if let address = model.recipient {
-            // In groups, because nobody really compares 40 characters in one run.
-            Text(AddressText.grouped(address.checksummed))
-                .font(.callout.monospaced())
+            AddressLine(address.checksummed)
+                .font(.callout)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if let problem = model.recipientProblem {
@@ -147,7 +146,7 @@ private struct SendForm: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .softBox()
     }
 }
 
@@ -166,10 +165,12 @@ struct SendConfirmation: View {
     var body: some View {
         ConfirmationView(asker: .spendingMoney, hero: .amount(Money.text(ofUnits: model.amount ?? 0, decimals: model.token.decimals), symbol: model.token.symbol), worth: model.usdText, rows: rows) {
             if model.stage == .sent || gate.phase == .done {
-                ProgressFooter(doing: "Sending…", done: "Sent", isDone: true)
-                    .task {
-                        try? await Task.sleep(for: .seconds(1.1))
-                        done()
+                ProgressFooter(stage: stage, close: done)
+                    // Only once it's landed. Up to then it stays, and there's a way to close it.
+                    .task(id: model.landing) {
+                        guard model.landing == .landed else { return }
+                        try? await Task.sleep(for: Motion.acknowledged)
+                        if !Task.isCancelled { done() }
                     }
             } else {
                 TouchIDFooter(gate: gate, verb: "send", doing: "Sending…", leaveTitle: "Edit") { model.backToEditing() }
@@ -178,10 +179,18 @@ struct SendConfirmation: View {
         .onExitCommand { if gate.backOut() { model.backToEditing() } }
     }
 
+    private var stage: ProgressFooter.Stage {
+        switch model.landing {
+        case .onItsWay: .onItsWay
+        case .landed: .finished("Sent")
+        case .didntLand: .didntLand("This didn't go through")
+        }
+    }
+
     private var rows: [ConfirmationRow] {
         var rows: [ConfirmationRow] = []
         if let address = model.recipient {
-            rows.append(ConfirmationRow(label: "To", value: AddressText.grouped(address.checksummed), isAddress: true, name: model.recipientName))
+            rows.append(ConfirmationRow(label: "To", value: address.checksummed, isAddress: true, name: model.recipientName))
         }
         if let fee = model.feeText { rows.append(ConfirmationRow(label: "Network fee", value: "About \(fee)")) }
         return rows
@@ -192,10 +201,13 @@ struct SendConfirmation: View {
 struct SweepSheet: View {
     let wallet: HotWallet
     @State var gate: ApprovalPrompt
+    /// What was already signed, so what comes after is this sweep.
+    @State private var signedBefore: Set<String>
     @Environment(\.dismiss) private var dismiss
 
     init(wallet: HotWallet, gate: ApprovalPrompt? = nil) {
         self.wallet = wallet
+        _signedBefore = State(initialValue: Set(wallet.records.map(\.hash)))
         _gate = State(initialValue: gate ?? ApprovalPrompt(notBefore: { wallet.nextPromptAt }) { prompt, _ in
             await wallet.sweepConfirmed(in: prompt)
         })
@@ -208,10 +220,11 @@ struct SweepSheet: View {
     var body: some View {
         ConfirmationView(asker: .spendingMoney, hero: hero, worth: worth, rows: rows) {
             if gate.phase == .done {
-                ProgressFooter(doing: "Sweeping…", done: "On its way", isDone: true)
-                    .task {
-                        try? await Task.sleep(for: .seconds(1.1))
-                        dismiss()
+                ProgressFooter(stage: sweepStage) { dismiss() }
+                    .task(id: landing) {
+                        guard landing == .landed else { return }
+                        try? await Task.sleep(for: Motion.acknowledged)
+                        if !Task.isCancelled { dismiss() }
                     }
             } else {
                 TouchIDFooter(gate: gate, verb: "sweep", doing: "Sweeping…", leaveTitle: hasFailed ? "Close" : "Cancel") { dismiss() }
@@ -219,6 +232,18 @@ struct SweepSheet: View {
         }
         .frame(width: 460)
         .interactiveDismissDisabled(wallet.isWorking)
+    }
+
+    private var landing: Landing {
+        Landing(wallet.records.filter { !signedBefore.contains($0.hash) })
+    }
+
+    private var sweepStage: ProgressFooter.Stage {
+        switch landing {
+        case .onItsWay: .onItsWay
+        case .landed: .finished("Moved to your savings")
+        case .didntLand: .didntLand("Some of this didn't go through")
+        }
     }
 
     /// Part of it may have gone by then, and that can't be cancelled.
@@ -241,19 +266,11 @@ struct SweepSheet: View {
     private var rows: [ConfirmationRow] {
         var rows: [ConfirmationRow] = []
         if let destination {
-            rows.append(ConfirmationRow(label: "To", value: AddressText.grouped(destination.address.checksummed), isAddress: true, name: destination.name))
+            rows.append(ConfirmationRow(label: "To", value: destination.address.checksummed, isAddress: true, name: destination.name))
         }
         if let preview = wallet.sweepPreview, !preview.transfers.isEmpty {
             rows.append(ConfirmationRow(label: "Network fee", value: "About \(preview.feeUsdMicros.map(wallet.usd) ?? "\(Format.amount(String(preview.feeWei), decimals: 18)) ETH")"))
         }
         return rows
-    }
-}
-
-enum AddressText {
-    static func grouped(_ address: String) -> String {
-        let digits = Array(address.dropFirst(2))
-        let groups = stride(from: 0, to: digits.count, by: 4).map { String(digits[$0..<min($0 + 4, digits.count)]) }
-        return "0x " + groups.joined(separator: " ")
     }
 }
