@@ -6,29 +6,13 @@ import SwiftUI
 
 /// What the flow needs from this Mac, so a test scene can say what's there without touching any of it.
 struct AddSavingsMac {
-    var ledgerBrowser: () -> LedgerBrowserChoice
+    var browsers: DeviceBrowsers
     var ledgerWalletIsOpen: () -> Bool
-    var open: (URL, InstalledBrowser?) -> Void
     var scanner: () -> AddressScanner
 
     static let real = AddSavingsMac(
-        ledgerBrowser: {
-            // Any web address will do, to ask who opens them.
-            let page = URL(string: "https://example.com")!
-            let browser = { (url: URL) -> InstalledBrowser? in
-                guard let id = Bundle(url: url)?.bundleIdentifier else { return nil }
-                return InstalledBrowser(bundleID: id, name: FileManager.default.displayName(atPath: url.path(percentEncoded: false)).replacing(".app", with: ""), url: url)
-            }
-            return LedgerBrowserChoice(defaultBrowser: NSWorkspace.shared.urlForApplication(toOpen: page).flatMap(browser), installed: NSWorkspace.shared.urlsForApplications(toOpen: page).compactMap(browser))
-        },
+        browsers: .real,
         ledgerWalletIsOpen: { !NSRunningApplication.runningApplications(withBundleIdentifier: "com.ledger.live").isEmpty },
-        open: { url, browser in
-            if let browser {
-                NSWorkspace.shared.open([url], withApplicationAt: browser.url, configuration: NSWorkspace.OpenConfiguration())
-            } else {
-                NSWorkspace.shared.open(url)
-            }
-        },
         scanner: { AddressScanner() }
     )
 }
@@ -82,8 +66,8 @@ struct AddColdWalletSheet: View {
         case .ledgerPlugIn: StepPage(page: page, picture: .ledger(screen: "Enter PIN"), model: model, showsTrouble: showsTrouble)
         case .ledgerApp: StepPage(page: page, picture: .ledger(screen: "Ethereum\napp is ready"), model: model, showsTrouble: showsTrouble)
         case .ledgerQuit: LedgerQuitStep(page: page, model: model, isOpen: mac.ledgerWalletIsOpen)
-        case .ledgerBrowser: LedgerBrowserStep(page: page, model: model, showsTrouble: showsTrouble, choice: mac.ledgerBrowser, open: { browser in
-            if let link = DeviceFlow.addSavingsFromLedger(server: server) { mac.open(link, browser) }
+        case .ledgerBrowser: LedgerBrowserStep(page: page, model: model, showsTrouble: showsTrouble, browsers: mac.browsers, open: { browser in
+            if let link = DeviceFlow.addSavingsFromLedger(server: server) { mac.browsers.open(link, browser) }
         })
         case .keystoneUnlock: StepPage(page: page, picture: .keystone(showsCode: false), model: model, showsTrouble: showsTrouble)
         case .keystoneReceive: StepPage(page: page, picture: .keystone(showsCode: true), model: model, showsTrouble: showsTrouble)
@@ -301,21 +285,19 @@ private struct LedgerBrowserStep: View {
     let page: AddSavingsWording.Page
     let model: AddSavingsModel
     let showsTrouble: Bool
-    let choice: () -> LedgerBrowserChoice
+    let browsers: DeviceBrowsers
     let open: (InstalledBrowser?) -> Void
-    @State private var found: LedgerBrowserChoice?
+    @State private var found = LedgerBrowserChoice.unknown
 
     var body: some View {
         Group {
-            if model.isWaitingForBrowser, let browser = found?.browser {
+            if model.isWaitingForBrowser, let browser = found.browser {
                 waiting(browser)
             } else {
                 offer
             }
         }
-        .onAppear { found = choice() }
-        // Installing one means leaving this app and coming back.
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in found = choice() }
+        .findingBrowsers(browsers, $found)
     }
 
     private var offer: some View {
@@ -329,10 +311,10 @@ private struct LedgerBrowserStep: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
                 .accessibilityHidden(true)
-            Text(found?.browser.map { "Continue in \($0.name)" } ?? page.title)
+            Text(found.browser.map { "Continue in \($0.name)" } ?? page.title)
                 .font(.title2.bold())
-            if let browser = found?.browser {
-                Text(AddSavingsWording.browserBody(browser.name, defaultThatCant: found?.defaultThatCant))
+            if let browser = found.browser {
+                Text(AddSavingsWording.browserBody(browser.name, defaultThatCant: found.defaultThatCant))
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Open \(browser.name)") {
                     open(browser)
@@ -341,8 +323,8 @@ private struct LedgerBrowserStep: View {
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
             } else {
-                Notice(.warning, AddSavingsWording.noBrowser(found?.defaultThatCant))
-                Link("Get Chrome", destination: URL(string: "https://www.google.com/chrome/")!)
+                Notice(.warning, AddSavingsWording.noBrowser(found.defaultThatCant))
+                Link("Get Chrome", destination: DeviceBrowsers.getChrome)
             }
             TroubleList(troubles: page.troubles, isExpanded: showsTrouble)
             Button("Paste an Address Instead") { model.enterByHand() }

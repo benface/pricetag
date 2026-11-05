@@ -489,13 +489,15 @@ private struct HotWalletDetails: View {
 struct TopUpSheet: View {
     let wallet: HotWallet
     let server: URL
+    let browsers: DeviceBrowsers
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openURL) private var openURL
     @State private var dollars = 0.0
+    @State private var found = LedgerBrowserChoice.unknown
 
-    init(wallet: HotWallet, server: URL) {
+    init(wallet: HotWallet, server: URL, browsers: DeviceBrowsers = .real) {
         self.wallet = wallet
         self.server = server
+        self.browsers = browsers
     }
 
     private var room: Int { Int(wallet.topUpRoom / Money.dollar) }
@@ -525,9 +527,9 @@ struct TopUpSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("This opens your browser, where your hardware wallet signs the transfer. A Ledger needs Chrome, Brave, Edge or another Chromium browser.")
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let deviceLink {
+                    DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.") { open(deviceLink, in: nil) }
+                }
                 DisclosureGroup("Or do it by hand on the device") {
                     VStack(alignment: .leading, spacing: 8) {
                         Label("Choose Send, on Base", systemImage: "1.circle")
@@ -560,11 +562,8 @@ struct TopUpSheet: View {
                 Button(room >= 1 ? "Cancel" : "Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 if room >= 1, let deviceLink {
-                    Button("Continue in Browser") {
-                        openURL(deviceLink)
-                        dismiss()
-                    }
-                    .keyboardShortcut(.defaultAction)
+                    Button(found.continueTitle) { open(deviceLink, in: found.browser) }
+                        .keyboardShortcut(.defaultAction)
                 }
             }
         }
@@ -573,6 +572,12 @@ struct TopUpSheet: View {
         .onAppear { dollars = Double(max(1, min(room, 20))) }
         // A read can leave less room than there was when this opened. What's chosen stays if it still fits.
         .onChange(of: room) { dollars = min(dollars, Double(max(room, 1))) }
+        .findingBrowsers(browsers, $found)
+    }
+
+    private func open(_ link: URL, in browser: InstalledBrowser?) {
+        browsers.open(link, browser)
+        dismiss()
     }
 
     private var ethHint: String {

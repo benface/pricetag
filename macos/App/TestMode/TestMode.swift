@@ -187,6 +187,7 @@ enum TestScene: String, CaseIterable {
     case mainDetailsCAD = "main-details-cad"
     case resolve
     case resolveCostWithheld = "resolve-cost-withheld"
+    case resolvePublishFromDevice = "resolve-publish-from-device"
     case resolveAnsweredWallet = "resolve-answered-wallet"
     case walletSwitcher = "wallet-switcher"
     case walletSwitcherFirstRun = "wallet-switcher-first-run"
@@ -291,6 +292,8 @@ enum TestScene: String, CaseIterable {
     case hotWalletTopUpOneDollar = "hot-wallet-top-up-one-dollar"
     case hotWalletTopUpAtCap = "hot-wallet-top-up-at-cap"
     case hotWalletTopUpCAD = "hot-wallet-top-up-cad"
+    case hotWalletTopUpSafari = "hot-wallet-top-up-safari"
+    case hotWalletTopUpNoChromium = "hot-wallet-top-up-no-chromium"
     case send
     case sendCAD = "send-cad"
     case sendKnown = "send-known"
@@ -323,6 +326,9 @@ enum TestScene: String, CaseIterable {
     case publishCost = "publish-cost"
     case publishCAD = "publish-cost-cad"
     case publishWaiting = "publish-cost-waiting"
+    case publishFromDevice = "publish-from-device"
+    case publishFromDeviceSafari = "publish-from-device-safari"
+    case publishFromDeviceNoChromium = "publish-from-device-no-chromium"
     case ruleComparison = "rule-comparison"
     case ruleComparisonCAD = "rule-comparison-cad"
     case siteConnect = "site-connect"
@@ -341,9 +347,9 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
-             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
-             .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
+        case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
+             .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
+             .publishFromDevice, .publishFromDeviceSafari, .publishFromDeviceNoChromium, .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
         }
@@ -358,6 +364,7 @@ enum TestScene: String, CaseIterable {
         case .mainNotUpdating, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
         case .mainCostWithheld, .resolveCostWithheld: .costWithheld
+        case .resolvePublishFromDevice: .costOnSavings
         case .mainSmallAmounts, .mainSmallAmountsNarrow: .smallAmounts
         case .mainLongHistory, .mainChartWeek: .longHistory
         case .resolveAnsweredWallet: .answeredWallet
@@ -412,7 +419,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned, .popoverNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped: .funded
+        case .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletCAD, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium, .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped: .funded
         case .siteConnect: .funded
         case .siteTransaction, .siteTransactionCAD, .sitePreview, .sitePreviewUnknown, .sitePreviewLong, .siteUnlimitedApproval, .siteTypedPermit: .connectedToSite
         case .hotWalletTopUpOneDollar: .nearCap
@@ -429,11 +436,28 @@ enum TestScene: String, CaseIterable {
         }
     }
 
+    /// Says what's there, and fails if a scene tries to open one.
+    private func browsers(defaultBrowser: InstalledBrowser, installed: [InstalledBrowser]) -> DeviceBrowsers {
+        DeviceBrowsers(choice: { LedgerBrowserChoice(defaultBrowser: defaultBrowser, installed: installed) }, open: { _, _ in TestMode.fail("A scene tried to open a browser.") })
+    }
+
+    private static let chrome = InstalledBrowser(bundleID: "com.google.Chrome", name: "Google Chrome", url: URL(filePath: "/Applications/Google Chrome.app"))
+    private static let safari = InstalledBrowser(bundleID: "com.apple.Safari", name: "Safari", url: URL(filePath: "/Applications/Safari.app"))
+
+    /// For scenes that only differ in the browsers on this Mac.
+    private var deviceBrowsers: DeviceBrowsers {
+        switch self {
+        case .hotWalletTopUpSafari, .publishFromDeviceSafari: browsers(defaultBrowser: Self.safari, installed: [Self.safari, Self.chrome])
+        case .hotWalletTopUpNoChromium, .publishFromDeviceNoChromium: browsers(defaultBrowser: Self.safari, installed: [Self.safari])
+        default: browsers(defaultBrowser: Self.chrome, installed: [Self.chrome])
+        }
+    }
+
     /// One step of the flow. Nothing here reaches the camera, a browser or another app: `AddSavingsMac` says what's there.
     private func addSavingsSheet(_ wallet: HotWallet) -> AnyView {
         let other = "0x00000000000000000000000000000000000de304"
-        let chrome = InstalledBrowser(bundleID: "com.google.Chrome", name: "Google Chrome", url: URL(filePath: "/Applications/Google Chrome.app"))
-        let safari = InstalledBrowser(bundleID: "com.apple.Safari", name: "Safari", url: URL(filePath: "/Applications/Safari.app"))
+        let chrome = Self.chrome
+        let safari = Self.safari
         var defaultBrowser = chrome
         var installed = [chrome]
         var ledgerWalletIsOpen = false
@@ -492,9 +516,8 @@ enum TestScene: String, CaseIterable {
         default: model = AddSavingsModel(wallet: wallet)
         }
         let mac = AddSavingsMac(
-            ledgerBrowser: { [defaultBrowser, installed] in LedgerBrowserChoice(defaultBrowser: defaultBrowser, installed: installed) },
+            browsers: browsers(defaultBrowser: defaultBrowser, installed: installed),
             ledgerWalletIsOpen: { [ledgerWalletIsOpen] in ledgerWalletIsOpen },
-            open: { _, _ in TestMode.fail("A scene tried to open a browser.") },
             scanner: { [camera] in AddressScanner(fixed: camera) }
         )
         return AnyView(AddColdWalletSheet(model: model, server: URL(string: "http://127.0.0.1:8787")!, mac: mac, showsTrouble: showsTrouble))
@@ -552,7 +575,7 @@ enum TestScene: String, CaseIterable {
         let isReady: () -> Bool = { [feed] in
             if TestMode.live != nil { return store.feed == .noWallet || store.portfolio != nil }
             return switch feed {
-            case .demo, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .smallAmounts, .longHistory, .answeredWallet, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .costOnSavings, .smallAmounts, .longHistory, .answeredWallet, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
             case .stopsAnswering: store.feed == .serverUnreachable && store.portfolio != nil
@@ -561,6 +584,8 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .resolve, .resolveCostWithheld, .resolveAnsweredWallet:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
+        case .resolvePublishFromDevice:
+            return TestScreen(view: AnyView(ResolveFlow(store: store, noteWriter: SavingsNoteWriter()) { AnyView(PublishFromDeviceButton(link: $0, browsers: deviceBrowsers)) }), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .holdComparison:
             return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
         case .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed:
@@ -654,11 +679,11 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation)), size: CGSize(width: 560, height: 1200), isReady: isReady)
         case .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsOtherPaste, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere:
             return TestScreen(view: addSavingsSheet(hotWallet), isReady: isReady)
-        case .hotWalletTopUp, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD:
-            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!)), isReady: isReady)
+        case .hotWalletTopUp, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium:
+            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers)), isReady: isReady)
         case .hotWalletTopUpFirstRead:
             // The sheet opens first here, so the read has to change what it worked out.
-            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!).task { await readHotWallet() }), isReady: { hotWalletHasRead.isDone })
+            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers).task { await readHotWallet() }), isReady: { hotWalletHasRead.isDone })
         case .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped:
             let model = SendModel(wallet: hotWallet, store: store)
             model.token = Base.tokens.first { $0.symbol == "USDC" }!
@@ -682,6 +707,9 @@ enum TestScene: String, CaseIterable {
         case .publishCost, .publishCAD, .publishWaiting:
             let draft = CostNoteDraft(wallet: "0x00000000000000000000000000000000000de301", txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
             return TestScreen(view: AnyView(PublishCostSheet(draft: draft, currency: currency, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
+        case .publishFromDevice, .publishFromDeviceSafari, .publishFromDeviceNoChromium:
+            // What the button's popover holds, because a render has no popovers. The page itself isn't part of this.
+            return TestScreen(view: AnyView(PublishFromDeviceOffer(link: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers, done: {}).background(.background)), isReady: { true })
         case .ruleComparison, .ruleComparisonCAD:
             if TestMode.live != nil { return TestScreen(view: AnyView(RuleComparisonSheet(store: store)), isReady: isReady) }
             guard let comparison: RuleComparison = try? FixtureSource.decode(self == .ruleComparison ? "demo-rule-comparison" : "demo-rule-comparison-cad") else { TestMode.fail("There's no comparison fixture.") }
@@ -820,13 +848,21 @@ private struct HoldComparisonScene: View {
     }
 }
 
+/// Says every wallet is savings, so the only way to publish is from a device. Nothing here ever signs.
+private final class SavingsNoteWriter: CostNoteWriter {
+    func canWriteNote(from wallet: String) -> Bool { false }
+    func canWriteNoteOnDevice(from wallet: String) -> Bool { true }
+    func writeNote(_ calldata: [UInt8], asset: String, from wallet: String) async -> Bool { false }
+    var noteProblem: String? { nil }
+}
+
 private final class ReadOnce {
     var isDone = false
 }
 
 /// Stands in for the server, with the same demo wallet the tests read.
 final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, missingPrice, unreadBalance, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, smallAmounts, longHistory, answeredWallet, empty, emptyReadingLinked, notStarted, firstRun }
+    enum Feed { case demo, missingPrice, unreadBalance, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, answeredWallet, empty, emptyReadingLinked, notStarted, firstRun }
 
     private let feed: Feed
     private let reads = Mutex(0)
@@ -872,11 +908,11 @@ final class FixtureSource: PortfolioSource {
         case .linkedFails:
             // The demo, with one of its linked wallets unreadable.
             return try demo { $0["linkedFailed"] = ["0x00000000000000000000000000000000000de301"] }
-        case .costWithheld:
-            // The demo, with what one of its linked wallets sent left unknown.
+        case .costWithheld, .costOnSavings:
+            // The demo, with what one of its linked wallets sent left unknown. On savings, a note could answer it, and there's every way to answer it.
             return try demo { object in
                 object["withheld"] = [["wallet": "0x00000000000000000000000000000000000de301", "asset": "USDC"]]
-                let asked: [String: Any] = ["id": "cost:0xdemo:0xwithheld:USDC", "kind": "cost", "wallet": object["address"] ?? "", "receipts": [["wallet": object["address"] ?? "", "legId": "0xwithheld:USDC", "asset": "USDC", "units": "500000000"]], "costKey": "0xdemo:0xwithheld:USDC", "noteAbout": NSNull(), "needsCost": false, "arrivals": [["asset": "USDC", "decimals": 6, "units": "500000000"]], "transfers": 1, "firstAt": "2026-11-04T12:00:00.000Z", "lastAt": "2026-11-04T12:00:00.000Z", "evidence": ["0x0000…e301, your wallet, sent this, and its USDC history can't be confirmed"], "valueMicros": "500000000"]
+                let asked: [String: Any] = ["id": "cost:0xdemo:0xwithheld:USDC", "kind": "cost", "wallet": object["address"] ?? "", "receipts": [["wallet": object["address"] ?? "", "legId": "0xwithheld:USDC", "asset": "USDC", "units": "500000000"]], "costKey": "0xdemo:0xwithheld:USDC", "sender": feed == .costOnSavings ? "0x00000000000000000000000000000000000de301" : NSNull(), "noteAbout": feed == .costOnSavings ? "0x" + String(repeating: "ab", count: 32) : NSNull(), "needsCost": false, "arrivals": [["asset": "USDC", "decimals": 6, "units": "500000000"]], "transfers": 1, "firstAt": "2026-11-04T12:00:00.000Z", "lastAt": "2026-11-04T12:00:00.000Z", "evidence": ["0x0000…e301, your wallet, sent this, and its USDC history can't be confirmed"], "valueMicros": "500000000"]
                 object["questions"] = [asked] + (object["questions"] as? [[String: Any]] ?? [])
             }
         case .smallAmounts:

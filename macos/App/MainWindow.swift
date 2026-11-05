@@ -65,7 +65,7 @@ struct MainWindow: View {
         }
         .sheet(isPresented: detailsSheetBinding) { detailsSheet }
         .sheet(isPresented: $navigation.isResolving) {
-            ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet)
+            ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet) { AnyView(PublishFromDeviceButton(link: $0, browsers: .real)) }
         }
         .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: exportName) { result in
             if case .failure(let error) = result { exportError = error.localizedDescription }
