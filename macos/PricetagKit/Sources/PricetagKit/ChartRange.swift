@@ -139,6 +139,14 @@ public struct ChartWindow: Equatable, Sendable {
         return String(to - from)
     }
 
+    /// Whether any of this range is shaded as unknown, which is its own for each: value can be known where PnL isn't, and the other way around.
+    public func hasUnknown(_ metric: ChartMetric) -> Bool {
+        switch metric {
+        case .value: !ValueSeries(points: points).gaps.isEmpty
+        case .pnl: !PnlSeries(points: points).gaps.isEmpty
+        }
+    }
+
     /// "+$12.40 in the past day", or nil when there's no change to state.
     public func changeText(_ currency: CurrencyCode, estimated: Bool, metric: ChartMetric = .pnl) -> String? {
         guard let change = changeMicros(metric), let phrase = range.phrase else { return nil }

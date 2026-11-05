@@ -102,14 +102,18 @@ extension View {
 private struct UpdatingMark: View {
     @Environment(\.updatingNote) private var note
 
+    /// It fades, whatever Reduce Motion says, because nothing moves. The numbers it sits beside don't animate with it.
     var body: some View {
-        if let note {
-            ProgressView()
-                .controlSize(.mini)
-                .help(note)
-                .accessibilityLabel("Updating")
-                .transition(.opacity)
+        ZStack {
+            if let note {
+                ProgressView()
+                    .controlSize(.mini)
+                    .help(note)
+                    .accessibilityLabel("Updating")
+                    .transition(.opacity)
+            }
         }
+        .animation(Motion.state, value: note != nil)
     }
 }
 

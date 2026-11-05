@@ -71,6 +71,22 @@ import Testing
         #expect(window.points.first?.valueMicros == nil)
     }
 
+    @Test func eachMetricSaysWhetherItsOwnStretchIsUnknown() {
+        // Value's known throughout, and PnL isn't at the first point.
+        let valueKnown = [point(0, before: 0, after: 100), point(60, before: 100, after: 100)]
+        #expect(!ChartWindow(points: valueKnown, range: .all).hasUnknown(.value))
+        #expect(ChartWindow(points: valueKnown, range: .all).hasUnknown(.pnl))
+        // More than prices moved between these two, and PnL has nothing to do with it.
+        let broken = [point(0, before: 0, after: 100), point(60, before: 300, after: 300, continues: false)].map(\.withKnownPnl)
+        #expect(ChartWindow(points: broken, range: .all).hasUnknown(.value))
+        #expect(!ChartWindow(points: broken, range: .all).hasUnknown(.pnl))
+    }
+
+    @Test func aRangeThatStartsInsideAValueGapSaysSo() {
+        let points = [point(0, before: 0, after: 100), point(7200, before: 300, after: 300, continues: false), point(7300, before: 300, after: 300, tx: false)]
+        #expect(ChartWindow(points: points, range: .hour).hasUnknown(.value))
+    }
+
     @Test func aRangeStartsOnTheEstimateBetweenTwoTransactions() {
         let points = [point(0, before: 0, after: 100), point(7200, before: 300, after: 300), point(7300, before: 300, after: 300, tx: false)]
         let window = ChartWindow(points: points, range: .hour)
@@ -85,5 +101,11 @@ import Testing
     @Test func noValueChangeWhenEitherEndLeavesSomethingOut() {
         let points = [point(0, before: 0, after: 100), point(7200, before: 300, after: 300, excluded: 1)]
         #expect(ChartWindow(points: points, range: .hour).changeMicros(.value) == nil)
+    }
+}
+
+private extension PnlPoint {
+    var withKnownPnl: PnlPoint {
+        PnlPoint(blockNum: blockNum, timestamp: timestamp, txHash: txHash, pnlMicros: "1000000", excludedCount: 0, valueMicros: valueMicros, valueBeforeMicros: valueBeforeMicros, valueExcludedCount: valueExcludedCount, valueContinues: valueContinues)
     }
 }

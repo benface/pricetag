@@ -40,6 +40,7 @@ struct WordingVectors: Decodable {
         let methodName, methodHelp, averagePricePaid, networkFees, balanceCheck, startingBalance, pnlHelp, realizedHelp, unrealizedHelp, returnHelp: String
         let notStarted, unpricedFees, demo, pnlUnavailable, nothingToChart, reading, notAnAddress, rulesTitle, rulesHelp: String
         let holdTitle, holdWallet, holdEth, holdPast: String
+        let answerQuestions, showMissing, senderQuestion, senderWhy, costQuestion, costWhy, exchangeCostWhy, allAnswered, nothingLeft: String
     }
     let manifestHash: String
     let methods: [String: String]
@@ -60,6 +61,7 @@ struct WordingVectors: Decodable {
     let pnlHelp: [PnlHelp]
     let linkedFailed: [FeesUnknown]
     let withheld: String
+    let answerQuestions: [FeesUnknown]
     let sentences: Sentences
 }
 
@@ -120,6 +122,21 @@ struct WordingVectors: Decodable {
         #expect(Wording.nothingToChart == sentences.nothingToChart)
         #expect(Wording.reading == sentences.reading)
         #expect(Wording.notAnAddress == sentences.notAnAddress)
+    }
+
+    /// Answering has one name, and the questions say why they're asked, the same on the web.
+    @Test func answeringSaysTheSameOnTheWeb() {
+        for vector in vectors.answerQuestions { #expect(Wording.answerQuestions(vector.count) == vector.text) }
+        let sentences = vectors.sentences
+        #expect(sentences.answerQuestions == Wording.answerQuestions)
+        #expect(sentences.showMissing == Wording.showMissing)
+        #expect(sentences.senderQuestion == Wording.senderQuestion)
+        #expect(sentences.senderWhy == Wording.senderWhy)
+        #expect(sentences.costQuestion == Wording.costQuestion)
+        #expect(sentences.costWhy == Wording.costWhy)
+        #expect(sentences.exchangeCostWhy == Wording.exchangeCostWhy)
+        #expect(sentences.allAnswered == Wording.allAnswered)
+        #expect(sentences.nothingLeft == Wording.nothingLeft)
     }
 }
 
@@ -215,6 +232,7 @@ struct HoldComparisonTests {
         #expect(Wording.answerQuestions(1) == "Answer 1 Question")
         #expect(Wording.answerQuestions(5) == "Answer 5 Questions")
     }
+
 
     private func changing(_ change: (inout [String: Any]) -> Void) throws -> Portfolio {
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]

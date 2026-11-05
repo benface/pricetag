@@ -53,7 +53,7 @@ public struct PnlChartView: View {
         Chart {
             ForEach(Array((metric == .value ? drawnValues.gaps : drawn.gaps).enumerated()), id: \.offset) { _, gap in
                 RectangleMark(xStart: .value("Unknown from", gap.lowerBound), xEnd: .value("Unknown to", gap.upperBound))
-                    .foregroundStyle(Color.secondary.opacity(contrast == .increased ? 0.22 : 0.1))
+                    .foregroundStyle(Color.secondary.opacity(Self.gapOpacity(contrast)))
             }
             if metric == .value {
                 valueMarks(drawnValues, hovered: hovered, showsEveryDot: values.plotted.count <= 60)
@@ -65,7 +65,8 @@ public struct PnlChartView: View {
                 PointMark(x: .value("Time", hovered.date), y: .value(metric.label, hovered.value ?? 0))
                     // Only there to carry the tooltip when the value is unknown, not to mark a place on the axis.
                     .foregroundStyle(hovered.value == nil ? Color.clear : lineColor)
-                    .annotation(position: .top, spacing: 6, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                    // Inside the plot sideways, so at either end it doesn't cover the axis's labels.
+                    .annotation(position: .top, spacing: 6, overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .chart))) {
                         tooltip(hovered.point, date: hovered.date)
                     }
             }
@@ -220,6 +221,10 @@ public struct PnlChartView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
+    static func gapOpacity(_ contrast: ColorSchemeContrast) -> Double {
+        contrast == .increased ? 0.22 : 0.1
+    }
+
     private static var overscan: CGFloat { 8 }
     private static var softEdge: CGFloat { 40 }
 
@@ -243,6 +248,7 @@ public struct PnlHistorySection: View {
     @Binding var metric: ChartMetric
     let scrubbedIndex: Int?
     let onSelect: (String) -> Void
+    @Environment(\.colorSchemeContrast) private var contrast
 
     public init(portfolio: Portfolio, isLive: Bool, range: Binding<ChartRange>, metric: Binding<ChartMetric>, scrubbedIndex: Int? = nil, onSelect: @escaping (String) -> Void) {
         self.portfolio = portfolio
@@ -269,11 +275,11 @@ public struct PnlHistorySection: View {
                     HStack(alignment: .center) {
                         heading
                         Spacer(minLength: 12)
-                        rangePicker
+                        controls
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         heading
-                        rangePicker
+                        controls
                     }
                 }
                 Group {
@@ -326,6 +332,32 @@ public struct PnlHistorySection: View {
         .labelsHidden()
         .fixedSize()
         .help(metric == .value ? Wording.valueChartHelp : Wording.pnlHelp)
+    }
+
+    private var controls: some View {
+        HStack(spacing: 14) {
+            unknownKey
+            rangePicker
+        }
+    }
+
+    /// What the shaded stretches are, while one's in view. Too narrow a stretch has no room to say it inside.
+    @ViewBuilder
+    private var unknownKey: some View {
+        if portfolio.canChart(metric), window.hasUnknown(metric) {
+            HStack(spacing: 5) {
+                // Upright like the band, and a little darker, since it's so much smaller. A square would look like a checkbox.
+                Rectangle()
+                    .fill(Color.secondary.opacity(PnlChartView.gapOpacity(contrast) * 2))
+                    .frame(width: 7, height: 13)
+                Text("\(metric.label) unknown")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize()
+            .help(metric == .value ? Wording.valueChartGap : Wording.chartGap)
+            .transition(.opacity)
+        }
     }
 
     /// Not there when there's nothing to choose between, since a lone segment that does nothing isn't a control.
