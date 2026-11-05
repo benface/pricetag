@@ -170,7 +170,7 @@ struct MainWindow: View {
         GeometryReader { window in
             ScrollView {
                 AtLeastHeight(window.size.height) {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 16) {
                         notices(portfolio)
                         if !portfolio.progress.started {
                             ContentUnavailableView("Still catching up", systemImage: "hourglass", description: Text(Wording.notStarted))
@@ -186,15 +186,20 @@ struct MainWindow: View {
                             summary(portfolio)
                             HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
                             history(portfolio)
-                            HoldingsTable(portfolio: portfolio, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
-                                .frame(minHeight: 140)
-                            if let noMarket = Wording.noMarket(portfolio) {
-                                Text(noMarket)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Holdings").font(.headline)
+                                HoldingsTable(portfolio: portfolio, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
                             }
-                            coverageNote(portfolio)
+                            .frame(minHeight: 160)
+                            VStack(alignment: .leading, spacing: 2) {
+                                if let noMarket = Wording.noMarket(portfolio) {
+                                    Text(noMarket)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                coverageNote(portfolio)
+                            }
                         }
                     }
                     .padding(16)
@@ -211,25 +216,12 @@ struct MainWindow: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// The same size whichever it shows, so switching moves nothing else. It gives up some height before the page has to scroll.
+    /// The same size whether it's the chart or the list, so switching moves nothing else, and it gives up some height before the page has to scroll.
+    /// With too little to plot, it says so in one line and leaves the room to the holdings.
     private func history(_ portfolio: Portfolio) -> some View {
-        GroupBox {
-            Group {
-                if navigation.showsTransactions {
-                    TransactionsTable(transactions: portfolio.transactions, currency: portfolio.currency, isLive: isLive, target: $navigation.target)
-                } else if portfolio.hasChartableData {
-                    PnlChartView(points: portfolio.points, currency: portfolio.currency, isLive: isLive) { navigation.target = .transaction($0) }
-                        .padding(6)
-                } else {
-                    Text(Wording.nothingToChart)
-                        .foregroundStyle(.secondary)
-                        .help(Wording.pnlHelp)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
-            .frame(minHeight: 120, idealHeight: 170, maxHeight: 170)
-        } label: {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
+                Text("History").font(.headline)
                 Spacer()
                 Picker("History", selection: $navigation.showsTransactions) {
                     Text("Chart").tag(false)
@@ -241,7 +233,35 @@ struct MainWindow: View {
                 .fixedSize()
                 .help("Chart or transactions (⌘T)")
             }
+            if navigation.showsTransactions {
+                TransactionsTable(transactions: portfolio.transactions, currency: portfolio.currency, isLive: isLive, target: $navigation.target)
+                    .frame(minHeight: 120, idealHeight: 170, maxHeight: 170)
+            } else if !portfolio.hasChartableData {
+                nothingToChart(Wording.nothingToChart, detail: nil)
+                    .help(Wording.pnlHelp)
+            } else if portfolio.isTooNewToChart {
+                nothingToChart(Wording.tooNewToChart, detail: Wording.transactionsSoFar(portfolio.transactions.count))
+            } else {
+                PnlChartView(points: portfolio.points, currency: portfolio.currency, isLive: isLive) { navigation.target = .transaction($0) }
+                    .frame(minHeight: 120, idealHeight: 170, maxHeight: 170)
+            }
         }
+    }
+
+    private func nothingToChart(_ title: String, detail: String?) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "chart.xyaxis.line")
+                .foregroundStyle(.tertiary)
+            Text(title)
+            if let detail {
+                Text(detail).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.callout)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     @ViewBuilder
@@ -470,16 +490,13 @@ private struct TransactionsTable: View {
                 Text(point.date.map(Format.time) ?? point.timestamp)
             }
             TableColumn("Total PnL after") { point in
-                HStack(spacing: 4) {
-                    if point.pnlMicros == nil { WarningIcon() }
-                    LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: isLive ? Tone(signed: point.pnlMicros) : .neutral)
-                }
-                .help(Wording.pnlHelp)
+                LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: point.pnlMicros == nil ? .secondary : isLive ? Tone(signed: point.pnlMicros) : .neutral)
+                    .help(Wording.pnlHelp)
             }
             .alignment(.numeric)
             TableColumn("Leaves out") { point in
                 if point.excludedCount > 0 {
-                    LiveNumber("\(point.excludedCount) unknown", tone: .warning)
+                    LiveNumber("\(point.excludedCount) unknown", tone: .secondary)
                 } else {
                     Text("—").foregroundStyle(.tertiary)
                 }
@@ -498,16 +515,6 @@ private struct TransactionsTable: View {
             selection = transactions.first { $0.txHash == targetHash }?.id
         }
         .accessibilityLabel("Transactions")
-    }
-}
-
-private struct WarningIcon: View {
-    @Environment(\.backgroundProminence) private var prominence
-
-    var body: some View {
-        Image(systemName: "exclamationmark.triangle.fill")
-            .font(.caption2)
-            .foregroundStyle(prominence == .increased ? Tone.neutral.style : Tone.warning.style)
     }
 }
 

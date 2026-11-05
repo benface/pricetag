@@ -304,6 +304,12 @@ public struct Portfolio: Codable, Sendable, Equatable {
     /// A balance that couldn't be read doesn't count as nothing.
     public var isEmpty: Bool { positions.isEmpty && unreadAssets.isEmpty }
     public var hasChartableData: Bool { points.contains { $0.pnlMicros != nil } }
+    /// A line says nothing with a transaction or two, or across a few minutes: it's an empty box with a flat line in it.
+    public var isTooNewToChart: Bool {
+        let known = points.filter { $0.txHash != nil && $0.pnlMicros != nil }.compactMap(\.date)
+        guard known.count >= 3, let first = known.min(), let last = known.max() else { return true }
+        return last.timeIntervalSince(first) < 5 * 60
+    }
     /// Every point with a transaction behind it, newest first.
     public var transactions: [PnlPoint] { points.filter { $0.txHash != nil }.reversed() }
 }

@@ -124,6 +124,11 @@ public enum Wording {
         return !listed.isEmpty && listed.allSatisfy(\.isReconciled) ? "Every balance matches the chain." : nil
     }
 
+    /// What there is instead of a chart, so what's short isn't mistaken for nothing.
+    public static func transactionsSoFar(_ count: Int) -> String {
+        count == 1 ? "1 transaction so far." : "\(Format.block(count)) transactions so far."
+    }
+
     public static func feesUnknown(_ count: Int) -> String {
         "Network fees couldn't be worked out for \(count) \(count == 1 ? "transaction" : "transactions"), so the network fees shown are too low."
     }
@@ -261,6 +266,7 @@ public enum Wording {
     public static let pnlUnavailable = "PnL unavailable"
     public static let unknown = "Unknown"
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
+    public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet's history. The first read can take a minute, then only new activity is read."
     public static let notAnAddress = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 }

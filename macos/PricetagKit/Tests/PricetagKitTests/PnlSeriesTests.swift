@@ -51,4 +51,19 @@ import Testing
         let found = series.nearestTransaction(to: series.plotted[1].date)
         #expect(found?.point.txHash == "0x0")
     }
+
+    private func portfolio(points: [PnlPoint]) throws -> Portfolio {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
+        object["points"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(points))
+        return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    @Test func aChartWaitsForAFewTransactionsOverSomeTime() throws {
+        // A transaction or two says nothing, and neither do many of them in a couple of minutes.
+        #expect(try portfolio(points: [point(0, "1"), point(3600, "2")]).isTooNewToChart)
+        #expect(try portfolio(points: [point(0, "1"), point(60, "2"), point(120, "3")]).isTooNewToChart)
+        #expect(try !portfolio(points: [point(0, "1"), point(300, "2"), point(600, "3")]).isTooNewToChart)
+        // What's unknown can't be plotted, and the latest point isn't a transaction.
+        #expect(try portfolio(points: [point(0, nil), point(300, nil), point(600, "3"), point(900, "3", tx: false)]).isTooNewToChart)
+    }
 }
