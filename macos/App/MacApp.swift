@@ -29,7 +29,7 @@ struct MacApp: App {
         #endif
         let store = PortfolioStore(cacheDirectory: .portfolioCache)
         let hotWallet = HotWalletFactory.make(store: store)
-        let navigation = Navigation()
+        let navigation = Navigation(store: store, hotWallet: hotWallet)
         let siteBridge = SiteBridge(wallet: hotWallet)
         siteBridge.onTopUp = { navigation.wantsTopUp = true }
         siteBridge.onReceive = { navigation.wantsReceive = true }
@@ -41,7 +41,9 @@ struct MacApp: App {
             store.setLinkedWallets($0)
             siteBridge.walletChanged()
         }
-        hotWallet.onKeyRetired = { store.followRetiredWallet($0.lowercased, to: $1?.lowercased) }
+        hotWallet.onKeyRetired = { old, next in
+            store.followRetiredWallet(old.lowercased, to: next?.lowercased ?? store.walletList(hotWallet: hotWallet).next(afterRemoving: old.lowercased))
+        }
         #if DEBUG
         HotWalletDebug.applyLaunchArguments(to: hotWallet, bridge: siteBridge)
         #endif
@@ -142,7 +144,7 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
 
         Settings {
-            SettingsView(store: store, hotWallet: hotWallet)
+            SettingsView(store: store, hotWallet: hotWallet, tab: Bindable(navigation).settingsPane)
                 .holdsDockPresence()
         }
     }
@@ -176,8 +178,19 @@ private struct WalletCommands: View {
             navigation.isBuying = true
         }
         .disabled(hotWallet.availability != .ready)
+        Button(HotWalletWording.title) {
+            openMainWindow()
+            navigation.showSpendingMoney()
+        }
+        .keyboardShortcut("4", modifiers: .command)
+        .disabled(hotWallet.availability == .notProvisioned)
+        Button("Send…") {
+            openMainWindow()
+            navigation.send()
+        }
+        .disabled(!hotWallet.canSend)
         Divider()
-        WalletPicker(store: store, list: store.walletList(hotWallet: hotWallet), navigation: navigation, onChoose: openMainWindow)
+        WalletPicker(store: store, list: store.walletList(hotWallet: hotWallet), onChoose: openMainWindow)
     }
 
     private func openMainWindow() {
@@ -228,7 +241,7 @@ struct MenuBarLabel: View {
             .onChange(of: alarm?.findings.count) { _, count in
                 guard count != nil else { return }
                 NSSound(named: "Sosumi")?.play()
-                navigation.section = .spendingMoney
+                navigation.showSpendingMoney()
                 openWindow(id: WindowID.main)
                 DockPresence.bringForward()
                 NSApp.requestUserAttention(.criticalRequest)
@@ -257,7 +270,7 @@ struct MenuBarLabel: View {
                     return
                 }
                 #endif
-                navigation.section = .spendingMoney
+                navigation.showSpendingMoney()
                 openWindow(id: WindowID.main)
                 DockPresence.bringForward()
             }
@@ -276,7 +289,7 @@ struct MenuBarLabel: View {
             }
             .onChange(of: navigation.addingSavings) { _, link in
                 guard link != nil else { return }
-                navigation.section = .spendingMoney
+                navigation.showSpendingMoney()
                 openWindow(id: WindowID.main)
                 DockPresence.bringForward()
             }

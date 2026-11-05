@@ -25,7 +25,6 @@ public protocol PortfolioSource: Sendable {
     func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview]
     func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String
     func importCoinbase(csv: String) async throws -> ExchangeImport
-    func verifyLink(owner: String, address: String, signature: String) async throws -> Bool
     /// Empty when the server has only one, so there's nothing to choose.
     func rules() async throws -> [PricingRule]
     func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison
@@ -48,7 +47,6 @@ extension PortfolioSource {
     public func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview] { throw FetchError.unreachable }
     public func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String { throw FetchError.unreachable }
     public func importCoinbase(csv: String) async throws -> ExchangeImport { throw FetchError.unreachable }
-    public func verifyLink(owner: String, address: String, signature: String) async throws -> Bool { throw FetchError.unreachable }
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
     public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof { throw FetchError.unreachable }
     public func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
@@ -143,11 +141,6 @@ public struct PricetagClient: PortfolioSource {
 
     public func importCoinbase(csv: String) async throws -> ExchangeImport {
         try await decoded(post("/api/import/coinbase", body: ["csv": csv], timeout: .seconds(30)))
-    }
-
-    public func verifyLink(owner: String, address: String, signature: String) async throws -> Bool {
-        let answer: VerifyAnswer = try await decoded(post("/api/links/verify", body: ["owner": owner, "address": address, "signature": signature], timeout: .seconds(15)))
-        return answer.verified
     }
 
     public func rules() async throws -> [PricingRule] {

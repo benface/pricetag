@@ -1,9 +1,10 @@
+import HotWalletKit
 import Observation
 import PricetagKit
 
 /// The main window's sections.
 enum AppSection: String, CaseIterable, Identifiable {
-    case overview, transactions, spendingMoney, taxReport
+    case overview, transactions, taxReport
 
     var id: Self { self }
 
@@ -11,7 +12,6 @@ enum AppSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "Overview"
         case .transactions: "Transactions"
-        case .spendingMoney: "Spending Money"
         case .taxReport: "Tax Report"
         }
     }
@@ -20,7 +20,6 @@ enum AppSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "chart.line.uptrend.xyaxis"
         case .transactions: "list.bullet"
-        case .spendingMoney: "banknote"
         case .taxReport: "doc.text"
         }
     }
@@ -29,13 +28,17 @@ enum AppSection: String, CaseIterable, Identifiable {
 /// What the main window shows, set from the popover and the menus too.
 @Observable
 final class Navigation {
+    @ObservationIgnored private let store: PortfolioStore
+    @ObservationIgnored private let hotWallet: HotWallet
+
+    init(store: PortfolioStore, hotWallet: HotWallet) {
+        self.store = store
+        self.hotWallet = hotWallet
+    }
+
     /// Details belong to the section they were opened from, so set this first when opening both.
     var section: AppSection = .overview {
-        didSet {
-            if section != oldValue { target = nil }
-            // There's no wallet button there for the list to belong to.
-            if section == .spendingMoney { isSwitchingWallet = false }
-        }
+        didSet { if section != oldValue { target = nil } }
     }
     var chartRange: ChartRange = .all
     /// The number being explained in the details.
@@ -47,9 +50,9 @@ final class Navigation {
     /// A wallet's name while it's being typed. Closing the list keeps it, whichever way the list closes, and only Esc cancels.
     let pendingWalletName = PendingWalletName()
     @ObservationIgnored var onSwitcherClosed: (() -> Void)?
-    /// The extension's Top Up button was pressed. The hot wallet's section takes it from here.
+    /// The extension's Top Up button was pressed. Spending Money's page takes it from here.
     var wantsTopUp = false
-    /// The menu bar's Send button was pressed. The hot wallet's section takes it from here.
+    /// The menu bar's Send button was pressed. Spending Money's page takes it from here.
     var wantsSend = false
     /// Buy was pressed. It isn't tied to a section, so the window takes it from anywhere.
     var isBuying = false
@@ -57,25 +60,33 @@ final class Navigation {
     var isReceiving = false
     /// The extension's Receive button was pressed. The menu bar item opens the window for it, since nothing else may be open.
     var wantsReceive = false
-    /// Buy needs a savings wallet first. The hot wallet's section takes it from here.
+    /// Buy needs a savings wallet first. Spending Money's page takes it from here.
     var wantsAddSavings = false
-    /// The web app sent over an account from a device. The hot wallet's window asks the person to check it.
+    /// The web app sent over an account from a device. Spending Money's page asks the person to check it.
     var addingSavings: AddSavingsLink?
-    /// Asked for from a row in the wallet list, which closes when the person goes off to sign. So it's the window that holds this.
-    var provingWallet: WalletProof?
+    /// There's no Spending Money to show yet, or it can't be opened. This says what it is, and is the only place that makes a key.
+    var isSettingUpSpendingMoney = false
+    /// Asked for from a row in the wallet list, which closes first. So it's the window that holds this.
+    var removingFromSavings: WalletEntry?
+    /// Which pane Settings opens on, for what points there from elsewhere.
+    var settingsPane = SettingsView.Pane.general
     var isResolving = false
     /// Which holding Fill In was clicked on, so its questions come first.
     var resolvingAsset: String?
     var isExporting = false
 
-    /// Spending Money is always this Mac's, so the wallet button isn't there. Every other section shows the wallet chosen.
     func switchWallet() {
-        showChosenWallet()
         isSwitchingWallet = true
     }
 
-    func showChosenWallet() {
-        if section == .spendingMoney { section = .overview }
+    /// Spending Money is a wallet like any other, so this chooses it and goes to its page, or offers to make one.
+    func showSpendingMoney() {
+        section = .overview
+        if let address = hotWallet.address {
+            store.setWallet(address.lowercased)
+        } else {
+            isSettingUpSpendingMoney = true
+        }
     }
 
     /// What the wallet's page shows: its holdings, or where to enter a wallet when there isn't one.
@@ -89,21 +100,21 @@ final class Navigation {
         self.target = target
     }
 
-    /// Goes to spending money and asks for its Send sheet, which appears once the section is on screen.
+    /// Goes to spending money and asks for its Send sheet, which appears once the page is on screen.
     func send() {
-        section = .spendingMoney
+        showSpendingMoney()
         wantsSend = true
     }
 
-    /// Goes to spending money and asks for its Top Up sheet, which appears once the section is on screen.
+    /// Goes to spending money and asks for its Top Up sheet, which appears once the page is on screen.
     func topUp() {
-        section = .spendingMoney
+        showSpendingMoney()
         wantsTopUp = true
     }
 
-    /// Goes to spending money and adds a savings wallet, which appears once the section is on screen.
+    /// Goes to spending money and adds a savings wallet, which appears once the page is on screen.
     func addSavings() {
-        section = .spendingMoney
+        showSpendingMoney()
         wantsAddSavings = true
     }
 

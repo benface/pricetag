@@ -73,15 +73,23 @@ struct MainWindow: View {
             Task { await purchases.check() }
         }
         .sheet(isPresented: $navigation.isBuying) {
-            BuySheet(wallet: hotWallet, purchases: purchases) { navigation.section = .spendingMoney } addSavings: { navigation.addSavings() }
+            BuySheet(wallet: hotWallet, purchases: purchases) { navigation.showSpendingMoney() } addSavings: { navigation.addSavings() }
         }
         .sheet(isPresented: $navigation.isReceiving) {
-            ReceiveSheet(wallet: hotWallet) { navigation.section = .spendingMoney }
+            ReceiveSheet(wallet: hotWallet) { navigation.showSpendingMoney() }
         }
         .sheet(isPresented: $navigation.isResolving) {
             ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet) { AnyView(PublishFromDeviceButton(link: $0, browsers: .real)) }
         }
-        .sheet(item: $navigation.provingWallet) { ProveWalletSheet(store: store, proof: $0) }
+        .sheet(isPresented: $navigation.isSettingUpSpendingMoney) {
+            SpendingMoneySetup(wallet: hotWallet, store: store) { navigation.isSettingUpSpendingMoney = false }
+                .frame(width: 480, height: 400)
+        }
+        .confirmationDialog(navigation.removingFromSavings.map { "Remove \($0.title) from savings?" } ?? "", isPresented: Binding(get: { navigation.removingFromSavings != nil }, set: { if !$0 { navigation.removingFromSavings = nil } }), presenting: navigation.removingFromSavings) { entry in
+            Button("Remove from Savings", role: .destructive) { store.removeFromSavings(entry, hotWallet: hotWallet) }
+        } message: { entry in
+            Text(hotWallet.removingFromSavingsMessage(entry.address))
+        }
         .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: exportName) { result in
             if case .failure(let error) = result { exportError = error.localizedDescription }
             exportDocument = nil
@@ -112,7 +120,7 @@ struct MainWindow: View {
         // Or it would open again by itself with the window.
         .onDisappear {
             navigation.isSwitchingWallet = false
-            navigation.provingWallet = nil
+            navigation.removingFromSavings = nil
         }
     }
 
@@ -155,10 +163,8 @@ struct MainWindow: View {
     /// Only what does something in this section. The leading slot is the wallet's.
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        if navigation.section != .spendingMoney {
-            ToolbarItem(placement: .navigation) {
-                WalletButton(store: store, hotWallet: hotWallet, navigation: navigation, maxWidth: width < Self.sidebarWidth ? 230 : 300)
-            }
+        ToolbarItem(placement: .navigation) {
+            WalletButton(store: store, hotWallet: hotWallet, navigation: navigation, maxWidth: width < Self.sidebarWidth ? 230 : 300)
         }
         // With no title in a small window, nothing else would hold the rest at the far end.
         ToolbarSpacer(.flexible)
@@ -232,9 +238,17 @@ struct MainWindow: View {
     @ViewBuilder
     private var page: some View {
         switch navigation.section {
-        case .overview: walletPage(overview)
+        case .overview:
+            if isShowingSpendingMoney {
+                spendingMoneyOverview
+            } else {
+                walletPage { portfolio in
+                    GeometryReader { window in
+                        overviewPage(pageWidth: window.size.width) { overview(portfolio, pageHeight: window.size.height) }
+                    }
+                }
+            }
         case .transactions: walletPage(transactions)
-        case .spendingMoney: HotWalletWindow(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases)
         case .taxReport:
             if store.address == nil {
                 NoWalletYet(navigation: navigation)
@@ -283,31 +297,56 @@ struct MainWindow: View {
         }
     }
 
-    /// Fills the window: the chart takes the height the rest doesn't use, within reason, and the page scrolls once it needs more than there is.
-    private func overview(_ portfolio: Portfolio) -> some View {
+    private var isShowingSpendingMoney: Bool {
+        // With no wallet showing and no key yet, there's nothing here for these to be equal about.
+        guard hotWallet.availability == .ready, let address = hotWallet.address else { return false }
+        return address.lowercased == store.address
+    }
+
+    /// The same numbers as any wallet, with what only this one can do around them. Those work whatever the server's doing, so they stay on the page either way.
+    private var spendingMoneyOverview: some View {
         GeometryReader { window in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    notices(portfolio)
-                    PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 40) { navigation.target = .total($0) }
-                        // Short of height, its amounts would shrink and cut off instead of the page scrolling.
-                        .fixedSize(horizontal: false, vertical: true)
-                    PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
-                        .arrives()
-                    PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange) { navigation.target = .transaction($0) }
-                        .frame(height: portfolio.hasChartableData && !portfolio.isTooNewToChart ? chartHeight(window.size.height, rows: portfolio.listedPositions.count) : nil)
-                    HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
-                    HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
+            overviewPage(pageWidth: window.size.width) {
+                HotWalletDetails(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases, showsHoldings: !hasHoldingsInOverview) {
+                    walletPage { overview($0, pageHeight: window.size.height) }
+                        .frame(minHeight: hasHoldingsInOverview ? nil : 260)
                 }
+            }
+        }
+    }
+
+    private var hasHoldingsInOverview: Bool {
+        guard let portfolio else { return false }
+        return portfolio.progress.started && !portfolio.isEmpty
+    }
+
+    private func overviewPage(pageWidth: CGFloat, @ViewBuilder content: () -> some View) -> some View {
+        ScrollView {
+            content()
                 // A line of numbers gets hard to read across a very wide window.
                 .frame(maxWidth: 1280, alignment: .leading)
-                .padding(window.size.width < 520 ? 14 : 20)
+                .padding(pageWidth < 520 ? 14 : 20)
                 .frame(maxWidth: .infinity)
-                // A notice, the attention box or the chart coming or going, without the page below it jumping.
-                .motion(Motion.state, value: pageShape(portfolio))
-            }
-            .scrollBounceBehavior(.basedOnSize)
         }
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    /// Fills the window: the chart takes the height the rest doesn't use, within reason, and the page scrolls once it needs more than there is.
+    private func overview(_ portfolio: Portfolio, pageHeight: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            notices(portfolio)
+            PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 40) { navigation.target = .total($0) }
+                // Short of height, its amounts would shrink and cut off instead of the page scrolling.
+                .fixedSize(horizontal: false, vertical: true)
+            PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
+                .arrives()
+            PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange) { navigation.target = .transaction($0) }
+                .frame(height: portfolio.hasChartableData && !portfolio.isTooNewToChart ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
+            HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
+            HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
+        }
+        // A notice, the attention box or the chart coming or going, without the page below it jumping.
+        .motion(Motion.state, value: pageShape(portfolio))
     }
 
     /// What can add or remove a whole block of the page.
@@ -790,8 +829,12 @@ private struct NoActivity<Notices: View>: View {
     private var isSpendingMoney: Bool { entry?.kind == .spendingMoney && hotWallet.canSend }
     /// Buying lands in Spending Money, whichever wallet of yours this is.
     private var canBuy: Bool { entry?.kind.isOwn == true && hotWallet.canSend }
-    /// A wallet of yours whose key is somewhere else. A replaced spending key's is nowhere, so nothing should go to it.
-    private var isHeldElsewhere: Bool { (entry?.kind == .savings || entry?.kind == .yours) && entry?.isAccount == false }
+    /// A wallet of yours whose key is somewhere else. A replaced spending key's is nowhere, so nothing should go to it, and the one
+    /// Spending Money is moving to is this Mac's.
+    private var isHeldElsewhere: Bool {
+        guard let entry, entry.kind == .savings || entry.kind == .yours else { return false }
+        return !entry.isReplacedKey && !entry.isNewKey
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -865,8 +908,8 @@ private struct Welcome: View {
                 Button("Show \(HotWalletWording.title)") { store.setWallet(address.lowercased) }
                     .buttonStyle(.borderedProminent)
             } else {
-                // That section says what this is and what can go wrong, and only it makes the key.
-                Button("Create \(HotWalletWording.title)…") { navigation.section = .spendingMoney }
+                // That sheet says what this is and what can go wrong, and only it makes the key.
+                Button("Create \(HotWalletWording.title)…") { navigation.showSpendingMoney() }
                     .buttonStyle(.borderedProminent)
                     .help(HotWalletWording.summary)
             }
