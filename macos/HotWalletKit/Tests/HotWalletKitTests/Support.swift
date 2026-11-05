@@ -194,6 +194,17 @@ struct FakePresence: UserPresence {
     }
 }
 
+/// Says yes, after doing something once while the prompt's open, like another window using the wallet.
+final class OpenPrompt: UserPresence, @unchecked Sendable {
+    var whileOpen: (@MainActor () async -> Void)?
+
+    func confirm(reason: String) async {
+        let body = whileOpen
+        whileOpen = nil
+        await body?()
+    }
+}
+
 actor ScriptedPortfolios: PortfolioSource {
     private var next: Result<Portfolio, FetchError>
     private(set) var linked: [[String]] = []
@@ -278,7 +289,7 @@ struct Rig {
     let portfolios: ScriptedPortfolios
 
     /// A wallet that exists already, with a cold wallet to sweep to unless told otherwise.
-    init(_ snapshot: ChainSnapshot = HotWalletKitTests.snapshot(), withCold: Bool = true, presence: Bool = true, portfolio read: Result<Portfolio, FetchError> = .success(portfolio()), mainCurrency: @escaping @MainActor () -> CurrencyCode = { .USD }, now: @escaping @Sendable () -> Date = { Date() }, tickDelay: Duration = .seconds(15), receiptDelay: Duration = .seconds(1)) async {
+    init(_ snapshot: ChainSnapshot = HotWalletKitTests.snapshot(), withCold: Bool = true, presence: Bool = true, prompt: (any UserPresence)? = nil, portfolio read: Result<Portfolio, FetchError> = .success(portfolio()), mainCurrency: @escaping @MainActor () -> CurrencyCode = { .USD }, now: @escaping @Sendable () -> Date = { Date() }, tickDelay: Duration = .seconds(15), receiptDelay: Duration = .seconds(1)) async {
         let chain = FakeChain(snapshot)
         let signer = FakeSigner(keys: [hotAddress], next: [nextAddress])
         let stateStore = MemoryStateStore()
@@ -294,6 +305,6 @@ struct Rig {
         self.signer = signer
         self.stateStore = stateStore
         self.portfolios = portfolios
-        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: FakePresence(allows: presence), portfolioSource: { portfolios }, mainCurrency: mainCurrency, makeChain: { _ in chain }, now: now, tickDelay: tickDelay, receiptDelay: receiptDelay)
+        wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: prompt ?? FakePresence(allows: presence), portfolioSource: { portfolios }, mainCurrency: mainCurrency, makeChain: { _ in chain }, now: now, tickDelay: tickDelay, receiptDelay: receiptDelay)
     }
 }

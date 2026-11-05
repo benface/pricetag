@@ -380,6 +380,12 @@ public final class HotWallet {
     /// Whether the person using this can have it sign something. A key that may be stolen, or that's being replaced, only moves to safety.
     public var canSend: Bool { availability == .ready && canTopUp }
 
+    /// Not during a rotation. What's been moved may already be on the new key, which would take over on the next tick anyway.
+    public var canDelete: Bool { address != nil && rotation == nil }
+
+    /// Whether a rotation is waiting on the user. Without the old key it can't move anything, so that always is.
+    public var canLeaveOldKeyBehind: Bool { rotation != nil && (rotationHold != nil || isKeyMissing) }
+
     /// Holdings it can't value, which the cap can't see.
     public var unpricedSymbols: [String] {
         holdings.filter { $0.priceUsdMicros == nil && !$0.token.isNative }.map(\.token.symbol)
@@ -417,7 +423,7 @@ public final class HotWallet {
         case .cantCheckOtherTokens: notices.append(.init(.warning, HotWalletWording.rotationCantCheck))
         case .notWorthTheGas(let symbols): notices.append(.init(.warning, HotWalletWording.rotationHeldByGas(symbols)))
         case .notEnoughGas, nil:
-            if rotation != nil { notices.append(.init(.info, HotWalletWording.rotating)) }
+            if rotation != nil, !isKeyMissing { notices.append(.init(.info, HotWalletWording.rotating)) }
         }
         if let chainProblem { notices.append(.init(.warning, chainProblem == .rateLimited ? HotWalletWording.networkBusy : HotWalletWording.cantReachChain)) }
         if let snapshot, snapshot.chainID != Base.chainID { notices.append(.init(.warning, HotWalletWording.wrongChain)) }
@@ -557,6 +563,8 @@ public final class HotWallet {
     public func replaceKey() async {
         guard let address, rotation == nil else { return }
         await work(confirming: "replace this wallet's key") { [self] in
+            // The wallet can be deleted or replaced while the prompt's open, and then this isn't its key anymore.
+            guard self.address == address, rotation == nil else { return }
             let next = try await signer.createKey()
             let destination = alarm != nil ? settings.sweepDestination ?? next : next
             state.rotation = Rotation(from: address, to: next, destination: destination)
@@ -583,8 +591,10 @@ public final class HotWallet {
 
     /// Deletes the key for good. What's still on it is lost, so the view offers a sweep first.
     public func deleteWallet() async {
-        guard let address else { return }
+        guard canDelete, let address else { return }
         await work(confirming: "delete this wallet's key, which can't be undone") { [self] in
+            // A rotation can start or finish while the prompt's open, and then this key isn't all there is.
+            guard canDelete, self.address == address else { throw ChainError.rejected(HotWalletWording.deleteWaitsForRotation) }
             try await signer.deleteKey(address)
             retire(address, activating: nil)
             try persist()
