@@ -190,9 +190,22 @@ import Testing
 
     @Test func readsTheCountsAndPreview() throws {
         let report = try resource("demo-tax-report", as: TaxReport.self)
-        #expect(report.soldCount + report.feeCount + report.sentCount == report.rowCount)
+        // A sale split into a known and an unknown part is two rows in the file, and one sale here.
+        #expect(report.eventCount == 15)
+        #expect(report.rowCount == 23)
+        #expect(report.unknownCount <= report.eventCount)
+        #expect(report.unknownWallets == report.wallets)
         #expect(report.preview.count == min(5, report.rowCount))
         #expect(report.years == [2026])
+    }
+
+    @Test func previewTimesAreInUTCLikeTheFile() throws {
+        // 8 PM on December 31 in Toronto, and already the next year in the file.
+        let date = try #require(parseTimestamp("2027-01-01T01:00:00.000Z"))
+        #expect(Format.utcDateTime(date) == "Jan 1, 2027 at 1:00\u{202F}AM UTC")
+        var toronto = Calendar(identifier: .gregorian)
+        toronto.timeZone = try #require(TimeZone(identifier: "America/Toronto"))
+        #expect(toronto.component(.year, from: date) == 2026, "The case this guards against")
     }
 
     @Test func theFileIsTheServersWordForWord() throws {

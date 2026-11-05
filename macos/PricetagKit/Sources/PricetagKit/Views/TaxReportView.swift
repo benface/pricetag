@@ -6,8 +6,8 @@ public struct TaxReportView: View {
     let store: PortfolioStore
     let wallets: [WalletEntry]
     let readAddress: (String) -> String?
-    /// Opens the questions about what's unknown.
-    let onResolve: (() -> Void)?
+    /// Opens a wallet's questions about what's unknown. It can be one added here rather than the one showing.
+    let onResolve: ((String) -> Void)?
     /// Opens the details of a number, for what's unknown that no question covers.
     let onOpen: ((ExplainTarget) -> Void)?
     @State private var model: TaxReportModel
@@ -15,7 +15,7 @@ public struct TaxReportView: View {
     @State private var document: TaxReportDocument?
     @State private var saveError: String?
 
-    public init(store: PortfolioStore, wallets: [WalletEntry] = [], readAddress: @escaping (String) -> String? = WalletAddress.pasted(in:), addingWallet: String = "", model: TaxReportModel? = nil, onResolve: (() -> Void)? = nil, onOpen: ((ExplainTarget) -> Void)? = nil) {
+    public init(store: PortfolioStore, wallets: [WalletEntry] = [], readAddress: @escaping (String) -> String? = WalletAddress.pasted(in:), addingWallet: String = "", model: TaxReportModel? = nil, onResolve: ((String) -> Void)? = nil, onOpen: ((ExplainTarget) -> Void)? = nil) {
         self.store = store
         self.onResolve = onResolve
         self.onOpen = onOpen
@@ -216,38 +216,53 @@ public struct TaxReportView: View {
 
     /// What's unknown is never in the total, so this says how much is left out, and where to fix it.
     private func unknownRow(_ report: TaxReport) -> some View {
-        let count = report.unresolvedCount
-        let text = count == report.rowCount
-            ? (count == 1 ? "Its gain is unknown." : "All \(Format.block(count)) have an unknown gain.")
-            : "\(Format.block(count)) of \(Format.block(report.rowCount)) \(count == 1 ? "has" : "have") an unknown gain, so \(count == 1 ? "it's" : "they're") left out of the total."
-        return ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                WarningText(text).font(.callout)
-                Spacer(minLength: 0)
-                fixButton
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                WarningText(text)
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
-                fixButton
+        let count = report.unknownCount
+        let text = count == report.eventCount
+            ? (count == 1 ? "Its gain is unknown, in whole or in part." : "All \(Format.block(count)) have an unknown gain, in whole or in part.")
+            : "\(Format.block(count)) of these \(Format.block(report.eventCount)) \(count == 1 ? "has" : "have") an unknown gain, in whole or in part. What's unknown is left out of the total."
+        return VStack(alignment: .leading, spacing: 8) {
+            WarningText(text)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            fixButtons(report)
+        }
+    }
+
+    /// One for each wallet with something unknown, since its questions are about that wallet. The one showing works like
+    /// Overview's: answer what the app can't work out, or see why when there's nothing to answer.
+    @ViewBuilder
+    private func fixButtons(_ report: TaxReport) -> some View {
+        let buttons = report.unknownWallets.compactMap(fixButton)
+        if !buttons.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { ForEach(buttons.indices, id: \.self) { buttons[$0] } }
+                VStack(alignment: .leading, spacing: 8) { ForEach(buttons.indices, id: \.self) { buttons[$0] } }
             }
         }
     }
 
-    /// The same as Overview's: answer what the app can't work out, or see why when there's nothing to answer.
-    @ViewBuilder
-    private var fixButton: some View {
-        if let portfolio = store.portfolio {
-            if !portfolio.questions.isEmpty, let onResolve {
-                Button(Wording.answerQuestions(portfolio.questions.count), action: onResolve)
+    private func fixButton(_ wallet: String) -> AnyView? {
+        guard wallet == store.address else {
+            guard let onResolve else { return nil }
+            let name = wallets.first { $0.address == wallet }?.title ?? Format.shortHash(wallet)
+            return AnyView(
+                Button("Answer for \(name)") { onResolve(wallet) }
+                    .fixedSize()
+                    .help("Shows this wallet's questions, then comes back here")
+            )
+        }
+        guard let portfolio = store.portfolio else { return nil }
+        if !portfolio.questions.isEmpty, let onResolve {
+            return AnyView(
+                Button(Wording.answerQuestions(portfolio.questions.count)) { onResolve(wallet) }
                     .fixedSize()
                     .help("Answer what the app can't work out by itself (⇧⌘R)")
-            } else if portfolio.attention != nil, let onOpen {
-                Button("See Why") { onOpen(portfolio.attentionTarget) }
-                    .fixedSize()
-            }
+            )
         }
+        if portfolio.attention != nil, let onOpen {
+            return AnyView(Button("See Why") { onOpen(portfolio.attentionTarget) }.fixedSize())
+        }
+        return nil
     }
 
     private func previewSection(_ report: TaxReport) -> some View {
@@ -283,7 +298,7 @@ public struct TaxReportView: View {
         } label: {
             Text(row.type == "Network fee" ? "Network fee, \(amount)" : "\(row.type) \(amount)")
             if let date = parseTimestamp(row.timestamp) {
-                Text(Format.dateTime(date))
+                Text(Format.utcDateTime(date))
             }
         }
     }

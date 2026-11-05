@@ -464,6 +464,10 @@ describe("taxReportOf", () => {
     const unknown = walletOf(B, [leg(30, E18), sell(40, 1n, 2000)])
     const report = taxReportOf([known, unknown], { country: "US", method: "fifo", scope: "per-wallet" })
     assert.deepEqual([report.unknownCount, report.unknownWallets], [1, [B]])
+    // Answering that wallet's question is what the button leads to, and the report picks it up.
+    const book: Book = { ...emptyBook(), costs: { [costKey(B, `${hash(30)}:ETH`)]: { micros: usd(1500), currency: "USD" } } }
+    const answered = taxReportOf([known, unknown], { country: "US", method: "fifo", scope: "per-wallet" }, { book })
+    assert.deepEqual([answered.unknownCount, answered.unknownWallets, answered.gainMicros], [0, [], usd(1500)])
     assert.deepEqual(taxReportOf([known], { country: "US", method: "fifo", scope: "per-wallet" }).unknownWallets, [])
   })
 

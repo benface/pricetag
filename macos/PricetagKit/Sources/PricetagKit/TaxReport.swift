@@ -108,9 +108,14 @@ public struct TaxReport: Codable, Sendable, Equatable {
     /// Why the year's history isn't all here, when it isn't.
     public let partialYear: String?
     public let rowCount: Int
+    /// Each sale, fee and send once, where `rowCount` counts one split into a known and an unknown part twice.
     public let soldCount: Int
     public let feeCount: Int
     public let sentCount: Int
+    /// Of those, how many have an unknown gain, in whole or in part.
+    public let unknownCount: Int
+    /// The wallets with something unknown, in the order of `wallets`.
+    public let unknownWallets: [String]
     public let unresolvedCount: Int
     public let estimatedCount: Int
     public let selfReportedCount: Int
@@ -122,6 +127,9 @@ public struct TaxReport: Codable, Sendable, Equatable {
     public let preview: [TaxPreviewRow]
     public let filename: String
     public let csv: String
+
+    /// Sales, fees and sends, each counted once.
+    public var eventCount: Int { soldCount + feeCount + sentCount }
 }
 
 /// One report, in full context, because the same choices mean something else on another wallet or currency.

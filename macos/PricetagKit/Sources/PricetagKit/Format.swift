@@ -158,9 +158,11 @@ public enum Format {
         date.formatted(.dateTime.month(.abbreviated).day().hour().minute().locale(locale))
     }
 
-    /// With the year, for where that matters, like a tax report.
-    public static func dateTime(_ date: Date) -> String {
-        date.formatted(.dateTime.year().month(.abbreviated).day().hour().minute().locale(locale))
+    /// In UTC and saying so, like a tax report's file, so a time near midnight is in the same year as there.
+    public static func utcDateTime(_ date: Date) -> String {
+        var style = Date.FormatStyle.dateTime.year().month(.abbreviated).day().hour().minute().locale(locale)
+        style.timeZone = .gmt
+        return "\(date.formatted(style)) UTC"
     }
 
     public static func duration(ms: Int) -> String {

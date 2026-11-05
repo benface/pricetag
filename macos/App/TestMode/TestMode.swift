@@ -249,6 +249,8 @@ enum TestScene: String, CaseIterable {
     case mainTaxReportSmall = "main-tax-report-small"
     /// The whole page, tall enough that nothing's scrolled out of the picture.
     case taxReport = "tax-report"
+    /// The same, showing another wallet, so what's unknown is in a wallet added to the report.
+    case taxReportAddedWallet = "tax-report-added-wallet"
     case taxReportOtherWallets = "tax-report-other-wallets"
     case taxReportLeftOver = "tax-report-left-over"
     case mainNoWalletSmall = "main-no-wallet-small"
@@ -519,7 +521,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .motionChartDraw, .motionChartRange, .motionChartScrub, .motionSend, .chartHover:
             .none
-        case .walletSwitcherNote, .walletSwitcherNewKey, .spendingMoneySetupSheet, .taxReport, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
+        case .walletSwitcherNote, .walletSwitcherNewKey, .spendingMoneySetupSheet, .taxReport, .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .receive, .receiveNoSavings, .receiveCAD, .receiveNotSetUp, .receiveAlarm, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
              .publishFromDevice, .publishFromDeviceSafari, .publishFromDeviceNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
@@ -568,7 +570,7 @@ enum TestScene: String, CaseIterable {
 
     private var shownWallet: String? {
         switch self {
-        case .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading: TestScene.namedWallet
+        case .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading: TestScene.namedWallet
         case .walletSwitcherLong: TestScene.manyWallets.last?.address
         case .mainShowingSpendingMoney, .mainSpendingMoney, .mainSpendingMoneySmall, .mainSpendingMoneyServerDown, .routeRemoveFromSavingsOpen, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest: HotWalletFixture.spending.lowercased
         case .mainSavings, .mainEmptySavings: HotWalletFixture.savings.lowercased
@@ -928,8 +930,8 @@ enum TestScene: String, CaseIterable {
         case .walletSwitcherNote, .walletSwitcherNewKey, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong:
             let switcher = WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: self == .walletSwitcherRenaming ? PendingWalletName(address: TestScene.namedWallet, text: "Treasury") : PendingWalletName(), onOpenSpendingMoney: {}, onRemoveFromSavings: { _ in }, onDeleteSpendingMoney: {}, onDone: {}, input: self == .walletSwitcherProblem ? "0x1234…abcd" : "", note: self == .walletSwitcherNote ? WalletListNote(text: Wording.movedToYours, undo: {}) : nil)
             return TestScreen(view: AnyView(switcher.background(.background)), isReady: isReady)
-        case .taxReport:
-            let view = TaxReportView(store: store, model: TaxReportModel(defaults: defaults, currency: store.currency, fetch: { try await store.taxReport($0) }), onResolve: {}, onOpen: { _ in })
+        case .taxReport, .taxReportAddedWallet:
+            let view = TaxReportView(store: store, model: TaxReportModel(defaults: defaults, currency: store.currency, fetch: { try await store.taxReport($0) }), onResolve: { _ in }, onOpen: { _ in })
             return TestScreen(view: AnyView(view.frame(width: 640, height: 1240).background(.background)), isReady: isReady)
         case .taxReportOtherWallets, .taxReportLeftOver:
             let view = TaxReportView(store: store, wallets: store.walletList(hotWallet: hotWallet).pickable, readAddress: AddressText.readAnywhere, addingWallet: self == .taxReportLeftOver ? "0x2222 0x33zz" : "", model: TaxReportModel(defaults: defaults, currency: store.currency, fetch: { try await store.taxReport($0) }))
