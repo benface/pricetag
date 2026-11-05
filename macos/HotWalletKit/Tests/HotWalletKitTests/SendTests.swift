@@ -981,6 +981,25 @@ private final class Display {
         #expect(!model.canSend)
     }
 
+    @Test func maxWithNoPriceLeftShowsTokens() async {
+        let aero = token("AERO")
+        let rig = await Rig(snapshot(tokens: [aero: oneEth * 20], prices: ["AERO": 2 * Money.dollar]), withCold: false)
+        await rig.wallet.tick()
+        let store = makeStore()
+        defer { store.stop() }
+        let model = SendModel(wallet: rig.wallet, store: store)
+        model.token = aero
+        model.addressText = coldAddress.lowercased
+        model.switchUnit()
+        model.amountText = "10"
+        await rig.chain.set(snapshot(tokens: [aero: oneEth * 20], prices: [:]))
+        await rig.wallet.tick()
+        model.useMaximum()
+        #expect(model.unit == .token)
+        #expect(model.amountText == "20", "never an empty field standing for the whole balance")
+        #expect(model.amount == oneEth * 20)
+    }
+
     @Test func aTokenWithNoPriceIsTypedInItself() async {
         let rig = await Rig(snapshot(eth: oneEth / 200, tokens: [usdc: usdcUnits(20), dai: oneEth]))
         await rig.wallet.tick()

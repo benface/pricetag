@@ -284,13 +284,14 @@ public final class SendModel {
 
     public func useMaximum() {
         let most = maximum
-        switch unit {
-        case .token:
+        // Without a price to say it in money, it's said in the token, so what's shown is always what's sent.
+        guard unit == .money, let text = moneyText(of: most) else {
+            unit = .token
             amountText = Money.text(ofUnits: most, decimals: token.decimals)
-        case .money:
-            amountText = moneyText(of: most) ?? ""
-            pinnedMaximum = (amountText, most)
+            return
         }
+        amountText = text
+        pinnedMaximum = (text, most)
     }
 
     public var canSend: Bool {
