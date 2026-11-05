@@ -23,10 +23,12 @@ import {
   PNL_HELP,
   PNL_UNAVAILABLE,
   READING,
+  ANSWER_QUESTIONS,
   REALIZED_HELP,
   RETURN_HELP,
   UNPRICED_FEES,
   UNREALIZED_HELP,
+  answerQuestionsLabel,
   behindSentence,
   coverageSentence,
   excludedSentence,
@@ -45,6 +47,7 @@ import { ResolvePanel } from "./ResolvePanel.tsx"
 import { useBook, useOtherWallets } from "./useBook.ts"
 import { RulesPanel } from "./RulesPanel.tsx"
 import { useRules } from "./useRules.ts"
+import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
 import { linkedWallets, walletsBehind } from "../core/book.ts"
@@ -221,8 +224,8 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
                             {values.unrealizedMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : est(signed(values.unrealizedMicros), position.estimates.unrealized)}
                           </Num>
                           {unknown && resolvable.has(asset) ? (
-                            <button type="button" className="resolve-button" aria-label={`Resolve ${asset}`} onClick={() => onResolve(asset)}>
-                              Resolve
+                            <button type="button" className="resolve-button" aria-label={`Answer questions about ${asset}`} onClick={() => onResolve(asset)}>
+                              {ANSWER_QUESTIONS}
                             </button>
                           ) : null}
                         </>
@@ -259,6 +262,8 @@ export function App() {
   const [method, setMethod] = useState<Method>("average")
   const [target, setTarget] = useState<ExplainTarget | null>(null)
   const [taxOpen, setTaxOpen] = useState(false)
+  // Not remembered: opening the report starts on the newest year. Coming back from answering keeps the one it was on.
+  const [taxYear, setTaxYear] = useState<TaxYear>("latest")
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
   const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule)
@@ -268,6 +273,10 @@ export function App() {
     return link ? { link } : null
   })
   const [resolving, setResolving] = useState<{ asset: string | null } | null>(null)
+  // Another wallet's questions, asked for from a tax report that includes it: they open once it's read, and closing them
+  // goes back to the report on the wallet that was showing.
+  const [pendingResolve, setPendingResolve] = useState<{ wallet: string; returnTo: string } | null>(null)
+  const [returnTo, setReturnTo] = useState<string | null>(null)
   const [cardSender, setCardSender] = useState<string | null>(null)
   const wanted = useMemo(() => [...new Set([...linkedWallets(book), ...(cardSender ? [cardSender] : [])])].filter((a) => a !== wallet?.address), [book, cardSender, wallet?.address])
   const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, wallet?.latest.blockNum ?? null, wallet)
@@ -275,6 +284,8 @@ export function App() {
 
   useEffect(() => {
     const onPop = () => {
+      setPendingResolve(null)
+      setReturnTo(null)
       setAddress(readAddress())
       setTarget(null)
       setTaxOpen(false)
@@ -303,6 +314,30 @@ export function App() {
   const chooseCurrency = (next: CurrencyCode) => {
     localStorage.setItem(CURRENCY_KEY, next)
     setChosenCurrency(next)
+  }
+
+  useEffect(() => {
+    if (!pendingResolve || wallet?.address.toLowerCase() !== pendingResolve.wallet) return
+    setReturnTo(pendingResolve.returnTo)
+    setPendingResolve(null)
+    setResolving({ asset: null })
+  }, [pendingResolve, wallet])
+
+  const resolveFromTax = (next: string) => {
+    if (next === wallet?.address.toLowerCase()) {
+      setTaxOpen(false)
+      setResolving({ asset: null })
+    } else if (address) {
+      setPendingResolve({ wallet: next, returnTo: address })
+      go(next)
+    }
+  }
+  const closeResolve = () => {
+    setResolving(null)
+    if (returnTo === null) return
+    setReturnTo(null)
+    go(returnTo)
+    setTaxOpen(true)
   }
 
   const fold = useMemo(() => (wallet ? foldBook(wallet, others, method, book) : null), [wallet, others, method, book])
@@ -428,7 +463,7 @@ export function App() {
                   {caveat ? <p className="caveat">{caveat}</p> : null}
                   {questions.length > 0 ? (
                     <button type="button" className="resolve-button big" onClick={() => setResolving({ asset: null })}>
-                      Resolve {questions.length}
+                      {answerQuestionsLabel(questions.length)}
                     </button>
                   ) : null}
                   {totals.excluded.length > 0 ? (
@@ -453,7 +488,14 @@ export function App() {
                 </div>
               </section>
               <p className="tax-link">
-                <button type="button" className="link" onClick={() => setTaxOpen(true)}>
+                <button
+                  type="button"
+                  className="link"
+                  onClick={() => {
+                    setTaxYear("latest")
+                    setTaxOpen(true)
+                  }}
+                >
                   Export a tax report…
                 </button>
               </p>
@@ -477,7 +519,7 @@ export function App() {
       ) : null}
 
       {explanation && wallet ? <ExplainPanel explanation={explanation} address={wallet.address} rule={wallet.rule ?? null} onClose={close} /> : null}
-      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
+      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
       {device ? (
         <Suspense fallback={null}>
           <DevicePanel
@@ -497,7 +539,17 @@ export function App() {
           />
         </Suspense>
       ) : null}
-      {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} book={book} onClose={() => setTaxOpen(false)} /> : null}
+      {taxOpen && address ? <TaxPanel
+          address={address}
+          currency={chosenCurrency}
+          book={book}
+          year={taxYear}
+          onYear={setTaxYear}
+          overviewMethod={method}
+          questionCount={questions.length}
+          onResolve={resolveFromTax}
+          onClose={() => setTaxOpen(false)}
+        /> : null}
     </div>
   )
 }

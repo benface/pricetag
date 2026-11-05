@@ -116,6 +116,11 @@ struct MainWindow: View {
         .onChange(of: store.address) {
             navigation.forgetDetails()
             navigation.isResolving = false
+            navigation.openPendingQuestions()
+        }
+        .onChange(of: store.portfolio?.address) { navigation.openPendingQuestions() }
+        .onChange(of: navigation.isResolving) { _, open in
+            if !open { navigation.returnFromQuestions() }
         }
         // Or it would open again by itself with the window.
         .onDisappear {
@@ -246,7 +251,7 @@ struct MainWindow: View {
             if store.address == nil {
                 NoWalletYet(navigation: navigation)
             } else {
-                TaxReportView(store: store, wallets: store.walletList(hotWallet: hotWallet).pickable, readAddress: AddressText.readAnywhere)
+                TaxReportView(store: store, wallets: store.walletList(hotWallet: hotWallet).pickable, readAddress: AddressText.readAnywhere, onResolve: { navigation.resolve(in: $0) }, onOpen: { navigation.explain($0) })
             }
         }
     }
@@ -519,7 +524,7 @@ private struct HoldingsSection: View {
     }
 }
 
-/// What a right-click on a holding offers. Each is also in the interface: the row opens its details, and Fill In is in the row.
+/// What a right-click on a holding offers. Each is also in the interface: the row opens its details, and answering is in the row.
 private struct HoldingActions: View {
     let position: Position
     let currency: CurrencyCode
@@ -529,7 +534,7 @@ private struct HoldingActions: View {
     var body: some View {
         Button("Show Details", action: onShow)
         if position.resolvable {
-            Button("Fill In Cost…", action: onResolve)
+            Button("Answer Questions…", action: onResolve)
         }
         Divider()
         Button("Copy") { Clipboard.copy(position.copyText(currency: currency)) }
@@ -718,11 +723,13 @@ private struct HoldingsTable: View {
                     let unrealized = position.values.unrealizedMicros
                     HStack(spacing: 6) {
                         if position.resolvable {
-                            Button("Fill In") { onResolve(position.asset) }
+                            // The column has room for the number beside a symbol, not a name. The name's in its tooltip and for VoiceOver.
+                            Button(questionsTitle(position.asset), systemImage: "questionmark.bubble") { onResolve(position.asset) }
+                                .labelStyle(.iconOnly)
                                 .buttonStyle(.bordered)
                                 .controlSize(.mini)
-                                .accessibilityLabel("Fill in \(position.asset)'s cost")
-                                .help("Answer what the app can't work out about \(position.asset)")
+                                .accessibilityLabel("\(questionsTitle(position.asset)) about \(position.asset)")
+                                .help("\(questionsTitle(position.asset)) about \(position.asset), so what you paid is known")
                         }
                         number(position, .unrealized, unrealized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.unrealized) } ?? Wording.unknown, tone: unrealized == nil ? .secondary : Tone(signed: unrealized))
                     }
@@ -779,6 +786,11 @@ private struct HoldingsTable: View {
 
     private var targetAsset: String? {
         if case .asset(let asset, _) = target { asset } else { nil }
+    }
+
+    /// Counts this holding's own questions, which are the ones that come first.
+    private func questionsTitle(_ asset: String) -> String {
+        Wording.answerQuestions(max(1, portfolio.questions.count { $0.arrivals.contains { $0.asset == asset } }))
     }
 
     private func position(_ asset: String) -> Position? {
