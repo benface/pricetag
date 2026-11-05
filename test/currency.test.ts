@@ -126,6 +126,10 @@ describe("converting a wallet", () => {
     const usd = walletWith({ references: [{ blockNum: BUY_BLOCK, ethUsd: "200000000000", usdcUsd: "100000000" }] })
     assert.equal(viewWallet(usd).markPrice(BUY_BLOCK, "ETH"), "2500000000")
     assert.equal(viewWallet({ ...usd, rates: withoutRate(BUY_BLOCK) }).markPrice(BUY_BLOCK, "ETH"), null)
+    const marketMarks = { [BUY_BLOCK]: { AERO: "1300000" } }
+    assert.equal(viewWallet({ ...usd, marketMarks, currency: "USD", rates: null }).markPrice(BUY_BLOCK, "AERO"), "1300000")
+    assert.equal(viewWallet({ ...usd, marketMarks }).markPrice(BUY_BLOCK, "AERO"), "1625000", "at the rate of that block")
+    assert.equal(viewWallet({ ...usd, marketMarks, rates: withoutRate(BUY_BLOCK) }).markPrice(BUY_BLOCK, "AERO"), null)
   })
 })
 

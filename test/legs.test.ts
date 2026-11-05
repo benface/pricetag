@@ -671,6 +671,26 @@ describe("totals", () => {
     }
   })
 
+  it("the chart doesn't jump at its last point when a token has a market price, because it's marked all along", () => {
+    const points = pnlOverTime(DEMO_WALLET.legs, "average", prices, usdView(DEMO_WALLET).markPrice, DEMO_WALLET.latest)
+    assert.equal(points.at(-2)!.pnlMicros, points.at(-1)!.pnlMicros, "nothing the chart counts changed price after the last transaction")
+    assert.ok(points.some((p, i) => BigInt(p.pnlMicros ?? 0) > BigInt(points.at(-1)!.pnlMicros!) && i < points.length - 1), "AERO was worth more when it was sold")
+    const unmarked = pnlOverTime(DEMO_WALLET.legs, "average", prices, usdView({ ...DEMO_WALLET, marketMarks: {} }).markPrice, DEMO_WALLET.latest)
+    assert.ok(BigInt(unmarked.at(-1)!.pnlMicros!) - BigInt(unmarked.at(-2)!.pnlMicros!) > 70_000_000n, "without them, it would jump")
+    assert.ok(points.at(-2)!.excludedCount < unmarked.at(-2)!.excludedCount, "and what has a price is no longer left out")
+    assert.equal(points.at(-2)!.excludedCount, unmarked.at(-1)!.excludedCount)
+  })
+
+  it("leaves a token out of a point with no price at that block, as it does with no market", () => {
+    const { marketMarks } = DEMO_WALLET
+    const block = Number(Object.keys(marketMarks).find((b) => marketMarks[b]?.AERO))
+    const points = pnlOverTime(DEMO_WALLET.legs, "average", prices, usdView({ ...DEMO_WALLET, marketMarks: { ...marketMarks, [block]: {} } }).markPrice, DEMO_WALLET.latest)
+    const marked = pnlOverTime(DEMO_WALLET.legs, "average", prices, usdView(DEMO_WALLET).markPrice, DEMO_WALLET.latest)
+    const at = (from: typeof points) => from.find((p) => p.blockNum === block)!
+    assert.equal(at(points).excludedCount, at(marked).excludedCount + 1)
+    assert.equal(points.at(-2)!.pnlMicros, marked.at(-2)!.pnlMicros, "and it's back at the next point")
+  })
+
   it("the demo wallet shows the hand-worked numbers", () => {
     const aero = positions.find((p) => p.asset === "AERO")!
     // Bought 800 for 1,000 USDC at $0.9998: $1.24975 each. Sold 300 for 450 USDC: $1.4997 each.

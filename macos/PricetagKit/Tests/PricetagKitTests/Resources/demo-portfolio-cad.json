@@ -456,64 +456,64 @@
       "blockNum": 53500900,
       "timestamp": "2026-11-04T08:30:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
-      "pnlMicros": "-262833",
-      "excludedCount": 7
+      "pnlMicros": "9427",
+      "excludedCount": 6
     },
     {
       "blockNum": 53501200,
       "timestamp": "2026-11-04T08:40:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000005",
-      "pnlMicros": "-262833",
-      "excludedCount": 8
+      "pnlMicros": "69305427",
+      "excludedCount": 6
     },
     {
       "blockNum": 53501500,
       "timestamp": "2026-11-04T08:50:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
-      "pnlMicros": "-397716",
-      "excludedCount": 8
+      "pnlMicros": "126222744",
+      "excludedCount": 6
     },
     {
       "blockNum": 53502400,
       "timestamp": "2026-11-04T09:20:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000007",
-      "pnlMicros": "106675611",
-      "excludedCount": 8
+      "pnlMicros": "287067973",
+      "excludedCount": 6
     },
     {
       "blockNum": 53503000,
       "timestamp": "2026-11-04T09:40:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000008",
-      "pnlMicros": "106675611",
-      "excludedCount": 8
+      "pnlMicros": "271778073",
+      "excludedCount": 6
     },
     {
       "blockNum": 53503600,
       "timestamp": "2026-11-04T10:00:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
-      "pnlMicros": "106532707",
-      "excludedCount": 8
+      "pnlMicros": "261371169",
+      "excludedCount": 6
     },
     {
       "blockNum": 53504200,
       "timestamp": "2026-11-04T10:20:00.000Z",
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
-      "pnlMicros": "106388819",
-      "excludedCount": 9
+      "pnlMicros": "252669381",
+      "excludedCount": 7
     },
     {
       "blockNum": 53504800,
       "timestamp": "2026-11-04T10:40:00.000Z",
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000b",
-      "pnlMicros": "106243973",
-      "excludedCount": 9
+      "pnlMicros": "242136635",
+      "excludedCount": 7
     },
     {
       "blockNum": 53505000,
       "timestamp": "2026-11-04T10:46:40.000Z",
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000c",
-      "pnlMicros": "106097605",
-      "excludedCount": 9
+      "pnlMicros": "238527767",
+      "excludedCount": 7
     },
     {
       "blockNum": 53505400,
