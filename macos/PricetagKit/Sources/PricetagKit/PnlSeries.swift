@@ -78,7 +78,7 @@ extension PnlSeries: PlottedSeries {}
 
 /// What was held, which is only known where prices were read: at the wallet's own transactions, and now.
 /// At each one it's known just before and just after, so a deposit is a jump. Between them only prices moved, and nobody read them, so that stretch is a straight line marked as an estimate.
-/// Where it's unknown there's a gap, and where two points leave out different things the line breaks rather than join them.
+/// Where it's unknown there's a gap. So is a stretch where more than prices moved: two points that leave out different things, or ETH that arrived with no transaction to show for it.
 struct ValueSeries: PlottedSeries {
     struct Line: Identifiable, Equatable {
         let id: Int
@@ -114,8 +114,12 @@ struct ValueSeries: PlottedSeries {
                 gapStart = nil
             }
             let before = item.point.valueBeforeMicros.map(Format.chartValue)
-            if let previous, let from = previous.value, let before, previous.point.valueExcludedCount == item.point.valueExcludedCount {
-                lines.append(Line(id: lines.count, known: false, steps: [PnlSeries.Step(id: previous.id, date: previous.date, value: from), PnlSeries.Step(id: "\(item.id):before", date: item.date, value: before)]))
+            if let previous, let from = previous.value {
+                if let before, item.point.valueContinues == true {
+                    lines.append(Line(id: lines.count, known: false, steps: [PnlSeries.Step(id: previous.id, date: previous.date, value: from), PnlSeries.Step(id: "\(item.id):before", date: item.date, value: before)]))
+                } else {
+                    gaps.append(previous.date...item.date)
+                }
             }
             if let before, before != after {
                 lines.append(Line(id: lines.count, known: true, steps: [PnlSeries.Step(id: "\(item.id):before", date: item.date, value: before), PnlSeries.Step(id: item.id, date: item.date, value: after)]))

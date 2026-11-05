@@ -372,6 +372,11 @@ export type PnlPoint = {
   valueBeforeMicros: string | null
   /** What `valueMicros` leaves out. `valueBeforeMicros` can leave out other things, and then it's null. */
   valueExcludedCount: number
+  /**
+   * Whether only prices moved since the point before: what's held is the same, and so is what's left out, which a count
+   * can't say. Otherwise `valueBeforeMicros` can't be compared to that point's `valueMicros`.
+   */
+  valueContinues: boolean
 }
 
 /**
@@ -455,12 +460,29 @@ export function pnlOverTime(
     return { valueMicros: answer(value, coverage), excluded: excluded.sort() }
   }
   let before: Worth | null = null
+  let previous: Worth | null = null
+  let arrivedUnnamed = false
+  const valueAround = (before: Worth | null, after: Worth) => {
+    const value = {
+      valueMicros: after.valueMicros,
+      valueBeforeMicros: before !== null && leavesOutTheSame(before, after) ? before.valueMicros : null,
+      valueExcludedCount: after.excluded.length,
+      valueContinues: previous !== null && before !== null && !arrivedUnnamed && leavesOutTheSame(previous, before),
+    }
+    previous = after
+    arrivedUnnamed = false
+    return value
+  }
   legs.forEach((leg, i) => {
     const at = (asset: string) => markPrice(leg.blockNum, asset)
     if (!leg.opening && leg.txHash && legs[i - 1]?.txHash !== leg.txHash) before = worthNow(at)
     states.set(leg.asset, applyLeg(states.get(leg.asset) ?? emptyPosition(method, leg.decimals), leg))
-    // ETH that arrived with no transaction to name has nothing to click, and the next point counts it.
-    if (leg.opening || !leg.txHash || legs[i + 1]?.txHash === leg.txHash) return
+    // ETH that arrived with no transaction to name has nothing to click, and the next point counts it, but what's held did change.
+    if (leg.opening || !leg.txHash) {
+      arrivedUnnamed = true
+      return
+    }
+    if (legs[i + 1]?.txHash === leg.txHash) return
     const after = worthNow(at)
     points.push({ blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure(at), ...valueAround(before, after) })
   })
@@ -473,8 +495,5 @@ export function pnlOverTime(
 
 type Worth = { valueMicros: string | null; excluded: string[] }
 
-/** Before and after can only be compared when they leave out the same things. */
-function valueAround(before: Worth | null, after: Worth) {
-  const comparable = before !== null && before.excluded.join() === after.excluded.join()
-  return { valueMicros: after.valueMicros, valueBeforeMicros: comparable ? before.valueMicros : null, valueExcludedCount: after.excluded.length }
-}
+/** Two values can only be compared when they leave out the same things. */
+const leavesOutTheSame = (a: Worth, b: Worth) => a.excluded.join() === b.excluded.join()

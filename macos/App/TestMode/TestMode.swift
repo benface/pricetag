@@ -1429,6 +1429,7 @@ final class FixtureSource: PortfolioSource {
                 point["valueBeforeMicros"] = String(value[index].before * 1_000_000)
                 point["valueMicros"] = String(value[index].after * 1_000_000)
                 point["valueExcludedCount"] = 0
+                point["valueContinues"] = index > 0
             }
             return point
         }

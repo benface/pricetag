@@ -4,10 +4,10 @@ import Testing
 
 @Suite struct ValueSeriesTests {
     /// Value in whole dollars before and after a transaction at that second.
-    func point(_ second: Int, before: Int?, after: Int?, excluded: Int = 0, tx: Bool = true) -> PnlPoint {
+    func point(_ second: Int, before: Int?, after: Int?, excluded: Int = 0, tx: Bool = true, continues: Bool = true) -> PnlPoint {
         let date = Date(timeIntervalSince1970: 1_800_000_000 + Double(second))
         let timestamp = date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
-        return PnlPoint(blockNum: second, timestamp: timestamp, txHash: tx ? "0x\(second)" : nil, pnlMicros: nil, excludedCount: 0, valueMicros: after.map { "\($0 * 1_000_000)" }, valueBeforeMicros: before.map { "\($0 * 1_000_000)" }, valueExcludedCount: excluded)
+        return PnlPoint(blockNum: second, timestamp: timestamp, txHash: tx ? "0x\(second)" : nil, pnlMicros: nil, excludedCount: 0, valueMicros: after.map { "\($0 * 1_000_000)" }, valueBeforeMicros: before.map { "\($0 * 1_000_000)" }, valueExcludedCount: excluded, valueContinues: continues)
     }
 
     @Test func aDepositIsAKnownJumpAndWhatsBetweenIsAnEstimate() {
@@ -35,8 +35,40 @@ import Testing
     }
 
     @Test func pointsThatLeaveOutDifferentThingsArentJoined() {
-        let series = ValueSeries(points: [point(0, before: 0, after: 100), point(60, before: 100, after: 100, excluded: 1)])
+        let series = ValueSeries(points: [point(0, before: 0, after: 100), point(60, before: 100, after: 100, excluded: 1, continues: false)])
         #expect(series.lines.map(\.known) == [true])
+        #expect(series.gaps == [series.plotted[0].date...series.plotted[1].date])
+    }
+
+    /// From the SDK, by way of `test/portfolio.test.ts`.
+    struct Breaks: Decodable {
+        let unnamedEth: [PnlPoint]
+        let differentOmissions: [PnlPoint]
+    }
+
+    @Test func aStretchWithEthThatArrivedUnnamedIsAGapAndNotPriceMovement() throws {
+        let points = try resource("value-breaks", as: Breaks.self).unnamedEth
+        let series = ValueSeries(points: points)
+        // At minutes 0, 20, 120 and 150, with the ETH arriving at minute 60.
+        #expect(series.gaps == [series.plotted[1].date...series.plotted[2].date])
+        #expect(!series.lines.contains { line in !line.known && line.steps.first?.date == series.plotted[1].date })
+        let window = ChartWindow(points: points, range: .hour)
+        #expect(window.points.first?.valueMicros == nil)
+        #expect(window.changeMicros(.value) == nil)
+        #expect(ValueSeries(points: window.points).gaps == [window.points[0].date!...window.points[1].date!])
+        // PnL has the same points as ever, and doesn't stop.
+        #expect(PnlSeries(points: points).plotted.map(\.point.txHash) == ["0x1", "0x2", "0x3", nil])
+    }
+
+    @Test func pointsLeavingOutAsManyDifferentHoldingsAreAGap() throws {
+        let points = try resource("value-breaks", as: Breaks.self).differentOmissions
+        #expect(points[1].valueExcludedCount == points[2].valueExcludedCount)
+        let series = ValueSeries(points: points)
+        #expect(series.gaps.contains(series.plotted[1].date...series.plotted[2].date))
+        #expect(!series.lines.contains { line in line.steps.first?.date == series.plotted[1].date && line.steps.last?.date == series.plotted[2].date })
+        // A range starting between two like them doesn't go between them either.
+        let window = ChartWindow(points: [point(0, before: 0, after: 100, excluded: 1), point(7200, before: 300, after: 300, excluded: 1, continues: false), point(7300, before: 300, after: 300, excluded: 1, tx: false)], range: .hour)
+        #expect(window.points.first?.valueMicros == nil)
     }
 
     @Test func aRangeStartsOnTheEstimateBetweenTwoTransactions() {

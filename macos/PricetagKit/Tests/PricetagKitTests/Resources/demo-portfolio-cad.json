@@ -448,6 +448,7 @@
       "valueMicros": "7074155750",
       "valueBeforeMicros": "336960750",
       "valueExcludedCount": 1,
+      "valueContinues": false,
       "summary": "Received 5,000 USDC"
     },
     {
@@ -459,6 +460,7 @@
       "valueMicros": "7148261903",
       "valueBeforeMicros": "7083700500",
       "valueExcludedCount": 1,
+      "valueContinues": true,
       "summary": "Received 0.02 ETH"
     },
     {
@@ -470,6 +472,7 @@
       "valueMicros": "7178059539",
       "valueBeforeMicros": "7177537900",
       "valueExcludedCount": 1,
+      "valueContinues": true,
       "summary": "Bought 1 ETH for 2,400 USDC"
     },
     {
@@ -481,6 +484,7 @@
       "valueMicros": "7267342706",
       "valueBeforeMicros": "7267202858",
       "valueExcludedCount": 1,
+      "valueContinues": true,
       "summary": "Bought 800 AERO for 1,000 USDC"
     },
     {
@@ -492,6 +496,7 @@
       "valueMicros": "7645474466",
       "valueBeforeMicros": "7372277866",
       "valueExcludedCount": 1,
+      "valueContinues": true,
       "summary": "Received 200 USDT"
     },
     {
@@ -503,6 +508,7 @@
       "valueMicros": "7731447882",
       "valueBeforeMicros": "7731582766",
       "valueExcludedCount": 1,
+      "valueContinues": true,
       "summary": "Network fee of $0.13"
     },
     {
@@ -514,6 +520,7 @@
       "valueMicros": "7979934192",
       "valueBeforeMicros": "7980195854",
       "valueExcludedCount": 1,
+      "valueContinues": true,
       "summary": "Sold 300 AERO for 450 USDC"
     },
     {
@@ -525,6 +532,7 @@
       "valueMicros": "8051345900",
       "valueBeforeMicros": "8051345900",
       "valueExcludedCount": 1,
+      "valueContinues": true,
       "summary": "Received 0.02 cbBTC"
     },
     {
@@ -536,6 +544,7 @@
       "valueMicros": "8103371714",
       "valueBeforeMicros": "8103514620",
       "valueExcludedCount": 1,
+      "valueContinues": true,
       "summary": "Bought 50,000 DEGEN for 0.000001 USDC"
     },
     {
@@ -547,6 +556,7 @@
       "valueMicros": "8139990331",
       "valueBeforeMicros": "8133162019",
       "valueExcludedCount": 1,
+      "valueContinues": true,
       "summary": "Bought 50 VIRTUAL for 100 USDC"
     },
     {
@@ -558,6 +568,7 @@
       "valueMicros": "8162432326",
       "valueBeforeMicros": "8162939431",
       "valueExcludedCount": 1,
+      "valueContinues": true,
       "summary": "Sold 0.5 ETH for 1,300 USDC"
     },
     {
@@ -569,6 +580,7 @@
       "valueMicros": "8185299758",
       "valueBeforeMicros": "8192764563",
       "valueExcludedCount": 1,
+      "valueContinues": true,
       "summary": "Sent 0.002 ETH"
     },
     {
@@ -580,6 +592,7 @@
       "valueMicros": "8211228143",
       "valueBeforeMicros": "8211228143",
       "valueExcludedCount": 1,
+      "valueContinues": true,
       "summary": null
     }
   ],

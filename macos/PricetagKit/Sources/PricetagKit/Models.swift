@@ -205,6 +205,8 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public var valueBeforeMicros: String? = nil
     /// What `valueMicros` leaves out.
     public var valueExcludedCount: Int? = nil
+    /// Only prices moved since the point before: what's held is the same, and so is what's left out. Otherwise there's nothing to join it to.
+    public var valueContinues: Bool? = nil
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
     public var date: Date? { parseTimestamp(timestamp) }
