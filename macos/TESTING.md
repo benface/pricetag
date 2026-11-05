@@ -59,6 +59,17 @@ The `route-*` scenes check more than looks: they press what the menu bar's butto
 
 Scenes for the main window and Settings always use a real window, because their sidebar, toolbar and tabs are drawn by the window server. So do the scenes that go through the site window (`site-connect`, `site-transaction` and the like), whose top spacing is the title bar. The other `site-*` scenes only draw what's in it. A window can't be larger than the display, so `main-huge` shows as much as this display allows. A test window's toolbar has no room for Settings' tabs, which show properly in the real one. Sheets, including the details in a narrow window, don't appear in a capture.
 
+## Watching motion
+
+A screenshot can't show animation, so the `motion-*` scenes play something after their real window appears, and this captures it frame by frame, behind the desktop like any other window:
+
+```sh
+macos/shot.sh motion-chart-draw some-folder --frames 24 --slowdown 4
+macos/shot.sh motion-cost-known some-folder --frames 30 --slowdown 3 --dark
+```
+
+Capturing takes about 100 ms a frame, so `--slowdown` plays the app's animations more slowly (everything in `Motion` follows it). What this shows is where things go and what's on screen at each moment. It can't show how it feels at full speed, a hover from a real pointer, or a haptic, so those go on the checklist for benface. Every other scene has `Motion.playsEntrances` off and shows the finished view.
+
 ## 3. Test behavior with logic tests
 
 Don't drive the UI. Anything that decides what happens belongs in `PricetagKit` or another package, with a test next to `FeedTests.swift`. Scenes set up the state you want to see, so you don't need to click your way to it.

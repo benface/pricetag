@@ -41,6 +41,9 @@ enum TestMode {
         guard let name = value(after: "--test-scene") else { return }
         guard let scene = TestScene(rawValue: name) else { fail("There's no scene called \(name).") }
         let dark = value(after: "--appearance") == "dark"
+        // Only a scene about motion plays what happens by itself, so every other one shows the finished view.
+        Motion.playsEntrances = scene == .motionChartDraw
+        Motion.slowdown = value(after: "--slowdown").flatMap(Double.init) ?? 1
         let screen = scene.make()
         if let output = value(after: "--output") {
             do {
@@ -91,6 +94,13 @@ enum TestMode {
         if NSApp.isActive { fail("This became the active app, which it must never do.") }
         print("WINDOW \(window.windowNumber) \(ProcessInfo.processInfo.processIdentifier)")
         fflush(stdout)
+        if let play = screen.play, let cue = value(after: "--play-when") {
+            // Once `shot.sh` has started capturing, which takes it a while the first time.
+            while !FileManager.default.fileExists(atPath: cue) {
+                RunLoop.main.run(until: .now.addingTimeInterval(0.01))
+            }
+            play()
+        }
         // In case whoever started this is gone by now.
         RunLoop.main.run(until: .now.addingTimeInterval(60))
         exit(0)
@@ -140,6 +150,71 @@ struct TestScreen {
     /// nil to fit the view.
     var size: CGSize?
     let isReady: () -> Bool
+    /// What `shot.sh --frames` watches happen.
+    var play: (@MainActor () -> Void)?
+}
+
+/// What a motion scene changes while it's being captured, from outside the views.
+@Observable @MainActor
+final class MotionCue {
+    var revision = 0
+    var range = ChartRange.all
+    var scrubbed: Int?
+    var stage = ProgressFooter.Stage.working("Sending…")
+    var costIsKnown = false
+}
+
+/// The chart, on its own, doing what the scene's cue says.
+private struct MotionChartScene: View {
+    let store: PortfolioStore
+    let cue: MotionCue
+
+    var body: some View {
+        Group {
+            if let portfolio = store.portfolio {
+                PnlHistorySection(portfolio: portfolio, isLive: true, range: Binding(get: { cue.range }, set: { cue.range = $0 }), scrubbedIndex: cue.scrubbed) { _ in }
+                    .id(cue.revision)
+            }
+        }
+        .padding(20)
+        .frame(width: 760, height: 340)
+        .background(.background)
+    }
+}
+
+/// The page's numbers and boxes with Increase Contrast on, which can't be turned on from here for real.
+private struct ContrastScene: View {
+    let store: PortfolioStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let portfolio = store.portfolio {
+                Notice(.info, Wording.demo)
+                Notice(.warning, "This wallet's numbers aren't updating.")
+                PortfolioSummary(portfolio: portfolio, isLive: true, size: 40) { _ in }
+                PortfolioAttention(portfolio: portfolio, onOpen: { _ in }, onResolve: {})
+                PnlHistorySection(portfolio: portfolio, isLive: true, range: .constant(.all)) { _ in }
+                    .frame(height: 260)
+            }
+        }
+        .padding(20)
+        .frame(width: 900)
+        .background(.background)
+        .environment(\._colorSchemeContrast, .increased)
+    }
+}
+
+/// What a send's confirmation goes through once Touch ID has said yes.
+private struct MotionSendScene: View {
+    let cue: MotionCue
+
+    var body: some View {
+        ConfirmationView(asker: .spendingMoney, hero: .amount("12.5", symbol: "USDC"), worth: "$12.50", rows: [ConfirmationRow(label: "To", value: "0x00000000000000000000000000000000000de302", isAddress: true, name: "Ledger"), ConfirmationRow(label: "Network fee", value: "About $0.0032")]) {
+            ProgressFooter(stage: cue.stage, close: {})
+        }
+        .frame(width: 460)
+        .background(.background)
+    }
 }
 
 enum TestScene: String, CaseIterable {
@@ -368,13 +443,28 @@ enum TestScene: String, CaseIterable {
     case siteUnlimitedApproval = "site-unlimited-approval"
     case siteTypedPermit = "site-typed-permit"
 
+    /// Set from inside the page, because the setting doesn't pass through the window's own panes.
+    case increasedContrast = "increased-contrast"
+    case chartHover = "chart-hover"
+    /// Each plays something after the window appears, for `shot.sh --frames`. Hovering can't be done from here, so `motion-chart-scrub` moves what hovering moves.
+    case motionChartDraw = "motion-chart-draw"
+    case motionChartRange = "motion-chart-range"
+    case motionChartScrub = "motion-chart-scrub"
+    case motionSend = "motion-send"
+    case motionCostKnown = "motion-cost-known"
+    case motionDetails = "motion-details"
+
+    var isAboutMotion: Bool { rawValue.hasPrefix("motion") }
+
     enum Chrome { case titled, hiddenTitleBar, none }
 
     /// Rendering draws the inspector's text in the wrong color in dark mode, and leaves out the title bar the site window leaves room for, so these only come from a real window.
-    var needsRealWindow: Bool { chrome == .hiddenTitleBar || rawValue.hasPrefix("main") || rawValue.hasPrefix("settings") || rawValue.hasPrefix("route") || self == .mainDetails || self == .mainFirstRunDetails || self == .mainDetailsCAD || self == .mainHoldDetails || self == .mainSmallestEnd }
+    var needsRealWindow: Bool { isAboutMotion || chrome == .hiddenTitleBar || rawValue.hasPrefix("main") || rawValue.hasPrefix("settings") || rawValue.hasPrefix("route") || self == .mainDetails || self == .mainFirstRunDetails || self == .mainDetailsCAD || self == .mainHoldDetails || self == .mainSmallestEnd }
 
     var chrome: Chrome {
         switch self {
+        case .motionChartDraw, .motionChartRange, .motionChartScrub, .motionSend, .chartHover:
+            .none
         case .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .proveWallet, .proveWalletProblem, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverServerDown, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .buy, .buyCAD, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
              .publishFromDevice, .publishFromDeviceSafari, .publishFromDeviceNoChromium, .send, .sendCAD, .sendKnown, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sweep, .sweepCAD, .sweepStopped, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
@@ -396,7 +486,8 @@ enum TestScene: String, CaseIterable {
         case .mainCostWithheld, .resolveCostWithheld: .costWithheld
         case .resolvePublishFromDevice: .costOnSavings
         case .mainSmallAmounts, .mainSmallAmountsNarrow: .smallAmounts
-        case .mainLongHistory, .mainChartWeek: .longHistory
+        case .mainLongHistory, .mainChartWeek, .motionChartRange: .longHistory
+        case .motionCostKnown: .costBecomesKnown
         case .resolveAnsweredWallet: .answeredWallet
         case .mainEmpty, .mainEmptySmallest, .popoverEmpty: .empty
         case .mainEmptyNotice: .emptyReadingLinked
@@ -580,6 +671,7 @@ enum TestScene: String, CaseIterable {
         if self == .resolveAnsweredWallet, let book = try? JSONEncoder().encode(Book().answering(TestScene.answeredWallet, .mine, focus: nil)) { registered["answers"] = book }
         if self == .hotWalletPurchases || self == .hotWalletPurchasesCantCheck, let saved = try? JSONEncoder().encode(self == .hotWalletPurchases ? TestScene.purchases : Array(TestScene.purchases.suffix(3))) { registered["purchases"] = saved }
         defaults.register(defaults: registered)
+        let cue = MotionCue()
         let source: any PortfolioSource = TestMode.live.map { PricetagClient(serverURL: $0.server) } ?? FixtureSource(feed: feed)
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: TestMode.live == nil ? .milliseconds(50) : .seconds(30), unreachableDelay: .seconds(30))
         store.start()
@@ -619,13 +711,52 @@ enum TestScene: String, CaseIterable {
         let isReady: () -> Bool = { [feed] in
             if TestMode.live != nil { return store.feed == .noWallet || store.portfolio != nil }
             return switch feed {
-            case .demo, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .costOnSavings, .smallAmounts, .longHistory, .answeredWallet, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .costBecomesKnown, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .costOnSavings, .smallAmounts, .longHistory, .answeredWallet, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
             case .stopsAnswering: store.feed == .serverUnreachable && store.portfolio != nil
             }
         }
         switch self {
+        case .chartHover:
+            cue.scrubbed = 6
+            return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady)
+        case .motionChartDraw:
+            return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady, play: {
+                forgetDrawnCharts()
+                cue.revision += 1
+            })
+        case .motionChartRange:
+            return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady, play: { cue.range = .week })
+        case .motionChartScrub:
+            return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady, play: {
+                Task {
+                    for index in 2...6 {
+                        cue.scrubbed = index
+                        try? await Task.sleep(for: .seconds(0.3 * Motion.slowdown))
+                    }
+                }
+            })
+        case .motionSend:
+            return TestScreen(view: AnyView(MotionSendScene(cue: cue)), isReady: { true }, play: {
+                Task {
+                    try? await Task.sleep(for: .seconds(0.4))
+                    cue.stage = .onItsWay
+                    try? await Task.sleep(for: .seconds(0.8))
+                    cue.stage = .finished("Sent")
+                }
+            })
+        case .motionCostKnown:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 820), isReady: isReady, play: {
+                FixtureSource.costIsKnown.withLock { $0 = true }
+                store.start()
+            })
+        case .motionDetails:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady, play: {
+                navigation.target = .asset("AERO", .realized)
+            })
+        case .increasedContrast:
+            return TestScreen(view: AnyView(ContrastScene(store: store)), isReady: isReady)
         case .resolve, .resolveCostWithheld, .resolveAnsweredWallet:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .resolvePublishFromDevice:
@@ -971,10 +1102,12 @@ private final class ReadOnce {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, missingPrice, unreadBalance, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, answeredWallet, empty, emptyReadingLinked, notStarted, firstRun }
+    enum Feed { case demo, costBecomesKnown, missingPrice, unreadBalance, neverAnswers, serverDown, stopsAnswering, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, answeredWallet, empty, emptyReadingLinked, notStarted, firstRun }
 
     private let feed: Feed
     private let reads = Mutex(0)
+    /// For `motion-cost-known`: whether what you paid has come in yet.
+    static let costIsKnown = Mutex(false)
 
     init(feed: Feed) {
         self.feed = feed
@@ -987,6 +1120,36 @@ final class FixtureSource: PortfolioSource {
         }
         switch feed {
         case .demo: break
+        case .costBecomesKnown:
+            guard Self.costIsKnown.withLock({ $0 }) else { break }
+            return try demo { object in
+                var positions = object["positions"] as? [[String: Any]] ?? []
+                for index in positions.indices {
+                    var values = positions[index]["values"] as? [String: Any] ?? [:]
+                    guard (values["unknownCostQty"] as? String) != "0" else { continue }
+                    values["unknownCostQty"] = "0"
+                    let value = Int64(values["valueMicros"] as? String ?? "") ?? 0
+                    let cost = value * 9 / 10
+                    let price = (positions[index]["price"] as? [String: Any])?["micros"] as? String
+                    values["costMicros"] = String(cost)
+                    values["averageCostMicros"] = String((Int64(price ?? "") ?? 0) * 9 / 10)
+                    values["realizedMicros"] = "0"
+                    values["unrealizedMicros"] = String(value - cost)
+                    positions[index]["values"] = values
+                    positions[index]["pnlMicros"] = String(value - cost)
+                    positions[index]["resolvable"] = false
+                }
+                object["positions"] = positions
+                object["questions"] = [Any]()
+                object["pnlStatus"] = "complete"
+                var totals = object["totals"] as? [String: Any] ?? [:]
+                totals["excluded"] = [Any]()
+                totals["unresolvedMicros"] = "0"
+                totals["pnlMicros"] = "361230000"
+                totals["unrealizedMicros"] = "287050000"
+                totals["coverage"] = ["value": ["known": 7, "missing": 0], "realized": ["known": 7, "missing": 0], "unrealized": ["known": 7, "missing": 0], "pnl": ["known": 7, "missing": 0]]
+                object["totals"] = totals
+            }
         case .missingPrice:
             // The demo, with no price for USDC right now. It's the largest holding, so its value is a big part of the total, and with no price it's listed last.
             return try demo { object in
