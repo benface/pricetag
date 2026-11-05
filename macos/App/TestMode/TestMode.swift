@@ -323,9 +323,14 @@ enum TestScene: String, CaseIterable {
         if self == .mainTransactions || self == .mainTransactionsCAD || self == .mainTransactionsSmall { navigation.section = .transactions }
         if self == .mainSpendingMoney || self == .mainSpendingMoneySmall { navigation.section = .spendingMoney }
         if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
-        if self == .mainDetails || self == .mainDetailsCAD { navigation.target = .asset("AERO", .realized) }
-        if self == .mainHoldDetails { navigation.target = .holdComparison }
-        if self == .mainFirstRunDetails { navigation.target = .asset("ETH", .onchain) }
+        // Once the window has its size, as when someone clicks. Before that it's too small for the details to fit beside the section.
+        let opened: ExplainTarget? = switch self {
+        case .mainDetails, .mainDetailsCAD: .asset("AERO", .realized)
+        case .mainHoldDetails: .holdComparison
+        case .mainFirstRunDetails: .asset("ETH", .onchain)
+        default: nil
+        }
+        if let opened { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { navigation.target = opened } }
 
         let isReady: () -> Bool = { [feed] in
             switch feed {

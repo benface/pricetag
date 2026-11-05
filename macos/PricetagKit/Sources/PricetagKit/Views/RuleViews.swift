@@ -40,8 +40,8 @@ public struct RuleComparisonTable: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(comparison.why).fixedSize(horizontal: false, vertical: true)
-            ForEach(comparison.warnings, id: \.self) { WarningText($0) }
+            Text(comparison.why).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(comparison.warnings, id: \.self) { WarningText($0).font(.caption).fixedSize(horizontal: false, vertical: true) }
             Grid(alignment: .trailing, horizontalSpacing: 16, verticalSpacing: 6) {
                 GridRow {
                     Text("At block \(Format.block(comparison.blockNum))").gridColumnAlignment(.leading)
@@ -88,7 +88,7 @@ public struct RuleComparisonTable: View {
 
     private func value(_ micros: String?, format: String, isPartial: Bool, isEstimate: Bool) -> some View {
         HStack(spacing: 4) {
-            if isPartial { Text("partial").font(.caption).foregroundStyle(Tone.warning.style) }
+            if isPartial { Text("partial").font(.caption.weight(.medium)).foregroundStyle(.secondary) }
             Text(Format.ruleValue(micros, format: format, currency: comparison.currency, isEstimate: isEstimate))
         }
     }

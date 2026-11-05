@@ -150,7 +150,11 @@ public struct LegRow: View {
             .font(.caption.weight(.medium))
             .monospacedDigit()
             .lineLimit(1)
+            #if os(macOS)
             .buttonStyle(.link)
+            #else
+            .buttonStyle(.borderless)
+            #endif
             .disabled(leg.opening)
             .help(leg.opening ? "" : "See where this price comes from")
         } else {
