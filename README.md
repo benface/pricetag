@@ -15,7 +15,7 @@ pnpm dev                     # http://localhost:5173
 
 ## The Mac app
 
-Patina is a native menu bar app: live total PnL in the bar, holdings, cost and PnL in its popover, and a window where any number clicks through to its activity, price source and transaction. A wallet you look up is only read. The one key it holds is this Mac's spending money, below.
+Patina is a native menu bar app: live total PnL in the bar, holdings, cost and PnL in its popover, and a window where any number clicks through to its activity, price source and transaction. The wallet's name in the toolbar switches between your wallets and the ones you're watching (⌘L, then paste an address to add one). The list keeps addresses and names only. A wallet you watch is only read. The one key the app holds is this Mac's spending money, below.
 
 ```sh
 pnpm mac         # builds the app, opens it, and runs the server until you press Ctrl-C

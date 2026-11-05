@@ -64,13 +64,10 @@ struct MainWindow: View {
             if wasWide != isWide { columns = isWide ? .all : .detailOnly }
         }
         .sheet(isPresented: detailsSheetBinding) { detailsSheet }
-        .sheet(isPresented: $navigation.isChangingWallet) {
-            WalletSheet(store: store)
-        }
         .sheet(isPresented: $navigation.isResolving) {
             ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet)
         }
-        .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: "\(AppName.current) \(walletName)") { result in
+        .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .commaSeparatedText, defaultFilename: exportName) { result in
             if case .failure(let error) = result { exportError = error.localizedDescription }
             exportDocument = nil
         }
@@ -97,6 +94,8 @@ struct MainWindow: View {
             navigation.target = nil
             navigation.isResolving = false
         }
+        // Or it would open again by itself with the window.
+        .onDisappear { navigation.isSwitchingWallet = false }
     }
 
     private var sidebar: some View {
@@ -117,10 +116,14 @@ struct MainWindow: View {
         }
     }
 
-    private var walletName: String {
-        guard let address = store.address else { return "" }
-        let wallet = address == WalletAddress.demo ? "Demo wallet" : Format.shortHash(address)
-        return store.activeRuleName.map { "\(wallet) · \($0)" } ?? wallet
+    private var walletTitle: String? {
+        store.walletList(hotWallet: hotWallet).entry(for: store.address)?.title
+    }
+
+    /// A name can hold what a file's name can't.
+    private var exportName: String {
+        [AppName.current, walletTitle, store.activeRuleName].compactMap(\.self).joined(separator: " ")
+            .replacing(/[\/:]/, with: "-")
     }
 
     private var inspectorBinding: Binding<Bool> {
@@ -134,12 +137,10 @@ struct MainWindow: View {
     /// Only what does something in this section. The leading slot is the wallet's.
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            Button { navigation.isChangingWallet = true } label: {
-                Label(store.address == nil ? "Add Wallet" : walletName, systemImage: "wallet.bifold")
-                    .labelStyle(.titleAndIcon)
+        if navigation.section != .spendingMoney {
+            ToolbarItem(placement: .navigation) {
+                WalletButton(store: store, hotWallet: hotWallet, navigation: navigation, maxWidth: width < Self.sidebarWidth ? 230 : 300)
             }
-            .help("Look at another wallet (⌘L)")
         }
         // With no title in a small window, nothing else would hold the rest at the far end.
         ToolbarSpacer(.flexible)
@@ -350,6 +351,12 @@ private struct HoldingsSection: View {
                         .accessibilityLabel(matches)
                 }
                 Spacer(minLength: 8)
+                if let rule = store.activeRuleName {
+                    Text("\(Wording.rulesTitle): \(rule)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 CostMethodMenu(store: store)
                 Button("About This Data", systemImage: "info.circle") { showsAbout.toggle() }
                     .labelStyle(.iconOnly)
@@ -659,7 +666,7 @@ private struct NoWalletYet: View {
         } description: {
             Text("Add one to see this.")
         } actions: {
-            Button("Add Wallet") { navigation.isChangingWallet = true }
+            Button("Add Wallet") { navigation.switchWallet() }
                 .buttonStyle(.borderedProminent)
         }
     }
@@ -680,7 +687,7 @@ private struct NoActivity<Notices: View>: View {
                 Text("Nothing has moved for this wallet in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
                     .help(Wording.coverage(portfolio))
             } actions: {
-                Button("Change Wallet") { navigation.isChangingWallet = true }
+                Button("Switch Wallet") { navigation.switchWallet() }
             }
             // Fills what's left, so a notice stays at the top instead of floating over it.
             .frame(maxHeight: .infinity)
@@ -692,17 +699,28 @@ private struct Welcome: View {
     let store: PortfolioStore
     let hotWallet: HotWallet
     let navigation: Navigation
+    @State private var problem: String?
 
     var body: some View {
         ContentUnavailableView {
             Label("See What a Wallet Is Worth", systemImage: "wallet.bifold")
         } description: {
-            Text("Paste a Base address to see its holdings, cost and PnL.")
-                .help("A wallet you look up is only read, and nothing signs for it.")
+            Text("See the holdings, cost and PnL of any Base wallet.")
+                .help("A wallet you watch is only read, and nothing signs for it.")
         } actions: {
             VStack(spacing: 16) {
                 spendingMoney
-                WalletForm(store: store, onDone: {})
+                VStack(alignment: .leading, spacing: 6) {
+                    WalletAddressField(prompt: "Paste an address to watch it", problem: $problem) { store.setWallet($0) }
+                        .textFieldStyle(.roundedBorder)
+                    if let problem {
+                        WarningText(problem).font(.callout)
+                    }
+                }
+                if WalletList.offersDemo {
+                    Button("Try the Demo Wallet") { store.setWallet(WalletAddress.demo) }
+                        .buttonStyle(.link)
+                }
             }
             .frame(width: 340)
         }
@@ -713,11 +731,11 @@ private struct Welcome: View {
     private var spendingMoney: some View {
         if hotWallet.availability == .ready {
             if let address = hotWallet.address {
-                Button("Show Spending Money") { store.setWallet(address.lowercased) }
+                Button("Show \(HotWalletWording.title)") { store.setWallet(address.lowercased) }
                     .buttonStyle(.borderedProminent)
             } else {
                 // That section says what this is and what can go wrong, and only it makes the key.
-                Button("Create Spending Money…") { navigation.section = .spendingMoney }
+                Button("Create \(HotWalletWording.title)…") { navigation.section = .spendingMoney }
                     .buttonStyle(.borderedProminent)
                     .help(HotWalletWording.summary)
             }
@@ -742,79 +760,5 @@ private struct Unavailable: View {
             Button("Try Again") { store.start() }
                 .buttonStyle(.borderedProminent)
         }
-    }
-}
-
-struct WalletSheet: View {
-    let store: PortfolioStore
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Change Wallet").font(.headline)
-            WalletForm(store: store) { dismiss() }
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-            }
-        }
-        .padding(18)
-        .frame(width: 480)
-    }
-}
-
-/// Addresses only. Nothing in this app ever asks for a key or a recovery phrase.
-struct WalletForm: View {
-    let store: PortfolioStore
-    let onDone: () -> Void
-    @State private var input = ""
-    @State private var error: String?
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        VStack(spacing: 10) {
-            HStack {
-                TextField("Paste a Base address, 0x…", text: $input)
-                    .textFieldStyle(.roundedBorder)
-                    // Only what's typed: a prompt in a code font reads as a command.
-                    .font(input.isEmpty ? .body : .body.monospaced())
-                    .autocorrectionDisabled()
-                    .focused($isFocused)
-                    .onSubmit(submit)
-                Button("Look Up", action: submit)
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(input.isEmpty)
-                    .fixedSize()
-            }
-            if let error {
-                WarningText(error)
-                    .font(.callout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            #if DEBUG
-            // For trying things while building the app. A fixture has no place in a release build, and scenes show what one looks like.
-            if !TestMode.isRunning {
-                Button("Try the demo wallet") {
-                    store.setWallet(WalletAddress.demo)
-                    onDone()
-                }
-                .buttonStyle(.link)
-            }
-            #endif
-        }
-        .onAppear { isFocused = true }
-    }
-
-    private func submit() {
-        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard WalletAddress.isValid(value) else {
-            error = Wording.notAnAddress
-            return
-        }
-        error = nil
-        store.setWallet(value)
-        onDone()
     }
 }

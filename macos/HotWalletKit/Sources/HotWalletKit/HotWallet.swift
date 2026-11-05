@@ -530,6 +530,12 @@ public final class HotWallet {
         updateSettings { $0.removeColdWallet(address) }
     }
 
+    /// A savings wallet always has a name, because it's how the sweep says where the money went.
+    public func renameColdWallet(_ address: EthereumAddress, to name: String) {
+        let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        updateSettings { $0.renameColdWallet(address, to: cleanName.isEmpty ? "Savings" : cleanName) }
+    }
+
     private func updateSettings(_ change: (inout WalletSettings) -> Void) {
         change(&settings)
         settingsStore.save(settings)

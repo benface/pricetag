@@ -9,7 +9,7 @@ import PricetagKit
 struct HotWalletFixture {
     enum KeyAnswer { case hasIt, isMissing, notProvisioned }
 
-    private static let spending = TestMode.live.flatMap { EthereumAddress($0.wallet) } ?? EthereumAddress("0x00000000000000000000000000000000000de301")!
+    static let spending = TestMode.live.flatMap { EthereumAddress($0.wallet) } ?? EthereumAddress("0x00000000000000000000000000000000000de301")!
     private static let replacement = EthereumAddress("0x00000000000000000000000000000000000de303")!
     private static let block: UInt64 = 53_505_400
     /// Fixed, so a scene looks the same whenever it's taken.
