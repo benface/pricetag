@@ -26,7 +26,7 @@ public enum HotWalletWording {
 
     public static func overCap(by excess: UInt128, hasDestination: Bool, beside main: CurrencyCode) -> String {
         hasDestination
-            ? "\(usd(excess, beside: main)) over the cap. It's being moved to your savings."
+            ? "\(usd(excess, beside: main)) over the cap. It's being moved to your savings, so keep this app open until it lands."
             : "\(usd(excess, beside: main)) over the cap, with nowhere to sweep it. Add a savings wallet."
     }
 

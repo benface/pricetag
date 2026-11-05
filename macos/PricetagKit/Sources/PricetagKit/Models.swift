@@ -296,6 +296,8 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let linkedFailed: [String]
     /// Other wallets' history that can't be confirmed, which leaves what they sent here with an unknown cost.
     public let withheld: [WithheldCost]
+    /// What became of each purchase in the book, among the wallets read.
+    public let purchases: [PurchaseMatch]?
     public let marketChecked: Bool
 
     /// What the holdings table lists. Tokens with no market go in a group of their own, so real warnings stay noticeable.
@@ -340,6 +342,8 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let priceSource: String?
     public let priceNote: String?
     public let costLabel: String
+    /// Who says what was paid, when it isn't the chain.
+    public let costSource: String?
     /// Its cost or proceeds rest on an estimate.
     public let estimated: Bool
     /// Some of what arrived has a known cost and some doesn't.
@@ -602,16 +606,76 @@ public struct SenderAnswer: Codable, Sendable, Equatable {
     public static let someoneElse = SenderAnswer(kind: .someoneElse)
 }
 
+/// Something bought through a provider, as its order says. Only the server decides whether it matches what arrived, and only an exact match counts.
+public struct Purchase: Codable, Sendable, Equatable, Hashable {
+    public let provider: String
+    public let order: String
+    public let wallet: String
+    public let asset: String
+    public let units: String
+    public let txHash: String
+    public let blockNum: Int?
+    /// Everything paid, fees included.
+    public let cost: Money
+    public let costUsdMicros: String?
+
+    public init(provider: String, order: String, wallet: String, asset: String, units: String, txHash: String, blockNum: Int?, cost: Money, costUsdMicros: String?) {
+        self.provider = provider
+        self.order = order
+        self.wallet = wallet
+        self.asset = asset
+        self.units = units
+        self.txHash = txHash
+        self.blockNum = blockNum
+        self.cost = cost
+        self.costUsdMicros = costUsdMicros
+    }
+}
+
+/// What became of a purchase, as the server worked it out from what's been read.
+public struct PurchaseMatch: Codable, Sendable, Equatable {
+    public enum State: String, Codable, Sendable {
+        /// It's the cost of what arrived.
+        case recorded
+        /// Nothing's been seen arriving from its transaction yet.
+        case waiting
+        /// Something was, and it isn't exactly what the order says, or can't be shown in this currency.
+        case unmatched
+    }
+
+    public let order: String
+    public let state: State
+}
+
 /// The user's answers. They stay on this device, and go along with each request. The server doesn't keep them.
 public struct Book: Codable, Sendable, Equatable, Hashable {
     public var senders: [String: SenderAnswer]
     public var costs: [String: Money]
     public var withdrawals: [ExchangeWithdrawal]
+    public var purchases: [Purchase]
 
-    public init(senders: [String: SenderAnswer] = [:], costs: [String: Money] = [:], withdrawals: [ExchangeWithdrawal] = []) {
+    public init(senders: [String: SenderAnswer] = [:], costs: [String: Money] = [:], withdrawals: [ExchangeWithdrawal] = [], purchases: [Purchase] = []) {
         self.senders = senders
         self.costs = costs
         self.withdrawals = withdrawals
+        self.purchases = purchases
+    }
+
+    /// A book saved before there were purchases has none.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        senders = try container.decode([String: SenderAnswer].self, forKey: .senders)
+        costs = try container.decode([String: Money].self, forKey: .costs)
+        withdrawals = try container.decode([ExchangeWithdrawal].self, forKey: .withdrawals)
+        purchases = try container.decodeIfPresent([Purchase].self, forKey: .purchases) ?? []
+    }
+
+    /// An order can say more as it goes, like the block its delivery landed in, so a newer read of one takes over.
+    public func recording(_ purchase: Purchase) -> Book {
+        var next = self
+        next.purchases.removeAll { $0.order == purchase.order }
+        next.purchases.append(purchase)
+        return next
     }
 
     /// Saying a sender's yours says the wallet you're looking at is yours too. Saying someone else sent what arrived from a wallet
@@ -660,7 +724,7 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
         senders.filter { $0.value.kind == .mine }.keys.sorted()
     }
 
-    public var isEmpty: Bool { senders.isEmpty && costs.isEmpty && withdrawals.isEmpty }
+    public var isEmpty: Bool { senders.isEmpty && costs.isEmpty && withdrawals.isEmpty && purchases.isEmpty }
 }
 
 extension SenderAnswer: Hashable {}

@@ -39,7 +39,7 @@ function LegRow({ effect, currency, address, rule }: { effect: LegEffect; curren
         ) : (
           <span className="tag warn">⚠ No price</span>
         )}
-        {incoming ? <span className={leg.costLabel === "unknown" ? "tag warn" : "tag"}>{leg.costLabel === "unknown" ? `⚠ ${costTag(leg.costLabel)}` : costTag(leg.costLabel)}</span> : null}
+        {incoming ? <span className={leg.costLabel === "unknown" ? "tag warn" : "tag"}>{leg.costLabel === "unknown" ? `⚠ ${costTag(leg.costLabel)}` : costTag(leg.costLabel, leg.purchaseSource ?? null)}</span> : null}
         {incoming && leg.costLabel !== "unknown" && leg.costMicros === null ? <span className="tag warn">⚠ Partly unknown</span> : null}
         {leg.estimated ? <span className="tag">≈ Estimate</span> : null}
       </div>

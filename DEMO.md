@@ -89,6 +89,19 @@ WORK-452 rewrites the steps for whatever has merged by Thursday at 13:45.
 
 If this withdrawal pays from a different contract, the app can't name it (WORK-444), so you may get a second card without "Coinbase". It still works, but change what you say in step 5.
 
+### Buying on stage (WORK-462)
+
+**Optional, and only after a real purchase has worked in rehearsal.** Press **Buy** in the toolbar, enter $3 of ETH, **Continue on Coinbase**, and pay by card. It opens Spending Money, where the purchase says "On its way", then "Delivered", then "Cost $X, fees included". Say: "No question this time. Coinbase's order says what I paid, and it matches what arrived exactly." The row in Transactions says "Cost: Bought on Coinbase".
+
+**To show a larger amount:** type more than the room left, and the sheet says how much stays and that the rest goes to your savings, but stop there, because the trial limit won't let it through. If you do buy more than the room left: what lands above the cap sweeps by itself, with Patina open, and that needs a savings wallet you've checked on a device. Coinbase's page lets you change the amount but not the token. Its row in the savings wallet says the same cost and source.
+
+**Coinbase's trial limit is CA$6.99 a transaction (*measured*).** It refused $5 of ETH, which is about that before fees. $3 should fit, but that's not tried yet. Larger purchases need full access (https://support.cdp.coinbase.com/onramp-onboarding), so don't plan on one on stage. A refusal shows on Coinbase's page, or in the sheet as Coinbase said it. Use the fallbacks below.
+
+A real card purchase on stage can fail, and a real delivery can take minutes, so don't let the demo depend on one:
+- **Best:** do a real purchase before you go on, and show its finished row and its cost in Transactions. Open with "I bought this an hour ago".
+- **Recording:** add a clip of a real purchase to the backup recording.
+- **Mocked:** set `COINBASE_ONRAMP_MOCK` to `1` in `.env.local`, restart the server, and turn on Coinbase's mocked mode on its page: click "Secured" 10 times, open **Actions**, and toggle **Enable Mocked Buy and Send**. Nothing's charged and nothing arrives, so the row stays at "Waiting for you on Coinbase", and it doesn't record a cost. It only shows the page. Use **I Didn't Buy It** to clear it.
+
 ## What could go wrong
 
 | Problem | How you'd know | Do this |
@@ -120,6 +133,7 @@ If this withdrawal pays from a different contract, the app can't name it (WORK-4
 - [ ] Right after the buys, answer the Coinbase card. There should be no other question and PnL shouldn't say partial. If it does, read what it leaves out, and see above. Then **Undo Last Answer**.
 - [ ] Review WORK-426, then 431 and 432. Merging 426 starts WORK-449's test on real data, so read its results if they're in by 14:00.
 - [ ] Say on WORK-448 what time the demo is.
+- [ ] Make one small real purchase with **Buy…** (steps on WORK-462), and check its cost shows with no question.
 
 **Fix before rehearsing**
 - [ ] WORK-426, 431 and 432 merged, or decided against. WORK-452 then updates the steps.

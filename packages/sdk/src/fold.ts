@@ -34,6 +34,8 @@ export type FoldLeg = {
   pieces?: CostPiece[]
   /** Its cost or proceeds rest on an estimate, so whatever comes from them does too. */
   estimated?: boolean
+  /** Credits only: who says what was paid, when it isn't the chain. It stays with the cost wherever it moves. */
+  purchaseSource?: string
   /**
    * Nothing says where this comes in its block, among other movements that depend on it, and the method it matters to:
    * `always` when something left, and `fifo` when things only arrived, since those come to the same average either way.
@@ -58,6 +60,10 @@ export type CostPiece = {
   reported?: true
   /** The part of `costMicros` that's a market price for what the user said came from someone else, wherever it's moved since. Missing means none. */
   givenCostMicros?: string
+  /** Who says what was paid for it, wherever it's moved since. Missing means nobody but the chain. */
+  purchaseSource?: string
+  /** That's only some of its cost, because an average mixed it with others. */
+  purchasePartly?: true
   /** No cost because of these wallets, whose history of it can't be confirmed, wherever it's moved since. Missing means none. */
   unconfirmedBy?: string[]
   acquiredBlock?: number
@@ -78,6 +84,10 @@ export type Lot = {
   reported?: true
   /** The part of `costMicros` that's a market price for what the user said came from someone else. Missing means none. */
   givenCostMicros?: string
+  /** Who says what was paid for some or all of it. An average lot stays this way, because every unit shares that cost. */
+  purchaseSource?: string
+  /** That's only some of its cost, because an average mixed it with others. */
+  purchasePartly?: true
   /** No cost because of these wallets, whose history of it can't be confirmed. Missing means none. */
   unconfirmedBy?: string[]
   /** When these units were first acquired, which an inherited lot keeps from the wallet that sent it. */
@@ -212,6 +222,7 @@ function lotOf(piece: CostPiece, legId: string): Lot {
     legId,
     ...(estimated > 0n ? { estimatedCostMicros: estimated.toString() } : {}),
     ...costSource(known && (piece.reported || piece.label === "self-reported"), known ? givenOf(piece) : 0n),
+    ...(known && piece.purchaseSource ? { purchaseSource: piece.purchaseSource, ...(piece.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
     ...unconfirmed(known ? [] : piece.unconfirmedBy),
     ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }),
     ...(known && piece.paidAt ? { paidAt: piece.paidAt } : {}),
@@ -241,6 +252,7 @@ function addLot({ method, tracksPaidAt }: PositionState, lots: readonly Lot[], l
     legId: pool.legId,
     ...(estimated > 0n ? { estimatedCostMicros: estimated.toString() } : {}),
     ...costSource(pool.reported || lot.reported, givenOf(pool) + givenOf(lot)),
+    ...(pool.purchaseSource || lot.purchaseSource ? { purchaseSource: (pool.purchaseSource ?? lot.purchaseSource) as string, ...(pool.purchaseSource !== lot.purchaseSource || pool.purchasePartly || lot.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
     ...unconfirmed(pool.unconfirmedBy, lot.unconfirmedBy),
     ...(acquired.acquiredBlock === undefined ? {} : { acquiredBlock: acquired.acquiredBlock, acquiredAt: acquired.acquiredAt as string }),
     ...(paidAt ? { paidAt } : {}),
@@ -256,7 +268,7 @@ function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
   if (orderMatters(leg, state.method)) return addLot(state, state.lots, lotOf({ qty: qty.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", ...dated }, leg.id))
   const estimated = (leg.estimated || leg.costLabel === "received at market") && leg.costMicros !== null ? leg.costMicros : "0"
   // A piece with its own date got it from the wallet that first acquired it. Any other was acquired here and now.
-  const pieces = leg.pieces?.map((piece) => ({ ...dated, ...piece })) ?? [{ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...dated }]
+  const pieces = leg.pieces?.map((piece) => ({ ...dated, ...piece })) ?? [{ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...(leg.purchaseSource ? { purchaseSource: leg.purchaseSource } : {}), ...dated }]
   return pieces.reduce<Lot[]>((lots, piece) => addLot(state, lots, lotOf(piece, leg.id)), state.lots)
 }
 
@@ -316,6 +328,7 @@ function take(state: PositionState, qty: bigint): Taken {
       label: lot.costMicros === null ? "unknown" : lot.label === "mixed" ? "inherited" : lot.label,
       estimatedCostMicros: estimated.toString(),
       ...costSource(lot.costMicros !== null && lot.reported, given),
+      ...(lot.costMicros !== null && lot.purchaseSource ? { purchaseSource: lot.purchaseSource, ...(lot.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
       ...unconfirmed(lot.unconfirmedBy),
       ...(lot.acquiredBlock === undefined ? {} : { acquiredBlock: lot.acquiredBlock, acquiredAt: lot.acquiredAt as string }),
       ...(paidAt ? { paidAt } : {}),

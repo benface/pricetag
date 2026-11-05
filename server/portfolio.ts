@@ -50,7 +50,7 @@ function outgoingTxsOf(wallet: WalletResponse): string[] {
 const linkingTo = (others: readonly WalletResponse[]): Book => ({ ...emptyBook(), linked: others.map((other) => other.address.toLowerCase()) })
 
 export function portfolioOf(wallet: WalletResponse, method: Method, others: readonly WalletResponse[] = [], book: Book = linkingTo(others), failed: readonly string[] = []): PortfolioResponse {
-  const { view, positions, unread, totals, pnlStatus, points, holdComparison, questions, meter, withheld } = foldBook(wallet, others, method, book)
+  const { view, positions, unread, totals, pnlStatus, points, holdComparison, questions, meter, withheld, purchases } = foldBook(wallet, others, method, book)
   const missing = missingWallets(book, wallet, others)
   const linkedFailed = walletsBehind(book, wallet).filter((address) => failed.includes(address))
   return {
@@ -82,6 +82,7 @@ export function portfolioOf(wallet: WalletResponse, method: Method, others: read
     linkedReading: missing.filter((address) => !linkedFailed.includes(address)),
     linkedFailed,
     withheld,
+    purchases,
     marketChecked: wallet.marketChecked,
   }
 }
@@ -106,6 +107,7 @@ function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg {
     priceSource: leg.priceSource,
     priceNote: leg.priceNote,
     costLabel: leg.costLabel,
+    costSource: leg.purchaseSource ?? null,
     estimated: leg.estimated === true,
     partlyUnknown: leg.pieces !== undefined && leg.pieces.some((p) => p.costMicros === null) && leg.pieces.some((p) => p.costMicros !== null),
     blockNum: leg.blockNum,
