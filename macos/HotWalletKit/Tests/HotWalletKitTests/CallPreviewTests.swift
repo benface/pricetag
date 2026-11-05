@@ -241,8 +241,9 @@ private let wethText = weth.contract!.lowercased
         #expect(review.preview?.gives == [known("200", "USDC", usd: 200 * Money.dollar)])
         #expect(review.preview?.gets == [known("0.1", "ETH", usd: 300 * Money.dollar)])
         #expect(review.warnings.map(\.text) == [SiteWording.previewIsAnEstimate])
-        // What Touch ID asks about only says what's certain.
-        #expect(review.promptWords == "make a contract call")
+        // The window says what the estimate does, and what Touch ID asks about only says what's certain.
+        #expect(review.title == "Swap 200 USDC for about 0.1 ETH")
+        #expect(review.promptWords == "approve a request this app can't read")
     }
 
     @Test func aFailedSimulationFallsBackToTodaysWording() async throws {
