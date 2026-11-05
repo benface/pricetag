@@ -199,6 +199,10 @@ public enum Wording {
         "The data is still catching up, \(ms < 30_000 ? "less than a minute" : "about \(Format.duration(ms: ms))") behind the network. Anything newer isn't in these numbers yet."
     }
 
+    public static func updating(lastUpdate: String) -> String {
+        "Updating. These numbers are from \(lastUpdate)."
+    }
+
     public static func stale(lastUpdate: String) -> String {
         "These numbers aren't updating. Last update: \(lastUpdate)."
     }
