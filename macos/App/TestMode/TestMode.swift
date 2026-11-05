@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import HotWalletKit
+import KeyVault
 import PricetagKit
 import SwiftUI
 import Synchronization
@@ -149,6 +150,8 @@ enum TestScene: String, CaseIterable {
     case sendCAD = "send-cad"
     case sendKnown = "send-known"
     case sendWaiting = "send-waiting"
+    case siteConnect = "site-connect"
+    case siteUnlimited = "site-unlimited"
     case publishCost = "publish-cost"
     case publishCAD = "publish-cost-cad"
     case publishWaiting = "publish-cost-waiting"
@@ -164,7 +167,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .changeWallet, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletTopUp, .hotWalletTopUpAtCap, .hotWalletTopUpCAD,
-             .send, .sendCAD, .sendKnown, .sendWaiting, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
+             .send, .sendCAD, .sendKnown, .sendWaiting, .siteConnect, .siteUnlimited, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
         default: .titled
         }
@@ -298,6 +301,12 @@ enum TestScene: String, CaseIterable {
             // It never gets past the prompt, and there's no key behind it anyway.
             if isWaiting { Task { _ = await model.send() } }
             return TestScreen(view: AnyView(SendSheet(model: model)), isReady: { !isWaiting || model.isSending })
+        case .siteConnect, .siteUnlimited:
+            let approval: SiteApproval = self == .siteConnect
+                ? .sceneConnect(origin: "https://app.uniswap.org")
+                : .sceneUnlimitedApproval(origin: "https://app.uniswap.org", token: EthereumAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")!, spender: EthereumAddress("0x0000000000000000000000000000000000c0ffee")!)
+            // Its buttons answer nothing, so nothing can get as far as a key.
+            return TestScreen(view: AnyView(SiteApprovalView(approval: approval, waitingBehind: 0, usd: { hotWallet.usd($0) }, approve: { _ in }, reject: {}).frame(width: 480)), isReady: isReady)
         case .publishCost, .publishCAD, .publishWaiting:
             let draft = CostNoteDraft(wallet: "0x00000000000000000000000000000000000de301", txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", decimals: 6, units: "250000000")
             return TestScreen(view: AnyView(PublishCostSheet(draft: draft, currency: currency, typed: "250", publish: { _ in false }, problem: { nil }, isPublishing: { [self] in self == .publishWaiting })), isReady: isReady)
