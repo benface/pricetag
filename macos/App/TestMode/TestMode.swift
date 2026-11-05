@@ -230,6 +230,7 @@ enum TestScene: String, CaseIterable {
     case main
     case mainTransactions = "main-transactions"
     case mainDetails = "main-details"
+    case mainDetailsProof = "main-details-proof"
     case mainNarrow = "main-narrow"
     case mainSmall = "main-small"
     case mainMedium = "main-medium"
@@ -511,7 +512,7 @@ enum TestScene: String, CaseIterable {
     enum Chrome { case titled, hiddenTitleBar, none }
 
     /// Rendering draws the inspector's text in the wrong color in dark mode, and leaves out the title bar the site window leaves room for, so these only come from a real window.
-    var needsRealWindow: Bool { isAboutMotion || chrome == .hiddenTitleBar || rawValue.hasPrefix("main") || rawValue.hasPrefix("settings") || rawValue.hasPrefix("route") || self == .mainDetails || self == .mainFirstRunDetails || self == .mainDetailsCAD || self == .mainHoldDetails || self == .mainSmallestEnd }
+    var needsRealWindow: Bool { isAboutMotion || chrome == .hiddenTitleBar || rawValue.hasPrefix("main") || rawValue.hasPrefix("settings") || rawValue.hasPrefix("route") || self == .mainDetails || self == .mainDetailsProof || self == .mainFirstRunDetails || self == .mainDetailsCAD || self == .mainHoldDetails || self == .mainSmallestEnd }
 
     var chrome: Chrome {
         switch self {
@@ -772,7 +773,7 @@ enum TestScene: String, CaseIterable {
         if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
         // Once the window has its size, as when someone clicks. Before that it's too small for the details to fit beside the section.
         let opened: ExplainTarget? = switch self {
-        case .mainDetails, .mainDetailsCAD: .asset(TestMode.live?.asset ?? "AERO", .realized)
+        case .mainDetails, .mainDetailsProof, .mainDetailsCAD: .asset(TestMode.live?.asset ?? "AERO", .realized)
         case .mainHoldDetails: .holdComparison
         case .mainFirstRunDetails: .asset("ETH", .onchain)
         default: nil
@@ -843,6 +844,8 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainNoWalletAfterDeleting, .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainTransactions, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainUpdating, .mainUpdatingCAD, .mainTransactionsUpdating, .mainServerDown, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
+        case .mainDetailsProof:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases).environment(\.opensFirstProof, true)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainSmallestEnd:
             // Starts at the end of the page, because a screenshot can't scroll to it.
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)

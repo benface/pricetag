@@ -355,6 +355,10 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let txHash: String
     /// What the wallet already held before the first block read, which isn't a transaction.
     public let opening: Bool
+    /// What it did, in one plain sentence led by its amount in money.
+    public let summary: String
+    /// What about it isn't known, in words. nil when nothing is.
+    public let unknown: String?
     public let effect: String
     public let netting: String?
     /// What this leg was in USD and the rate that converted it, in words. nil when it's in USD.

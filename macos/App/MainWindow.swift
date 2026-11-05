@@ -33,6 +33,8 @@ struct MainWindow: View {
     @State private var exporting = false
     @State private var exportDocument: CSVDocument?
     @State private var exportError: String?
+    /// Asked for from the details sheet, which closes first.
+    @State private var resolvingAfterDetails: String?
 
     /// How small the window can get, with the sidebar closed. It closes by itself below `sidebarWidth`.
     static let minimumSize = CGSize(width: 480, height: 400)
@@ -67,7 +69,12 @@ struct MainWindow: View {
             width = newWidth
             if wasWide != isWide { columns = isWide ? .all : .detailOnly }
         }
-        .sheet(isPresented: detailsSheetBinding) { detailsSheet }
+        .sheet(isPresented: detailsSheetBinding, onDismiss: {
+            if let asset = resolvingAfterDetails {
+                resolvingAfterDetails = nil
+                navigation.resolve(asset)
+            }
+        }) { detailsSheet }
         // Coming back from the provider's page is when there's news, whichever section this is on.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await purchases.check() }
@@ -188,7 +195,7 @@ struct MainWindow: View {
     @ViewBuilder
     private var inspector: some View {
         if let target = navigation.target {
-            ExplanationPane(target: target, store: store)
+            ExplanationPane(target: target, store: store) { navigation.resolve($0) }
                 .safeAreaBar(edge: .top) { metricPicker(target) }
                 .inspectorColumnWidth(min: 300, ideal: 330, max: 520)
                 .toolbar {
@@ -213,7 +220,11 @@ struct MainWindow: View {
                 }
                 .padding(12)
                 Divider()
-                ExplanationPane(target: target, store: store)
+                // Questions open in a sheet of their own, so they wait for this one to close.
+                ExplanationPane(target: target, store: store) { asset in
+                    resolvingAfterDetails = asset
+                    navigation.target = nil
+                }
             }
             .frame(minWidth: 320, idealWidth: 420, minHeight: 320, idealHeight: 520)
         }
@@ -223,12 +234,16 @@ struct MainWindow: View {
     @ViewBuilder
     private func metricPicker(_ target: ExplainTarget) -> some View {
         if case .asset(let asset, let metric) = target, let position = portfolio?.positions.first(where: { $0.asset == asset }) {
-            Picker("Show", selection: Binding(get: { metric }, set: { navigation.target = .asset(asset, $0) })) {
-                ForEach(position.explainableMetrics, id: \.self) { Text($0.title).tag($0) }
+            // The pane has no title of its own for these, so this names both the asset and the number.
+            HStack(spacing: 8) {
+                Text(asset).font(.headline)
+                Picker("Show", selection: Binding(get: { metric }, set: { navigation.target = .asset(asset, $0) })) {
+                    ForEach(position.explainableMetrics, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
             }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .fixedSize()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
