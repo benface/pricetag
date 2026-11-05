@@ -64,6 +64,11 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
     const stalled = new AbortController()
     const watchdog = setTimeout(() => stalled.abort(new Error(`No new block in ${stallMs} ms`)), stallMs)
     let at = from
+    /**
+     * Blocks polling said that the stream hasn't confirmed. Amp only reports a reorg before `from`, so one after it would
+     * pass as new blocks. If the stream gets to the polled block with its hash, they held. If not, they count as replaced.
+     */
+    let unconfirmed = last && last.blockNum > from.blockNum ? { from: from.blockNum + 1, mark: last } : null
     try {
       for await (const range of streamed(sql, from, AbortSignal.any([signal, stalled.signal]))) {
         watchdog.refresh()
@@ -72,6 +77,11 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
         if (range.start <= at.blockNum && !isSameBlock) reorgFrom = Math.min(reorgFrom ?? range.start, range.start)
         if (!range.complete || isSameBlock) continue
         at = resume = { blockNum: range.end, hash: range.hash }
+        if (unconfirmed && range.end >= unconfirmed.mark.blockNum) {
+          const held = range.end === unconfirmed.mark.blockNum && range.hash === unconfirmed.mark.hash
+          if (!held) reorgFrom = Math.min(reorgFrom ?? unconfirmed.from, unconfirmed.from)
+          unconfirmed = null
+        }
         // Catching up on blocks polling already said, with nothing replaced.
         if (reorgFrom === null && last && range.end <= last.blockNum) continue
         last = at
