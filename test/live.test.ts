@@ -191,6 +191,130 @@ describe("following the chain", () => {
     await chain.stop()
   })
 
+  describe("while it only polls", () => {
+    /** A chain whose blocks a test can replace. The head is its highest block. */
+    function polledChain(through: number) {
+      const blocks = new Map<number, string>()
+      const extend = (to: number, tag = "a") => {
+        const from = Math.max(0, ...blocks.keys()) + 1
+        for (let n = from; n <= to; n++) blocks.set(n, `0x${tag}${n}`)
+      }
+      extend(through)
+      const asked: (readonly number[])[] = []
+      return {
+        blocks,
+        asked,
+        extend,
+        /** Replaces every block from `from` on and goes on to `to`. */
+        reorg(from: number, to: number) {
+          for (const n of blocks.keys()) if (n >= from) blocks.delete(n)
+          for (let n = from; n <= to; n++) blocks.set(n, `0xb${n}`)
+        },
+        config: {
+          readMark: async (after: number | null) => {
+            const head = Math.max(...blocks.keys())
+            return after !== null && head < after ? null : { blockNum: head, hash: blocks.get(head)! }
+          },
+          readHashes: async (wanted: readonly number[]) => {
+            asked.push(wanted)
+            return new Map(wanted.flatMap((n) => (blocks.has(n) ? [[n, blocks.get(n)!] as const] : [])))
+          },
+        },
+      }
+    }
+
+    it("says a deep reorg that made the chain longer, from after the newest block it said that's still there", async () => {
+      // Found on a real Amp (WORK-497): 343 blocks replaced, with the stream down, and no tick ever said so.
+      const chain = polledChain(100)
+      const follow = following(chain.config)
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 100, reorgFrom: null, via: "polling" })
+      chain.extend(200)
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 200, reorgFrom: null, via: "polling" })
+      chain.extend(300)
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 300, reorgFrom: null, via: "polling" })
+      chain.reorg(150, 643)
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 643, reorgFrom: 101, via: "polling" })
+      chain.extend(644, "b")
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 644, reorgFrom: null, via: "polling" })
+      await follow.stop()
+    })
+
+    it("goes back to the oldest block it said when none of them are still there", async () => {
+      const chain = polledChain(100)
+      const follow = following(chain.config)
+      await follow.next()
+      chain.extend(200)
+      await follow.next()
+      chain.reorg(50, 400)
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 400, reorgFrom: 100, via: "polling" })
+      await follow.stop()
+    })
+
+    it("says a reorg that left a shorter chain once it's there, and only then", async () => {
+      const chain = polledChain(100)
+      const follow = following(chain.config)
+      await follow.next()
+      chain.extend(200)
+      await follow.next()
+      chain.reorg(150, 180)
+      const next = follow.next()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      // The last block is gone rather than different, which a read that's behind looks like too.
+      chain.reorg(181, 200)
+      assert.deepEqual(await next, { kind: "block", blockNum: 200, reorgFrom: 101, via: "polling" })
+      await follow.stop()
+    })
+
+    it("checks the blocks the stream said once it's gone", async () => {
+      const hand = handStream()
+      const chain = polledChain(100)
+      const follow = following({ ...chain.config, stream: hand.stream, retryMs: 60_000 })
+      const first = follow.next()
+      await new Promise((resolve) => setTimeout(resolve, 2))
+      chain.extend(110)
+      hand.send(blockOf(110, 101, chain.blocks.get(110)!))
+      assert.deepEqual(await first, { kind: "block", blockNum: 110, reorgFrom: null, via: "stream" })
+      chain.reorg(105, 500)
+      hand.send(new Error("connection lost"))
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 500, reorgFrom: 101, via: "polling" })
+      await follow.stop()
+    })
+
+    it("keeps looking when the check fails, and says the reorg when it works again", async () => {
+      const chain = polledChain(100)
+      let failing = false
+      const follow = following({
+        ...chain.config,
+        readHashes: async (wanted) => {
+          if (failing) throw new Error("down")
+          return chain.config.readHashes(wanted)
+        },
+      })
+      await follow.next()
+      failing = true
+      chain.reorg(100, 200)
+      assert.deepEqual(await follow.next(), { kind: "down", message: "down" })
+      failing = false
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 200, reorgFrom: 100, via: "polling" })
+      await follow.stop()
+    })
+
+    it("asks about one block on each poll, and remembers no more than any reorg could need", async () => {
+      const chain = polledChain(100)
+      const follow = following(chain.config)
+      await follow.next()
+      chain.extend(700)
+      await follow.next()
+      chain.extend(1500)
+      await follow.next()
+      assert.ok(chain.asked.every((blocks) => blocks.length === 1))
+      chain.reorg(1000, 1600)
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 1600, reorgFrom: 701, via: "polling" })
+      assert.deepEqual(chain.asked.at(-1), [700, 1500])
+      await follow.stop()
+    })
+  })
+
   it("counts what polling said after the last streamed block as replaced, when the stream comes back past it on another chain", async () => {
     // Found in WORK-497's review: block 101 still holds, so Amp resumes with plain new blocks and reports nothing.
     const hand = handStream()
@@ -371,10 +495,14 @@ describe("Amp's stream on the wire", () => {
 
 /** A chain a test can move and reorg: what its tables hold, how far it's gone, and a stream of what happened. */
 function chainAt(block: number, tables: Tables, onQuery: (sql: string) => void = () => {}, follow: Partial<FollowConfig> = {}) {
-  const chain: { block: number; tables: Tables; through?: number } = { block, tables }
+  const chain: { block: number; tables: Tables; through?: number; forkedFrom: number } = { block, tables, forkedFrom: Infinity }
+  const hashOf = (n: number) => `${n >= chain.forkedFrom ? "b" : ""}${n}`.padStart(64, "0")
   const query: Query = async <T,>(sql: string) => {
     onQuery(sql)
-    if (sql.includes(".blocks")) return [{ block_num: String(chain.block), hash: `${chain.block}`.padStart(64, "0"), timestamp: 1_800_000_000_000 }] as T[]
+    // A test's stream says hashes of its own, so only a test with no stream can check them.
+    const asked = /\.blocks WHERE .*block_num IN \(([^)]*)\)/.exec(sql)
+    if (asked) return (follow.stream === null ? asked[1]!.split(", ").filter((n) => Number(n) <= chain.block).map((n) => ({ block_num: n, hash: hashOf(Number(n)) })) : []) as T[]
+    if (sql.includes(".blocks")) return [{ block_num: String(chain.block), hash: hashOf(chain.block), timestamp: 1_800_000_000_000 }] as T[]
     return fakeAmp(chain.tables, chain.through ?? chain.block).query<T>(sql)
   }
   const hand = handStream()
@@ -438,6 +566,31 @@ describe("watchWallet", () => {
   })
 
   // Before the fix, no update came, so this would wait forever.
+  it("replaces a reorg that made the chain longer, past the blocks it would re-read anyway, with no stream at all", { timeout: 5_000 }, async () => {
+    // Found on a real Amp (WORK-497): the replaced transfers stayed, and only the balance check said something was wrong.
+    const { chain, client } = chainAt(100, { legs: [], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(600, "0") }, undefined, { stream: null })
+    const updates = client.watchWallet(ADDRESS)
+    assert.deepEqual(legsOf((await updates.next()).value as WalletUpdate), [])
+
+    chain.block = 150
+    chain.tables = { ...chain.tables, legs: [creditAt(149, "dd", "1")], reference_prices: [{ ...REFERENCE, block_num: "149" }], balances: balancesThrough(600, "1") }
+    let update = (await updates.next()).value as WalletUpdate
+    while (update.blocks.toBlock < 150) update = (await updates.next()).value as WalletUpdate
+    assert.deepEqual(legsOf(update), ["149:0xdd:1"])
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    // 350 blocks past the old head, so a re-read of recent blocks doesn't reach the replaced transfer.
+    chain.forkedFrom = 120
+    chain.block = 500
+    chain.tables = { ...chain.tables, legs: [creditAt(120, "ee", "9")], reference_prices: [{ ...REFERENCE, block_num: "120" }, { ...REFERENCE, block_num: "500" }], balances: balancesThrough(600, "9") }
+    update = (await updates.next()).value as WalletUpdate
+    while (update.reorgFrom === null) update = (await updates.next()).value as WalletUpdate
+    assert.equal(update.reorgFrom, 101)
+    assert.equal(update.via, "polling")
+    assert.deepEqual(legsOf(update), ["120:0xee:9"])
+    await updates.return()
+  })
+
   it("replaces a transfer polling read from a chain that was replaced before the stream came back, past the blocks it would re-read anyway", { timeout: 5_000 }, async () => {
     const { chain, hand, client } = chainAt(100, { legs: [creditAt(100, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(700, "5") }, undefined, { retryMs: 5 })
     const updates = client.watchWallet(ADDRESS)

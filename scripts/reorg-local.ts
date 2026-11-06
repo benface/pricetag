@@ -320,7 +320,7 @@ watchRanges("priced_legs", followSql(DATASET), stop.signal, rewinds)
 const config = { url: FLIGHT, dataset: DATASET, baseDataset: RAW, startBlock: START, logger: { warn: (message: string) => log("sdk warn", { message: message.slice(0, 200) }) } }
 watchers = [
   watch("stream wallet", createPricetag(config).watchWallet(WALLET, { signal: stop.signal })),
-  // Polling only, which is what a client gets while the stream is down. It only finds a reorg at the head.
+  // Polling only, which is what a client gets while the stream is down.
   watch("polling wallet", pricetagClient(createQuery(FLIGHT, undefined), { ...config, follow: { pollMs: 1000 } }).watchWallet(WALLET, { signal: stop.signal })),
 ]
 await sleep(10_000)
