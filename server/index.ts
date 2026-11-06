@@ -3,10 +3,12 @@
 
 import { createServer } from "node:http"
 import { resolve } from "node:path"
+import { createQuery } from "@pricetag/sdk/internal"
 import { createApi, createSource } from "./app.ts"
 import { createCoinbase } from "./coinbase.ts"
-import { clientIpOf, gate, hostingOf, useStructuredLogs } from "./hosting.ts"
+import { checkoutLimit, clientIpOf, gate, hostingOf, useStructuredLogs } from "./hosting.ts"
 import { createHandler } from "./http.ts"
+import { laneOf } from "./lanes.ts"
 
 const hosting = hostingOf(process.env)
 if (hosting.hosted) useStructuredLogs(process.env)
@@ -14,9 +16,10 @@ if (hosting.hosted) useStructuredLogs(process.env)
 const maxWallets = process.env.PRICETAG_MAX_WALLETS ? Number(process.env.PRICETAG_MAX_WALLETS) : undefined
 if (maxWallets !== undefined && (!Number.isSafeInteger(maxWallets) || maxWallets <= 0)) throw new Error("PRICETAG_MAX_WALLETS must be a positive whole number")
 
-const created = createSource(process.env)
+// Locally it's one person, so one query at a time, as `createSource` makes it.
+const created = createSource(process.env, hosting.hosted && process.env.AMP_QUERY_URL ? createQuery(process.env.AMP_QUERY_URL, process.env.AMP_QUERY_TOKEN || undefined, { lanesAtOnce: hosting.ampLanes, laneOf }) : undefined)
 const onramp = createCoinbase(process.env)
-const api = gate(createApi(process.env, created, onramp, { clientIp: (req) => clientIpOf(req, hosting.clientIpHeader), maxWallets }), hosting, () => ({ amp: created !== null, buying: onramp !== null }))
+const api = gate(createApi(process.env, created, onramp, { clientIp: (req) => clientIpOf(req, hosting.clientIpHeader), maxWallets, limitCheckout: checkoutLimit(hosting) }), hosting, () => ({ amp: created !== null, buying: onramp !== null }))
 const server = createServer(createHandler(api, hosting.servesApp ? resolve(import.meta.dirname, "../dist") : null))
 
 server.listen(hosting.port, hosting.host, () => {

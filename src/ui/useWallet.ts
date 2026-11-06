@@ -63,24 +63,36 @@ export function followRead<T>(read: (signal: AbortSignal) => Promise<T>, { live,
   // Counts dropped connections, so a read that started before the last one can't clear its warning.
   let drops = 0
   let soon: ReturnType<typeof setTimeout> | undefined
+  // When the server said it'd have room again. New blocks wait for it, and the last read to fail reads again then.
+  let heldUntil = 0
 
   const refresh = () => {
     if (busy) {
       readAgain = readAgain || !connected
       return
     }
+    if (Date.now() < heldUntil) return
     busy = true
     readAgain = false
     clearTimeout(soon)
     const dropsAtStart = drops
     read(abort.signal)
       .then((value) => {
+        heldUntil = 0
         update((s) => ({ value, loading: false, readFailure: null, updateFailure: connected && drops === dropsAtStart ? null : s.updateFailure }))
         if (unfinished?.(value)) soon = setTimeout(refresh, READ_AGAIN_MS)
       })
       .catch((error: unknown) => {
         if (abort.signal.aborted) return
-        update((s) => ({ ...s, loading: false, readFailure: failureOf(error) }))
+        const failure = failureOf(error)
+        update((s) => ({ ...s, loading: false, readFailure: failure }))
+        if (failure.kind === "slowedDown") {
+          heldUntil = Date.now() + failure.retryAfter * 1000
+          soon = setTimeout(() => {
+            heldUntil = 0
+            refresh()
+          }, failure.retryAfter * 1000)
+        }
       })
       .finally(() => {
         busy = false

@@ -202,7 +202,7 @@ public final class ResolveModel {
             failure = imported.skipped > 0 ? "Found \(imported.withdrawals.count) withdrawals. \(imported.skipped) had no usable cost." : nil
             advance()
             return imported
-        } catch FetchError.rejected(let message) {
+        } catch FetchError.rejected(let message), FetchError.rateLimited(let message, _) {
             failure = message
         } catch {
             failure = "Couldn't read that file. Is the price service running?"

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { afterEach, beforeEach, describe, it, mock } from "node:test"
-import { ReadError, type ReadFailure } from "../src/core/read-failure.ts"
+import { ReadError, readResponse, type ReadFailure } from "../src/core/read-failure.ts"
+import { feedProblem, panelProblem } from "../src/core/wording.ts"
 import { followRead, liveError, type LiveState } from "../src/ui/useWallet.ts"
 
 const INVITE = "This server needs an invite."
@@ -61,6 +62,50 @@ function follow(live = true) {
     },
   }
 }
+
+describe("a server that says to slow down", () => {
+  const slowedDown = (retryAfter: number) => new ReadError({ kind: "slowedDown", said: "Too many requests from this invite.", retryAfter })
+
+  it("says so, skips new blocks while it waits, and reads again by itself when it's time", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"] })
+    FakeEvents.opened = []
+    ;(globalThis as { EventSource?: unknown }).EventSource = FakeEvents
+    const run = follow()
+    try {
+      await run.fail(slowedDown(60))
+      assert.equal(run.error()?.kind, "slowedDown")
+      run.events().fire("head")
+      assert.equal(run.reads.length, 1, "A new block doesn't ask again")
+      t.mock.timers.tick(59_000)
+      run.events().fire("head")
+      assert.equal(run.reads.length, 1)
+      t.mock.timers.tick(1000)
+      assert.equal(run.reads.length, 2, "Its minute's up")
+      await run.finish("back")
+      assert.equal(run.error(), null, "And the warning's gone once a read works")
+      assert.equal(run.state().value, "back")
+      run.events().fire("head")
+      assert.equal(run.reads.length, 3, "New blocks count again")
+    } finally {
+      run.stop()
+    }
+  })
+
+  it("reads the wait from the answer, and a minute if it doesn't say", async () => {
+    const answer = (headers: Record<string, string>) => new Response(JSON.stringify({ error: "Too many." }), { status: 429, headers })
+    await assert.rejects(readResponse(answer({ "retry-after": "17" })), (error: ReadError) => error.failure.kind === "slowedDown" && error.failure.retryAfter === 17)
+    await assert.rejects(readResponse(answer({})), (error: ReadError) => error.failure.kind === "slowedDown" && error.failure.retryAfter === 60)
+    await assert.rejects(readResponse(answer({ "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" })), (error: ReadError) => error.failure.kind === "slowedDown" && error.failure.retryAfter === 60)
+  })
+
+  it("is worded as something that clears by itself, without telling anyone to restart anything", () => {
+    const { message } = feedProblem({ kind: "slowedDown", said: "x", retryAfter: 60 }, "https://patina.example")
+    assert.match(message, /slow down/)
+    assert.match(message, /by themselves/)
+    assert.doesNotMatch(message, /restart/i)
+    assert.equal(panelProblem({ kind: "slowedDown", said: "Too many requests.", retryAfter: 60 }, "https://patina.example").message, "Too many requests.")
+  })
+})
 
 describe("a read and its updates failing", () => {
   let stops: (() => void)[] = []
