@@ -1690,7 +1690,7 @@ private func paddedAddress(_ text: String) -> String { word(String(text.dropFirs
             await Task.yield()
         }
         #expect(await base.isWaiting)
-        wallet.setRPC(otherURL)
+        await wallet.setRPC(otherURL)
         await base.releaseChainID()
         await check.value
 

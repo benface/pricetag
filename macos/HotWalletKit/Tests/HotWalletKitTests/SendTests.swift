@@ -397,6 +397,25 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         #expect(await approveSweep(on: rig.wallet) == .stopped(problem))
     }
 
+    /// An automatic sweep needs no Touch ID, so one can be going with none to give. A reason means it never asked.
+    @Test func sweepingWhileASweepIsOnItsWayDoesntAskForTouchID() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)]), presence: false)
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.count == 1)
+        #expect(await approveSweep(on: rig.wallet) == .stopped(HotWalletWording.lastOneOnItsWay))
+        #expect(await rig.chain.sent.count == 1)
+    }
+
+    @Test func sweepingBeforeTheLastSweepShowsUpDoesntAskForTouchID() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)]), presence: false)
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.wallet.tick()
+        #expect(rig.stateStore.saved.settledThroughBlock == 1001)
+        #expect(await approveSweep(on: rig.wallet) == .stopped(HotWalletWording.lastOneStillShowingUp))
+        #expect(await rig.chain.sent.count == 1)
+    }
+
     @Test func aSweepWithSomethingToMoveHasNoReasonItWouldnt() async throws {
         let rig = await Rig(funded)
         await rig.wallet.tick()

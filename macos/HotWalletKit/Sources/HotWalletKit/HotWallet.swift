@@ -685,9 +685,9 @@ public final class HotWallet {
     @discardableResult
     public func sweepEverything(in prompt: PresencePrompt? = nil) async -> Bool {
         guard let address, let destination = settings.sweepDestination else { return false }
-        // Touch ID is for approving something, and as of the last read there's nothing to approve. A read that does find something still asks, and then reads again.
-        if let whyNothing = sweepPreview?.whyNothing {
-            sweepProblem = whyNothing
+        // Touch ID is for approving something, and as of the last read there's nothing to approve, or it couldn't go yet. A read that does find something still asks, and then reads again.
+        if let whyNot = whySweepHasToWait(for: address, lastRead: snapshot) ?? sweepPreview?.whyNothing {
+            sweepProblem = whyNot
             return false
         }
         var isOnItsWay = false
@@ -703,8 +703,7 @@ public final class HotWallet {
             let snapshot = try await patientSnapshot(of: address)
             self.snapshot = snapshot
             guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
-            guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected(HotWalletWording.lastOneStillShowingUp) }
-            guard !(state.records[address] ?? []).contains(where: { $0.status == .pending }) else { throw ChainError.rejected(HotWalletWording.lastOneOnItsWay) }
+            if let wait = whySweepHasToWait(for: address, lastRead: snapshot) { throw ChainError.rejected(wait) }
             let everything = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: destination)
             if let whyNothing = HotWalletWording.whyNothingSweeps(everything) { throw ChainError.rejected(whyNothing) }
             pausedUntil = nil
@@ -733,6 +732,13 @@ public final class HotWallet {
             ))
         }
         return isOnItsWay
+    }
+
+    /// What's already gone has to land and show up first, so a sweep can't reuse its nonce or move it twice.
+    private func whySweepHasToWait(for address: EthereumAddress, lastRead: ChainSnapshot?) -> String? {
+        if let lastRead, lastRead.blockNumber < state.settledThroughBlock ?? 0 { return HotWalletWording.lastOneStillShowingUp }
+        if (state.records[address] ?? []).contains(where: { $0.status == .pending }) { return HotWalletWording.lastOneOnItsWay }
+        return nil
     }
 
     /// What the confirmation asks for, in its own terms. Only all of it being on its way is done, because done closes the sheet.
