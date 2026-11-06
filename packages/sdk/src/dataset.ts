@@ -63,6 +63,10 @@ export function txFilters(txs: readonly { block_num: number; tx_hash: string }[]
   return result
 }
 
+/**
+ * The newest block from `after` on. With no newer block to go from, pass the dataset's start block if there is one:
+ * Amp only skips files on a range, and on staging this query took 8 s with no bound and 0.4 s with one.
+ */
 export async function readHead(query: Query, dataset: string, after: number | null): Promise<Head | null> {
   const where = after === null ? "" : `WHERE block_num >= ${after}`
   const rows = await query<Row>(`SELECT block_num, timestamp FROM "${dataset}".blocks ${where} ORDER BY block_num DESC LIMIT 1`, 15_000)
@@ -153,7 +157,7 @@ export const SWAP_TABLES = ["legs", "unlisted_legs", "priced_legs"]
 /** The tables a pricing rule decides. Everything else is what happened on the chain, whichever rule prices it. */
 const PRICE_TABLES = ["priced_legs", "reference_prices"]
 
-export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined }) {
+export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock?: number | null | undefined }) {
   const ds = `"${config.dataset}"`
   // A fork of the pricing rule only needs the tables the rule reaches, so these can come from somewhere else.
   const prices = `"${config.priceDataset ?? config.dataset}"`
@@ -185,15 +189,22 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   }
 
   return {
-    head: (after: number | null) => readHead(query, config.baseDataset, after),
+    head: (after: number | null) => readHead(query, config.baseDataset, after ?? config.startBlock ?? null),
 
     /**
      * The newest block, in `after`..`head`, that all these tables have processed, or null if one has none.
      * Reads never go past this. A derived table can lag the chain, and a block read before it's processed looks empty.
      */
     async processedThrough(after: number, head: number, tables: readonly string[] = WALLET_TABLES): Promise<number | null> {
-      // Together, because this is on every wallet read, and a slow minute on staging makes each one take seconds.
-      const newest = await Promise.all(tables.map((table) => readOrEmpty(`SELECT block_num FROM ${PRICE_TABLES.includes(table) ? prices : ds}.${table} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`)))
+      const tableOf = (table: string) => `${PRICE_TABLES.includes(table) ? prices : ds}.${table}`
+      // One query matching no rows: Amp says how far all its tables have got, and a table can be done with a block it has no row for.
+      const end = await query.snapshotEnd?.(tables.map((table) => `SELECT block_num FROM ${tableOf(table)} WHERE false`).join(" UNION ALL ")).catch((error: unknown) => {
+        if (isNotStarted(error)) return after - 1
+        throw error
+      })
+      if (end !== undefined && end !== null) return end < after ? null : Math.min(end, head)
+      // Without that, a table's newest row is as far as it can be shown to have got.
+      const newest = await Promise.all(tables.map((table) => readOrEmpty(`SELECT block_num FROM ${tableOf(table)} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`)))
       let through = head
       for (const rows of newest) {
         if (!rows[0]) return null

@@ -1464,3 +1464,270 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
     }
 }
 #endif
+
+private let permit2Text = "0x000000000022d473030f116ddee9f6b43ac78ba3"
+private let permitSpender = "0x4444444444444444444444444444444444444444"
+private let farOff: UInt64 = 4_000_000_000
+
+private func typed(_ primaryType: String, _ types: String, chain: String = "8453", contract: String, _ message: String) -> JSONValue {
+    .string(#"{"domain":{"name":"Test","chainId":\#(chain),"verifyingContract":"\#(contract)"},"types":{\#(types)},"primaryType":"\#(primaryType)","message":\#(message)}"#)
+}
+
+private func eip2612(value: String = "250000000", nonce: String = "5", token: String = usdcText, deadline: String = "\(farOff)") -> JSONValue {
+    typed("Permit", #""Permit":[{"name":"owner","type":"address"},{"name":"spender","type":"address"},{"name":"value","type":"uint256"},{"name":"nonce","type":"uint256"},{"name":"deadline","type":"uint256"}]"#, contract: token, #"{"owner":"\#(hot)","spender":"\#(permitSpender)","value":"\#(value)","nonce":"\#(nonce)","deadline":"\#(deadline)"}"#)
+}
+
+private func permitSingle(nonce: String = "5") -> JSONValue {
+    typed("PermitSingle", #""PermitSingle":[{"name":"details","type":"PermitDetails"},{"name":"spender","type":"address"},{"name":"sigDeadline","type":"uint256"}],"PermitDetails":[{"name":"token","type":"address"},{"name":"amount","type":"uint160"},{"name":"expiration","type":"uint48"},{"name":"nonce","type":"uint48"}]"#, contract: permit2Text, #"{"details":{"token":"\#(usdcText)","amount":"7","expiration":"\#(farOff)","nonce":"\#(nonce)"},"spender":"\#(permitSpender)","sigDeadline":"\#(farOff)"}"#)
+}
+
+private func permitTransfer(nonce: String) -> JSONValue {
+    typed("PermitTransferFrom", #""PermitTransferFrom":[{"name":"permitted","type":"TokenPermissions"},{"name":"spender","type":"address"},{"name":"nonce","type":"uint256"},{"name":"deadline","type":"uint256"}],"TokenPermissions":[{"name":"token","type":"address"},{"name":"amount","type":"uint256"}]"#, contract: permit2Text, #"{"permitted":{"token":"\#(usdcText)","amount":"7"},"spender":"\#(permitSpender)","nonce":"\#(nonce)","deadline":"\#(farOff)"}"#)
+}
+
+private func paddedAddress(_ text: String) -> String { word(String(text.dropFirst(2))) }
+
+@MainActor
+@Suite struct SignedPermitTests {
+    private func sign(_ payload: JSONValue, on rig: SiteRig) async throws -> String {
+        let (task, approval) = await rig.start("eth_signTypedData_v4", .array([.string(hot), payload]))
+        await rig.bridge.approve(approval.id, acknowledged: true)
+        return try #require(try await task.value.get().string)
+    }
+
+    private func signedRig(_ payload: JSONValue, now: @escaping @Sendable () -> Date = { Date() }) async throws -> SiteRig {
+        let rig = SiteRig(now: now)
+        await rig.connect()
+        _ = try await sign(payload, on: rig)
+        await rig.chain.setChainID(.success(.string("0x2105")))
+        return rig
+    }
+
+    @Test func aPermitIsWrittenDownWithWhatItAllowsAndNeverTheSignature() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let signature = try await sign(eip2612(), on: rig)
+
+        let permit = try #require(rig.wallet.signedPermits.first)
+        let terms = try #require(permit.terms)
+        #expect(permit.site == site)
+        #expect(terms.kind == .allowance)
+        #expect(terms.token == EthereumAddress(usdcText))
+        #expect(terms.tokenSymbol == "USDC")
+        #expect(terms.spender == EthereumAddress(permitSpender))
+        #expect(terms.amount == "250 USDC")
+        #expect(terms.deadline == farOff)
+
+        let saved = try rig.stateStore.load()
+        #expect(saved.signedPermits?[hotAddress]?.count == 1)
+        let disk = String(decoding: try JSONEncoder().encode(saved), as: UTF8.self)
+        #expect(!disk.contains(signature.dropFirst(2)))
+        #expect(!disk.contains(signature.dropFirst(2).prefix(64)))
+        #expect(!disk.contains(signature.dropFirst(66).prefix(64)))
+    }
+
+    @Test func theSiteGetsNothingWhenTheNoteCantBeSaved() async {
+        let rig = SiteRig()
+        await rig.connect()
+        rig.stateStore.failSaves(with: CocoaError(.fileWriteUnknown))
+        let (task, approval) = await rig.start("eth_signTypedData_v4", .array([.string(hot), eip2612()]))
+        await rig.bridge.approve(approval.id, acknowledged: true)
+        guard case .failure = await task.value else { Issue.record("The site got a signature with no record of it."); return }
+        rig.stateStore.failSaves(with: nil)
+        #expect(rig.wallet.signedPermits.isEmpty)
+    }
+
+    @Test func signingTheSamePermitTwiceIsOnePermit() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        _ = try await sign(eip2612(), on: rig)
+        _ = try await sign(eip2612(), on: rig)
+        #expect(rig.wallet.signedPermits.count == 1)
+    }
+
+    @Test func aMessageThatGivesNothingAwayIsNotKept() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        _ = try await sign(eip2612(value: "0"), on: rig)
+        let (task, approval) = await rig.start("personal_sign", .array([.string("0x" + Hex.encode(Array("hello".utf8))), .string(hot)]))
+        await rig.bridge.approve(approval.id, acknowledged: true)
+        _ = try await task.value.get()
+        #expect(rig.wallet.signedPermits.isEmpty)
+    }
+
+    @Test func onlyLookingLikeAPermitKeepsItWithNothingClaimedAboutIt() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        _ = try await sign(permitJSON(domainExtra: #","verifyingContract":"\#(usdcText)""#), on: rig)
+        let permit = try #require(rig.wallet.signedPermits.first)
+        #expect(permit.terms == nil)
+        let reads = await rig.chain.reads
+        await rig.wallet.checkSignedPermits()
+        #expect(await rig.chain.reads == reads)
+        #expect(rig.wallet.signedPermits.count == 1)
+    }
+
+    @Test func aNonceThatsMovedPastAPermitProvesItCantBeUsed() async throws {
+        let rig = try await signedRig(eip2612(nonce: "5"))
+        let call = usdcText + "0x7ecebe00" + paddedAddress(hot)
+        await rig.chain.answerCall(call, .success(.string("0x" + word("5"))))
+        await rig.wallet.checkSignedPermits()
+        #expect(rig.wallet.permitChecks.values.first == .notUsed)
+        #expect(rig.wallet.signedPermits.count == 1)
+
+        await rig.chain.answerCall(call, .success(.string("0x" + word("6"))))
+        await rig.wallet.checkSignedPermits()
+        #expect(rig.wallet.signedPermits.isEmpty)
+        #expect(try rig.stateStore.load().signedPermits?[hotAddress]?.isEmpty == true)
+    }
+
+    @Test func permit2AllowanceReadsItsOwnNonce() async throws {
+        let rig = try await signedRig(permitSingle(nonce: "5"))
+        let call = permit2Text + "0x927da105" + paddedAddress(hot) + paddedAddress(usdcText) + paddedAddress(permitSpender)
+        // A big amount and date don't matter. Only the last word is the nonce.
+        await rig.chain.answerCall(call, .success(.string("0x" + word("ffff") + word("ffff") + word("5"))))
+        await rig.wallet.checkSignedPermits()
+        #expect(rig.wallet.signedPermits.count == 1)
+        await rig.chain.answerCall(call, .success(.string("0x" + word("0") + word("0") + word("6"))))
+        await rig.wallet.checkSignedPermits()
+        #expect(rig.wallet.signedPermits.isEmpty)
+    }
+
+    @Test func permit2TransferReadsItsOwnBit() async throws {
+        // 0x1ff is bit 255 of word 1.
+        let rig = try await signedRig(permitTransfer(nonce: "511"))
+        let call = permit2Text + "0x4fe02b44" + paddedAddress(hot) + word("1")
+        // Every bit but that one.
+        await rig.chain.answerCall(call, .success(.string("0x7f" + String(repeating: "ff", count: 31))))
+        await rig.wallet.checkSignedPermits()
+        #expect(rig.wallet.permitChecks.values.first == .notUsed)
+        await rig.chain.answerCall(call, .success(.string("0x80" + String(repeating: "00", count: 31))))
+        await rig.wallet.checkSignedPermits()
+        #expect(rig.wallet.signedPermits.isEmpty)
+    }
+
+    @Test func noAnswerIsNeverProof() async throws {
+        let rig = try await signedRig(eip2612())
+        let call = usdcText + "0x7ecebe00" + paddedAddress(hot)
+        for answer: RPCAnswer in [.failure(SiteError(code: 3, message: "execution reverted")), .success(.string("0x")), .success(.string("0xread")), .success(.null)] {
+            await rig.chain.answerCall(call, answer)
+            await rig.wallet.checkSignedPermits()
+            #expect(rig.wallet.signedPermits.count == 1)
+            #expect(rig.wallet.permitChecks.values.first == .couldntCheck)
+        }
+    }
+
+    @Test func aNodeOnAnotherChainIsNeverProof() async throws {
+        let rig = try await signedRig(eip2612())
+        await rig.chain.setChainID(.success(.string("0x1")))
+        await rig.chain.answerCall(usdcText + "0x7ecebe00" + paddedAddress(hot), .success(.string("0x" + word("ff"))))
+        await rig.wallet.checkSignedPermits()
+        #expect(rig.wallet.signedPermits.count == 1)
+        #expect(rig.wallet.permitChecks.values.first == .couldntCheck)
+    }
+
+    @Test func aTokenOffTheListIsNeverAsked() async throws {
+        let stranger = "0x5555555555555555555555555555555555555555"
+        let rig = try await signedRig(eip2612(token: stranger))
+        await rig.chain.answerCall(stranger + "0x7ecebe00" + paddedAddress(hot), .success(.string("0x" + word("ff"))))
+        await rig.wallet.checkSignedPermits()
+        #expect(rig.wallet.signedPermits.count == 1)
+        #expect(rig.wallet.permitChecks.values.first == .couldntCheck)
+        #expect(await rig.chain.reads.contains("eth_call") == false)
+    }
+
+    @Test func anExpiredPermitIsNoLongerListedAndIsForgotten() async throws {
+        let clock = TestClock()
+        clock.now = Date(timeIntervalSince1970: 1_000)
+        let rig = try await signedRig(eip2612(deadline: "2000"), now: { clock.now })
+        #expect(rig.wallet.signedPermits.count == 1)
+        clock.now = Date(timeIntervalSince1970: 2_000)
+        #expect(rig.wallet.signedPermits.count == 1)
+        clock.now = Date(timeIntervalSince1970: 2_001)
+        #expect(rig.wallet.signedPermits.isEmpty)
+        await rig.wallet.checkSignedPermits()
+        #expect(try rig.stateStore.load().signedPermits?[hotAddress]?.isEmpty == true)
+    }
+
+    @Test func aDeadlinePastAnyCalendarHasNoEnd() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        _ = try await sign(eip2612(deadline: "115792089237316195423570985008687907853269984665640564039457584007913129639935"), on: rig)
+        #expect(rig.wallet.signedPermits.first?.terms?.deadline == nil)
+        #expect(rig.wallet.signedPermits.first?.hasExpired(at: .distantFuture) == false)
+    }
+
+    @Test func recordsFromBeforeThisStillLoad() throws {
+        let old = #"{"records":[],"retired":[],"sweptGains":[],"acknowledged":[]}"#
+        #expect(try JSONDecoder().decode(DeviceWalletState.self, from: Data(old.utf8)).signedPermits == nil)
+    }
+
+    @Test func whatLimitsEachKind() throws {
+        let usdc = try #require(EthereumAddress(usdcText))
+        let spender = try #require(EthereumAddress(permitSpender))
+        func stop(_ kind: PermitSummary.Kind) -> String { SignedPermit.Terms(kind: kind, token: usdc, tokenSymbol: "USDC", spender: spender, amount: "1 USDC", deadline: nil).howToStop }
+        #expect(stop(.allowance) == "Moving USDC to another of your wallets protects what you move, but doesn't cancel this: it stays valid, so any of it that comes back to this wallet could still be taken.")
+        #expect(stop(.permit2Allowance).hasPrefix("To stop this, revoke Permit2's approval for USDC"))
+        #expect(stop(.permit2Transfer) == stop(.permit2Allowance))
+    }
+
+    @Test func changingTheNodeDuringACheckNeverUsesTheOneThatWasntChecked() async throws {
+        let base = HeldChainIDNode(isBase: true)
+        let other = HeldChainIDNode(isBase: false)
+        let otherURL = try #require(URL(string: "https://ethereum.example.invalid"))
+        let permit = SignedPermit(id: "pending", site: site, signedAt: .now, terms: .init(kind: .permit2Transfer, token: try #require(EthereumAddress(usdcText)), tokenSymbol: "USDC", spender: try #require(EthereumAddress(permitSpender)), amount: "1 USDC", deadline: nil))
+        let store = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hotAddress
+        state.signedPermits = [hotAddress: [permit]]
+        try store.save(state)
+        let portfolios = ScriptedPortfolios(.failure(.unreachable))
+        let wallet = HotWallet(signer: FakeSigner(keys: [hotAddress]), settingsStore: MemorySettingsStore(), stateStore: store, presence: FakePresence(allows: true), portfolioSource: { portfolios }, makeChain: { $0 == otherURL ? other : base })
+
+        let check = Task { await wallet.checkSignedPermits() }
+        for _ in 0..<10_000 {
+            if await base.isWaiting { break }
+            await Task.yield()
+        }
+        #expect(await base.isWaiting)
+        wallet.setRPC(otherURL)
+        await base.releaseChainID()
+        await check.value
+
+        #expect(wallet.signedPermits.map(\.id) == ["pending"])
+        #expect(wallet.permitChecks["pending"] == .notUsed)
+        #expect(try store.load().signedPermits?[hotAddress]?.map(\.id) == ["pending"])
+        #expect(await !other.reads.contains("eth_call"))
+    }
+}
+
+/// A node that holds Base's chain ID until told to answer, and says every nonce on any other chain is used.
+private actor HeldChainIDNode: ChainClient {
+    let isBase: Bool
+    private var waiter: CheckedContinuation<RPCAnswer, Never>?
+    private(set) var reads: [String] = []
+
+    init(isBase: Bool) { self.isBase = isBase }
+
+    var isWaiting: Bool { waiter != nil }
+
+    func releaseChainID() {
+        waiter?.resume(returning: .success(.string("0x2105")))
+        waiter = nil
+    }
+
+    func snapshot(of address: EthereumAddress) throws -> ChainSnapshot { throw ChainError.unreadable }
+    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) throws -> UInt64 { throw ChainError.unreadable }
+    func send(_ transaction: SignedTransaction) throws { throw ChainError.unreadable }
+    func receipt(of hash: String) -> Receipt? { nil }
+    func l1Fee(ofPayload payload: [UInt8]) throws -> UInt128 { throw ChainError.unreadable }
+
+    func read(_ method: String, _ parameters: JSONValue) async -> RPCAnswer {
+        reads.append(method)
+        if method == "eth_chainId" {
+            if isBase { return await withCheckedContinuation { waiter = $0 } }
+            return .success(.string("0x1"))
+        }
+        return .success(.string("0x" + String(repeating: "0", count: 63) + (isBase ? "0" : "1")))
+    }
+}

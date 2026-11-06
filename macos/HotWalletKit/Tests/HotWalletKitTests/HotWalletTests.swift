@@ -84,6 +84,15 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.settings.capInDollars == 25)
     }
 
+    @Test func itsValueCountsWhatsKeptForGasLikeEverywhereElse() async throws {
+        // 0.0000007 ETH, all of it kept for gas, so none of it counts toward the cap.
+        let rig = await Rig(snapshot(eth: 700_000_000_000))
+        await rig.wallet.tick()
+        #expect(rig.wallet.plan?.valueUsdMicros == 0)
+        let value = try #require(rig.wallet.valueUsdMicros)
+        #expect(rig.wallet.money(value) == "$0.0021")
+    }
+
     @Test func refusesToSignOnAnotherChain() async throws {
         let rig = await Rig(snapshot(eth: oneEth, tokens: [usdc: usdcUnits(500)], chainID: 1))
         await rig.wallet.tick()

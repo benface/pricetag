@@ -424,6 +424,8 @@ public struct MessageReview: Equatable, Sendable {
     let signable: SignableMessage
     /// What a permit allows, when it's one this app can read. Then `body` is only there for anyone who wants to check it.
     public var permit: PermitSummary?
+    /// It lets someone act for this wallet later, whether or not this app can read how.
+    var isPermitLike = false
 }
 
 extension MessageReview {
@@ -462,7 +464,7 @@ extension MessageReview {
         let headline = permit?.headline ?? "Sign this message"
         // A name with anything in it that `shown` would change is left out, since the title has no room to explain it.
         let title = permit == nil ? name.flatMap { Self.shown($0) == $0 ? "Sign this for \($0)" : nil } ?? headline : headline
-        self.init(headline: headline, title: title, body: Self.pretty(data.message, indent: 0), contract: contract, warnings: warnings, signable: try data.signable(), permit: permit)
+        self.init(headline: headline, title: title, body: Self.pretty(data.message, indent: 0), contract: contract, warnings: warnings, signable: try data.signable(), permit: permit, isPermitLike: Self.looksLikeAPermit(data))
     }
 
     /// Line breaks are fine. Direction overrides, zero-width characters and the like can make a message read as something it isn't.

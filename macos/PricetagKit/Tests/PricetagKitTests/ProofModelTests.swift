@@ -26,7 +26,7 @@ import Testing
 
         let passed = try resource("verification", as: Verification.self)
         #expect(passed.status == .passed)
-        #expect(passed.checks.count == 4)
+        #expect(passed.checks.count == 6)
         #expect(passed.checks.allSatisfy { $0.status == .passed })
 
         let failed = try resource("verification-failed", as: Verification.self)
