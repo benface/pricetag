@@ -17,7 +17,7 @@ import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from 
 import { createCoinbase } from "./coinbase.ts"
 import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onramp.ts"
 import { createRates, readPaidRates } from "./rates.ts"
-import { createDepositReader } from "./block.ts"
+import { createBlockHashReader, createDepositReader } from "./block.ts"
 import { warnOfNewAggregators, warnOfNewRateAggregators } from "./feeds.ts"
 import { createManifestReader, createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
 import { feedRounds, rawSource, resolvingSource, settledL1Fees, sharedReads, updateRounds, type SharedReads } from "./source.ts"
@@ -91,6 +91,7 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
     baseDataset,
     dataset: env.PRICETAG_DATASET ? { name: env.PRICETAG_DATASET, reference: pin ? "pricetag" : env.PRICETAG_DATASET, hash: pin ? env.PRICETAG_DATASET_HASH! : null } : null,
     readDeposits: createDepositReader(env.BASE_RPC_URL || DEFAULT_RPC_URL),
+    readBlockHash: createBlockHashReader(env.BASE_RPC_URL || DEFAULT_RPC_URL),
     readManifestHash: createManifestReader(env.AMP_ADMIN_URL || `${env.AMP_QUERY_URL}/controller`, env.AMP_QUERY_TOKEN || undefined),
   })
   if (env.PRICETAG_DATASET) {
@@ -839,7 +840,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         sendAmpError(res, error, "Couldn't read this block.")
         return true
       }
-      if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits, checkedUpdate))
+      if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits, checkedUpdate, read.nodeHash))
       else sendJson(res, 404, { error: "Amp doesn't have this block." })
       return true
     }
