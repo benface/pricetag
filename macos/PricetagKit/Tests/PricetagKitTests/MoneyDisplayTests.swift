@@ -65,9 +65,19 @@ struct MoneyDisplayTests {
 
 private actor Rates: PortfolioSource {
     var answer: Result<String?, FetchError>
+    /// What it says from its second answer on.
+    let then: Result<String?, FetchError>?
     var asked: [CurrencyCode] = []
+    var askedAt: [ContinuousClock.Instant] = []
+    let rateTakes: Duration?
+    let rulesTake: Duration?
 
-    init(_ answer: Result<String?, FetchError>) { self.answer = answer }
+    init(_ answer: Result<String?, FetchError>, then: Result<String?, FetchError>? = nil, rateTakes: Duration? = nil, rulesTake: Duration? = nil) {
+        self.answer = answer
+        self.then = then
+        self.rateTakes = rateTakes
+        self.rulesTake = rulesTake
+    }
 
     func say(_ answer: Result<String?, FetchError>) { self.answer = answer }
 
@@ -75,7 +85,16 @@ private actor Rates: PortfolioSource {
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
     func currentRate(currency: CurrencyCode) async throws -> String? {
         asked.append(currency)
+        askedAt.append(.now)
+        let answer = self.answer
+        if let then { self.answer = then }
+        // Its answer still arrives if the read's stopped, as one can that's already on its way.
+        if let rateTakes { try? await Task.sleep(for: rateTakes) }
         return try answer.get()
+    }
+    func rules() async throws -> [PricingRule] {
+        if let rulesTake { try await Task.sleep(for: rulesTake) }
+        return []
     }
 }
 
@@ -142,6 +161,152 @@ struct CurrentRateTests {
         await source.say(.success("1400000"))
         for _ in 0..<400 where !store.moneyDisplay.isConverted { try await Task.sleep(for: .milliseconds(5)) }
         #expect(store.moneyDisplay == MoneyDisplay(main: .CAD, rateMicros: "1400000"))
+    }
+
+    @Test func aServerThatSaysToWaitIsLeftAloneUntilThen() async throws {
+        let source = Rates(.failure(.rateLimited("Too many requests.", retryAfter: 1)), then: .success("1400000"))
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        defaults.set("CAD", forKey: "currency")
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, rateRetryDelay: .milliseconds(10))
+        store.start()
+        defer { store.stop() }
+        for _ in 0..<2000 where !store.moneyDisplay.isConverted { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(store.moneyDisplay == MoneyDisplay(main: .CAD, rateMicros: "1400000"))
+        let askedAt = await source.askedAt
+        #expect(askedAt.count == 2)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+    }
+
+    private func untilAsked(_ source: Rates, times: Int) async throws {
+        for _ in 0..<2000 where await source.asked.count < times { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(await source.asked.count >= times)
+    }
+
+    private static let saysToWait: Result<String?, FetchError> = .failure(.rateLimited("Too many requests.", retryAfter: 60))
+
+    @Test func aRuleThatsGoneStartingOverDoesntEndAWait() async throws {
+        let source = Rates(.failure(.rateLimited("Too many requests.", retryAfter: 1)), then: .success("1400000"), rulesTake: .milliseconds(100))
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        defaults.set("CAD", forKey: "currency")
+        defaults.set("gone", forKey: "pricingRule")
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source })
+        store.start()
+        defer { store.stop() }
+        for _ in 0..<2000 where !store.moneyDisplay.isConverted { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(store.selectedRule == nil)
+        #expect(store.moneyDisplay == MoneyDisplay(main: .CAD, rateMicros: "1400000"))
+        let askedAt = await source.askedAt
+        #expect(askedAt.count == 2)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+    }
+
+    @Test func changingACurrencyDoesntEndAWait() async throws {
+        let source = Rates(Self.saysToWait)
+        let store = store(source)
+        store.start()
+        defer { store.stop() }
+        try await untilAsked(source, times: 1)
+        try await Task.sleep(for: .milliseconds(20))
+        store.setCurrency(.EUR)
+        store.setCurrency(.CAD)
+        store.refresh()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await source.asked.count == 1)
+    }
+
+    @Test func aWaitEndsWithTheInviteItWasFor() async throws {
+        let source = Rates(Self.saysToWait)
+        let store = store(source)
+        store.start()
+        defer { store.stop() }
+        try await untilAsked(source, times: 1)
+        try await Task.sleep(for: .milliseconds(20))
+        store.setInvite("another")
+        try await untilAsked(source, times: 2)
+    }
+
+    @Test func aRateStillGoesOnTimeAfterStartingOverDuringAWait() async throws {
+        let source = Rates(.success("1400000"))
+        let clock = Clock()
+        let store = store(source, clock: clock)
+        await store.readRate()
+        await source.say(Self.saysToWait)
+        clock.now += 60 * 60 - 0.1
+        await store.readRate()
+        store.start()
+        defer { store.stop() }
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(store.moneyDisplay.isConverted)
+        for _ in 0..<400 where store.moneyDisplay.isConverted { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(!store.moneyDisplay.isConverted)
+        #expect(await source.asked.count == 2)
+    }
+
+    @Test func aRateAlreadyTooOldGoesWhenStartingOverDuringAWait() async throws {
+        let source = Rates(.success("1400000"))
+        let clock = Clock()
+        let store = store(source, clock: clock)
+        await store.readRate()
+        await source.say(.failure(.rateLimited("Too many requests.", retryAfter: 7200)))
+        await store.readRate()
+        clock.now += 60 * 60 + 1
+        await store.readRate()
+        #expect(!store.moneyDisplay.isConverted)
+        #expect(await source.asked.count == 2)
+    }
+
+    @Test func aRefusalForAReadThatWasStoppedStillCounts() async throws {
+        let source = Rates(Self.saysToWait, then: .success("1400000"), rateTakes: .milliseconds(100))
+        let store = store(source)
+        store.start()
+        try await untilAsked(source, times: 1)
+        store.stop()
+        try await Task.sleep(for: .milliseconds(20))
+        store.start()
+        defer { store.stop() }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await source.asked.count == 1)
+    }
+
+    @Test func theLongestWaitFromReadsAtOnceCounts() async throws {
+        let source = Rates(Self.saysToWait, then: .failure(.rateLimited("Too many requests.", retryAfter: 1)), rateTakes: .milliseconds(50))
+        let clock = Clock()
+        let store = store(source, clock: clock)
+        async let first = store.readRate()
+        async let second = store.readRate()
+        _ = await (first, second)
+        #expect(await source.asked.count == 2)
+        clock.now += 30
+        await store.readRate()
+        #expect(await source.asked.count == 2)
+    }
+
+    @Test func aRateGoesWhenItsTimeRunsOutDuringAWait() async throws {
+        let source = Rates(.success("1400000"))
+        let clock = Clock()
+        let store = store(source, clock: clock)
+        await store.readRate()
+        await source.say(.failure(.rateLimited("Too many requests.", retryAfter: 600)))
+        clock.now += 60 * 60 - 0.1
+        await store.readRate()
+        #expect(store.moneyDisplay.isConverted)
+        for _ in 0..<400 where store.moneyDisplay.isConverted { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(!store.moneyDisplay.isConverted)
+        #expect(await source.asked.count == 2)
+        store.stop()
+    }
+
+    @Test func stoppingEndsARatesCountdown() async throws {
+        let source = Rates(.success("1400000"))
+        let clock = Clock()
+        let store = store(source, clock: clock)
+        await store.readRate()
+        await source.say(.failure(.rateLimited("Too many requests.", retryAfter: 600)))
+        clock.now += 60 * 60 - 0.05
+        await store.readRate()
+        store.stop()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(store.moneyDisplay.isConverted)
     }
 
     @Test func aRateIsOnlyForItsOwnCurrency() async {

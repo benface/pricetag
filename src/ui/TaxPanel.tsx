@@ -4,7 +4,7 @@ import type { TaxReportResponse } from "../core/api.ts"
 import { failureOf, readResponse, type ReadFailure } from "../core/read-failure.ts"
 import type { Book } from "../core/book.ts"
 import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, savedOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
-import { METHOD_LABELS, METHOD_NAME, panelProblem } from "../core/wording.ts"
+import { METHOD_LABELS, METHOD_NAME, est, panelProblem } from "../core/wording.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
 
 const COUNTRY_KEY = "pricetag.taxCountry"
@@ -287,7 +287,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
               ) : null}
               <div>
                 <dt className="small muted">Total gain · {report.currency}</dt>
-                <dd>{report.gainMicros === null ? <span className="warn-text">⚠ Unknown</span> : formatSignedMoney(report.gainMicros, report.currency)}</dd>
+                <dd>{report.gainMicros === null ? <span className="warn-text">⚠ Unknown</span> : est(formatSignedMoney(report.gainMicros, report.currency), report.estimatedCount > 0)}</dd>
               </div>
             </dl>
             {report.unresolvedCount > 0 ? (

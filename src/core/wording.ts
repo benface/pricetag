@@ -252,6 +252,12 @@ export function excludedSentence(excluded: readonly { asset: string; reason: str
 }
 
 /** How this wallet did next to holding, when the two cover the same money. */
+/** An estimate has to look different from an exact value, wherever it's shown. */
+export const est = (text: string, isEstimate: boolean) => (isEstimate ? `≈${text}` : text)
+
+/** Said beside a number marked as an estimate, when nothing else there already says why. */
+export const ESTIMATE_LINE = "This is an estimate, because part of it rests on a market price or an exchange rate."
+
 export function holdDifferenceSentence(micros: string, currency: CurrencyCode, estimated = false): string {
   const difference = BigInt(micros)
   const about = estimated ? "About " : ""

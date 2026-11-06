@@ -313,6 +313,17 @@ struct CostArrivalTests {
         #expect(marks.lit == ["sent"])
     }
 
+    @Test func aBadValueIsUnknownAndNeverZero() {
+        #expect(Format.money("nope", .USD) == "Unknown")
+        #expect(Format.signedMoney("nope", .USD) == "Unknown")
+        #expect(Format.price("nope", .USD) == "Unknown")
+        #expect(Format.percent(bps: "nope") == "Unknown")
+        #expect(Format.ruleDifference("nope", format: "money", currency: .USD) == "Unknown")
+        #expect(Format.plainMoney("nope") == nil)
+        #expect(Format.chartValue("nope") == nil)
+        #expect(Format.chartValue("1500000") == 1.5)
+    }
+
     @Test func aSweepOfSeveralIsMarkedTogether() {
         var marks = NewRowMarks()
         marks.rowsChanged(from: ["old"], to: ["old", "eth"], isCovered: true)
