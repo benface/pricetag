@@ -48,7 +48,39 @@ const SENDS = new Set(["send", "withdrawal"])
 const READABLE: ReadonlySet<string> = new Set(["USD", "CAD"])
 const isReadable = (currency: string): currency is CurrencyCode => READABLE.has(currency)
 
-type Pool = { units: bigint; cost: bigint; known: boolean; currency: CurrencyCode | null }
+/**
+ * Bought at one moment, which is one lot however many rows it took, because a file doesn't say which of them came first. When
+ * they were at different prices, what part of it cost depends on that, so only all of it has a cost. Null: part of it has gone.
+ */
+type Lot = { at: number; units: bigint; cost: bigint | null; tied: boolean }
+
+type Pool = { units: bigint; cost: bigint; lots: Lot[]; known: boolean; currency: CurrencyCode | null }
+
+function addLot(lots: Lot[], at: number, units: bigint, cost: bigint) {
+  const last = lots.at(-1)
+  if (last?.at !== at) lots.push({ at, units, cost, tied: false })
+  else {
+    last.tied ||= last.cost === null || last.cost * units !== cost * last.units
+    last.units += units
+    last.cost = last.cost === null ? null : last.cost + cost
+  }
+}
+
+/** What the oldest of these units cost, which leaves the rest. Null when that can't be said. Rounding never loses any, because taking a whole lot takes all of its cost. */
+function takeOldest(lots: Lot[], units: bigint): bigint | null {
+  let total: bigint | null = 0n
+  for (let left = units; left > 0n; ) {
+    const lot = lots[0] as Lot
+    const taken = left < lot.units ? left : lot.units
+    const cost = lot.cost === null || (lot.tied && taken < lot.units) ? null : (lot.cost * taken) / lot.units
+    total = total === null || cost === null ? null : total + cost
+    lot.cost = lot.cost === null || cost === null ? null : lot.cost - cost
+    lot.units -= taken
+    left -= taken
+    if (lot.units === 0n) lots.shift()
+  }
+  return total
+}
 
 export function parseCoinbaseCsv(text: string): ExchangeImport | null {
   const lines = text.replace(/^﻿/, "").split(/\r?\n/)
@@ -76,7 +108,7 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
   }
   const typeOf = (cells: string[]) => (cells[at.type] ?? "").trim().toLowerCase()
   const poolOf = (asset: string) => {
-    const pool = pools.get(asset) ?? { units: 0n, cost: 0n, known: true, currency: null }
+    const pool = pools.get(asset) ?? { units: 0n, cost: 0n, lots: [], known: true, currency: null }
     pools.set(asset, pool)
     return pool
   }
@@ -109,15 +141,17 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
       else {
         pool.cost += total
         pool.currency = currency
+        addLot(pool.lots, time, units, total)
       }
       pool.units += units
     } else if (SELLS.has(type) || SENDS.has(type)) {
       const enough = pool.known && pool.currency !== null && units <= pool.units && pool.units > 0n
       const cost = enough ? (pool.cost * units) / pool.units : 0n
+      const oldest = enough ? takeOldest(pool.lots, units) : null
       if (SENDS.has(type)) {
         if (enough) {
           const to = (cells[at.notes] ?? "").match(/0x[0-9a-fA-F]{40}/)?.[0]
-          withdrawals.push({ exchange: "Coinbase", asset, units: units.toString(), at: new Date(time).toISOString(), cost: { micros: cost.toString(), currency: pool.currency as CurrencyCode }, toAddress: to && isAddress(to) ? normalizeAddress(to) : null })
+          withdrawals.push({ exchange: "Coinbase", asset, units: units.toString(), at: new Date(time).toISOString(), cost: { micros: cost.toString(), currency: pool.currency as CurrencyCode }, fifoCostMicros: oldest === null ? null : oldest.toString(), toAddress: to && isAddress(to) ? normalizeAddress(to) : null })
         } else skipped++
       }
       // More went out than this history shows coming in, so it's missing something, and no cost after this can be trusted.

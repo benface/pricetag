@@ -511,7 +511,7 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
     const FILE = `Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes
 2026-01-01T00:00:00Z,Buy,ETH,1,USD,$0,$0,$6000,$0,x
 2026-02-01T00:00:00Z,Send,ETH,1,USD,$0,$0,$0,$0,x`
-    const withdrawal = (at: string, micros: string) => ({ exchange: "Coinbase", asset: "ETH", units: (10n ** 18n).toString(), at, cost: { micros, currency: "USD" }, toAddress: null })
+    const withdrawal = (at: string, micros: string) => ({ exchange: "Coinbase", asset: "ETH", units: (10n ** 18n).toString(), at, cost: { micros, currency: "USD" }, fifoCostMicros: null, toAddress: null })
     const SAME_DAY = "2026-02-01T00:00:00.000Z"
     /** Whether all of it is inside what the panel shows, without scrolling. */
     const inSight = (session: string, selector: string) =>
