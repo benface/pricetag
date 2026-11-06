@@ -110,6 +110,21 @@ struct AccessibilityTreeTests {
         #expect(button.spelledOut == [spoken])
     }
 
+    /// Combining text into one element makes it static text, which keeps its marks somewhere else than the label.
+    @Test func anAddressCombinedIntoStaticTextIsSpelledOut() throws {
+        let address = "0x00000000000000000000000000000000000De302"
+        let view = VStack {
+            Text("0x00")
+            Text("De302")
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Spoken.address(address, after: "This wallet's address, "))
+        let elements = try AccessibilityTree.elements(of: view.frame(width: 640), settle: 0.05)
+        let found = try #require(elements.first { $0.value == "This wallet's address, \(Spoken.address(address))" }, "\(elements)")
+        #expect(found.role == "StaticText")
+        #expect(found.spelledOut == [Spoken.address(address)])
+    }
+
     /// A name can be anything, so nothing in one is read as a format or as Markdown.
     @Test func whatComesBeforeAnAddressIsSaidAsWritten() throws {
         let address = "0x00000000000000000000000000000000000De302"
