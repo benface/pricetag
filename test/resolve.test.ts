@@ -12,6 +12,7 @@ import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { linkByProof } from "../src/ui/link-proof.ts"
 import { allocateTaken, foldBook, isBalanced, microsOf, missingWallets, previewBook, readKey, readsMatching } from "../src/core/resolve.ts"
+import { combinedPortfolioOf } from "../src/core/combined.ts"
 import { E18, E6 } from "./support/units.ts"
 import { assertMatchesFixture } from "./support/fixtures.ts"
 
@@ -1279,6 +1280,46 @@ describe("asking as little as possible", () => {
     const after = foldBook(wallet(A, rows), [], "average", book({ [STRANGER]: { kind: "someone-else" } })).meter
     assert.deepEqual(after, { open: 1, answered: 1, waiting: 0 })
     assert.deepEqual(foldBook(wallet(A, rows), [], "average", book({ [STRANGER]: { kind: "someone-else" }, [C]: { kind: "someone-else" } })).meter, { open: 0, answered: 2, waiting: 0 })
+  })
+
+  describe("the meter, with one book answering for the demo and real wallets", () => {
+    const DEMO_SENDER = "0x000000000000000000000000000000000000be11"
+    const rows = send(10, "0x1", STRANGER, A, 100n * E6)
+    const real = wallet(A, rows, { mode: "raw" })
+    const realAnswers = (b: Book) => ({ ...b, senders: { ...b.senders, [STRANGER]: { kind: "someone-else" as const }, [A]: { kind: "mine" as const }, [C]: { kind: "mine" as const } }, costs: { ...b.costs, [costKey(A, "0x1:USDC")]: usd("1000000") } })
+    const demoAnswers = (b: Book) => ({ ...answerSender(answerSender(b, DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, { kind: "mine" }), DEMO_ADDRESS, DEMO_SENDER, { kind: "someone-else" }), costs: { ...b.costs, [costKey(DEMO_ADDRESS, "0xdemo:USDC")]: usd("1000000") } })
+    const answered = (focus: WalletResponse, b: Book, others: WalletResponse[] = []) => foldBook(focus, others, "average", b).meter.answered
+
+    it("doesn't count answers about real wallets on the demo", () => {
+      assert.equal(answered(DEMO_WALLET, realAnswers(emptyBook())), 0)
+    })
+
+    it("doesn't count the demo's answers on a real wallet, even the user's own", () => {
+      assert.equal(answered(real, realAnswers(emptyBook())), 3, "STRANGER, C and the cost")
+      assert.equal(answered(real, demoAnswers(realAnswers(emptyBook()))), 3)
+    })
+
+    it("still counts the demo's own answers on the demo, with real ones in the book", () => {
+      assert.equal(answered(DEMO_WALLET, demoAnswers(emptyBook()), [DEMO_SAVINGS_WALLET]), 3, "its other wallet, the sender and the cost")
+      assert.equal(answered(DEMO_WALLET, realAnswers(demoAnswers(emptyBook())), [DEMO_SAVINGS_WALLET]), 3)
+    })
+
+    it("counts a sender that sent to both, because it's an answer about each", () => {
+      const shared = wallet(A, send(10, "0x1", DEMO_SENDER, A, 100n * E6), { mode: "raw" })
+      const b = { ...emptyBook(), senders: { [DEMO_SENDER]: { kind: "someone-else" as const } } }
+      assert.equal(answered(shared, b), 1)
+      assert.equal(answered(DEMO_WALLET, b), 1)
+    })
+
+    it("doesn't count an answer about a wallet that's only being watched on another", () => {
+      const other = wallet(B, [], { mode: "raw" })
+      assert.equal(answered(other, { ...emptyBook(), senders: { [STRANGER]: { kind: "someone-else" } }, costs: { [costKey(A, "0x1:USDC")]: usd("1000000") } }), 0)
+    })
+
+    it("counts each read wallet's answers in All Yours", () => {
+      const both = combinedPortfolioOf([real, wallet(B, [], { mode: "raw" })], "average", realAnswers(emptyBook())).meter
+      assert.equal(both.answered, 3)
+    })
   })
 })
 

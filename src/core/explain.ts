@@ -1,7 +1,7 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
 import { CURRENCIES, TOKENS, TOKEN_FEEDS, formatAmount, formatMoney, formatPaid, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, shortHash, tokenByAddress, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
-import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unseenEthCause } from "./wording.ts"
+import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unrecordedSentence, unseenEthCause } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "price" | "value" | "return" | "realized" | "unrealized" | "onchain"
 
@@ -202,7 +202,7 @@ function onchainLines({ asset, decimals, reconciliation, effects }: Position): s
   const block = reconciliation.blockNum.toLocaleString("en-US")
   if (reconciliation.status === "reconciled") {
     const opening = effects.some(({ leg }) => leg.opening) ? "what it already held, plus every transaction since," : "its transactions"
-    return [`Matches the actual balance exactly: ${opening} add up to ${amount(reconciliation.actualQty)} at block ${block}.`]
+    return [`Matches the actual balance exactly: ${opening} add up to ${amount(reconciliation.actualQty)} at block ${block}.`, ...(reconciliation.unrecordedQty ? [unrecordedSentence(reconciliation.unrecordedQty, decimals, asset)] : [])]
   }
   const unconfirmed = effects.filter(({ leg }) => leg.unsettledCredit).map(({ leg }) => shortHash(leg.txHash))
   return [

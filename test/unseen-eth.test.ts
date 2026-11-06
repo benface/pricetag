@@ -4,7 +4,9 @@ import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, credi
 import { createWallets, readPayoutTxsAt, type Query, type ReadL1Fees, type Source } from "@pricetag/sdk/internal"
 import { portfolioOf } from "../src/core/portfolio.ts"
 import { costKey, emptyBook } from "../src/core/book.ts"
-import { describeEffect } from "../src/core/explain.ts"
+import { allBalancesMatch } from "../src/core/attention.ts"
+import { USD_CONTEXT, describeEffect, explainMetric } from "../src/core/explain.ts"
+import { ALL_BALANCES_MATCH } from "../src/core/wording.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { knownSender } from "../src/core/senders.ts"
 import { taxReportOf, taxRows } from "../src/core/tax.ts"
@@ -68,6 +70,7 @@ function chain(changes: Partial<Source> = {}, { rows = SWAP_ROWS, eth = plainEth
   return { source, wallets, ethRounds, payerReads }
 }
 
+const unseenAmount = (wallet: { legs: { id: string; delta: string }[] }, block: number) => wallet.legs.find((leg) => leg.id === `unseen:${block}:ETH`)?.delta
 const ethOf = (wallet: Parameters<typeof portfolioOf>[0]) => portfolioOf(wallet, "average").positions.find((p) => p.asset === "ETH")!
 const unseenLeg = (wallet: { legs: { id: string }[] }) => wallet.legs.find((leg) => leg.id === `unseen:${PAYOUT_BLOCK}:ETH`) as Awaited<ReturnType<ReturnType<typeof createWallets>["get"]>>["legs"][number]
 
@@ -259,6 +262,83 @@ describe("a deposit through the Base bridge", () => {
   })
 })
 
+describe("a fee missing from the rows, in a block where ETH arrived (WORK-612)", () => {
+  // The real case, from Ethereum: 10 ETH arrived, and the wallet's own transaction there has no gas row.
+  const BLOCK = 53526000
+  const ARRIVED = 10n * 10n ** 18n
+  const FEE = 1064253686682165n
+  const SENT = "0xa38c"
+  const sent: PayoutTx = { blockNum: BLOCK, txHash: SENT, from: ME, to: PAYOUT_CONTRACT, input: "" }
+  const eth = (block: number) => (block < BLOCK ? 0n : ARRIVED - FEE)
+  const read = (txs: PayoutTx[], rows: LegRow[] = []) => chain({ readPayoutTxs: async () => txs }, { rows, eth, head: BLOCK + 10 }).wallets.get(ME)
+  const onlyEth = (wallet: Parameters<typeof ethOf>[0]) => ethOf(wallet).reconciliation
+
+  it("doesn't let the arrival absorb it, so ETH shows the difference and the fee is reported as unknown", async () => {
+    const wallet = await read([sent])
+    assert.equal(wallet.legs.some((leg) => leg.id === `unseen:${BLOCK}:ETH`), false)
+    assert.deepEqual(wallet.gasUnknownTxs, [SENT])
+    const check = onlyEth(wallet)
+    assert.equal(check?.status, "incomplete")
+    assert.equal(check?.status === "incomplete" && check.differenceQty, (ARRIVED - FEE).toString())
+  })
+
+  it("counts a failed transaction too, because its sender still paid", async () => {
+    const wallet = await read([{ ...sent, failed: true }])
+    assert.deepEqual(wallet.gasUnknownTxs, [SENT])
+    assert.equal(onlyEth(wallet)?.status, "incomplete")
+  })
+
+  it("never names a failed transaction as who sent the ETH", () => {
+    assert.equal(payerOf([{ ...PAYOUT, failed: true }], ME, PAYOUT_AMOUNT.toString()), null)
+  })
+
+  it("leaves a transaction alone when its fee is on record", async () => {
+    const wallet = await read([sent], [row(BLOCK, SENT, ETH_ADDRESS, "debit", FEE, "gas")])
+    assert.deepEqual(wallet.gasUnknownTxs, [])
+    assert.equal(unseenAmount(wallet, BLOCK), ARRIVED.toString())
+    assert.equal(onlyEth(wallet)?.status, "reconciled")
+  })
+
+  it("leaves a deposit alone, which pays no fee here and brings the ETH with it", async () => {
+    const wallet = await read([{ ...sent, deposit: true }])
+    assert.deepEqual(wallet.gasUnknownTxs, [])
+    assert.equal(onlyEth(wallet)?.status, "reconciled")
+  })
+
+  it("leaves someone else's transaction alone", async () => {
+    const wallet = await read([{ ...sent, from: PAYOUT.from }])
+    assert.deepEqual(wallet.gasUnknownTxs, [])
+    assert.equal(onlyEth(wallet)?.status, "reconciled")
+  })
+
+  it("still says a match has an amount it can't confirm when the transactions can't be read", async () => {
+    const wallet = await chain({ readPayoutTxs: async () => Promise.reject(new Error("no answer")) }, { rows: [], eth, head: BLOCK + 10 }).wallets.get(ME)
+    const check = onlyEth(wallet)
+    assert.equal(check?.status, "reconciled")
+    assert.equal(check?.status === "reconciled" && check.unrecordedQty, (ARRIVED - FEE).toString())
+  })
+})
+
+describe("what a match says when ETH arrived with no record", () => {
+  it("says how much, and nothing on a wallet with none", async () => {
+    const check = ethOf(await chain().wallets.get(ME)).reconciliation
+    assert.equal(check?.status, "reconciled")
+    assert.equal(check?.status === "reconciled" && check.unrecordedQty, PAYOUT_AMOUNT.toString())
+    const recorded = [row(SWAP_BLOCK, "0xaa", ETH_ADDRESS, "credit", 5n, "eth")]
+    const plain = ethOf(await chain({}, { rows: recorded, eth: (block) => (block < SWAP_BLOCK ? 0n : 5n), usdc: 0n }).wallets.get(ME)).reconciliation
+    assert.equal(plain?.status, "reconciled")
+    assert.equal(plain?.status === "reconciled" && plain.unrecordedQty, undefined)
+  })
+
+  it("is in the headline and the details, because the match can't fail on that part", async () => {
+    const { positions } = foldBook((await chain().wallets.get(ME)) as WalletResponse, [], "average", emptyBook())
+    const sentence = "0.00206 ETH arrived with no transaction to show for it, so that part comes from the balance, and the match doesn't confirm it."
+    assert.equal(allBalancesMatch(positions, []), `${ALL_BALANCES_MATCH} ${sentence}`)
+    const lines = explainMetric(positions.find((p) => p.asset === "ETH")!, "onchain", USD_CONTEXT).lines
+    assert.ok(lines.includes(sentence), lines.join(" | "))
+  })
+})
+
 describe("what must never be credited", () => {
   const BLOCK = 500
   const account = ME
@@ -387,15 +467,23 @@ describe("searching the balance", () => {
 })
 
 describe("reading who's behind it", () => {
-  it("asks for successful transactions naming the wallet or sent by it, in those blocks", async () => {
+  it("asks for successful transactions naming the wallet, and any it sent, in those blocks", async () => {
     const queries: string[] = []
     const query = (async (sql: string) => {
       queries.push(sql)
-      return [{ block_num: "7", tx_hash: "ab", from: "cd", to: null, input: "ef" }]
+      return [
+        { block_num: "7", tx_hash: "ab", from: "cd", to: null, input: "ef", status: true, type: 2 },
+        { block_num: "7", tx_hash: "ac", from: "cd", to: null, input: "ef", status: false, type: 2 },
+        { block_num: "7", tx_hash: "ad", from: "cd", to: null, input: "ef", status: true, type: 126 },
+      ]
     }) as Query
-    assert.deepEqual(await readPayoutTxsAt(query, "edgeandnode/base_mainnet@0.0.2", ME, [7]), [{ blockNum: 7, txHash: "0xab", from: "0xcd", to: null, input: "ef" }])
+    assert.deepEqual(await readPayoutTxsAt(query, "edgeandnode/base_mainnet@0.0.2", ME, [7]), [
+      { blockNum: 7, txHash: "0xab", from: "0xcd", to: null, input: "ef" },
+      { blockNum: 7, txHash: "0xac", from: "0xcd", to: null, input: "ef", failed: true },
+      { blockNum: 7, txHash: "0xad", from: "0xcd", to: null, input: "ef", deposit: true },
+    ])
     assert.equal(queries.length, 1)
-    assert.match(queries[0]!, /status/)
+    assert.ok(queries[0]!.includes(`("from" = X'${ME.slice(2)}' OR (status AND strpos(`), "what it sent counts even when it failed, because it still paid")
     assert.ok(queries[0]!.includes(`strpos(encode(input, 'hex'), '${ME.slice(2)}') > 0`))
     assert.ok(queries[0]!.includes(`"from" = X'${ME.slice(2)}'`))
   })

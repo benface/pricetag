@@ -3,7 +3,7 @@
 
 import { describeError, type Logger } from "./amp.ts"
 import { LAST_2S_BLOCK, blockBefore, msBetweenBlocks, priceSampleBlocks, timestampOfBlock } from "./chain.ts"
-import { answerToMicros, buildPricedLegs, creditUnseenEth, derivePricedRows, isUnwrapClaim, oneWaySendBalanceBlocks, payerOf, settleUnwraps, unseenEthSearchBlocks, unwrapBalanceBlocks, type EthPayer, type GasUnknownTx, type LegRow, type PayoutTx, type PricedRow, type Reference } from "./legs.ts"
+import { answerToMicros, buildPricedLegs, creditUnseenEth, derivePricedRows, isUnwrapClaim, oneWaySendBalanceBlocks, payerOf, sentWithNoFee, settleUnwraps, unseenEthSearchBlocks, unwrapBalanceBlocks, type EthPayer, type GasUnknownTx, type LegRow, type PayoutTx, type PricedRow, type Reference } from "./legs.ts"
 import { WalletTooBigError, createRowBudget, rowsThatFit, type RowBudget } from "./memory.ts"
 import { MARKET_MAX_AGE_MS, markNeeds, marketPrice, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
 import { TOKEN_MARKET_RULES, tokenMarketPrice, type TokenActivity } from "./token-market.ts"
@@ -730,6 +730,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       if (unread.length > 0 && source.readPayoutTxs) {
         const txs = await source.readPayoutTxs(address, unread.map((row) => row.block_num))
         for (const { block_num, amount } of unread) wallet.ethPayers.set(block_num, payerOf(txs.filter((tx) => tx.blockNum === block_num), address, amount))
+        for (const { tx_hash, block_num } of sentWithNoFee(txs, wallet.rows, address)) wallet.gasUnknown.set(tx_hash, block_num)
       }
     } catch (error) {
       logger.warn(`Couldn't read what's behind ETH that arrived unseen: ${describeError(error)}`)
@@ -814,13 +815,16 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const ethBalances = new Map(cached?.ethBalances ?? [])
     const ethPayers = new Map(cached?.ethPayers ?? [])
     let replacedFrom = Number.POSITIVE_INFINITY
+    let abandoned = false
     const readNewRows = async () => {
       if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo || reorgable)) {
         const readFrom = cached ? Math.max(fromBlock, Math.min(settledThrough(cached.coveredTo) + 1, unsettled ?? Infinity)) : fromBlock
         replacedFrom = readFrom
         // Only a first read can bring in a whole history, and it can't say how much until it has.
         if (!cached) reservation.release = await budget.loading()
+        if (abandoned) return
         const window = await source.readWindow(address, readFrom, coveredTo)
+        if (abandoned) return
         rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
         if (rows.length > budget.maxRows) throw new WalletTooBigError(budget.maxRows)
         reservation.release?.()
@@ -841,12 +845,18 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const openingIsOld = readsBalances && (!isComplete(cached?.opening ?? null) || openingMayChange(cached, chain))
     const closingIsOld = readsBalances && (cached?.closing?.blockNum !== coveredTo || !isComplete(cached.closing) || reorgable)
     // None of these needs what another finds, and they're most of a read with nothing new, so they don't wait for each other.
+    const rowsRead = readNewRows()
     const [, openingRead, closing, latestReference] = await Promise.all([
-      readNewRows(),
+      rowsRead,
       openingIsOld ? readBalances(address, fromBlock - 1) : null,
       closingIsOld ? readBalances(address, coveredTo) : (cached?.closing ?? null),
       source.readLatestReference(head.blockNum),
-    ])
+    ]).catch(async (error: unknown) => {
+      // The read's reservation is given back when this refresh ends, so it can't end with the rows still taking one.
+      abandoned = true
+      await rowsRead.catch(() => {})
+      throw error
+    })
 
     const l1Fees = new Map([...(cached?.l1Fees ?? [])].filter(([, fee]) => unsettled === null || fee.blockNum < unsettled))
     const claimBlocks = new Set(unwrapBalanceBlocks(rows))
@@ -932,7 +942,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
    * busy wallet each one takes seconds. Only the last one is kept, because it's about as big as the wallet.
    */
   function currentOf(address: string, wallet: Cached) {
-    const stamp = `${wallet.ethBalances.size}:${wallet.ethPayers.size}:${wallet.references.size}:${priceRevision}`
+    const stamp = `${wallet.ethBalances.size}:${wallet.ethPayers.size}:${wallet.gasUnknown.size}:${wallet.references.size}:${priceRevision}`
     if (last?.wallet !== wallet || last.stamp !== stamp) last = { wallet, stamp, response: responseOf(address, wallet) }
     return last
   }

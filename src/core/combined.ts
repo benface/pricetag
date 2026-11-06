@@ -94,6 +94,7 @@ function combinedCheck(checks: readonly (Reconciliation | null)[]): Reconciliati
     computedQty: sum(counted.map((check) => check.computedQty)),
     actualQty: sum(counted.map((check) => check.actualQty)),
     differenceQty: sum(counted.map((check) => check.differenceQty)),
+    ...(counted.some((check) => check.unrecordedQty) ? { unrecordedQty: sum(counted.map((check) => check.unrecordedQty ?? "0")) } : {}),
     ...(counted.some((check) => check.unseenEth) ? { unseenEth: counted.flatMap((check) => check.unseenEth ?? []) } : {}),
   }
 }
@@ -279,7 +280,7 @@ export function combinedPortfolioOf(read: readonly WalletResponse[], method: Met
     points,
     holdComparison,
     questions,
-    meter: { ...meterOf(questions, linking, (folded[0] as Folded).wallet, waiting), waiting },
+    meter: { ...meterOf(questions, linking, (folded[0] as Folded).wallet, read, waiting), waiting },
     linkedReading: [...unread.reading],
     linkedFailed: [...unread.failed],
     withheld: [...withheld.values()],

@@ -34,6 +34,18 @@ public enum DeviceFlow {
         return digits.dropLast(6) + (fraction.isEmpty ? "" : ".\(fraction)")
     }
 
+    /// A server on this Mac serves these pages itself, and any other only answers the API, so the app has to.
+    public static func needsItsOwnPage(_ link: URL) -> Bool {
+        !link.isOnThisMac
+    }
+
+    /// The same request, on the page at `page`.
+    public static func link(_ link: URL, on page: URL) -> URL? {
+        guard let query = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems, var parts = URLComponents(url: page, resolvingAgainstBaseURL: false) else { return nil }
+        parts.queryItems = query
+        return parts.url
+    }
+
     private static func link(_ server: URL, _ items: [URLQueryItem]) -> URL? {
         guard var parts = URLComponents(url: server, resolvingAgainstBaseURL: false) else { return nil }
         parts.queryItems = items
