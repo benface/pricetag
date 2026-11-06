@@ -237,6 +237,44 @@
     "nothingLeft": "That's all for now",
     "moneyUnaffected": "Your money isn't affected."
   },
+  "finishNotes": [
+    {
+      "open": 5,
+      "answered": 0,
+      "waiting": 0,
+      "text": "Nothing's answered yet, so PnL still leaves some things out."
+    },
+    {
+      "open": 2,
+      "answered": 3,
+      "waiting": 0,
+      "text": "Not everything's answered, so PnL still leaves some things out."
+    },
+    {
+      "open": 0,
+      "answered": 0,
+      "waiting": 1,
+      "text": "There's nothing to ask so far, but PnL still leaves some things out."
+    },
+    {
+      "open": 0,
+      "answered": 3,
+      "waiting": 1,
+      "text": "Every question so far is answered, but PnL still leaves some things out."
+    },
+    {
+      "open": 0,
+      "answered": 0,
+      "waiting": 0,
+      "text": "There's nothing to ask. What's left isn't a question, like a balance that doesn't match the chain."
+    },
+    {
+      "open": 0,
+      "answered": 3,
+      "waiting": 0,
+      "text": "Every question's answered. What's left isn't a question, like a balance that doesn't match the chain."
+    }
+  ],
   "problems": [
     {
       "kind": "unreachable",

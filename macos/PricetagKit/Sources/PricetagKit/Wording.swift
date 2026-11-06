@@ -292,6 +292,14 @@ public enum Wording {
     public static let exchangeCostWhy = "You said it came from your exchange account, which knows what you paid. Until you say, PnL leaves it out."
     public static let allAnswered = "All answered"
     public static let nothingLeft = "That's all for now"
+    /// Under what the questions were for, when it still leaves something out. Past the last card, what's still open is what was skipped.
+    public static func finishNote(_ meter: Meter) -> String {
+        let leftOut = "PnL still leaves some things out."
+        let notAQuestion = "What's left isn't a question, like a balance that doesn't match the chain."
+        if meter.open > 0 { return meter.answered > 0 ? "Not everything's answered, so \(leftOut)" : "Nothing's answered yet, so \(leftOut)" }
+        if meter.waiting > 0 { return meter.answered > 0 ? "Every question so far is answered, but \(leftOut)" : "There's nothing to ask so far, but \(leftOut)" }
+        return meter.answered > 0 ? "Every question's answered. \(notAQuestion)" : "There's nothing to ask. \(notAQuestion)"
+    }
     /// Where earlier answers are, so none is stuck once it's given.
     public static let answersPlace = "You can change any answer in Settings, under Answers."
 

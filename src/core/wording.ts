@@ -42,6 +42,14 @@ export const COST_WHY = "Nothing shows what this cost, so PnL leaves it out unti
 export const EXCHANGE_COST_WHY = "You said it came from your exchange account, which knows what you paid. Until you say, PnL leaves it out."
 export const ALL_ANSWERED = "All answered"
 export const NOTHING_LEFT = "That's all for now"
+/** Under what the questions were for, when it still leaves something out. Past the last card, what's still open is what was skipped. */
+export function finishNote({ open, answered, waiting }: { open: number; answered: number; waiting: number }): string {
+  const leftOut = "PnL still leaves some things out."
+  const notAQuestion = "What's left isn't a question, like a balance that doesn't match the chain."
+  if (open > 0) return answered > 0 ? `Not everything's answered, so ${leftOut}` : `Nothing's answered yet, so ${leftOut}`
+  if (waiting > 0) return answered > 0 ? `Every question so far is answered, but ${leftOut}` : `There's nothing to ask so far, but ${leftOut}`
+  return answered > 0 ? `Every question's answered. ${notAQuestion}` : `There's nothing to ask. ${notAQuestion}`
+}
 
 /** The tooltip for a title or sentence that says PnL, or nothing when it doesn't. */
 export const pnlHelp = (text: string): string | undefined => (text.includes("PnL") ? PNL_HELP : undefined)
