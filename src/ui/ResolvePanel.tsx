@@ -64,7 +64,6 @@ type Props = {
 export function ResolvePanel({ wallet, others, all, failed, onRetry, method, book, firstAsset, onChange, onUndo, canUndo, notSaved, onPublish, onCurrentSender, onClose }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set())
-  const [asking, setAsking] = useState(false)
   const [costs, setCosts] = useState<Record<string, string>>({})
   const [message, setMessage] = useState<string | null>(null)
   // Apart from the message, which goes with its card, because an import can answer the card it was made from.
@@ -109,7 +108,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const sender = current?.sender ?? null
   // What an answer's about: the wallet showing, or with all of them showing, the one it arrived in.
   const focus = all && current ? current.wallet : wallet.address
-  const takingCost = current !== null && (current.kind === "cost" || asking || current.needsCost)
+  const takingCost = current !== null && (current.kind === "cost" || current.needsCost)
   // Only for an account someone checked on a device from this browser, because that's who can sign it.
   const publishable = current && readCheckedAccounts().some((account) => account.address === current.wallet) ? noteLinkFor(current, costs[current.arrivals[0]?.asset ?? ""] ?? null, currency) : null
   const linkedFailed = all ? all.failed : failed.filter((address) => walletsBehind(book, wallet).includes(address))
@@ -125,7 +124,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   useEffect(() => {
     setCosts({})
     setMessage(null)
-  }, [current?.id])
+  }, [current?.id, takingCost])
 
   const answer = (next: SenderAnswer) => sender && onChange(answerSender(book, focus, sender, next))
   /** What a book would make the headline say. A sender that would join All Yours hasn't been read yet, so it says that rather than leave it out. */
@@ -139,7 +138,6 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
     // What was entered for this sender before stays, because it covers what had arrived by then.
     const earlier = sender ? book.senders[sender] : undefined
     answer(kind === "my-exchange" && earlier?.kind === "my-exchange" ? earlier : { kind })
-    setAsking(kind === "my-exchange")
   }
   const undo = () => {
     setLastImport(null)
@@ -149,7 +147,6 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const skip = () => {
     if (!current) return
     setSkipped(new Set([...skipped, current.id]))
-    setAsking(false)
   }
   const previews = useMemo(() => {
     if (!sender || takingCost) return null
@@ -191,7 +188,6 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const saveCost = () => {
     if (!costBook) return setMessage("That isn't an amount.")
     onChange(costBook)
-    setAsking(false)
   }
   const importFile = async (file: File | undefined) => {
     if (!file) return
@@ -212,7 +208,6 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
       (before) => {
         if (startsAfterImported(before.withdrawals, imported)) return setImportRefusal(IMPORT_STARTS_LATE)
         setLastImport(imported)
-        setAsking(false)
       },
     )
   }
