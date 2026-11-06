@@ -85,25 +85,18 @@ private struct HotWalletSetup: View {
                     .fixedSize(horizontal: false, vertical: true)
                 // What can't be undone stays in full, and on screen.
                 Notice(.warning, HotWalletWording.cannotBeRestored)
-                HStack {
-                    Label(HotWalletWording.label, systemImage: "flask")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("How It Works", systemImage: "info.circle") { showsHowItWorks.toggle() }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
-                        .help("How it works")
-                        .popover(isPresented: $showsHowItWorks, arrowEdge: .bottom) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(HotWalletWording.sweepsOnlyWhileOpen)
-                                Text(HotWalletWording.newDevice)
-                            }
-                            .font(.callout)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(14)
-                            .frame(width: 300)
+                Button("How It Works", systemImage: "info.circle") { showsHowItWorks.toggle() }
+                    .buttonStyle(.borderless)
+                    .popover(isPresented: $showsHowItWorks, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(HotWalletWording.sweepsOnlyWhileOpen)
+                            Text(HotWalletWording.newDevice)
                         }
-                }
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(14)
+                        .frame(width: 300)
+                    }
                 Toggle("I understand this money can't be restored if this Mac is lost", isOn: $understands)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Create Spending Money") {
@@ -286,10 +279,6 @@ struct HotWalletDetails<Overview: View>: View {
                         .accessibilityLabel("Cap, \(wallet.capText)")
                         .accessibilityHint("Change the cap")
                         .popover(isPresented: $isChangingCap, arrowEdge: .bottom) { capEditor }
-                    Spacer()
-                    Label(HotWalletWording.label, systemImage: "flask")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
                 // Only a picture of the numbers above, which are what's real.
                 Gauge(value: gaugeValue, in: 0...1) {}
@@ -611,7 +600,7 @@ struct HotWalletDetails<Overview: View>: View {
                             .monospacedDigit()
                         Text("\(reasonText(record)) · \(Format.time(record.createdAt))")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .secondaryText()
                     }
                     Spacer()
                     RecordStatus(status: record.status, text: statusText(record))

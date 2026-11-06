@@ -173,6 +173,18 @@ describe("what the page can reach", () => {
     assert.match(CSP, /script-src 'self';/)
   })
 
+  test("the page the Mac app serves has the same rules as the server's", () => {
+    const swift = readFileSync(new URL("../macos/PricetagKit/Sources/PricetagKit/DevicePageServer.swift", import.meta.url), "utf8")
+    assert.equal(swift.match(/contentSecurityPolicy = "([^"]+)"/)?.[1], CSP)
+  })
+
+  test("the page the Mac app serves has no way to ask a server for anything", () => {
+    const page = readFileSync(new URL("../src/device-page.tsx", import.meta.url), "utf8")
+    assert.doesNotMatch(page, /App\.tsx|useBook|useWallet|currency=/)
+    assert.deepEqual([...page.matchAll(/fetch\("([^"]+)"/g)].map((match) => match[1]), ["/alive"])
+    assert.match(readFileSync(new URL("../macos/PricetagKit/Sources/PricetagKit/DevicePageServer.swift", import.meta.url), "utf8"), /alivePath = "\/alive"/)
+  })
+
   test("device code stays out of the page that only looks at wallets", () => {
     const app = readFileSync(new URL("../src/ui/App.tsx", import.meta.url), "utf8")
     assert.doesNotMatch(app, /from "\.\/DevicePanel|from "\.\/devices|from "\.\.\/core\/cold/)

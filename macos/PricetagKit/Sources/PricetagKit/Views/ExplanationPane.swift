@@ -144,7 +144,7 @@ private struct WalletPartRow: View {
             ForEach(part.lines, id: \.self) { line in
                 Text(line)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }

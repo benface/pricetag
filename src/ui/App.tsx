@@ -56,6 +56,7 @@ import {
   unknownCostIn,
   valueGapsSentence,
   walletCount,
+  est,
 } from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { ResolvePanel } from "./ResolvePanel.tsx"
@@ -116,7 +117,6 @@ const holdingOf = (position: CombinedPosition): Holding => ({ ...position, state
 /** The wallets a holding's parts qualify for. */
 const partsWhere = ({ wallets }: Holding, has: (part: PositionPart) => boolean) => (wallets ?? []).filter(has).map(({ wallet }) => wallet)
 
-const est = (text: string, isEstimate: boolean) => (isEstimate ? `≈${text}` : text)
 
 function OtherTokenRows({ tokens }: { tokens: readonly OtherToken[] }) {
   return (

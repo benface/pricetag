@@ -67,7 +67,7 @@ struct SiteApprovalView: View {
                 if waitingBehind > 0 {
                     Text("\(waitingBehind) more waiting")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
             }
         }
