@@ -16,6 +16,8 @@ export const AVERAGE_PAID = "Average paid"
 export const NETWORK_FEES = "Network fees"
 /** An answer, an undo or a device's accounts that didn't reach what's stored, so they're back as they were. */
 export const NOT_SAVED = "This browser couldn't save that, so it's back as it was. Try again."
+/** Saved answers or purchases this version can't read, which are kept rather than replaced. */
+export const UNREADABLE_SAVED = "Some of what you saved can't be read by this version, so costs that rely on it may show as unknown. A copy is kept on this device."
 export const BALANCE_CHECK = "Balance check"
 export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Doesn't match", unchecked: "Not checked" }
 export const STARTING_BALANCE = "Starting balance"

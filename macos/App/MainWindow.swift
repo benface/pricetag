@@ -389,7 +389,7 @@ struct MainWindow: View {
 
     /// What can add or remove a whole block of the page.
     private func pageShape(_ portfolio: Portfolio) -> [Bool] {
-        [portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
+        [portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty, store.hasUnreadableSaved]
     }
 
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
@@ -403,6 +403,9 @@ struct MainWindow: View {
 
     @ViewBuilder
     private func notices(_ portfolio: Portfolio) -> some View {
+        if store.hasUnreadableSaved {
+            Notice(.warning, Wording.unreadableSaved, actionTitle: "OK", action: store.dismissUnreadableSaved)
+        }
         if let problem = store.feed.problem(serverURL: store.serverURL, portfolio: portfolio) {
             Notice(.warning, problem.message, detail: problem.detail, actionTitle: "Try Again", action: store.refresh)
         } else if let notice = store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) {

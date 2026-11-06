@@ -24,11 +24,12 @@ import { createElement, useEffect } from "react"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { answerSender, changeStoredBook, linkDeviceAccounts } from "/src/core/book.ts"
-import { shelf, useBook } from "/src/ui/useBook.ts"
+import { shelf, useBook, useUnreadableSaved } from "/src/ui/useBook.ts"
 import { usePurchases } from "/src/ui/usePurchases.ts"
 function Harness() {
   const book = useBook()
   const tracker = usePurchases(book.addPurchase)
+  window.unreadableSaved = useUnreadableSaved()
   window.hook = book
   window.tracker = tracker
   window.answer = (address, kind) => flushSync(() => window.hook.change(answerSender(window.hook.book, null, address, { kind })))
@@ -43,6 +44,8 @@ window.count = async (times) => {
   for (let i = 0; i < times; i++) await shelf.change("count", (latest) => String(Number(latest ?? 0) + 1))
 }
 window.counted = () => shelf.read("count")
+window.shelf = shelf
+window.flushSync = flushSync
 window.linkUnheard = (addresses) => changeStoredBook(shelf, (latest) => linkDeviceAccounts(latest, addresses))
 createRoot(document.getElementById("root")).render(createElement(Harness))
 `
@@ -485,5 +488,27 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
     await reload(a)
     assert.ok((await bookIn(a)).purchases.some(({ order }: { order: string }) => order === "older"))
     assert.ok(await evaluate<boolean>(a, `JSON.parse(localStorage.getItem("patina.book")).purchases.length > 0`), "and the copy's put right")
+  })
+
+  it("doesn't touch answers it can't read until one changes, keeps a copy, and says so once", async () => {
+    const [a, b] = (await tabs(2)) as [string, string]
+    const unreadable = JSON.stringify({ senders: { [OTHER]: { kind: "mine" } }, costs: { [`${ME}:leg`]: { micros: "1", currency: "NEW" } }, withdrawals: [] })
+    const stored = () => evaluate<string | null>(a, `shelf.read("patina.book")`)
+    await evaluate(a, `localStorage.setItem("patina.book", ${JSON.stringify(unreadable)})`)
+    await reload(a)
+    await until(() => evaluate(a, "unreadableSaved.unreadable"), "the person to be told")
+    assert.equal(await evaluate(a, `localStorage.getItem("patina.book")`), unreadable, "opening the page wrote nothing over it")
+    assert.deepEqual((await bookIn(a)).senders, {})
+
+    await evaluate(a, `flushSync(() => unreadableSaved.dismiss())`)
+    await until(async () => !(await evaluate(a, "unreadableSaved.unreadable")), "the notice to go")
+    await reload(a)
+    assert.equal(await evaluate(a, "unreadableSaved.unreadable"), false, "it's only said once")
+
+    await evaluate(a, `answer(${JSON.stringify(address(7))}, "mine")`)
+    await until(async () => (await stored()) !== unreadable, "the answer to save")
+    assert.equal(JSON.parse((await stored()) as string).senders[address(7)].kind, "mine")
+    const kept = JSON.parse((await evaluate<string>(b, `shelf.read("patina.unreadable")`)))
+    assert.deepEqual(kept.entries, [{ key: "patina.book", text: unreadable }])
   })
 })

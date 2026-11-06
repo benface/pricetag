@@ -283,6 +283,63 @@ private final class AnswerClock: @unchecked Sendable {
         #expect(store.answeredAt(try entry(store, AnswerEntry.senderID(sender))) == Date(timeIntervalSince1970: 1_793_750_400))
     }
 
+    @Test func answersItCantReadStayUntilOneChangesAndACopyIsKept() throws {
+        let defaults = UserDefaults(suiteName: "answers-tests-\(UUID().uuidString)")!
+        defaults.set(wallet, forKey: "wallet")
+        // A currency from a newer version is enough to make the whole book unreadable.
+        let unreadable = Data(#"{"senders":{"\#(sender)":{"kind":"mine"}},"costs":{"\#(costKey)":{"micros":"1","currency":"NEW"}},"withdrawals":[]}"#.utf8)
+        let details = Data(#"{"dates":{},"about":{"x":"0.002 ETH from Coinbase"}}"#.utf8)
+        defaults.set(unreadable, forKey: "answers")
+        defaults.set(details, forKey: "answerDetails")
+        let source = BookSource([try demoPortfolio()])
+
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source })
+        #expect(store.book.senders.isEmpty)
+        #expect(store.hasUnreadableSaved)
+        #expect(defaults.data(forKey: "answers") == unreadable, "opening the app wrote nothing over it")
+
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        #expect(defaults.data(forKey: "answers") != unreadable)
+        let kept = try JSONDecoder().decode([KeptEntry].self, from: try #require(defaults.data(forKey: "unreadableSaved")))
+        #expect(kept.contains { $0.key == "answers" && $0.bytes == unreadable })
+        #expect(kept.contains { $0.key == "answerDetails" && $0.bytes == details }, "these only mean something with the answers")
+
+        store.dismissUnreadableSaved()
+        #expect(!store.hasUnreadableSaved)
+        #expect(!PortfolioStore(defaults: defaults, makeSource: { _ in source }).hasUnreadableSaved, "it's only said once")
+        #expect(defaults.data(forKey: "unreadableSaved") != nil, "and telling them doesn't lose the copy")
+    }
+
+    @Test func savedWalletsAndPurchasesItCantReadAreKeptToo() throws {
+        let defaults = UserDefaults(suiteName: "answers-tests-\(UUID().uuidString)")!
+        let wallets = Data(#"[{"address":1}]"#.utf8)
+        let purchases = Data(#"[{"ref":1}]"#.utf8)
+        defaults.set(wallets, forKey: "savedWallets")
+        defaults.set(purchases, forKey: "purchases")
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in BookSource([]) })
+        #expect(store.savedWallets.isEmpty)
+        let tracker = PurchaseTracker(store: store, defaults: defaults)
+        #expect(tracker.purchases.isEmpty)
+        #expect(store.hasUnreadableSaved)
+        let kept = try JSONDecoder().decode([KeptEntry].self, from: try #require(defaults.data(forKey: "unreadableSaved")))
+        #expect(kept.map(\.key) == ["savedWallets", "purchases"])
+        #expect(kept.map(\.bytes) == [wallets, purchases])
+    }
+
+    @Test func nothingIsKeptWhenEverythingCanBeRead() throws {
+        let (store, defaults) = try makeStore()
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        let again = PortfolioStore(defaults: defaults, makeSource: { _ in BookSource([]) })
+        #expect(again.book.senders[sender] == .someoneElse)
+        #expect(!again.hasUnreadableSaved)
+        #expect(defaults.data(forKey: "unreadableSaved") == nil)
+    }
+
+    private struct KeptEntry: Decodable {
+        let key: String
+        let bytes: Data
+    }
+
     @Test func anAnswerFromBeforeDatesStaysUndatedThroughUndo() throws {
         let defaults = UserDefaults(suiteName: "answers-tests-\(UUID().uuidString)")!
         defaults.set(wallet, forKey: "wallet")

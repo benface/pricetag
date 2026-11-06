@@ -46,6 +46,7 @@ import {
   inWallets,
   linkedFailedSentence,
   NOT_SAVED,
+  UNREADABLE_SAVED,
   noMarketSentence,
   otherTokenAmount,
   otherTokenName,
@@ -58,7 +59,7 @@ import {
 } from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { ResolvePanel } from "./ResolvePanel.tsx"
-import { useBook, useOtherWallets } from "./useBook.ts"
+import { useBook, useOtherWallets, useUnreadableSaved } from "./useBook.ts"
 import { RulesPanel } from "./RulesPanel.tsx"
 import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
@@ -375,6 +376,7 @@ export function App() {
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
   const { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase } = useBook()
+  const unreadableSaved = useUnreadableSaved()
   const { purchases, problem: purchasesProblem, begin: beginPurchase, dismiss: dismissPurchase } = usePurchases(addPurchase)
   const [buying, setBuying] = useState(false)
   const paidIn = currenciesIn(book).join(",")
@@ -579,6 +581,14 @@ export function App() {
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
       {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
+      {unreadableSaved.unreadable ? (
+        <p className="notice warn" role="alert">
+          ⚠ {UNREADABLE_SAVED}{" "}
+          <button type="button" onClick={unreadableSaved.dismiss}>
+            OK
+          </button>
+        </p>
+      ) : null}
       {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={rule} address={isAll ? null : single} method={method} currency={currency} book={book} /> : null}
 
       <PurchaseList purchases={purchases} problem={purchasesProblem} matches={combined?.purchases ?? fold?.purchases ?? []} currency={chosenCurrency} showing={wallet?.address ?? null} onView={go} onDismiss={dismissPurchase} />

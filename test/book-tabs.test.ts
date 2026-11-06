@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { answerSender, applyAnswer, changeStoredBook, costKey, emptyBook, enterExchangeCosts, linkDeviceAccounts, parseBook, recordPurchase, storedBook, undoAnswer, type Book, type Purchase } from "../src/core/book.ts"
-import { plainShelf, type KeptIn } from "../src/core/shelf.ts"
+import { answerSender, applyAnswer, changeStoredBook, readStoredBook, costKey, emptyBook, enterExchangeCosts, linkDeviceAccounts, parseBook, recordPurchase, storedBook, undoAnswer, type Book, type Purchase } from "../src/core/book.ts"
+import { hasUnseenSetAside, markSetAsideSeen, plainShelf, type KeptIn } from "../src/core/shelf.ts"
 
 const ME = "0x3762620fbcb400b0f98365da4aad7d2a250e5d89"
 const OTHER = "0x1111111111111111111111111111111111111111"
@@ -231,5 +231,80 @@ describe("a book shared between tabs", () => {
     assert.equal(parseBook({ deviceLinks: { [OTHER]: "1" } }), null)
     assert.equal(parseBook({ deviceLinks: [OTHER] }), null)
     assert.equal(parseBook({})?.deviceLinks, undefined)
+  })
+})
+
+describe("answers this version can't read", () => {
+  // A currency from a newer version is enough to make the whole book unreadable.
+  const unreadable = JSON.stringify({ senders: { [SENDER]: { kind: "mine" } }, costs: { [`${ME}:leg`]: { micros: "1", currency: "NEW" } }, withdrawals: [] })
+  const stored = (text: string) => {
+    const storage = shelf()
+    storage.setItem("patina.book", text)
+    storage.writes = 0
+    return storage
+  }
+  const kept = (storage: KeptIn) => JSON.parse(storage.getItem("patina.unreadable") ?? "null")
+
+  it("stays as it is after a read, with a copy kept and the person told", async () => {
+    const storage = stored(unreadable)
+    assert.deepEqual(storedBook(storage), emptyBook())
+    assert.deepEqual(await readStoredBook(plainShelf(storage)), emptyBook())
+    assert.equal(storage.getItem("patina.book"), unreadable)
+    assert.deepEqual(kept(storage).entries, [{ key: "patina.book", text: unreadable }])
+    assert.equal(await hasUnseenSetAside(plainShelf(storage)), true)
+  })
+
+  it("is copied before the next answer replaces it, even with no read first", async () => {
+    const storage = stored(unreadable)
+    await changeStoredBook(plainShelf(storage), (latest) => answerSender(latest, null, OTHER, { kind: "someone-else" }))
+    assert.equal(parseBook(JSON.parse(storage.getItem("patina.book") as string))?.senders[OTHER]?.kind, "someone-else")
+    assert.deepEqual(kept(storage).entries, [{ key: "patina.book", text: unreadable }])
+  })
+
+  it("isn't replaced by a change that changes nothing", async () => {
+    const storage = stored(unreadable)
+    await changeStoredBook(plainShelf(storage), (latest) => latest)
+    assert.equal(storage.getItem("patina.book"), unreadable)
+  })
+
+  it("is copied if it's something else by the time it would be replaced", async () => {
+    const storage = stored(unreadable)
+    const plain = plainShelf(storage)
+    const other = unreadable.replace("NEW", "NEWER")
+    let replaced = false
+    const racing = { ...plain, change: (key: string, update: (latest: string | null) => string | null) => {
+      if (key === "patina.book" && !replaced && storage.getItem("patina.unreadable")) {
+        replaced = true
+        storage.setItem("patina.book", other)
+      }
+      return plain.change(key, update)
+    } }
+    await changeStoredBook(racing, (latest) => answerSender(latest, null, OTHER, { kind: "someone-else" }))
+    assert.deepEqual(kept(storage).entries.map((entry: { text: string }) => entry.text), [unreadable, other])
+  })
+
+  it("keeps each different one once, and tells the person about a new one after they've seen the last", async () => {
+    const storage = stored(unreadable)
+    const plain = plainShelf(storage)
+    await readStoredBook(plain)
+    await readStoredBook(plain)
+    assert.equal(kept(storage).entries.length, 1)
+    await markSetAsideSeen(plain)
+    assert.equal(await hasUnseenSetAside(plain), false)
+    await readStoredBook(plain)
+    assert.equal(await hasUnseenSetAside(plain), false, "it's the same one")
+    await changeStoredBook(plain, (latest) => answerSender(latest, null, OTHER, { kind: "mine" }))
+    storage.setItem("patina.book", "not json")
+    await readStoredBook(plain)
+    assert.equal(kept(storage).entries.length, 2)
+    assert.equal(await hasUnseenSetAside(plain), true)
+  })
+
+  it("leaves a book that can be read alone, and writes nothing to read it", async () => {
+    const book = answerSender(emptyBook(), null, OTHER, { kind: "mine" })
+    const storage = stored(JSON.stringify(book))
+    assert.deepEqual(await readStoredBook(plainShelf(storage)), book)
+    assert.equal(storage.writes, 0)
+    assert.equal(await hasUnseenSetAside(plainShelf(storage)), false)
   })
 })
