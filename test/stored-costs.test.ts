@@ -75,7 +75,7 @@ const legOf = (changes: Partial<WalletResponse>, book: Book) => foldBook(wallet(
 
 describe("an imported withdrawal's purchases when the main currency changes", () => {
   const paidRates = { CAD: { 10: round("75000000") } }
-  const lots = [{ units: (10n * E6).toString(), micros: "1" }, { units: (90n * E6).toString(), micros: "90000000" }]
+  const lots = [{ units: (10n * E6).toString(), micros: "1", at: "2026-01-01T00:00:00.000Z" }, { units: (90n * E6).toString(), micros: "90000000", at: "2026-01-02T00:00:00.000Z" }]
   const book: Book = { ...emptyBook(), withdrawals: [{ ...withdrawal(CAD_90), fifoCostMicros: "90000001", fifoLots: lots }] }
 
   it("add up to what all of it converts to, however each one rounds", () => {

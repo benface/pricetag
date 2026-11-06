@@ -73,8 +73,8 @@ function addLot(lots: Lot[], at: number, units: bigint, cost: bigint) {
   }
 }
 
-/** Part of a lot, as taken: how much, what it cost, and whether a file says which came first within it. */
-type Part = { units: bigint; cost: bigint; tied: boolean }
+/** Part of a lot, as taken: how much, what it cost, when it was bought, and whether a file says which came first within it. */
+type Part = { at: number; units: bigint; cost: bigint; tied: boolean }
 
 /** What these units cost lot by lot, this far along the lots. Null when that can't be said, or the budget ran out before it could. */
 function partsAlong({ lots, oldest }: Pool, from: bigint, units: bigint, budget: Budget): Part[] | null {
@@ -91,28 +91,18 @@ function partsAlong({ lots, oldest }: Pool, from: bigint, units: bigint, budget:
     }
     const taken = left < lot.units - skip ? left : lot.units - skip
     if (lot.cost === null || (lot.tied && taken < lot.units)) known = false
-    else addPart(parts, { units: taken, cost: (lot.cost * taken) / lot.units, tied: lot.tied })
+    else parts.push({ at: lot.at, units: taken, cost: (lot.cost * taken) / lot.units, tied: lot.tied })
     skip = 0n
     left -= taken
   }
   return known ? parts : null
 }
 
-/** Next to one at the same price, it's the same part, wherever the lots between them happened to divide. */
-function addPart(parts: Part[], part: Part) {
-  const last = parts.at(-1)
-  if (!last || last.tied || part.tied || last.cost * part.units !== part.cost * last.units) parts.push(part)
-  else {
-    last.units += part.units
-    last.cost += part.cost
-  }
-}
-
 const costOf = (parts: readonly Part[]) => parts.reduce((sum, { cost }) => sum + cost, 0n)
 
 const within = (a: bigint, b: bigint, rounding: bigint) => a - b <= rounding && b - a <= rounding
 
-const sameParts = (a: readonly Part[], b: readonly Part[], rounding: bigint) => a.length === b.length && a.every(({ units, cost, tied }, i) => units === b[i]?.units && tied === b[i]?.tied && within(cost, b[i].cost, rounding))
+const sameParts = (a: readonly Part[], b: readonly Part[], rounding: bigint) => a.length === b.length && a.every(({ at, units, cost, tied }, i) => at === b[i]?.at && units === b[i]?.units && tied === b[i]?.tied && within(cost, b[i].cost, rounding))
 
 /** Takes the oldest of these units, which leaves the rest. Rounding never loses any, because taking a whole lot takes all of its cost. */
 function takeOldest(pool: Pool, units: bigint) {
@@ -162,8 +152,8 @@ function positionsAfter(moment: ReadonlyMap<bigint, number>, size: bigint, budge
 /**
  * What a withdrawal this size cost oldest first, when that's the same whichever of its moment's other disposals went first.
  * Otherwise null. Dividing a lot can round differently from one position to the next, by up to a millionth per lot, which isn't
- * a different cost. The same total can come in a different order, and then only all of it has that cost, as it does when
- * there are too many lots to keep.
+ * a different cost. The same total can come from different purchases, and then only all of it has that cost, with no one date,
+ * as it does when there are too many lots to keep.
  */
 function costInAnyOrder(pool: Pool, moment: ReadonlyMap<bigint, number>, size: bigint, budget: Budget): { cost: bigint; lots: ExchangeLot[] } | null {
   const positions = positionsAfter(moment, size, budget)
@@ -178,7 +168,7 @@ function costInAnyOrder(pool: Pool, moment: ReadonlyMap<bigint, number>, size: b
     if (parts === null || !within(costOf(parts), cost, rounding)) return null
     settled &&= sameParts(first, parts, rounding)
   }
-  const lots = settled ? first.map((part) => ({ units: part.units.toString(), micros: part.cost.toString(), ...(part.tied ? { wholeCostOnly: true as const } : {}) })) : [{ units: size.toString(), micros: cost.toString(), wholeCostOnly: true as const }]
+  const lots = settled ? first.map((part) => ({ units: part.units.toString(), micros: part.cost.toString(), at: new Date(part.at).toISOString(), ...(part.tied ? { wholeCostOnly: true as const } : {}) })) : [{ units: size.toString(), micros: cost.toString(), wholeCostOnly: true as const }]
   return { cost, lots }
 }
 

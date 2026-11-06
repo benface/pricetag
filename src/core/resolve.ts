@@ -73,7 +73,7 @@ function moneyIn(side: Side, money: Money, leg: PricedLeg): string | null {
 }
 
 /** Part of a piece whose cost is only known for all of it, so this part has none, and neither does the rest. */
-const withoutItsCost = ({ qty, acquiredBlock, acquiredAt }: CostPiece, units: bigint): CostPiece => ({ qty: units.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }) })
+const withoutItsCost = ({ acquiredBlock, acquiredAt, boughtAt }: CostPiece, units: bigint): CostPiece => ({ qty: units.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", unanswerable: true, ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...(boughtAt ? { boughtAt } : {}) })
 
 /** Part of a piece, with its share of the cost. Taking it all takes all of the cost, so rounding never loses any. */
 function slice(piece: CostPiece, qty: bigint): CostPiece {
@@ -243,9 +243,10 @@ const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: Priced
 const withdrawalCost = ({ cost, fifoCostMicros }: ExchangeWithdrawal, method: Method): Money | undefined => (method === "average" ? cost : fifoCostMicros === null ? undefined : { micros: fifoCostMicros, currency: cost.currency })
 
 /**
- * What arrived from a withdrawal oldest first, purchase by purchase, so spending part of it takes the oldest. The network kept
- * a little of each, in proportion, and what's left still cost all of it, so nothing here depends on how much it kept. Saved
- * before its lots were kept, it's one cost for all of it, because treating that as one purchase would be a guess.
+ * What arrived from a withdrawal oldest first, purchase by purchase, each going by when it was bought, so spending part of what's
+ * held takes the oldest. The network kept a little of each, in proportion, and what's left still cost all of it, so nothing here
+ * depends on how much it kept. Saved before its lots were kept, it's one cost for all of it, because treating that as one
+ * purchase would be a guess.
  */
 function piecesOfWithdrawal(side: Side, { units, cost, fifoCostMicros, fifoLots }: ExchangeWithdrawal, leg: PricedLeg): CostPiece[] | null {
   if (fifoCostMicros === null) return null
@@ -261,7 +262,7 @@ function piecesOfWithdrawal(side: Side, { units, cost, fifoCostMicros, fifoLots 
     // Converted as a running total, so the pieces add up to exactly what all of it comes to.
     const upTo = moneyIn(side, { micros: microsUpTo.toString(), currency: cost.currency }, leg)
     if (upTo === null) return null
-    pieces.push({ qty: qty.toString(), costMicros: (BigInt(upTo) - microsGiven).toString(), label: "self-reported", estimatedCostMicros: "0", ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}) })
+    pieces.push({ qty: qty.toString(), costMicros: (BigInt(upTo) - microsGiven).toString(), label: "self-reported", estimatedCostMicros: "0", ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(lot.at ? { boughtAt: lot.at } : {}) })
     unitsGiven += qty
     microsGiven = BigInt(upTo)
   }

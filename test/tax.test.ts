@@ -5,7 +5,7 @@ import { after, before, describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, foldPositions, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { Source } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../src/core/api.ts"
-import { costKey, emptyBook, type Book } from "../src/core/book.ts"
+import { costKey, emptyBook, parseBook, type Book } from "../src/core/book.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { foldBook } from "../src/core/resolve.ts"
@@ -610,6 +610,31 @@ describe("the user's answers in a report", () => {
     it("still has all of it at its known cost, if all of it's sold", () => {
       const [all] = eventsOf(taxReportOf([held([twoEth, sell(30, 2n, 5000)])], US, { book: bookOf(...TIED) }))
       assert.deepEqual([all?.Cost, all?.Gain, all?.Status], ["4000.000000", "1000.000000", "SELF-REPORTED"])
+    })
+
+    describe("next to what the wallet already holds", () => {
+      const own = leg(5, E18, { kind: "transfer", parts: [part(A, "credit", E18, SELLER)], timestamp: "2026-10-02T12:00:00.000Z" })
+      const late = { ...twoEth, timestamp: "2026-10-03T10:00:00.000Z" }
+      const dated = [row("2026-10-01T10:00:00Z", "Buy", "1", "$1000"), row("2026-10-02T10:00:00Z", "Buy", "1", "$3000"), row(late.timestamp, "Send", "2")]
+      const mixed = (legs = [own, late, sell(30, 1n, 2500)]) => held(legs)
+      const key = costKey(A, own.id)
+      const bookFor = (withdrawals: Book["withdrawals"]): Book => ({ ...emptyBook(), withdrawals, costs: { [key]: { micros: "2000000000", currency: "USD" } } })
+      const fresh = () => bookFor(file(...dated).withdrawals)
+
+      it("costs the oldest purchase, not what arrived first, and again after being saved", () => {
+        for (const book of [fresh(), parseBook(JSON.parse(JSON.stringify(fresh())))!]) {
+          const [sale] = eventsOf(taxReportOf([mixed()], US, { book }))
+          assert.deepEqual([sale?.Cost, sale?.Gain], ["1000.000000", "1500.000000"])
+        }
+      })
+
+      it("has no cost or gain from a withdrawal saved with no dates, until all of what could be first has gone", () => {
+        const old = file(...dated).withdrawals.map(({ fifoLots: _, ...rest }) => rest)
+        const book = bookFor(parseBook({ withdrawals: old })!.withdrawals)
+        assert.deepEqual(eventsOf(taxReportOf([mixed()], US, { book })).map((r) => [r.Cost, r.Gain]), [["unknown", "unknown"]])
+        const [all] = eventsOf(taxReportOf([mixed([own, late, sell(30, 3n, 7500)])], US, { book }))
+        assert.deepEqual([all?.Cost, all?.Gain], ["6000.000000", "1500.000000"])
+      })
     })
 
     it("keeps the row for what's known when the same sale also splits it", () => {

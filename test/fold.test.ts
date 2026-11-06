@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { applyLeg, applyLegTaking, emptyPosition, lotSplitBy, returnBps, valuePosition, type FoldLeg, type Method } from "@pricetag/sdk/core"
+import { applyLeg, applyLegTaking, emptyPosition, lotsSplitBy, returnBps, takesAnswerableCost, valuePosition, type FoldLeg, type Method } from "@pricetag/sdk/core"
 
 const USD = 1_000_000n
 const ETH = 10n ** 18n
@@ -25,10 +25,48 @@ describe("a lot whose cost is only known for all of it", () => {
   })
 
   it("is only split by what doesn't reach the end of it", () => {
-    assert.equal(lotSplitBy(held, ETH), held.lots[0])
-    assert.equal(lotSplitBy(held, 2n * ETH), null)
-    assert.equal(lotSplitBy(held, 3n * ETH), null)
-    assert.equal(lotSplitBy(held, 0n), null)
+    assert.deepEqual(lotsSplitBy(held, ETH), [held.lots[0]])
+    assert.deepEqual(lotsSplitBy(held, 2n * ETH), [])
+    assert.deepEqual(lotsSplitBy(held, 3n * ETH), [])
+    assert.deepEqual(lotsSplitBy(held, 0n), [])
+  })
+
+  it("says no answer can fix what its split left, in what's taken and what stays", () => {
+    const { state, taken } = applyLegTaking(held, sold(ETH, 3000n))
+    assert.equal(taken[0]?.unanswerable, true)
+    assert.equal(state.lots[0]?.unanswerable, true)
+    assert.equal(takesAnswerableCost(held, ETH), false)
+    assert.equal(takesAnswerableCost(state, ETH / 2n), false)
+  })
+
+  it("can be from any time before it arrived when it has no date, so it needs all that's ahead of it to go too", () => {
+    const dated = { id: "older", delta: ETH.toString(), decimals: 18, kind: "transfer" as const, priceMicros: null, costMicros: (2000n * USD).toString(), proceedsMicros: null, costLabel: "paid" as const, blockNum: 1, timestamp: "2026-10-02T00:00:00.000Z" }
+    const both = applyLeg(applyLeg(emptyPosition("fifo", 18), dated), { ...arrived, blockNum: 2, timestamp: "2026-10-03T00:00:00.000Z" })
+    assert.equal(lotsSplitBy(both, ETH).length, 2, "what's taken could be either")
+    assert.deepEqual(lotsSplitBy(both, 3n * ETH), [])
+    const after = applyLeg(both, sold(ETH, 3000n))
+    assert.equal(valuePosition(after, null).costMicros, null)
+    assert.equal(after.realizedMicros, "0")
+    assert.equal(applyLeg(both, sold(3n * ETH, 3000n)).realizedMicros, (3000n * USD).toString())
+  })
+})
+
+describe("a purchase an exchange dates", () => {
+  const credit = (id: string, qty: bigint, usd: bigint, blockNum: number, timestamp: string, boughtAt?: string): FoldLeg => ({ id, delta: qty.toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (usd * USD).toString(), proceedsMicros: null, costLabel: "self-reported", blockNum, timestamp, pieces: [{ qty: qty.toString(), costMicros: (usd * USD).toString(), label: "self-reported", estimatedCostMicros: "0", ...(boughtAt ? { boughtAt } : {}) }] })
+  const held = (...legs: FoldLeg[]) => legs.reduce(applyLeg, emptyPosition("fifo", 18)).lots.map((lot) => lot.legId)
+
+  it("goes by when it was bought, not when it arrived", () => {
+    const wallet = credit("wallet", ETH, 2000n, 5, "2026-10-02T12:00:00.000Z")
+    assert.deepEqual(held(wallet, credit("old", ETH, 1000n, 9, "2026-10-03T00:00:00.000Z", "2026-10-01T00:00:00.000Z")), ["old", "wallet"])
+    assert.deepEqual(held(wallet, credit("new", ETH, 3000n, 9, "2026-10-03T00:00:00.000Z", "2026-10-02T13:00:00.000Z")), ["wallet", "new"])
+  })
+
+  it("keeps its place when nothing says what it cost anymore", () => {
+    const wallet = credit("wallet", ETH, 2000n, 5, "2026-10-02T12:00:00.000Z")
+    const tied = { ...credit("old", 2n * ETH, 4000n, 9, "2026-10-03T00:00:00.000Z", "2026-10-01T00:00:00.000Z") }
+    tied.pieces = [{ ...tied.pieces![0]!, wholeCostOnly: true }]
+    const state = [wallet, tied, { id: "out", delta: (-ETH).toString(), decimals: 18, kind: "transfer" as const, priceMicros: null, costMicros: null, proceedsMicros: null, costLabel: "unknown" as const }].reduce(applyLeg, emptyPosition("fifo", 18))
+    assert.deepEqual(state.lots.map((lot) => [lot.legId, lot.costMicros, lot.boughtAt]), [["old", null, "2026-10-01T00:00:00.000Z"], ["wallet", (2000n * USD).toString(), undefined]])
   })
 })
 

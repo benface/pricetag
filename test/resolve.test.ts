@@ -1345,7 +1345,7 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
   it("works out each withdrawal's cost from what was bought before it, fees included", () => {
     const { withdrawals, skipped } = parseCoinbaseCsv(CSV)!
     // 2 ETH cost $4,240, so half an ETH costs $1,060.
-    assert.deepEqual(withdrawals[0], { exchange: "Coinbase", asset: "ETH", units: (E18 / 2n).toString(), at: "2026-11-04T00:00:00.000Z", cost: usd("1060000000"), fifoCostMicros: "1010000000", fifoLots: [{ units: (E18 / 2n).toString(), micros: "1010000000" }], toAddress: A })
+    assert.deepEqual(withdrawals[0], { exchange: "Coinbase", asset: "ETH", units: (E18 / 2n).toString(), at: "2026-11-04T00:00:00.000Z", cost: usd("1060000000"), fifoCostMicros: "1010000000", fifoLots: [{ units: (E18 / 2n).toString(), micros: "1010000000", at: "2026-10-01T10:00:00.000Z" }], toAddress: A })
     assert.equal(withdrawals.length, 1)
     assert.equal(skipped, 2, "one has no purchases behind it, and one was bought in a currency this app doesn't have")
   })
@@ -1634,7 +1634,7 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
       const bookOf = (...rows: string[]): Book => ({ ...emptyBook(), withdrawals: parse(...rows).withdrawals })
 
       it("takes the oldest purchase first, or an equal share for a wallet that averages", () => {
-        assert.deepEqual(parse(...TWO_DAYS).withdrawals[0]?.fifoLots, [{ units: E18.toString(), micros: "1000000000" }, { units: E18.toString(), micros: "3000000000" }])
+        assert.deepEqual(parse(...TWO_DAYS).withdrawals[0]?.fifoLots, [{ units: E18.toString(), micros: "1000000000", at: new Date(day(1)).toISOString() }, { units: E18.toString(), micros: "3000000000", at: new Date(day(2)).toISOString() }])
         assert.equal(left(bookOf(...TWO_DAYS), "fifo")?.costMicros, "3000000000")
         assert.equal(left(bookOf(...TWO_DAYS), "average")?.costMicros, "2000000000")
       })
@@ -1660,7 +1660,7 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
 
       describe("with purchases nothing puts in order", () => {
         it("only has a cost for all of it", () => {
-          assert.deepEqual(parse(...TIED).withdrawals[0]?.fifoLots, [{ units: (2n * E18).toString(), micros: "4000000000", wholeCostOnly: true }])
+          assert.deepEqual(parse(...TIED).withdrawals[0]?.fifoLots, [{ units: (2n * E18).toString(), micros: "4000000000", at: new Date(day(1)).toISOString(), wholeCostOnly: true }])
           assert.equal(left(bookOf(...TIED), "fifo", [arrival()])?.costMicros, "4000000000")
           assert.equal(left(bookOf(...TIED), "fifo")?.costMicros, null)
           assert.equal(left(bookOf(...TIED), "fifo")?.unknownCostQty, E18.toString())
@@ -1746,6 +1746,91 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
           assert.equal(parseBook({ withdrawals: [{ ...withdrawal, fifoLots }] }), null, JSON.stringify(fifoLots).slice(0, 80))
         }
         assert.equal(parseBook({ withdrawals: [{ ...withdrawal, fifoCostMicros: null }] }), null, "lots with no cost")
+      })
+
+      describe("next to what the wallet already holds", () => {
+        // Bought in this wallet after the first purchase, and before the withdrawal reached it.
+        const before = { ...move(50, "0x0", A, "credit", E18, STRANGER, ETH_ADDRESS), timestamp: "2026-10-02T12:00:00.000Z" }
+        const cost = costKey(A, wallet(A, [before]).legs[0]!.id)
+        const withWalletCost = (book: Book): Book => ({ ...book, costs: { ...book.costs, [cost]: usd("2000000000") } })
+        const saved = (book: Book) => parseBook(JSON.parse(JSON.stringify(book)))!
+        const held = (book: Book, method: Method = "fifo") => left(book, method, [before, arrival(), spent()])
+
+        it("takes the oldest purchase, wherever it arrived, and again after being saved", () => {
+          for (const book of [withWalletCost(bookOf(...TWO_DAYS)), saved(withWalletCost(bookOf(...TWO_DAYS)))]) {
+            assert.equal(held(book)?.costMicros, "5000000000")
+            const { positions } = foldBook(wallet(A, [before, arrival(), spent(2n * E18)]), [], "fifo", book)
+            assert.equal(positions[0]?.values.costMicros, "2000000000", "both purchases came before what the wallet got, so that's what stays")
+          }
+        })
+
+        it("still comes after what the wallet held before it was bought", () => {
+          const LATER = [row("2026-10-02T13:00:00.000Z", "Buy", "2", "$6000"), row(day(3), "Send", "2")]
+          assert.equal(held(withWalletCost(bookOf(...LATER)))?.costMicros, "6000000000")
+        })
+
+        it("still averages", () => {
+          assert.equal(held(withWalletCost(bookOf(...TWO_DAYS)), "average")?.costMicros, "4000000000")
+        })
+
+        it("carries its date to a linked wallet, and ranks there too", () => {
+          const moved = send(70, "0x2", A, B, 2n * E18, ETH_ADDRESS)
+          const own = { ...move(55, "0x5", B, "credit", E18, STRANGER, ETH_ADDRESS), timestamp: "2026-10-02T12:00:00.000Z" }
+          const key = costKey(B, wallet(B, [own]).legs[0]!.id)
+          const book: Book = { ...bookOf(...TWO_DAYS), costs: { [key]: usd("2000000000") }, senders: { [A]: { kind: "mine" } } }
+          const later = move(80, "0x3", B, "debit", E18, STRANGER, ETH_ADDRESS)
+          const { positions } = foldBook(wallet(B, [own, ...moved, later]), [wallet(A, [arrival(), ...moved])], "fifo", book)
+          assert.equal(positions[0]?.values.costMicros, "5000000000")
+        })
+
+        it("doesn't take part of a withdrawal with no dates for the oldest, because it might not be", () => {
+          const { fifoLots: _, ...old } = bookOf(...TWO_DAYS).withdrawals[0]!
+          const book = withWalletCost(parseBook({ withdrawals: [old] })!)
+          assert.equal(left(book, "fifo", [before, arrival()])?.costMicros, "6000000000")
+          assert.deepEqual([held(book)?.costMicros, held(book)?.unknownCostQty], [null, (2n * E18).toString()])
+          assert.equal(left(book, "fifo", [before, arrival(), spent(3n * E18)])?.qty, "0")
+          const { state } = foldBook(wallet(A, [before, arrival(), spent(3n * E18)]), [], "fifo", book).positions[0]!
+          assert.deepEqual([state.transferredOutCostMicros, state.transferredOutUnknownQty], ["6000000000", "0"])
+        })
+      })
+
+      describe("after a split nothing can answer", () => {
+        const stranger = "0x00000000000000000000000000000000000000f1"
+        const unrelated = { ...move(40, "0x7", A, "credit", E18 / 10n, stranger, ETH_ADDRESS), timestamp: "2026-09-01T00:00:00.000Z" }
+        const summaries = (rows: LegRow[], others: WalletResponse[] = [], book = bookOf(...TIED), address = A) => {
+          const fold = foldBook(wallet(address, rows), others, "fifo", book)
+          return { questions: fold.questions.length, effects: fold.positions[0]!.effects.map((effect) => summarizeEffect(effect, "USD").answerable) }
+        }
+
+        it("says so on every later spend, with another question open", () => {
+          const later = move(80, "0x3", A, "debit", E18 / 2n, STRANGER, ETH_ADDRESS)
+          const { questions, effects } = summaries([arrival(), spent(), later])
+          assert.equal(questions, 0)
+          assert.deepEqual(effects, [false, false, false])
+          // What this wallet got from a stranger has a question, and it's the oldest, so taking that much could be fixed by it.
+          const mixed = summaries([unrelated, arrival(), spent(E18 / 10n), later])
+          assert.equal(mixed.questions, 1)
+          assert.deepEqual(mixed.effects, [true, false, true, false])
+        })
+
+        it("says so for what a linked wallet received, and what it spends", () => {
+          const moved = send(70, "0x2", A, B, E18, ETH_ADDRESS)
+          const book = { ...bookOf(...TIED), senders: { [A]: { kind: "mine" as const } } }
+          const later = move(80, "0x3", B, "debit", E18 / 2n, STRANGER, ETH_ADDRESS)
+          const fromElsewhere = { ...move(50, "0x7", B, "credit", E18 / 10n, stranger, ETH_ADDRESS), timestamp: "2026-09-01T00:00:00.000Z" }
+          const sender = wallet(A, [arrival(), ...moved])
+          const { questions, effects } = summaries([...moved, later], [sender], book, B)
+          assert.equal(questions, 0)
+          assert.deepEqual(effects, [false, false])
+          const mixed = summaries([fromElsewhere, ...moved, move(75, "0x8", B, "debit", E18 / 10n, STRANGER, ETH_ADDRESS), later], [sender], book, B)
+          assert.equal(mixed.questions, 1)
+          assert.deepEqual(mixed.effects, [true, false, true, false])
+        })
+
+        it("still says a question can help with what's unknown for another reason", () => {
+          const { effects } = summaries([unrelated, spent(E18 / 20n)], [], emptyBook())
+          assert.deepEqual(effects, [true, true])
+        })
       })
 
       it("doesn't use them over a cost someone entered", () => {

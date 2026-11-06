@@ -28,6 +28,8 @@ export type ExchangeLot = {
   micros: string
   /** A file can't say which came first within it, so only all of it has a cost. */
   wholeCostOnly?: true
+  /** When it was bought, as `toISOString` writes it. Only a part only known as a whole can be without one, when it could be from several moments. */
+  at?: string
 }
 
 /** The most lots a withdrawal keeps. More than that only has a cost as a whole, so one file can't weigh down every fold after it. */
@@ -249,7 +251,8 @@ function parseExchangeLots(value: unknown[], units: string, fifoCostMicros: stri
     const lot = plainRecord(item)
     if (!lot || !isMicros(lot.units) || BigInt(lot.units) === 0n || !isMicros(lot.micros)) return null
     if (lot.wholeCostOnly !== undefined && lot.wholeCostOnly !== true) return null
-    lots.push({ units: lot.units, micros: lot.micros, ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}) })
+    if (lot.at === undefined ? !lot.wholeCostOnly : typeof lot.at !== "string" || Number.isNaN(Date.parse(lot.at))) return null
+    lots.push({ units: lot.units, micros: lot.micros, ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(typeof lot.at === "string" ? { at: new Date(lot.at).toISOString() } : {}) })
   }
   const adds = (pick: (lot: ExchangeLot) => string, total: string) => lots.reduce((sum, lot) => sum + BigInt(pick(lot)), 0n) === BigInt(total)
   return adds((lot) => lot.units, units) && adds((lot) => lot.micros, fifoCostMicros) ? lots : null

@@ -785,6 +785,8 @@ public struct ExchangeLot: Codable, Sendable, Equatable, Hashable {
     public let micros: String
     /// A file can't say which came first within it, so only all of it has a cost.
     public var wholeCostOnly: Bool? = nil
+    /// When it was bought. Only a part only known as a whole can be without one, when it could be from several moments.
+    public var at: String? = nil
 }
 
 /// A withdrawal found in an exchange's history, with what it cost.
