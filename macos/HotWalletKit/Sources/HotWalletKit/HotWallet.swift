@@ -551,7 +551,13 @@ public final class HotWallet {
 
     // MARK: - Settings
 
-    public func setCap(dollars: Int) {
+    /// Lowering it can send money to savings at the next look, so that asks. Raising it moves nothing, so that doesn't.
+    public func setCap(dollars: Int) async {
+        var next = settings
+        next.setCap(dollars: dollars)
+        if next.capUsdMicros < settings.capUsdMicros {
+            guard await confirmingSetting("lower this wallet's cap to \(money(dollars: next.capInDollars)), which can move what's above it to your savings") else { return }
+        }
         updateSettings { $0.setCap(dollars: dollars) }
     }
 
@@ -559,11 +565,16 @@ public final class HotWallet {
         updateSettings { $0.sweepsRealizedGains = value }
     }
 
-    public func setSweepDestination(_ address: EthereumAddress) {
+    public func setSweepDestination(_ address: EthereumAddress) async {
+        guard address != settings.sweepDestination, let wallet = settings.coldWallets.first(where: { $0.address == address }) else { return }
+        guard await confirmingSetting("send sweeps to \(wallet.name) (\(address.checksummed))") else { return }
         updateSettings { $0.setSweepDestination(address) }
     }
 
-    public func setRPC(_ url: URL) {
+    public func setRPC(_ url: URL) async {
+        guard url != settings.rpcURL else { return }
+        guard await confirmingSetting("change this wallet's network address to \(url.host() ?? url.absoluteString)") else { return }
+        // Two can ask at once, and only the first has anything left to do.
         guard url != settings.rpcURL else { return }
         updateSettings { $0.rpcURL = url }
         chain = makeChain(url)
@@ -584,11 +595,18 @@ public final class HotWallet {
     }
 
     /// The address has to be what the user read on the device's screen. Nothing here can check that, so the sheet makes them say so.
-    public func addColdWallet(address text: String, name: String) throws(ColdWalletProblem) {
+    /// True if it was added. `isWanted` is asked after the prompt, since what's on screen can change while it's open.
+    @discardableResult
+    public func addColdWallet(address text: String, name: String, isWanted: () -> Bool = { true }) async throws(ColdWalletProblem) -> Bool {
         guard let address = EthereumAddress(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw .notAnAddress }
+        if let problem = problem(addingColdWallet: address) { throw problem }
+        let what = settings.sweepDestination == nil ? "add \(address.checksummed) as your savings wallet, where money above your cap will go" : "add \(address.checksummed) as a savings wallet"
+        guard await confirmingSetting(what), isWanted() else { return false }
+        // A rotation can start or finish while the prompt's open.
         if let problem = problem(addingColdWallet: address) { throw problem }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         updateSettings { $0.add(ColdWallet(address: address, name: cleanName.isEmpty ? "Savings" : cleanName, confirmedOnDeviceAt: now())) }
+        return true
     }
 
     /// Other accounts on a device, which go in the book as the user's from here on. This can't tell whose they are, so the caller has to have asked. They only link costs.
@@ -612,6 +630,23 @@ public final class HotWallet {
     public func renameColdWallet(_ address: EthereumAddress, to name: String) {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         updateSettings { $0.renameColdWallet(address, to: cleanName.isEmpty ? "Savings" : cleanName) }
+    }
+
+    /// For a setting that decides what the next sweep does, since a sweep then runs with nobody asked. It doesn't wait its turn like `work`,
+    /// because nothing here signs, and a node that's stuck is a reason to change the RPC.
+    private func confirmingSetting(_ reason: String) async -> Bool {
+        isWorking = true
+        defer { isWorking = false }
+        sweepProblem = nil
+        do {
+            try await confirmPresence(reason: reason)
+            return true
+        } catch let error as LAError where [.userCancel, .appCancel, .systemCancel].contains(error.code) {
+            return false
+        } catch {
+            sweepProblem = HotWalletWording.touchIDDidNotConfirm
+            return false
+        }
     }
 
     private func updateSettings(_ change: (inout WalletSettings) -> Void) {

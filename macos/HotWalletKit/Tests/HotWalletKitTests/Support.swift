@@ -341,3 +341,14 @@ struct Rig {
         wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: userPresence ?? FakePresence(allows: presence), portfolioSource: { portfolios }, moneyDisplay: moneyDisplay, makeChain: { _ in chain }, now: now, tickDelay: tickDelay, receiptDelay: receiptDelay)
     }
 }
+
+/// Says what it's told, and remembers what it was asked.
+final class RecordingPresence: UserPresence, @unchecked Sendable {
+    private(set) var reasons: [String] = []
+    var refusal: (any Error)?
+
+    func confirm(reason: String) throws {
+        reasons.append(reason)
+        if let refusal { throw refusal }
+    }
+}

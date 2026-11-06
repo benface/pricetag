@@ -835,8 +835,12 @@ enum TestScene: String, CaseIterable {
         case .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere:
             model = AddSavingsModel(wallet: wallet, device: .ledger, step: .check, address: other)
             model.matches = true
-            do { try model.add() } catch { TestMode.fail("This scene's wallet couldn't be added.") }
-            if model.step != .finished { TestMode.fail("This scene's wallet wasn't added.") }
+            Task { try? await model.add() }
+            let deadline = Date.now.addingTimeInterval(TestMode.readyTimeout)
+            while model.step != .finished {
+                guard Date.now < deadline else { TestMode.fail("This scene's wallet wasn't added.") }
+                RunLoop.main.run(until: .now.addingTimeInterval(0.01))
+            }
         default: model = AddSavingsModel(wallet: wallet)
         }
         let mac = AddSavingsMac(
@@ -882,7 +886,7 @@ enum TestScene: String, CaseIterable {
         let readStarted: TimeInterval = TestMode.live == nil && [.neverAnswers, .updating, .retrying, .retryingWithNumbers].contains(feed) && self != .mainReadingStart ? 72 : 0
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { Date().addingTimeInterval(-readStarted) }, reachableDelay: TestMode.live == nil ? .milliseconds(50) : .seconds(30), unreachableDelay: .seconds(30))
         store.start()
-        let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method }, moneyDisplay: { store.moneyDisplay })
+        let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method }, moneyDisplay: { store.moneyDisplay }, confirmsAddingSavings: [.addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere].contains(self))
         if !hasWallet, TestMode.live == nil, store.address != nil { TestMode.fail("This scene should start with no wallet, but it's showing \(store.address ?? "").") }
         // Never started, so it reads nothing, and only what these scenes registered is there.
         let purchases = PurchaseTracker(store: store, defaults: defaults, matchOf: { TestScene.purchaseMatches[$0] })
