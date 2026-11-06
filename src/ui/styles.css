@@ -210,7 +210,8 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .primary { padding: 9px 14px; border-radius: 8px; border: 0; background: var(--text-primary); color: var(--surface-1); font-weight: 600; }
 .primary:disabled { opacity: 0.5; cursor: default; }
 .tax-notes p { margin-top: 6px; color: var(--text-secondary); }
-.tax-notes summary { cursor: pointer; }
+.tax-notes summary, .problem-details summary { cursor: pointer; }
+.problem-details { margin-top: 4px; overflow-wrap: anywhere; }
 @media (max-width: 800px) {
   .summary { grid-template-columns: 1fr; }
 }

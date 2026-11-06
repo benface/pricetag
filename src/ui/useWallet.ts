@@ -1,29 +1,27 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type { WalletResponse } from "../core/api.ts"
 import type { CurrencyCode } from "@pricetag/sdk/core"
+import { failureOf, readResponse, type ReadFailure } from "../core/read-failure.ts"
 
 export type WalletState = {
   wallet: WalletResponse | null
   loading: boolean
   /** Set when the latest read failed. `wallet` then still holds the last good data, so the UI must say it's old. */
-  error: string | null
+  error: ReadFailure | null
 }
 
 /** Where a wallet's read. `paid` is the currencies the book holds amounts in, comma-separated, because this client folds its answers without sending them. */
 export const walletUrl = (address: string, currency: CurrencyCode, rule: string | null, paid: string) => `/api/wallet/${address}?currency=${currency}${rule ? `&rule=${encodeURIComponent(rule)}` : ""}${paid ? `&paid=${paid}` : ""}`
 
 async function fetchWallet(address: string, currency: CurrencyCode, rule: string | null, paid: string, signal: AbortSignal): Promise<WalletResponse> {
-  const response = await fetch(walletUrl(address, currency, rule, paid), { signal })
-  const body = (await response.json().catch(() => ({ error: "Can't reach the server." }))) as WalletResponse | { error: string }
-  if (!response.ok || "error" in body) throw new Error("error" in body ? body.error : "Couldn't read this wallet.")
-  return body
+  return readResponse<WalletResponse>(await fetch(walletUrl(address, currency, rule, paid), { signal }))
 }
 
-const LOST_CONNECTION = "Lost the connection to the server."
 const RECONNECT_MS = 3000
 
 /** Reads a wallet, then reads it again on each new block. A block that arrives during a read waits for the next one. */
-export function useWallet(address: string | null, currency: CurrencyCode, rule: string | null, paid: string): WalletState {
+export function useWallet(address: string | null, currency: CurrencyCode, rule: string | null, paid: string): WalletState & { retry: () => void } {
+  const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<WalletState>({ wallet: null, loading: false, error: null })
   const shownAddress = useRef<string | null>(null)
 
@@ -50,10 +48,9 @@ export function useWallet(address: string | null, currency: CurrencyCode, rule: 
       const dropsAtStart = drops
       fetchWallet(address, currency, rule, paid, abort.signal)
         .then((wallet) => setState((s) => ({ wallet, loading: false, error: connected && drops === dropsAtStart ? null : s.error })))
-        .catch((error: Error) => {
+        .catch((error: unknown) => {
           if (abort.signal.aborted) return
-          const message = error instanceof TypeError ? "Can't reach the server." : error.message
-          setState((s) => ({ ...s, loading: false, error: message }))
+          setState((s) => ({ ...s, loading: false, error: failureOf(error) }))
         })
         .finally(() => {
           busy = false
@@ -76,11 +73,11 @@ export function useWallet(address: string | null, currency: CurrencyCode, rule: 
         read()
       })
       events.addEventListener("head", read)
-      events.addEventListener("down", () => setState((s) => ({ ...s, error: "Can't reach the data source." })))
+      events.addEventListener("down", () => setState((s) => ({ ...s, error: { kind: "unavailable", said: "Can't reach the data source." } })))
       events.addEventListener("error", () => {
         connected = false
         drops++
-        setState((s) => ({ ...s, loading: false, error: LOST_CONNECTION }))
+        setState((s) => ({ ...s, loading: false, error: { kind: "unreachable" } }))
         // The browser retries a dropped connection by itself, but gives up for good on an error response.
         if (events.readyState === EventSource.CLOSED) retry = setTimeout(connect, RECONNECT_MS)
       })
@@ -91,7 +88,7 @@ export function useWallet(address: string | null, currency: CurrencyCode, rule: 
       events.close()
       abort.abort()
     }
-  }, [address, currency, rule, paid])
+  }, [address, currency, rule, paid, attempt])
 
-  return state
+  return { ...state, retry: useCallback(() => setAttempt((n) => n + 1), []) }
 }

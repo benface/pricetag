@@ -842,7 +842,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         return true
       }
       if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits, checkedUpdate))
-      else sendJson(res, 404, { error: "Amp doesn't have this block." })
+      else sendJson(res, 404, { error: "The price service doesn't have this block." })
       return true
     }
 

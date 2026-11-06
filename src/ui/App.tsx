@@ -36,6 +36,7 @@ import {
   feesUnknownSentence,
   holdCaveatSentence,
   holdDifferenceSentence,
+  feedProblem,
   linkedFailedSentence,
   networkFeeUnknownSentence,
   withheldSentence,
@@ -50,6 +51,7 @@ import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
+import { ProblemNotice } from "./ProblemNotice.tsx"
 import { currenciesIn, linkedWallets, walletsBehind } from "../core/book.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
@@ -268,7 +270,7 @@ export function App() {
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
   const { book, change, undo, canUndo, linkAccounts } = useBook()
   const paidIn = currenciesIn(book).filter((code) => code !== "USD").join(",")
-  const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule, paidIn)
+  const { wallet, loading, error, retry: retryRead } = useWallet(address, chosenCurrency, chosenRule, paidIn)
   const [device, setDevice] = useState<{ link: DeviceLink | null } | null>(() => {
     const link = parseDeviceLink(window.location.search)
     return link ? { link } : null
@@ -368,6 +370,11 @@ export function App() {
     return explainTarget(target, fold, { view: fold.view, ruleNote: wallet.ruleNote ?? null, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points, holdComparison: usd.holdComparison } })
   }, [target, fold, wallet, others, method, book])
   const close = useCallback(() => setTarget(null), [])
+  const tryRead = (
+    <button type="button" className="link" onClick={retryRead}>
+      Try again
+    </button>
+  )
   const openTotal = (metric: TotalMetric) => setTarget({ kind: "total", metric })
 
   return (
@@ -421,11 +428,11 @@ export function App() {
         </section>
       ) : null}
 
-      {!wallet && error ? <p className="notice warn">⚠ {error}</p> : null}
+      {!wallet && error ? <ProblemNotice problem={feedProblem(error, location.origin)} action={tryRead} /> : null}
 
       {wallet ? (
         <main>
-          {error ? <p className="notice warn">⚠ {error} {staleSentence(formatTime(wallet.latest.timestamp))}</p> : null}
+          {error ? <ProblemNotice problem={feedProblem(error, location.origin, hasStarted(wallet) ? staleSentence(formatTime(wallet.latest.timestamp)) : null)} action={tryRead} /> : null}
           {isBehind(wallet) ? (
             <p className="notice warn">⚠ {hasStarted(wallet) ? behindSentence(msBetweenBlocks(wallet.coverage.toBlock, wallet.latest.blockNum)) : NOT_STARTED}</p>
           ) : null}

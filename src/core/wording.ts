@@ -4,6 +4,7 @@
 
 import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
+import type { ReadFailure } from "./read-failure.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
 export const METHOD_NAME = "How cost is worked out"
@@ -206,6 +207,36 @@ export function behindSentence(ms: number): string {
 
 export function staleSentence(lastUpdate: string): string {
   return `These numbers aren't updating. Last update: ${lastUpdate}.`
+}
+
+/** A failed read never touches what's onchain, so this is true of every failure. */
+export const MONEY_UNAFFECTED = "Your money isn't affected."
+
+/** What's wrong, for someone who doesn't know there's a server. What a developer would want stays in `detail`. */
+export type Problem = { message: string; detail: string | null }
+
+const SAID = (said: string) => `The price service said: ${said}`
+
+/** A wallet's read that failed, in `FeedState.problem`'s words on the Mac. `stale` says how old any numbers still on screen are. */
+export function feedProblem(failure: ReadFailure, serverUrl: string, stale: string | null = null): Problem {
+  const say = (what: string, next: string, detail: string) => ({ message: [what, stale, MONEY_UNAFFECTED, next].filter((part) => part !== null).join(" "), detail })
+  switch (failure.kind) {
+    case "unreachable":
+      return say("The price service isn't answering.", "Check your internet connection, then try again.", `Nothing answered at ${serverUrl}.`)
+    case "unavailable":
+      return say("The price service can't get its data right now.", "It usually clears up by itself, and updates start again when it does.", SAID(failure.said))
+    case "noSource":
+      return say("The price service has no data source, so only the demo wallet works.", "Set one up, then restart the price service.", `${SAID(failure.said)} Its data source goes in .env.local.`)
+    case "refused":
+      return say("The price service turned this request down.", "Try again. If it keeps happening, restart the price service.", SAID(failure.said))
+  }
+}
+
+/** A failure in a panel, which answers one question and doesn't update by itself. A refusal already says what about that question went wrong. */
+export function panelProblem(failure: ReadFailure, serverUrl: string): Problem {
+  if (failure.kind === "refused") return { message: failure.said, detail: null }
+  if (failure.kind === "unavailable") return { message: `The price service can't get its data right now. ${MONEY_UNAFFECTED} It usually clears up by itself, so try again in a moment.`, detail: SAID(failure.said) }
+  return feedProblem(failure, serverUrl)
 }
 
 /** The technical side of the status badge, for its tooltip. */

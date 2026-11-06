@@ -8,6 +8,7 @@ import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../
 import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting, summarizeEffect } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
+import { failureOf, readResponse, type ReadFailure } from "../src/core/read-failure.ts"
 import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
@@ -608,6 +609,8 @@ describe("what a transaction did", () => {
   })
 })
 
+const READ_FAILURES: readonly ReadFailure[] = [{ kind: "unreachable" }, { kind: "unavailable", said: "Couldn't read this wallet's data." }, { kind: "noSource", said: "No data source is set up, so only the demo wallet is available." }, { kind: "refused", said: "That isn't a Base address." }]
+
 describe("wording", () => {
   const costLabels = ["paid", "inherited", "received at market", "self-reported", "unknown"] as const
   const kinds = ["swap", "transfer", "gas"] as const
@@ -663,13 +666,55 @@ describe("wording", () => {
       exchangeCostWhy: wording.EXCHANGE_COST_WHY,
       allAnswered: wording.ALL_ANSWERED,
       nothingLeft: wording.NOTHING_LEFT,
+      moneyUnaffected: wording.MONEY_UNAFFECTED,
     },
+    problems: READ_FAILURES.map((failure) => ({ ...failure, ...wording.feedProblem(failure, "https://prices.example.com") })),
     unseenEth: UNSEEN_ETH_CASES.map((unseen) => ({ unseen, text: wording.unseenEthCause(unseen) })),
     manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
   }
 
   it("says the same on the Mac", () => {
     assertMatchesFile("wording-vectors.json", vectors)
+  })
+
+  it("says what a failed read means, that money is fine and what to do, with the technical side apart", () => {
+    const stale = wording.staleSentence("Nov 4 at 5:40 AM")
+    for (const failure of READ_FAILURES) {
+      for (const problem of [wording.feedProblem(failure, "https://prices.example.com"), wording.feedProblem(failure, "https://prices.example.com", stale), failure.kind === "refused" ? null : wording.panelProblem(failure, "https://prices.example.com")]) {
+        if (!problem) continue
+        assert.ok(problem.message.includes(wording.MONEY_UNAFFECTED), problem.message)
+        assert.ok(problem.detail, failure.kind)
+        assert.doesNotMatch(problem.message, /https?:|server|\bAmp\b|Couldn't read this wallet's data/)
+      }
+    }
+    assert.ok(wording.feedProblem(READ_FAILURES[1]!, "https://prices.example.com", stale).message.includes(`right now. ${stale} ${wording.MONEY_UNAFFECTED}`))
+    assert.equal(wording.feedProblem({ kind: "unreachable" }, "https://prices.example.com").detail, "Nothing answered at https://prices.example.com.")
+    assert.equal(wording.feedProblem({ kind: "unavailable", said: "Couldn't read this wallet's data." }, "x").detail, "The price service said: Couldn't read this wallet's data.")
+  })
+
+  it("lets a panel say what a refusal said, since that's about the question it asked", () => {
+    assert.deepEqual(wording.panelProblem({ kind: "refused", said: "The two rules haven't reached the same block yet. Try again in a moment." }, "x"), { message: "The two rules haven't reached the same block yet. Try again in a moment.", detail: null })
+  })
+
+  it("sorts a failed read the way the Mac does", async () => {
+    const failed = async (response: Response) => {
+      try {
+        await readResponse(response)
+      } catch (error) {
+        return failureOf(error)
+      }
+      return null
+    }
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
+    assert.deepEqual(await failed(json(502, { error: "a" })), { kind: "unavailable", said: "a" })
+    assert.deepEqual(await failed(json(503, { error: "b" })), { kind: "noSource", said: "b" })
+    assert.deepEqual(await failed(json(409, { error: "c" })), { kind: "refused", said: "c" })
+    assert.deepEqual(await failed(json(200, { error: "d" })), { kind: "refused", said: "d" })
+    assert.deepEqual(await failed(new Response("<html>Bad gateway</html>", { status: 502 })), { kind: "unreachable" })
+    assert.deepEqual(await failed(new Response("not json", { status: 200 })), { kind: "unreachable" })
+    assert.equal(await failed(json(200, { ok: true })), null)
+    assert.deepEqual(await readResponse(json(200, { ok: true })), { ok: true })
+    assert.deepEqual(failureOf(new TypeError("Failed to fetch")), { kind: "unreachable" })
   })
 
   it("says what PnL stands for", () => {
