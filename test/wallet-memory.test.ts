@@ -197,6 +197,67 @@ describe("many wallets read at once", () => {
     await assert.rejects(wallets.get(ME), /Amp went away/)
     assert.equal((await wallets.get(OTHER)).address, OTHER)
   })
+
+  describe("when a query alongside the rows fails", () => {
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 1))
+    const gate = () => {
+      let open = () => {}
+      const opened = new Promise<void>((resolve) => (open = resolve))
+      return { opened, open: () => open() }
+    }
+
+    function failingPrice() {
+      const source = fakeSource({ [ME]: rowsOf(90), [OTHER]: rowsOf(1, OTHER) })
+      const fail = gate()
+      const readLatestReference = source.readLatestReference
+      let failing = true
+      source.readLatestReference = async (block) => {
+        if (!failing) return readLatestReference(block)
+        failing = false
+        await fail.opened
+        throw new Error("Amp went away")
+      }
+      const budget = createRowBudget(90)
+      return { source, budget, fail, wallets: createWallets(source, async () => HEAD, async () => new Map(), { warn() {} }, { budget }) }
+    }
+
+    it("gives back what the rows reserve, once they're read", async () => {
+      const { source, budget, fail, wallets } = failingPrice()
+      const window = gate()
+      const readWindow = source.readWindow
+      source.readWindow = async (address, from, to) => {
+        if (address === ME) await window.opened
+        return readWindow(address, from, to)
+      }
+      const failed = assert.rejects(wallets.get(ME), /Amp went away/)
+      await settle()
+      fail.open()
+      await settle()
+      window.open()
+      await failed
+      await settle()
+      budget.reserve(90)()
+      assert.deepEqual(wallets.progress(ME), { stage: "waiting", transfers: null })
+      assert.equal((await wallets.get(OTHER)).address, OTHER)
+    })
+
+    it("doesn't start reading rows it was still waiting for room to read", async () => {
+      const { source, budget, fail, wallets } = failingPrice()
+      const release = budget.reserve(90)
+      const failed = assert.rejects(wallets.get(ME), /Amp went away/)
+      await settle()
+      fail.open()
+      await settle()
+      release()
+      await failed
+      await settle()
+      assert.deepEqual(source.reads, [])
+      budget.reserve(90)()
+      assert.deepEqual(wallets.progress(ME), { stage: "waiting", transfers: null })
+      assert.equal((await wallets.get(OTHER)).address, OTHER)
+      assert.deepEqual(source.reads, [OTHER])
+    })
+  })
 })
 
 describe("what the SDK loads of it", () => {
