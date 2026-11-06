@@ -4,7 +4,7 @@
 import Foundation
 
 public enum Wording {
-    public static let methodName = "How cost is worked out"
+    public static let methodName = "Cost method"
     public static let methodHelp = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
     public static let averagePricePaid = "Average price paid"
     public static let networkFees = "Network fees"
@@ -292,6 +292,14 @@ public enum Wording {
     public static let exchangeCostWhy = "You said it came from your exchange account, which knows what you paid. Until you say, PnL leaves it out."
     public static let allAnswered = "All answered"
     public static let nothingLeft = "That's all for now"
+    /// Under what the questions were for, when it still leaves something out. Past the last card, what's still open is what was skipped.
+    public static func finishNote(_ meter: Meter) -> String {
+        let leftOut = "PnL still leaves some things out."
+        let notAQuestion = "What's left isn't a question, like a balance that doesn't match the chain."
+        if meter.open > 0 { return meter.answered > 0 ? "Not everything's answered, so \(leftOut)" : "Nothing's answered yet, so \(leftOut)" }
+        if meter.waiting > 0 { return meter.answered > 0 ? "Every question so far is answered, but \(leftOut)" : "There's nothing to ask so far, but \(leftOut)" }
+        return meter.answered > 0 ? "Every question's answered. \(notAQuestion)" : "There's nothing to ask. \(notAQuestion)"
+    }
     /// Where earlier answers are, so none is stuck once it's given.
     public static let answersPlace = "You can change any answer in Settings, under Answers."
 
@@ -400,7 +408,11 @@ public enum Wording {
     public static let unknown = "Unknown"
     public static let noPrice = "No price"
     public static let chartGap = "Where it's shaded, the PnL depends on a cost or price that isn't known, so there's no line. It isn't zero."
+    public static let valueChartGap = "Where it's shaded, a price is missing or more than prices changed, so this wallet's value can't be told and there's no line. It isn't zero."
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
+    public static let noValueToChart = "Nothing here had a known price when it moved, so there's no value to chart. It isn't zero."
+    public static let valueChartHelp = "What this wallet held, at the prices when each of its transactions happened. Prices are only read then, so the dashed line between two transactions is an estimate."
+    public static let valueChartLeavesOut = "Something here doesn't add up to what the wallet holds, or had no price, so the chart can't say what it was worth. The value above still counts it when it can."
     public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet. The first read can take a minute."
     /// A failed read never touches what's onchain, so this is true of every problem the feed has.

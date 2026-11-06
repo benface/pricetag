@@ -375,6 +375,10 @@ describe("the fork", () => {
     assert.equal(fork.functions.pt_cautious!.source.source, ptCautiousSource())
   })
 
+  it("starts from the same block as the dataset it forks", () => {
+    assert.equal(start, Number(/block_num\(\) >= (\d+)/.exec(manifest.tables.reference_prices!.input.sql)![1]))
+  })
+
   it("only has the tables a pricing rule decides, and depends only on what it forks", () => {
     assert.deepEqual(Object.keys(fork.tables).sort(), ["priced_legs", "reference_prices"])
     assert.deepEqual(Object.keys(fork.dependencies), ["pricetag"])
@@ -407,9 +411,7 @@ describe("the fork", () => {
 describe("exchange rates from logs", () => {
   const rates = JSON.parse(readFileSync(new URL("../dataset/rates.json", import.meta.url), "utf8")) as typeof manifest
   const sql = rates.tables.rate_updates!.input.sql
-  // The start staging serves, which the fork was built at too. The committed pricetag.json is from an earlier start.
-  const fork = JSON.parse(readFileSync(new URL("../dataset/cautious-eth.json", import.meta.url), "utf8")) as typeof manifest
-  const start = Number(/block_num\(\) >= (\d+)/.exec(fork.tables.reference_prices!.input.sql)![1])
+  const start = Number(/block_num\(\) >= (\d+)/.exec(manifest.tables.reference_prices!.input.sql)![1])
 
   it("is what build.ts writes, for the Pricetag dataset's start, on the same Base dataset, with no RPC", () => {
     assert.deepEqual(Object.keys(rates.tables), ["rate_updates"])

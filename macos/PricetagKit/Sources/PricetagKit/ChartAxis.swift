@@ -10,9 +10,10 @@ enum ChartAxis {
     }
 
     /// Marks for these values and zero, each as precise as the distance between them, so a chart of fractions of a cent doesn't label every line $0.
-    static func moneyTicks(_ values: [Double], _ currency: CurrencyCode) -> [MoneyTick] {
-        let low = min(0, values.min() ?? 0)
-        let high = max(0, values.max() ?? 0)
+    /// Without zero, they only span the values, for something that's never below it and moves little next to its size, like what's held.
+    static func moneyTicks(_ values: [Double], _ currency: CurrencyCode, includingZero: Bool = true) -> [MoneyTick] {
+        let low = includingZero ? min(0, values.min() ?? 0) : values.min() ?? 0
+        let high = includingZero ? max(0, values.max() ?? 0) : values.max() ?? 0
         let raw = (high > low ? high - low : 1) / 4
         let magnitude = pow(10, floor(log10(raw)))
         // PnL comes in millionths of a dollar, so nothing's finer than that.

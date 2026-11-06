@@ -6,20 +6,26 @@
 
 import { createServer, type Server } from "node:http"
 import { fileURLToPath } from "node:url"
+import { relayRate } from "../packages/sdk/src/receipts.ts"
 
 const RETRIES = 20
 const PAUSE_AFTER_429_MS = 1_000
 const TIMEOUT_MS = 30_000
 
-export function createThrottle(target: string, perSecond: number): Server {
+const realClock = {
+  now: () => Date.now(),
+  sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+}
+
+export function createThrottle(target: string, perSecond: number, clock = realClock): Server {
   const gapMs = 1_000 / perSecond
   let nextSlot = 0
 
   const waitForSlot = () => {
-    const now = Date.now()
+    const now = clock.now()
     const slot = Math.max(now, nextSlot)
     nextSlot = slot + gapMs
-    return new Promise((resolve) => setTimeout(resolve, slot - now))
+    return clock.sleep(slot - now)
   }
 
   return createServer(async (req, res) => {
@@ -39,7 +45,7 @@ export function createThrottle(target: string, perSecond: number): Server {
         })
         if (upstream.status === 429 && attempt < RETRIES) {
           // Everything waits, since the next request would get a 429 too.
-          nextSlot = Math.max(nextSlot, Date.now() + PAUSE_AFTER_429_MS)
+          nextSlot = Math.max(nextSlot, clock.now() + PAUSE_AFTER_429_MS)
           continue
         }
         // Read it first, so a response that breaks partway can still become a 502.
@@ -59,8 +65,9 @@ export function createThrottle(target: string, perSecond: number): Server {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const target = process.env.BASE_RPC_URL
-  const perSecond = Number(process.env.BASE_RPC_RATE_LIMIT)
+  const rateLimit = Number(process.env.BASE_RPC_RATE_LIMIT)
   const port = Number(process.argv[2])
-  if (!target || !(perSecond > 0) || !Number.isInteger(port)) throw new Error("Needs BASE_RPC_URL, BASE_RPC_RATE_LIMIT and a port")
-  createThrottle(target, perSecond).listen(port, "127.0.0.1")
+  if (!target || !(rateLimit > 0) || !Number.isInteger(port)) throw new Error("Needs BASE_RPC_URL, BASE_RPC_RATE_LIMIT and a port")
+  // The app's server reads L1 fees from the same RPC, with the rest of the limit.
+  createThrottle(target, relayRate(rateLimit)).listen(port, "127.0.0.1")
 }

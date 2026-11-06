@@ -20,6 +20,14 @@ function legsOf(rows: LegRow[], references: Reference[] = [REF]) {
 const marks = (references: Reference[]) => referenceMarks(references)
 
 describe("pricing a wallet's rows", () => {
+  it("prices a swap by its own priced row, in any order, whoever else's rows are there", () => {
+    const rows = [row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 800n * E18), row("0x2", USDC_ADDRESS, "debit", 1000n * E6), row("0x2", AERO, "credit", 400n * E18)]
+    const own = derivePricedRows(rows, [REF])
+    const someoneElse = own.map((p) => ({ ...p, account: "0x00000000000000000000000000000000000000bb", priced: { ...p.priced, usd_micros: "1" } }))
+    const legs = buildPricedLegs({ account: ME, rows, references: [REF], priced: [...someoneElse, ...own.toReversed()] })
+    assert.deepEqual(legs.filter((l) => l.asset === "AERO").map((l) => l.priceMicros), ["1250000", "2500000"])
+  })
+
   it("a swap uses the oracle for ETH and USDC, and the implied price for the other token", () => {
     const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 800n * E18)])
     const usdc = legs.find((l) => l.asset === "USDC")!
@@ -712,5 +720,53 @@ describe("totals", () => {
   it("the demo wallet's rows are still that wallet's", () => {
     assert.ok(DEMO_ROWS.every((r) => r.account === DEMO_ADDRESS))
     assert.ok(DEMO_REFERENCES.length > 0)
+  })
+})
+
+describe("what a wallet held over time", () => {
+  const at = (block: number, rows: LegRow[]) => rows.map((r) => ({ ...r, block_num: block, timestamp: new Date(Date.UTC(2026, 10, 4, 0, block - 100)).toISOString() }))
+  const references = [100, 101, 102].map((blockNum, i) => ({ ...REF, blockNum, ethUsd: String(240000000000 + i * 10000000000) }))
+  const latest = { blockNum: 103, timestamp: "2026-11-04T00:03:00.000Z" }
+  const valueOf = (rows: LegRow[], prices = {}, unconfirmed = new Set<string>()) => pnlOverTime(legsOf(rows, references), "average", prices, marks(references), latest, unconfirmed)
+
+  it("is worth what's held at that block's prices, before and after each transaction, so a deposit is a jump and not a slope", () => {
+    const points = valueOf([...at(100, [row("0x1", ETH_ADDRESS, "credit", E18)]), ...at(102, [row("0x2", ETH_ADDRESS, "credit", E18)])])
+    assert.deepEqual(points.slice(0, 2).map((p) => [p.valueBeforeMicros, p.valueMicros]), [["0", "2400000000"], ["2600000000", "5200000000"]])
+  })
+
+  it("a swap at the oracle's price leaves it where it was", () => {
+    const [, swap] = valueOf([...at(100, [row("0x1", USDC_ADDRESS, "credit", 2500n * E6)]), ...at(101, [row("0x2", USDC_ADDRESS, "debit", 2500n * E6), row("0x2", ETH_ADDRESS, "credit", E18)])])
+    assert.equal(swap!.valueBeforeMicros, "2500000000")
+    assert.equal(swap!.valueMicros, "2500000000")
+  })
+
+  it("holding nothing is a real $0, and the last point is at current prices", () => {
+    const points = valueOf([...at(100, [row("0x1", ETH_ADDRESS, "credit", E18)]), ...at(101, [row("0x2", ETH_ADDRESS, "debit", E18)])], { ETH: { micros: "3000000000", source: "oracle", blockNum: 103 } })
+    assert.equal(points[1]!.valueMicros, "0")
+    assert.equal(points.at(-1)!.valueMicros, "0")
+    assert.equal(points.at(-1)!.txHash, null)
+  })
+
+  it("a holding with no price is left out and counted, and alone it's unknown, never $0", () => {
+    const [aero] = valueOf(at(100, [row("0x1", AERO, "credit", E18)]))
+    assert.equal(aero!.valueMicros, null)
+    assert.equal(aero!.valueExcludedCount, 1)
+    const [, both] = valueOf([...at(100, [row("0x1", ETH_ADDRESS, "credit", E18)]), ...at(101, [row("0x2", AERO, "credit", E18)])])
+    assert.equal(both!.valueMicros, "2500000000")
+    assert.equal(both!.valueExcludedCount, 1)
+    assert.equal(both!.valueBeforeMicros, null, "before it, nothing was left out, so the two can't be compared")
+  })
+
+  it("leaves out what the chain hasn't confirmed, since its history can't vouch for what was held", () => {
+    const [eth] = valueOf(at(100, [row("0x1", ETH_ADDRESS, "credit", E18)]), {}, new Set(["ETH"]))
+    assert.equal(eth!.valueMicros, null)
+    assert.equal(eth!.valueExcludedCount, 1)
+  })
+
+  it("the last point matches the headline's value when everything is confirmed", () => {
+    const prices = DEMO_WALLET.prices
+    const headline = sumTotals(foldPositions(DEMO_WALLET.legs, "average", prices))
+    const points = pnlOverTime(DEMO_WALLET.legs, "average", prices, usdView(DEMO_WALLET).markPrice, DEMO_WALLET.latest)
+    assert.equal(points.at(-1)!.valueMicros, headline.valueMicros)
   })
 })

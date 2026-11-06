@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../core/api.ts"
-import { applyAnswer, changeStoredBook, isBookKey, linkDeviceAccounts, readStoredBook, recordPurchase, same, storedBook, undoAnswer, type Book, type Purchase } from "../core/book.ts"
+import { applyChange, changeStoredBook, isBookKey, linkDeviceAccounts, readStoredBook, recordPurchase, same, storedBook, undoAnswer, type Book, type BookChange, type Purchase } from "../core/book.ts"
 import { readKey, readsMatching } from "../core/resolve.ts"
 import { browserShelf } from "../core/shelf.ts"
 import { walletUrl } from "./useWallet.ts"
@@ -77,8 +77,8 @@ export function useBook() {
   }, [show])
 
   const change = useCallback(
-    (next: Book) => {
-      const update = (latest: Book) => applyAnswer(latest, book, next)
+    (next: BookChange) => {
+      const update = (latest: Book) => applyChange(latest, book, next)
       setBook(update)
       act(async () => {
         let before = book

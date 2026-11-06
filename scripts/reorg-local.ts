@@ -32,9 +32,6 @@ const WETH = "0x4200000000000000000000000000000000000006"
 /** Uniswap v3's USDC/WETH pool, impersonated on the fork as a source of USDC. */
 const USDC_SOURCE = "0xd0b53d9277642d899df5c87a3966a349a798f224"
 const ROUTER = "0x2626664c2603336e57b271c5c0b26f421741e481"
-/** An unlisted token that only emits a `Transfer` from its caller to its caller. */
-const UNLISTED = "0x4970000000000000000000000000000000000001"
-const UNLISTED_CODE = "0x60016000523333" + "7fddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef" + "60206000a300"
 
 const T0 = Date.now()
 const log = (event: string, data: Record<string, unknown> = {}) => console.log(JSON.stringify({ t: ((Date.now() - T0) / 1000).toFixed(2), event, ...data }))
@@ -56,15 +53,6 @@ const usdcBalance = async (block: number) => BigInt(await rpc<string>("eth_call"
 const sendEth = (wei: bigint) => rpc<string>("eth_sendTransaction", [{ from: SENDER, to: WALLET, value: hex(wei) }])
 const sendUsdc = (units: bigint) => rpc<string>("eth_sendTransaction", [{ from: USDC_SOURCE, to: USDC, data: `0xa9059cbb${word(WALLET)}${word(units)}`, gas: hex(200_000) }])
 
-/**
- * The SDK counts a table as processed up to its newest row, and Base always has swaps and unlisted tokens. A quiet fork
- * doesn't, so the chain gets one of each every few blocks, from the sender, never the watched wallet.
- */
-async function activity() {
-  await swapEth(10n ** 15n)
-  await rpc("eth_sendTransaction", [{ from: SENDER, to: UNLISTED, data: "0x", gas: hex(100_000) }])
-}
-
 /** The sender sells `wei` of ETH for USDC on Uniswap, which gives `priced_legs` a row for it. */
 function swapEth(wei: bigint) {
   const swap = `0x04e45aaf${word(WETH)}${word(USDC)}${word(500n)}${word(SENDER)}${word(wei)}${word(0n)}${word(0n)}`
@@ -81,14 +69,10 @@ async function txsIn(from: number, to: number): Promise<Set<string>> {
   return txs
 }
 
-/** `blocks` blocks at once, after anything already sent, with activity in the last one. */
-async function mineNow(blocks: number) {
-  if (blocks > 1) await rpc("anvil_mine", [hex(blocks - 1)])
-  await activity()
-  await rpc("anvil_mine", ["0x1"])
-}
+/** `blocks` blocks at once, after anything already sent. */
+const mineNow = (blocks: number) => rpc("anvil_mine", [hex(blocks)])
 
-/** A block every 200 ms like Base, with activity in every 5th, except while a reorg is being set up. */
+/** A block every 200 ms like Base, except while a reorg is being set up. */
 const miner = { paused: false, idle: Promise.resolve(), stopped: false }
 async function runMiner() {
   for (let n = 0; !miner.stopped; n++) {
@@ -96,7 +80,6 @@ async function runMiner() {
       let done = () => {}
       miner.idle = new Promise((resolve) => (done = resolve))
       try {
-        if (n % 5 === 0) await activity()
         await rpc("anvil_mine", ["0x1"])
       } finally {
         done()
@@ -311,7 +294,6 @@ async function reorg(depth: number, round: number) {
 if (!Number.isSafeInteger(START)) throw new Error("Set START_BLOCK to the datasets' start block")
 await rpc("anvil_impersonateAccount", [USDC_SOURCE])
 await rpc("anvil_setBalance", [USDC_SOURCE, hex(10n ** 18n)])
-await rpc("anvil_setCode", [UNLISTED, UNLISTED_CODE])
 void runMiner()
 await sleep(20_000)
 
@@ -320,7 +302,7 @@ watchRanges("priced_legs", followSql(DATASET), stop.signal, rewinds)
 const config = { url: FLIGHT, dataset: DATASET, baseDataset: RAW, startBlock: START, logger: { warn: (message: string) => log("sdk warn", { message: message.slice(0, 200) }) } }
 watchers = [
   watch("stream wallet", createPricetag(config).watchWallet(WALLET, { signal: stop.signal })),
-  // Polling only, which is what a client gets while the stream is down. It only finds a reorg at the head.
+  // Polling only, which is what a client gets while the stream is down.
   watch("polling wallet", pricetagClient(createQuery(FLIGHT, undefined), { ...config, follow: { pollMs: 1000 } }).watchWallet(WALLET, { signal: stop.signal })),
 ]
 await sleep(10_000)
