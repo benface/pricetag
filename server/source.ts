@@ -69,24 +69,27 @@ export function updateRounds(query: Query, dataset: string, exact: RoundReader):
   }
 }
 
-/** One query however many feeds, in the same shape: a wallet that holds several asks for them all at once. */
+/** One query however many feeds and blocks, in the same shape: a wallet that holds several asks for them all at once, and a chart's points share one. */
 function readFeedRoundsAt(query: Query, config: { baseDataset: string; network: string }): NonNullable<Source["readFeedRounds"]> {
-  return async (assets, block) => {
+  return async (assets, blocks) => {
+    const result = new Map<number, Record<string, FeedRound>>()
     const feeds = assets.flatMap((asset) => {
       const feed = TOKEN_FEEDS[asset]
       return feed ? [{ asset, address: feed.address }] : []
     })
-    if (feeds.length === 0) return {}
+    if (feeds.length === 0) return result
     const calls = feeds.map(({ address }, i) => `rpc.${config.network}.eth_call(NULL, evm_encode_hex('${address}'), evm_encode_params('latestRoundData()'), block_num) AS f${i}`)
-    const { filter, count } = blockFilters([block])[0] as { filter: string; count: number }
-    const [row] = await query<Row>(`SELECT block_num, timestamp, ${calls.join(", ")} FROM (SELECT block_num, timestamp FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)
-    if (!row) return {}
-    const rounds: Record<string, FeedRound> = {}
-    feeds.forEach(({ asset }, i) => {
-      const round = decodeRound((row[`f${i}`] as { data?: string } | null)?.data)
-      if (round) rounds[asset] = { ...round, blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) }
-    })
-    return rounds
+    for (const { filter, count } of blockFilters(blocks)) {
+      for (const row of await query<Row>(`SELECT block_num, timestamp, ${calls.join(", ")} FROM (SELECT block_num, timestamp FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)) {
+        const rounds: Record<string, FeedRound> = {}
+        feeds.forEach(({ asset }, i) => {
+          const round = decodeRound((row[`f${i}`] as { data?: string } | null)?.data)
+          if (round) rounds[asset] = { ...round, blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) }
+        })
+        result.set(asNumber(row.block_num), rounds)
+      }
+    }
+    return result
   }
 }
 
