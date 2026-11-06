@@ -177,20 +177,17 @@ describe("what a dataset adds to a wallet's rows", () => {
   const SENDER = "00000000000000000000000000000000000000dd"
   const leg = { block_num: 5, timestamp: 1, tx_hash: "aa", tx_index: 1, log_index: 3, token: "833589fcd6edb6e08f4c7c32d4f71b54bda02913", account: ME, side: "credit", amount: "7", kind: "erc20" }
 
-  it("says who sent each row, reading only the blocks that have one", async () => {
+  it("says who sent each row from the dataset, without reading the raw tables", async () => {
     const queries: string[] = []
     const query = async <T>(sql: string) => {
       queries.push(sql)
-      if (sql.includes(".legs")) return [leg, { ...leg, log_index: 0, token: "0000000000000000000000000000000000000000", kind: "eth", tx_hash: "bb" }] as T[]
-      if (sql.includes("base\".logs")) return [{ tx_hash: "aa", log_index: 3, topic1: SENDER.padStart(64, "0"), topic2: ME.padStart(64, "0") }] as T[]
-      if (sql.includes("base\".transactions")) return [{ tx_hash: "bb", from: SENDER, to: ME }] as T[]
+      if (sql.includes(".legs")) return [{ ...leg, counterparty: SENDER }, { ...leg, log_index: 0, token: "0000000000000000000000000000000000000000", kind: "eth", tx_hash: "bb", counterparty: SENDER }] as T[]
       return [] as T[]
     }
     const { rows } = await resolvingSource(query, config).readWindow(`0x${ME}`, 1, 10)
     assert.deepEqual(rows.map((r) => r.counterparty), [`0x${SENDER}`, `0x${SENDER}`])
-    const raw = queries.filter((q) => q.includes('"base"'))
-    assert.equal(raw.length, 2)
-    assert.ok(raw.every((q) => q.includes("block_num BETWEEN 5 AND 5")), "only that block")
+    assert.ok(queries.some((q) => /counterparty FROM "ds"\.legs/.test(q)))
+    assert.ok(!queries.some((q) => q.includes('"base".logs') || q.includes('"base".transactions')), "no raw lookups")
   })
 
   it("doesn't touch the raw tables for a wallet with nothing to look up", async () => {
@@ -282,9 +279,8 @@ describe("reading a wallet by two pricing rules", () => {
     const queries: string[] = []
     const query = async <T>(sql: string) => {
       queries.push(sql)
-      const leg = (block: number) => ({ block_num: block, timestamp: 1, tx_hash: `aa${block}`, tx_index: 1, log_index: 3, token: USDC, account: ME, side: "credit", amount: amountAt(block), kind: "erc20" })
+      const leg = (block: number) => ({ block_num: block, timestamp: 1, tx_hash: `aa${block}`, tx_index: 1, log_index: 3, token: USDC, account: ME, side: "credit", amount: amountAt(block), kind: "erc20", counterparty: SENDER })
       if (sql.includes(".legs")) return blocks.filter((block) => inRange(sql, block)).map(leg) as T[]
-      if (sql.includes('"base".logs')) return blocks.filter((block) => inRange(sql, block)).map((block) => ({ tx_hash: `aa${block}`, log_index: 3, topic1: SENDER.padStart(64, "0"), topic2: ME.padStart(64, "0") })) as T[]
       return [] as T[]
     }
     const reads = (table: string) => queries.filter((sql) => sql.includes(table))
@@ -303,8 +299,6 @@ describe("reading a wallet by two pricing rules", () => {
     assert.equal(reads('"market".priced_legs').length, 1)
     assert.equal(reads('"cautious".priced_legs').length, 1)
     assert.equal(reads('"ds".legs').filter((sql) => sql.includes("BETWEEN 1 AND 200")).length, 1, "the whole range once")
-    assert.equal(reads('"base".logs').filter((sql) => inRange(sql, 5)).length, 1, "a block no reorg can reach has one lookup")
-    assert.equal(reads('"base".logs').filter((sql) => inRange(sql, 150)).length, 1)
   })
 
   it("re-reads only what a reorg could reach, up to the blocks that are new", async () => {
@@ -316,7 +310,6 @@ describe("reading a wallet by two pricing rules", () => {
     assert.deepEqual(rows.map((r) => r.block_num).sort((a, b) => a - b), [5, 190, 205])
     assert.equal(reads('"ds".legs').length, 1)
     assert.ok(reads('"ds".legs')[0]!.includes(`BETWEEN ${settledThrough(200) + 1} AND 210`))
-    assert.ok(!reads('"base".logs').some((sql) => inRange(sql, 5)), "an old block's lookup isn't repeated")
   })
 
   it("a reorg in the blocks it re-reads replaces what's held, and older blocks stay", async () => {
@@ -716,7 +709,6 @@ describe("reading a wallet by two pricing rules", () => {
     assert.deepEqual(wb.legs.map((leg) => [leg.txHash, leg.blockNum]), wa.legs.map((leg) => [leg.txHash, leg.blockNum]))
     assert.ok(wa.legs.length >= 2)
     assert.equal(reads('"ds".legs').filter((sql) => sql.includes("BETWEEN 1 AND 200")).length, 1)
-    assert.equal(reads('"base".logs').filter((sql) => inRange(sql, 5)).length, 1)
   })
 })
 

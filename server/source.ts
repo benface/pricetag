@@ -4,8 +4,8 @@
 // Every query is bounded by block, because staging is shared.
 
 import { CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, MAX_ROUND_AGE_SECONDS, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type CurrencyCode, type FeedRound, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
-import { asIso, asNumber, blockFilters, blockRanges, datasetReader, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, readPayoutTxsAt, settledThrough, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
-import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRound, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
+import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, readPayoutTxsAt, settledThrough, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
+import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRound, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
 /** A currency's answer at each block, leaving out blocks where the read failed. */
 export type RoundReader = (currency: CurrencyCode, blocks: readonly number[]) => Promise<Map<number, RateRound>>
@@ -249,9 +249,6 @@ function unsettledFrom(reached: number, reorgs: readonly Reorg[]): number | null
   return unsettled.length > 0 ? Math.min(...unsettled.map(({ from }) => from)) : null
 }
 
-/** 5,000 blocks of `logs` took 3.8 s on staging, against about 7 s for the same blocks named 200 at a time. */
-const COUNTERPARTY_SPAN = 5_000
-
 /** What's been read of a wallet: its rows from `from` to `to`, and the answers for blocks that were past any reorg by then. */
 type SharedWallet = Pick<WindowRows, "rows" | "gasUnknown"> & { from: number; to: number; notes: Map<number, CostNote[]>; ethBalances: Map<number, string> }
 
@@ -261,8 +258,7 @@ type SharedWallet = Pick<WindowRows, "rows" | "gasUnknown"> & { from: number; to
  * again, and everything older comes from what's held, until `rewind` says a reorg went further back than that.
  */
 export function sharedReads(query: Query, config: { baseDataset: string; dataset: string; network: string }) {
-  const reader = datasetReader(query, config)
-  const base = `"${config.baseDataset}"`
+  const reader = datasetReader(query, { ...config, counterparties: true })
   const wallets = new Map<string, SharedWallet>()
   const turns = new Map<string, Promise<void>>()
   const reorgs: Reorg[] = []
@@ -274,26 +270,6 @@ export function sharedReads(query: Query, config: { baseDataset: string; dataset
     return turn
   }
 
-  /** The rows in a range, with who was on the other side. `legs` doesn't say, so that comes from the raw tables, for only the blocks that matter. */
-  async function readRows(address: string, from: number, to: number): Promise<Pick<WindowRows, "rows" | "gasUnknown">> {
-    const window = await reader.readLegs(address, from, to)
-    const me = hexOf(address)
-    const topic = `X'${me.padStart(64, "0")}'`
-    const allowlist = ERC20_ADDRESSES.map((a) => `X'${hexOf(a)}'`).join(", ")
-    const logs: Pick<RawLog, "tx_hash" | "log_index" | "topic1" | "topic2">[] = []
-    const txs: Pick<RawTx, "tx_hash" | "from" | "to">[] = []
-    // What else these ranges find matches no row of this wallet's, so `withCounterparties` never looks at it.
-    for (const filter of blockRanges(counterpartyBlocks(window.rows, "erc20"), COUNTERPARTY_SPAN)) {
-      const logRows = await query<Row>(`SELECT tx_hash, log_index, topic1, topic2 FROM ${base}.logs WHERE ${filter} AND topic0 = X'${TRANSFER_TOPIC}' AND address IN (${allowlist}) AND (topic1 = ${topic} OR topic2 = ${topic})`)
-      logs.push(...logRows.map((l) => ({ tx_hash: prefixed(String(l.tx_hash)), log_index: asNumber(l.log_index), topic1: String(l.topic1), topic2: String(l.topic2) })))
-    }
-    for (const filter of blockRanges(counterpartyBlocks(window.rows, "eth"), COUNTERPARTY_SPAN)) {
-      const txRows = await query<Row>(`SELECT tx_hash, "from", "to" FROM ${base}.transactions WHERE ${filter} AND ("from" = X'${me}' OR "to" = X'${me}') AND value <> '0'`)
-      txs.push(...txRows.map((t) => ({ tx_hash: prefixed(String(t.tx_hash)), from: String(t.from), to: t.to == null ? null : String(t.to) })))
-    }
-    return { ...window, rows: withCounterparties(window.rows, logs, txs) }
-  }
-
   return {
     readLegs: (address: string, from: number, to: number) =>
       inTurn(address, async () => {
@@ -301,7 +277,7 @@ export function sharedReads(query: Query, config: { baseDataset: string; dataset
         const extended = held && held.from <= from && from <= held.to + 1 ? held : null
         // Until the tables get past a reorg, every read goes back to it, however far that is.
         const readFrom = extended ? Math.max(extended.from, Math.min(settledThrough(extended.to) + 1, unsettledFrom(extended.to, reorgs) ?? Infinity)) : from
-        const read = readFrom <= to ? await readRows(address, readFrom, to) : { rows: [], gasUnknown: [] }
+        const read = readFrom <= to ? await reader.readLegs(address, readFrom, to) : { rows: [], gasUnknown: [] }
         const unread = ({ block_num }: { block_num: number }) => block_num < readFrom || block_num > to
         const next: SharedWallet = {
           from: extended?.from ?? from,
