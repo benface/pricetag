@@ -2,8 +2,8 @@
 
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { applyLeg, emptyPosition, pnlOverTime, type LegEffect, type Method, type PricedLeg } from "@pricetag/sdk/core"
-import type { ExplanationResponse } from "../src/core/api.ts"
+import { applyLeg, emptyPosition, firstMarks, pnlOverTime, usdView, viewWallet, type LegEffect, type Method, type PricedLeg } from "@pricetag/sdk/core"
+import type { ExplanationResponse, WalletResponse } from "../src/core/api.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { emptyBook } from "../src/core/book.ts"
 import { ESTIMATE_LINE, est } from "../src/core/wording.ts"
@@ -83,8 +83,93 @@ describe("explaining an estimate", () => {
     const at = pnlOverTime([bought, given], method, {}, () => "3000000000", null)
     assert.equal(at[0]?.pnlEstimated, undefined)
     assert.equal(at[1]?.pnlEstimated, true)
-    const market = pnlOverTime([{ ...bought, asset: "NOFEED" }], method, {}, () => "3000000", null)
-    assert.equal(market[0]?.pnlEstimated, true)
+  })
+
+  describe("a transaction's PnL goes by the price used at that block, not today's", () => {
+    const aero = leg(10n ** 18n, { asset: "AERO", costMicros: "1000000", costLabel: "paid", priceMicros: "1000000" })
+    const wallet = (source: "oracle" | "market", fromFeed: boolean): WalletResponse => ({
+      ...DEMO_WALLET,
+      legs: [aero],
+      references: [],
+      marketMarks: { 1: { AERO: "2000000" } },
+      ...(fromFeed ? { feedMarks: { 1: ["AERO"] } } : { feedMarks: {} }),
+      prices: { AERO: { micros: "2000000", source, blockNum: 2 } },
+      balances: { blockNum: 2, amounts: { AERO: aero.delta } },
+      latest: { blockNum: 2, timestamp: "2026-11-04T00:00:04Z" },
+      coverage: { fromBlock: 1, toBlock: 2 },
+      unreadBalances: [],
+      priceSamples: [],
+      gasUnknownTxs: [],
+      l1FeeUnknownTxs: [],
+    })
+    const explain = (response: WalletResponse) => explainPortfolio(response, method, { kind: "tx", txHash: "0xa" })!
+
+    it("marks a market price then, though a feed prices it now", () => {
+      const { value, lines } = explain(wallet("oracle", false))
+      assert.equal(value, "≈+$1.00")
+      assert.ok(lines.includes(ESTIMATE_LINE))
+    })
+
+    it("leaves a feed's price then alone, though only a market prices it now", () => {
+      const { value, lines } = explain(wallet("market", true))
+      assert.equal(value, "+$1.00")
+      assert.ok(!lines.includes(ESTIMATE_LINE))
+    })
+
+    it("marks what's priced by a market now on the last point only", () => {
+      const points = foldBook(wallet("market", true), [], method, emptyBook()).points
+      assert.deepEqual(points.map((point) => point.pnlEstimated), [undefined, true])
+    })
+
+    it("keeps a price's source with the wallet that has that price", () => {
+      const noPrice = { markPrice: () => null, markEstimated: () => { throw new Error("it has no price to ask about") } }
+      const marks = firstMarks([noPrice, { markPrice: () => "1", markEstimated: () => true }])
+      assert.equal(marks.markPrice(1, "AERO"), "1")
+      assert.equal(marks.markEstimated(1, "AERO"), true)
+    })
+  })
+
+  describe("a transaction across wallets", () => {
+    const eth = leg(ETH, { costMicros: "3000000000", costLabel: "paid" })
+    const wallet: WalletResponse = {
+      ...DEMO_WALLET,
+      legs: [eth],
+      references: [{ blockNum: 1, ethUsd: "300000000000", usdcUsd: "100000000" }],
+      marketMarks: {},
+      prices: { ETH: { micros: "3000000000", source: "oracle", blockNum: 2 } },
+      balances: { blockNum: 2, amounts: { ETH: eth.delta } },
+      latest: { blockNum: 2, timestamp: "2026-11-04T00:00:04Z" },
+      coverage: { fromBlock: 1, toBlock: 2 },
+      unreadBalances: [],
+      priceSamples: [],
+      gasUnknownTxs: [],
+      l1FeeUnknownTxs: [],
+    }
+
+    it("reads exact when it reads exact alone", () => {
+      const alone = explainPortfolio(wallet, method, { kind: "tx", txHash: "0xa" })!
+      const across = explainCombined([wallet], method, { kind: "tx", txHash: "0xa" }, emptyBook())!
+      assert.equal(alone.value, "$0.00")
+      assert.equal(across.value, "$0.00")
+      assert.ok(!across.lines.includes(ESTIMATE_LINE))
+    })
+
+    it("still marks a market price", () => {
+      const aero = leg(10n ** 18n, { asset: "AERO", costMicros: "1000000", costLabel: "paid", priceMicros: "1000000" })
+      const held: WalletResponse = { ...wallet, legs: [aero], references: [], marketMarks: { 1: { AERO: "2000000" } }, prices: { AERO: { micros: "2000000", source: "oracle", blockNum: 2 } }, balances: { blockNum: 2, amounts: { AERO: aero.delta } } }
+      const across = explainCombined([held], method, { kind: "tx", txHash: "0xa" }, emptyBook())!
+      assert.equal(across.value, "≈+$1.00")
+      assert.ok(across.lines.includes(ESTIMATE_LINE))
+    })
+  })
+
+  it("carries a price's source through another currency", () => {
+    const view = { ...DEMO_WALLET, marketMarks: { 1: { AERO: "1" }, 2: { AERO: "1" } }, feedMarks: { 1: ["AERO"] } }
+    for (const { markEstimated } of [usdView(view), viewWallet({ ...view, currency: "CAD", rates: { byBlock: {}, latest: null } })]) {
+      assert.equal(markEstimated(1, "AERO"), false)
+      assert.equal(markEstimated(2, "AERO"), true)
+      assert.equal(markEstimated(1, "ETH"), false)
+    }
   })
 
   it("leaves exact numbers alone", () => assert.equal(est("$1.00", false), "$1.00"))

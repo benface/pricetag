@@ -59,7 +59,7 @@ Amounts are in a token's smallest unit, and money is in micros (millionths of a 
 | `getLatestPrices()` | The current prices to value positions at, for every token on the allowlist, in one query: ETH and USDC from a recent oracle read, and the rest from their Chainlink feeds. A token whose answer is too old, implausible or failed isn't in it, and a feed read that fails goes to `logger`. |
 | `buildPortfolio(legs, method, prices?)` | `{ method, positions, totals }` from `getLegs`' legs. It's pure, so it needs no Amp. Nothing in it is checked against the chain, so prefer `getPortfolio`. |
 | `pnlStatus(totals, gasUnknownTxs?)` | Whether `totals.pnlMicros` can be read as the wallet's PnL: `complete`, `partial` or `unavailable`. `getPortfolio` already includes it. |
-| `pnlOverTime(legs, method, prices, markPrice, latest, unconfirmed?)` | PnL after each transaction, where `referenceMarks(references)` gives `markPrice`. `getPortfolio` already includes it, as `points`. |
+| `pnlOverTime(legs, method, prices, markPrice, latest, unconfirmed?)` | PnL after each transaction, where `referenceMarks(references)` gives `markPrice`. A last `markEstimated` argument, like `marketMarked(marks, feeds)`, says which of those prices are estimates, for each point's `pnlEstimated`. `getPortfolio` already includes it, as `points`. |
 | `formatMoney`, `formatSignedMoney`, `formatPrice` | A value in micros, as text, in USD unless you pass another currency. `null` prints as `unknown`, never as $0. |
 | `formatAmount`, `formatSignedAmount` | An amount in whole tokens, from its smallest units and decimals, cut to a readable length. They cut instead of rounding, so they never show more than there is. |
 | `shortHash` | A transaction hash or address, shortened. |

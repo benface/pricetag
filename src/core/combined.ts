@@ -8,7 +8,7 @@
 
 import { CHECK_LABELS, ESTIMATE_LINE, est } from "./wording.ts"
 import { NO_FACTS, combinedFacts, type TransactionFacts } from "./activity.ts"
-import { compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
+import { compareWithHoldingEth, firstMarks, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { BookPoint, BookPreview, ExplanationLeg, ExplanationResponse, PortfolioPosition, PortfolioResponse, WalletResponse } from "./api.ts"
 import type { Book } from "./book.ts"
 import { explainHold, explainPoint, explainTarget, explainTotal, metricIsEstimate, totalIsEstimate, type ExplainTarget, type Explanation, type Metric } from "./explain.ts"
@@ -59,12 +59,6 @@ function foldAll(read: readonly WalletResponse[], method: Method, book: Book): F
 }
 
 const unique = <T>(values: Iterable<T>) => [...new Set(values)]
-
-/** The first that has a price, since each wallet's reads only have the blocks it was read at. */
-const markOf =
-  (folded: readonly Folded[]): MarkPrice =>
-  (blockNum, asset) =>
-    folded.map(({ fold }) => fold.view.markPrice(blockNum, asset)).find((price) => price !== null) ?? null
 
 const noTotals = (): Totals => ({ ...sumTotals([]), valueMicros: null, realizedMicros: null, unrealizedMicros: null, gasMicros: null, pnlMicros: null })
 
@@ -148,7 +142,7 @@ function combinedPositions(parts: readonly { wallet: string; position: Portfolio
  * and all of them marked at that moment's prices. Adding up each wallet's own points wouldn't do: they're marked at the prices
  * of their own transactions, not each other's.
  */
-function combinedPoints(started: readonly Folded[], mark: MarkPrice, latest: { blockNum: number; timestamp: string }, method: Method): PnlPoint[] {
+function combinedPoints(started: readonly Folded[], { markPrice, markEstimated }: Pick<WalletView, "markPrice" | "markEstimated">, latest: { blockNum: number; timestamp: string }, method: Method): PnlPoint[] {
   const key = (address: string, asset: string) => `${address}|${asset}`
   const assetOf = (keyed: string) => keyed.slice(keyed.indexOf("|") + 1)
   // Sorting is stable, so each wallet's order holds inside a transaction, and one transaction's legs stay together.
@@ -157,7 +151,7 @@ function combinedPoints(started: readonly Folded[], mark: MarkPrice, latest: { b
   for (const { address, fold } of started) for (const position of fold.positions) prices[key(address, position.asset)] = fold.view.prices[position.asset]
   const unconfirmed = new Set(started.flatMap(({ address, fold }) => [...unconfirmedAssets(fold.positions, fold.unread)].map((asset) => key(address, asset))))
   const noMarket = new Set(started.flatMap(({ address, fold }) => fold.totals.noMarket.map((asset) => key(address, asset))))
-  return pnlOverTime(legs, method, prices, (blockNum, keyed) => mark(blockNum, assetOf(keyed)), latest, unconfirmed, noMarket, started.flatMap(({ wallet }) => (wallet.priceSamples ?? []).map((sample) => sample.blockNum)))
+  return pnlOverTime(legs, method, prices, (blockNum, keyed) => markPrice(blockNum, assetOf(keyed)), latest, unconfirmed, noMarket, started.flatMap(({ wallet }) => (wallet.priceSamples ?? []).map((sample) => sample.blockNum)), (blockNum, keyed) => markEstimated(blockNum, assetOf(keyed)))
 }
 
 /** What a transaction did across the wallets. A move between them says so, rather than that one sent and another received. */
@@ -201,7 +195,7 @@ function combine(read: readonly WalletResponse[], method: Method, book: Book, { 
   const totals = { ...summed, excluded: started.flatMap(({ address, fold }) => fold.totals.excluded.map((exclusion) => ({ ...exclusion, wallet: address }))) }
   const status = statusOf(summed, gasUnknownTxs)
   const moves = movesBetween(started.map(({ wallet, fold }) => ({ wallet, view: { ...fold.view, legs: fold.legs } })))
-  const mark = markOf(folded)
+  const marks = firstMarks(folded.map(({ fold }) => fold.view))
   const latest = read.reduce((newest, wallet) => (wallet.latest.blockNum > newest.blockNum ? wallet.latest : newest), (read[0] as WalletResponse).latest)
 
   const walletOf = new Map<PricedLeg, string>()
@@ -220,7 +214,7 @@ function combine(read: readonly WalletResponse[], method: Method, book: Book, { 
     }
   }
   const everyWallet = new Set(started.map(({ address }) => address))
-  const points = combinedPoints(started, mark, latest, method).map((point): CombinedPoint => {
+  const points = combinedPoints(started, marks, latest, method).map((point): CombinedPoint => {
     const entries = point.txHash ? (byTx.get(point.txHash) ?? []) : []
     const legs = entries.map(({ leg }) => leg)
     const facts = point.txHash ? combinedFacts(legs, factsIn.get(point.txHash) ?? [], everyWallet) : NO_FACTS
@@ -230,14 +224,14 @@ function combine(read: readonly WalletResponse[], method: Method, book: Book, { 
   const holdPositions = walletPositions.map((position) => ({ ...position, effects: position.effects.filter(({ leg }) => !isMove(leg, moves)) }))
   // Each wallet's own latest prices, first one first, for the ETH that holding would have.
   const prices: LatestPrices = Object.assign({}, ...folded.map(({ fold }) => fold.view.prices).reverse())
-  const holdComparison = compareWithHoldingEth(holdPositions, summed, status, prices, mark)
+  const holdComparison = compareWithHoldingEth(holdPositions, summed, status, prices, marks.markPrice)
 
   // Each wallet's fold already asks about what arrived in any of them, so this only takes out the repeats.
   const questions = [...new Map(folded.flatMap(({ fold }) => fold.questions).map((question) => [question.id, question])).values()].sort((a, b) => {
     const [x, y] = [BigInt(a.valueMicros ?? "0"), BigInt(b.valueMicros ?? "0")]
     return x === y ? a.id.localeCompare(b.id) : x > y ? -1 : 1
   })
-  return { folded, started, responses, positions, walletPositions, totals, points, moves, holdPositions, holdComparison, questions, walletOf, mark }
+  return { folded, started, responses, positions, walletPositions, totals, points, moves, holdPositions, holdComparison, questions, walletOf, mark: marks.markPrice }
 }
 
 /**

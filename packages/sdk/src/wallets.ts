@@ -4,7 +4,7 @@
 import { describeError, type Logger } from "./amp.ts"
 import { LAST_2S_BLOCK, blockBefore, msBetweenBlocks, priceSampleBlocks, timestampOfBlock } from "./chain.ts"
 import { answerToMicros, buildPricedLegs, creditUnseenEth, derivePricedRows, isUnwrapClaim, oneWaySendBalanceBlocks, payerOf, settleUnwraps, unseenEthSearchBlocks, unwrapBalanceBlocks, type EthPayer, type GasUnknownTx, type LegRow, type PayoutTx, type PricedRow, type Reference } from "./legs.ts"
-import { MARKET_MAX_AGE_MS, markNeeds, marketPrice, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
+import { MARKET_MAX_AGE_MS, markNeeds, marketPrice, type FeedMarks, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
 import type { CostNote } from "./notes.ts"
 import { feedPrice, foldPositions, latestPrices, type FeedRound, type Head, type LatestPrices } from "./portfolio.ts"
 import type { ReadL1Fees } from "./receipts.ts"
@@ -798,9 +798,12 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     }
     // What's been read for its chart so far. A feed comes first, as for what's held now, so the last point doesn't jump.
     const marketMarks: MarketMarks = {}
+    const feedMarks: FeedMarks = {}
     for (const read of chartReads(address, wallet.rows, opening)) {
-      const micros = feedMark(read, rounds, wallet.references) ?? marketAt(read.asset, read.block)
+      const fromFeed = feedMark(read, rounds, wallet.references)
+      const micros = fromFeed ?? marketAt(read.asset, read.block)
       if (micros) (marketMarks[read.block] ??= {})[read.asset] = micros
+      if (fromFeed) (feedMarks[read.block] ??= []).push(read.asset)
     }
     const openedAt = timestampOfBlock(wallet.fromBlock - 1, wallet.latest)
     return {
@@ -826,6 +829,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       notes: wallet.notes,
       marketChecked: wallet.marketChecked,
       marketMarks,
+      ...(Object.keys(feedMarks).length > 0 ? { feedMarks } : {}),
       ...(wallet.samples ? { priceSamples: sampleBlocksOf(wallet).map((block) => wallet.samples?.get(block) ?? { blockNum: block, ethUsd: "", usdcUsd: "" }) } : {}),
     }
   }

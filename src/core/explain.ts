@@ -56,7 +56,7 @@ export function explainContext(wallet: WalletResponse, view: WalletView, method:
   const usd = usdView(wallet)
   const positions = foldPositions(usd.legs, method, usd.prices, wallet)
   const unread = unreadAssets(positions, wallet)
-  return { view, ruleNote, source: { positions, totals: sumTotals(positions, unread), points: pnlOverTime(usd.legs, method, usd.prices, usd.markPrice, wallet.latest, unconfirmedAssets(positions, unread)) } }
+  return { view, ruleNote, source: { positions, totals: sumTotals(positions, unread), points: pnlOverTime(usd.legs, method, usd.prices, usd.markPrice, wallet.latest, unconfirmedAssets(positions, unread), undefined, undefined, usd.markEstimated) } }
 }
 
 /** Where a currency's rates come from, in words. It's said wherever a rate is used, since it isn't the source of the prices. */

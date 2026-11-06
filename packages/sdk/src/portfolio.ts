@@ -4,7 +4,7 @@ import { applyLeg, emptyPosition, worth, valuePosition, type Method, type Positi
 import { timestampOfBlock } from "./chain.ts"
 import type { RateRound } from "./currency.ts"
 import { answerToMicros, isSanePrice, type PricedLeg, type Reference } from "./legs.ts"
-import type { MarketMarks } from "./market.ts"
+import type { FeedMarks, MarketMarks } from "./market.ts"
 import { decimalsOf, estimateHeld, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
 import { TOKENS, TOKEN_FEEDS } from "./tokens.ts"
 
@@ -340,6 +340,14 @@ export function referenceMarks(references: readonly Reference[], market: MarketM
     return market[blockNum]?.[asset] ?? null
   }
 }
+
+/** Whether a token's price at a block is an estimate, so a chart can say so. It's only asked about a price there is. */
+export type MarkEstimated = (blockNum: number, asset: string) => boolean
+
+/** Whether `referenceMarks` got a price from a market. Oracle reads and feeds aren't estimates. */
+export function marketMarked(market: MarketMarks = {}, feeds: FeedMarks = {}): MarkEstimated {
+  return (blockNum, asset) => asset !== "ETH" && asset !== "USDC" && market[blockNum]?.[asset] !== undefined && !feeds[blockNum]?.includes(asset)
+}
 export type Portfolio = { method: Method; positions: Position[]; totals: Totals }
 
 /** cost = fold(pricedLegs, method). Without `prices`, every position's value and unrealized PnL stay unknown. */
@@ -366,7 +374,7 @@ export type PnlPoint = {
   txHash: string | null
   /** Realized, plus unrealized at that moment's prices, less gas. Only what's known, and null when nothing is. */
   pnlMicros: string | null
-  /** What `pnlMicros` is made of includes an estimated cost or proceeds, or a token only a market can price. Only there when it's true. */
+  /** What `pnlMicros` is made of includes an estimated cost or proceeds, or a price from a market at that moment. Only there when it's true. */
   pnlEstimated?: boolean
   excludedCount: number
   /** What was held right after it, at that moment's prices. Only what's known, and null when nothing is. */
@@ -409,10 +417,12 @@ export function pnlOverTime(
   noMarket: ReadonlySet<string> = new Set(),
   /** Blocks with prices that aren't there for a transaction. */
   sampleBlocks: readonly number[] = [],
+  /** Which of `markPrice`'s prices are estimates. */
+  markEstimated: MarkEstimated = () => false,
 ): PnlPoint[] {
   const states = new Map<string, PositionState>()
   const points: PnlPoint[] = []
-  const measure = (priceOf: (asset: string) => string | null) => {
+  const measure = (priceOf: (asset: string) => string | null, priceEstimated: (asset: string) => boolean) => {
     const coverage: Coverage = { known: 0, missing: 0 }
     let pnl = 0n
     let excludedCount = 0
@@ -441,7 +451,7 @@ export function pnlOverTime(
         pnl += BigInt(v.unrealizedMicros)
         if (BigInt(v.qty) > 0n) {
           coverage.known++
-          if (BigInt(v.estimatedCostMicros) > 0n || prices[asset]?.source === "market" || !(TOKENS.some((t) => t.symbol === asset && t.oracle) || TOKEN_FEEDS[asset])) pnlEstimated = true
+          if (BigInt(v.estimatedCostMicros) > 0n || priceEstimated(asset)) pnlEstimated = true
         }
       } else if (BigInt(v.qty) > 0n) {
         excludedCount++
@@ -525,13 +535,13 @@ export function pnlOverTime(
     }
     if (legs[i + 1]?.txHash === leg.txHash) return
     const after = worthNow(at)
-    lastPoint = { blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure(at), ...valueAround(before, after) }
+    lastPoint = { blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure(at, (asset) => markEstimated(leg.blockNum, asset)), ...valueAround(before, after) }
     points.push(lastPoint)
   })
   if (latest && (states.size > 0 || unconfirmed.size > 0)) {
     sampleBefore(latest.blockNum)
     const now = worthNow((asset) => prices[asset]?.micros ?? null)
-    points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.micros ?? null), ...valueAround(now, now) })
+    points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.micros ?? null, (asset) => prices[asset]?.source === "market"), ...valueAround(now, now) })
   }
   return points
 }

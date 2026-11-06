@@ -1009,6 +1009,18 @@ describe("marking the chart from the token feeds", () => {
     assert.equal(marketMarks[950]?.wstETH, "3000000000")
   })
 
+  it("says which of a chart's prices came from a feed", async () => {
+    const { source } = thin([holding(750), holding(950)], {
+      readMarketTrades: async (asset, _, to) => [1, 2, 3].map((n) => ({ blockNum: to - n, txHash: `0x${n}`, asset, usdMicros: "1300000", notionalUsdMicros: "500000000" })),
+      readFeedRounds: async (_, block): Promise<Record<string, FeedRound>> => (block === 900 ? { AERO: round("63000000", block) } : {}),
+    })
+    const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.deepEqual([wallet.marketMarks[750]?.AERO, wallet.marketMarks[950]?.AERO], ["1300000", "630000"])
+    assert.deepEqual(wallet.feedMarks, { 950: ["AERO"] })
+    const { markEstimated } = usdView(wallet)
+    assert.deepEqual([markEstimated(750, "AERO"), markEstimated(950, "AERO")], [true, false])
+  })
+
   it("asks once per bucket, however many tokens are held", async () => {
     const { source, feedReads } = thin([holding(950), holding(951, DAI), holding(960, WSTETH)])
     await createWallets(source, headAt(1000), noFees).get(ME)
