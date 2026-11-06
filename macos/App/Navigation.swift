@@ -83,7 +83,10 @@ final class Navigation {
     /// The web app sent over an account from a device. Spending Money's page asks the person to check it.
     var addingSavings: AddSavingsLink?
     /// There's no Spending Money to show yet, or it can't be opened. This says what it is, and is the only place that makes a key.
-    var isSettingUpSpendingMoney = false
+    var isSettingUpSpendingMoney = false {
+        // Here and not in a view, for the same reason as the wallet list. Cancelled, there's no page to take what was asked for.
+        didSet { if oldValue, !isSettingUpSpendingMoney, hotWallet.address == nil { forgetSpendingMoneyRequests() } }
+    }
     /// Asked for from a row in the wallet list, which closes first. So it's the window that holds this.
     var removingFromSavings: WalletEntry?
     /// Which pane Settings opens on, for what points there from elsewhere.
@@ -223,6 +226,15 @@ final class Navigation {
         guard resolvingWallet == nil, let returnWallet else { return }
         self.returnWallet = nil
         store.setWallet(returnWallet)
+    }
+
+    /// Left waiting, these would open by surprise once there's a page, and the ones already set couldn't be asked for again.
+    private func forgetSpendingMoneyRequests() {
+        wantsTopUp = false
+        wantsSend = false
+        wantsAddSavings = false
+        addingSavings = nil
+        shownRow = nil
     }
 
     private func forgetPendingQuestions() {

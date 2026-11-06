@@ -169,7 +169,7 @@ public struct LegRow: View {
                     if let wallet = leg.wallet { Tag(walletNames.walletName(wallet)) }
                     Tag("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
                     if leg.priceMicros == nil {
-                        Tag("No price", isWarning: true)
+                        Tag(Wording.noPrice, isWarning: true)
                     }
                     if let unknown = leg.unknown {
                         Tag("Gain unknown", isWarning: true).help(unknown)
@@ -278,7 +278,7 @@ public struct LegRow: View {
                 .help("The price per \(leg.asset) at this block. Proof says where it comes from.")
                 .accessibilityLabel("Price, \(Format.price(price, currency)), \(Wording.priceSource(source))")
         } else {
-            Tag("No price", isWarning: true)
+            Tag(Wording.noPrice, isWarning: true)
         }
         // An unknown cost has its own line below, with what fixes it.
         if leg.isIncoming, leg.costLabel != "unknown" {

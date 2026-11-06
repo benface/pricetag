@@ -417,6 +417,11 @@ enum TestScene: String, CaseIterable {
     case routeReceive = "route-receive"
     case routeReceiveOpen = "route-receive-open"
     case routeAddSavings = "route-add-savings"
+    case routeExport = "route-export"
+    case routeExportOpen = "route-export-open"
+    case routeFind = "route-find"
+    case routeFindOpen = "route-find-open"
+    case routeTopUpCancelled = "route-top-up-cancelled"
     /// The menu bar's other destinations, starting from another section. Each fails unless it gets there and stays.
     case routeHoldings = "route-holdings"
     case routeHoldingsOpen = "route-holdings-open"
@@ -449,6 +454,7 @@ enum TestScene: String, CaseIterable {
     case hotWallet = "hot-wallet"
     case hotWalletCAD = "hot-wallet-cad"
     case hotWalletNoRate = "hot-wallet-no-rate"
+    case hotWalletTwoSavings = "hot-wallet-two-savings"
     case hotWalletNoSavings = "hot-wallet-no-savings"
     case hotWalletNoSavingsCAD = "hot-wallet-no-savings-cad"
     case hotWalletNoPrice = "hot-wallet-no-price"
@@ -532,6 +538,8 @@ enum TestScene: String, CaseIterable {
     case buyRefused = "buy-refused"
     case hotWalletTopUp = "hot-wallet-top-up"
     case hotWalletTopUpFirstRead = "hot-wallet-top-up-first-read"
+    case hotWalletTopUpReading = "hot-wallet-top-up-reading"
+    case hotWalletTopUpNoGas = "hot-wallet-top-up-no-gas"
     case hotWalletTopUpOneDollar = "hot-wallet-top-up-one-dollar"
     case hotWalletTopUpAtCap = "hot-wallet-top-up-at-cap"
     case hotWalletTopUpNoSavings = "hot-wallet-top-up-no-savings"
@@ -729,6 +737,9 @@ enum TestScene: String, CaseIterable {
         case .hotWalletTopUpOneDollar: .nearCap
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD, .popoverHotWalletNoSavings, .hotWalletTopUpNoSavings, .addSavingsFinished, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet: .noSavings
         case .hotWalletNoPrice: .noPrice
+        case .hotWalletTwoSavings: .twoSavings
+        case .hotWalletTopUpReading: .funded
+        case .hotWalletTopUpNoGas: .noGas
         case .hotWalletNothingToSweep: .nothingToSweep
         case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap, .buyAtCap: .overCap
         case .hotWalletOverCapNoSavings, .hotWalletTopUpNoSavingsAtCap, .buyNoSavingsAtCap, .buyNoSavingsAtCapFirstRead, .addSavingsCheckStartsSweeps, .addSavingsFinishedSweeping: .overCapNoSavings
@@ -889,7 +900,7 @@ enum TestScene: String, CaseIterable {
             hotWalletHasRead.isDone = true
         }
         // Adding a wallet doesn't wait for this read, and neither does that scene.
-        if ![.hotWalletTopUpFirstRead, .addSavingsCheckBalanceUnread, .buyFirstRead, .buyReading, .buyNoSavingsFirstRead, .buyNoSavingsAtCapFirstRead].contains(self) {
+        if ![.hotWalletTopUpFirstRead, .hotWalletTopUpReading, .addSavingsCheckBalanceUnread, .buyFirstRead, .buyReading, .buyNoSavingsFirstRead, .buyNoSavingsAtCapFirstRead].contains(self) {
             Task { await readHotWallet() }
             let deadline = Date.now.addingTimeInterval(TestMode.readyTimeout)
             while !hotWalletHasRead.isDone {
@@ -1034,7 +1045,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 2200, height: 1300), isReady: isReady)
         case .mainMissingPrice:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .routeRemoveFromSavingsOpen, .routeBuy, .routeBuyOpen, .routeReceive, .routeReceiveOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .routeHoldings, .routeHoldingsOpen, .routeAddWallet, .routeAddWalletOpen, .routeDetails, .routeDetailsOpen, .routeAnswer, .routeAnswerOpen:
+        case .routeExport, .routeExportOpen, .routeFind, .routeFindOpen, .routeTopUpCancelled, .routeRemoveFromSavingsOpen, .routeBuy, .routeBuyOpen, .routeReceive, .routeReceiveOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .routeHoldings, .routeHoldingsOpen, .routeAddWallet, .routeAddWalletOpen, .routeDetails, .routeDetailsOpen, .routeAnswer, .routeAnswerOpen:
             let press: () -> Void
             let hasArrived: () -> Bool
             let hasSheet = { NSApp.windows.contains { $0.attachedSheet != nil } }
@@ -1055,6 +1066,23 @@ enum TestScene: String, CaseIterable {
             case .routeAddSavings:
                 press = navigation.addSavings
                 hasArrived = { !navigation.wantsAddSavings && isOnSpendingMoney() && hasSheet() }
+            case .routeExport, .routeExportOpen:
+                press = { navigation.isExporting = true }
+                hasArrived = { !navigation.isExporting }
+            case .routeFind, .routeFindOpen:
+                navigation.section = .taxReport
+                press = navigation.find
+                hasArrived = { !navigation.wantsSearch && navigation.section == .transactions }
+            case .routeTopUpCancelled:
+                // There's no spending money, so it asks to make some, and that's cancelled the way the sheet's button does.
+                press = {
+                    navigation.topUp()
+                    Task {
+                        try? await Task.sleep(for: .seconds(0.2))
+                        navigation.isSettingUpSpendingMoney = false
+                    }
+                }
+                hasArrived = { !navigation.isSettingUpSpendingMoney && !navigation.wantsTopUp && !hasSheet() }
             case .routeHoldings, .routeHoldingsOpen:
                 navigation.section = .transactions
                 press = navigation.showOverview
@@ -1132,7 +1160,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(view), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation, purchases: purchases)), size: CGSize(width: 560, height: 720), isReady: isReady)
-        case .hotWallet, .hotWalletRecordShown, .hotWalletCAD, .hotWalletNoRate, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletNothingToSweep, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck, .hotWalletReplacingKeyMissing, .hotWalletSites:
+        case .hotWallet, .hotWalletTwoSavings, .hotWalletRecordShown, .hotWalletCAD, .hotWalletNoRate, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletNothingToSweep, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck, .hotWalletReplacingKeyMissing, .hotWalletSites:
             // The manual sweep, which is a row in the middle of the activity.
             if self == .hotWalletRecordShown { navigation.show(row: MoneyNotice.recordRow("0xde4" + String(repeating: "0", count: 59) + "20")) }
             // Taller than it opens, because a screenshot can't scroll to the actions and the activity at the bottom.
@@ -1171,11 +1199,14 @@ enum TestScene: String, CaseIterable {
             // It keeps few enough that checking has nothing to trim, because that would save over what's registered here.
             if purchases.purchases.isEmpty { TestMode.fail("This scene's purchases weren't read. Something saved over them.") }
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation, purchases: purchases).task { if self == .hotWalletPurchasesCantCheck { await purchases.check() } }), size: CGSize(width: 780, height: 900), isReady: isReady)
-        case .hotWalletTopUp, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium:
+        case .hotWalletTopUp, .hotWalletTopUpNoGas, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium:
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers)), isReady: isReady)
         case .hotWalletTopUpFirstRead:
             // The sheet opens first here, so the read has to change what it worked out.
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers).task { await readHotWallet() }), isReady: { hotWalletHasRead.isDone })
+        case .hotWalletTopUpReading:
+            // Never read, to show what it says while it waits.
+            return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers)), isReady: { true })
         case .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendReviewing, .sendGoing, .sendSent, .sendStopped, .sendMoney, .sendMoneyCAD, .sendLookalike, .sendLookalikeChecked, .sendRefused:
             let model = SendModel(wallet: hotWallet, store: store)
             model.token = Base.tokens.first { $0.symbol == "USDC" }!
