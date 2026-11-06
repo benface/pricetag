@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
 import type { Book } from "../core/book.ts"
-import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
+import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, savedOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME } from "../core/wording.ts"
 
 const COUNTRY_KEY = "pricetag.taxCountry"
@@ -30,6 +30,13 @@ const readScope = (): TaxScope | null => {
 function remember(key: string, value: string | null) {
   if (value === null) localStorage.removeItem(key)
   else localStorage.setItem(key, value)
+}
+
+/** Also clears anything else an earlier version saved here. */
+function readOthers(): string {
+  const saved = savedOtherWallets(localStorage.getItem(OTHERS_KEY) ?? "")
+  remember(OTHERS_KEY, saved || null)
+  return saved
 }
 
 /** A post, because answers don't belong in a URL, where they'd end up in logs. */
@@ -87,7 +94,7 @@ export function TaxPanel({ address, currency, book, year, onYear, overviewMethod
   const [chosenMethod, setChosenMethod] = useState<Method | null>(readMethod)
   const [chosenScope, setChosenScope] = useState<TaxScope | null>(readScope)
   const [years, setYears] = useState<number[]>([])
-  const [othersText, setOthersText] = useState(() => localStorage.getItem(OTHERS_KEY) ?? "")
+  const [othersText, setOthersText] = useState(readOthers)
   const [report, setReport] = useState<TaxReportResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -240,7 +247,7 @@ export function TaxPanel({ address, currency, book, year, onYear, overviewMethod
               placeholder="0x…"
               value={othersText}
               onChange={(e) => {
-                localStorage.setItem(OTHERS_KEY, e.target.value)
+                remember(OTHERS_KEY, savedOtherWallets(e.target.value) || null)
                 setOthersText(e.target.value)
               }}
             />
