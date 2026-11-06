@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRoundAnswer, effectiveGasPrice, gasPaid, legRowsFromRaw, type RawLog, type RawTx } from "../server/raw.ts"
 import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS } from "@pricetag/sdk/core"
-import { blockFilters } from "@pricetag/sdk/internal"
+import { blockFilters, blockRanges, datasetReader, type Query } from "@pricetag/sdk/internal"
 
 const ME = "dd8795475306152abe5f45f1ce97c017fd2f02e7"
 const OTHER = "f849e0d4a7a1d74cb278361ff29967dfb5a22c67"
@@ -186,6 +186,36 @@ describe("block filters", () => {
     const filters = blockFilters(Array.from({ length: 450 }, (_, i) => i + 1))
     assert.deepEqual(filters.map((f) => f.count), [200, 200, 50])
     assert.match(filters[1]!.filter, /^block_num BETWEEN 201 AND 400 /)
+  })
+})
+
+describe("block ranges", () => {
+  const every = (from: number, count: number, step = 1) => Array.from({ length: count }, (_, i) => from + i * step)
+
+  it("names a few blocks, or blocks far apart, as block filters do", () => {
+    assert.deepEqual(blockRanges([5, 3, 3], 1000), blockFilters([3, 5]).map(({ filter }) => filter))
+    const sparse = every(0, 201, 1000)
+    assert.deepEqual(blockRanges(sparse, 5000), blockFilters(sparse).map(({ filter }) => filter))
+    assert.deepEqual(blockRanges([], 1000), [])
+  })
+
+  it("reads many blocks close together as ranges, covering each of them once", () => {
+    const blocks = [...every(1000, 150, 3), ...every(5000, 150, 3)]
+    assert.deepEqual(blockRanges(blocks, 1000), ["block_num BETWEEN 1000 AND 1447", "block_num BETWEEN 5000 AND 5447"])
+    assert.deepEqual(blockRanges(every(0, 300), 100), ["block_num BETWEEN 0 AND 99", "block_num BETWEEN 100 AND 199", "block_num BETWEEN 200 AND 299"])
+  })
+
+  it("gives only the oracle reads asked for, however the query was shaped", async () => {
+    const blocks = every(1000, 300, 2)
+    const queries: string[] = []
+    const query = (async (sql: string) => {
+      queries.push(sql)
+      return every(1000, 600).map((block_num) => ({ block_num, eth_usd: "1", usdc_usd: "1" }))
+    }) as Query
+    const read = await datasetReader(query, { baseDataset: "base", dataset: "pricetag" }).readReferences(blocks)
+    assert.equal(queries.length, 1)
+    assert.ok(!queries[0]!.includes(" IN "))
+    assert.deepEqual(read.map((r) => r.blockNum), blocks)
   })
 })
 

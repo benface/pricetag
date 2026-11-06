@@ -174,7 +174,21 @@ function exchangeShare(costs: readonly ExchangeCost[], wallet: string, legId: st
  * Whether a note about this leg's transaction and asset would be about more than this leg. A note gives one cost for what
  * arrived in a transaction, and what its balance says arrived may not be part of that, so it can't be shared out or given to either.
  */
-const noteIsAmbiguous = (leg: PricedLeg, legs: readonly PricedLeg[]) => legs.filter((other) => other.txHash === leg.txHash && other.asset === leg.asset && BigInt(other.delta) > 0n).length > 1
+const noteIsAmbiguous = (leg: PricedLeg, legs: readonly PricedLeg[]) => (arrivalsIn(legs).get(`${leg.txHash}:${leg.asset}`) ?? 0) > 1
+
+/** How many legs brought in each asset in each transaction. Once per list, because a busy wallet can ask this for thousands of its legs. */
+const arrivalCounts = new WeakMap<readonly PricedLeg[], Map<string, number>>()
+function arrivalsIn(legs: readonly PricedLeg[]): Map<string, number> {
+  const known = arrivalCounts.get(legs)
+  if (known) return known
+  const counts = new Map<string, number>()
+  for (const { txHash, asset, delta } of legs) {
+    const key = `${txHash}:${asset}`
+    if (BigInt(delta) > 0n) counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  arrivalCounts.set(legs, counts)
+  return counts
+}
 
 const isOpenCredit = (leg: PricedLeg) => BigInt(leg.delta) > 0n && leg.costLabel === "unknown" && !leg.unsettledCredit
 
@@ -405,21 +419,34 @@ const day = (timestamp: string) => new Date(timestamp).toLocaleDateString("en-US
 /** Why this is being asked about at all, when no transaction shows it arriving. A balance can't say who sent it, so an address is only the likeliest. */
 const unseenEvidence = (sender: string | null) => `This wallet's ETH rose in this block with no transaction showing it${sender ? ". This is the contract most likely behind it." : ""}`
 
-function evidenceFor(sender: string, sides: readonly Side[], known: KnownSender | null, book: Book): string[] {
+/** The latest thing these wallets sent each address, and which part of the leg says so. */
+function latestSends(sides: readonly Side[]): Map<string, { leg: PricedLeg; amount: string }> {
+  const latest = new Map<string, { leg: PricedLeg; amount: string }>()
+  for (const { view } of sides) {
+    for (const leg of view.legs) {
+      if (leg.kind !== "transfer" || BigInt(leg.delta) >= 0n) continue
+      for (const { counterparty, amount } of leg.parts) {
+        if (!counterparty) continue
+        const to = normalizeAddress(counterparty)
+        const known = latest.get(to)
+        if (!known || leg.blockNum > known.leg.blockNum) latest.set(to, { leg, amount })
+      }
+    }
+  }
+  return latest
+}
+
+function evidenceFor(sender: string, sends: ReturnType<typeof latestSends>, known: KnownSender | null, book: Book): string[] {
   const evidence = [...(known ? [`From a ${known.name} address`] : []), ...(book.senders[sender]?.kind === "mine" ? ["You've said this is your wallet. Choose My wallet if the one you're looking at is yours too, or Someone else if it isn't."] : [])]
-  const sends = sides
-    .flatMap(({ view }) => view.legs)
-    .filter((leg) => BigInt(leg.delta) < 0n && leg.kind === "transfer" && leg.parts.some((p) => p.counterparty && normalizeAddress(p.counterparty) === sender))
-    .sort((a, b) => b.blockNum - a.blockNum)
-  const last = sends[0]
+  const last = sends.get(sender)
   if (!last) return evidence
-  const part = last.parts.find((p) => p.counterparty && normalizeAddress(p.counterparty) === sender)
-  return [...evidence, `You sent this address ${formatAmount(part?.amount ?? "0", last.decimals)} ${last.asset} on ${day(last.timestamp)}`]
+  return [...evidence, `You sent this address ${formatAmount(last.amount, last.leg.decimals)} ${last.leg.asset} on ${day(last.leg.timestamp)}`]
 }
 
 /** One card per address, however many transfers it covers. A token with no price anywhere isn't worth asking about. */
 export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], book: Book): Question[] {
   const sideOf = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
+  const sends = latestSends(sides)
   const questions = new Map<string, Omit<Question, "noteAbout"> & { arrived: Map<string, Arrival>; value: bigint; priced: boolean; first: { leg: PricedLeg; units: bigint } }>()
   for (const { wallet, leg, sender, units, evidence } of open) {
     const owner = sideOf.get(wallet) as Side
@@ -440,7 +467,7 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
       transfers: 0,
       firstAt: leg.timestamp,
       lastAt: leg.timestamp,
-      evidence: [...(sender ? evidenceFor(sender, sides, known, book) : (evidence ?? [])), ...(leg.parts.some((p) => p.kind === "unseen_eth") ? [unseenEvidence(sender)] : [])],
+      evidence: [...(sender ? evidenceFor(sender, sends, known, book) : (evidence ?? [])), ...(leg.parts.some((p) => p.kind === "unseen_eth") ? [unseenEvidence(sender)] : [])],
       valueMicros: null,
       first: { leg, units },
       arrived: new Map<string, Arrival>(),
