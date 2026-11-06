@@ -42,6 +42,8 @@ extension View {
 struct DeviceBrowserNote: View {
     let choice: LedgerBrowserChoice
     let outcome: String
+    /// False while the page isn't ready to be opened.
+    var canUseDefault = true
     let useDefault: () -> Void
 
     var body: some View {
@@ -53,6 +55,7 @@ struct DeviceBrowserNote: View {
                 Button("Use \(other) Instead, for a Keystone", action: useDefault)
                     .buttonStyle(.link)
                     .font(.callout)
+                    .disabled(!canUseDefault)
             }
             if let problem = choice.noLedgerBrowser {
                 Notice(.warning, problem)

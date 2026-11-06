@@ -803,6 +803,8 @@ struct TopUpSheet: View {
     }
 
     private var room: Int { Int(wallet.topUpRoom / Money.dollar) }
+    /// Until then the room left is unknown, and would read as the whole cap.
+    private var hasRead: Bool { wallet.plan != nil }
     private var hasDestination: Bool { wallet.settings.sweepDestination != nil }
 
     private var deviceLink: URL? {
@@ -813,25 +815,25 @@ struct TopUpSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(HotWalletWording.topUpTitle(hasDestination: hasDestination))
                 .font(.sheetTitle)
-            if room < 1 {
+            if hasRead, room < 1 {
                 Notice(.info, HotWalletWording.topUpAtCap(wallet.capText, hasDestination: hasDestination))
             } else {
                 LabeledContent("Amount") {
                     HStack {
                         // A slider needs two ends, and with room for one dollar, the other end is too much.
                         Slider(value: $dollars, in: 1...Double(max(room, 2)), step: 1)
-                            .disabled(room < 2)
+                            .disabled(!hasRead || room < 2)
                         Text(amountText)
                             .monospacedDigit()
                             .frame(width: 56, alignment: .trailing)
                     }
                 }
-                Text(HotWalletWording.topUpRoom(wallet.money(wallet.topUpRoom), hasDestination: hasDestination))
+                Text(hasRead ? HotWalletWording.topUpRoom(wallet.money(wallet.topUpRoom), hasDestination: hasDestination) : "Reading this wallet…")
                     .font(.caption)
                     .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
                 if let deviceLink {
-                    DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.") { open(deviceLink, in: nil) }
+                    DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.", canUseDefault: hasRead) { open(deviceLink, in: nil) }
                 }
                 DisclosureGroup("Or do it by hand on the device") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -866,6 +868,7 @@ struct TopUpSheet: View {
                 if room >= 1, let deviceLink {
                     Button(found.continueTitle) { open(deviceLink, in: found.browser) }
                         .keyboardShortcut(.defaultAction)
+                        .disabled(!hasRead)
                 }
             }
         }
@@ -878,6 +881,8 @@ struct TopUpSheet: View {
     }
 
     private func open(_ link: URL, in browser: InstalledBrowser?) {
+        // The amount in the link is only worth sending once the room's known.
+        guard hasRead else { return }
         browsers.open(link, browser)
         dismiss()
     }

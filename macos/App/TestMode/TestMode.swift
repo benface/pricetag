@@ -541,6 +541,7 @@ enum TestScene: String, CaseIterable {
     case hotWalletTopUp = "hot-wallet-top-up"
     case hotWalletTopUpFirstRead = "hot-wallet-top-up-first-read"
     case hotWalletTopUpReading = "hot-wallet-top-up-reading"
+    case hotWalletTopUpReadingSafari = "hot-wallet-top-up-reading-safari"
     case hotWalletTopUpNoGas = "hot-wallet-top-up-no-gas"
     case hotWalletTopUpOneDollar = "hot-wallet-top-up-one-dollar"
     case hotWalletTopUpAtCap = "hot-wallet-top-up-at-cap"
@@ -742,7 +743,7 @@ enum TestScene: String, CaseIterable {
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD, .popoverHotWalletNoSavings, .hotWalletTopUpNoSavings, .addSavingsFinished, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet: .noSavings
         case .hotWalletNoPrice: .noPrice
         case .hotWalletTwoSavings: .twoSavings
-        case .hotWalletTopUpReading: .funded
+        case .hotWalletTopUpReading, .hotWalletTopUpReadingSafari: .funded
         case .hotWalletTopUpNoGas: .noGas
         case .hotWalletNothingToSweep: .nothingToSweep
         case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap, .buyAtCap: .overCap
@@ -770,7 +771,7 @@ enum TestScene: String, CaseIterable {
     /// For scenes that only differ in the browsers on this Mac.
     private var deviceBrowsers: DeviceBrowsers {
         switch self {
-        case .hotWalletTopUpSafari, .publishFromDeviceSafari: browsers(defaultBrowser: Self.safari, installed: [Self.safari, Self.chrome])
+        case .hotWalletTopUpSafari, .hotWalletTopUpReadingSafari, .publishFromDeviceSafari: browsers(defaultBrowser: Self.safari, installed: [Self.safari, Self.chrome])
         case .hotWalletTopUpNoChromium, .publishFromDeviceNoChromium: browsers(defaultBrowser: Self.safari, installed: [Self.safari])
         default: browsers(defaultBrowser: Self.chrome, installed: [Self.chrome])
         }
@@ -908,7 +909,7 @@ enum TestScene: String, CaseIterable {
             hotWalletHasRead.isDone = true
         }
         // Adding a wallet doesn't wait for this read, and neither does that scene.
-        if ![.hotWalletTopUpFirstRead, .hotWalletTopUpReading, .addSavingsCheckBalanceUnread, .buyFirstRead, .buyReading, .buyNoSavingsFirstRead, .buyNoSavingsAtCapFirstRead].contains(self) {
+        if ![.hotWalletTopUpFirstRead, .hotWalletTopUpReading, .hotWalletTopUpReadingSafari, .addSavingsCheckBalanceUnread, .buyFirstRead, .buyReading, .buyNoSavingsFirstRead, .buyNoSavingsAtCapFirstRead].contains(self) {
             Task { await readHotWallet() }
             let deadline = Date.now.addingTimeInterval(TestMode.readyTimeout)
             while !hotWalletHasRead.isDone {
@@ -1218,7 +1219,7 @@ enum TestScene: String, CaseIterable {
         case .hotWalletTopUpFirstRead:
             // The sheet opens first here, so the read has to change what it worked out.
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers).task { await readHotWallet() }), isReady: { hotWalletHasRead.isDone })
-        case .hotWalletTopUpReading:
+        case .hotWalletTopUpReading, .hotWalletTopUpReadingSafari:
             // Never read, to show what it says while it waits.
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers)), isReady: { true })
         case .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendReviewing, .sendGoing, .sendSent, .sendStopped, .sendMoney, .sendMoneyCAD, .sendLookalike, .sendLookalikeChecked, .sendRefused:
