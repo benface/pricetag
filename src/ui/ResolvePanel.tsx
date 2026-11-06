@@ -7,7 +7,7 @@ import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
 import { parseCoinbaseCsv } from "../core/exchange-import.ts"
 import { foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
-import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, linkedFailedSentence } from "../core/wording.ts"
+import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOT_SAVED, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, linkedFailedSentence } from "../core/wording.ts"
 import { linkByProof, type Ethereum } from "./link-proof.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
@@ -50,6 +50,8 @@ type Props = {
   onChange: (change: BookChange) => void
   onUndo: () => void
   canUndo: boolean
+  /** The last answer or undo couldn't be saved. */
+  notSaved: boolean
   /** Publishing a cost takes a device, which has its own panel. */
   onPublish: (link: DeviceLink) => void
   /** The sender on the card, whose wallet has to be read to say what "My wallet" would do. */
@@ -58,7 +60,7 @@ type Props = {
 }
 
 /** Answering questions: one card at a time, with swipes, keys or taps. Each answer shows what it does before you pick it. */
-export function ResolvePanel({ wallet, others, all, failed, onRetry, method, book, firstAsset, onChange, onUndo, canUndo, onPublish, onCurrentSender, onClose }: Props) {
+export function ResolvePanel({ wallet, others, all, failed, onRetry, method, book, firstAsset, onChange, onUndo, canUndo, notSaved, onPublish, onCurrentSender, onClose }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set())
   const [asking, setAsking] = useState(false)
@@ -310,6 +312,8 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
       )}
 
       <LinkByProof current={wallet.address} book={book} onChange={onChange} />
+
+      {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
 
       <footer className="resolve-foot">
         <button type="button" disabled={!canUndo} onClick={onUndo}>

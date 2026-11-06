@@ -51,7 +51,7 @@ export function amountForUsd(usdMicros: string, token: Token, ethPriceMicros: bi
   if (token.address === ETH_ADDRESS) {
     if (!ethPriceMicros) return null
     const millionths = (BigInt(usdMicros) * 1_000_000n) / ethPriceMicros
-    return millionths > 0n ? (Number(millionths) / 1_000_000).toFixed(6).replace(/0+$/, "") : null
+    return millionths > 0n ? (Number(millionths) / 1_000_000).toFixed(6).replace(/\.?0+$/, "") : null
   }
   return token.symbol === "USDC" ? (Number(usdMicros) / 1_000_000).toFixed(2) : null
 }
