@@ -7,9 +7,14 @@ import { createThrottle } from "../scripts/rpc-throttle.ts"
 const listen = (server: Server) =>
   new Promise<string>((resolve) => server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)))
 
-async function withThrottle(perSecond: number, upstream: RequestListener, run: (url: string) => Promise<void>) {
+async function withThrottle(
+  perSecond: number,
+  upstream: RequestListener,
+  run: (url: string) => Promise<void>,
+  clock?: Parameters<typeof createThrottle>[2],
+) {
   const rpc = createServer(upstream)
-  const throttle = createThrottle(await listen(rpc), perSecond)
+  const throttle = createThrottle(await listen(rpc), perSecond, clock)
   try {
     await run(await listen(throttle))
   } finally {
@@ -38,20 +43,40 @@ describe("the RPC throttle", () => {
   })
 
   it("holds a burst to its rate", async () => {
-    const arrivals: number[] = []
+    // A stopped clock, because under load real timers and arrivals drift by more than the gaps being measured.
+    const sleeps: number[] = []
+    let markAllWaiting = () => {}
+    const allWaiting = new Promise<void>((resolve) => {
+      markAllWaiting = resolve
+    })
+    let release = () => {}
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let arrivals = 0
     await withThrottle(
       50,
       (_req, res) => {
-        arrivals.push(Date.now())
+        arrivals += 1
         res.end("{}")
       },
       async (url) => {
-        await Promise.all(Array.from({ length: 10 }, () => call(url)))
+        const burst = Promise.all(Array.from({ length: 10 }, () => call(url)))
+        await allWaiting
+        assert.equal(arrivals, 0)
+        release()
+        await burst
+      },
+      {
+        now: () => 1_000,
+        sleep: (ms) => {
+          if (sleeps.push(ms) === 10) markAllWaiting()
+          return released
+        },
       },
     )
-    assert.equal(arrivals.length, 10)
-    // 9 gaps of 20 ms, with room for timers firing a little early.
-    assert.ok(arrivals.at(-1)! - arrivals[0]! >= 150)
+    assert.deepEqual(sleeps, [0, 20, 40, 60, 80, 100, 120, 140, 160, 180])
+    assert.equal(arrivals, 10)
   })
 
   it("retries a 429 instead of passing it on", async () => {

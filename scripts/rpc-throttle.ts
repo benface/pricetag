@@ -11,15 +11,20 @@ const RETRIES = 20
 const PAUSE_AFTER_429_MS = 1_000
 const TIMEOUT_MS = 30_000
 
-export function createThrottle(target: string, perSecond: number): Server {
+const realClock = {
+  now: () => Date.now(),
+  sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+}
+
+export function createThrottle(target: string, perSecond: number, clock = realClock): Server {
   const gapMs = 1_000 / perSecond
   let nextSlot = 0
 
   const waitForSlot = () => {
-    const now = Date.now()
+    const now = clock.now()
     const slot = Math.max(now, nextSlot)
     nextSlot = slot + gapMs
-    return new Promise((resolve) => setTimeout(resolve, slot - now))
+    return clock.sleep(slot - now)
   }
 
   return createServer(async (req, res) => {
@@ -39,7 +44,7 @@ export function createThrottle(target: string, perSecond: number): Server {
         })
         if (upstream.status === 429 && attempt < RETRIES) {
           // Everything waits, since the next request would get a 429 too.
-          nextSlot = Math.max(nextSlot, Date.now() + PAUSE_AFTER_429_MS)
+          nextSlot = Math.max(nextSlot, clock.now() + PAUSE_AFTER_429_MS)
           continue
         }
         // Read it first, so a response that breaks partway can still become a 502.
