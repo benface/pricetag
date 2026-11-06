@@ -57,7 +57,7 @@
       "balance": "10000000000",
       "state": "read",
       "note": null,
-      "tucked": "It calls itself USDC, and it isn't the USDC we know."
+      "tucked": "It calls itself USDC, but it isn't the real USDC."
     }
   ],
   "otherTokensLeftOut": 0,
@@ -1165,6 +1165,8 @@
   "withheld": [],
   "purchases": [],
   "marketChecked": true,
+  "linkedUpdating": [],
+  "linkedOutdated": [],
   "wallets": [
     {
       "address": "0x00000000000000000000000000000000000de300",

@@ -2,7 +2,7 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type OtherToken, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
+import { formatAmount, formatDuration, formatMoney, formatSignedMoney, msBetweenBlocks, shortHash, worth, type OtherToken, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 import type { ValueGaps } from "./attention.ts"
 import type { ReadFailure } from "./read-failure.ts"
@@ -266,8 +266,11 @@ export function holdDifferenceSentence(micros: string, currency: CurrencyCode, e
 }
 
 /** The comparison in a few words, for the line that opens the whole of it. */
-export function holdSummarySentence({ status, differenceMicros, walletEstimated, estimated }: Pick<HoldComparison, "status" | "differenceMicros" | "walletEstimated" | "estimated">, currency: CurrencyCode): string {
-  if (status === "partial") return "Not comparable yet"
+export function holdSummarySentence({ status, differenceMicros, holdMicros, unknownAmounts, walletEstimated, estimated }: Pick<HoldComparison, "status" | "differenceMicros" | "holdMicros" | "unknownAmounts" | "walletEstimated" | "estimated">, currency: CurrencyCode): string {
+  if (status === "partial" && holdMicros !== null) {
+    const leavesOut = unknownAmounts === 0 ? "and the total PnL leaves some things out" : unknownAmounts === 1 ? "leaving out 1 amount" : `leaving out ${unknownAmounts.toLocaleString("en-US")} amounts`
+    return `Partial: ${estimated ? "about " : ""}${formatSignedMoney(holdMicros, currency)} holding ETH, ${leavesOut}`
+  }
   return status === "complete" && differenceMicros !== null ? holdDifferenceSentence(differenceMicros, currency, walletEstimated || estimated) : "Not available yet"
 }
 
@@ -319,6 +322,12 @@ export const allYoursReadingSentence = (wallets: readonly string[]) => `Still re
 
 /** Wallets in All Yours whose read failed, which aren't in its numbers. */
 export const allYoursFailedSentence = (wallets: readonly string[]) => `Couldn't read ${walletList(wallets)}, so ${wallets.length === 1 ? "it isn't" : "they aren't"} in these numbers.`
+
+/** Wallets in All Yours being read again, whose last read is what these numbers use. */
+export const allYoursUpdatingSentence = (wallets: readonly string[]) => `Updating ${walletList(wallets)}. These numbers use ${wallets.length === 1 ? "its" : "their"} last read until then.`
+
+/** Wallets in All Yours whose latest read failed, whose last good read is what these numbers use. */
+export const allYoursOutdatedSentence = (wallets: readonly string[]) => `Couldn't update ${walletList(wallets)}, so these numbers use ${wallets.length === 1 ? "its" : "their"} last read.`
 
 /** A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent. */
 export function withheldSentence(wallet: string, asset: string): string {

@@ -170,10 +170,12 @@ describe("allBalancesMatch", () => {
 })
 
 describe("holdSummarySentence", () => {
-  const base = { walletEstimated: false, estimated: false, differenceMicros: null }
+  const base = { walletEstimated: false, estimated: false, differenceMicros: null, holdMicros: null, unknownAmounts: 0 }
   it("says the comparison in a few words", () => {
     assert.equal(holdSummarySentence({ ...base, status: "unavailable" }, "USD"), "Not available yet")
-    assert.equal(holdSummarySentence({ ...base, status: "partial" }, "USD"), "Not comparable yet")
+    assert.equal(holdSummarySentence({ ...base, status: "partial", holdMicros: "12000000", unknownAmounts: 2 }, "USD"), "Partial: +$12.00 holding ETH, leaving out 2 amounts")
+    assert.equal(holdSummarySentence({ ...base, status: "partial", holdMicros: "-12000000", unknownAmounts: 1, estimated: true }, "USD"), "Partial: about -$12.00 holding ETH, leaving out 1 amount")
+    assert.equal(holdSummarySentence({ ...base, status: "partial", holdMicros: "12000000" }, "USD"), "Partial: +$12.00 holding ETH, and the total PnL leaves some things out")
     assert.equal(holdSummarySentence({ ...base, status: "complete", differenceMicros: "-5000000" }, "USD"), "$5.00 less than holding ETH.")
     assert.equal(holdSummarySentence({ ...base, status: "complete", differenceMicros: "5000000", estimated: true }, "USD"), "About $5.00 more than holding ETH.")
   })

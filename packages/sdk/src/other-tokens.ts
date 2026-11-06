@@ -181,10 +181,38 @@ export function decodeTokenFacts(data: string | null | undefined, requests: read
   )
 }
 
-// Letters from other alphabets that look like Latin ones, as a token copying a name would use them.
-const LOOKALIKES: Record<string, string> = { А: "A", В: "B", С: "C", Е: "E", Н: "H", І: "I", К: "K", М: "M", О: "O", Р: "P", Т: "T", Х: "X", Ѕ: "S", Α: "A", Β: "B", Ε: "E", Η: "H", Ι: "I", Κ: "K", Μ: "M", Ν: "N", Ο: "O", Ρ: "P", Τ: "T", Χ: "X", Υ: "Y", Ζ: "Z", "$": "S" }
+// Letters from other alphabets, and small capitals, that look like Latin ones, as a token copying a name would use them. Each is what's left after `toUpperCase`.
+const LOOKALIKE_LETTERS: Record<string, string> = {
+  A: "\u0410\u0391\u13AA\u15C5\uA4EE\u2C80\u1D00",
+  B: "\u0412\u0392\u13F4\u15F7\uA4D0\u2C82\u0299",
+  C: "\u0421\u03F9\u13DF\u1455\uA4DA\u2CA4\u1D04",
+  D: "\u0500\u13A0\u15EA\uA4D3\u1D05",
+  E: "\u0415\u0395\u13AC\uA4F0\u2C88\u1D07",
+  F: "\u1574\uA4DD",
+  G: "\u050C\u13C0\uA4D6\u0262",
+  H: "\u041D\u0397\u13BB\u157C\uA4E7\u2C8E\u0540\u029C",
+  I: "\u0406\u0399\u04C0\uA4F2\u2C92\uA7AE",
+  J: "\u0408\u13AB\u148D\uA4D9\u1D0A",
+  K: "\u041A\u039A\u13E6\uA4D7\u2C94\u1D0B",
+  L: "\u13DE\u14AA\uA4E1\u2C96\u029F",
+  M: "\u041C\u039C\u13B7\u15F0\uA4DF\u2C98\u1D0D",
+  N: "\u039D\u144E\uA4E0\u2C9A\u0548\u0274",
+  O: "\u041E\u039F\u0555\uA4F3\u2C9E\u1D0F",
+  P: "\u0420\u03A1\u13E2\u146D\uA4D1\u2CA2\u1D18",
+  Q: "\u051A",
+  R: "\u13A1\u1587\uA4E3\u01A6",
+  S: "\u0405\u13DA\u1515\uA4E2\u054F\uA731$",
+  T: "\u0422\u03A4\u13A2\uA4D4\u2CA6\u1D1B",
+  U: "\u054D\u144C\uA4F4\u1D1C",
+  V: "\u0474\u13D9\u142F\uA4E6\u1D20",
+  W: "\u051C\u13B3\u15EF\uA4EA\u1D21",
+  X: "\u0425\u03A7\u166D\uA4EB\u2CAC",
+  Y: "\u04AE\u03A5\uA4EC\u2CA8\u028F",
+  Z: "\u0396\u13C3\uA4DC\u1D22",
+}
+const LOOKALIKES = new Map(Object.entries(LOOKALIKE_LETTERS).flatMap(([latin, letters]) => Array.from(letters, (letter) => [letter, latin] as const)))
 const plainLetters = (text: string) =>
-  Array.from(text.normalize("NFKC").toUpperCase(), (letter) => LOOKALIKES[letter] ?? letter)
+  Array.from(text.normalize("NFKC").toUpperCase(), (letter) => LOOKALIKES.get(letter) ?? letter)
     .join("")
     .replace(/[^A-Z0-9]/g, "")
 const KNOWN_NAMES = new Map([...TOKENS.map((t) => [plainLetters(t.symbol), t.symbol] as const), ["ETHER", "ETH"], ["ETHEREUM", "ETH"], ["WRAPPEDETHER", "WETH"], ["USDCOIN", "USDC"], ["TETHER", "USDT"], ["TETHERUSD", "USDT"], ["DAISTABLECOIN", "DAI"], ["COINBASEWRAPPEDBTC", "cbBTC"], ["COINBASEWRAPPEDSTAKEDETH", "cbETH"]])
@@ -197,7 +225,7 @@ const WEB_ADDRESS = /(https?:|www\.|\b[\p{L}\p{N}-]+\.(com|net|org|io|xyz|app|si
  */
 export function tuckedReason({ name, symbol, state }: Pick<OtherToken, "name" | "symbol" | "state">, sentByThisWallet: boolean): string | null {
   const copied = [symbol, name].map((text) => (text ? KNOWN_NAMES.get(plainLetters(text)) : undefined)).find(Boolean)
-  if (copied) return `It calls itself ${copied}, and it isn't the ${copied} we know.`
+  if (copied) return `It calls itself ${copied}, but it isn't the real ${copied}.`
   if ([name, symbol].some((text) => text && WEB_ADDRESS.test(text))) return "Its name points you to a website, which is a common way to lure people to a scam."
   if (state === "unreadable") return "Its contract doesn't answer properly."
   if (!sentByThisWallet) return "It arrived without any transaction of yours."
