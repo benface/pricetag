@@ -198,6 +198,8 @@ public final class PortfolioStore {
             sourceChanges += 1
             rulesRetry?.cancel()
             rulesRetry = nil
+            rulesFailureRetry?.cancel()
+            rulesFailureRetry = nil
             rulesRead = nil
             rateHeldUntil = nil
         }
@@ -206,6 +208,9 @@ public final class PortfolioStore {
     @ObservationIgnored private var sourceChanges = 0
     /// Asks for the rules again once the server has room. While it's there, nobody else asks.
     @ObservationIgnored private var rulesRetry: Task<Void, Never>?
+    /// Asks for the rules again after a read that failed, so a server that comes up later still gets its rules read. Anyone can ask before then.
+    @ObservationIgnored private var rulesFailureRetry: Task<Void, Never>?
+    @ObservationIgnored private let rulesRetryDelay: Duration
     /// The read of the rules that's under way, which anyone else asking joins, so one answer settles it.
     @ObservationIgnored private var rulesRead: Task<Void, Never>?
     @ObservationIgnored private var cache: PortfolioCache
@@ -254,10 +259,12 @@ public final class PortfolioStore {
         // The longest wait for a block, plus as long as a read gets before it's marked as on its way anyway.
         liveFor: Duration = .seconds(30),
         rateRetryDelay: Duration = .seconds(30),
+        rulesRetryDelay: Duration = .seconds(15),
         longProblem: Duration = .seconds(60)
     ) {
         self.longProblem = longProblem
         self.rateRetryDelay = rateRetryDelay
+        self.rulesRetryDelay = rulesRetryDelay
         self.defaults = defaults
         self.customSource = makeSource
         self.now = now
@@ -335,6 +342,8 @@ public final class PortfolioStore {
         rateExpiry = nil
         pollTask?.cancel()
         pollTask = nil
+        rulesFailureRetry?.cancel()
+        rulesFailureRetry = nil
         readCount += 1
         readingSince = nil
         eventsTask?.cancel()
@@ -814,10 +823,21 @@ public final class PortfolioStore {
                     self.rulesRetry = nil
                     await self.refreshRules()
                 }
+            } else if !(error is CancellationError), !needsInvite {
+                // Giving an invite asks again by itself, so one that's needed has nothing to wait for here.
+                rulesFailureRetry?.cancel()
+                rulesFailureRetry = Task { [weak self, rulesRetryDelay] in
+                    try? await Task.sleep(for: rulesRetryDelay)
+                    guard !Task.isCancelled, let self else { return }
+                    self.rulesFailureRetry = nil
+                    await self.refreshRules()
+                }
             }
             return
         }
         guard asked == sourceChanges else { return }
+        rulesFailureRetry?.cancel()
+        rulesFailureRetry = nil
         serverCheck = .answers
         needsInvite = false
         rules = next
@@ -1219,7 +1239,8 @@ public final class PortfolioStore {
         // First, because they're why these numbers have stopped moving, however old that's made them.
         if portfolio.linkedOutdated?.isEmpty == false { return .walletsOutdated }
         if portfolio.linkedUpdating?.isEmpty == false { return .reading }
-        guard let newest = portfolio.latest.date else { return .live }
+        // With no way to tell how old these numbers are, they can't be called live.
+        guard let newest = portfolio.latest.date else { return .catchingUp }
         let age = Int(now().timeIntervalSince(newest))
         if age > Self.behindAfterSeconds { return .behind(seconds: age) }
         return portfolio.progress.started && portfolio.progress.behindBlocks == 0 ? .live : .catchingUp

@@ -34,6 +34,26 @@ import Testing
         #expect(failed.checks.contains { $0.status == .unchecked })
     }
 
+    @Test func aLinkOnlyOpensOverHTTPSOnBasescan() {
+        func destination(_ url: String) -> URL? { ProofLink(title: "View on Basescan", url: url).destination }
+        #expect(destination("https://basescan.org/tx/0xabc#eventlog")?.absoluteString == "https://basescan.org/tx/0xabc#eventlog")
+        for url in [
+            "http://basescan.org/tx/0xabc",
+            "https://basescan.org.evil.example/tx/0xabc",
+            "https://evil.example/basescan.org",
+            "https://basescan.org@evil.example/tx/0xabc",
+            "https://evil.example\\@basescan.org.evil.example/",
+            "https://sub.basescan.org/tx/0xabc",
+            "file:///etc/passwd",
+            "patina://add-savings?address=0xEvil",
+            "javascript:alert(1)",
+            "/tx/0xabc",
+            "",
+        ] {
+            #expect(destination(url) == nil, "\(url)")
+        }
+    }
+
     @Test func loadsOnceItHasAnAnswer() async {
         var reads = 0
         let model = model(proof: {

@@ -173,6 +173,8 @@ public final class ResolveModel {
     /// A typed cost next to what it was worth, to catch a slip. It's only ever a warning: what someone paid is theirs to say.
     public func costWarning(_ dollars: [String: String], for question: Question) -> String? {
         guard question.arrivals.count == 1, let asset = question.arrivals.first?.asset, let value = question.valueMicros, isPositive(value) else { return nil }
+        // What it was worth is in the currency of the numbers on screen, and what's typed is in the chosen one. They differ while it's switching.
+        guard store.portfolio?.currency == store.currency else { return nil }
         guard let text = dollars[asset], let entered = Format.micros(fromDollars: text, in: store.currency).flatMap({ Decimal(string: $0) }), let worth = Decimal(string: value) else { return nil }
         guard entered > worth * 5 || entered * 5 < worth else { return nil }
         return "That's far from what it was worth when it arrived, about \(Format.money(value, store.currency)). Double-check it."
