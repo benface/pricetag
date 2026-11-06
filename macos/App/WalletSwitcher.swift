@@ -156,9 +156,15 @@ struct WalletSwitcher: View {
     @State var input = ""
     /// What the last change did, in words, and the way back. The list stays open for it.
     @State var note: WalletListNote?
+    /// Stands in for a small display in a test scene.
+    var displayRoom: CGFloat?
+    @State private var room = WalletSwitcher.roomOnDisplay
+    @State private var rows = ListRows()
+    @State private var scrolled = ScrolledEdges()
     @State private var highlighted: String?
     /// Where the pointer was when the arrows last moved. Rows scrolling under a still pointer report a hover that nobody made.
     @State private var pointerAtLastKey: CGPoint?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focus: Field?
 
     private enum Field: Hashable {
@@ -167,6 +173,9 @@ struct WalletSwitcher: View {
 
     private static let rowHeight: CGFloat = 40
     private static let titleHeight: CGFloat = 28
+    private static let leastRoom: CGFloat = 200
+    /// How long the fade is at an edge with more past it.
+    private static let fadeHeight: CGFloat = 12
 
     private var list: WalletList { store.walletList(hotWallet: hotWallet) }
     private var offersSpendingMoney: Bool {
@@ -176,11 +185,29 @@ struct WalletSwitcher: View {
     private var cantOpenSpendingMoney: Bool {
         if case .unavailable = hotWallet?.availability { true } else { false }
     }
-    /// The list is as tall as its rows, until it scrolls.
-    private var listHeight: CGFloat {
-        let titles = [list.yours, list.watching, list.recent].filter { !$0.isEmpty }.count
-        return min(CGFloat(list.all.count) * Self.rowHeight + CGFloat(titles) * Self.titleHeight + 8, 440)
+    /// What's left under the window's toolbar down to the bottom of the display, and past what goes under the list, however much a note takes. Larger Text
+    /// makes a display smaller, so this is what keeps the list on it there too.
+    private static var roomOnDisplay: CGFloat {
+        let window = NSApp.mainWindow
+        guard let display = (window?.screen ?? NSScreen.main)?.visibleFrame else { return 700 }
+        return max((window?.frame.maxY ?? display.maxY) - display.minY - 200, leastRoom)
     }
+
+    /// A first guess for the moment before the list has rows to measure.
+    private var estimatedHeight: CGFloat {
+        let titles = [list.yours, list.watching, list.recent].filter { !$0.isEmpty }.count
+        return CGFloat(list.all.count) * Self.rowHeight + CGFloat(titles) * Self.titleHeight
+    }
+
+    /// The list is as tall as its rows, until there's no more room. Then it stops at the end of a row.
+    private var listHeight: CGFloat {
+        isCapped ? rows.heightEndingOnARow(atMost: displayRoom ?? room) : contentHeight
+    }
+
+    private var contentHeight: CGFloat { rows.contentHeight ?? estimatedHeight }
+    private var isCapped: Bool { contentHeight > displayRoom ?? room }
+    /// Not while the list is still growing to fit a row that came back.
+    private var hasMoreBelow: Bool { isCapped && scrolled.hasMoreBelow }
 
     /// Which rows are in which section, and in what order. It's what the list slides on, so it does whatever moved them: a row's actions, Undo, or the Edit menu.
     private var rowsBySection: [[String]] {
@@ -193,14 +220,21 @@ struct WalletSwitcher: View {
                 .onKeyPress(.downArrow) { moveHighlight(by: 1, proxy) }
                 .onKeyPress(.upArrow) { moveHighlight(by: -1, proxy) }
                 // Opens where the wallet showing is, however long the list.
-                .task {
-                    guard let shown = pendingName.address ?? store.address else { return }
-                    // A list only knows where a far row is once it has laid out the rows before it, so this takes a second try.
-                    proxy.scrollTo(shown, anchor: .center)
-                    await Task.yield()
-                    proxy.scrollTo(shown, anchor: .center)
+                .task { await scrollToShown(proxy) }
+                // Growing to its real height moves what's in view, until someone's using it.
+                .onChange(of: listHeight) {
+                    guard highlighted == nil else { return }
+                    Task { await scrollToShown(proxy) }
                 }
         }
+    }
+
+    private func scrollToShown(_ proxy: ScrollViewProxy) async {
+        guard let shown = pendingName.address ?? store.address else { return }
+        // A list only knows where a far row is once it has laid out the rows before it, so this takes a second try.
+        proxy.scrollTo(shown, anchor: .center)
+        await Task.yield()
+        proxy.scrollTo(shown, anchor: .center)
     }
 
     private var content: some View {
@@ -221,7 +255,20 @@ struct WalletSwitcher: View {
                 .alternatingRowBackgrounds(.disabled)
                 .contentMargins(.horizontal, 0, for: .scrollContent)
                 .environment(\.defaultMinListRowHeight, Self.rowHeight)
+                .scrollBounceBehavior(.basedOnSize)
+                .scrollIndicators(.visible)
+                .scrollIndicatorsFlash(onAppear: true)
+                // Rows that have been laid out can turn out taller than a first guess.
+                .onScrollGeometryChange(for: CGFloat.self, of: \.contentSize.height) { _, _ in rows.measure() }
+                .onScrollGeometryChange(for: ScrolledEdges.self) { ScrolledEdges(hasMoreAbove: $0.visibleRect.minY > 4, hasMoreBelow: $0.visibleRect.maxY < $0.contentSize.height - 4) } action: { scrolled = $1 }
                 .frame(height: listHeight)
+                .mask { edgeFades }
+                // A scroll bar only shows once it's scrolling, and what's out of sight might be the wallet someone came for.
+                .overlay(alignment: .bottomTrailing) {
+                    // On the line below, where it's never over a row's name or its actions.
+                    if hasMoreBelow { MoreBelowHint().padding(.trailing, 12).offset(y: 19) }
+                }
+                .zIndex(1)
                 Divider()
             }
             VStack(alignment: .leading, spacing: 0) {
@@ -233,6 +280,13 @@ struct WalletSwitcher: View {
         }
         .frame(width: 340)
         .motion(Motion.state, value: rowsBySection)
+        // The table takes its new rows after this update, and the list changes height along with them.
+        .onChange(of: rowsBySection) {
+            Task {
+                await Task.yield()
+                withAnimation(reduceMotion ? nil : Motion.state) { rows.measure() }
+            }
+        }
         .onAppear {
             highlighted = nil
             focus = pendingName.address == nil ? .add : .rename
@@ -240,6 +294,17 @@ struct WalletSwitcher: View {
         // Clicking away keeps what was typed, as it does in Finder.
         .onChange(of: focus) { old, new in
             if old == .rename, new != .rename { store.save(pendingName, hotWallet: hotWallet) }
+        }
+    }
+
+    /// Softens the edge something scrolled past goes under.
+    private var edgeFades: some View {
+        VStack(spacing: 0) {
+            LinearGradient(colors: [scrolled.hasMoreAbove ? .clear : .black, .black], startPoint: .top, endPoint: .bottom)
+                .frame(height: Self.fadeHeight)
+            Color.black
+            LinearGradient(colors: [.black, hasMoreBelow ? .clear : .black], startPoint: .top, endPoint: .bottom)
+                .frame(height: Self.fadeHeight)
         }
     }
 
@@ -276,6 +341,7 @@ struct WalletSwitcher: View {
                         }
                     }
                     .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 6))
+                    .background { ListRowsReader(rows: rows) }
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                 }
@@ -499,6 +565,141 @@ struct WalletSwitcher: View {
         pointerAtLastKey = NSEvent.mouseLocation
         proxy.scrollTo(addresses[next])
         return .handled
+    }
+}
+
+/// How far a list goes past each edge of what's showing.
+private struct ScrolledEdges: Equatable {
+    var hasMoreAbove = false
+    var hasMoreBelow = false
+}
+
+/// The table behind a List, for what SwiftUI doesn't say: where each row and title really is. It also leaves a whole row at the top whenever scrolling stops.
+@MainActor
+@Observable
+private final class ListRows {
+    private(set) var scrollView: NSScrollView?
+    /// How tall the rows really are, once there's a table to ask.
+    private(set) var contentHeight: CGFloat?
+    @ObservationIgnored private var observers: [any NSObjectProtocol] = []
+    @ObservationIgnored private var isScrolling = false
+    @ObservationIgnored private var lastOffset: CGFloat = 0
+    @ObservationIgnored private var isGoingDown = true
+    @ObservationIgnored private var settling: Task<Void, Never>?
+
+    isolated deinit {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    /// From what the rows take up, because the table and its content size never get shorter than what's showing, and what's showing is sized from this.
+    func measure() {
+        guard let scrollView, let table = scrollView.documentView as? NSTableView else { return }
+        let rows = table.intrinsicContentSize.height
+        guard rows > 0 else { return }
+        let insets = scrollView.contentView.contentInsets
+        let height = (rows + insets.top + insets.bottom).rounded(.up)
+        if height != contentHeight { contentHeight = height }
+    }
+
+    func attach(to scrollView: NSScrollView) {
+        defer { measure() }
+        guard self.scrollView !== scrollView else { return }
+        self.scrollView = scrollView
+        let center = NotificationCenter.default
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        observers = [
+            center.addObserver(forName: NSScrollView.willStartLiveScrollNotification, object: scrollView, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.isScrolling = true }
+            },
+            center.addObserver(forName: NSScrollView.didEndLiveScrollNotification, object: scrollView, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.isScrolling = false
+                    self?.settleSoon()
+                }
+            },
+            // A mouse wheel and scrolling from code don't count as live scrolling, so this is how those stop.
+            center.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.moved() }
+            },
+        ]
+    }
+
+    /// A whole number of rows and what's under the last one, so when one row is whole at the top, so is the one at the bottom, all the way to the end. Only
+    /// rows that have been laid out know their real height, and those are the ones showing.
+    func heightEndingOnARow(atMost limit: CGFloat) -> CGFloat {
+        guard let table = scrollView?.documentView as? NSTableView, table.numberOfRows > 0 else { return limit }
+        let showing = table.rows(in: table.visibleRect)
+        guard let row = (showing.lowerBound..<showing.upperBound).map({ table.rect(ofRow: $0).height }).max(), row > 0 else { return limit }
+        let under = table.intrinsicContentSize.height - table.rect(ofRow: table.numberOfRows - 1).maxY
+        return ((limit - under) / row).rounded(.down) * row + under
+    }
+
+    private func moved() {
+        guard let offset = scrollView?.contentView.bounds.minY, offset != lastOffset else { return }
+        isGoingDown = offset > lastOffset
+        lastOffset = offset
+        settleSoon()
+    }
+
+    private func settleSoon() {
+        settling?.cancel()
+        settling = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(0.15))
+            guard !Task.isCancelled else { return }
+            self?.settle()
+        }
+    }
+
+    /// On in the direction it was already going, so a row the arrow keys just brought in from the bottom stays in.
+    private func settle() {
+        guard !isScrolling, let scrollView, let table = scrollView.documentView as? NSTableView else { return }
+        let clip = scrollView.contentView
+        let offset = clip.bounds.minY
+        let end = table.frame.height - clip.bounds.height
+        guard offset > 0, offset < end else { return }
+        let cut = (0..<table.numberOfRows).map { table.rect(ofRow: $0) }.first { $0.minY < offset - 0.5 && $0.maxY > offset + 0.5 }
+        guard let cut else { return }
+        let target = min(isGoingDown ? cut.maxY : cut.minY, end)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.15 * Motion.slowdown
+            clip.animator().setBoundsOrigin(CGPoint(x: clip.bounds.minX, y: target))
+        }
+    }
+}
+
+/// Lives in a row, because that's what's inside the table. Rows come and go as the list scrolls, so what it finds is kept outside it.
+private struct ListRowsReader: NSViewRepresentable {
+    let rows: ListRows
+
+    func makeNSView(context: Context) -> Finder {
+        Finder(rows: rows)
+    }
+
+    func updateNSView(_ view: Finder, context: Context) {
+        view.rows = rows
+    }
+
+    final class Finder: NSView {
+        var rows: ListRows
+
+        init(rows: ListRows) {
+            self.rows = rows
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil, let scrollView = enclosingScrollView else {
+                // A row leaving, which the table may only just have caught up with.
+                DispatchQueue.main.async { [rows] in rows.measure() }
+                return
+            }
+            // Later, because this can run in the middle of a SwiftUI update.
+            DispatchQueue.main.async { [rows] in rows.attach(to: scrollView) }
+        }
     }
 }
 
