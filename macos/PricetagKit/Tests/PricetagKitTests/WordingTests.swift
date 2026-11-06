@@ -42,6 +42,11 @@ struct WordingVectors: Decodable {
         let holdTitle, holdWallet, holdEth, holdPast: String
         let answerQuestions, showMissing, senderQuestion, senderWhy, costQuestion, costWhy, exchangeCostWhy, allAnswered, nothingLeft: String
     }
+    struct FinishNote: Decodable {
+        let open, answered, waiting: Int
+        let text: String
+    }
+    let finishNotes: [FinishNote]
     let manifestHash: String
     let methods: [String: String]
     let modes: [String: String]
@@ -137,6 +142,9 @@ struct WordingVectors: Decodable {
         #expect(sentences.exchangeCostWhy == Wording.exchangeCostWhy)
         #expect(sentences.allAnswered == Wording.allAnswered)
         #expect(sentences.nothingLeft == Wording.nothingLeft)
+        for note in vectors.finishNotes {
+            #expect(Wording.finishNote(Meter(open: note.open, answered: note.answered, waiting: note.waiting)) == note.text)
+        }
     }
 }
 

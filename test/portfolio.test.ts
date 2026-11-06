@@ -604,6 +604,15 @@ describe("a chart's axes", () => {
   })
 })
 
+const FINISH_METERS = [
+  { open: 5, answered: 0, waiting: 0 },
+  { open: 2, answered: 3, waiting: 0 },
+  { open: 0, answered: 0, waiting: 1 },
+  { open: 0, answered: 3, waiting: 1 },
+  { open: 0, answered: 0, waiting: 0 },
+  { open: 0, answered: 3, waiting: 0 },
+]
+
 const UNSEEN_ETH_CASES = [
   [{ blockNum: 53517245, amount: "827782101642000000", txHashes: [`0xde3a${"0".repeat(60)}`] }],
   [{ blockNum: 1, amount: "5", txHashes: [`0xaaaa${"0".repeat(60)}`, `0xbbbb${"0".repeat(60)}`] }, ...[2, 3, 4, 5, 6].map((blockNum) => ({ blockNum, amount: "1000000000000000000", txHashes: [`0x${String(blockNum).repeat(64)}`] }))],
@@ -715,6 +724,7 @@ describe("wording", () => {
       allAnswered: wording.ALL_ANSWERED,
       nothingLeft: wording.NOTHING_LEFT,
     },
+    finishNotes: FINISH_METERS.map((meter) => ({ ...meter, text: wording.finishNote(meter) })),
     unseenEth: UNSEEN_ETH_CASES.map((unseen) => ({ unseen, text: wording.unseenEthCause(unseen) })),
     manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
   }

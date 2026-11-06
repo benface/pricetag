@@ -366,6 +366,8 @@ enum TestScene: String, CaseIterable {
     case resolveCostWithheld = "resolve-cost-withheld"
     case resolvePublishFromDevice = "resolve-publish-from-device"
     case resolveAnsweredWallet = "resolve-answered-wallet"
+    /// Past the last card with every question skipped.
+    case resolveAllSkipped = "resolve-all-skipped"
     case walletSwitcher = "wallet-switcher"
     case walletSwitcherAllYours = "wallet-switcher-all-yours"
     case walletSwitcherFirstRun = "wallet-switcher-first-run"
@@ -1002,6 +1004,13 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(ContrastScene(store: store)), isReady: isReady)
         case .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .resolveFinished:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
+        case .resolveAllSkipped:
+            let model = ResolveModel(store: store)
+            return TestScreen(view: AnyView(ResolveFlow(store: store, model: model)), size: CGSize(width: 520, height: 560), isReady: {
+                guard isReady() else { return false }
+                while model.current != nil { model.skip() }
+                return true
+            })
         case .resolvePublishFromDevice:
             return TestScreen(view: AnyView(ResolveFlow(store: store, noteWriter: SavingsNoteWriter()) { AnyView(PublishFromDeviceButton(link: $0, browsers: deviceBrowsers)) }), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .holdComparison:
