@@ -11,6 +11,8 @@ const KNOWN: Readonly<Record<string, KnownSender>> = {
   // No name tag. It paid a real Coinbase withdrawal (0x82a62dd6…3a26).
   "0x4b5c71082d027d16d2a146465d66f9eec11634f6": { name: "Coinbase", kind: "exchange" },
   "0x4200000000000000000000000000000000000010": { name: "the Base bridge", kind: "bridge" },
+  // What a bridge deposit calls, with the wallet in its calldata. A real one paid 69.74 ETH (0xcefbf81b…5e5c).
+  "0x4200000000000000000000000000000000000007": { name: "the Base bridge", kind: "bridge" },
   "0x09aea4b2242abc8bb4bb78d537a67a245a7bec64": { name: "Across", kind: "bridge" },
   "0xf70da97812cb96acdf810712aa562db8dfa3dbef": { name: "Relay", kind: "bridge" },
   "0x27a16dc786820b16e5c9028b75b99f6f604b5d26": { name: "Stargate", kind: "bridge" },
