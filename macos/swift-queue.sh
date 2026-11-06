@@ -16,6 +16,8 @@
 # as a pass, and each later run tries again and refuses to start until the job's verifiably gone, so nothing overlaps or gets forgotten.
 #
 # SWIFT_QUEUE_ON_PASS is a command to run once a run really has passed, cleanup included. Nothing the command does in its turn can know that.
+# SWIFT_QUEUE_ON_STOP is a command to run if a run's reported as stopped, which has to take back anything SWIFT_QUEUE_ON_PASS did, even if
+# that's still running. Once the first has returned and this script stops listening for signals, the run has passed.
 set -u
 
 # A check's own builds are already part of its turn.
@@ -274,12 +276,14 @@ watch() {
   fi
   # The script was killed before it could say what happened.
   [ ! -r "$run/locker" ] || kill -TERM "$(cat "$run/locker")" 2>/dev/null
+  [ -z "${SWIFT_QUEUE_ON_STOP:-}" ] || sh -c "$SWIFT_QUEUE_ON_STOP"
   say "$(no_result)"
   [ ! -e "$run/stuck" ] || say "$(not_a_pass)"
   [ -e "$run/stuck" ] && [ ! -e "$run/clean" ] || remove_job "$run"
 }
 
 stopped() { # status
+  [ -z "${SWIFT_QUEUE_ON_STOP:-}" ] || sh -c "$SWIFT_QUEUE_ON_STOP"
   abort
   await_clean
   [ ! -r "$run/locker" ] || kill -TERM "$(cat "$run/locker")" 2>/dev/null
@@ -343,8 +347,9 @@ waited=
 case $status in
   0)
     if [ ! -e "$run/stuck" ]; then
-      say "$label passed in $took$waited."
       [ -z "${SWIFT_QUEUE_ON_PASS:-}" ] || sh -c "$SWIFT_QUEUE_ON_PASS"
+      trap '' TERM INT HUP
+      say "$label passed in $took$waited."
     fi
     ;;
   70 | 129 | 130 | 137 | 143) say "$(no_result)" ;;

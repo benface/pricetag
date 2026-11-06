@@ -1,9 +1,10 @@
 import assert from "node:assert/strict"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, test } from "node:test"
+import { setTimeout as sleep } from "node:timers/promises"
 
 // The real scripts in a throwaway repo, with stand-ins for swift and xcodebuild that write down what they were asked to do.
 let root: string
@@ -35,7 +36,40 @@ function check(args: string[] = [], extra: Record<string, string> = {}) {
   return { status, output: stderr, ran: readFileSync(calls, "utf8").trim().split("\n").filter(Boolean) }
 }
 
-const passes = () => readdirSync(join(root, "passes"))
+// The records of passes, not of which run's latest.
+const passes = () => readdirSync(join(root, "passes")).filter((name) => /^[0-9a-f]+$/.test(name))
+
+// A full run that's paused right before it publishes its pass, for what can happen in that moment.
+async function publishing() {
+  const mv = join(root, "bin/mv")
+  writeFileSync(mv, `#!/bin/sh
+case "$1" in
+  "$CHECK_MAC_PASSES/"*.new)
+    touch "${root}/ready"
+    until [ -e "${root}/release" ]; do sleep 0.05; done
+    ;;
+esac
+exec /bin/mv "$@"
+`)
+  chmodSync(mv, 0o755)
+  // Reading stderr so it's over when everything's done saying what happened, including the watcher of a script that's killed.
+  const child = spawn(join(repo, "macos/check-mac.sh"), [], { env, stdio: ["ignore", "ignore", "pipe"] })
+  child.stderr.resume()
+  const ended = new Promise<number | null>((resolve) => child.on("close", (code) => resolve(code)))
+  const deadline = Date.now() + 30_000
+  while (!existsSync(join(root, "ready"))) {
+    assert.ok(Date.now() < deadline, "the run never got to publishing")
+    await sleep(25)
+  }
+  rmSync(mv)
+  return {
+    child,
+    release: () => {
+      writeFileSync(join(root, "release"), "")
+      return ended
+    },
+  }
+}
 
 // Only on macOS, the one place this runs: the real queue needs its lockf, ps and sw_vers.
 describe("check:mac", { skip: process.platform !== "darwin" }, () => {
@@ -62,7 +96,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     }
     calls = join(root, "calls")
     env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_CALLS: calls, SWIFT_QUEUE_DIR: join(root, "queue"), CHECK_MAC_PASSES: join(root, "passes") }
-    for (const name of ["SWIFT_QUEUE_TURN", "ANVIL_RPC_URL", "BASE_READ_RPC_URL", "CONFIGURATION", "npm_lifecycle_event", "CHECK_MAC_PASSED", "SWIFT_QUEUE_ON_PASS", "GIT_DIR", "GIT_INDEX_FILE"]) delete env[name]
+    for (const name of ["SWIFT_QUEUE_TURN", "ANVIL_RPC_URL", "BASE_READ_RPC_URL", "CONFIGURATION", "npm_lifecycle_event", "CHECK_MAC_PASSED", "SWIFT_QUEUE_ON_PASS", "SWIFT_QUEUE_ON_STOP", "GIT_DIR", "GIT_INDEX_FILE"]) delete env[name]
   })
 
   afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -190,6 +224,33 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
       writeFileSync(calls, "")
       const { status } = spawnSync("sh", ["-c", `"$0" "$@" & echo $! >'${pid}'; wait $!`, join(repo, "macos/check-mac.sh"), ...args], { env: { ...env, FAKE_ON_CALL: stop }, encoding: "utf8" })
       assert.notEqual(status, 0)
+      assert.equal(check().ran.length, 5)
+    })
+  }
+
+  test("a run that's still publishing its pass can't undo a newer run's failure", async () => {
+    const older = await publishing()
+    assert.equal(check(["--force"], { FAKE_FAIL: "HotWalletKit" }).status, 3)
+    assert.equal(await older.release(), 0)
+    const next = check([], { FAKE_FAIL: "HotWalletKit" })
+    assert.equal(next.status, 3)
+    assert.doesNotMatch(next.output, /Nothing ran/)
+  })
+
+  test("a run that's still publishing its pass doesn't count over a newer run that was stopped", async () => {
+    const older = await publishing()
+    const pid = join(root, "pid")
+    const stop = `kill -TERM "$(cat '${pid}')"`
+    spawnSync("sh", ["-c", `"$0" "$@" & echo $! >'${pid}'; wait $!`, join(repo, "macos/check-mac.sh"), "--force"], { env: { ...env, FAKE_ON_CALL: stop }, encoding: "utf8" })
+    assert.equal(await older.release(), 0)
+    assert.equal(check().ran.length, 5)
+  })
+
+  for (const [signal, code] of [["SIGTERM", 143], ["SIGINT", 130], ["SIGHUP", 129], ["SIGKILL", null]] as const) {
+    test(`${signal} while a run publishes its pass leaves no pass`, async () => {
+      const run = await publishing()
+      run.child.kill(signal)
+      assert.equal(await run.release(), code)
       assert.equal(check().ran.length, 5)
     })
   }

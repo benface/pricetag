@@ -3,6 +3,8 @@
 # It runs nothing if this exact code already passed on this Mac with these tools, unless it's given --force.
 # `pnpm check:mac:quick` (--quick) is only the tests, always run, for while you're working. It never counts as a pass. See TESTING.md.
 # A pass is only remembered once the queue has verified that the whole turn is over, and any run that fails forgets one for its code.
+# Each full run that starts claims its code in <key>.latest, and a pass only counts if it's from the run named there. So a run's slow
+# publication can't undo what a newer run found, with no lock for it to hold up, and being wrong about it only means running again.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -16,8 +18,20 @@ if [ "${1:-}" = --remember ]; then
   key=$(cat "${CHECK_MAC_PASSED:-/nonexistent}" 2>/dev/null) || exit 0
   rm -f "$CHECK_MAC_PASSED"
   find "$passes" -type f -mtime +30 -delete || true
-  echo "$(date '+%Y-%m-%d %H:%M'), $repo" >"$passes/$key.new"
-  mv "$passes/$key.new" "$passes/$key"
+  run=$(basename "$CHECK_MAC_PASSED")
+  printf '%s\n' "$run" "$(date '+%Y-%m-%d %H:%M'), $repo" >"$passes/$key.$run.new"
+  mv "$passes/$key.$run.new" "$passes/$key"
+  exit 0
+fi
+
+# What the queue runs when a run's stopped, even if it had already got as far as --remember: that run's pass no longer counts.
+if [ "${1:-}" = --withdraw ]; then
+  [ -n "${CHECK_MAC_PASSED:-}" ] || exit 0
+  rm -f "$CHECK_MAC_PASSED"
+  run=$(basename "$CHECK_MAC_PASSED")
+  for latest in "$passes"/*.latest; do
+    [ "$(cat "$latest" 2>/dev/null)" != "$run" ] || rm -f "$latest"
+  done
   exit 0
 fi
 
@@ -58,11 +72,13 @@ fingerprint() {
 
 already_passed() {
   [ -z "$force" ] && [ -n "$key" ] && [ -e "$passes/$key" ] || return 1
-  say "Nothing ran: this exact code already passed on this Mac with these tools ($(cat "$passes/$key")). To run it again anyway, add --force."
+  { read -r run && read -r when; } <"$passes/$key" || return 1
+  [ "$run" = "$(cat "$passes/$key.latest" 2>/dev/null)" ] || return 1
+  say "Nothing ran: this exact code already passed on this Mac with these tools ($when). To run it again anyway, add --force."
 }
 
 forget() {
-  [ -z "$key" ] || rm -f "$passes/$key"
+  [ -z "$key" ] || rm -f "$passes/$key" "$passes/$key.latest"
 }
 
 if [ -z "${SWIFT_QUEUE_TURN:-}" ]; then
@@ -73,7 +89,8 @@ if [ -z "${SWIFT_QUEUE_TURN:-}" ]; then
   if [ -n "$key" ]; then
     CHECK_MAC_PASSED="$passes/running.$$.$(date +%s)"
     SWIFT_QUEUE_ON_PASS="\"$here/check-mac.sh\" --remember"
-    export CHECK_MAC_PASSED SWIFT_QUEUE_ON_PASS
+    SWIFT_QUEUE_ON_STOP="\"$here/check-mac.sh\" --withdraw"
+    export CHECK_MAC_PASSED SWIFT_QUEUE_ON_PASS SWIFT_QUEUE_ON_STOP
   fi
   exec "$here/swift-queue.sh" "$0" "$@"
 fi
@@ -84,6 +101,10 @@ key=$(fingerprint) || key=
 if [ -z "$quick" ]; then
   already_passed && exit 0
   forget
+  if [ -n "$key" ] && [ -n "${CHECK_MAC_PASSED:-}" ]; then
+    mkdir -p "$passes"
+    basename "$CHECK_MAC_PASSED" >"$passes/$key.latest"
+  fi
 fi
 
 step() { # name, command
@@ -120,10 +141,7 @@ step "HotWalletKit's iOS build" ios HotWalletKit
 # Only remembered if what passed is still what's there.
 [ -n "$key" ] || exit 0
 if [ "$(fingerprint || true)" = "$key" ]; then
-  if [ -n "${CHECK_MAC_PASSED:-}" ]; then
-    mkdir -p "$passes"
-    echo "$key" >"$CHECK_MAC_PASSED"
-  fi
+  [ -z "${CHECK_MAC_PASSED:-}" ] || echo "$key" >"$CHECK_MAC_PASSED"
 else
   say "macos/ changed during this run, so this pass won't be remembered."
 fi
