@@ -28,8 +28,6 @@ USAGE
 
 here=$(cd "$(dirname "$0")" && pwd)
 name=$(sed -n 's/^APP_NAME = //p' "$here/Config/App.xcconfig")
-# Debug's, from App.xcconfig. A fixture run with this in front is the one thing this must never cause.
-bundle_id=$(sed -n 's/^PRODUCT_BUNDLE_IDENTIFIER\[config=Debug\] = //p' "$here/Config/App.xcconfig")
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 [ $# -ge 1 ] || usage
@@ -96,7 +94,6 @@ if [ "${PATINA_WATCH_ONLY:-}" = 1 ]; then
   set -- -xcconfig "$here/Config/WatchOnly.xcconfig"
 elif [ "${PATINA_HOSTED:-}" = 1 ]; then
   products="$here/build/test-mode-hosted"
-  bundle_id=$(sed -n 's/^APP_DEBUG_BUNDLE_ID = //p' "$here/Config/Hosted.xcconfig")
   set -- -xcconfig "$here/Config/Hosted.xcconfig"
 else
   set --
@@ -109,6 +106,8 @@ fi
 run=$(mktemp -d "${TMPDIR:-/tmp}/patina-shot.XXXXXX")
 ditto "$products/Build/Products/Debug/$name.app" "$run/$name.app"
 binary="$run/$name.app/Contents/MacOS/$name"
+# From what was built, so it's right for every flavor. A fixture run with this in front is the one thing this must never cause.
+bundle_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$run/$name.app/Contents/Info.plist")
 
 started=
 watcher=

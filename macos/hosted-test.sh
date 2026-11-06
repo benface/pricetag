@@ -2,13 +2,17 @@
 # `pnpm check:hosted`: tests the whole app as colleagues get it, with no real funds, and without opening a window or taking focus.
 #
 # The .dmg's release app: its signature, profile and entitlements, that it reads the hosted server, what's beside it in the image, and that it
-# launches, finds a server's 401, tells a browser where its host is and leaves the normal build's alone. Its first read and questions run if
-# PATINA_TEST_ENV_FILE names a .env.local with Amp credentials, which stay in that server's environment.
+# launches, finds a server's 401, tells a browser where its host is and leaves every manifest that's already there alone. Its first read and questions
+# run if PATINA_TEST_ENV_FILE names a .env.local with Amp credentials, which stay in that server's environment.
+#
+# What launches of the release app goes by its own test ID, with no profile, Keychain group or app group, so it can't reach an installed copy's key, settings,
+# records or socket, and this stops before launching if that isn't so. It can't write to a browser's manifest that's already there either, whoever wrote it,
+# since it's signed without that browser's paths. So the release app under its real ID and profile first launches on someone's Mac, not here.
 #
 # A debug copy signed the same way, whose isolated wallet has its own Keychain service inside this build's own Keychain group: a new key in
 # the real Secure Enclave and device-only Keychain, a sweep, and a site's transaction through the extension, all on a local fork of Base.
 #
-# Every copy that launches has its patina:// scheme taken out and is signed again, so it can't take that link from the normal build, and it never
+# Every copy that launches has its patina:// scheme taken out and is signed again, so it can't take that link from another build, and it never
 # has a quarantine flag, whose first-launch dialog would land on someone's screen. Check Gatekeeper with spctl. Never launch a quarantined copy here.
 #
 # Usage: hosted-test.sh [--no-launch] [path to the .dmg]. With none, it builds a --local one first. --no-launch stops before anything runs, since
@@ -19,6 +23,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 repo=$(dirname "$here")
 name=$(sed -n 's/^APP_NAME = //p' "$here/Config/App.xcconfig")
 bundle_id=$(sed -n 's/^APP_BUNDLE_ID = //p' "$here/Config/Hosted.xcconfig")
+test_id="$bundle_id.check"
+probe_id="$test_id.keychain"
 identity="Developer ID Application: Benface Inc. (R7TNNTC382)"
 team=R7TNNTC382
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
@@ -50,12 +56,16 @@ cleanup() {
   for pid in $started; do kill "$pid" 2>/dev/null; done
   pkill -f "$work/" 2>/dev/null
   [ -x "$work/debug/$name.app/Contents/MacOS/$name" ] && "$work/debug/$name.app/Contents/MacOS/$name" --isolated hosted-test --reset-isolated-wallet >/dev/null 2>&1
-  # Only what this test's launch added. A manifest that was already there was never changed.
-  printf '%s\n' "$new_manifests" | while IFS= read -r file; do [ -z "$file" ] || rm -f "$file"; done
+  # Only what this test's launch added, and is still this test's. A manifest that was already there can't have changed, since the copy isn't allowed to write it.
+  printf '%s\n' "$new_manifests" | while IFS= read -r file; do if [ -n "$file" ] && grep -qF "$work/" "$file" 2>/dev/null; then rm -f "$file"; fi; done
   printf '%s\n' "$new_folders" | while IFS= read -r folder; do [ -z "$folder" ] || rmdir "$folder" 2>/dev/null; done
   for app in "$work/release/$name.app" "$work/debug/$name.app"; do "$lsregister" -u "$app" 2>/dev/null; done
   hdiutil detach -quiet "$mount" 2>/dev/null
   rm -rf "$work"
+  # Only the test IDs' folders. An installed copy's holds someone's wallet. macOS guards these, so this may not be allowed, and they hold no key either way.
+  for id in "$test_id" "$probe_id"; do
+    rm -rf "${HOME:?}/Library/Containers/$id" 2>/dev/null || echo "macOS wouldn't let this remove $HOME/Library/Containers/$id, which is left over from testing."
+  done
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -77,8 +87,9 @@ launchable() { # from, to
   mkdir -p "$(dirname "$2")"
   ditto --noqtn "$1" "$2"
   /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$2/Contents/Info.plist" 2>/dev/null || true
-  codesign -d --entitlements - --xml "$1" 2>/dev/null >"$work/launch-entitlements.plist"
-  codesign --force --options runtime --timestamp=none --entitlements "$work/launch-entitlements.plist" --sign "$identity" "$2" 2>/dev/null
+}
+sign_with() { # app, entitlements
+  codesign --force --options runtime --timestamp=none --entitlements "$2" --sign "$identity" "$1" 2>/dev/null
 }
 
 free_port() { node -e 'const s=require("node:net").createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})'; }
@@ -221,7 +232,6 @@ sleep 0.5
 
 echo "Launching the release app in the background:"
 released="$work/release/$name.app"
-launchable "$app" "$released"
 browsers=$(sed -n 's/.*\/Library\/Application Support\/\(.*\)\/NativeMessagingHosts<\/string>.*/\1/p' "$here/Config/Hosted.entitlements")
 snapshot() {
   printf '%s\n' "$browsers" | while IFS= read -r browser; do
@@ -232,6 +242,46 @@ snapshot() {
 snapshot >"$work/manifests-before"
 new_manifests=$(sed -n 's/^none //p' "$work/manifests-before" | while IFS= read -r browser; do if [ -d "$support/$browser" ]; then printf '%s\n' "$support/$browser/NativeMessagingHosts/com.benface.patina.json"; fi; done)
 new_folders=$(sed -n 's/^none //p' "$work/manifests-before" | while IFS= read -r browser; do if [ -d "$support/$browser" ] && [ ! -d "$support/$browser/NativeMessagingHosts" ]; then printf '%s\n' "$support/$browser/NativeMessagingHosts"; fi; done)
+
+# A sandboxed app's saved data goes by its bundle ID wherever it's launched from, and the Keychain groups it can reach by what it's signed with. What's left
+# is what the app's own sandbox needs, without the paths of any browser that already has a manifest. The sandbox stops that write, whoever wrote the manifest.
+launchable "$app" "$released"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $test_id" "$released/Contents/Info.plist"
+rm -f "$released/Contents/embedded.provisionprofile"
+/usr/bin/python3 -I - "$work/entitlements.plist" "$work/manifests-before" "$work/release-entitlements.plist" <<'PYTHON'
+import plistlib, sys
+have = plistlib.load(open(sys.argv[1], "rb"))
+exception = "com.apple.security.temporary-exception.files.home-relative-path.read-write"
+keep = {"com.apple.security.app-sandbox", "com.apple.security.device.camera", "com.apple.security.files.user-selected.read-write", "com.apple.security.network.client", "com.apple.security.network.server"}
+theirs = [line.split(" ", 1)[1] for line in open(sys.argv[2]).read().splitlines() if not line.startswith("none ")]
+out = {key: value for key, value in have.items() if key in keep}
+out[exception] = [path for path in have.get(exception, []) if not any(path.startswith(f"/Library/Application Support/{browser}/NativeMessagingHosts") for browser in theirs)]
+plistlib.dump(out, open(sys.argv[3], "wb"))
+PYTHON
+sign_with "$released" "$work/release-entitlements.plist"
+
+# From what macOS will actually read, since a mistake above must never launch something that can reach a wallet.
+codesign -d --entitlements - --xml "$released" 2>/dev/null >"$work/release-signed.plist"
+isolation=$(/usr/bin/python3 -I - "$work/release-signed.plist" "$work/manifests-before" "$released/Contents/Info.plist" "$test_id" <<'PYTHON'
+import plistlib, sys
+have = plistlib.load(open(sys.argv[1], "rb"))
+exception = "com.apple.security.temporary-exception.files.home-relative-path.read-write"
+theirs = [line.split(" ", 1)[1] for line in open(sys.argv[2]).read().splitlines() if not line.startswith("none ")]
+if plistlib.load(open(sys.argv[3], "rb")).get("CFBundleIdentifier") != sys.argv[4]: print("its bundle ID isn't the test ID")
+if have.get("com.apple.security.app-sandbox") is not True: print("it isn't sandboxed")
+for key in ("keychain-access-groups", "com.apple.security.application-groups", "com.apple.application-identifier", "com.apple.developer.team-identifier"):
+    if key in have: print("it still has " + key)
+for path in have.get(exception, []):
+    if any(path.startswith(f"/Library/Application Support/{browser}/NativeMessagingHosts") for browser in theirs): print("it can still write " + path)
+PYTHON
+) || isolation="couldn't read how it's signed"
+[ ! -e "$released/Contents/embedded.provisionprofile" ] || isolation="$isolation it still has a provisioning profile"
+codesign -dv "$released" 2>&1 | grep -qx "Identifier=$test_id" || isolation="$isolation it isn't signed as the test ID"
+if [ -n "$isolation" ]; then
+  echo "Not launching the release app, because it could reach an installed copy's wallet or manifests: $isolation" >&2
+  exit 1
+fi
+pass "it can't reach an installed copy's key, settings, records or socket, or a manifest that's already there"
 
 front_app() { lsappinfo info -only bundleID "$(lsappinfo front)" | sed -n 's/.*bundleID="\([^"]*\)".*/\1/p'; }
 front=$(front_app)
@@ -244,13 +294,14 @@ done
 if grep -q 'GET /api/rules 401' "$requests"; then pass "launched, reached the server, and got the 401 that opens the invite prompt"; else fail "never asked the server: $(cat "$requests")"; fi
 if pgrep -f "$released/Contents/MacOS/$name" >/dev/null; then pass "still running"; else fail "it quit"; fi
 after=$(front_app)
-if [ "$after" = "$bundle_id" ]; then fail "it took focus from $front"; else pass "left focus alone"; fi
+if [ "$after" = "$test_id" ]; then fail "it took focus from $front"; else pass "left focus alone"; fi
+if lsappinfo info -only bundleID "$(lsappinfo find bundleID="$test_id" | head -n 1)" 2>/dev/null | grep -qF "\"$test_id\""; then pass "macOS is running it as the test ID, $test_id"; else fail "macOS isn't running it as $test_id"; fi
 
 sleep 1
 snapshot >"$work/manifests-after"
 theirs=$(grep -v '^none ' "$work/manifests-before" || true)
 if [ -n "$theirs" ]; then
-  if printf '%s\n' "$theirs" | while IFS= read -r line; do grep -qxF "$line" "$work/manifests-after" || exit 1; done; then pass "left the normal build's browser manifests exactly as they were"; else fail "changed a manifest that was already there"; fi
+  if printf '%s\n' "$theirs" | while IFS= read -r line; do grep -qxF "$line" "$work/manifests-after" || exit 1; done; then pass "left every manifest that was already there exactly as it was, whichever build wrote it"; else fail "changed a manifest that was already there"; fi
 fi
 if [ -n "$new_manifests" ]; then
   if printf '%s\n' "$new_manifests" | while IFS= read -r file; do
@@ -276,7 +327,10 @@ echo "A debug copy signed the same way, with the real Keychain and a local fork:
 "$here/hosted.sh" --debug
 debugged="$work/debug/$name.app"
 launchable "$here/build/hosted/debug/$name.app" "$debugged"
+codesign -d --entitlements - --xml "$here/build/hosted/debug/$name.app" 2>/dev/null >"$work/debug-entitlements.plist"
+sign_with "$debugged" "$work/debug-entitlements.plist"
 debug_binary="$debugged/Contents/MacOS/$name"
+debug_id=$(sed -n 's/^APP_DEBUG_BUNDLE_ID = //p' "$here/Config/Hosted.xcconfig")
 if "$debug_binary" --hot-wallet-self-test >"$work/self-test" 2>&1 && grep -q "KEYCHAIN SELF TEST PASSED" "$work/self-test" && grep -q "Accessible: cku. Synchronizable: false." "$work/self-test"; then
   pass "made a key in the Secure Enclave and device-only Keychain, signed with it, and deleted it"
 else
@@ -327,6 +381,39 @@ case $address in
 esac
 pid=$(sed -n 's/^PID //p' "$log" | head -n 1)
 [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+
+# That wallet stands in for an installed copy's: a real key in the hosted build's own Keychain group, and a sandbox folder that isn't the release launch's.
+# A program signed the way that launch was asks for both. It asks only whether they're there, and never for what's in them.
+cat >"$work/probe.swift" <<'SWIFT'
+import Foundation
+import Security
+
+func status(_ query: [String: Any]) -> OSStatus {
+    var result: CFTypeRef?
+    return SecItemCopyMatching(query as CFDictionary, &result)
+}
+let arguments = CommandLine.arguments
+let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecUseDataProtectionKeychain as String: true, kSecReturnAttributes as String: true, kSecMatchLimit as String: kSecMatchLimitAll, kSecAttrService as String: arguments[1]]
+var inGroup = base
+inGroup[kSecAttrAccessGroup as String] = arguments[2]
+print("by-service", status(base))
+print("in-group", status(inGroup))
+print("sandbox", opendir(arguments[3]) == nil ? errno : 0)
+SWIFT
+probe="$work/probe.app"
+mkdir -p "$probe/Contents/MacOS"
+swiftc -O -o "$probe/Contents/MacOS/probe" "$work/probe.swift"
+/usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $probe_id" -c "Add :CFBundleExecutable string probe" -c "Add :CFBundlePackageType string APPL" "$probe/Contents/Info.plist" >/dev/null
+sign_with "$probe" "$work/release-entitlements.plist"
+"$probe/Contents/MacOS/probe" com.benface.pricetag.hot-wallet.isolated.hosted-test "$team.com.benface.pricetag.hosted.hotwallet" "$HOME/Library/Containers/${debug_id:-$bundle_id}/Data" >"$work/probe.out" 2>&1 || true
+# -34018 is errSecMissingEntitlement, the Keychain refusing. Asked without naming a group, it only searches groups this has, of which there are none, so
+# -25300, errSecItemNotFound, is the same answer. 1 is EPERM, the sandbox refusing.
+answer=$(sed -n 's/^by-service //p' "$work/probe.out")
+if [ "$answer" = -34018 ] || [ "$answer" = -25300 ]; then pass "signed like the release launch, it can't find an existing wallet's key by name ($answer)"; else fail "asking for an existing wallet's key answered ${answer:-nothing}: $(cat "$work/probe.out")"; fi
+answer=$(sed -n 's/^in-group //p' "$work/probe.out")
+if [ "$answer" = -34018 ]; then pass "or in the hosted build's Keychain group ($answer)"; else fail "asking in the hosted build's group answered ${answer:-nothing}: $(cat "$work/probe.out")"; fi
+answer=$(sed -n 's/^sandbox //p' "$work/probe.out")
+if [ "$answer" = 1 ]; then pass "or open another copy's sandbox folder ($answer)"; else fail "opening another copy's sandbox folder answered ${answer:-nothing}: $(cat "$work/probe.out")"; fi
 
 # Signed like the release app, so this is what shows its sandbox lets the listener start. The page's flows are pnpm check:device-pages.
 "$debug_binary" --isolated hosted-test --reset-isolated-wallet >/dev/null

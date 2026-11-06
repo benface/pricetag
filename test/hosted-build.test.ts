@@ -1,5 +1,8 @@
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { test } from "node:test"
 
 const read = (path: string) => readFileSync(new URL(`../macos/${path}`, import.meta.url), "utf8")
@@ -44,6 +47,35 @@ test("the hosted build can't share a Keychain group, sandbox or socket with the 
     assert.notEqual(id, debug)
     assert.notEqual(socket(id), socket(release))
     assert.notEqual(socket(id), socket(debug))
+  }
+})
+
+test("the hosted test's release launch has its own ID, and refuses to launch if it could reach a wallet", () => {
+  const script = read("hosted-test.sh")
+  const launch = script.indexOf(`open -g -j -n "$released"`)
+  const guard = script.indexOf(`Not launching the release app`)
+  assert.ok(guard > 0 && guard < launch)
+  assert.ok(script.indexOf(`Set :CFBundleIdentifier $test_id`) < guard)
+  assert.ok(script.indexOf(`rm -f "$released/Contents/embedded.provisionprofile"`) < guard)
+  const [kept] = /^keep = \{.*\}$/m.exec(script)!
+  for (const reach of ["keychain-access-groups", "application-groups", "application-identifier", "team-identifier"]) assert.ok(!kept.includes(reach), reach)
+})
+
+test("shot.sh's focus check goes by what was built, and catches it in front", () => {
+  const script = read("shot.sh")
+  assert.ok(script.indexOf("bundle_id=") > script.indexOf(`ditto "$products`), "it reads what was built")
+  assert.match(script, /bundle_id=\$\(\/usr\/libexec\/PlistBuddy -c "Print :CFBundleIdentifier" "\$run\/\$name\.app\/Contents\/Info\.plist"\)/)
+  const [, pattern] = /^if grep -q (.+) "\$run\/focus"; then$/m.exec(script)!
+  const run = mkdtempSync(join(tmpdir(), "shot-focus-"))
+  const recorded = (id: string) => {
+    writeFileSync(join(run, "focus"), `kLSNotifyBecameFrontmost "CFBundleIdentifier"="${id}"\n`)
+    return spawnSync("sh", ["-c", `grep -q ${pattern} "$run/focus"`], { env: { run, bundle_id: "com.example.built", PATH: process.env.PATH } }).status
+  }
+  try {
+    assert.equal(recorded("com.example.built"), 0)
+    assert.equal(recorded("com.apple.finder"), 1)
+  } finally {
+    rmSync(run, { recursive: true })
   }
 })
 
