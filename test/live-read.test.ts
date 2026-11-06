@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { afterEach, beforeEach, describe, it, mock } from "node:test"
 import { ReadError, readResponse, type ReadFailure } from "../src/core/read-failure.ts"
 import { feedProblem, panelProblem } from "../src/core/wording.ts"
-import { followRead, liveError, type LiveState } from "../src/ui/useWallet.ts"
+import { followRead, liveError, readEach, type LiveState } from "../src/ui/useWallet.ts"
 
 const INVITE = "This server needs an invite."
 const refused = (): ReadError => new ReadError({ kind: "refused", said: INVITE })
@@ -299,5 +299,60 @@ describe("a read and its updates failing", () => {
     await run.fail(refused())
     assert.equal(FakeEvents.opened.length, 0)
     assert.deepEqual(run.error(), REFUSED)
+  })
+})
+
+describe("readEach", () => {
+  /** Each read waits here until the test finishes it. */
+  const harness = () => {
+    const reads: { key: string; signal: AbortSignal; finish: (value: string) => void; fail: (error: Error) => void }[] = []
+    const seen: string[] = []
+    const failed: string[] = []
+    const each = readEach<string>(
+      (key, signal) =>
+        new Promise((resolve, reject) => {
+          reads.push({ key, signal, finish: resolve, fail: reject })
+        }),
+      (key, value) => seen.push(`${key}=${value}`),
+      (key) => failed.push(key),
+    )
+    return { each, reads, seen, failed }
+  }
+
+  it("lets a read outlast the blocks that arrive during it, and reads again on the next one after it", async () => {
+    const { each, reads, seen } = harness()
+    each.start(["a", "b"])
+    each.start(["a", "b"])
+    each.start(["a", "b"])
+    assert.deepEqual(reads.map(({ key }) => key), ["a", "b"], "nothing's started twice")
+    assert.equal(reads[0]?.signal.aborted, false, "and nothing's stopped")
+
+    reads[0]?.finish("slow")
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(seen, ["a=slow"])
+
+    each.start(["a", "b"])
+    assert.deepEqual(reads.map(({ key }) => key), ["a", "b", "a"], "only the one that finished goes again")
+  })
+
+  it("says which read failed, and tries it again next time", async () => {
+    const { each, reads, seen, failed } = harness()
+    each.start(["a"])
+    reads[0]?.fail(new Error("no"))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(failed, ["a"])
+    assert.deepEqual(seen, [])
+    each.start(["a"])
+    assert.equal(reads.length, 2)
+  })
+
+  it("doesn't call a read it stopped a failure", async () => {
+    const { each, reads, failed } = harness()
+    each.start(["a"])
+    each.stop()
+    assert.equal(reads[0]?.signal.aborted, true)
+    reads[0]?.fail(new Error("aborted"))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(failed, [])
   })
 })

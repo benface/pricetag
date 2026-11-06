@@ -3,9 +3,10 @@ import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../core/api.ts"
 import { applyChange, changeStoredBook, isBookKey, linkDeviceAccounts, readStoredBook, recordPurchase, same, storedBook, storedBookHasNoCopy, undoAnswer, type Book, type BookChange, type Purchase } from "../core/book.ts"
 import { readKey, readsMatching } from "../core/resolve.ts"
+import { readResponse } from "../core/read-failure.ts"
 import { readStoredPurchases, isPurchasesKey, storedPurchasesHaveNoCopy } from "../core/purchases.ts"
 import { browserShelf, hasUnseenSetAside, isSetAsideKey, markSetAsideSeen, plainShelf, type Shelf } from "../core/shelf.ts"
-import { walletUrl } from "./useWallet.ts"
+import { readEach, walletUrl } from "./useWallet.ts"
 
 /** What the stored book said just before and just after an answer was saved, so only saved answers are ever in the history. */
 type Step = { before: Book; after: Book }
@@ -171,12 +172,10 @@ export function useUnreadableSaved() {
 }
 
 /**
- * Reads other wallets, and again on each new block of the wallet on screen. One that can't be read yet stays out, and one
- * whose read failed is in `failed`, so nobody's told it's still reading. `retry` reads them all again now.
- */
-/**
- * Linked wallets, read by `rule` in `currency`. `shown` is how the numbers on screen were read, which for a moment after a
- * change isn't that: they go with the wallets read the same way, and a newer read waits until they've changed too.
+ * Linked wallets, read by `rule` in `currency`, and again on each new block of the wallet on screen. One that can't be read yet
+ * stays out, and one whose read failed is in `failed`, so nobody's told it's still reading. `retry` reads them all again now.
+ * `shown` is how the numbers on screen were read, which for a moment after a change isn't that: they go with the wallets read
+ * the same way, and a newer read waits until they've changed too.
  */
 export function useOtherWallets(addresses: readonly string[], currency: CurrencyCode, rule: string | null, paid: string, block: number | null, shown: Pick<WalletResponse, "rule" | "currency"> | null) {
   const [wallets, setWallets] = useState<Record<string, WalletResponse>>({})
@@ -184,23 +183,25 @@ export function useOtherWallets(addresses: readonly string[], currency: Currency
   const [attempt, setAttempt] = useState(0)
   const key = addresses.join(",")
 
+  const reads = useRef<ReturnType<typeof readEach> | null>(null)
+
+  // Only asking for something else stops a read. A new block doesn't, or a wallet that takes longer than a block to read would never land.
   useEffect(() => {
     if (!key) return
-    const abort = new AbortController()
-    const fail = (address: string) => setFailures((f) => new Set([...f, address]))
-    for (const address of key.split(",")) {
-      fetch(walletUrl(address, currency, rule, paid), { signal: abort.signal })
-        .then((response) => (response.ok ? (response.json() as Promise<WalletResponse>) : null))
-        .then((wallet) => {
-          if (!wallet) return fail(address)
-          setWallets((w) => ({ ...w, [readKey(address, wallet)]: wallet }))
-          setFailures((f) => new Set([...f].filter((other) => other !== address)))
-        })
-        .catch(() => {
-          if (!abort.signal.aborted) fail(address)
-        })
-    }
-    return () => abort.abort()
+    const each = readEach<WalletResponse>(
+      async (address, signal) => readResponse(await fetch(walletUrl(address, currency, rule, paid), { signal })),
+      (address, wallet) => {
+        setWallets((w) => ({ ...w, [readKey(address, wallet)]: wallet }))
+        setFailures((f) => new Set([...f].filter((other) => other !== address)))
+      },
+      (address) => setFailures((f) => new Set([...f, address])),
+    )
+    reads.current = each
+    return () => each.stop()
+  }, [key, currency, rule, paid, attempt])
+
+  useEffect(() => {
+    if (key) reads.current?.start(key.split(","))
   }, [key, currency, rule, paid, block, attempt])
 
   return {

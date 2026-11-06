@@ -16,6 +16,7 @@ import { refuse, type CheckoutRefusal } from "./hosting.ts"
 import { forEveryone } from "./lanes.ts"
 import { verifyLink } from "./links.ts"
 import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type AllYoursRead, type Unread } from "../src/core/combined.ts"
+import type { ExplainTarget } from "../src/core/explain.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../src/core/portfolio.ts"
 import { createCoinbase } from "./coinbase.ts"
 import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onramp.ts"
@@ -26,9 +27,9 @@ import { createManifestReader, createProofs, currentProofOf, currentRevision, cu
 import { rawSource, resolvingSource, settledL1Fees, sharedReads, type SharedReads } from "./source.ts"
 import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
 import { createContractCheck } from "./contract.ts"
+import { recordOf } from "../src/core/record.ts"
+import { pathOf, type Env } from "./shared.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
-
-type Env = Record<string, string | undefined>
 
 const DEMO_UNVERIFIABLE = "This is the demo wallet, so there's no real block to check."
 
@@ -165,15 +166,6 @@ function parseLinked(value: string | null): string[] | null {
   return [...new Set(addresses.map((address) => address.toLowerCase()))]
 }
 
-/** The request's decoded path, or null when the URL is malformed. Clients can send anything here. */
-export function pathOf(req: IncomingMessage): string | null {
-  try {
-    return decodeURIComponent(new URL(req.url ?? "/", "http://localhost").pathname)
-  } catch {
-    return null
-  }
-}
-
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" })
   res.end(JSON.stringify(body))
@@ -212,7 +204,27 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   }
 }
 
-const recordOf = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
+const currencyIn = (body: Record<string, unknown>) => parseCurrency(typeof body.currency === "string" ? body.currency : null)
+
+const bookIn = (body: Record<string, unknown>) => (body.book === undefined ? emptyBook() : parseBook(body.book))
+
+/**
+ * What a post about a portfolio wants besides the portfolio: a number explained, or how some answers would change it. Those
+ * answers are what it's read for, and otherwise the user's own are. Answers the request itself when that can't be read.
+ */
+function askedIn(action: string | undefined, body: Record<string, unknown>, book: Book, req: IncomingMessage, res: ServerResponse): { target: ExplainTarget | null; candidates: Book[]; books: Book[] } | null {
+  const target = action === "explain" ? parseExplainTarget(new URL(req.url ?? "/", "http://localhost").searchParams) : null
+  if (action === "explain" && !target) {
+    sendJson(res, 400, { error: "That isn't a number this can explain." })
+    return null
+  }
+  const candidates = action === "preview" ? (Array.isArray(body.candidates) ? body.candidates.map(parseBook) : null) : []
+  if (!candidates || candidates.includes(null) || candidates.length > 8) {
+    sendJson(res, 400, { error: "Those answers can't be read." })
+    return null
+  }
+  return { target, candidates: candidates as Book[], books: action === "preview" ? (candidates as Book[]) : [book] }
+}
 
 /** For a source with nothing to stream. */
 const pollingOnly = (source: Source): FollowConfig => ({
@@ -563,11 +575,9 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (addresses.length === 0) return sendJson(res, 400, { error: "There are no wallets of yours to add up." })
     if (addresses.length > MAX_OTHER_WALLETS + 1) return sendJson(res, 400, { error: `This can add up to ${MAX_OTHER_WALLETS + 1} wallets.` })
     if (action === "compare") return sendJson(res, 400, { error: "Rules are compared one wallet at a time." })
-    const target = action === "explain" ? parseExplainTarget(new URL(req.url ?? "/", "http://localhost").searchParams) : null
-    if (action === "explain" && !target) return sendJson(res, 400, { error: "That isn't a number this can explain." })
-    const candidates = action === "preview" ? (Array.isArray(body.candidates) ? body.candidates.map(parseBook) : null) : []
-    if (!candidates || candidates.includes(null) || candidates.length > 8) return sendJson(res, 400, { error: "Those answers can't be read." })
-    const books = action === "preview" ? (candidates as Book[]) : [book]
+    const asked = askedIn(action, body, book, req, res)
+    if (!asked) return
+    const { target, candidates, books } = asked
     const paidIn = parsePaidIn(typeof body.paid === "string" ? body.paid : null)
     if (!paidIn) return sendJson(res, 400, { error: "That currency isn't supported." })
     const shown: unknown = body.shown ?? []
@@ -587,7 +597,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       res.end()
       return
     }
-    if (action === "preview") return sendJson(res, 200, { previews: previewCombined(read, method, candidates as Book[], unread) })
+    if (action === "preview") return sendJson(res, 200, { previews: previewCombined(read, method, candidates, unread) })
     if (action === "export") {
       // Worked out first, because it can be refused, and a refusal can't follow a 200.
       const csv = exportCombined(read, method, book)
@@ -642,9 +652,9 @@ export function createApi(env: Env, created: Created | null = createSource(env),
 
     const taxMatch = /^\/api\/tax-report\/([^/]+)$/.exec(path)
     if (taxMatch) {
-      const currency = parseCurrency(typeof body.currency === "string" ? body.currency : null)
+      const currency = currencyIn(body)
       if (!currency) return sendJson(res, 400, { error: "That currency isn't supported." })
-      const book = body.book === undefined ? emptyBook() : parseBook(body.book)
+      const book = bookIn(body)
       if (!book) return sendJson(res, 400, { error: "Those answers can't be read." })
       const also: unknown = body.also ?? []
       if (!Array.isArray(also) || !also.every((address) => typeof address === "string")) return sendJson(res, 400, { error: "Other wallets are a list of Base addresses." })
@@ -655,9 +665,9 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (!match) return sendJson(res, 404, { error: "Not found" })
     const method = parseMethod(typeof body.method === "string" ? body.method : null)
     if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
-    const currency = parseCurrency(typeof body.currency === "string" ? body.currency : null)
+    const currency = currencyIn(body)
     if (!currency) return sendJson(res, 400, { error: "That currency isn't supported." })
-    const book = body.book === undefined ? emptyBook() : parseBook(body.book)
+    const book = bookIn(body)
     if (!book) return sendJson(res, 400, { error: "Those answers can't be read." })
     const rule = body.rule === undefined || body.rule === null ? (rules[0] ?? null) : (rules.find((r) => r.rule.id === body.rule) ?? null)
     if (body.rule !== undefined && body.rule !== null && !rule) return sendJson(res, 400, { error: "That pricing rule isn't available here." })
@@ -665,23 +675,20 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (match[1] === ALL_YOURS) return allYours(action, body, req, res, { method, currency, book, rule })
     if (action === "wallets") return sendJson(res, 404, { error: "Not found" })
 
-    const target = action === "explain" ? parseExplainTarget(new URL(req.url ?? "/", "http://localhost").searchParams) : null
-    if (action === "explain" && !target) return sendJson(res, 400, { error: "That isn't a number this can explain." })
-    const candidates = action === "preview" ? (Array.isArray(body.candidates) ? body.candidates.map(parseBook) : null) : []
-    if (!candidates || candidates.includes(null) || candidates.length > 8) return sendJson(res, 400, { error: "Those answers can't be read." })
-    const books = action === "preview" ? (candidates as Book[]) : [book]
+    const asked = askedIn(action, body, book, req, res)
+    if (!asked) return
+    const { target, books } = asked
 
     // Every wallet this request could read, before any read starts: a shared server's reads queue for everyone.
     const sent: unknown[] = Array.isArray(body.linked) ? body.linked : []
     if (!sent.every((address) => typeof address === "string" && isAddress(address))) return sendJson(res, 400, { error: "Linked wallets are a list of Base addresses." })
-    const named = new Set([...(sent as string[]).map((address) => address.toLowerCase()), ...books.flatMap(linkedWallets)])
+    const linked = (sent as string[]).map((address) => address.toLowerCase())
+    const named = new Set([...linked, ...books.flatMap(linkedWallets)])
     named.delete((match[1] as string).toLowerCase())
     if (named.size > MAX_OTHER_WALLETS) return sendJson(res, 400, { error: `A request can add up to ${MAX_OTHER_WALLETS} other wallets.` })
 
     if (action === "compare") {
-      const known = Array.isArray(body.linked) ? body.linked : []
-      if (!known.every((address) => typeof address === "string" && isAddress(address))) return sendJson(res, 400, { error: "Linked wallets are a list of Base addresses." })
-      const linking = { ...book, linked: known.map((address: string) => address.toLowerCase()) }
+      const linking = { ...book, linked }
       return compare(match[1] as string, currency, method, walletsBehind(linking, { address: match[1] as string }), res, linking)
     }
 
@@ -695,9 +702,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const wallet = read && (await inCurrency(read, currency, res, books))
     if (!wallet) return
     // The client's own wallets, which only count on a wallet that's real.
-    const known: unknown[] = wallet.mode === "demo" || !Array.isArray(body.linked) ? [] : body.linked
-    if (!known.every((address) => typeof address === "string" && isAddress(address))) return sendJson(res, 400, { error: "Linked wallets are a list of Base addresses." })
-    const linkedBooks = books.map((one) => ({ ...one, linked: (known as string[]).map((address) => address.toLowerCase()) }))
+    const linkedBooks = books.map((one) => ({ ...one, linked: wallet.mode === "demo" ? [] : linked }))
     const others = await linkedOf(wallet, linkedBooks, currency, rule, res)
     if (!others) return
 
@@ -769,14 +774,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
    */
   async function compare(address: string, currency: CurrencyCode, method: Method, linked: readonly string[], res: ServerResponse, book?: Book): Promise<void> {
     const [first, second] = rules
-    if (!first || !second) {
-      sendJson(res, 404, { error: "There's only one pricing rule here, so there's nothing to compare." })
-      return
-    }
-    if (!isAddress(address)) {
-      sendJson(res, 400, { error: "That isn't a Base address." })
-      return
-    }
+    if (!first || !second) return sendJson(res, 404, { error: "There's only one pricing rule here, so there's nothing to compare." })
+    if (!isAddress(address)) return sendJson(res, 400, { error: "That isn't a Base address." })
     const notYet = () => sendJson(res, 409, { error: "The two rules haven't reached the same block yet. Try again in a moment." })
     const own = address.toLowerCase()
     const others = linked.filter((other) => other !== own)
@@ -833,36 +832,29 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-    try {
-      return await route(req, res)
-    } catch (error) {
-      // Folds aren't all inside a read's `try`, and every one of them can ask for this.
-      if (!(error instanceof OldestFirstTooBigError || error instanceof WalletsTooBigError)) throw error
-      sendAmpError(res, error)
-      return true
-    }
-  }
-
-  async function route(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = pathOf(req)
     if (path === null) {
       sendJson(res, 400, { error: "Bad request" })
       return true
     }
     if (!path.startsWith("/api/")) return false
-    if (req.method === "POST") {
-      await handlePost(path, req, res)
-      return true
+    try {
+      await (req.method === "POST" ? handlePost(path, req, res) : handleGet(path, req, res))
+    } catch (error) {
+      // Folds aren't all inside a read's `try`, and every one of them can ask for this.
+      if (!(error instanceof OldestFirstTooBigError || error instanceof WalletsTooBigError)) throw error
+      sendAmpError(res, error)
     }
-    if (req.method !== "GET") {
-      sendJson(res, 405, { error: "Method not allowed" })
-      return true
-    }
+    return true
+  }
+
+  async function handleGet(path: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== "GET") return sendJson(res, 405, { error: "Method not allowed" })
 
     if (path === "/api/events") {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" })
       res.write(": connected\n\n")
-      if (!source) return true
+      if (!source) return
       subscribers.add(res)
       req.on("close", () => {
         subscribers.delete(res)
@@ -870,22 +862,15 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       })
       // It outlives this request, and reads for everyone watching.
       forEveryone(() => void followLoop())
-      return true
+      return
     }
 
-    if (path === "/api/rules") {
-      sendJson(res, 200, { rules: rules.map(({ rule }) => rule) })
-      return true
-    }
+    if (path === "/api/rules") return sendJson(res, 200, { rules: rules.map(({ rule }) => rule) })
 
     if (path === "/api/rate") {
       const currency = new URL(req.url ?? "/", "http://localhost").searchParams.get("currency")
-      if (!isMainCurrency(currency)) {
-        sendJson(res, 400, { error: "That isn't a currency this app shows amounts in." })
-        return true
-      }
-      await answerRate(currency, res)
-      return true
+      if (!isMainCurrency(currency)) return sendJson(res, 400, { error: "That isn't a currency this app shows amounts in." })
+      return answerRate(currency, res)
     }
 
     const progressMatch = /^\/api\/wallet\/([^/]+)\/progress$/.exec(path)
@@ -894,99 +879,70 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       if (address === "demo" || address === DEMO_ADDRESS || demoWallet(address)) sendJson(res, 200, { stage: "costs", transfers: null, isContract: false })
       else if (!isAddress(address)) sendJson(res, 400, { error: "That isn't a Base address." })
       else sendJson(res, 200, { ...(wallets?.progress(address) ?? { stage: "waiting", transfers: null }), isContract: await isContract(address) })
-      return true
+      return
     }
 
     const orderMatch = /^\/api\/onramp\/orders\/([A-Za-z0-9_-]{1,64})$/.exec(path)
     if (orderMatch) {
       if (onramp) await onrampAnswer(res, async () => ({ orders: await onramp.orders(orderMatch[1] as string) }))
       else sendJson(res, 503, { error: NO_ONRAMP })
-      return true
+      return
     }
 
     const params = new URL(req.url ?? "/", "http://localhost").searchParams
     const ruleId = params.get("rule")
     const rule = ruleId === null ? (rules[0] ?? null) : (rules.find((r) => r.rule.id === ruleId) ?? null)
-    if (ruleId !== null && !rule) {
-      sendJson(res, 400, { error: "That pricing rule isn't available here." })
-      return true
-    }
+    if (ruleId !== null && !rule) return sendJson(res, 400, { error: "That pricing rule isn't available here." })
     const currency = parseCurrency(params.get("currency"))
-    if (!currency) {
-      sendJson(res, 400, { error: "That currency isn't supported." })
-      return true
-    }
+    if (!currency) return sendJson(res, 400, { error: "That currency isn't supported." })
 
     const approvalsMatch = /^\/api\/approvals\/([^/]+)$/.exec(path)
     if (approvalsMatch) {
-      await answerApprovals(approvalsMatch[1] as string, res)
-      return true
+      return answerApprovals(approvalsMatch[1] as string, res)
     }
 
     const walletMatch = /^\/api\/wallet\/([^/]+)$/.exec(path)
     if (walletMatch) {
       const paidIn = parsePaidIn(params.get("paid"))
-      if (!paidIn) {
-        sendJson(res, 400, { error: "That currency isn't supported." })
-        return true
-      }
+      if (!paidIn) return sendJson(res, 400, { error: "That currency isn't supported." })
       const read = await readWallet(walletMatch[1] as string, res, { fresh: true, rule })
       const wallet = read && (await inCurrency(read, currency, res, [], paidIn))
       if (wallet) sendJson(res, 200, wallet)
-      return true
+      return
     }
 
     const proofMatch = /^\/api\/portfolio\/([^/]+)\/(proof|verify)$/.exec(path)
     if (proofMatch) {
       const wallet = await readWallet(proofMatch[1] as string, res, { fresh: false, rule })
-      if (!wallet) return true
+      if (!wallet) return
       const proofs = wallet.mode === "demo" ? null : (created?.proofs ?? null)
       const byRule = Boolean(wallet.ruleNote)
       const asset = params.get("asset")
       if (asset !== null) {
         const price = wallet.prices[asset]
-        if (!price || price.source !== "oracle") {
-          sendJson(res, 404, { error: "This price doesn't come from Chainlink." })
-          return true
-        }
+        if (!price || price.source !== "oracle") return sendJson(res, 404, { error: "This price doesn't come from Chainlink." })
         try {
           const behind = proofs ? await proofs.currentPriceBehind(asset, price, wallet.prices.ETH, byRule) : null
           const revision = behind && currentRevision(behind, price, wallet.prices.ETH, wallet.rule ?? null)
           if (proofMatch[2] === "proof") {
             // A proof of any other price would sit beside the one on screen as if it were about that.
-            if (params.get("price") !== price.micros) {
-              sendJson(res, 412, { error: "This price has just changed. Its proof will show once the new price does." })
-              return true
-            }
-            sendJson(res, 200, { ...currentProofOf(asset, price.blockNum, currency, proofs ? await proofs.datasets(rule?.note ? rule.rule : null, asset) : [], proofs ? null : DEMO_UNVERIFIABLE, behind, wallet.ruleNote ?? null), ...(revision ? { revision } : {}) })
-            return true
+            if (params.get("price") !== price.micros) return sendJson(res, 412, { error: "This price has just changed. Its proof will show once the new price does." })
+            return sendJson(res, 200, { ...currentProofOf(asset, price.blockNum, currency, proofs ? await proofs.datasets(rule?.note ? rule.rule : null, asset) : [], proofs ? null : DEMO_UNVERIFIABLE, behind, wallet.ruleNote ?? null), ...(revision ? { revision } : {}) })
           }
-          if (!proofs) {
-            sendJson(res, 400, { error: DEMO_UNVERIFIABLE })
-            return true
-          }
-          if (!behind) {
-            sendJson(res, 404, { error: "A price read from a contract has no log to check, so there's no block to verify." })
-            return true
-          }
+          if (!proofs) return sendJson(res, 400, { error: DEMO_UNVERIFIABLE })
+          if (!behind) return sendJson(res, 404, { error: "A price read from a contract has no log to check, so there's no block to verify." })
           // Checking the newest update instead would pass or fail something other than what the proof on screen says.
-          if (params.get("revision") !== revision) {
-            sendJson(res, 412, { error: "The update behind this price has changed, so its proof was read again. Check the new one." })
-            return true
-          }
+          if (params.get("revision") !== revision) return sendJson(res, 412, { error: "The update behind this price has changed, so its proof was read again. Check the new one." })
           const blocks = [...new Set(behind.updates.flatMap(({ update }) => (update && !isSeed(update) ? [update.block_num] : [])))]
           const reads = new Map(await Promise.all(blocks.map(async (block) => [block, await proofs.readBlock(block)] as const)))
           sendJson(res, 200, currentVerificationOf(behind, reads))
         } catch (error) {
           sendAmpError(res, error, "Couldn't read this block.")
         }
-        return true
+        return
       }
       const leg = wallet.legs.find(({ id }) => id === params.get("leg"))
-      if (!leg || leg.opening || !leg.txHash) {
-        sendJson(res, 404, { error: "There's no transaction behind that." })
-        return true
-      }
+      if (!leg || leg.opening || !leg.txHash) return sendJson(res, 404, { error: "There's no transaction behind that." })
       const feed = feedBehind(leg, wallet.legs)
       if (proofMatch[2] === "proof") {
         // The rest of the proof doesn't depend on this read, so a failure just says the update couldn't be found.
@@ -997,13 +953,9 @@ export function createApi(env: Env, created: Created | null = createSource(env),
                 return { feed, update: null }
               })
             : null
-        sendJson(res, 200, proofOf(leg, wallet.legs, currency, proofs ? await proofs.datasets(rule?.note ? rule.rule : null) : [], proofs ? null : DEMO_UNVERIFIABLE, behind && { ...behind, byRule }, wallet.ruleNote ?? null))
-        return true
+        return sendJson(res, 200, proofOf(leg, wallet.legs, currency, proofs ? await proofs.datasets(rule?.note ? rule.rule : null) : [], proofs ? null : DEMO_UNVERIFIABLE, behind && { ...behind, byRule }, wallet.ruleNote ?? null))
       }
-      if (!proofs) {
-        sendJson(res, 400, { error: DEMO_UNVERIFIABLE })
-        return true
-      }
+      if (!proofs) return sendJson(res, 400, { error: DEMO_UNVERIFIABLE })
       let read: BlockRead | null
       let checkedUpdate: CheckedUpdate | null = null
       try {
@@ -1016,65 +968,51 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         }
       } catch (error) {
         sendAmpError(res, error, "Couldn't read this block.")
-        return true
+        return
       }
       if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits, checkedUpdate, read.nodeHash))
       else sendJson(res, 404, { error: "The price service doesn't have this block." })
-      return true
+      return
     }
 
     const portfolioMatch = /^\/api\/portfolio\/([^/]+)(\/explain|\/compare)?$/.exec(path)
     if (portfolioMatch) {
       const method = parseMethod(params.get("method"))
-      if (!method) {
-        sendJson(res, 400, { error: "The method is either average or fifo." })
-        return true
-      }
+      if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
       if (portfolioMatch[2] === "/compare") {
         const linked = parseLinked(params.get("linked"))
         if (!linked) sendJson(res, 400, { error: "Linked wallets are a comma-separated list of Base addresses." })
         else await compare(portfolioMatch[1] as string, currency, method, linked, res)
-        return true
+        return
       }
       const target = portfolioMatch[2] ? parseExplainTarget(params) : null
-      if (portfolioMatch[2] && !target) {
-        sendJson(res, 400, { error: "That isn't a number this can explain." })
-        return true
-      }
+      if (portfolioMatch[2] && !target) return sendJson(res, 400, { error: "That isn't a number this can explain." })
       const linked = parseLinked(params.get("linked"))
-      if (!linked) {
-        sendJson(res, 400, { error: "Linked wallets are a comma-separated list of Base addresses." })
-        return true
-      }
+      if (!linked) return sendJson(res, 400, { error: "Linked wallets are a comma-separated list of Base addresses." })
       const read = await readWallet(portfolioMatch[1] as string, res, { fresh: !target, rule })
       const wallet = read && (await inCurrency(read, currency, res))
-      if (!wallet) return true
+      if (!wallet) return
       const linkedWallets: WalletResponse[] = []
       for (const address of wallet.mode === "demo" ? [] : linked.filter((address) => address !== wallet.address)) {
         // A cost that can't be read isn't a cost of zero, so this answers with the failure instead of a wrong number.
         const other = await readWallet(address, res, { fresh: !target, rule })
         const converted = other && (await inCurrency(other, currency, res))
-        if (!converted) return true
+        if (!converted) return
         linkedWallets.push(converted)
       }
-      if (!target) {
-        sendJson(res, 200, portfolioOf(wallet, method, linkedWallets))
-        return true
-      }
+      if (!target) return sendJson(res, 200, portfolioOf(wallet, method, linkedWallets))
       const explanation = explainPortfolio(wallet, method, target, linkedWallets)
       if (explanation) sendJson(res, 200, explanation)
       else sendJson(res, 404, { error: "This wallet has nothing like that." })
-      return true
+      return
     }
 
     const taxMatch = /^\/api\/tax-report\/([^/]+)$/.exec(path)
     if (taxMatch) {
       const also = (params.get("also") ?? "").split(",")
-      await taxReport(taxMatch[1] as string, { country: params.get("country"), method: params.get("method"), scope: params.get("scope"), year: params.get("year") }, also, currency, emptyBook(), res)
-      return true
+      return taxReport(taxMatch[1] as string, { country: params.get("country"), method: params.get("method"), scope: params.get("scope"), year: params.get("year") }, also, currency, emptyBook(), res)
     }
 
-    sendJson(res, 404, { error: "Not found" })
-    return true
+    return sendJson(res, 404, { error: "Not found" })
   }
 }

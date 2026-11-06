@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { ETH_ADDRESS, TOKENS, isAddress, normalizeAddress, type CurrencyCode, type Token } from "@pricetag/sdk/core"
 import type { PublicClient } from "viem"
 import type { Money } from "../core/book.ts"
@@ -8,6 +8,7 @@ import { groupAddress } from "../core/device-wording.ts"
 import { PROVIDER, checkoutNote, microsOf, typedAmount, type CheckoutRequest } from "../core/purchases.ts"
 import { findAllWallets, type BrowserWallet } from "./devices/browser.ts"
 import { useCurrentRate } from "./useCurrentRate.ts"
+import { useModal } from "./useModal.ts"
 
 /** What's on sale: the server's `ONRAMP_ASSETS`. */
 const FOR_SALE = TOKENS.filter(({ symbol }) => symbol === "ETH" || symbol === "USDC")
@@ -42,17 +43,7 @@ export function BuyPanel({ currency, onBegin, onView, onClose }: Props) {
   const rateMicros = useCurrentRate(currency)
   const amountError = useId()
 
-  useLayoutEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const element = dialog.current
-    if (!element) return
-    if (!element.open) element.showModal()
-    closeButton.current?.focus()
-    return () => {
-      element.close()
-      opener?.focus()
-    }
-  }, [])
+  useModal(dialog, closeButton)
 
   useEffect(() => {
     let current = true

@@ -2,6 +2,7 @@
 // these. Anyone can make a link, so a link only ever fills in a form: nothing here is treated as true until the person says so.
 
 import { isAddress, normalizeAddress, plainAmount, type CurrencyCode } from "@pricetag/sdk/core"
+import { unitsOfDecimal } from "./decimal.ts"
 
 export type DeviceLink =
   | { kind: "add-savings"; device: "ledger" | null }
@@ -12,8 +13,7 @@ export type DeviceLink =
 export function usdMicrosOf(text: string | null): string | null {
   const clean = plainAmount(text?.replaceAll("$", "") ?? "")
   if (clean === null || !/^(\d{1,12}(\.\d*)?|\.\d+)$/.test(clean)) return null
-  const [whole = "", fraction = ""] = clean.split(".")
-  const micros = BigInt(`${whole || "0"}${fraction.slice(0, 6).padEnd(6, "0")}`)
+  const micros = unitsOfDecimal(clean, 6)
   return micros > 0n ? micros.toString() : null
 }
 

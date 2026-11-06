@@ -24,6 +24,7 @@
 import { assertFoldFits, foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
+import { csvCell, microsCell, unitsCell } from "./csv.ts"
 import { rateSource } from "./explain.ts"
 import { resolveLegs, withheldIn } from "./resolve.ts"
 import { METHOD_LABELS, withheldSentence } from "./wording.ts"
@@ -448,22 +449,7 @@ function coverageNote({ wallet }: Source, named: boolean): string {
   return `${named ? `${shortHash(wallet.address)} covers` : "Covers"} blocks ${fromBlock.toLocaleString("en-US")} to ${toBlock.toLocaleString("en-US")}${span}. Anything earlier isn't here, and tokens off the tracked list aren't counted.`
 }
 
-const csvCell = (value: string) => (/[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value)
-
-function money(micros: string | null): string {
-  if (micros === null) return "unknown"
-  const value = BigInt(micros)
-  const size = value < 0n ? -value : value
-  return `${value < 0n ? "-" : ""}${size / 1_000_000n}.${(size % 1_000_000n).toString().padStart(6, "0")}`
-}
-
-/** Every digit, because a tax file shouldn't round what it's given. */
-function units(amount: string, decimals: number): string {
-  const size = BigInt(amount)
-  const scale = 10n ** BigInt(decimals)
-  const fraction = (size % scale).toString().padStart(decimals, "0").replace(/0+$/, "")
-  return `${size / scale}${fraction ? `.${fraction}` : ""}`
-}
+const money = (micros: string | null) => (micros === null ? "unknown" : microsCell(micros))
 
 const STATUS_LABELS: Record<TaxRowStatus, string> = { resolved: "OK", estimated: "ESTIMATED", "self-reported": "SELF-REPORTED", unresolved: "UNKNOWN GAIN" }
 
@@ -476,7 +462,7 @@ export function taxCsv(rows: readonly TaxRow[], notes: readonly string[], { meth
     row.timestamp.slice(0, 19).replace("T", " "),
     row.type,
     row.asset,
-    units(row.amount, row.decimals),
+    unitsCell(row.amount, row.decimals),
     money(row.proceedsMicros),
     money(row.costMicros),
     money(row.gainMicros),
@@ -492,7 +478,6 @@ export function taxCsv(rows: readonly TaxRow[], notes: readonly string[], { meth
   return `${[CSV_HEADER, ...notes.map(noteRow), ...rows.map(eventRow)].map((cells) => cells.map(csvCell).join(",")).join("\r\n")}\r\n`
 }
 
-/** `wallets[0]` is the one asked about. They all have to be in the same currency. */
 /**
  * `wallets[0]` is the one asked about. They all have to be in the same currency. A year only picks which rows are listed:
  * what each one cost is still worked out from all the history there is, as it would be across tax years.

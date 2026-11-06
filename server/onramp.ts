@@ -3,6 +3,7 @@
 
 import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { OnrampOrder } from "../src/core/api.ts"
+import { unitsOfDecimal } from "../src/core/decimal.ts"
 
 /** An amount of money as someone typed it, in plain digits. */
 export type FiatAmount = { amount: string; currency: CurrencyCode }
@@ -28,5 +29,5 @@ export function unitsOf(value: unknown, decimals: number): string | null {
   if (!match) return null
   const fraction = (match[2] ?? "").replace(/0+$/, "")
   if (fraction.length > decimals) return null
-  return (BigInt(match[1] as string) * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, "0") || "0")).toString()
+  return unitsOfDecimal(`${match[1]}.${fraction}`, decimals).toString()
 }

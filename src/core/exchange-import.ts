@@ -4,6 +4,7 @@
 
 import { ASSETS, decimalsOf, isAddress, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
 import type { Book, ExchangeWithdrawal } from "./book.ts"
+import { unitsOfDecimal } from "./decimal.ts"
 
 export type ExchangeImport = {
   withdrawals: ExchangeWithdrawal[]
@@ -34,10 +35,8 @@ function parseCsvLine(line: string): string[] {
 /** Whole units from a decimal string like "1,234.50", without going through a float. Null when it isn't one. */
 function unitsOf(text: string, decimals: number): bigint | null {
   const clean = text.replace(/[$,\s]/g, "").replace(/^-/, "")
-  const match = /^(\d*)(?:\.(\d*))?$/.exec(clean)
-  if (!match || clean === "" || clean === ".") return null
-  const fraction = (match[2] ?? "").slice(0, decimals).padEnd(decimals, "0")
-  return BigInt(`${match[1] || "0"}${fraction}`)
+  if (!/^\d*(\.\d*)?$/.test(clean) || clean === "" || clean === ".") return null
+  return unitsOfDecimal(clean, decimals)
 }
 
 const BUYS = new Set(["buy", "advanced trade buy", "advance trade buy"])
