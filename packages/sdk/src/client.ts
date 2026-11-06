@@ -28,6 +28,8 @@ export type PricetagConfig = {
    * anything, and `getLegs` can't confirm a swap paid out in unwrapped ETH. Both say so.
    */
   rpcUrl?: string | undefined
+  /** Calls a second `rpcUrl` allows, of which L1 fees use half. It defaults to 20, for the public RPC. Raise it for a dedicated one, so a very busy wallet can catch up. */
+  rpcRateLimit?: number | undefined
   /** The network name Amp knows the chain by, as in `rpc.base_mainnet.eth_call`, which reads onchain balances. */
   network?: string | undefined
   /** How long one query can take, in ms. It defaults to 60 s. Queries still run one at a time, because a hosted Amp is shared. */
@@ -139,9 +141,9 @@ function findToken(token: string): Token {
 
 export function createPricetag(config: PricetagConfig) {
   if (!config.url) throw new Error("Pricetag needs Amp's query URL")
-  const { timeoutMs, logger, rpcUrl } = config
+  const { timeoutMs, logger, rpcUrl, rpcRateLimit } = config
   const stream = createRangeStream(config.url, config.token || undefined, (config.network ?? DEFAULT_NETWORK).replaceAll("_", "-"))
-  return pricetagClient(createQuery(config.url, config.token || undefined, { timeoutMs, logger }), { ...config, stream, readL1Fees: rpcUrl ? createL1FeeReader(rpcUrl, fetch, undefined, logger) : undefined })
+  return pricetagClient(createQuery(config.url, config.token || undefined, { timeoutMs, logger }), { ...config, stream, readL1Fees: rpcUrl ? createL1FeeReader(rpcUrl, fetch, undefined, logger, rpcRateLimit) : undefined })
 }
 
 type ClientConfig = Pick<PricetagConfig, "dataset" | "baseDataset" | "startBlock" | "network" | "logger"> & {

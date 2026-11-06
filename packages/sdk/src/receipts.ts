@@ -16,15 +16,23 @@ export type FeeRequest = { txHash: string; blockNum: number }
 /** L1 fees in wei by transaction hash. A transaction with no answer yet isn't in it. */
 export type ReadL1Fees = (requests: readonly FeeRequest[]) => Promise<Map<string, string>>
 
-const BATCH = 5
 // The public RPC allows 25 calls a second per IP, counting each one in a batch, and a local Amp's relay can be using
-// most of that. So this is slow on purpose, and it waits out a 429 before giving up until the next refresh.
-const PAUSE_MS = 500
+// most of that. So this is slow on purpose, and it waits out a 429 before giving up until the next refresh. A faster RPC
+// says so with its rate limit, and fees get half of it, leaving the rest for the relay.
+export const DEFAULT_RPC_RATE_LIMIT = 20
+const MAX_BATCH = 25
 const PAUSE_AFTER_429_MS = 1_000
 const RETRIES = 3
 /** A busy wallet catches up over a few refreshes, and until then its ETH says it isn't checked yet. */
-const MAX_PER_READ = 200
+const SECONDS_PER_READ = 20
 const TIMEOUT_MS = 15_000
+
+/** How to stay under half of `rateLimit`: at the default, 5 receipts every 500 ms, and at most 200 in a read. */
+export function l1FeePace(rateLimit: number = DEFAULT_RPC_RATE_LIMIT) {
+  const callsPerSecond = (rateLimit > 0 ? rateLimit : DEFAULT_RPC_RATE_LIMIT) / 2
+  const batch = Math.max(1, Math.min(MAX_BATCH, Math.floor(callsPerSecond / 2)))
+  return { batch, pauseMs: (batch * 1_000) / callsPerSecond, maxPerRead: Math.max(batch, Math.floor(callsPerSecond * SECONDS_PER_READ)) }
+}
 
 type Receipt = { blockNumber?: string; l1Fee?: string } | null
 type RpcResult = { id: number; result?: Receipt }
@@ -36,13 +44,14 @@ export function l1FeeOf(receipt: Receipt | undefined, blockNum: number): string 
   return receipt.l1Fee ? BigInt(receipt.l1Fee).toString() : "0"
 }
 
-export function createL1FeeReader(url: string, send: typeof fetch = fetch, pauseAfter429Ms = PAUSE_AFTER_429_MS, logger: Logger = console): ReadL1Fees {
+export function createL1FeeReader(url: string, send: typeof fetch = fetch, pauseAfter429Ms = PAUSE_AFTER_429_MS, logger: Logger = console, rateLimit?: number): ReadL1Fees {
+  const { batch: batchSize, pauseMs, maxPerRead } = l1FeePace(rateLimit)
   return async (requests) => {
     const fees = new Map<string, string>()
-    const wanted = requests.slice(0, MAX_PER_READ)
-    for (let i = 0; i < wanted.length; i += BATCH) {
-      if (i > 0) await new Promise((resolve) => setTimeout(resolve, PAUSE_MS))
-      const batch = wanted.slice(i, i + BATCH)
+    const wanted = requests.slice(0, maxPerRead)
+    for (let i = 0; i < wanted.length; i += batchSize) {
+      if (i > 0) await new Promise((resolve) => setTimeout(resolve, pauseMs))
+      const batch = wanted.slice(i, i + batchSize)
       try {
         const body = JSON.stringify(batch.map(({ txHash }, id) => ({ jsonrpc: "2.0", id, method: "eth_getTransactionReceipt", params: [txHash] })))
         const post = () => send(url, { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(TIMEOUT_MS) })

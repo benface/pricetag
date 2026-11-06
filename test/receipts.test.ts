@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { createL1FeeReader, l1FeeOf } from "@pricetag/sdk/internal"
+import { createL1FeeReader, l1FeeOf, l1FeePace } from "@pricetag/sdk/internal"
 
 const HASH = (n: number) => `0x${n.toString(16).padStart(64, "0")}`
 const request = (n: number) => ({ txHash: HASH(n), blockNum: 100 })
@@ -51,6 +51,31 @@ describe("the receipt reader", () => {
     assert.deepEqual(calls.map((c) => c.length), [5, 1])
     assert.equal(fees.size, 6)
     assert.equal(fees.get(HASH(1)), "16")
+  })
+
+  it("stays at 5 receipts every 500 ms, at most 200 in a read, for the public RPC", () => {
+    const pace = { batch: 5, pauseMs: 500, maxPerRead: 200 }
+    assert.deepEqual(l1FeePace(), pace)
+    assert.deepEqual(l1FeePace(20), pace)
+    assert.deepEqual(l1FeePace(0), pace)
+    assert.deepEqual(l1FeePace(-1), pace)
+    assert.deepEqual(l1FeePace(Number.NaN), pace)
+  })
+
+  it("reads at half of a faster RPC's limit, in batches that any RPC takes", () => {
+    assert.deepEqual(l1FeePace(100), { batch: 25, pauseMs: 500, maxPerRead: 1_000 })
+    assert.deepEqual(l1FeePace(1_000), { batch: 25, pauseMs: 50, maxPerRead: 10_000 })
+  })
+
+  it("reads at half of a slower RPC's limit, one receipt at a time if it has to", () => {
+    assert.deepEqual(l1FeePace(2), { batch: 1, pauseMs: 1_000, maxPerRead: 20 })
+  })
+
+  it("reads more in one go with a faster RPC", async () => {
+    const { send, calls } = answering(allFound)
+    const fees = await createL1FeeReader("http://rpc", send, 0, console, 10_000)(Array.from({ length: 60 }, (_, i) => request(i + 1)))
+    assert.deepEqual(calls.map((c) => c.length), [25, 25, 10])
+    assert.equal(fees.size, 60)
   })
 
   it("leaves out what the RPC doesn't have yet, so it's read again", async () => {
