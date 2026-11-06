@@ -815,13 +815,16 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const ethBalances = new Map(cached?.ethBalances ?? [])
     const ethPayers = new Map(cached?.ethPayers ?? [])
     let replacedFrom = Number.POSITIVE_INFINITY
+    let abandoned = false
     const readNewRows = async () => {
       if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo || reorgable)) {
         const readFrom = cached ? Math.max(fromBlock, Math.min(settledThrough(cached.coveredTo) + 1, unsettled ?? Infinity)) : fromBlock
         replacedFrom = readFrom
         // Only a first read can bring in a whole history, and it can't say how much until it has.
         if (!cached) reservation.release = await budget.loading()
+        if (abandoned) return
         const window = await source.readWindow(address, readFrom, coveredTo)
+        if (abandoned) return
         rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
         if (rows.length > budget.maxRows) throw new WalletTooBigError(budget.maxRows)
         reservation.release?.()
@@ -842,12 +845,18 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const openingIsOld = readsBalances && (!isComplete(cached?.opening ?? null) || openingMayChange(cached, chain))
     const closingIsOld = readsBalances && (cached?.closing?.blockNum !== coveredTo || !isComplete(cached.closing) || reorgable)
     // None of these needs what another finds, and they're most of a read with nothing new, so they don't wait for each other.
+    const rowsRead = readNewRows()
     const [, openingRead, closing, latestReference] = await Promise.all([
-      readNewRows(),
+      rowsRead,
       openingIsOld ? readBalances(address, fromBlock - 1) : null,
       closingIsOld ? readBalances(address, coveredTo) : (cached?.closing ?? null),
       source.readLatestReference(head.blockNum),
-    ])
+    ]).catch(async (error: unknown) => {
+      // The read's reservation is given back when this refresh ends, so it can't end with the rows still taking one.
+      abandoned = true
+      await rowsRead.catch(() => {})
+      throw error
+    })
 
     const l1Fees = new Map([...(cached?.l1Fees ?? [])].filter(([, fee]) => unsettled === null || fee.blockNum < unsettled))
     const claimBlocks = new Set(unwrapBalanceBlocks(rows))
