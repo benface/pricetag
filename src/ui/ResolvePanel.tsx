@@ -7,7 +7,7 @@ import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
 import { parseCoinbaseCsv } from "../core/exchange-import.ts"
 import { foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
-import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, linkedFailedSentence } from "../core/wording.ts"
+import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, linkedFailedSentence } from "../core/wording.ts"
 import { linkByProof, type Ethereum } from "./link-proof.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
@@ -297,7 +297,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
             </>
           ) : null}
           {fold.meter.waiting > linkedFailed.length ? <p className="small muted">Still reading your other {fold.meter.waiting === 1 ? "wallet" : "wallets"}. What came from {fold.meter.waiting === 1 ? "it" : "them"} has an unknown cost until that's done.</p> : null}
-          {fold.totals.excluded.length > 0 ? <p className="small muted">Every question's answered. What's left isn't a question, like a balance that doesn't match the chain.</p> : null}
+          {fold.totals.excluded.length > 0 ? <p className="small muted">{finishNote(fold.meter)}</p> : null}
           {skipped.size > 0 ? (
             <>
               <p className="small warn-text">{skipped.size} skipped, and still flagged.</p>

@@ -517,6 +517,12 @@ public final class HotWallet {
 
     public var capText: String { display.cap(settings.capUsdMicros) }
 
+    /// What everything priced here is worth, ETH kept for gas included, so it reads the same as this wallet's numbers anywhere else.
+    /// The cap counts the plan's value, which leaves that ETH out. Nil until the first read.
+    public var valueUsdMicros: UInt128? {
+        plan.map { _ in holdings.reduce(0) { $0 + ($1.valueUsdMicros ?? 0) } }
+    }
+
     /// Whether something needs the user, for places with room for only a triangle.
     public var needsAttention: Bool {
         alarm != nil || notices.contains { $0.kind == .warning }
@@ -761,6 +767,7 @@ public final class HotWallet {
 
     /// Everything else that was about one key, and that's not worth writing down.
     private func forgetTheOldKeysReads() {
+        permitChecks = [:]
         snapshot = nil
         plan = nil
         portfolio = nil
@@ -832,6 +839,9 @@ public final class HotWallet {
     }
 
     public var connectedSites: [String] { state.connectedSites ?? [] }
+    /// What the last check of `signedPermits` found. One it hasn't looked at has no answer here.
+    public private(set) var permitChecks: [String: SignedPermit.Check] = [:]
+    public private(set) var isCheckingPermits = false
 
     func isConnected(_ origin: String) -> Bool {
         connectedSites.contains(origin)
@@ -994,10 +1004,62 @@ public final class HotWallet {
         return signed.hash
     }
 
-    /// Only after the user approved exactly this in the app. A message never spends by itself, but what it permits can.
-    func signForSite(_ message: SignableMessage) async throws -> MessageSignature {
+    /// Only after the user approved exactly this in the app. A message never spends by itself, but what it permits can, so a permit
+    /// is written down before the site gets it. If that fails, the site doesn't get it.
+    func signForSite(_ review: MessageReview, origin: String) async throws -> MessageSignature {
         guard let address else { throw ChainError.unreadable }
-        return try await signer.sign(message, from: address)
+        let signature = try await signer.sign(review.signable, from: address)
+        if let permit = SignedPermit(review, site: origin, signedAt: now()), state.signedPermits?[address]?.contains(where: { $0.id == permit.id }) != true {
+            let before = state.signedPermits
+            state.signedPermits = (before ?? [:]).merging([address: [permit]]) { $0 + $1 }
+            do {
+                try persist()
+            } catch {
+                state.signedPermits = before
+                throw error
+            }
+        }
+        return signature
+    }
+
+    /// What this key signed for sites that may still be used, newest first. An expired one can't be, whatever else is known about it.
+    public var signedPermits: [SignedPermit] {
+        guard let address else { return [] }
+        let time = now()
+        return (state.signedPermits?[address] ?? []).filter { !$0.hasExpired(at: time) }.reversed()
+    }
+
+    /// Asks the chain about each one, and forgets it only once that's proof it can't be used, or once it's expired. Anything that
+    /// doesn't answer stays listed, because a permit that can't be checked may still work.
+    public func checkSignedPermits() async {
+        guard let address, !isCheckingPermits else { return }
+        isCheckingPermits = true
+        defer { isCheckingPermits = false }
+        let time = now()
+        let permits = state.signedPermits?[address] ?? []
+        let open = permits.filter { !$0.hasExpired(at: time) }
+        // Settings can change the node while this waits, and only the node that said it's on Base gets to answer.
+        let chain = chain
+        // A node on another chain could answer anything about these, so only Base's answers count.
+        var isBase = false
+        if open.contains(where: { $0.terms != nil }) { isBase = (try? await chain.read("eth_chainId", .array([])))?.isBaseChainID == true }
+        var spent = Set<String>()
+        var checks: [String: SignedPermit.Check] = [:]
+        for permit in open {
+            guard let terms = permit.terms else { continue }
+            checks[permit.id] = .couldntCheck
+            guard isBase, let read = terms.read(owner: address),
+                  case .success(let answer)? = try? await chain.read("eth_call", .array([.object(["to": .string(read.to.lowercased), "data": .string("0x" + Hex.encode(read.data))]), .string("latest")])),
+                  let bytes = answer.string.flatMap(Hex.decode), let isSpent = terms.isSpent(given: bytes) else { continue }
+            if isSpent { spent.insert(permit.id) } else { checks[permit.id] = .notUsed }
+        }
+        permitChecks = checks
+        let expired = Set(permits.filter { $0.hasExpired(at: time) }.map(\.id))
+        guard !spent.isEmpty || !expired.isEmpty else { return }
+        // More may have been signed while this was reading, so this only takes out what it knows about.
+        state.signedPermits?[address]?.removeAll { spent.contains($0.id) || expired.contains($0.id) }
+        // If this doesn't reach the disk, the next check finds the same again.
+        try? persist()
     }
 
     // MARK: - Sending
