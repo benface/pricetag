@@ -52,6 +52,7 @@ About 3 minutes of speaking, on top of the steps' 5, so about 8 in all. Numbers 
 **Don't claim:**
 - "Every token is priced." It's 10 assets. Any other token that's moved since the dataset's start shows its balance with no price, and likely spam is tucked away.
 - "Verify proves the SQL or the chain." It doesn't show that the header is on Base's real chain, that the SQL ran correctly, or that Chainlink's number is right. Say so, because it's more convincing.
+- "Every fee is checked." The check is on balances, to the smallest unit. ETH found from a balance can't fail it, and the app says how much of that there is (WORK-612).
 - "Audited." The hot wallet is an unreviewed build, for small funds only.
 - "Tested on a real Ledger or Keystone," until it has been.
 - "Under a second." Or "at most 6 s": prices were a median of about 7 s behind this morning, and at most about 15 s (*measured*, WORK-602).

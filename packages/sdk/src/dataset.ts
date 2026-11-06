@@ -332,12 +332,15 @@ export async function readEthBalancesAt(query: Query, network: string, baseDatas
   return balances
 }
 
-/** The successful transactions that name this wallet in their calldata, or that it sent, in these blocks. */
+/** An OP Stack deposit's transaction type. Like `tx_gas` in the dataset, this is what says it paid no gas. */
+const OP_DEPOSIT_TX_TYPE = 126
+
+/** The successful transactions that name this wallet in their calldata, and all those it sent, in these blocks. */
 export async function readPayoutTxsAt(query: Query, baseDataset: string, address: string, blocks: readonly number[]): Promise<PayoutTx[]> {
   const me = hexOf(address)
   const txs: PayoutTx[] = []
   for (const { filter } of blockFilters(blocks)) {
-    const rows = await query<Row>(`SELECT block_num, tx_hash, "from", "to", input FROM "${baseDataset}".transactions WHERE ${filter} AND status AND ("from" = X'${me}' OR strpos(encode(input, 'hex'), '${me}') > 0)`)
+    const rows = await query<Row>(`SELECT block_num, tx_hash, "from", "to", input, status, type FROM "${baseDataset}".transactions WHERE ${filter} AND ("from" = X'${me}' OR (status AND strpos(encode(input, 'hex'), '${me}') > 0))`)
     for (const row of rows) {
       txs.push({
         blockNum: asNumber(row.block_num),
@@ -345,6 +348,8 @@ export async function readPayoutTxsAt(query: Query, baseDataset: string, address
         from: prefixed(String(row.from)),
         to: row.to == null ? null : prefixed(String(row.to)),
         input: String(row.input ?? ""),
+        ...(row.status === false ? { failed: true } : {}),
+        ...(row.type !== undefined && asNumber(row.type) === OP_DEPOSIT_TX_TYPE ? { deposit: true } : {}),
       })
     }
   }

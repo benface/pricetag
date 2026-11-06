@@ -166,7 +166,13 @@ public enum Wording {
     public static func allBalancesMatch(_ portfolio: Portfolio) -> String? {
         let listed = portfolio.listedPositions
         // A balance that couldn't be read has no row, and hasn't been shown to match anything.
-        return !listed.isEmpty && portfolio.unreadAssets.isEmpty && listed.allSatisfy(\.isReconciled) ? "Every balance matches the chain." : nil
+        guard !listed.isEmpty, portfolio.unreadAssets.isEmpty, listed.allSatisfy(\.isReconciled) else { return nil }
+        return (["Every balance matches the chain."] + listed.compactMap(unrecorded)).joined(separator: " ")
+    }
+
+    /// Said wherever a match is, because this part of it can't fail.
+    static func unrecorded(_ position: Position) -> String? {
+        position.reconciliation?.unrecordedQty.map { "\(Format.amount($0, decimals: position.decimals)) \(position.asset) arrived with no transaction to show for it, so that part comes from the balance, and the match doesn't confirm it." }
     }
 
     /// What there is instead of a chart, so what's short isn't mistaken for nothing.
@@ -195,7 +201,7 @@ public enum Wording {
         guard let check = position.reconciliation else { return nil }
         switch check.status {
         case .reconciled:
-            return "Matches the actual balance exactly."
+            return (["Matches the actual balance exactly."] + [unrecorded(position)].compactMap(\.self)).joined(separator: " ")
         case .unchecked:
             return "Not checked. \(check.reason ?? "") PnL is unavailable until this balance is confirmed."
         case .incomplete:

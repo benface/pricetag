@@ -279,7 +279,7 @@ To add a country, add it to `TAX_COUNTRIES` in `src/core/tax.ts` and a case to `
 
 Each position's legs are compared with its onchain balance at the last block they cover, to the smallest unit. ETH is compared with ETH plus WETH.
 
-- **Reconciled** gets a check mark.
+- **Reconciled** gets a check mark. It means the balance is right. ETH that arrived with no transaction is counted from the balance, so that part can't fail, and the check says how much of it there is. If the wallet sent a transaction in that block with no fee on record, the arrival isn't counted, so the missing fee shows as a difference rather than vanishing into it. A fee on record with the wrong amount would still be absorbed: nothing compares recorded fees with receipts.
 - **Doesn't match** shows the computed balance, the actual balance and the difference. Its amount and value come from the chain, because those are facts, and its PnL shows as unavailable. Without traces, this is what catches rebasing tokens and internal ETH transfers, and ETH that arrived this way then gets found and counted (see Known gaps).
 - **Not checked** means a read failed or an L1 fee isn't in yet. It clears on its own. Its PnL shows as unavailable until then, so PnL only ever shows for a position that matches. Otherwise a failed read would bring back a number already known to be wrong. Its amount comes from the chain if that read worked, and otherwise from the last read plus what's moved since.
 
