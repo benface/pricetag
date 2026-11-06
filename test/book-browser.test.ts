@@ -408,6 +408,89 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
     await until(() => evaluate(a, `JSON.parse(localStorage.getItem("patina.book")).senders[${JSON.stringify(OTHER)}]?.kind === "mine"`), "the copy to catch up")
   })
 
+  /** Saves an answer the shelf has and its copy doesn't, as with a full localStorage, and so no other tab hears of it. */
+  async function answerOnlyOnTheShelf(session: string) {
+    await evaluate(session, `window.setItem = Storage.prototype.setItem
+      Storage.prototype.setItem = function (key, value) {
+        if (key === "patina.book") throw new DOMException("Full", "QuotaExceededError")
+        return window.setItem.call(this, key, value)
+      }
+      answer(${JSON.stringify(OTHER)}, "mine")`)
+    await until(() => evaluate(session, "hook.canUndo"), "the answer to save")
+    await evaluate(session, "Storage.prototype.setItem = window.setItem")
+  }
+
+  it("shows what's saved once a stuck first read is free", async () => {
+    const [a, b] = (await tabs(2)) as [string, string]
+    await answerOnlyOnTheShelf(b)
+    await holdTheShelf(b)
+    await reload(a)
+    await delay(5_200)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+    assert.equal(await evaluate(a, "hook.notSaved"), false, "nothing the user did failed")
+
+    await release(b)
+    await until(() => evaluate(a, `hook.book.senders[${JSON.stringify(OTHER)}]?.kind === "mine"`), "the saved answer to show")
+    assert.equal(await evaluate(a, "hook.notSaved"), false)
+    assert.equal(await evaluate(a, `JSON.parse(localStorage.getItem("patina.book")).senders[${JSON.stringify(OTHER)}]?.kind`), "mine", "and the copy's put right")
+  })
+
+  it("shows what's saved once a database that wouldn't open does", async () => {
+    let holder = ""
+    const [a] = (await tabs(1, async (context) => {
+      holder = await openTab(`${url}?blank`, context)
+      await until(() => evaluate(holder, `document.readyState === "complete"`), "the other tab to load")
+      await evaluate(holder, `new Promise((resolve) => {
+        window.released = false
+        const request = indexedDB.open("patina", 1)
+        request.onupgradeneeded = () => {
+          request.result.createObjectStore("kept")
+          request.transaction.objectStore("kept").put(${JSON.stringify(JSON.stringify({ senders: { [OTHER]: { kind: "mine" } } }))}, "patina.book")
+          ;(${keepBusy})(request.transaction)
+          resolve(true)
+        }
+      })`)
+    })) as [string]
+    await delay(5_200)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+
+    await release(holder)
+    await until(() => evaluate(a, `hook.book.senders[${JSON.stringify(OTHER)}]?.kind === "mine"`), "the saved answer to show")
+    assert.equal(await evaluate(a, "hook.notSaved"), false)
+  })
+
+  it("shows what's saved once a stuck save is over, whatever its copy said", async () => {
+    const [a, b] = (await tabs(2)) as [string, string]
+    await answerOnlyOnTheShelf(b)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined, "this tab hasn't heard")
+    await holdTheShelf(b)
+    await evaluate(a, `answer(${JSON.stringify(ME)}, "mine")`)
+    await until(() => evaluate(a, "hook.notSaved"), "the warning to show")
+
+    await release(b)
+    await until(() => evaluate(a, `hook.book.senders[${JSON.stringify(OTHER)}]?.kind === "mine"`), "the saved answer to show")
+    assert.equal((await bookIn(a)).senders[ME], undefined, "and the stuck one stays gone")
+  })
+
+  it("follows a purchase saved only on the shelf, once a stuck first read is free", async () => {
+    const [a, b] = (await tabs(2)) as [string, string]
+    // Stays full, since that tab's own polling would otherwise put the copy right and tell this one.
+    await evaluate(b, `const setItem = Storage.prototype.setItem
+      Storage.prototype.setItem = function (key, value) {
+        if (key === "patina.purchases") throw new DOMException("Full", "QuotaExceededError")
+        return setItem.call(this, key, value)
+      }
+      begin()`)
+    await until(() => evaluate(b, "tracker.purchases.length === 1"), "the purchase to save")
+    await holdTheShelf(b)
+    await reload(a)
+    await delay(5_200)
+    assert.equal(await evaluate(a, "tracker.purchases.length"), 0)
+
+    await release(b)
+    await until(() => evaluate(a, "tracker.purchases.length === 1"), "the purchase to show")
+  })
+
   it("says so when the database won't open, and saves once it does", async () => {
     let holder = ""
     const [a] = (await tabs(1, async (context) => {
