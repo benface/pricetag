@@ -25,6 +25,8 @@ enum TestMode {
         value(after: "--live-wallet").map { Live(server: server, wallet: $0.lowercased(), asset: value(after: "--live-asset") ?? "ETH") }
     }
     static let liveCurrency = value(after: "--live-currency").flatMap(CurrencyCode.init(rawValue:))
+    /// What the Overview chart shows, from `shot.sh --chart`.
+    static let chartMetric = value(after: "--chart-metric").flatMap(ChartMetric.init(rawValue:)) ?? .pnl
     /// A wallet's first read can take minutes.
     static let readyTimeout: TimeInterval = live == nil ? 5 : 240
     /// Live scenes load more after they appear, like the details and the tax report, and nothing here can tell when that's done.
@@ -176,6 +178,7 @@ struct TestScreen {
 final class MotionCue {
     var revision = 0
     var range = ChartRange.all
+    var metric = TestMode.chartMetric
     var scrubbed: Int?
     var stage = ProgressFooter.Stage.working("Sending…")
     var purchase = PurchasePhase.onItsWay
@@ -190,7 +193,7 @@ private struct MotionChartScene: View {
     var body: some View {
         Group {
             if let portfolio = store.portfolio {
-                PnlHistorySection(portfolio: portfolio, isLive: true, range: Binding(get: { cue.range }, set: { cue.range = $0 }), scrubbedIndex: cue.scrubbed) { _ in }
+                PnlHistorySection(portfolio: portfolio, isLive: true, range: Binding(get: { cue.range }, set: { cue.range = $0 }), metric: Binding(get: { cue.metric }, set: { cue.metric = $0 }), scrubbedIndex: cue.scrubbed) { _ in }
                     .id(cue.revision)
             }
         }
@@ -211,7 +214,7 @@ private struct ContrastScene: View {
                 Notice(.warning, "This wallet's numbers aren't updating.")
                 PortfolioSummary(portfolio: portfolio, isLive: true, size: 40) { _ in }
                 PortfolioAttention(portfolio: portfolio, onOpen: { _ in }, onResolve: {})
-                PnlHistorySection(portfolio: portfolio, isLive: true, range: .constant(.all)) { _ in }
+                PnlHistorySection(portfolio: portfolio, isLive: true, range: .constant(.all), metric: .constant(TestMode.chartMetric)) { _ in }
                     .frame(height: 260)
             }
         }
@@ -345,6 +348,9 @@ enum TestScene: String, CaseIterable {
     case mainSmallAmounts = "main-small-amounts"
     case mainSmallAmountsNarrow = "main-small-amounts-narrow"
     case mainLongHistory = "main-long-history"
+    case mainChartGaps = "main-chart-gaps"
+    case mainChartGapsSmall = "main-chart-gaps-small"
+    case mainChartGapsNarrow = "main-chart-gaps-narrow"
     case mainChartWeek = "main-chart-week"
     case mainCAD = "main-cad"
     case mainTransactionsCAD = "main-transactions-cad"
@@ -591,9 +597,11 @@ enum TestScene: String, CaseIterable {
     /// Set from inside the page, because the setting doesn't pass through the window's own panes.
     case increasedContrast = "increased-contrast"
     case chartHover = "chart-hover"
+    case chartGapsHover = "chart-gaps-hover"
     /// Each plays something after the window appears, for `shot.sh --frames`. Hovering can't be done from here, so `motion-chart-scrub` moves what hovering moves.
     case motionChartDraw = "motion-chart-draw"
     case motionChartRange = "motion-chart-range"
+    case motionChartMetric = "motion-chart-metric"
     case motionChartScrub = "motion-chart-scrub"
     case motionSend = "motion-send"
     case motionPurchase = "motion-purchase"
@@ -611,7 +619,7 @@ enum TestScene: String, CaseIterable {
 
     var chrome: Chrome {
         switch self {
-        case .motionChartDraw, .motionChartRange, .motionChartScrub, .motionSend, .motionPurchase, .chartHover:
+        case .motionChartDraw, .motionChartRange, .motionChartMetric, .motionChartScrub, .motionSend, .motionPurchase, .chartHover, .chartGapsHover:
             .none
         case .walletSwitcherNote, .walletSwitcherNewKey, .walletSwitcherAllYours, .spendingMoneySetupSheet, .taxReport, .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverPricesDown, .popoverRetrying, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .receive, .receiveNoSavings, .receiveCAD, .receiveNotSetUp, .receiveAlarm, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNoSavingsAboveRoom, .buyNoSavingsAtCap, .buyNoSavingsCAD, .buyFirstRead, .buyReading, .buyNoSavingsFirstRead, .buyNoSavingsAtCapFirstRead, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
@@ -643,6 +651,7 @@ enum TestScene: String, CaseIterable {
         case .resolvePublishFromDevice: .costOnSavings
         case .mainSmallAmounts, .mainSmallAmountsNarrow: .smallAmounts
         case .mainLongHistory, .mainChartWeek, .motionChartRange: .longHistory
+        case .mainChartGaps, .mainChartGapsSmall, .mainChartGapsNarrow, .chartGapsHover: .chartGaps
         case .motionCostKnown: .costBecomesKnown
         case .mainTransactionsBusy: .busy
         case .resolveAnsweredWallet: .answeredWallet
@@ -884,6 +893,7 @@ enum TestScene: String, CaseIterable {
         if self == .walletSwitcherNewKey || self == .mainNoWalletAfterDeleting || isAllYours { store.setLinkedWallets(hotWallet.linkedWallets) }
         let navigation = Navigation(store: store, hotWallet: hotWallet)
         if self == .mainChartWeek { navigation.chartRange = .week }
+        navigation.chartMetric = TestMode.chartMetric
         if [.mainTransactions, .mainTransactionsCAD, .mainTransactionsSmall, .mainTransactionsUpdating, .mainTransactionsSending, .mainTransactionsBusy, .mainAllYoursTransactions].contains(self) { navigation.section = .transactions }
         if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
         if self == .mainSecurity { navigation.section = .security }
@@ -900,7 +910,7 @@ enum TestScene: String, CaseIterable {
         let isReady: () -> Bool = { [feed] in
             if TestMode.live != nil { return store.feed == .noWallet || store.portfolio != nil }
             return switch feed {
-            case .demo, .allYours, .costBecomesKnown, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .costOnSavings, .smallAmounts, .longHistory, .busy, .answeredWallet, .allAnswered, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .allYours, .costBecomesKnown, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .costOnSavings, .smallAmounts, .longHistory, .chartGaps, .busy, .answeredWallet, .allAnswered, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
             case .updating: store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
@@ -917,6 +927,10 @@ enum TestScene: String, CaseIterable {
         case .chartHover:
             cue.scrubbed = 6
             return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady)
+        case .chartGapsHover:
+            // A point that's unknown on whichever chart this is, whose tooltip has only that to say.
+            cue.scrubbed = TestMode.chartMetric == .value ? 5 : 2
+            return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady)
         case .motionChartDraw:
             return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady, play: {
                 forgetDrawnCharts()
@@ -924,6 +938,8 @@ enum TestScene: String, CaseIterable {
             })
         case .motionChartRange:
             return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady, play: { cue.range = .week })
+        case .motionChartMetric:
+            return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady, play: { cue.metric = cue.metric == .pnl ? .value : .pnl })
         case .motionChartScrub:
             return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady, play: {
                 Task {
@@ -974,7 +990,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: MainWindow.minimumSize, isReady: isReady)
         case .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .mainNoWalletAfterDeleting, .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainTransactions, .mainTransactionsSending, .mainTransactionsBusy, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainReadingStart, .mainUpdating, .mainUpdatingCAD, .mainTransactionsUpdating, .mainServerDown, .mainPricesDown, .mainPricesStop, .mainTooSlow, .mainRetrying, .mainRetryingNumbers, .mainNotStartedFailing, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .mainNoWalletAfterDeleting, .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainTransactions, .mainTransactionsSending, .mainTransactionsBusy, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainReadingStart, .mainUpdating, .mainUpdatingCAD, .mainTransactionsUpdating, .mainServerDown, .mainPricesDown, .mainPricesStop, .mainTooSlow, .mainRetrying, .mainRetryingNumbers, .mainNotStartedFailing, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainChartGaps, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainDetailsProof:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases).environment(\.opensFirstProof, true)), size: CGSize(width: 1120, height: 760), isReady: isReady)
@@ -983,9 +999,9 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .mainEmptySmallest, .mainSmallest, .mainFirstRunSmallest, .mainEmptySpendingMoneySmallest:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 780, height: 560), isReady: isReady)
-        case .mainNarrow, .mainSmallAmountsNarrow, .mainUpdatingNarrow:
+        case .mainNarrow, .mainChartGapsNarrow, .mainSmallAmountsNarrow, .mainUpdatingNarrow:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 780, height: 760), isReady: isReady)
-        case .mainSmall, .mainUpdatingSmall, .mainNotUpdatingSmall, .mainFirstRunSmall, .mainTransactionsSmall, .mainSpendingMoneySmall, .mainTaxReportSmall, .mainNoWalletSmall, .mainNoWalletSavedSmall:
+        case .mainSmall, .mainChartGapsSmall, .mainUpdatingSmall, .mainNotUpdatingSmall, .mainFirstRunSmall, .mainTransactionsSmall, .mainSpendingMoneySmall, .mainTaxReportSmall, .mainNoWalletSmall, .mainNoWalletSavedSmall:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: MainWindow.minimumSize, isReady: isReady)
         case .mainMedium, .mainSpendingMoney, .mainSpendingMoneyServerDown, .mainTaxReport:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 900, height: 640), isReady: isReady)
@@ -1426,7 +1442,7 @@ private final class ReadOnce {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, allYours, costBecomesKnown, missingPrice, unreadBalance, neverAnswers, updating, serverDown, stopsAnswering, pricesDown, pricesStop, tooSlow, retrying, retryingWithNumbers, notStartedFails, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, busy, answeredWallet, allAnswered, empty, emptyReadingLinked, notStarted, firstRun }
+    enum Feed { case demo, allYours, costBecomesKnown, missingPrice, unreadBalance, neverAnswers, updating, serverDown, stopsAnswering, pricesDown, pricesStop, tooSlow, retrying, retryingWithNumbers, notStartedFails, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, chartGaps, busy, answeredWallet, allAnswered, empty, emptyReadingLinked, notStarted, firstRun }
 
     private let feed: Feed
     private let hasRate: Bool
@@ -1539,9 +1555,25 @@ final class FixtureSource: PortfolioSource {
         case .longHistory:
             // Weeks of history, where a time of day on the axis would say nothing.
             return try demo {
-                let points = Self.points(every: 3 * 86_400, pnl: [1_000_000, 250_000_000, 1_250_000_000, 900_000_000, 400_000_000, 1_100_000_000, 800_000_000])
+                // Two deposits and a withdrawal, in whole dollars before and after each, with prices moving in between.
+                let value = [(0, 1000), (1080, 2080), (2150, 2150), (2010, 2010), (1890, 1390), (1460, 1460), (1420, 1420)]
+                let points = Self.points(every: 3 * 86_400, pnl: [1_000_000, 250_000_000, 1_250_000_000, 900_000_000, 400_000_000, 1_100_000_000, 800_000_000], value: value)
                 $0["points"] = points
                 // At 2 s a block, so what's offered goes back as far as these do.
+                $0["coverage"] = ["fromBlock": 53_500_000 - points.count * 3 * 86_400 / 2, "toBlock": 53_500_000]
+            }
+        case .chartGaps:
+            // Unknown on each chart somewhere the other one's known, so each has its own band and key.
+            return try demo {
+                let value = [(0, 1000), (1080, 2080), (2150, 2150), (2010, 2010), (1890, 1390), (1460, 1460), (1420, 1420)]
+                var points = Self.points(every: 3 * 86_400, pnl: [1_000_000, 250_000_000, 1_250_000_000, 900_000_000, 400_000_000, 1_100_000_000, 800_000_000], value: value)
+                points[2]["pnlMicros"] = NSNull()
+                points[2]["excludedCount"] = 1
+                points[4]["valueContinues"] = false
+                points[5]["valueMicros"] = NSNull()
+                points[5]["valueBeforeMicros"] = NSNull()
+                points[5]["valueExcludedCount"] = 1
+                $0["points"] = points
                 $0["coverage"] = ["fromBlock": 53_500_000 - points.count * 3 * 86_400 / 2, "toBlock": 53_500_000]
             }
         case .busy:
@@ -1602,17 +1634,24 @@ final class FixtureSource: PortfolioSource {
     }
 
     /// Chart points this many seconds apart, the last one being now.
-    private static func points(every seconds: Int, pnl: [Int]) -> [[String: Any]] {
+    private static func points(every seconds: Int, pnl: [Int], value: [(before: Int, after: Int)] = []) -> [[String: Any]] {
         let start = Date(timeIntervalSince1970: 1_793_800_000)
         return pnl.enumerated().map { index, micros in
             let isLast = index == pnl.count - 1
-            return [
+            var point: [String: Any] = [
                 "blockNum": 53_500_000 + index,
                 "timestamp": start.addingTimeInterval(Double(index * seconds)).formatted(.iso8601),
                 "txHash": isLast ? NSNull() : "0xde3\(String(repeating: "0", count: 60))\(index)",
                 "pnlMicros": String(micros),
                 "excludedCount": 0,
-            ] as [String: Any]
+            ]
+            if value.indices.contains(index) {
+                point["valueBeforeMicros"] = String(value[index].before * 1_000_000)
+                point["valueMicros"] = String(value[index].after * 1_000_000)
+                point["valueExcludedCount"] = 0
+                point["valueContinues"] = index > 0
+            }
+            return point
         }
     }
 

@@ -53,6 +53,24 @@ struct SpokenTests {
         #expect(summary.contains("Unknown for part of it."))
     }
 
+    /// On Value it says Value's own numbers, unsigned, and what Value leaves out, not PnL's.
+    @Test func theValueChartSaysItsOwnNumbers() {
+        var start = point(0, "9000000")
+        start.valueMicros = "1000000"
+        var end = point(10, nil, excluded: 2)
+        end.valueMicros = "3000000"
+        end.valueContinues = true
+        end.valueExcludedCount = 1
+        let series = ValueSeries(points: [start, end])
+        let summary = Spoken.chartSummary(series, .USD, isLive: true)
+        #expect(summary.hasPrefix("Value over time, from "))
+        #expect(summary.contains("It went from $1.00 to $3.00 (partial)."), "\(summary)")
+        let step = Spoken.chartStep(series.plotted[1], .USD, metric: .value)
+        #expect(step.contains("$3.00"), "\(step)")
+        #expect(step.contains("leaves out 1 holding"), "\(step)")
+        #expect(Spoken.chartSummary(ValueSeries(points: []), .USD, isLive: false) == "Value over time: nothing to show yet. Not updating.")
+    }
+
     @Test func aChartThatsAllUnknownStillSaysWhenAndHowFresh() {
         let series = PnlSeries(points: [point(0, nil, excluded: 1), point(10, nil, excluded: 1)])
         let summary = Spoken.chartSummary(series, .USD, isLive: false)
