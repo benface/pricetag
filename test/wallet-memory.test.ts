@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import { after, before, describe, it } from "node:test"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
+import { fileURLToPath } from "node:url"
 import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, WalletsTooBigError, applyLeg, assertFoldsFit, emptyPosition, limitFolds, type LegRow } from "@pricetag/sdk/core"
 import { OldestFirstTooBigError, WalletTooBigError, buildPortfolio } from "@pricetag/sdk"
 import { WalletsBusyError, createRowBudget, createWallets, foldBytesThatFit, pricetagClient, rowsThatFit, type Query, type Source } from "@pricetag/sdk/internal"
@@ -400,6 +402,51 @@ describe("wallets that pass lots between them", () => {
     const held = positions.find(({ asset }) => asset === "USDC")
     assert.equal(held?.values.unknownCostQty, "0")
     assert.notEqual(held?.values.costMicros, null)
+  })
+})
+
+describe("counting a history that's too big to fold", () => {
+  /** The heap the `Dockerfile` gives the server. */
+  const answersOn512Mb = (lots: number, moves: number) => {
+    const { status, stdout, stderr } = spawnSync(process.execPath, ["--max-old-space-size=512", fileURLToPath(new URL("./support/bounce-server.ts", import.meta.url)), String(lots), String(moves)], { encoding: "utf8" })
+    assert.equal(status, 0, stderr.slice(0, 2_000))
+    return JSON.parse(stdout) as Record<string, { status: number; type: string | null; error?: string }>
+  }
+
+  it("refuses partway, in the real heap, and the server goes on answering", () => {
+    // 9,000 rows, well within what can be read, but nine million copies of a lot to count them all.
+    const answers = answersOn512Mb(3_000, 3_000)
+    assert.equal(answers.warm?.status, 200)
+    for (const name of ["all", "export", "explain", "preview", "single", "tax"]) {
+      assert.equal(answers[name]?.status, 413, name)
+      assert.match(answers[name]?.type ?? "", /json/, name)
+      assert.match(answers[name]?.error ?? "", /oldest first.*Average cost still works/, name)
+    }
+    assert.equal(answers.small?.status, 200)
+  })
+
+  it("stops at the first step past the limit, without looking at what's left", () => {
+    const LOTS = 30
+    const MOVES = 40
+    const leg = (block: number, delta: number, counterparty?: string) => ({ asset: "USDC", delta: String(delta), blockNum: block, txIndex: 1, txHash: `0x${block.toString(16)}`, parts: counterparty ? [{ side: delta > 0 ? "credit" : "debit", counterparty, amount: String(Math.abs(delta)), logIndex: 0 }] : [] })
+    const legs: Record<string, ReturnType<typeof leg>[]> = { [ME]: Array.from({ length: LOTS }, (_, i) => leg(i + 1, 100)), [OTHER]: [] }
+    for (let i = 0; i < MOVES; i++) {
+      const [from, to] = i % 2 === 0 ? [ME, OTHER] : [OTHER, ME]
+      legs[from]!.push(leg(LOTS + i + 1, -LOTS * 100, to))
+      legs[to]!.push(leg(LOTS + i + 1, LOTS * 100, from))
+    }
+    let reachedTheEnd = false
+    const last = leg(LOTS + MOVES + 1, 100)
+    legs[ME]!.push(Object.defineProperty(last, "parts", { get: () => ((reachedTheEnd = true), []) }))
+    const count = LOTS + 2 * MOVES + 1
+    // Room for what each wallet's legs cost, and for two moves' worth of inherited lots.
+    limitFolds(count * 11_000 + 2 * LOTS * 500 + 20 * 1_000)
+    assert.throws(() => assertFoldsFit(Object.entries(legs).map(([address, of]) => ({ address, legs: of })) as never, "fifo"), OldestFirstTooBigError)
+    assert.equal(reachedTheEnd, false)
+    limitFolds(1e12)
+    assertFoldsFit(Object.entries(legs).map(([address, of]) => ({ address, legs: of })) as never, "fifo")
+    assert.equal(reachedTheEnd, true)
+    limitFolds(Number.POSITIVE_INFINITY)
   })
 })
 

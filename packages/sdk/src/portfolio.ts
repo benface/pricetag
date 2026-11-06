@@ -160,6 +160,11 @@ function closeLots(open: OpenLots, units: bigint): OpenLot[] {
     if (lot.units === 0n) open.first++
     left -= size
   }
+  // Spent lots go once they're most of the list, so what's kept follows what's open however many times lots move.
+  if (open.first * 2 > open.lots.length) {
+    open.lots.splice(0, open.first)
+    open.first = 0
+  }
   return taken
 }
 
@@ -175,15 +180,20 @@ const chainOrder = (histories: readonly FoldedHistory[]) =>
 /**
  * A dry run of oldest first over wallets that can pass lots between them, cheap enough to run before any of the fold does.
  * A transfer it can't rule out counts as carrying its lots, so this can say more than the fold will hold, but not less.
- * For each wallet, `held` is the lots open after each leg, added up, and `inherited` is the lots that arrived from another wallet.
+ * `bytesFor` gets, for each wallet, the lots open after each leg, added up, and the lots that arrived from another wallet.
+ * Neither ever goes down, so this stops as soon as they're past the limit, rather than counting a history that may not fit in memory just to count it.
  */
-function dryRun(histories: readonly FoldedHistory[]): { held: number[]; inherited: number[] } {
+function dryRunFits(histories: readonly FoldedHistory[], bytesFor: (held: readonly number[], inherited: number) => number): boolean {
   const held = histories.map(() => 0)
-  const inherited = histories.map(() => 0)
+  let inherited = 0
   const addresses = addressesOf(histories)
   const open = new Map<string, OpenLots>()
   const carried = new Map<string, OpenLot[]>()
+  let at: FoldedLeg | null = null
   for (const { leg, wallet, address, delta } of chainOrder(histories)) {
+    // What's carried is only for this transaction, the same as when costs carry for real.
+    if (at && (at.blockNum !== leg.blockNum || at.txIndex !== leg.txIndex)) carried.clear()
+    at = leg
     const key = `${wallet}:${leg.asset}`
     const lots = open.get(key) ?? { lots: [], first: 0 }
     open.set(key, lots)
@@ -192,7 +202,7 @@ function dryRun(histories: readonly FoldedHistory[]): { held: number[]; inherite
       if (address && goesTo(leg, addresses)) carried.set(`${leg.txHash}:${address}:${leg.asset}`, taken)
     } else if (leg.pieces) {
       for (const piece of leg.pieces) openLot(lots, { units: BigInt(piece.qty), acquired: piece.acquiredBlock ?? leg.blockNum })
-      inherited[wallet] = (inherited[wallet] as number) + leg.pieces.length
+      inherited += leg.pieces.length
     } else if (delta > 0n) {
       let left = delta
       for (const part of leg.parts) {
@@ -201,7 +211,7 @@ function dryRun(histories: readonly FoldedHistory[]): { held: number[]; inherite
           const lot = pool[0] as OpenLot
           const size = lot.units < need ? lot.units : need
           openLot(lots, { units: size, acquired: lot.acquired })
-          inherited[wallet] = (inherited[wallet] as number) + 1
+          inherited++
           lot.units -= size
           if (lot.units === 0n) pool.shift()
           need -= size
@@ -211,8 +221,9 @@ function dryRun(histories: readonly FoldedHistory[]): { held: number[]; inherite
       if (left > 0n) openLot(lots, { units: left, acquired: leg.blockNum })
     }
     held[wallet] = (held[wallet] as number) + lots.lots.length - lots.first
+    if (bytesFor(held, inherited) > foldBytes) return false
   }
-  return { held, inherited }
+  return true
 }
 
 /**
@@ -252,10 +263,9 @@ export function assertFoldsFit(histories: readonly FoldedHistory[], method: Meth
     if (bytes + averageMoveLines(histories) * BYTES_PER_MOVE_LINE > foldBytes) throw new WalletsTooBigError()
     return
   }
-  const { held, inherited } = dryRun(histories)
   // Each fold is still held when the next starts, and a wallet's costs can look through another's whole history on top of that, so more than one wallet counts the biggest twice.
-  const lots = sumOf(held) + (held.length > 1 ? Math.max(...held) : 0)
-  if (bytes + lots * BYTES_PER_LOT + sumOf(inherited) * BYTES_PER_INHERITED_LOT > foldBytes) throw new OldestFirstTooBigError()
+  const fits = dryRunFits(histories, (held, inherited) => bytes + (sumOf(held) + (held.length > 1 ? Math.max(...held) : 0)) * BYTES_PER_LOT + inherited * BYTES_PER_INHERITED_LOT)
+  if (!fits) throw new OldestFirstTooBigError()
 }
 
 /** Throws unless folding this wallet fits, with the others only there to say what it inherits. Only its fold is kept, but working out what it inherits holds all of what they pass around. */
@@ -265,8 +275,8 @@ export function assertFoldFits(focus: FoldedHistory, others: readonly FoldedHist
     if (focus.legs.length * BYTES_PER_LEG + averageMoveLines([focus, ...others]) * BYTES_PER_MOVE_LINE > foldBytes) throw new WalletsTooBigError()
     return
   }
-  const { held, inherited } = dryRun([focus, ...others])
-  if (focus.legs.length * BYTES_PER_LEG + (held[0] as number) * BYTES_PER_LOT + sumOf(inherited) * BYTES_PER_INHERITED_LOT > foldBytes) throw new OldestFirstTooBigError()
+  const fits = dryRunFits([focus, ...others], (held, inherited) => focus.legs.length * BYTES_PER_LEG + (held[0] as number) * BYTES_PER_LOT + inherited * BYTES_PER_INHERITED_LOT)
+  if (!fits) throw new OldestFirstTooBigError()
 }
 
 export function foldPositions(legs: readonly PricedLeg[], method: Method, prices: LatestPrices, onchain?: Onchain): Position[] {
