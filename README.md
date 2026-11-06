@@ -27,7 +27,7 @@ pnpm check:extension # the browser extension on a real site, through to a local 
 pnpm mac:shot    # screenshots from fixtures that never open a window you'd see or take focus. See macos/TESTING.md
 ```
 
-It reads from the server on http://127.0.0.1:8787, set in Settings, so it runs on whatever the server runs on: with no `.env.local`, that's the demo wallet. It remembers the wallet, method and currency across restarts.
+It reads from the server on http://127.0.0.1:8787, set in Settings, so it runs on whatever the server runs on: with no `.env.local`, that's the demo wallet. A build can read a [hosted one](#hosting) instead. It remembers the wallet, method and currency across restarts.
 
 If the menu bar is full, macOS hides new items. Look under the menu bar's "show hidden items" control, or in System Settings > Menu Bar, and drag it out. The window opens at launch either way.
 
@@ -136,6 +136,19 @@ Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/ve
 **A new dataset name needs a new manifest hash.** Amp finds a dataset's active tables by hash and table name, not by dataset name, so one manifest under two names can read and write the same tables. That's why `benface/pricetag@0.0.1` is `dataset/pricetag.json` at this start block plus a one-line SQL comment. A manifest with new SQL already has its own hash.
 
 `pnpm amp:start` turns the fork off while it runs, because it isn't registered on a local Amp. Hot wallet decisions and tax reports always read by the default rule, whatever the switch says.
+
+## Hosting
+
+The Mac app reads from a server because the server holds what the app can't ship: the Amp token and the Coinbase key. Locally that's `pnpm mac`'s. A shared one is the same server with `PRICETAG_HOSTED=1`, which turns on everything it needs at once:
+
+- **Invites.** Every `/api/` request needs `Authorization: Bearer <invite>`. `pnpm invite <name>` makes one and prints the line for `PRICETAG_INVITES`, which holds only its SHA-256. Remove that line to take it back. It won't start without one.
+- **Limits.** Per invite: requests a minute, live streams at once, and Coinbase checkouts an hour. And checkouts a day for everyone together, so one invite can't use up the account. Past one, it answers 429 with `Retry-After`. One request can name at most 20 other wallets, counting its linked wallets, its answers and every preview, and it's refused before anything is read.
+- **Logs** are one JSON object a line, with addresses and transaction hashes (as `0x…`, as SQL's `X'…'`, or as any long run of hex), URLs, bearer tokens and the env's secrets taken out. It replaces `console` itself, so the SDK's lines go through it too. It logs no requests.
+- **`GET /healthz`** answers without an invite, with whether Amp and buying are set up and nothing else. It says 503 once a shutdown starts.
+- **SIGTERM** stops taking requests, ends the live streams so clients reconnect, and waits up to `PRICETAG_DRAIN_MS` for the rest.
+- **API only.** It doesn't serve the web app, so Top Up and Publish from a device still need one on the Mac. `PRICETAG_SERVE_APP=1` serves it anyway.
+
+`Dockerfile` builds it, and `fly.toml` runs it on Fly.io, on **one machine**: the wallet reads, the limits and the day's checkouts are counted in its memory, so a second one would split them. Fly starts two on a first deploy unless told otherwise, so deploy with `fly deploy --ha=false`, then check that `fly machine list` shows one. The app reads it when its build names it: `PATINA_SERVER_HOST` in `macos/Config/App.xcconfig`, which is empty, so builds read the Mac's own server. Its invite goes in Settings. It's saved for that server alone, so it never goes to another one, and it's only sent over HTTPS. See `.env.example` for the rest.
 
 ## How it's put together
 

@@ -13,6 +13,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>PatinaServerHost</key>
+	<string>$(PATINA_SERVER_HOST)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- Plain HTTP is only for the server on this Mac. -->
