@@ -63,7 +63,7 @@ An honest account of building Pricetag on Amp, November 4 to 5, 2026. Private to
 | Dataset's three wallet queries, 33,272 blocks, quiet wallet with 4 `legs` rows | 8.3 s then 6.2 s for `legs` ([WORK-448]) |
 | Same, busy wallet with 75,735 `legs` rows | 8.7 s then 4.8 s ([WORK-448]) |
 | `legs` for the quiet wallet today, 43,000 blocks, 10 rows, after the switch | 7.7 s and 10.8 s |
-| The app's full read, including balances and fees | Quiet: 19–22 s cold, 3–4 s warm. Busy: 142 s cold, 6 s per update (DEMO.md, [WORK-410]) |
+| The app's full read, including balances and fees | Quiet: 13–17 s cold with a bounded head lookup ([WORK-552]), 19–22 s before, 3–4 s warm. Busy: 142 s cold, 6 s per update (DEMO.md, [WORK-410]) |
 | `eth_call` through Amp | About 30 ms per call on staging. It kept up with 2 s blocks, 1,030 of 1,030 in a row ([WORK-320], [321][WORK-321]) |
 
 **Freshness** (measured, on staging):
@@ -391,6 +391,7 @@ No new issues were filed in the `amp` project: everything that meets its bar alr
 [WORK-497]: https://multica.ai/benface-work/issues/01a1acfb-4a15-7718-b36d-9c5c03aae7c1
 [WORK-519]: https://multica.ai/benface-work/issues/01a1ad4a-d011-7430-8447-bb5443d76b0c
 [WORK-520]: https://multica.ai/benface-work/issues/01a1ad4a-d2ec-7501-9a5b-1095fea392d3
+[WORK-552]: https://multica.ai/benface-work/issues/01a1ae83-a37f-79a2-b5bb-257ab02a975c
 [WORK-575]: https://multica.ai/benface-work/issues/01a1aece-4d0e-7e87-b10c-736721709d0b
 [#479]: https://github.com/edgeandnode/amp/issues/479
 [#1819]: https://github.com/edgeandnode/amp/issues/1819

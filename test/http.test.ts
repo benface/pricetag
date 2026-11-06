@@ -4,7 +4,7 @@ import { createServer, request, type Server } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
-import { createApi } from "../server/app.ts"
+import { createApi, createSource } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
 import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type ReadL1Fees, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
 import { resolvingSource, settledL1Fees, sharedReads } from "../server/source.ts"
@@ -68,6 +68,21 @@ describe("the server", () => {
 
   it("has nothing to compare with only one rule", async () => {
     assert.equal((await get(server, "/api/portfolio/demo/compare")).status, 404)
+  })
+
+  it("bounds the first head lookup by the dataset's start block", async () => {
+    const asked: string[] = []
+    const query = Object.assign(async <T>(sql: string) => (asked.push(sql), [] as T[]), { aliased: () => query })
+    const hash = { PRICETAG_DATASET_HASH: "a".repeat(64), PRICETAG_FORK_DATASET: "a/c@0.0.1", PRICETAG_FORK_HASH: "b".repeat(64) }
+    const dataset = { AMP_QUERY_URL: "http://127.0.0.1:1", BASE_RPC_URL: "http://127.0.0.1:1", PRICETAG_DATASET: "a/b@0.0.1", PRICETAG_START_BLOCK: "5" }
+    for (const env of [dataset, { ...dataset, ...hash }]) {
+      const created = createSource(env, query)!
+      asked.length = 0
+      await created.source.head(null)
+      await created.follow.readMark(null)
+      assert.equal(asked.length, 2)
+      for (const sql of asked) assert.match(sql, /\.blocks WHERE block_num >= 5 ORDER BY/)
+    }
   })
 
   it("won't start with a fork it can't pin", () => {

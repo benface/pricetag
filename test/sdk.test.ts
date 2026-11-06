@@ -455,6 +455,25 @@ describe("getPortfolio", () => {
     assert.ok(missing.length > 0)
   })
 
+  it("bounds the first head lookup by the start block, and later ones by the last head", async () => {
+    const heads = (queries: string[]) => queries.filter((q) => q.includes(".blocks") && q.includes("ORDER BY"))
+    const { client, queries } = fakeAmp(TABLES, 200, { startBlock: 50 })
+    await client.getLatestPrices()
+    assert.match(heads(queries)[0]!, /WHERE block_num >= 50 ORDER BY/)
+    queries.length = 0
+    await client.getPortfolio(`0x${ME}`)
+    assert.match(heads(queries)[0]!, /WHERE block_num >= 50 ORDER BY/)
+    queries.length = 0
+    await client.getPortfolio(`0x${ME}`)
+    assert.match(heads(queries)[0]!, /WHERE block_num >= 200 ORDER BY/)
+  })
+
+  it("has no bound for the head without a start block", async () => {
+    const { client, queries } = fakeAmp(TABLES)
+    await client.getLatestPrices()
+    assert.ok(queries.some((q) => q.includes(".blocks  ORDER BY")))
+  })
+
   it("gives no totals before anything's been processed, rather than $0", async () => {
     const { client, queries } = fakeAmp({}, null, { startBlock: 50 })
     const { started, blocks, positions, totals, pnlStatus: status, missing } = await client.getPortfolio(`0x${ME}`)

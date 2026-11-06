@@ -541,6 +541,16 @@ const balancesThrough = (through: number, eth: string) => Object.fromEntries([..
 const legsOf = (update: WalletUpdate) => update.legs.filter((leg) => !leg.opening).map((leg) => `${leg.blockNum}:${leg.txHash}:${leg.delta}`)
 
 describe("watchWallet", FOLLOWING, () => {
+  it("looks for the head from the start block when it has nothing newer", async (t) => {
+    const asked: string[] = []
+    const { client } = chainAt(100, { reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(120, "0") }, (sql) => asked.push(sql))
+    const updates = client.watchWallet(ADDRESS, { signal: t.signal })
+    await updates.next()
+    const heads = () => asked.filter((sql) => sql.includes(".blocks") && sql.includes("ORDER BY"))
+    await until(t, () => heads().some((sql) => sql.includes("hash")))
+    for (const sql of heads()) assert.match(sql, /WHERE block_num >= \d+ ORDER BY/)
+  })
+
   it("gives the wallet now, then again on each new block, with the blocks it covers", async (t) => {
     const { chain, hand, client } = chainAt(100, { legs: [creditAt(100, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(120, "5") })
     const updates = client.watchWallet(ADDRESS, { signal: t.signal })
