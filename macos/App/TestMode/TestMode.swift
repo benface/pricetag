@@ -106,8 +106,10 @@ enum TestMode {
         print("WINDOW \(window.windowNumber) \(ProcessInfo.processInfo.processIdentifier)")
         fflush(stdout)
         if let play = screen.play, let cue = value(after: "--play-when") {
-            // Once `shot.sh` has started capturing, which takes it a while the first time.
+            // Once `shot.sh` has started capturing, which takes it a while the first time. If it's gone, the cue never comes.
+            let cueDeadline = Date.now.addingTimeInterval(60)
             while !FileManager.default.fileExists(atPath: cue) {
+                guard Date.now < cueDeadline else { fail("Nothing started this scene's motion.") }
                 RunLoop.main.run(until: .now.addingTimeInterval(0.01))
             }
             play()
