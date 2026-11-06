@@ -9,7 +9,7 @@ import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
 import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
-import { MINT_ADDRESS, isValuedOnArrival, knownSender, type KnownSender } from "./senders.ts"
+import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
 import { describeTransaction, purchaseSource } from "./wording.ts"
 
 /** An amount as typed in `currency`, in millionths of it. Null when it isn't an amount, which includes one in another currency's symbol: `€46` isn't 46 dollars. */
@@ -310,10 +310,10 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
         pending.push({ wallet: address, leg, sender, units: part })
         return [unknown]
       }
-      // A bridge or a mint could be the user's own money arriving from elsewhere. Only an answer says it came from someone else. A reward never is, but it's valued the same way.
+      // A bridge or a mint could be the user's own money arriving from elsewhere. Only an answer says it came from someone else.
       // Their wallet sent it to a wallet they've said isn't theirs, so that wallet got it from someone else.
       const given = answer?.kind === "someone-else" || (answer?.kind === "mine" && book.senders[address]?.kind === "someone-else")
-      const someoneElse = given || isValuedOnArrival(knownSender(sender)) || sender === MINT_ADDRESS
+      const someoneElse = given || knownSender(sender)?.kind === "bridge" || sender === MINT_ADDRESS
       if (someoneElse) {
         if (leg.priceMicros === null) return [unknown]
         const cost = worth(part, BigInt(leg.priceMicros), leg.decimals).toString()

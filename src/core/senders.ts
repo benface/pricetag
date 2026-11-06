@@ -1,7 +1,7 @@
 // Addresses with a name we can back up. Each one's name tag was read on Basescan, or a withdrawal from it confirmed, and
 // its activity checked on Base. A name is only evidence: exchanges send everyone's withdrawals from shared addresses, so
-// it never says whose withdrawal this was. Whatever a bridge or a rewards contract sends is valued at its price, with nothing
-// to ask, so only name one when nothing else could come out of it.
+// it never says whose withdrawal this was. Whatever a bridge sends is valued at its price, with nothing to ask, so only name
+// one when nothing else could come out of it.
 
 import { normalizeAddress } from "@pricetag/sdk/core"
 
@@ -23,8 +23,9 @@ const KNOWN: Readonly<Record<string, KnownSender>> = {
   "0x2cff890f0378a11913b6129b2e97417a2c302680": { name: "NEAR Intents", kind: "bridge" },
   // Name tag "NEAR Intents: Refill". 513 tiny ETH payouts over about 2 days, for gas.
   "0xbb2f33f73ccc2c74e3fb9bb8eb75241ac15337e0": { name: "NEAR Intents", kind: "bridge" },
-  // Merkl's rewards, name tag "Angle Protocol: Distributor". Nobody deposits here, so a claim is never the user's own money
-  // coming back. 114 payouts, from 105 claims by 96 wallets, over about 2 days.
+  // Merkl, name tag "Angle Protocol: Distributor". It pays rewards, but it also returns dispute deposits and tokens sent to it
+  // by mistake, and a payout doesn't say which it is, so it's still asked about. 114 payouts, from 105 claims by 96 wallets,
+  // over about 2 days.
   "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae": { name: "Merkl", kind: "reward" },
 }
 
@@ -32,6 +33,3 @@ const KNOWN: Readonly<Record<string, KnownSender>> = {
 export const MINT_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 export const knownSender = (address: string): KnownSender | null => KNOWN[normalizeAddress(address)] ?? null
-
-/** Whether what a sender sends has no question to ask: everything but an exchange's, whose withdrawals could be anyone's. */
-export const isValuedOnArrival = (known: KnownSender | null) => known !== null && known.kind !== "exchange"

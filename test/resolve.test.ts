@@ -1098,7 +1098,7 @@ describe("each kind of sender", () => {
     assert.equal(usdc.effects[0]?.leg.costLabel, "self-reported")
   })
 
-  for (const [name, sender] of [["NEAR Intents' treasury", "0x2cff890f0378a11913b6129b2e97417a2c302680"], ["NEAR Intents' gas refills", "0xbb2f33f73ccc2c74e3fb9bb8eb75241ac15337e0"], ["a Merkl reward", "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae"]] as const) {
+  for (const [name, sender] of [["NEAR Intents' treasury", "0x2cff890f0378a11913b6129b2e97417a2c302680"], ["NEAR Intents' gas refills", "0xbb2f33f73ccc2c74e3fb9bb8eb75241ac15337e0"]] as const) {
     it(`${name} is valued when it arrived, as an estimate, with nothing to ask`, () => {
       const rows = send(10, "0x1", sender, A, 100n * E6)
       assert.deepEqual(question(rows), [])
@@ -1107,6 +1107,18 @@ describe("each kind of sender", () => {
       assert.equal(usdc.estimates.cost, true)
     })
   }
+
+  it("Merkl is named and still asked about, because a reward and its own money coming back look the same", () => {
+    const merkl = "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae"
+    const rows = send(10, "0x1", merkl, A, 100n * E6)
+    const [q] = question(rows)
+    assert.deepEqual(q?.evidence, ["From a Merkl address"])
+    assert.equal(q?.known?.kind, "reward")
+    const usdc = position(wallet(A, rows), [], emptyBook())
+    assert.equal(usdc.effects[0]?.leg.costLabel, "unknown")
+    assert.equal(usdc.values.costMicros, null)
+    assert.equal(position(wallet(A, rows), [], book({ [merkl]: { kind: "someone-else" } })).effects[0]?.leg.costLabel, "received at market")
+  })
 
   it("a named exchange is still asked about, because the name doesn't say whose withdrawal it was", () => {
     const gate = "0x0d0707963952f2fba59dd06f2b425ace40b492fe"
