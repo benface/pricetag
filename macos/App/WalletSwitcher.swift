@@ -299,10 +299,18 @@ struct WalletSwitcher: View {
                     Text(entry.title)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(entry.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    // All Yours says how many wallets it adds up. Every other row's is a kind and an address.
+                    Group {
+                        if entry.kind == .allYours {
+                            Text(entry.detail)
+                                .secondaryText()
+                        } else {
+                            Text(entry.detail)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.caption)
+                    .lineLimit(1)
                 }
                 Spacer(minLength: 0)
             }
