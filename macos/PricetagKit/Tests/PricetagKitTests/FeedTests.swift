@@ -975,15 +975,50 @@ final class Sources: @unchecked Sendable {
         #expect(askedAt[2] - askedAt[1] >= .seconds(1))
     }
 
-    @Test func twoReadsRefusedTogetherOnlyAskAgainOnce() async throws {
+    @Test func twoReadsAtOnceAskOnceAndWaitAsLongAsTheyreTold() async throws {
         let source = RuledSource(rulesRefusals: [1, 1], rulesTake: .milliseconds(50))
         let store = makeStore(source)
         async let first: Void = store.refreshRules()
         async let second: Void = store.refreshRules()
         _ = await (first, second)
+        #expect(await source.rulesAsked == 1)
         try await waitForRules(store)
         try await Task.sleep(for: .milliseconds(100))
-        #expect(await source.rulesAsked == 3)
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 3)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+        #expect(askedAt[2] - askedAt[1] >= .seconds(1))
+    }
+
+    @Test func twoReadsAtOnceHonorADifferentWaitNext() async throws {
+        let source = RuledSource(rulesRefusals: [1, 2], rulesTake: .milliseconds(100))
+        let store = makeStore(source)
+        async let first: Void = store.refreshRules()
+        async let second: Void = store.refreshRules()
+        _ = await (first, second)
+        try await waitForRules(store)
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 3)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+        #expect(askedAt[2] - askedAt[1] >= .seconds(2))
+    }
+
+    @Test func aReadThatStartsDuringAnotherJoinsIt() async throws {
+        let source = RuledSource(rulesRefusals: [1, 1], rulesTake: .milliseconds(200))
+        let store = makeStore(source)
+        async let first: Void = store.refreshRules()
+        try await Task.sleep(for: .milliseconds(100))
+        // Partway through the first read, and then partway through the one after the wait.
+        await store.refreshRules()
+        #expect(await source.rulesAsked == 1)
+        await first
+        try await Task.sleep(for: .milliseconds(1100))
+        await store.refreshRules()
+        try await waitForRules(store)
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 3)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+        #expect(askedAt[2] - askedAt[1] >= .seconds(1))
     }
 
     @Test func aWaitEndsWithTheInviteItWasFor() async throws {

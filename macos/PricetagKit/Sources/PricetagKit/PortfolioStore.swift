@@ -158,12 +158,16 @@ public final class PortfolioStore {
             sourceChanges += 1
             rulesRetry?.cancel()
             rulesRetry = nil
+            rulesRead = nil
+            rateHeldUntil = nil
         }
     }
     /// How many times `source` has been replaced, so an answer from an earlier one can tell.
     @ObservationIgnored private var sourceChanges = 0
     /// Asks for the rules again once the server has room. While it's there, nobody else asks.
     @ObservationIgnored private var rulesRetry: Task<Void, Never>?
+    /// The read of the rules that's under way, which anyone else asking joins, so one answer settles it.
+    @ObservationIgnored private var rulesRead: Task<Void, Never>?
     @ObservationIgnored private var cache: PortfolioCache
     /// Something changed, so the server can answer from what it last read while the real read runs.
     @ObservationIgnored private var wantsLastRead = true
@@ -186,8 +190,8 @@ public final class PortfolioStore {
     @ObservationIgnored private var sleeper: Task<Void, Never>?
     @ObservationIgnored private var rateTask: Task<Void, Never>?
     @ObservationIgnored private let rateRetryDelay: Duration
-    /// How long the server said to wait, when that's why the last rate read failed.
-    @ObservationIgnored private var rateHeldFor: Duration?
+    /// When the server said it'd have room for a rate read again. Starting over doesn't change that, but another server or invite does.
+    @ObservationIgnored private var rateHeldUntil: Date?
     /// Lets a rate go at the end of its time, when the server said to wait past that.
     @ObservationIgnored private var rateExpiry: Task<Void, Never>?
     private static let rateDelay: Duration = .seconds(300)
@@ -259,7 +263,7 @@ public final class PortfolioStore {
         Task { await refreshRules() }
         rateTask = Task { [weak self] in
             while !Task.isCancelled {
-                guard let hasRead = await self?.readRate(), let delay = self?.rateHeldFor ?? self?.rateRetryDelay else { return }
+                guard let hasRead = await self?.readRate(), let delay = self?.rateHoldLeft ?? self?.rateRetryDelay else { return }
                 try? await Task.sleep(for: hasRead ? Self.rateDelay : delay)
             }
         }
@@ -601,13 +605,14 @@ public final class PortfolioStore {
     /// True when the server answered, so a read that failed can be tried again sooner.
     @discardableResult
     public func readRate() async -> Bool {
-        rateHeldFor = nil
         let currency = self.currency
         guard currency != .USD else {
             currentRate = nil
             return true
         }
+        guard rateHoldLeft == nil else { return rateNotRead() }
         let source = self.source
+        let asked = sourceChanges
         let server = serverURL
         do {
             let micros = try await source.currentRate(currency: currency)
@@ -615,21 +620,34 @@ public final class PortfolioStore {
             currentRate = micros.map { CurrentRate(currency: currency, micros: $0, readAt: now()) }
             return true
         } catch {
-            if Task.isCancelled { return true }
-            if let currentRate, now().timeIntervalSince(currentRate.readAt) > Self.rateLasts { self.currentRate = nil }
-            if case FetchError.rateLimited(_, let retryAfter) = error {
-                rateHeldFor = .seconds(retryAfter)
-                expireRate(within: retryAfter)
+            // The server said it whether or not anyone's still waiting on this read, and the longest wait it's given is the one that counts.
+            if case FetchError.rateLimited(_, let retryAfter) = error, asked == sourceChanges {
+                let until = now().addingTimeInterval(TimeInterval(retryAfter))
+                rateHeldUntil = max(rateHeldUntil ?? until, until)
             }
-            return false
+            if Task.isCancelled { return true }
+            return rateNotRead()
         }
     }
 
-    /// The next read is too late to notice a rate getting too old if it runs out within these seconds, and a server that said to wait isn't asked any sooner.
-    private func expireRate(within seconds: Int) {
+    /// How much of the server's wait is left, if any.
+    private var rateHoldLeft: Duration? {
+        guard let left = rateHeldUntil?.timeIntervalSince(now()), left > 0 else { return nil }
+        return .seconds(left)
+    }
+
+    /// There's no new rate, so the last one only stays while it's new enough.
+    private func rateNotRead() -> Bool {
+        if let currentRate, now().timeIntervalSince(currentRate.readAt) > Self.rateLasts { self.currentRate = nil }
+        if let rateHoldLeft { expireRate(within: rateHoldLeft) }
+        return false
+    }
+
+    /// The next read is too late to notice a rate getting too old if it runs out within this time, and a server that said to wait isn't asked any sooner.
+    private func expireRate(within wait: Duration) {
         guard let currentRate else { return }
         let left = Self.rateLasts - now().timeIntervalSince(currentRate.readAt)
-        guard left < TimeInterval(seconds) else { return }
+        guard .seconds(left) < wait else { return }
         rateExpiry?.cancel()
         rateExpiry = Task { [weak self] in
             try? await Task.sleep(for: .seconds(left))
@@ -706,7 +724,16 @@ public final class PortfolioStore {
     /// Asks the server what rules it has, and again when it says to wait. A rule it doesn't have would fail every read, so that choice goes.
     public func refreshRules() async {
         guard rulesRetry == nil else { return }
+        if let rulesRead { return await rulesRead.value }
+        let source = self.source
         let asked = sourceChanges
+        let read = Task<Void, Never> { [weak self] in await self?.readRules(from: source, asked: asked) }
+        rulesRead = read
+        await read.value
+    }
+
+    private func readRules(from source: any PortfolioSource, asked: Int) async {
+        defer { if asked == sourceChanges { rulesRead = nil } }
         do {
             let next = try await source.rules()
             guard asked == sourceChanges else { return }
@@ -717,8 +744,8 @@ public final class PortfolioStore {
                 settingsChanged()
             }
         } catch FetchError.rateLimited(_, let retryAfter) {
-            // Owned by the store, so closing Settings doesn't leave the list out of date. Two reads refused at once only ask again once.
-            guard asked == sourceChanges, rulesRetry == nil else { return }
+            // Owned by the store, so closing Settings doesn't leave the list out of date.
+            guard asked == sourceChanges else { return }
             rulesRetry = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(retryAfter))
                 guard !Task.isCancelled, let self else { return }
