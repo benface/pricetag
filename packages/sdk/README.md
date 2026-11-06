@@ -148,7 +148,7 @@ Each watch holds one streaming request open, apart from the one-at-a-time querie
 
 ### Other things to check
 
-- **Lower-level `blocks`:** each call only waits for the tables it reads, so `getPrices` for ETH, WETH or USDC only needs `reference_prices`, and other tokens need `legs`, `unlisted_legs` and `priced_legs`. Check `blocks` before folding `getLegs`' legs, because a portfolio of no legs adds up to $0.
+- **Lower-level `blocks`:** a table counts as processed through any block Amp has finished in it, with or without a row there. Each call only waits for the tables it reads, so `getPrices` for ETH, WETH or USDC only needs `reference_prices`, and other tokens need `legs`, `unlisted_legs` and `priced_legs`. Check `blocks` before folding `getLegs`' legs, because a portfolio of no legs adds up to $0.
 - **Price:** a leg's `priceSource` is `oracle`, `swap` or null. When it's null, `priceNote` says why. In `getPrices`, an unknown price stays in the list with `source: "unknown"` and a `note`.
 - **Transaction:** a leg has its `txHash` and the rows it nets together in `parts`. A swap price has its `txHash` and `account`. An oracle price is read at a block, so its `txHash` is null. An opening leg isn't a transaction, so its `txHash` is empty.
 

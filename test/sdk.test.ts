@@ -875,6 +875,14 @@ describe("reading through aliases", () => {
     assert.deepEqual(from("reference_prices"), ["pricing"])
   })
 
+  it("asks Amp about both datasets at once, so the slower one sets how far a read goes", async () => {
+    const asked: string[] = []
+    const query: Query = Object.assign(async <T,>() => [] as T[], { snapshotEnd: async (sql: string) => (asked.push(sql), 5) })
+    await datasetReader(query, { baseDataset: "base", dataset: "pricetag", priceDataset: "pricing" }).processedThrough(1, 200)
+    assert.equal(asked.length, 1)
+    for (const table of ['"pricetag".legs', '"pricetag".unlisted_legs', '"pricing".priced_legs', '"pricing".reference_prices']) assert.ok(asked[0]!.includes(table), table)
+  })
+
   it("reads everything from one dataset when there's no price dataset", async () => {
     const { query, queries } = fakeAmp({ legs: [], unlisted_legs: [], priced_legs: [], reference_prices: [] })
     await datasetReader(query, { baseDataset: "base", dataset: "pricetag" }).readWindow("0x" + ME, 1, 2)
