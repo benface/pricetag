@@ -487,6 +487,17 @@ describe("comparing only ever shows the rule", () => {
     assert.equal(((BigInt(row.a!) * 99n) / 100n - BigInt(row.b!)) ** 2n <= 1n, true, "the only difference is the 1%")
   })
 
+  it("tells the rates the chain's head when it compares at an earlier block", async () => {
+    const seen: [number, number | undefined][] = []
+    const readRates = async (_currency: unknown, wallet: { latest: { blockNum: number } }, options?: { chainHead?: number }) => {
+      seen.push([wallet.latest.blockNum, options?.chainHead])
+      return { byBlock: {}, latest: null }
+    }
+    const { status } = await compareWith({}, {}, { through: [HEAD - 1, HEAD], query: "?currency=CAD", readRates: readRates as never })
+    assert.equal(status, 200)
+    assert.deepEqual(seen, [[HEAD - 1, HEAD]])
+  })
+
   it("a balance read that fails for one rule's own reads changes nothing", async () => {
     const { status, body } = await compareWith({}, { readBalances: async () => null })
     assert.equal(status, 200)

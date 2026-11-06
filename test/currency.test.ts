@@ -8,9 +8,7 @@ import { CURRENCIES, atCurrentRate, currentRateMicros, foldPositions, formatMone
 import { describeConversion, describeEffect, explainContext, explainTarget, type ExplainTarget } from "../src/core/explain.ts"
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, portfolioOf } from "../src/core/portfolio.ts"
-import { createRates } from "../server/rates.ts"
-import { feedRounds, updateRounds, type RoundReader } from "../server/source.ts"
-import { decodeRound } from "@pricetag/sdk/internal"
+import { createRates, decodeRound, feedRounds, updateRounds, type RoundReader } from "@pricetag/sdk/internal"
 
 const E18 = 10n ** 18n
 const BUY_BLOCK = 100
@@ -550,6 +548,24 @@ describe("reading rates", () => {
     assert.deepEqual(asked.at(-1), [100, 1000])
     assert.ok(second?.byBlock[100])
     assert.equal(second?.latest?.blockNum, 1000)
+  })
+
+  it("goes by the chain's head for a wallet as of an earlier block", async () => {
+    const { asked, read } = scripted()
+    const ratesFor = createRates(read)
+    const wallet = walletAt(190, [100, 175])
+    await ratesFor("CAD", wallet, { chainHead: 200 })
+    assert.deepEqual(asked, [[100, 175, 190]])
+    await ratesFor("CAD", wallet, { chainHead: 200 })
+    assert.deepEqual(asked.at(-1), [175], "a recent transaction's block, as ever, but not 190 without a new block")
+    await ratesFor("CAD", wallet, { chainHead: 201 })
+    assert.deepEqual(asked.at(-1), [175, 190], "100 is settled, seen from the chain's head. The rest aren't yet.")
+    await ratesFor("CAD", wallet, { chainHead: 220 })
+    assert.deepEqual(asked.at(-1), [175, 190])
+    const settled = await ratesFor("CAD", wallet, { chainHead: 221 })
+    assert.equal(asked.length, 4, "past any reorg, so that read was the last")
+    assert.equal(settled?.latest?.blockNum, 190)
+    assert.deepEqual(Object.keys(settled?.latest ?? {}).sort(), ["blockNum", "round"])
   })
 
   it("reads nothing for USD", async () => {

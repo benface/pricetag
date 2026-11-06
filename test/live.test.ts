@@ -6,9 +6,8 @@ import { after, before, describe, it, type TestContext } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
 import { createPricetag, type WalletUpdate } from "@pricetag/sdk"
 import type { CostNote, RateRound } from "@pricetag/sdk/core"
-import { createQuery, createRangeStream, createWallets, datasetSource, followChain, parseSnapshotEnd, parseStreamRange, pricetagClient, type BlockMark, type ChainTick, type FollowConfig, type Query, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
+import { createQuery, createRangeStream, createRates, createWallets, datasetSource, followChain, parseSnapshotEnd, parseStreamRange, pricetagClient, type BlockMark, type ChainTick, type FollowConfig, type Query, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
-import { createRates } from "../server/rates.ts"
 import { fakeAmp, type Tables } from "./support/fake-amp.ts"
 
 const ME = "00000000000000000000000000000000000000aa"
@@ -539,6 +538,7 @@ function chainAt(block: number, tables: Tables, onQuery: (sql: string) => void =
   const hashOf = (n: number) => `${n >= chain.forkedFrom ? "b" : ""}${n}`.padStart(64, "0")
   const query: Query = async <T,>(sql: string) => {
     onQuery(sql)
+    if (sql.includes("AS round")) return fakeAmp(chain.tables).query<T>(sql)
     // A test's stream says hashes of its own, so only a test with no stream can check them.
     const asked = /\.blocks WHERE .*block_num IN \(([^)]*)\)/.exec(sql)
     if (asked) return (follow.stream === null ? asked[1]!.split(", ").filter((n) => Number(n) <= chain.block).map((n) => ({ block_num: n, hash: hashOf(Number(n)) })) : []) as T[]
@@ -597,7 +597,24 @@ describe("watchWallet", FOLLOWING, () => {
     assert.equal(update.positions.find((p) => p.asset === "ETH")?.values.qty, "7")
   })
 
-  it("replaces a reorg deeper than the blocks it would re-read anyway", async (t) => {
+  it("converts in the currency it's asked for, and reads again the rates a reorg replaced", async () => {
+    const rateAt100 = (update: WalletUpdate) => update.legs.find((leg) => leg.blockNum === 100)?.conversion?.rateMicros
+    const { chain, hand, client } = chainAt(1000, { legs: [creditAt(100, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "100" }, { ...REFERENCE, block_num: "1000" }], balances: balancesThrough(1100, "5"), rates: { 100: 80_000_000n, 1000: 80_000_000n } })
+    const updates = client.watchWallet(ADDRESS, { currency: "CAD" })
+    const first = (await updates.next()).value as WalletUpdate
+    assert.equal(first.currency, "CAD")
+    assert.equal(rateAt100(first), "1250000")
+
+    // Block 100 is long settled, so nothing but the reorg would read its rate again.
+    chain.tables = { ...chain.tables, rates: { 100: 50_000_000n, 1000: 80_000_000n } }
+    hand.send(blockOf(1000, 100, "0xnew"))
+    const update = (await updates.next()).value as WalletUpdate
+    assert.equal(update.reorgFrom, 100)
+    assert.equal(rateAt100(update), "2000000")
+    await updates.return()
+  })
+
+    it("replaces a reorg deeper than the blocks it would re-read anyway", async (t) => {
     const { chain, hand, client } = chainAt(150, { legs: [creditAt(100, "aa", "5"), creditAt(149, "dd", "1")], reference_prices: [{ ...REFERENCE, block_num: "100" }, { ...REFERENCE, block_num: "149" }], balances: balancesThrough(200, "6") })
     const updates = client.watchWallet(ADDRESS, { signal: t.signal })
     assert.deepEqual(legsOf((await updates.next()).value as WalletUpdate), ["100:0xaa:5", "149:0xdd:1"])
