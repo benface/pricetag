@@ -123,9 +123,9 @@ struct MacApp: App {
             SidebarCommands()
             CommandGroup(after: .toolbar) {
                 Divider()
-                ForEach(Array(AppSection.allCases.enumerated()), id: \.element) { index, section in
+                ForEach(AppSection.allCases) { section in
                     OpenSectionCommand(section: section, navigation: navigation)
-                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                        .keyboardShortcut(section.shortcut, modifiers: .command)
                 }
                 Divider()
                 Button(navigation.target == nil ? "Show Details" : "Hide Details") { navigation.toggleDetails() }

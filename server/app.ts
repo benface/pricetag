@@ -20,6 +20,7 @@ import { createDepositReader } from "./block.ts"
 import { warnOfNewAggregators, warnOfNewRateAggregators } from "./feeds.ts"
 import { createManifestReader, createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
 import { feedRounds, rawSource, resolvingSource, settledL1Fees, sharedReads, updateRounds, type SharedReads } from "./source.ts"
+import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 
 type Env = Record<string, string | undefined>
@@ -54,7 +55,7 @@ function pinned(dataset: string, hash: string | undefined): string {
   return `${dataset.split("@")[0]}@${hash}`
 }
 
-export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs; follow: FollowConfig; shared?: SharedReads } | null {
+export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs; follow: FollowConfig; shared?: SharedReads; approvals?: Approvals } | null {
   if (!query) return null
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
@@ -87,14 +88,18 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, pin),
         ruleSource(CAUTIOUS_RULE_ID, env.PRICETAG_FORK_DATASET!, env.PRICETAG_FORK_HASH, pinned(env.PRICETAG_FORK_DATASET!, env.PRICETAG_FORK_HASH)),
       ]
-      return { source: rules[0]!.source, rules, readRates, proofs, follow: followOf(followSql(pin)), shared }
+      const approvals = createApprovals(query.aliased({ pricetag: pin }), { baseDataset, dataset: { reference: "pricetag", name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
+      return { source: rules[0]!.source, rules, readRates, proofs, follow: followOf(followSql(pin)), shared, approvals }
     }
     const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network })
-    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET)), shared }
+    const approvals = createApprovals(query, { baseDataset, dataset: { reference: env.PRICETAG_DATASET, name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
+    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET)), shared, approvals }
   }
   const historyBlocks = env.PRICETAG_HISTORY_BLOCKS ? Number(env.PRICETAG_HISTORY_BLOCKS) : null
   if (historyBlocks !== null && (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0)) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
-  return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates, proofs, follow: followOf(followRawSql(baseDataset)) }
+  const source = rawSource(query, { baseDataset, network, historyBlocks })
+  const approvals = createApprovals(query, { baseDataset, dataset: null, network, historyFrom: (head) => source.historyFrom?.(head) ?? head })
+  return { source, readRates, proofs, follow: followOf(followRawSql(baseDataset)), approvals }
 }
 
 /** Each one is a wallet read, so this stays well under what the server keeps in memory. */
@@ -288,6 +293,19 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       sendJson(res, 200, { currency, rateMicros: currentRateMicros(await created.readRates(currency, { legs: [], latest }), latest.timestamp) })
     } catch (error) {
       sendAmpError(res, error)
+    }
+  }
+
+  /** What a wallet lets others spend, checked at the head. Demo wallets have made-up ones, like the rest of their history. */
+  async function answerApprovals(address: string, res: ServerResponse) {
+    const demo = address === "demo" || address === DEMO_ADDRESS ? DEMO_WALLET : demoWallet(address)
+    if (demo) return sendJson(res, 200, demoApprovals(demo))
+    if (!isAddress(address)) return sendJson(res, 400, { error: "That isn't a Base address." })
+    if (!created?.approvals) return sendJson(res, 503, { error: "No data source is set up, so only the demo wallet is available." })
+    try {
+      sendJson(res, 200, await created.approvals.read(address.toLowerCase(), await pollHead()))
+    } catch (error) {
+      sendAmpError(res, error, "Couldn't read this wallet's approvals.")
     }
   }
 
@@ -607,6 +625,12 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const currency = parseCurrency(params.get("currency"))
     if (!currency) {
       sendJson(res, 400, { error: "That currency isn't supported." })
+      return true
+    }
+
+    const approvalsMatch = /^\/api\/approvals\/([^/]+)$/.exec(path)
+    if (approvalsMatch) {
+      await answerApprovals(approvalsMatch[1] as string, res)
       return true
     }
 

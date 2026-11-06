@@ -1,3 +1,4 @@
+import Synchronization
 import Foundation
 import Testing
 @testable import PricetagKit
@@ -154,4 +155,43 @@ import Testing
     #expect(try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: json)).isEmpty)
     json["unreadAssets"] = ["ETH"]
     #expect(try !JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: json)).isEmpty)
+}
+
+@Suite struct ApprovalsModelTests {
+    @Test func readsWhatTheServerSends() throws {
+        let approvals = try resource("demo-approvals", as: WalletApprovals.self)
+        #expect(approvals.mode == .demo)
+        #expect(approvals.approvals.count == 4)
+        #expect(approvals.unlimitedCount == 3)
+        #expect(approvals.approvals.contains { $0.kind == .permit2 && $0.expiry != nil && $0.amountText == "250 USDC" })
+        #expect(approvals.approvals.allSatisfy { $0.grantedDate != nil })
+    }
+
+    @MainActor @Test func aFailedRefreshKeepsTheListButSaysItsOld() async throws {
+        let approvals = try resource("demo-approvals", as: WalletApprovals.self)
+        let fails = Mutex(false)
+        let model = ApprovalsModel(address: approvals.address) { _ in
+            if fails.withLock({ $0 }) { throw FetchError.unreachable }
+            return approvals
+        }
+        await model.load()
+        #expect(model.refreshFailure == nil)
+        fails.withLock { $0 = true }
+        await model.load()
+        #expect(model.approvals == approvals)
+        #expect(model.refreshFailure == "Can't reach the server.")
+        fails.withLock { $0 = false }
+        await model.load()
+        #expect(model.refreshFailure == nil)
+    }
+
+    @MainActor @Test func neverShowsAnotherWalletsList() async throws {
+        let approvals = try resource("demo-approvals", as: WalletApprovals.self)
+        let model = ApprovalsModel(address: "0x00000000000000000000000000000000000a11ce") { _ in approvals }
+        await model.load()
+        #expect(model.approvals == nil)
+        let matching = ApprovalsModel(address: approvals.address) { _ in approvals }
+        await matching.load()
+        #expect(matching.approvals == approvals)
+    }
 }

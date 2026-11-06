@@ -253,6 +253,8 @@ struct MainWindow: View {
             } else {
                 TaxReportView(store: store, wallets: store.walletList(hotWallet: hotWallet).pickable, readAddress: AddressText.readAnywhere, onResolve: { navigation.resolve(in: $0) }, onOpen: { navigation.explain($0) })
             }
+        case .security:
+            SecurityPage(store: store, hotWallet: hotWallet, navigation: navigation)
         }
     }
 

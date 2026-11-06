@@ -21,6 +21,8 @@ public enum Base {
     public static let chainID: UInt64 = 8453
     public static let publicRPC = URL(string: "https://mainnet.base.org")!
     public static let eth = Token(contract: nil, symbol: "ETH", decimals: 18, asset: "ETH")
+    /// Uniswap's, at the same address on every chain. Revoking only ever calls its `lockdown`.
+    public static let permit2 = EthereumAddress("0x000000000022D473030F116dDEE9F6B43aC78BA3")!
 
     /// Nothing else is ever called. Unknown tokens can be malicious, and a transaction to one could do anything.
     public static let tokens: [Token] = [
