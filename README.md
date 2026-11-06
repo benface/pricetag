@@ -24,6 +24,7 @@ pnpm check:mac   # the Swift tests, the app's build, and the shared packages' bu
 pnpm check:keychain  # the real Secure Enclave and Keychain, with a throwaway key, from a signed debug build
 pnpm check:anvil     # real signing and sweeps against a local fork of Base, with no real funds. It needs Foundry
 pnpm check:extension # the browser extension on a real site, through to a local fork, with no real funds. It needs Foundry and a Chromium that can load extensions
+pnpm check:tax-answer # a tax report's buttons open the right wallet's questions and come back, in a headless Chromium with made-up wallets
 pnpm mac:shot    # screenshots from fixtures that never open a window you'd see or take focus. See macos/TESTING.md
 ```
 
