@@ -2,8 +2,8 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { OldestFirstTooBigError, limitOldestFirst, currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, WalletTooBigError, WalletsBusyError, createL1FeeReader, createQuery, createRangeStream, createRowBudget, createWallets, describeError, followChain, followRawSql, followSql, oldestFirstLegsThatFit, readBlockHashes, readHeadMark, rowsThatFit, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
+import { OldestFirstTooBigError, WalletsTooBigError, limitFolds, currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { DEFAULT_RPC_URL, WalletTooBigError, WalletsBusyError, createL1FeeReader, createQuery, createRangeStream, createRowBudget, createWallets, describeError, followChain, followRawSql, followSql, foldBytesThatFit, readBlockHashes, readHeadMark, rowsThatFit, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -160,7 +160,8 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 /** Query errors can quote our SQL or the endpoint. The browser gets a fixed message, and the detail stays in the server log. */
 function sendAmpError(res: ServerResponse, error: unknown, message = "Couldn't read this wallet's data.") {
   if (error instanceof WalletTooBigError) return sendJson(res, 413, { error: "This wallet has too much history for this server to read, so there are no numbers to show for it." })
-  if (error instanceof OldestFirstTooBigError) return sendJson(res, 413, { error: "This wallet has too much history to work out by oldest first on this server. Average cost still works." })
+  if (error instanceof OldestFirstTooBigError) return sendJson(res, 413, { error: "There's too much history here to work out by oldest first on this server. Average cost still works." })
+  if (error instanceof WalletsTooBigError) return sendJson(res, 413, { error: "These wallets have too much history to add up on this server. Each one can still be read on its own." })
   if (error instanceof WalletsBusyError) return sendJson(res, 429, { error: "This server is busy reading other very large wallets. Try again in a minute." })
   console.error("Amp query failed:", describeError(error))
   sendJson(res, 502, { error: message })
@@ -221,7 +222,7 @@ export type ApiOptions = {
 
 export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env), { clientIp = () => null, maxWallets }: ApiOptions = {}) {
   const source = created?.source ?? null
-  limitOldestFirst(oldestFirstLegsThatFit())
+  limitFolds(foldBytesThatFit())
 
   let head: Head | null = null
   const subscribers = new Set<ServerResponse>()
@@ -498,8 +499,10 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     }
     if (action === "preview") return sendJson(res, 200, { previews: previewCombined(read, method, candidates as Book[], unread) })
     if (action === "export") {
+      // Worked out first, because it can be refused, and a refusal can't follow a 200.
+      const csv = exportCombined(read, method, book)
       res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" })
-      res.end(exportCombined(read, method, book))
+      res.end(csv)
       return
     }
     if (target) {
@@ -742,7 +745,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return await route(req, res)
     } catch (error) {
       // Folds aren't all inside a read's `try`, and every one of them can ask for this.
-      if (!(error instanceof OldestFirstTooBigError)) throw error
+      if (!(error instanceof OldestFirstTooBigError || error instanceof WalletsTooBigError)) throw error
       sendAmpError(res, error)
       return true
     }

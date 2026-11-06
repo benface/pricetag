@@ -101,7 +101,7 @@ export function unreadAssets(positions: readonly Position[], { unreadBalances }:
 /** The assets `pnlOverTime` has to leave out. */
 export const unconfirmedAssets = (positions: readonly Position[], unread: readonly string[] = []) => new Set([...positions.filter(isUnconfirmed).map((p) => p.asset), ...unread])
 
-/** Oldest first holds every lot at every step, so its memory grows with the square of the history (WORK-559). Average has no such limit. */
+/** Oldest first holds every lot at every step, so its memory grows with the lots times the steps (WORK-559). Average has no such limit. */
 export class OldestFirstTooBigError extends Error {
   constructor() {
     super("This history is too long to work out by oldest first in this much memory. Average cost still works.")
@@ -109,14 +109,68 @@ export class OldestFirstTooBigError extends Error {
   }
 }
 
+/** Wallets that each fit in memory, but not all at once. Each one can still be read on its own. */
+export class WalletsTooBigError extends Error {
+  constructor() {
+    super("These wallets have too much history to add up in this much memory.")
+    this.name = "WalletsTooBigError"
+  }
+}
+
 /** No limit in a browser, where running out only costs that one tab. A process that others rely on sets one. */
-let maxOldestFirstLegs = Number.POSITIVE_INFINITY
-export function limitOldestFirst(legs: number) {
-  maxOldestFirstLegs = legs
+let foldBytes = Number.POSITIVE_INFINITY
+export function limitFolds(bytes: number) {
+  foldBytes = bytes
+}
+
+// Measured through the server's API on a 640 MB heap (WORK-570).
+/** What a leg costs at the peak of reading and folding it, the same as a row in the budget wallets are read under. */
+const BYTES_PER_LEG = 10_000
+/** What each wallet beyond the first adds to every leg, because each fold looks through all of them: 21 wallets of 1,000 legs fit, and of 1,400 didn't. */
+const BYTES_PER_LEG_PER_OTHER_WALLET = 1_000
+/** 8,000 incoming transfers fit and 9,000 didn't, which is about 12 bytes a lot. This leaves room for wallets kept in memory too. */
+const BYTES_PER_LOT = 20
+
+type FoldedLeg = Pick<PricedLeg, "asset" | "delta">
+
+/** What an oldest-first fold of these legs holds: the lots open after each leg, added up. It takes what leaves from the oldest lots, the way the fold does. */
+function oldestFirstLots(legs: readonly FoldedLeg[]): number {
+  const open = new Map<string, { units: bigint[]; first: number }>()
+  let lots = 0
+  for (const leg of legs) {
+    const asset = open.get(leg.asset) ?? { units: [], first: 0 }
+    open.set(leg.asset, asset)
+    const delta = BigInt(leg.delta)
+    if (delta > 0n) asset.units.push(delta)
+    for (let left = -delta; left > 0n && asset.first < asset.units.length; ) {
+      const lot = asset.units[asset.first] as bigint
+      asset.units[asset.first] = lot - left
+      if (lot <= left) asset.first++
+      left -= lot
+    }
+    lots += asset.units.length - asset.first
+  }
+  return lots
+}
+
+/** Oldest first's share of a fold: every lot at every step. Each fold is still held when the next starts, and a wallet's costs can look through another's whole history on top of that, so more than one wallet counts the biggest twice. */
+function oldestFirstBytes(histories: readonly (readonly FoldedLeg[])[]): number {
+  const lots = histories.map(oldestFirstLots)
+  return (lots.reduce((sum, count) => sum + count, 0) + (lots.length > 1 ? Math.max(...lots) : 0)) * BYTES_PER_LOT
+}
+
+/** Throws unless folding all of these wallets' histories and keeping the results fits, before any of it is allocated. */
+export function assertFoldsFit(histories: readonly (readonly FoldedLeg[])[], method: Method) {
+  if (foldBytes === Number.POSITIVE_INFINITY) return
+  const legs = histories.reduce((sum, history) => sum + history.length, 0)
+  const bytes = legs * (BYTES_PER_LEG + BYTES_PER_LEG_PER_OTHER_WALLET * (histories.length - 1))
+  // One wallet's legs are what the budget it was read under already counted.
+  if (histories.length > 1 && bytes > foldBytes) throw new WalletsTooBigError()
+  if (method === "fifo" && bytes + oldestFirstBytes(histories) > foldBytes) throw new OldestFirstTooBigError()
 }
 
 export function foldPositions(legs: readonly PricedLeg[], method: Method, prices: LatestPrices, onchain?: Onchain): Position[] {
-  if (method === "fifo" && legs.length > maxOldestFirstLegs) throw new OldestFirstTooBigError()
+  if (method === "fifo") assertFoldsFit([legs], method)
   const positions = new Map<string, { state: PositionState; effects: LegEffect[]; decimals: number }>()
   for (const leg of legs) {
     const position = positions.get(leg.asset) ?? { state: emptyPosition(method, leg.decimals), effects: [], decimals: leg.decimals }

@@ -35,7 +35,7 @@ public struct FeedSummary: Equatable, Sendable {
         case .ampUnavailable: (text, isWarning) = ("Prices offline", true)
         case .noAmpConfigured: (text, isWarning) = ("No prices", true)
         case .rejected: (text, isWarning) = ("Can't read", true)
-        case .tooBig: (text, isWarning) = ("Too big to read", true)
+        case .tooBig: (text, isWarning) = ("Too much history", true)
         case .live:
             guard let portfolio else {
                 (text, isWarning) = ("Reading…", false)
@@ -122,9 +122,9 @@ extension FeedState {
             next = "Try again. If it keeps happening, restart the price service."
             detail = "The price service said: \(message)"
         case .tooBig(let message):
-            title = "This Wallet Is Too Big to Read"
-            what = "This wallet has more history than the price service can hold, so it has no numbers to show rather than incomplete ones."
-            next = "Trying again won't change this. Your other wallets aren't affected."
+            title = "Too Much History to Read"
+            what = "This is more history than the price service can hold at once, so there are no numbers to show rather than incomplete ones."
+            next = "Trying again won't change this."
             detail = "The price service said: \(message)"
         }
         let stale = portfolio.flatMap { $0.progress.started ? Wording.stale(lastUpdate: $0.latest.date.map(Format.time) ?? $0.latest.timestamp) : nil }
@@ -149,7 +149,7 @@ extension FeedState {
         case .ampUnavailable: "Prices unavailable for now"
         case .noAmpConfigured: "No price data set up"
         case .rejected: "Couldn't read this wallet"
-        case .tooBig: "Wallet is too big to read"
+        case .tooBig: "Too much history to read"
         }
     }
 

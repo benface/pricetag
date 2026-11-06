@@ -6,11 +6,11 @@ import { ORACLE_TABLES, SWAP_TABLES, WALLET_TABLES, datasetReader, datasetSource
 import type { Method } from "./fold.ts"
 import { answerToMicros, buildPricedLegs, type LegRow, type PricedLeg, type PriceSource, type Reference } from "./legs.ts"
 import { followChain, type FollowConfig, type Via } from "./live.ts"
-import { limitOldestFirst, latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
+import { limitFolds, latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
 import { createL1FeeReader, type ReadL1Fees } from "./receipts.ts"
 import { ASSETS, TOKENS, isAddress, normalizeAddress, tokenByAddress, type Token } from "./tokens.ts"
 import { describeMissing, foldWallet, hasStarted, type FoldedWallet, type WalletData } from "./wallet.ts"
-import { createRowBudget, oldestFirstLegsThatFit, rowsThatFit } from "./memory.ts"
+import { createRowBudget, foldBytesThatFit, rowsThatFit } from "./memory.ts"
 import { createWallets } from "./wallets.ts"
 
 export type PricetagConfig = {
@@ -145,7 +145,7 @@ function findToken(token: string): Token {
 
 export function createPricetag(config: PricetagConfig) {
   if (!config.url) throw new Error("Pricetag needs Amp's query URL")
-  limitOldestFirst(oldestFirstLegsThatFit())
+  limitFolds(foldBytesThatFit())
   const { timeoutMs, logger, rpcUrl } = config
   const stream = createRangeStream(config.url, config.token || undefined, (config.network ?? DEFAULT_NETWORK).replaceAll("_", "-"))
   return pricetagClient(createQuery(config.url, config.token || undefined, { timeoutMs, logger }), { ...config, stream, readL1Fees: rpcUrl ? createL1FeeReader(rpcUrl, fetch, undefined, logger) : undefined })

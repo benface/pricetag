@@ -645,7 +645,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(FeedState.ampUnavailable("Couldn't read from Amp.").problem(serverURL: server, portfolio: nil)?.detail?.contains("Couldn't read from Amp.") == true)
         #expect(FeedState.rejected("Nope.").problem(serverURL: server, portfolio: nil)?.detail?.contains("Nope.") == true)
         let tooBig = try #require(FeedState.tooBig("Too much history.").problem(serverURL: server, portfolio: nil))
-        #expect(tooBig.title == "This Wallet Is Too Big to Read")
+        #expect(tooBig.title == "Too Much History to Read")
         #expect(tooBig.message.contains("Trying again won't change this."))
         #expect(tooBig.detail?.contains("Too much history.") == true)
     }

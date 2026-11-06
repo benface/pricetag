@@ -30,11 +30,8 @@ const MIN_ROWS = 1_000
 /** The most rows of wallet history this process can hold at once. */
 export const rowsThatFit = (heapBytes = getHeapStatistics().heap_size_limit) => Math.max(MIN_ROWS, Math.floor((heapBytes - HEAP_FOR_THE_REST) / BYTES_PER_ROW))
 
-/** Measured: 19,000 legs took 475 MB, and 27,000 ran a 640 MB heap out. So 2 bytes per leg squared leaves about a third to spare (WORK-570). */
-const BYTES_PER_LEG_SQUARED = 2
-
-/** The most legs an oldest-first fold can take. Its memory grows with their square, so this is far fewer than `rowsThatFit`. */
-export const oldestFirstLegsThatFit = (heapBytes = getHeapStatistics().heap_size_limit) => Math.floor(Math.sqrt(Math.max(heapBytes - HEAP_FOR_THE_REST, 0) / BYTES_PER_LEG_SQUARED))
+/** How much of the heap folding can take, which `limitFolds` shares out between legs and lots. */
+export const foldBytesThatFit = (heapBytes = getHeapStatistics().heap_size_limit) => Math.max(heapBytes - HEAP_FOR_THE_REST, 0)
 
 /** A store of wallets' rows that can give some up. A wallet being read isn't counted, because its read reserves its rows. */
 export type RowHolder = { heldRows(): number; evictOldest(): boolean }

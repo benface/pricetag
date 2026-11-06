@@ -2,10 +2,11 @@ import assert from "node:assert/strict"
 import { after, before, describe, it } from "node:test"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
-import { ASSETS, ETH_ADDRESS, limitOldestFirst, type LegRow } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, WalletsTooBigError, assertFoldsFit, limitFolds, type LegRow } from "@pricetag/sdk/core"
 import { OldestFirstTooBigError, WalletTooBigError, buildPortfolio } from "@pricetag/sdk"
-import { WalletsBusyError, createRowBudget, createWallets, oldestFirstLegsThatFit, pricetagClient, rowsThatFit, type Query, type Source } from "@pricetag/sdk/internal"
+import { WalletsBusyError, createRowBudget, createWallets, foldBytesThatFit, pricetagClient, rowsThatFit, type Query, type Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
+import { createHandler } from "../server/http.ts"
 import { rawSource, sharedReads } from "../server/source.ts"
 
 const ME = "0x00000000000000000000000000000000000000aa"
@@ -39,12 +40,12 @@ function fakeSource(rows: Record<string, LegRow[]>): Source & { reads: string[] 
 const walletsOn = (source: Source, maxRows: number, head = HEAD) => createWallets(source, async () => head, async () => new Map(), { warn() {} }, { budget: createRowBudget(maxRows) })
 
 describe("how much history fits", () => {
-  it("grows with the heap, and leaves oldest first far less", () => {
+  it("grows with the heap", () => {
     assert.equal(rowsThatFit(640 * MB), 44_000)
     assert.equal(rowsThatFit(4_400 * MB), 420_000)
     assert.equal(rowsThatFit(100 * MB), 1_000)
-    assert.equal(oldestFirstLegsThatFit(640 * MB), 14_832)
-    assert.equal(oldestFirstLegsThatFit(100 * MB), 0)
+    assert.equal(foldBytesThatFit(640 * MB), 440 * MB)
+    assert.equal(foldBytesThatFit(100 * MB), 0)
   })
 })
 
@@ -263,15 +264,31 @@ describe("the server's other reads of a wallet", () => {
 })
 
 describe("oldest first on a long history", () => {
-  const leg = (i: number) => ({ id: `${i}`, asset: "ETH", delta: "1", decimals: 18, kind: "transfer", priceMicros: "1", priceSource: "oracle", priceNote: null, costMicros: "1", proceedsMicros: null, costLabel: "paid", blockNum: i, timestamp: HEAD.timestamp, txHash: `0x${i}`, txIndex: 0, parts: [] }) as never
-  after(() => limitOldestFirst(Number.POSITIVE_INFINITY))
+  const leg = (i: number, delta = "1") => ({ id: `${i}`, asset: "ETH", delta, decimals: 18, kind: "transfer", priceMicros: "1", priceSource: "oracle", priceNote: null, costMicros: "1", proceedsMicros: null, costLabel: "paid", blockNum: i, timestamp: HEAD.timestamp, txHash: `0x${i}`, txIndex: 0, parts: [] }) as never
+  after(() => limitFolds(Number.POSITIVE_INFINITY))
 
   it("is refused past the limit, and average cost isn't", () => {
-    limitOldestFirst(2)
+    limitFolds(25_000)
     const legs = [leg(1), leg(2), leg(3)]
     assert.throws(() => buildPortfolio(legs, "fifo", {}), OldestFirstTooBigError)
     assert.equal(buildPortfolio(legs, "average", {}).method, "average")
     assert.equal(buildPortfolio(legs.slice(0, 2), "fifo", {}).method, "fifo")
+  })
+
+  it("counts the lots that stay open, so the same number of legs can fit when what arrives also leaves", () => {
+    limitFolds(60_200)
+    const incoming = Array.from({ length: 6 }, (_, i) => leg(i))
+    const inAndOut = Array.from({ length: 6 }, (_, i) => leg(i, i % 2 === 0 ? "1" : "-1"))
+    assert.throws(() => buildPortfolio(incoming, "fifo", {}), OldestFirstTooBigError)
+    assert.equal(buildPortfolio(inAndOut, "fifo", {}).method, "fifo")
+  })
+
+  it("adds wallets up, and leaves each less room the more of them there are", () => {
+    const history = Array.from({ length: 10 }, (_, i) => leg(i))
+    limitFolds(220_000)
+    assertFoldsFit([history, history], "average")
+    assert.throws(() => assertFoldsFit([history, history], "fifo"), OldestFirstTooBigError)
+    assert.throws(() => assertFoldsFit([history, history, history], "average"), WalletsTooBigError)
   })
 })
 
@@ -286,7 +303,7 @@ describe("what the API answers", () => {
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   })
   after(() => {
-    limitOldestFirst(Number.POSITIVE_INFINITY)
+    limitFolds(Number.POSITIVE_INFINITY)
     server.close()
   })
   const post = (path: string, body: unknown) => fetch(`${base}/api/portfolio/${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
@@ -308,12 +325,62 @@ describe("what the API answers", () => {
   })
 
   it("says oldest first is too much, and reads the same wallet by average", async () => {
-    limitOldestFirst(2)
+    limitFolds(100_500)
     const refused = await fetch(`${base}/api/portfolio/${OTHER}?method=fifo`)
     assert.equal(refused.status, 413)
     assert.match(((await refused.json()) as { error: string }).error, /oldest first.*Average cost still works/)
     assert.equal((await post(OTHER, { method: "fifo" })).status, 413)
     assert.equal((await post("all", { method: "fifo", linked: [OTHER] })).status, 413)
     assert.equal((await fetch(`${base}/api/portfolio/${OTHER}`)).status, 200)
+  })
+})
+
+describe("wallets that each fit, added up", () => {
+  const A = ME
+  const B = OTHER
+  const source = fakeSource({ [A]: rowsOf(10, A), [B]: rowsOf(10, B) })
+  let server: Server
+  let base: string
+  before(async () => {
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }, null)
+    server = createServer(createHandler(api, null))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+  after(() => {
+    limitFolds(Number.POSITIVE_INFINITY)
+    server.close()
+  })
+  const post = (path: string, body: unknown) => fetch(`${base}/api/portfolio/${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+  const both = { linked: [A, B] }
+  const everyWay = ["all", "all/export", "all/preview", "all/explain?metric=pnl"]
+  const body = (way: string, method: string) => ({ method, ...both, ...(way === "all/preview" ? { candidates: [{ costs: {}, senders: {} }] } : {}) })
+  const refused = async (response: Response, why: RegExp) => {
+    assert.equal(response.status, 413)
+    assert.match(response.headers.get("content-type") ?? "", /json/)
+    assert.match(((await response.json()) as { error: string }).error, why)
+  }
+
+  it("refuses oldest first every way of asking, while average and each wallet on its own still work", async () => {
+    limitFolds(222_000)
+    await post("all/wallets", both)
+    for (const way of everyWay) await refused(await post(way, body(way, "fifo")), /oldest first.*Average cost still works/)
+    assert.equal((await post("all", body("all", "average"))).status, 200)
+    assert.equal((await post(A, { method: "fifo" })).status, 200)
+    assert.equal((await post(B, { method: "fifo" })).status, 200)
+  })
+
+  it("refuses wallets too big together by any method, and says each can still be read", async () => {
+    limitFolds(219_000)
+    await post("all/wallets", both)
+    for (const way of everyWay) await refused(await post(way, body(way, "average")), /too much history to add up.*on its own/)
+    assert.equal((await post(A, { method: "average" })).status, 200)
+  })
+
+  it("answers an export it can do with a CSV", async () => {
+    limitFolds(Number.POSITIVE_INFINITY)
+    const response = await post("all/export", body("all/export", "fifo"))
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get("content-type") ?? "", /csv/)
   })
 })
