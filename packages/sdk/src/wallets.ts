@@ -3,7 +3,7 @@
 
 import { describeError, type Logger } from "./amp.ts"
 import { LAST_2S_BLOCK, blockBefore, msBetweenBlocks, priceSampleBlocks, timestampOfBlock } from "./chain.ts"
-import { answerToMicros, buildPricedLegs, creditUnseenEth, derivePricedRows, isUnwrapClaim, oneWaySendBalanceBlocks, payerOf, settleUnwraps, unseenEthSearchBlocks, unwrapBalanceBlocks, type EthPayer, type GasUnknownTx, type LegRow, type PayoutTx, type PricedRow, type Reference } from "./legs.ts"
+import { answerToMicros, buildPricedLegs, creditUnseenEth, derivePricedRows, isUnwrapClaim, oneWaySendBalanceBlocks, payerOf, sentWithNoFee, settleUnwraps, unseenEthSearchBlocks, unwrapBalanceBlocks, type EthPayer, type GasUnknownTx, type LegRow, type PayoutTx, type PricedRow, type Reference } from "./legs.ts"
 import { MARKET_MAX_AGE_MS, markNeeds, marketPrice, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
 import type { CostNote } from "./notes.ts"
 import { feedPrice, foldPositions, latestPrices, type FeedRound, type Head, type LatestPrices } from "./portfolio.ts"
@@ -593,6 +593,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       if (unread.length > 0 && source.readPayoutTxs) {
         const txs = await source.readPayoutTxs(address, unread.map((row) => row.block_num))
         for (const { block_num, amount } of unread) wallet.ethPayers.set(block_num, payerOf(txs.filter((tx) => tx.blockNum === block_num), address, amount))
+        for (const { tx_hash, block_num } of sentWithNoFee(txs, wallet.rows, address)) wallet.gasUnknown.set(tx_hash, block_num)
       }
     } catch (error) {
       logger.warn(`Couldn't read what's behind ETH that arrived unseen: ${describeError(error)}`)
@@ -781,7 +782,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
    * busy wallet each one takes seconds. Only the last one is kept, because it's about as big as the wallet.
    */
   function currentOf(address: string, wallet: Cached) {
-    const stamp = `${wallet.ethBalances.size}:${wallet.ethPayers.size}:${wallet.references.size}:${priceRevision}`
+    const stamp = `${wallet.ethBalances.size}:${wallet.ethPayers.size}:${wallet.gasUnknown.size}:${wallet.references.size}:${priceRevision}`
     if (last?.wallet !== wallet || last.stamp !== stamp) last = { wallet, stamp, response: responseOf(address, wallet) }
     return last
   }

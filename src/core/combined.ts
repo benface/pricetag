@@ -92,6 +92,7 @@ function combinedCheck(checks: readonly (Reconciliation | null)[]): Reconciliati
     computedQty: sum(counted.map((check) => check.computedQty)),
     actualQty: sum(counted.map((check) => check.actualQty)),
     differenceQty: sum(counted.map((check) => check.differenceQty)),
+    ...(counted.some((check) => check.unrecordedQty) ? { unrecordedQty: sum(counted.map((check) => check.unrecordedQty ?? "0")) } : {}),
     ...(counted.some((check) => check.unseenEth) ? { unseenEth: counted.flatMap((check) => check.unseenEth ?? []) } : {}),
   }
 }

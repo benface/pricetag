@@ -92,6 +92,8 @@ public struct Reconciliation: Codable, Sendable, Equatable {
     /// Actual minus computed.
     public let differenceQty: String?
     public let reason: String?
+    /// How much of what the legs add up to has no transaction behind it, only a balance that rose. A match doesn't confirm this amount.
+    public let unrecordedQty: String?
     /// On ETH that doesn't match: the transactions most likely behind it.
     public let unseenEth: [UnseenEth]?
     /// On a balance that couldn't be checked: whether what's shown is still what the chain last said it holds. Without this, its value is only a best estimate.

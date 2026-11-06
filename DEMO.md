@@ -22,6 +22,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 **Don't claim:**
 - "Every token." It's 10 assets. The rest are listed with no price.
 - "Verify proves the SQL or the chain." It doesn't show that the header is on Base's real chain, that the SQL ran correctly, or that Chainlink's number is right. Say so, because it's more convincing.
+- "Every fee is checked." The check is on balances, to the smallest unit. ETH found from a balance can't fail it, and the app says how much of that there is (WORK-612).
 - "Audited." The hot wallet is an unreviewed build, for small funds only.
 - "Tested on a real Ledger or Keystone," until the rehearsal has done it.
 

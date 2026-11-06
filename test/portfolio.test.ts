@@ -839,6 +839,7 @@ describe("wording", () => {
     finishNotes: FINISH_METERS.map((meter) => ({ ...meter, text: wording.finishNote(meter) })),
     problems: READ_FAILURES.map((failure) => ({ ...failure, ...wording.feedProblem(failure, "https://prices.example.com") })),
     unseenEth: UNSEEN_ETH_CASES.map((unseen) => ({ unseen, text: wording.unseenEthCause(unseen) })),
+    unrecorded: wording.unrecordedSentence("2061830000000000", 18, "ETH"),
     manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
   }
 

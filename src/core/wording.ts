@@ -69,6 +69,9 @@ export const ABOUT_THIS_DATA = "What this covers"
 export const MARKET_ESTIMATES = "Some prices are estimates, from the market."
 export const PNL_INCOMPLETE = "PnL isn't complete"
 export const ALL_BALANCES_MATCH = "Every balance matches the chain."
+
+/** Said wherever a match is, because this part of it can't fail. */
+export const unrecordedSentence = (qty: string, decimals: number, asset: string) => `${formatAmount(qty, decimals)} ${asset} arrived with no transaction to show for it, so that part comes from the balance, and the match doesn't confirm it.`
 export const NOTHING_TO_CHART = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
 export const UNPRICED_FEES = "Some network fees had no price at the time, and aren't in this total."
 export const READING = "Reading this wallet. The first read can take a minute."
