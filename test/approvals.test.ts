@@ -101,7 +101,7 @@ describe("what an approval still allows", () => {
   it("names tracked tokens and well-known spenders, and nothing else", () => {
     const limited = viewOf({ kind: "token", token: USDC_ADDRESS, spender: PERMIT2, grant: null, amount: 12_500_000n, expiresAt: null }, false)
     assert.equal(limited.amountText, "12.5 USDC")
-    assert.equal(limited.spenderName, "Permit2, by Uniswap")
+    assert.equal(limited.spenderName, "Uniswap Permit2")
     assert.equal(limited.unlimited, false)
     assert.equal(limited.found, "known-spender")
     const stranger = viewOf({ kind: "token", token: COLLECTION, spender: SPENDER, grant: null, amount: 2n ** 200n, expiresAt: null }, true)

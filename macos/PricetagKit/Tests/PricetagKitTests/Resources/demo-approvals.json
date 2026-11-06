@@ -55,7 +55,7 @@
       "symbol": "USDC",
       "decimals": 6,
       "spender": "0x000000000022d473030f116ddee9f6b43ac78ba3",
-      "spenderName": "Permit2, by Uniswap",
+      "spenderName": "Uniswap Permit2",
       "amount": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
       "amountText": null,
       "unlimited": true,
