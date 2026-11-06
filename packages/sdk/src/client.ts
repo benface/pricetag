@@ -28,6 +28,8 @@ export type PricetagConfig = {
    * anything, and `getLegs` can't confirm a swap paid out in unwrapped ETH. Both say so.
    */
   rpcUrl?: string | undefined
+  /** Calls a second `rpcUrl` allows, of which L1 fees use 40%. It defaults to 25, for the public RPC. Raise it for a dedicated one, so a very busy wallet can catch up. */
+  rpcRateLimit?: number | undefined
   /** The network name Amp knows the chain by, as in `rpc.base_mainnet.eth_call`, which reads onchain balances. */
   network?: string | undefined
   /** How long one query can take, in ms. It defaults to 60 s. Queries still run one at a time, because a hosted Amp is shared. */
@@ -139,9 +141,9 @@ function findToken(token: string): Token {
 
 export function createPricetag(config: PricetagConfig) {
   if (!config.url) throw new Error("Pricetag needs Amp's query URL")
-  const { timeoutMs, logger, rpcUrl } = config
+  const { timeoutMs, logger, rpcUrl, rpcRateLimit } = config
   const stream = createRangeStream(config.url, config.token || undefined, (config.network ?? DEFAULT_NETWORK).replaceAll("_", "-"))
-  return pricetagClient(createQuery(config.url, config.token || undefined, { timeoutMs, logger }), { ...config, stream, readL1Fees: rpcUrl ? createL1FeeReader(rpcUrl, fetch, undefined, logger) : undefined })
+  return pricetagClient(createQuery(config.url, config.token || undefined, { timeoutMs, logger }), { ...config, stream, readL1Fees: rpcUrl ? createL1FeeReader(rpcUrl, fetch, undefined, logger, rpcRateLimit) : undefined })
 }
 
 type ClientConfig = Pick<PricetagConfig, "dataset" | "baseDataset" | "startBlock" | "network" | "logger"> & {
@@ -158,7 +160,7 @@ export function pricetagClient(query: Query, config: ClientConfig) {
   if (startBlock !== undefined && !isBlock(startBlock)) throw new Error(`Bad start block: ${startBlock}. It's the block number the dataset starts from.`)
   const baseDataset = config.baseDataset ?? "edgeandnode/base_mainnet@0.0.2"
   const source = datasetSource(query, { dataset: config.dataset, baseDataset, startBlock: startBlock ?? null, network: config.network ?? DEFAULT_NETWORK })
-  const reader = datasetReader(query, { dataset: config.dataset, baseDataset })
+  const reader = datasetReader(query, { dataset: config.dataset, baseDataset, startBlock })
 
   // Read just before a wallet is. A wallet's history stays in memory between calls, so each call only reads what's new.
   let chainHead: Head | null = null
@@ -229,7 +231,7 @@ export function pricetagClient(query: Query, config: ClientConfig) {
       resolveRange({ from })
       const stop = new AbortController()
       const stopping = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal
-      const ticks = followChain({ stream: config.stream ?? null, sql: followSql(config.dataset), readMark: (after) => readHeadMark(query, baseDataset, after), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks), logger, ...config.follow }, stopping)
+      const ticks = followChain({ stream: config.stream ?? null, sql: followSql(config.dataset), readMark: (after) => readHeadMark(query, baseDataset, after ?? startBlock ?? null), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks), logger, ...config.follow }, stopping)
       // Following starts before the first read, which can take a while, so no block or reorg goes by unseen.
       let next = ticks.next()
       let via: Via | null = null

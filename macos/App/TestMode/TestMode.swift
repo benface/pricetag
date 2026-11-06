@@ -106,8 +106,10 @@ enum TestMode {
         print("WINDOW \(window.windowNumber) \(ProcessInfo.processInfo.processIdentifier)")
         fflush(stdout)
         if let play = screen.play, let cue = value(after: "--play-when") {
-            // Once `shot.sh` has started capturing, which takes it a while the first time.
+            // Once `shot.sh` has started capturing, which takes it a while the first time. If it's gone, the cue never comes.
+            let cueDeadline = Date.now.addingTimeInterval(60)
             while !FileManager.default.fileExists(atPath: cue) {
+                guard Date.now < cueDeadline else { fail("Nothing started this scene's motion.") }
                 RunLoop.main.run(until: .now.addingTimeInterval(0.01))
             }
             play()
@@ -364,6 +366,8 @@ enum TestScene: String, CaseIterable {
     case resolve
     /// Every question answered: what it was all for.
     case resolveFinished = "resolve-finished"
+    /// Nothing left to ask, but it isn't all answered.
+    case resolveNothingLeft = "resolve-nothing-left"
     case resolveCostWithheld = "resolve-cost-withheld"
     case resolvePublishFromDevice = "resolve-publish-from-device"
     case resolveAnsweredWallet = "resolve-answered-wallet"
@@ -669,6 +673,7 @@ enum TestScene: String, CaseIterable {
         case .mainTransactionsBusy: .busy
         case .resolveAnsweredWallet: .answeredWallet
         case .resolveFinished: .allAnswered
+        case .resolveNothingLeft: .nothingLeft
         case .mainEmpty, .mainEmptySmallest, .popoverEmpty, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest, .mainEmptySavings: .empty
         case .mainEmptyNotice: .emptyReadingLinked
         case .mainNotStarted, .popoverNotStarted: .notStarted
@@ -930,7 +935,7 @@ enum TestScene: String, CaseIterable {
         let isReady: () -> Bool = { [feed] in
             if TestMode.live != nil { return store.feed == .noWallet || store.portfolio != nil }
             return switch feed {
-            case .demo, .allYours, .costBecomesKnown, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .costOnSavings, .smallAmounts, .longHistory, .chartGaps, .busy, .answeredWallet, .allAnswered, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .allYours, .costBecomesKnown, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .costOnSavings, .smallAmounts, .longHistory, .chartGaps, .busy, .answeredWallet, .allAnswered, .nothingLeft, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
             case .updating: store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
@@ -1010,7 +1015,7 @@ enum TestScene: String, CaseIterable {
             })
         case .increasedContrast:
             return TestScreen(view: AnyView(ContrastScene(store: store)), isReady: isReady)
-        case .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .resolveFinished:
+        case .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .resolveFinished, .resolveNothingLeft:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .resolveAllSkipped:
             let model = ResolveModel(store: store)
@@ -1500,7 +1505,7 @@ private final class ReadOnce {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, allYours, costBecomesKnown, missingPrice, unreadBalance, neverAnswers, updating, serverDown, stopsAnswering, pricesDown, pricesStop, tooSlow, retrying, retryingWithNumbers, notStartedFails, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, chartGaps, busy, answeredWallet, allAnswered, empty, emptyReadingLinked, notStarted, firstRun }
+    enum Feed { case demo, allYours, costBecomesKnown, missingPrice, unreadBalance, neverAnswers, updating, serverDown, stopsAnswering, pricesDown, pricesStop, tooSlow, retrying, retryingWithNumbers, notStartedFails, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, chartGaps, busy, answeredWallet, allAnswered, nothingLeft, empty, emptyReadingLinked, notStarted, firstRun }
 
     private let feed: Feed
     private let hasRate: Bool
@@ -1530,34 +1535,7 @@ final class FixtureSource: PortfolioSource {
         case .allYours: return try allYours("all-yours-demo-portfolio")
         case .costBecomesKnown:
             guard Self.costIsKnown.withLock({ $0 }) else { break }
-            return try demo { object in
-                var positions = object["positions"] as? [[String: Any]] ?? []
-                for index in positions.indices {
-                    var values = positions[index]["values"] as? [String: Any] ?? [:]
-                    guard (values["unknownCostQty"] as? String) != "0" else { continue }
-                    values["unknownCostQty"] = "0"
-                    let value = Int64(values["valueMicros"] as? String ?? "") ?? 0
-                    let cost = value * 9 / 10
-                    let price = (positions[index]["price"] as? [String: Any])?["micros"] as? String
-                    values["costMicros"] = String(cost)
-                    values["averageCostMicros"] = String((Int64(price ?? "") ?? 0) * 9 / 10)
-                    values["realizedMicros"] = "0"
-                    values["unrealizedMicros"] = String(value - cost)
-                    positions[index]["values"] = values
-                    positions[index]["pnlMicros"] = String(value - cost)
-                    positions[index]["resolvable"] = false
-                }
-                object["positions"] = positions
-                object["questions"] = [Any]()
-                object["pnlStatus"] = "complete"
-                var totals = object["totals"] as? [String: Any] ?? [:]
-                totals["excluded"] = [Any]()
-                totals["unresolvedMicros"] = "0"
-                totals["pnlMicros"] = "361230000"
-                totals["unrealizedMicros"] = "287050000"
-                totals["coverage"] = ["value": ["known": 7, "missing": 0], "realized": ["known": 7, "missing": 0], "unrealized": ["known": 7, "missing": 0], "pnl": ["known": 7, "missing": 0]]
-                object["totals"] = totals
-            }
+            return try demo(Self.knowEveryCost)
         case .missingPrice:
             // The demo, with no price for USDC right now. It's the largest holding, so its value is a big part of the total, and with no price it's listed last.
             return try demo { object in
@@ -1658,7 +1636,17 @@ final class FixtureSource: PortfolioSource {
                 questions[0] = first
                 object["questions"] = questions
             }
-        case .allAnswered: return try demo { $0["questions"] = [Any]() }
+        case .allAnswered:
+            return try demo { object in
+                Self.knowEveryCost(&object)
+                object["meter"] = ["open": 0, "answered": 5, "waiting": 0]
+            }
+        // Nothing to ask, and nothing answered that could settle what's still unknown.
+        case .nothingLeft:
+            return try demo { object in
+                object["questions"] = [Any]()
+                object["meter"] = ["open": 0, "answered": 0, "waiting": 0]
+            }
         case .empty: return try newWallet(started: true, readingLinked: false, address: address)
         case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: address)
         case .notStarted: return try newWallet(started: false, readingLinked: false, address: address)
@@ -1689,6 +1677,36 @@ final class FixtureSource: PortfolioSource {
         case .notStartedFails: try newWallet(started: false, readingLinked: false, address: address)
         default: nil
         }
+    }
+
+    /// The demo, with what it was missing filled in.
+    private static func knowEveryCost(_ object: inout [String: Any]) {
+        var positions = object["positions"] as? [[String: Any]] ?? []
+        for index in positions.indices {
+            var values = positions[index]["values"] as? [String: Any] ?? [:]
+            guard (values["unknownCostQty"] as? String) != "0" else { continue }
+            values["unknownCostQty"] = "0"
+            let value = Int64(values["valueMicros"] as? String ?? "") ?? 0
+            let cost = value * 9 / 10
+            let price = (positions[index]["price"] as? [String: Any])?["micros"] as? String
+            values["costMicros"] = String(cost)
+            values["averageCostMicros"] = String((Int64(price ?? "") ?? 0) * 9 / 10)
+            values["realizedMicros"] = "0"
+            values["unrealizedMicros"] = String(value - cost)
+            positions[index]["values"] = values
+            positions[index]["pnlMicros"] = String(value - cost)
+            positions[index]["resolvable"] = false
+        }
+        object["positions"] = positions
+        object["questions"] = [Any]()
+        object["pnlStatus"] = "complete"
+        var totals = object["totals"] as? [String: Any] ?? [:]
+        totals["excluded"] = [Any]()
+        totals["unresolvedMicros"] = "0"
+        totals["pnlMicros"] = "361230000"
+        totals["unrealizedMicros"] = "287050000"
+        totals["coverage"] = ["value": ["known": 7, "missing": 0], "realized": ["known": 7, "missing": 0], "unrealized": ["known": 7, "missing": 0], "pnl": ["known": 7, "missing": 0]]
+        object["totals"] = totals
     }
 
     /// Chart points this many seconds apart, the last one being now.

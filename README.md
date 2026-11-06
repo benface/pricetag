@@ -20,7 +20,8 @@ Patina is a native menu bar app: live total PnL in the bar, holdings, cost and P
 ```sh
 pnpm mac         # builds the app, opens it, and runs the server until you press Ctrl-C
 pnpm mac:build   # only builds it, to macos/build/
-pnpm check:mac   # the Swift tests, the app's build, and the shared packages' builds for iOS. It takes turns with other worktrees: see macos/TESTING.md
+pnpm check:mac   # the Swift tests, the app's build, and the shared packages' builds for iOS. It takes turns with other worktrees, and skips code that's already passed: see macos/TESTING.md
+pnpm check:mac:quick   # only the Swift tests, for while you're working
 pnpm check:keychain  # the real Secure Enclave and Keychain, with a throwaway key, from a signed debug build
 pnpm check:anvil     # real signing and sweeps against a local fork of Base, with no real funds. It needs Foundry
 pnpm check:extension # the browser extension on a real site, through to a local fork, with no real funds. It needs Foundry and a Chromium that can load extensions
@@ -93,9 +94,9 @@ pnpm amp:stop    # stops it and deletes its data
 
 It adds a marked block to the end of `.env.local` that points the app at the local Amp and sets `PRICETAG_START_BLOCK`. That block overrides your own values while Amp runs, and `amp:stop` removes it, so nothing else changes. To read from a hosted Amp instead, don't start the local one, and set `AMP_QUERY_URL`, `AMP_QUERY_TOKEN`, `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` yourself.
 
-**Use a dedicated RPC for a demo.** `BASE_RPC_URL` in `.env.local` defaults to the public `https://mainnet.base.org`, which allows 25 requests a second per IP and is shared with anything else on your network. A failed call stops the raw dataset, and everything built on it, until its retry succeeds. To avoid that, `amp:start` runs a small relay (`scripts/rpc-throttle.ts`) that holds requests to `BASE_RPC_RATE_LIMIT` a second, 20 by default, and retries 429s. Raise it to whatever a dedicated RPC allows. Of Amp's processes, only the relay gets `BASE_RPC_URL`. The app's server also uses it, for L1 fees. Neither ever logs it. Never commit a key.
+**Use a dedicated RPC for a demo.** `BASE_RPC_URL` in `.env.local` defaults to the public `https://mainnet.base.org`, which allows 25 requests a second per IP and is shared with anything else on your network. A failed call stops the raw dataset, and everything built on it, until its retry succeeds. To avoid that, `amp:start` runs a small relay (`scripts/rpc-throttle.ts`) that holds requests to 60% of `BASE_RPC_RATE_LIMIT` a second, and retries 429s. That setting is what the RPC allows in total, 25 by default, so raise it to whatever a dedicated RPC allows. Of Amp's processes, only the relay gets `BASE_RPC_URL`. The app's server also uses it, for L1 fees, with a little under the other 40%: about 9 a second by default, shared by every wallet being read, which a wallet sending that many transactions a second never catches up with, so its ETH stays not checked. Neither ever logs it. Never commit a key.
 
-**On Base's 200 ms blocks, from November 5, 2026 at 18:00 UTC, following the head takes about 10 requests a second,** all for the raw dataset, because prices come from logs. Measured with this script on Base Sepolia, which already has those blocks, at the default 20 requests a second to `sepolia.base.org`:
+**On Base's 200 ms blocks, from November 5, 2026 at 18:00 UTC, following the head takes about 10 requests a second,** all for the raw dataset, because prices come from logs. Measured with this script on Base Sepolia, which already has those blocks, with the relay at 20 requests a second to `sepolia.base.org`:
 
 | Start | Time to chain head | After that |
 | --- | --- | --- |
@@ -103,6 +104,8 @@ It adds a marked block to the end of `.env.local` that points the app at the loc
 | `PRICETAG_HISTORY_BLOCKS=300` | About 2 minutes | 5 blocks behind |
 
 Mainnet's RPC and blocks may differ. The previous dataset, which read prices with `eth_call`, couldn't follow these blocks: its `reference_prices` kept falling behind, or held hundreds of blocks behind, at 20, 25 and 35 requests a second.
+
+The relay now gets 15 a second by default, so L1 fees fit under the public RPC's limit. That leaves about 5 for catching up instead of 10, so expect a default start to take up to about twice as long. That's from the arithmetic, and it hasn't been measured.
 
 **A local Amp's first prices come from `eth_call`.** It only has logs from its start block, and USDC/USD's last update can be up to a day older. So `amp:start` reads each feed's latest round from its contract at the start block (`dataset/local.ts`), and those stand in as updates, with an all-zero transaction, for as long as the real ones would have lasted. If that read fails, `amp:start` stops before the backfill. Proof says a price came from the contract, and Verify doesn't claim to cover it. It covers the price from the first real log onward.
 
@@ -209,7 +212,7 @@ To add a currency, add its Chainlink feed and aggregator to `CURRENCIES` in `pac
 Both apps export the same CSV, because the server writes it (`POST /api/tax-report/<address>` with the country and the user's answers, and `src/core/tax.ts` does the work; a `GET` with `?country=CA|US` is the same report with no answers). This isn't tax advice, and the report says so first.
 
 - **One row per thing that may be taxable:** a sale, a network fee (paying one in ETH counts as selling that ETH) or something sent. Each has its date, asset, amount, proceeds, cost, gain, method, price source and transaction link, in the main currency. The gains come from what the fold did, so a position with nothing unresolved adds up to the Realized the apps show. With something unresolved, the apps leave out the whole position and this keeps each row it knows, so the report's total can differ, and it says so.
-- **Gaps say so.** A cost, proceeds or gain that can't be worked out says `unknown`, its row is `UNRESOLVED` with a reason, and it isn't in the gain total. It's never 0. A sale that's part known and part unknown becomes two rows. A cost from an estimate is `ESTIMATED`, and one the user entered or imported is `SELF-REPORTED`, even at $0, however far it's moved between wallets since.
+- **Gaps say so.** A cost, proceeds or gain that can't be worked out says `unknown`, its row is `UNKNOWN GAIN` with a reason, and it isn't in the gain total. It's never 0. A sale that's part known and part unknown becomes two rows. A cost from an estimate is `ESTIMATED`, and one the user entered or imported is `SELF-REPORTED`, even at $0, however far it's moved between wallets since.
 - **It uses the same answers as the screen.** Costs go through the same resolver as the questions the apps ask: what's inherited from a linked wallet, entered, imported, noted onchain or received at market.
 - **A market price for what the user said came from someone else reads differently by country.** In Canada it's generally the real cost of what you're paid or given ([ITA s. 69(1)(c)](https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-69.html), [s. 52(1)](https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-52.html)), so the row is `OK` and says where its cost came from. In the US it's the cost of pay (Q59) but not of a gift (Q76, [IRS digital asset FAQs](https://www.irs.gov/individuals/international-taxpayers/frequently-asked-questions-on-digital-asset-transactions)), and we can't tell which it was, so the row stays `ESTIMATED`. What arrives from a bridge or a mint could be the user's own money from elsewhere, which keeps what they first paid, so that's `ESTIMATED` in both.
 - **Notes are rows too**, right under the header, so the file still parses and the warnings are the first thing anyone sees.
@@ -226,7 +229,7 @@ Wallets are the address on screen, any others typed into the report, and the one
 
 All together needs one consistent history, because a cost worked out from part of it would look known and be wrong. So the report stops at the last block every wallet has reached and says what that leaves out. If their histories start at different blocks, which can only happen reading the raw dataset, every cost and gain says `unknown`. The demo wallet can't be combined with anything.
 
-The report doesn't check Canada's superficial loss rule, split US short-term from long-term gains, or list what was received, and it says so. Anything before the first block read has an unknown cost until the user answers for it, so most rows on an older wallet start out unresolved.
+The report doesn't check Canada's superficial loss rule, split US short-term from long-term gains, or list what was received, and it says so. Anything before the first block read has an unknown cost until the user answers for it, so most rows on an older wallet start out with an unknown gain.
 
 Only Canada's and the US's rules are here. In a main currency neither reports in, like EUR, the report is in that currency with whichever country is chosen, and its first warning says those rules and that layout may not apply where the user reports.
 
@@ -277,7 +280,7 @@ What's held now is valued at its Chainlink feed first, then at `market`. The dat
 
 A transfer's cost goes to the wallets it actually went to, whichever wallet is open: oldest lots first for the first transfer, or the same mix for each by average cost. An entered exchange cost covers only what had arrived when it was answered, so anything later is asked about in turn. One withdrawal in an exchange history explains one arrival, and when more than one fits, none of them is resolved from it. Native ETH bought in a swap can be an unwrap the account never received, so those `priced_legs` rows never set a market price.
 
-Answer Questions asks once per address, most useful first, and each question says why it's asked. Each answer shows what it would do before it's picked, Undo is always there, and skipping leaves it flagged. On the Mac, Settings > Answers lists every answer with what it was about and when, and any one can be changed or removed later. Costs only carry onto a wallet that's yours, so being paid by one of your wallets isn't enough: it asks, and My wallet says this one's yours too, while Someone else leaves your wallet as yours and values what arrived at the price then. A token with no price anywhere isn't asked about: it's listed apart and can't affect PnL. Totals say how much is unresolved and estimated right next to the number, and exports mark every row `exact`, `estimated`, `unresolved` or `no market`.
+Answer Questions asks once per address, most useful first, and each question says why it's asked. Each answer shows what it would do before it's picked, Undo is always there, and skipping leaves it flagged. On the Mac, Settings > Answers lists every answer with what it was about and when, and any one can be changed or removed later. Costs only carry onto a wallet that's yours, so being paid by one of your wallets isn't enough: it asks, and My wallet says this one's yours too, while Someone else leaves your wallet as yours and values what arrived at the price then. A token with no price anywhere isn't asked about: it's listed apart and can't affect PnL. Totals say how much is unresolved and estimated right next to the number, and exports mark every row `exact`, `estimated`, `unknown` or `no market`.
 
 ## Proving a price
 
