@@ -160,7 +160,19 @@ The Mac app reads from a server because the server holds what the app can't ship
 - **The client's address** goes to Coinbase only from the header in `PRICETAG_CLIENT_IP_HEADER`, which has to be one the host overwrites, like `fly-client-ip`. Without one it's the socket's. `x-forwarded-for` and the like stop the server from starting, because a client can write them. A private address, or a list, sends nothing, which beats a wrong address.
 - **API only.** It doesn't serve the web app, so Top Up and Publish from a device still need one on the Mac. `PRICETAG_SERVE_APP=1` serves it anyway.
 
-`Dockerfile` builds it, and `fly.toml` runs it on Fly.io, on **one machine**: the wallet reads, the limits and the day's checkouts are counted in its memory, so a second one would split them. Fly starts two on a first deploy unless told otherwise, so deploy with `fly deploy --ha=false`, then check that `fly machine list` shows one. The app reads it when its build names it: `PATINA_SERVER_HOST` in `macos/Config/App.xcconfig`, which is empty, so builds read the Mac's own server. Its invite goes in Settings. It's saved for that server alone, so it never goes to another one, and it's only sent over HTTPS. See `.env.example` for the rest.
+`Dockerfile` builds it, and `fly.toml` runs it on Fly.io, on **one machine**: the wallet reads, the limits and the day's checkouts are counted in its memory, so a second one would split them. Fly starts two on a first deploy unless told otherwise, so deploy with `fly deploy --ha=false`, then check that `fly machine list` shows one. It's live at `patina-server.fly.dev`, with the secrets in `fly secrets`. The app reads it when its build names it: `PATINA_SERVER_HOST` in `macos/Config/App.xcconfig`, which is empty, so `pnpm mac` reads the Mac's own server. The tester build sets it to `PATINA_HOSTED_SERVER_HOST`, next to it. Its invite goes in Settings. It's saved for that server alone, so it never goes to another one, and it's only sent over HTTPS. See `.env.example` for the rest.
+
+The invites live in `~/.config/pricetag/invites.txt`, mode 600, outside any repo, one a line: the name, the invite, and its `name:sha256`. The host only has the hashes, and `fly secrets` can't be read back, so that file is the list:
+
+- **To add one,** run `pnpm invite <name>`, add its line to the file, and push the list.
+- **To revoke one,** delete its line, and push the list.
+- **To push the list,** which replaces the whole of it, so it never drops the others:
+
+  ```sh
+  printf 'PRICETAG_INVITES=%s\n' "$(awk '!/^#/ && NF {print $3}' ~/.config/pricetag/invites.txt | paste -sd, -)" | fly secrets import -a patina-server
+  ```
+
+That restarts the machine, so wallet reads start over, the limits reset and the apps reconnect. Nothing else is lost, because it keeps nothing else. The dataset settings are secrets too, so when `.env.local` moves to a new version, set the same ones with `fly secrets import`, and only after that version reaches head. Code changes reach it with `fly deploy --ha=false`.
 
 ## How it's put together
 
