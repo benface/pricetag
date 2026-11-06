@@ -3,7 +3,7 @@
 
 import { formatAmount, formatSignedAmount, type CurrencyCode, type PnlStatus, type Position, type Totals } from "@pricetag/sdk/core"
 import { missingRatesLine, type ExplainTarget } from "./explain.ts"
-import { ALL_BALANCES_MATCH, CHECK_LABELS, MARKET_ESTIMATES, PNL_INCOMPLETE, UNPRICED_FEES, excludedSentence, feesUnknownSentence, leavesOutSentence, networkFeeUnknownSentence, pnlLeavesOutSentence, unreadBalancesSentence, unseenEthCause, valueGapsSentence, withheldSentence } from "./wording.ts"
+import { ALL_BALANCES_MATCH, CHECK_LABELS, MARKET_ESTIMATES, PAST_COSTS_UNKNOWN, PNL_INCOMPLETE, UNPRICED_FEES, excludedSentence, feesUnknownSentence, leavesOutSentence, networkFeeUnknownSentence, pnlLeavesOutSentence, unreadBalancesSentence, unseenEthCause, valueGapsSentence, withheldSentence } from "./wording.ts"
 
 export type AttentionFacts = {
   positions: readonly Position[]
@@ -80,6 +80,9 @@ export function attentionOf({ positions, unread, totals, pnlStatus, gasUnknownTx
   const [first, ...details] = rest
   return first === undefined ? null : { title: first, details, fullList: null }
 }
+
+/** What to say when there's no warning but questions remain, as when what they ask about has left. They can still be answered, and a tax report needs them. */
+export const pastCostsNote = (attention: Attention | null, questionCount: number) => (attention === null && questionCount > 0 ? PAST_COSTS_UNKNOWN : null)
 
 /** Where "Show What's Missing" goes: the balance that doesn't match when that's the reason, or else what the total is made of. */
 export function attentionTarget(positions: readonly Position[]): ExplainTarget {

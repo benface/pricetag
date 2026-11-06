@@ -3,7 +3,7 @@ import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, for
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { firstSort, formatHoldingsSort, parseHoldingsSort, sortHoldings, type HoldingsColumn, type HoldingsSort } from "../core/holdings.ts"
-import { allBalancesMatch, attentionOf, attentionTarget, balanceFlag, isValuePartial, valueGaps, type Attention } from "../core/attention.ts"
+import { allBalancesMatch, attentionOf, attentionTarget, balanceFlag, isValuePartial, pastCostsNote, valueGaps, type Attention } from "../core/attention.ts"
 import { explainTarget, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
 import {
   ABOUT_THIS_DATA,
@@ -368,7 +368,8 @@ export function App() {
   const questions = fold?.questions ?? []
   const listed = positions.filter((p) => !p.noMarket)
   const attention = fold && wallet ? attentionOf({ positions, unread, totals, pnlStatus: fold.pnlStatus, gasUnknownTxs: wallet.gasUnknownTxs, l1FeeUnknownTxs: wallet.l1FeeUnknownTxs, withheld: fold.withheld, currency, missingRateTxs: fold.view.missingRateTxs, hasCurrentRate: currency === "USD" || fold.view.latestRate !== null }) : null
-  const attentionBox = attention ? <AttentionBox attention={attention} questionCount={questions.length} onResolve={() => setResolving({ asset: null })} onShow={() => setTarget(attentionTarget(positions))} /> : null
+  const pastCosts = pastCostsNote(attention, questions.length)
+  const attentionBox = attention ? <AttentionBox attention={attention} questionCount={questions.length} onResolve={() => setResolving({ asset: null })} onShow={() => setTarget(attentionTarget(positions))} /> : pastCosts ? <PastCostsLine note={pastCosts} questionCount={questions.length} onResolve={() => setResolving({ asset: null })} /> : null
   const noMarket = wallet ? noMarketSentence(totals.noMarket, wallet.unlisted.length) : null
   const about = wallet ? [...(hasStarted(wallet) ? [coverageSentence(wallet.coverage, TOKENS.length - 1, wallet.openingUnread.length > 0)] : []), ...(noMarket ? [noMarket] : [])] : []
   // With no table to sit beside, what it covers stays on the page.
@@ -575,6 +576,18 @@ function AttentionBox({ attention, questionCount, onResolve, onShow }: { attenti
           {SHOW_MISSING}
         </button>
       )}
+    </section>
+  )
+}
+
+/** Questions that remain when the numbers above leave nothing out. Nothing's wrong, so there's no warning, but they can still be answered. */
+function PastCostsLine({ note, questionCount, onResolve }: { note: string; questionCount: number; onResolve: () => void }) {
+  return (
+    <section className="attention">
+      <p className="attention-text muted">{note}</p>
+      <button type="button" className="quiet-button" onClick={onResolve}>
+        {answerQuestionsLabel(questionCount)}
+      </button>
     </section>
   )
 }

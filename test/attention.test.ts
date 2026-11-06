@@ -3,11 +3,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import type { Position, Totals } from "@pricetag/sdk/core"
-import { allBalancesMatch, attentionOf, attentionTarget, balanceFlag, type AttentionFacts } from "../src/core/attention.ts"
+import { allBalancesMatch, attentionOf, attentionTarget, balanceFlag, pastCostsNote, type AttentionFacts } from "../src/core/attention.ts"
 import { emptyBook } from "../src/core/book.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { foldBook } from "../src/core/resolve.ts"
-import { ALL_BALANCES_MATCH, excludedSentence, holdSummarySentence } from "../src/core/wording.ts"
+import { ALL_BALANCES_MATCH, PAST_COSTS_UNKNOWN, excludedSentence, holdSummarySentence } from "../src/core/wording.ts"
 
 const totals = (changes: Partial<Totals> = {}): Totals =>
   ({
@@ -100,6 +100,26 @@ describe("attentionOf", () => {
 
   it("never leaves a partial PnL unsaid", () => {
     assert.equal(attentionOf(facts({ pnlStatus: "partial" }))?.title, "PnL isn't complete.")
+  })
+})
+
+describe("pastCostsNote", () => {
+  it("keeps a question reachable when everything it asks about has left and the totals are complete", () => {
+    const received = DEMO_WALLET.legs.find((leg) => leg.asset === "USDC" && BigInt(leg.delta) > 0n)
+    assert.ok(received)
+    const sent = { ...received, id: `${received.id}-out`, delta: `-${received.delta}`, blockNum: received.blockNum + 1 }
+    const wallet = { ...DEMO_WALLET, legs: [received, sent], balances: { blockNum: DEMO_WALLET.latest.blockNum, amounts: { USDC: "0" } } }
+    const fold = foldBook(wallet, [], "average", emptyBook())
+    const attention = attentionOf(facts({ positions: fold.positions, unread: fold.unread, totals: fold.totals, pnlStatus: fold.pnlStatus, withheld: fold.withheld }))
+    assert.equal(fold.pnlStatus, "complete")
+    assert.equal(attention, null)
+    assert.equal(fold.questions.length, 1)
+    assert.equal(pastCostsNote(attention, fold.questions.length), PAST_COSTS_UNKNOWN)
+  })
+
+  it("leaves the questions to the warning when there is one, and says nothing with none", () => {
+    assert.equal(pastCostsNote({ title: "PnL isn't complete.", details: [], fullList: null }, 2), null)
+    assert.equal(pastCostsNote(null, 0), null)
   })
 })
 

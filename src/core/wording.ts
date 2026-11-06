@@ -29,6 +29,8 @@ export const HOLD_PAST = "Past results don't predict future ones."
 /** Fixing an unknown cost is answering questions, wherever it's offered, so it has one name. A count always says what it counts. */
 export const ANSWER_QUESTIONS = "Answer Questions"
 export const answerQuestionsLabel = (count: number) => (count === 1 ? "Answer 1 Question" : `Answer ${count.toLocaleString("en-US")} Questions`)
+/** When questions remain, but nothing on the page leaves anything out: what they ask about has already left. */
+export const PAST_COSTS_UNKNOWN = "Not every past cost is known yet."
 /** When there's nothing to answer, but something's still left out. */
 export const SHOW_MISSING = "Show What's Missing"
 export const SENDER_QUESTION = "Who sent you this?"
