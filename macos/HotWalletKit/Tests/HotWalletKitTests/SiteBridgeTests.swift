@@ -599,7 +599,8 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         #expect(code(await task.value) == -32603)
         let shown = try #require(rig.bridge.failure)
         #expect(!shown.reason.contains("reach"))
-        #expect(shown.reason.contains("noSuchKey"))
+        #expect(shown.reason.contains(HotWalletWording.keyMissing))
+        #expect(!shown.reason.contains("noSuchKey"))
 
         rig.bridge.dismissFailure()
         let (message, messageApproval) = await rig.start("personal_sign", .array([.string("hello"), .string(hot)]))
@@ -885,8 +886,8 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         rig.bridge.cancelAll(connection: rig.connection)
         for task in tasks { _ = await task.value }
 
-        let (connecting, _) = await rig.start("eth_requestAccounts", origin: "https://other.example.com")
-        #expect(code(await rig.ask("eth_requestAccounts", origin: "https://other.example.com")) == -32002)
+        let (connecting, _) = await rig.start("eth_requestAccounts", origin: "https://other.example.org")
+        #expect(code(await rig.ask("eth_requestAccounts", origin: "https://other.example.org")) == -32002)
         rig.bridge.cancelAll(connection: rig.connection)
         _ = await connecting.value
     }
@@ -904,7 +905,7 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         #expect(code(await rig.ask("eth_requestAccounts")) == 4001)
         #expect(rig.bridge.pending.isEmpty)
         // Only for that site.
-        let (other, approval) = await rig.start("eth_requestAccounts", origin: "https://other.example.com")
+        let (other, approval) = await rig.start("eth_requestAccounts", origin: "https://other.example.org")
         rig.bridge.reject(approval.id)
         _ = await other.value
         // And only for a while.
@@ -912,6 +913,218 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         let (again, nextApproval) = await rig.start("eth_requestAccounts")
         rig.bridge.reject(nextApproval.id)
         _ = await again.value
+    }
+
+    @Test func aPageThatKeepsReloadingCantKeepTakingFocus() async {
+        final class Clock: @unchecked Sendable { var now = Date() }
+        let clock = Clock()
+        let rig = SiteRig(now: { clock.now })
+        for index in 0..<SiteBridge.rejectionsBeforeCooldown {
+            let (task, _) = await rig.start("eth_requestAccounts", id: "\(index)")
+            rig.bridge.cancel(connection: rig.connection, id: "\(index)")
+            _ = await task.value
+        }
+        #expect(code(await rig.ask("eth_requestAccounts")) == 4001)
+        #expect(rig.bridge.pending.isEmpty, "no window this time")
+    }
+
+    @Test func subdomainsShareTheirDomainsLimits() async {
+        let rig = SiteRig()
+        var tasks: [Task<RPCAnswer, Never>] = []
+        for index in 0..<SiteBridge.maxPendingPerOrigin {
+            let (task, _) = await rig.start("eth_requestAccounts", origin: "https://a\(index).evil.test", id: "\(index)")
+            tasks.append(task)
+        }
+        #expect(code(await rig.ask("eth_requestAccounts", origin: "https://more.evil.test")) == -32002)
+        #expect(rig.bridge.pending.count == SiteBridge.maxPendingPerOrigin)
+
+        // And a site that isn't them still gets its turn.
+        let (good, approval) = await rig.start("eth_requestAccounts", origin: "https://good.test", id: "good")
+        rig.bridge.reject(approval.id)
+        _ = await good.value
+
+        // Saying no to one is saying no to all of them.
+        for approval in rig.bridge.pending { rig.bridge.reject(approval.id) }
+        for task in tasks { _ = await task.value }
+        #expect(code(await rig.ask("eth_requestAccounts", origin: "https://brand-new.evil.test")) == 4001)
+        #expect(rig.bridge.pending.isEmpty)
+    }
+
+    @Test func aSiteThatKeepsAtItWaitsLongerEachTime() async {
+        final class Clock: @unchecked Sendable { var now = Date() }
+        let clock = Clock()
+        let rig = SiteRig(now: { clock.now })
+        func wearDown() async {
+            for _ in 0..<SiteBridge.rejectionsBeforeCooldown {
+                let (task, approval) = await rig.start("eth_requestAccounts")
+                rig.bridge.reject(approval.id)
+                _ = await task.value
+            }
+        }
+        await wearDown()
+        clock.now = clock.now.addingTimeInterval(SiteBridge.rejectionWindow + 1)
+        await wearDown()
+        clock.now = clock.now.addingTimeInterval(SiteBridge.rejectionWindow + 1)
+        #expect(code(await rig.ask("eth_requestAccounts")) == 4001, "twice as long the second time")
+        clock.now = clock.now.addingTimeInterval(SiteBridge.rejectionWindow)
+        await wearDown()
+
+        // Leaving it alone long enough starts over.
+        clock.now = clock.now.addingTimeInterval(4 * SiteBridge.rejectionWindow + SiteBridge.cooldownsForgottenAfter + 1)
+        await wearDown()
+        clock.now = clock.now.addingTimeInterval(SiteBridge.rejectionWindow + 1)
+        let (task, approval) = await rig.start("eth_requestAccounts")
+        rig.bridge.reject(approval.id)
+        _ = await task.value
+    }
+
+    @Test func aFamilyIsADomain() {
+        let cases = [
+            ("https://evil.com", "evil.com"),
+            ("https://a.b.evil.com", "evil.com"),
+            ("https://A.Evil.COM:8443", "evil.com"),
+            ("https://shop.example.co.uk", "example.co.uk"),
+            ("https://example.co.uk", "example.co.uk"),
+            ("https://shop.example.com.au", "example.com.au"),
+            ("https://shop.example.ne.jp", "example.ne.jp"),
+            // These only look like a country's second level. Each is someone's domain, who could otherwise have a family per subdomain.
+            ("https://a.net.de", "net.de"),
+            ("https://b.net.de", "net.de"),
+            ("https://a.co.de", "co.de"),
+            ("https://a.com.fr", "com.fr"),
+            ("https://a.org.ch", "org.ch"),
+            ("https://a.ne.uk", "ne.uk"),
+            ("https://a.or.uk", "or.uk"),
+            ("https://a.b.com.xx", "com.xx"),
+            ("https://a.example.io", "example.io"),
+            ("https://one.vercel.app", "vercel.app"),
+            ("http://localhost:3000", "localhost"),
+            ("http://127.0.0.1:3000", "127.0.0.1"),
+            ("https://1.2.3.4", "1.2.3.4"),
+            ("https://[::1]", "[::1]"),
+        ]
+        for (origin, family) in cases { #expect(SiteBridge.family(of: origin) == family, "\(origin)") }
+    }
+
+    @Test func aSecondLevelDomainThatLooksLikeASuffixIsStillOneSite() async {
+        let rig = SiteRig()
+        var tasks: [Task<RPCAnswer, Never>] = []
+        for index in 0..<SiteBridge.maxPendingPerOrigin {
+            let (task, _) = await rig.start("eth_requestAccounts", origin: "https://a\(index).net.de", id: "\(index)")
+            tasks.append(task)
+        }
+        #expect(code(await rig.ask("eth_requestAccounts", origin: "https://more.net.de")) == -32002)
+        #expect(rig.bridge.pending.count == SiteBridge.maxPendingPerOrigin)
+        rig.bridge.cancelAll(connection: rig.connection)
+        for task in tasks { _ = await task.value }
+    }
+
+    @Test func aSiteInACooldownCantReachTheNodeBySending() async {
+        final class Clock: @unchecked Sendable { var now = Date() }
+        let clock = Clock()
+        let rig = SiteRig(now: { clock.now })
+        await rig.connect()
+        for _ in 0..<SiteBridge.rejectionsBeforeCooldown {
+            let (task, approval) = await rig.start("personal_sign", .array([.string("hello"), .string(hot)]))
+            rig.bridge.reject(approval.id)
+            _ = await task.value
+        }
+        let snapshots = await rig.chain.snapshotReads
+        let fees = await rig.chain.l1FeePayloads.count
+        for _ in 0..<20 {
+            #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters())) == 4001)
+        }
+        #expect(await rig.chain.snapshotReads == snapshots)
+        #expect(await rig.chain.l1FeePayloads.count == fees)
+        #expect(rig.bridge.pending.isEmpty)
+    }
+
+    @Test func transactionsBeingPricedCountAsWaiting() async {
+        let rig = SiteRig()
+        await rig.connect()
+        await rig.chain.hold(snapshots: true)
+        var tasks: [Task<RPCAnswer, Never>] = []
+        for index in 0..<SiteBridge.maxPendingPerOrigin {
+            let bridge = rig.bridge
+            let request = rig.request("eth_sendTransaction", rig.sendParameters(), id: "\(index)")
+            tasks.append(Task { await bridge.handle(request) })
+            while await rig.chain.heldCalls <= index { await Task.yield() }
+        }
+
+        // Nothing has reached the window yet, and there's still no room for more at the node, or for a message that needs none.
+        let snapshots = await rig.chain.snapshotReads
+        #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters())) == -32002)
+        #expect(code(await rig.ask("personal_sign", .array([.string("hello"), .string(hot)]))) == -32002)
+        #expect(await rig.chain.snapshotReads == snapshots)
+        #expect(rig.bridge.pending.isEmpty)
+
+        // They all still get their turn.
+        await rig.chain.release()
+        for _ in 0..<10_000 where rig.bridge.pending.count < SiteBridge.maxPendingPerOrigin {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(rig.bridge.pending.count == SiteBridge.maxPendingPerOrigin)
+        rig.bridge.cancelAll(connection: rig.connection)
+        for task in tasks { #expect(code(await task.value) == 4001) }
+    }
+
+    @Test func transactionsThatCantBePricedCantUseUpTheNode() async {
+        final class Clock: @unchecked Sendable { var now = Date() }
+        let clock = Clock()
+        let rig = SiteRig(now: { clock.now })
+        await rig.connect()
+        await rig.connect(origin: "https://other.example.org")
+        await rig.chain.setEstimateFailure(.rejected("execution reverted"))
+        let snapshots = await rig.chain.snapshotReads
+        for _ in 0..<SiteBridge.quotesPerWindow {
+            #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters())) == -32000)
+        }
+        #expect(await rig.chain.snapshotReads == snapshots + SiteBridge.quotesPerWindow)
+        for _ in 0..<20 {
+            #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters())) == -32005)
+        }
+        #expect(await rig.chain.snapshotReads == snapshots + SiteBridge.quotesPerWindow)
+
+        // Another site isn't affected, and neither is this one after a while.
+        #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters(), origin: "https://other.example.org")) == -32000)
+        clock.now = clock.now.addingTimeInterval(SiteBridge.quoteWindow + 1)
+        #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters())) == -32000)
+    }
+
+    @Test func aValueThatFillsAUInt128JustWarns() async {
+        let rig = SiteRig()
+        await rig.connect()
+        let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters(value: "0x" + String(repeating: "f", count: 32)))
+        #expect(approval.warnings.contains { $0.text == SiteWording.notEnoughEth })
+        rig.bridge.reject(approval.id)
+        _ = await task.value
+    }
+
+    @Test func aSiteNeverHearsWhereAFailedSaveWasGoing() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        rig.stateStore.failSaves(with: CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: "/Users/someone/secret/state.json"]))
+        let (task, approval) = await rig.start("eth_signTypedData_v4", .array([.string(hot), eip2612()]))
+        await rig.bridge.approve(approval.id, acknowledged: true)
+        guard case .failure(let error) = await task.value else { Issue.record("That should have failed."); return }
+        #expect(!error.message.contains("/"))
+        #expect(!error.message.contains("secret"))
+        #expect(error.message.contains(HotWalletWording.cantSaveRecords))
+        #expect(SiteBridge.loggableReason(error) == "couldn't sign")
+    }
+
+    @Test func aDisconnectThatCantBeSavedSaysSoAndKeepsTrying() async {
+        let rig = SiteRig()
+        await rig.connect()
+        rig.stateStore.failSaves(with: CocoaError(.fileWriteOutOfSpace))
+        rig.bridge.disconnect(site)
+        #expect(!rig.wallet.isConnected(site), "it's true right away")
+        #expect(rig.wallet.notices.contains { $0.text == HotWalletWording.cantSaveRecordsYet })
+
+        rig.stateStore.failSaves(with: nil)
+        await rig.wallet.tick()
+        #expect(rig.stateStore.saved.connectedSites?.contains(site) == false)
+        #expect(!rig.wallet.hasUnsavedRecords)
     }
 
     // MARK: Asking right away
@@ -1034,8 +1247,6 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
     }
 
     @Test func approvalsAreToldApartByWhatTheyAllow() async {
-        let rig = SiteRig()
-        await rig.connect()
         let limited = word(String(5_000_000, radix: 16))
         let cases: [(String, Bool, String)] = [
             ("0x095ea7b3" + spenderWord + limited, false, "up to 5 USDC"),
@@ -1053,6 +1264,9 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
             ("0x12345678", false, "can't read"),
         ]
         for (data, isStrong, headline) in cases {
+            // A new one each time, because leaving this many times would stop the site asking.
+            let rig = SiteRig()
+            await rig.connect()
             let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters(to: usdcText, value: "0x0", data: data))
             guard case .transaction(let review) = approval.action else { Issue.record("Not a transaction"); return }
             #expect(approval.needsAcknowledgment == isStrong, "\(data)")
@@ -1148,8 +1362,6 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
     }
 
     @Test func aMessageIsShownAsTextOnlyWhenThatsAllItIs() async throws {
-        let rig = SiteRig()
-        await rig.connect()
         let hex = { (text: String) in JSONValue.string("0x" + Hex.encode(Array(text.utf8))) }
         let cases: [(JSONValue, Bool)] = [
             (hex("Hello\nthere"), false),
@@ -1161,12 +1373,17 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
             (hex("other.example.com wants you to sign in with your Ethereum account:\n\(hot)"), true),
         ]
         for (message, isStrong) in cases {
+            // A new one each time, because leaving this many times would stop the site asking.
+            let rig = SiteRig()
+            await rig.connect()
             let (task, approval) = await rig.start("personal_sign", .array([message, .string(hot)]))
             #expect(approval.needsAcknowledgment == isStrong, "\(message)")
             rig.bridge.cancelAll(connection: rig.connection)
             _ = await task.value
         }
 
+        let rig = SiteRig()
+        await rig.connect()
         let (task, approval) = await rig.start("personal_sign", .array([hex("Hello"), .string(hot)]))
         guard case .message(let review) = approval.action else { Issue.record("Not a message"); return }
         #expect(review.body == "Hello")
@@ -1205,10 +1422,18 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         final class Clock: @unchecked Sendable { var now = Date(timeIntervalSince1970: 1000) }
         let clock = Clock()
         let rig = SiteRig(now: { clock.now })
-        for _ in 0..<SiteBridge.readsPerSecond {
+        for _ in 0..<SiteBridge.readsPerSecondPerFamily {
             #expect(await rig.ask("eth_blockNumber") == .success(.string("0xread")))
         }
         #expect(code(await rig.ask("eth_blockNumber")) == -32005)
+        #expect(code(await rig.ask("eth_blockNumber", origin: "https://sub.example.com")) == -32005, "a subdomain is the same site")
+
+        // Another site still gets what's left of the wallet's share, and no more.
+        for _ in SiteBridge.readsPerSecondPerFamily..<SiteBridge.readsPerSecond {
+            #expect(await rig.ask("eth_blockNumber", origin: "https://other.example.org") == .success(.string("0xread")))
+        }
+        #expect(code(await rig.ask("eth_blockNumber", origin: "https://third.example.net")) == -32005)
+
         clock.now = clock.now.addingTimeInterval(1)
         #expect(await rig.ask("eth_blockNumber") == .success(.string("0xread")))
     }

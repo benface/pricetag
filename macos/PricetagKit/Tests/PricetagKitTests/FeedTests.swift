@@ -569,7 +569,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 
     @Test func onlyShowsANumberWhileLive() throws {
         let portfolio = try demoPortfolio()
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("x"), .noAmpConfigured("x"), .rejected("x")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("x"), .noAmpConfigured("x"), .rejected("x"), .rateLimited("x")]
         for state in states {
             for shows in MenuBarShows.allCases {
                 let summary = FeedSummary(feed: state, portfolio: portfolio, shows: shows)
@@ -604,7 +604,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 
     @Test func aProblemFitsInAFewWords() throws {
         let portfolio = try demoPortfolio()
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x"), .rateLimited("x")]
         for state in states {
             let problem = try #require(state.shortProblem(portfolio: portfolio))
             #expect(problem.count <= 26, "\(state)")
@@ -621,7 +621,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 
     @Test func aProblemSaysWhatHappenedThatMoneyIsFineAndWhatToDoWithoutTheServersAddress() throws {
         let portfolio = try realPortfolio(at: Date())
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("Couldn't read from Amp."), .noAmpConfigured("No Amp."), .rejected("Nope.")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("Couldn't read from Amp."), .noAmpConfigured("No Amp."), .rejected("Nope."), .rateLimited("Slow down.")]
         for state in states {
             for shown in [portfolio, nil] {
                 let problem = try #require(state.problem(serverURL: server, portfolio: shown))
@@ -916,6 +916,31 @@ actor RuledSource: PortfolioSource {
     }
 }
 
+/// Says to wait, once, then answers.
+actor HeldBackSource: PortfolioSource {
+    nonisolated let events: AsyncThrowingStream<Void, any Error>
+    nonisolated let push: AsyncThrowingStream<Void, any Error>.Continuation
+    private let answer: Portfolio
+    private let retryAfter: Int
+    private(set) var reads = 0
+
+    init(answer: Portfolio, retryAfter: Int) {
+        self.answer = answer
+        self.retryAfter = retryAfter
+        (events, push) = AsyncThrowingStream.makeStream(of: Void.self, throwing: (any Error).self)
+    }
+
+    nonisolated func headEvents() -> AsyncThrowingStream<Void, any Error>? { events }
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+        reads += 1
+        if reads == 1 { throw FetchError.rateLimited("Too many requests.", retryAfter: retryAfter) }
+        return answer
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
+}
+
 /// Answers every read the same way, counts them, and reports new blocks when a test says so.
 actor PushedSource: PortfolioSource {
     nonisolated let events: AsyncThrowingStream<Void, any Error>?
@@ -949,11 +974,16 @@ actor PushedSource: PortfolioSource {
 @Suite struct PushedFeedTests {
     let now = Date(timeIntervalSince1970: 1_800_000_100)
 
-    func makeStore(_ source: PushedSource, reachableDelay: Duration, pushedDelay: Duration) -> PortfolioStore {
+    func makeStore(_ source: any PortfolioSource, reachableDelay: Duration, pushedDelay: Duration) -> PortfolioStore {
         let defaults = UserDefaults(suiteName: "pushed-tests-\(UUID().uuidString)")!
         defaults.set("0xabc", forKey: "wallet")
         let now = now
         return PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now }, reachableDelay: reachableDelay, unreachableDelay: .milliseconds(5), pushedDelay: pushedDelay)
+    }
+
+    @MainActor private func waitForFeed(_ store: PortfolioStore, _ matches: (FeedState) -> Bool) async throws {
+        for _ in 0..<600 where !matches(store.feed) { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(matches(store.feed))
     }
 
     private func waitForReads(_ source: PushedSource, _ count: Int) async throws {
@@ -991,6 +1021,38 @@ actor PushedSource: PortfolioSource {
         #expect(await source.reads == settled)
     }
 
+    @Test func aServerThatSaysToWaitIsLeftAloneUntilThen() async throws {
+        let source = HeldBackSource(answer: try realPortfolio(at: now), retryAfter: 1)
+        let store = makeStore(source, reachableDelay: .milliseconds(5), pushedDelay: .seconds(600))
+        store.start()
+        defer { store.stop() }
+        try await waitForFeed(store) { $0 == .rateLimited("Too many requests.") }
+        #expect(store.feed.isStale)
+        // New blocks say nothing about when there's room.
+        source.push.yield()
+        source.push.yield()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await source.reads == 1)
+        // Then it comes back by itself.
+        try await waitForFeed(store) { $0 == .live }
+        #expect(await source.reads == 2)
+    }
+
+    @Test func oneReadABlockIsWellUnderTheLimit() async throws {
+        let source = PushedSource(answer: try realPortfolio(at: now), pushes: true)
+        let store = makeStore(source, reachableDelay: .seconds(600), pushedDelay: .seconds(600))
+        store.start()
+        defer { store.stop() }
+        try await waitForReads(source, 1)
+        // A minute's blocks at one every 2 s, with the reads faster than the blocks, as they are for an ordinary wallet.
+        for count in 2...31 {
+            source.push?.yield()
+            try await waitForReads(source, count)
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await source.reads == 31, "Hosted servers allow 120 requests a minute")
+    }
+
     @Test func goesBackToPollingStraightAwayWhenTheEventsStop() async throws {
         let source = PushedSource(answer: try realPortfolio(at: now), pushes: true)
         let store = makeStore(source, reachableDelay: .milliseconds(5), pushedDelay: .seconds(600))
@@ -1018,13 +1080,14 @@ actor PushedSource: PortfolioSource {
 final class EventsProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var body = ""
     nonisolated(unsafe) static var status = 200
+    nonisolated(unsafe) static var retryAfter: String?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func stopLoading() {}
 
     override func startLoading() {
-        let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: ["content-type": "text/event-stream"])!
+        let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: ["content-type": "text/event-stream"].merging(Self.retryAfter.map { ["Retry-After": $0] } ?? [:]) { $1 })!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(Self.body.utf8))
         client?.urlProtocolDidFinishLoading(self)
@@ -1069,6 +1132,26 @@ final class FailingProtocol: URLProtocol, @unchecked Sendable {
         var heads = 0
         for try await _ in try #require(client().headEvents()) { heads += 1 }
         #expect(heads == 2)
+    }
+
+    @Test func saysHowLongToWaitWhenItsHeldBack() async throws {
+        EventsProtocol.status = 429
+        EventsProtocol.body = ""
+        EventsProtocol.retryAfter = "17"
+        defer { EventsProtocol.retryAfter = nil }
+        await #expect(throws: FetchError.rateLimited("Too many requests.", retryAfter: 17)) {
+            for try await _ in try #require(client().headEvents()) {}
+        }
+    }
+
+    @Test func aReadSaysWhatTheServerSaidAndHowLongToWait() async throws {
+        EventsProtocol.status = 429
+        EventsProtocol.body = #"{"error":"Too many requests from this invite."}"#
+        EventsProtocol.retryAfter = "17"
+        defer { EventsProtocol.retryAfter = nil }
+        await #expect(throws: FetchError.rateLimited("Too many requests from this invite.", retryAfter: 17)) { try await client().rules() }
+        EventsProtocol.retryAfter = nil
+        await #expect(throws: FetchError.rateLimited("Too many requests from this invite.", retryAfter: 60)) { try await client().rules() }
     }
 
     @Test func failsOnAnErrorResponse() async throws {

@@ -15,6 +15,8 @@ public enum FetchError: Error, Equatable, Sendable {
     case rejected(String)
     /// The server only answers people it invited, and this request had no invite it takes.
     case needsInvite(String)
+    /// The server is holding this client back, and says how many seconds until there's room. It clears by itself.
+    case rateLimited(String, retryAfter: Int)
     /// The server's price or update isn't the one a proof is about.
     case priceChanged(String)
 }
@@ -98,7 +100,9 @@ public struct PricetagClient: PortfolioSource {
             let task = Task {
                 do {
                     let (bytes, response) = try await session.bytes(for: request)
-                    guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw FetchError.unreachable }
+                    let answer = response as? HTTPURLResponse
+                    if answer?.statusCode == 429 { throw FetchError.rateLimited("Too many requests.", retryAfter: Self.retryAfter(answer)) }
+                    guard answer?.statusCode == 200 else { throw FetchError.unreachable }
                     for try await line in bytes.lines where line == "event: head" {
                         continuation.yield()
                     }
@@ -262,9 +266,15 @@ public struct PricetagClient: PortfolioSource {
         case 502: throw FetchError.ampUnavailable(message)
         case 503: throw FetchError.noAmpConfigured(message)
         case 401: throw FetchError.needsInvite(message)
+        case 429: throw FetchError.rateLimited(message, retryAfter: Self.retryAfter(response as? HTTPURLResponse))
         case 412: throw FetchError.priceChanged(message)
         default: throw FetchError.rejected(message)
         }
+    }
+
+    /// In seconds, as this server sends it. Anything else waits a minute, which is as long as its shortest limit lasts.
+    private static func retryAfter(_ response: HTTPURLResponse?) -> Int {
+        response?.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil } ?? 60
     }
 
     private struct CheckoutBody: Encodable {

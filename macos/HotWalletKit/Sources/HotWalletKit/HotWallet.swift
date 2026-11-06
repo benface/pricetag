@@ -40,6 +40,8 @@ public final class HotWallet {
     public private(set) var historyReadFor: EthereumAddress?
     /// Why the last sweep didn't go out. Automatic sweeps wait a while before trying again.
     public private(set) var sweepProblem: String?
+    /// What's on disk is behind what's here, which a restart would lose. See `persistOrSayWhy`.
+    public private(set) var hasUnsavedRecords = false
     /// Every transaction the last send or sweep asked for put on its way, in order, a rebroadcast of one it had before included.
     /// What's shown about it follows these receipts and nothing else, so an earlier attempt or one made by itself can't stand in for it.
     public private(set) var lastSubmitted: [String] = []
@@ -148,7 +150,7 @@ public final class HotWallet {
         } catch {
             // Starting empty would forget what was signed, and call all of it stolen.
             state = DeviceWalletState()
-            availability = .unavailable("Couldn't read this wallet's records: \(error.localizedDescription)")
+            availability = .unavailable(HotWalletWording.cantReadRecords)
         }
         // From the start, so nothing that can make a key is ever offered, even for a moment.
         if Build.isWatchOnly || signer is WatchOnlySigner { availability = .notProvisioned }
@@ -212,6 +214,7 @@ public final class HotWallet {
             await reconcileKeys()
             return
         }
+        if hasUnsavedRecords { persistOrSayWhy() }
         do {
             let snapshot = try await chain.snapshot(of: address)
             guard address == self.address else { return }
@@ -230,7 +233,7 @@ public final class HotWallet {
         } catch let error as KeychainSealedKeyStore.Failure where error == .notProvisioned {
             availability = .notProvisioned
         } catch {
-            sweepProblem = error.localizedDescription
+            sweepProblem = HotWalletWording.problem(error)
         }
     }
 
@@ -265,7 +268,7 @@ public final class HotWallet {
             } catch is ChainError {
                 // The next tick says so if it's more than a moment.
             } catch {
-                sweepProblem = error.localizedDescription
+                sweepProblem = HotWalletWording.problem(error)
             }
         }
     }
@@ -478,6 +481,7 @@ public final class HotWallet {
         guard address != nil, availability == .ready else { return [] }
         var notices: [Notice] = []
         if isKeyMissing { notices.append(.init(.warning, HotWalletWording.keyMissing, short: HotWalletWording.shortKeyMissing)) }
+        if hasUnsavedRecords { notices.append(.init(.warning, HotWalletWording.cantSaveRecordsYet, short: HotWalletWording.shortCantSaveRecords)) }
         if cameBackWithSomethingOnIt { notices.append(.init(.info, HotWalletWording.keyCameBack)) }
         switch rotationHold {
         case .otherTokens(let count): notices.append(.init(.warning, HotWalletWording.rotationHeldByOtherTokens(count), short: HotWalletWording.shortOldKeyHolds))
@@ -833,7 +837,7 @@ public final class HotWallet {
         }
         state.alarm = nil
         nonceAheadTicks = 0
-        try? persist()
+        persistOrSayWhy()
     }
 
     /// The prompt comes first and waits outside the line, so an open prompt doesn't hold up automatic sweeps.
@@ -865,7 +869,7 @@ public final class HotWallet {
         } catch let error as KeychainSealedKeyStore.Failure where error == .notProvisioned {
             availability = .notProvisioned
         } catch {
-            sweepProblem = error.localizedDescription
+            sweepProblem = HotWalletWording.problem(error)
         }
     }
 
@@ -893,12 +897,12 @@ public final class HotWallet {
     func connectSite(_ origin: String) {
         guard !isConnected(origin) else { return }
         state.connectedSites = connectedSites + [origin]
-        try? persist()
+        persistOrSayWhy()
     }
 
     func disconnectSite(_ origin: String) {
         state.connectedSites?.removeAll { $0 == origin }
-        try? persist()
+        persistOrSayWhy()
     }
 
     func confirmPresence(reason: String, in prompt: PresencePrompt? = nil) async throws {
@@ -943,8 +947,7 @@ public final class HotWallet {
             // The node worked out what it would do, and it fails. Nothing good comes of signing that.
             throw ChainError.rejected(HotWalletWording.wouldFail + message)
         }
-        // A plain send to a plain address uses exactly what it's quoted.
-        let gasLimit = transaction.data.isEmpty && estimate == 21000 ? estimate : estimate + estimate / 4
+        let gasLimit = FeeQuote.gasLimit(estimate: estimate, isPlainSend: transaction.data.isEmpty)
         let unsigned = UnsignedTransaction(
             chainID: Base.chainID,
             nonce: snapshot.nonce,
@@ -957,6 +960,7 @@ public final class HotWallet {
         )
         let l1Fee = try await chain.l1Fee(ofPayload: unsigned.signingPayload)
         let fees = FeeQuote(maxFeePerGas: snapshot.fees.maxFeePerGas, maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas, l1FeeWei: l1Fee)
+        guard fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
         var quote = SiteQuote(
             gasLimit: gasLimit,
             maxFeePerGas: snapshot.fees.maxFeePerGas,
@@ -1102,7 +1106,7 @@ public final class HotWallet {
         // More may have been signed while this was reading, so this only takes out what it knows about.
         state.signedPermits?[address]?.removeAll { spent.contains($0.id) || expired.contains($0.id) }
         // If this doesn't reach the disk, the next check finds the same again.
-        try? persist()
+        persistOrSayWhy()
     }
 
     // MARK: - Sending
@@ -1162,10 +1166,11 @@ public final class HotWallet {
             guard snapshot.chainID == Base.chainID, snapshot.fees.isPlausible else { return nil }
             var feeWei: UInt128 = 0
             for transaction in transactions {
-                let gas = try await chain.estimateGas(from: address, to: transaction.to, value: 0, data: transaction.data)
-                let unsigned = UnsignedTransaction(chainID: Base.chainID, nonce: snapshot.nonce, maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas, maxFeePerGas: snapshot.fees.maxFeePerGas, gasLimit: gas + gas / 4, to: transaction.to, value: 0, data: transaction.data)
+                let gas = FeeQuote.gasLimit(estimate: try await chain.estimateGas(from: address, to: transaction.to, value: 0, data: transaction.data), isPlainSend: false)
+                let unsigned = UnsignedTransaction(chainID: Base.chainID, nonce: snapshot.nonce, maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas, maxFeePerGas: snapshot.fees.maxFeePerGas, gasLimit: gas, to: transaction.to, value: 0, data: transaction.data)
                 let fees = FeeQuote(maxFeePerGas: snapshot.fees.maxFeePerGas, maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas, l1FeeWei: try await chain.l1Fee(ofPayload: unsigned.signingPayload))
-                feeWei += fees.costWei(gas: UInt128(gas + gas / 4))
+                guard fees.isPlausible else { return nil }
+                feeWei += fees.costWei(gas: UInt128(gas))
             }
             return RevocationQuote(feeWei: feeWei, feeUsdMicros: snapshot.ethUsdMicros.map { Money.usdMicros(of: feeWei, priceMicros: $0, decimals: 18) }, transactions: transactions.count)
         } catch {
@@ -1248,8 +1253,7 @@ public final class HotWallet {
         } catch ChainError.rejected(let message) {
             throw ChainError.rejected(HotWalletWording.notSent(message))
         }
-        // A plain send to a plain address uses exactly what it's quoted.
-        let gasLimit = data.isEmpty && estimate == 21000 ? estimate : estimate + estimate / 4
+        let gasLimit = FeeQuote.gasLimit(estimate: estimate, isPlainSend: data.isEmpty)
         guard snapshot.balances[Base.eth] ?? 0 >= value + snapshot.fees.costWei(gas: UInt128(gasLimit)) else { throw ChainError.rejected(HotWalletWording.noGasToSend) }
         // History is read outside the line, so an alarm can arrive during any wait, and that stops this as much as it would have before.
         try checkStillAllowed(address)
@@ -1295,8 +1299,7 @@ public final class HotWallet {
                     nonce: nonce,
                     maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas,
                     maxFeePerGas: snapshot.fees.maxFeePerGas,
-                    // A plain send to a plain address uses exactly what it's quoted.
-                    gasLimit: transfer.token.isNative && estimate == 21000 ? estimate : estimate + estimate / 4,
+                    gasLimit: FeeQuote.gasLimit(estimate: estimate, isPlainSend: transfer.token.isNative),
                     to: contract,
                     value: value,
                     data: data
@@ -1434,7 +1437,7 @@ public final class HotWallet {
         } else {
             state.alarm = StolenKeyAlarm(address: address, findings: new, raisedAt: now())
         }
-        try? persist()
+        persistOrSayWhy()
     }
 
     private func updateRecord(hash: String, address: EthereumAddress, _ change: (inout SignedRecord) -> Void) {
@@ -1443,15 +1446,32 @@ public final class HotWallet {
     }
 
     private func persist() throws {
-        try stateStore.save(state)
+        do {
+            try stateStore.save(state)
+            hasUnsavedRecords = false
+        } catch {
+            hasUnsavedRecords = true
+            throw RecordsNotSaved()
+        }
+    }
+
+    /// For a change that's already true here and can't be undone by failing to write it, like an alarm. A restart would lose it, so
+    /// the wallet says so, and each tick tries again until it's on disk.
+    private func persistOrSayWhy() {
+        try? persist()
     }
 
     /// For a change that decides which keys count. It only takes effect once it's on disk, so nothing acts on what a restart wouldn't know.
     private func save(_ change: (inout DeviceWalletState) -> Void) throws {
         var changed = state
         change(&changed)
-        try stateStore.save(changed)
+        do {
+            try stateStore.save(changed)
+        } catch {
+            throw RecordsNotSaved()
+        }
         state = changed
+        hasUnsavedRecords = false
     }
 
     /// For a change about a key just made. Nothing's on it and nobody's seen its address, so it goes if the change can't be written.

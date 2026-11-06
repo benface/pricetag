@@ -6,6 +6,7 @@ import { LAST_2S_BLOCK, blockBefore, msBetweenBlocks, priceSampleBlocks, timesta
 import { answerToMicros, buildPricedLegs, creditUnseenEth, derivePricedRows, isUnwrapClaim, oneWaySendBalanceBlocks, payerOf, settleUnwraps, unseenEthSearchBlocks, unwrapBalanceBlocks, type EthPayer, type GasUnknownTx, type LegRow, type PayoutTx, type PricedRow, type Reference } from "./legs.ts"
 import { MARKET_MAX_AGE_MS, markNeeds, marketPrice, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
 import type { CostNote } from "./notes.ts"
+import { NO_OTHER_TOKENS, createOtherTokens, type OtherTokensReader, type ReadTokenFacts } from "./other-tokens.ts"
 import { feedPrice, foldPositions, latestPrices, type FeedRound, type Head, type LatestPrices } from "./portfolio.ts"
 import type { ReadL1Fees } from "./receipts.ts"
 import { openingLegs, type BalanceSnapshot } from "./reconcile.ts"
@@ -45,6 +46,8 @@ export type Source = {
   readMarketTrades?(asset: string, from: number, to: number): Promise<MarketTrade[]>
   /** What these assets' `TOKEN_FEEDS` answer at each of these blocks. A feed whose read failed isn't in it, and neither is a block with no row. */
   readFeedRounds?(assets: readonly string[], blocks: readonly number[]): Promise<Map<number, Record<string, FeedRound>>>
+  /** What tokens off the allowlist say about themselves and this wallet at `block`. Without it, a wallet just has no `otherTokens`. */
+  readTokenFacts?: ReadTokenFacts
 }
 
 /** Blocks to read, inclusive, where the source's defaults aren't wanted. `to` reads the wallet as of that block. */
@@ -320,16 +323,17 @@ function sampleBlocksOf({ rows, latest }: Pick<Cached, "rows" | "latest">): numb
 
 const keyOf = (address: string, { from, to }: WalletRange) => `${address.toLowerCase()}:${from ?? ""}:${to ?? ""}`
 
-/**
- * `maxWallets`: how many reads to keep, the oldest going first. A server that many people share wants more than one Mac does.
- * `priceSamples`: also read prices between a wallet's transactions, for an app's chart, which costs a query for each wallet.
- */
 /** How far a wallet's first read has got. `costs` means its facts are in and they're being worked into an answer. */
 export type ReadProgress = { stage: "waiting" | "transfers" | "prices" | "checking" | "costs"; transfers: number | null }
 
 const countTransfers = (rows: readonly LegRow[]) => rows.filter((row) => row.kind !== "gas" && row.kind !== "l1_fee").length
 
-export function createWallets(source: Source, currentHead: () => Promise<Head>, readL1Fees: ReadL1Fees, logger: Logger = console, { maxWallets = MAX_WALLETS, priceSamples = false }: { maxWallets?: number | undefined; priceSamples?: boolean | undefined } = {}) {
+/**
+ * `maxWallets`: how many reads to keep, the oldest going first. A server that many people share wants more than one Mac does.
+ * `priceSamples`: also read prices between a wallet's transactions, for an app's chart, which costs a query for each wallet.
+ * `otherTokens`: for sharing what's read about other tokens between pricing rules, since no rule changes it.
+ */
+export function createWallets(source: Source, currentHead: () => Promise<Head>, readL1Fees: ReadL1Fees, logger: Logger = console, { maxWallets = MAX_WALLETS, priceSamples = false, otherTokens = source.readTokenFacts && createOtherTokens(source.readTokenFacts, logger) }: { maxWallets?: number | undefined; priceSamples?: boolean | undefined; otherTokens?: OtherTokensReader | undefined } = {}) {
   const wallets = new Map<string, Cached>()
   const inflight = new Map<string, Promise<Cached>>()
   /** First reads in progress, for showing how far along they are. Later reads are quick, and have numbers to show meanwhile. */
@@ -828,6 +832,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       gasUnknownTxs: [...wallet.gasUnknown.keys()],
       gasUnknownBlocks: [...wallet.gasUnknown.values()],
       unlisted: unlistedTokens(wallet.rows, address),
+      ...NO_OTHER_TOKENS,
       currency: "USD",
       rates: null,
       l1FeeUnknownTxs: l1.unknownTxs,
@@ -853,10 +858,15 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         pending = refresh(account, key, range).finally(() => {
           inflight.delete(key)
           firstReads.delete(key)
+          otherTokens?.resume()
         })
         inflight.set(key, pending)
       }
-      return currentOf(account, await pending).response
+      const wallet = await pending
+      const { response } = currentOf(account, wallet)
+      if (range.to !== undefined || !otherTokens) return response
+      otherTokens.update(account, wallet.rows, wallet.gasUnknown, wallet.coveredTo, () => inflight.size > 0)
+      return { ...response, ...otherTokens.view(account, wallet.rows, wallet.gasUnknown) }
     },
 
     /** How far this wallet's first read has got. A wallet that's been read has only its costs left, however long ago that was. */
@@ -926,7 +936,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       if (rowKeys(own.rows.filter((r) => r.block_num <= through)) !== rowKeys(facts.rows)) return null
       // Market prices come from this source's own trades, like the rest of what's priced. A feed comes first, as in a refresh.
       const current = { ...prices, ...marketPricesAt(through, using), ...feedPrices(facts.feedRounds, prices) }
-      return responseOf(
+      const response = responseOf(
         account,
         {
           ...facts,
@@ -940,6 +950,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         (key) => using.priced.has(key),
         facts.markRounds,
       )
+      return otherTokens ? { ...response, ...otherTokens.viewAt(account, own.rows, facts.gasUnknown, through) } : response
     },
 
     /**
@@ -952,6 +963,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       reorgs.push({ from: block, oldTip: Math.max(tip, ...[...wallets.values()].flatMap((wallet) => [wallet.latest.blockNum, wallet.tablesReached])) })
       while (inflight.size > 0) await Promise.allSettled(inflight.values())
       forgetPricesFrom(block)
+      otherTokens?.forgetFrom(block)
       for (const [key, wallet] of wallets) {
         if (block <= wallet.fromBlock) wallets.delete(key)
         else if (block <= wallet.latest.blockNum) wallets.set(key, rewound(wallet, block))
@@ -968,7 +980,9 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     peek(address: string): WalletData | null {
       const account = address.toLowerCase()
       const wallet = wallets.get(keyOf(account, {}))
-      return wallet ? currentOf(account, wallet).response : null
+      if (!wallet) return null
+      const { response } = currentOf(account, wallet)
+      return otherTokens ? { ...response, ...otherTokens.view(account, wallet.rows, wallet.gasUnknown) } : response
     },
   }
 }

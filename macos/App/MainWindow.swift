@@ -430,7 +430,19 @@ struct MainWindow: View {
     }
 
     /// Fills the window: the chart takes the height the rest doesn't use, within reason, and the page scrolls once it needs more than there is.
+    @ViewBuilder
     private func overview(_ portfolio: Portfolio, pageHeight: CGFloat) -> some View {
+        if portfolio.holdsOnlyOtherTokens {
+            VStack(alignment: .leading, spacing: 18) {
+                notices(portfolio)
+                OtherTokensSection(portfolio: portfolio)
+            }
+        } else {
+            pricedOverview(portfolio, pageHeight: pageHeight)
+        }
+    }
+
+    private func pricedOverview(_ portfolio: Portfolio, pageHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             if firstRun.explainsNumbers {
                 Notice(.info, Wording.firstNumbers(portfolio), actionTitle: "Got It", action: firstRun.finishNumbers)
@@ -445,6 +457,7 @@ struct MainWindow: View {
             PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange, metric: $navigation.chartMetric) { navigation.target = .transaction($0) }
                 .frame(height: portfolio.canChart(navigation.chartMetric) ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
             HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, navigation: navigation)
+            if portfolio.hasOtherTokens { OtherTokensSection(portfolio: portfolio) }
             HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
         }
         // A notice, the attention box or the chart coming or going, without the page below it jumping.
