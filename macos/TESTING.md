@@ -46,7 +46,7 @@ macos/shot.sh all some-folder --accessibility        # every scene, one file eac
 
 This writes the tree macOS builds for VoiceOver, from the same offscreen render: each element's label, value and role, in reading order. It needs Accessibility in System Settings for whatever runs the script, because SwiftUI only builds the tree once an assistive app has asked. `AccessibilityTree` does the same in a Swift test, and those tests only run when it's allowed (see `AccessibilityTests.swift`).
 
-It shows what's said and in what order, not how VoiceOver pronounces it or where its cursor goes. It also leaves out a table's rows, which an offscreen table doesn't make, and the route-* scenes, which need a real window. Both stay on benface's checklist.
+It shows what's said and in what order, and ends a line with `{spelled out: …}` for any part that's marked to be said a character at a time. It doesn't show how VoiceOver pronounces it or where its cursor goes. It also leaves out a table's rows, which an offscreen table doesn't make, and the route-* scenes, which need a real window. Both stay on benface's checklist.
 
 macOS doesn't give other apps Dynamic Type: SwiftUI's text styles stay the same size whatever `dynamicTypeSize` says. Larger text on a Mac comes from the display's "Larger Text" setting, which makes the screen smaller, so the small-window scenes (`main-smallest`, `settings-small-display` and the like) are the check for it.
 
@@ -95,13 +95,25 @@ Don't do it yourself. Finish, and put a short checklist for benface in your hand
 - The green button enters full screen: at launch, after opening from the menu bar, and after closing the window and reopening it. Closing the last window still takes away the Dock icon.
 - Dragging the window down to its smallest size and back, with the details open.
 - The menu bar item's text, including its warning.
-- Right-clicking and Control-clicking the menu bar item opens its menu directly under the menu bar, including on a second display, and closes the panel if it's open. Open, Settings and Quit all work from it, with the app in the background and with its window closed. A plain click still opens the panel.
+- Right-clicking and Control-clicking the menu bar item opens its menu directly under the menu bar with every row showing and no scroll arrow, on a display with a notch, one without and a second display, and closes the panel if it's open. Open, Settings and Quit all work from it, with the app in the background and with its window closed. A plain click still opens the panel.
 - Settings' window grows and shrinks smoothly between tabs and when a warning appears, with its top edge staying put. Test scenes draw each tab at its final height, and Settings' own window can't be opened from the background.
 - The real popover under the menu bar, and that clicking outside it closes it.
 - Opening the window from the popover brings it to the front, and adds the Dock icon and menus. Closing it takes them away.
 - Keyboard shortcuts, keyboard focus, and sheets opening over the window.
 - The spending money window's confirmation dialogs, and Touch ID, which asks inside the window. Its sheets are scenes, without the window behind them.
 - The app's look when it's active and in front.
+
+## The hosted build
+
+`pnpm check:hosted [--no-launch] [dmg]` tests the full build colleagues get. It reads the signature, profile, entitlements and what's in the image. Without `--no-launch` it also launches a release copy against a local server in hosted mode, under its own test ID with no profile, Keychain group or app group, and signed without the paths of any browser's manifest that's already there, so it can't reach an installed copy's wallet or break its extension. It stops before launching if that doesn't hold, so the release app under its real ID first launches on someone's Mac. It also launches a debug copy signed the same way that makes a key in the real Keychain, sweeps and approves a site's transaction on a local fork. `PATINA_TEST_ENV_FILE=<a .env.local>` adds a first read and a question with real data. `PATINA_HOSTED=1 macos/shot.sh <scene> out.png` draws any scene as this build shows it, like `main-welcome-checking`, which a normal build never shows.
+
+Nothing takes focus, but each launch puts an icon in the menu bar for a moment, so use `--no-launch` while someone's presenting from this Mac.
+
+**Never launch a quarantined copy here.** Even a notarized one puts macOS's first-launch dialog on the screen of whoever's using this Mac, and a script can't close it. Check Gatekeeper with `spctl --assess --type execute`, as this does. Each launched copy also has its `patina://` scheme taken out and is signed again, so it can't take that link from the normal build.
+
+## The watch-only build
+
+`pnpm check:watch-only [dmg]` tests a built copy from a clean temporary folder, without opening a window or taking focus: its signature and entitlements, that the key code isn't in its binary, that the Keychain refuses what it's signed with, and that it reaches a local server in hosted mode and gets the 401 that opens the invite prompt. It launches a copy under its own test ID, so an installed copy's saved data is never touched, which also means the installed ID itself first launches on someone's Mac. It can't check Gatekeeper on another Mac, or HTTPS to the real host. `PATINA_WATCH_ONLY=1 macos/shot.sh <scene> out.png` draws any scene as that build shows it, like `invite-prompt`.
 
 ## How it's kept apart from the real app
 
@@ -113,7 +125,7 @@ Don't do it yourself. Finish, and put a short checklist for benface in your hand
 
 ## Compiling Swift takes turns
 
-Only one thing compiles Swift or runs its tests at a time, across every worktree on this Mac. `pnpm check:mac`, `pnpm check:mac:quick`, `pnpm mac:build`, `pnpm check:keychain`, `pnpm check:extension`, `pnpm check:anvil` and the build in `shot.sh` all queue by themselves, in the order they started, and only hold the lock while compiling or testing. `pnpm mac` never waits. Run anything else through the queue, like one test, with `--scratch-path` so it reuses what `check:mac` compiled:
+Only one thing compiles Swift or runs its tests at a time, across every worktree on this Mac. `pnpm check:mac`, `pnpm check:mac:quick`, `pnpm mac:build`, `pnpm check:keychain`, `pnpm check:extension`, `pnpm check:device-pages`, `pnpm check:anvil` and the build in `shot.sh` all queue by themselves, in the order they started, and only hold the lock while compiling or testing. `pnpm mac` never waits. Run anything else through the queue, like one test, with `--scratch-path` so it reuses what `check:mac` compiled:
 
 ```sh
 macos/swift-queue.sh swift test --package-path macos/PricetagKit --scratch-path macos/.build --filter FeedTests
@@ -153,7 +165,7 @@ A test that waits for something needs a deadline. If it spins forever and `swift
 ## Which check to run
 
 - **While working: `pnpm check:mac:quick`.** Only the tests of both packages. It always runs them, and never counts as a pass, though failing forgets one.
-- **Before review or a merge: `pnpm check:mac`.** Everything: all the tests, the signed Release app and both iOS builds. It says how long each step took on `[check:mac]` lines.
+- **Before review or a merge: `pnpm check:mac`.** Everything: all the tests, the signed Release app, the watch-only app, the hosted app and both iOS builds. It says how long each step took on `[check:mac]` lines.
 
 `check:mac` remembers a full pass for what's in `macos/`, committed or not, with this Xcode, Swift and macOS. If all of that is the same, it says `Nothing ran: this exact code already passed …` and exits 0 straight away, even from another worktree, or after merging a `main` that didn't touch `macos/`. Say so if you report it, because you didn't run it. A pass that's recorded is only ever a full one, recorded after the queue has verified its turn is over, and any change in `macos/`, even one character, runs everything. Any run of that same code that fails forgets the pass, including `--quick`, and `--force` forgets it as soon as its turn starts, so it's only back if that run passes. Only a pass from the latest run to start on that code counts, and one that's reported as stopped leaves none. To run it anyway, for example when chasing a flaky test, use `macos/check-mac.sh --force`. The records are in `~/Library/Caches/patina-check-mac/`, hold only a run's ID, a date and a path, and are safe to delete. A run with `ANVIL_RPC_URL`, `BASE_READ_RPC_URL` or another `CONFIGURATION` is never skipped or recorded.
 

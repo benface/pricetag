@@ -26,6 +26,25 @@ import Testing
         #expect(report.unresolvedCount > 0)
     }
 
+    @Test func marksWhatRestsOnAnEstimate() throws {
+        let exact = try resource("demo-tax-report", as: TaxReport.self)
+        let gain = try #require(exact.gainMicros)
+        #expect(exact.estimatedCount == 0)
+        #expect(exact.gainText == Format.signedMoney(gain, .USD))
+        var fields = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(exact)) as? [String: Any])
+        fields["estimatedCount"] = 1
+        let estimated = try JSONDecoder().decode(TaxReport.self, from: JSONSerialization.data(withJSONObject: fields))
+        #expect(estimated.gainText == "≈\(Format.signedMoney(gain, .USD))")
+
+        func row(_ status: String, gain: String?) -> TaxPreviewRow {
+            TaxPreviewRow(timestamp: "", type: "Sold", asset: "ETH", amount: "1", decimals: 18, gainMicros: gain, status: status)
+        }
+        #expect(row("estimated", gain: "1000000").gainText(.USD) == "≈+$1.00")
+        #expect(row("resolved", gain: "1000000").gainText(.USD) == "+$1.00")
+        #expect(row("self-reported", gain: "-1000000").gainText(.USD) == "-$1.00")
+        #expect(row("unresolved", gain: nil).gainText(.USD) == nil)
+    }
+
     @Test func eachCountrysDefaultsMatchTheServer() throws {
         let report = try resource("demo-tax-report", as: TaxReport.self)
         #expect(report.defaults.method == report.country.defaultMethod)
@@ -155,12 +174,12 @@ import Testing
 
     @Test func aReportReplacesAnEarlierFailure() async throws {
         let report = try resource("demo-tax-report", as: TaxReport.self)
-        var answer: Result<TaxReport, FetchError> = .failure(.unreachable)
-        let model = model(fetch: { _ in try answer.get() })
+        let answer = Answer()
+        let model = model(fetch: { _ in try answer.result.get() })
         let request = model.request(address: "demo", currency: .CAD, serverURL: server)!
         await model.load(request)
         #expect(model.state == .failed(Wording.cantReachServer))
-        answer = .success(report)
+        answer.result = .success(report)
         await model.load(request)
         #expect(model.state == .ready(report))
     }
@@ -214,4 +233,9 @@ import Testing
         #expect(document.csv == report.csv)
         #expect(document.filename == report.filename)
     }
+}
+
+@MainActor
+private final class Answer {
+    var result: Result<TaxReport, FetchError> = .failure(.unreachable)
 }

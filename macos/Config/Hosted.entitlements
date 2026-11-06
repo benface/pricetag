@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Not the normal build's group, so a copy of this on the same Mac can't read that wallet's key, or the other way around. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.benface.pricetag.hosted.hotwallet</string>
+	</array>
+	<!-- Only for the socket the extension's host connects to. See BridgeEndpoint. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.benface.pricetag.bridge</string>
+	</array>
+	<!-- So BrowserHosts can tell each browser where the extension's host is. Each browser's folder can only be made, and only this one file in it
+	     can be read or written, without a slash at the end. No other app's native messaging manifest can be read or changed from here, and neither can the browser's own files. -->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/Library/Application Support/Google/Chrome/NativeMessagingHosts</string>
+		<string>/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.benface.patina.json</string>
+		<string>/Library/Application Support/Google/Chrome Beta/NativeMessagingHosts</string>
+		<string>/Library/Application Support/Google/Chrome Beta/NativeMessagingHosts/com.benface.patina.json</string>
+		<string>/Library/Application Support/Google/Chrome Dev/NativeMessagingHosts</string>
+		<string>/Library/Application Support/Google/Chrome Dev/NativeMessagingHosts/com.benface.patina.json</string>
+		<string>/Library/Application Support/Google/Chrome Canary/NativeMessagingHosts</string>
+		<string>/Library/Application Support/Google/Chrome Canary/NativeMessagingHosts/com.benface.patina.json</string>
+		<string>/Library/Application Support/Chromium/NativeMessagingHosts</string>
+		<string>/Library/Application Support/Chromium/NativeMessagingHosts/com.benface.patina.json</string>
+		<string>/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts</string>
+		<string>/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.benface.patina.json</string>
+		<string>/Library/Application Support/Microsoft Edge/NativeMessagingHosts</string>
+		<string>/Library/Application Support/Microsoft Edge/NativeMessagingHosts/com.benface.patina.json</string>
+		<string>/Library/Application Support/Arc/User Data/NativeMessagingHosts</string>
+		<string>/Library/Application Support/Arc/User Data/NativeMessagingHosts/com.benface.patina.json</string>
+		<string>/Library/Application Support/Dia/User Data/NativeMessagingHosts</string>
+		<string>/Library/Application Support/Dia/User Data/NativeMessagingHosts/com.benface.patina.json</string>
+		<string>/Library/Application Support/Vivaldi/NativeMessagingHosts</string>
+		<string>/Library/Application Support/Vivaldi/NativeMessagingHosts/com.benface.patina.json</string>
+	</array>
+</dict>
+</plist>

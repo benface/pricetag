@@ -43,6 +43,11 @@ public final class ResolveModel {
     /// Asking what they paid, because they said it's their exchange account.
     public private(set) var isAskingCost = false
     public var failure: String?
+    /// What the last import found. It's apart from `failure`, which goes with a card, because an import can answer the card it was made from.
+    public private(set) var lastImport: ExchangeImport?
+    /// A file waiting for someone to say it's their whole history.
+    public private(set) var pendingImport: ExchangeImport?
+    public private(set) var importRefusal: String?
     /// From the moment it's asked for until it's on its way or isn't going. It can't be called back in that time.
     public private(set) var isPublishing = false
     /// Whether what each answer would do is waiting for the server to have room. It shows up by itself then.
@@ -67,10 +72,12 @@ public final class ResolveModel {
     }
 
     public var current: Question? { questions.first }
-    /// What's already said to be a wallet can't also be an exchange account, and what's asked is about the wallet it reached.
+    /// What a card offers. See `answersOffered` in `src/core/resolve.ts`. An address with a name is an exchange's or a contract's, so nobody's
+    /// wallet. An answer that already says so stays as it is: that card is about the wallet it reached, and the answer can be changed in Answers.
     public var options: [Ownership] {
-        guard let sender = current?.sender, store.book.senders[sender.lowercased()]?.kind == .mine else { return Ownership.allCases }
-        return Ownership.allCases.filter { $0 != .myExchange }
+        // What's already said to be a wallet can't also be an exchange account.
+        if let sender = current?.sender, store.book.senders[sender.lowercased()]?.kind == .mine { return Ownership.allCases.filter { $0 != .myExchange } }
+        return current?.known == nil ? Ownership.allCases : Ownership.allCases.filter { $0 != .mine }
     }
     public var meter: Meter? { store.portfolio?.meter }
     public var canUndo: Bool { !store.undoStack.isEmpty }
@@ -231,17 +238,44 @@ public final class ResolveModel {
     }
 
     public func importCoinbase(csv: String) async -> ExchangeImport? {
+        lastImport = nil
+        pendingImport = nil
+        importRefusal = nil
         do {
-            let imported = try await store.importCoinbase(csv: csv)
-            failure = imported.skipped > 0 ? "Found \(imported.withdrawals.count) withdrawals. \(imported.skipped) had no usable cost." : nil
-            advance()
+            let imported = try await store.readCoinbase(csv: csv)
+            failure = nil
+            if imported.withdrawals.isEmpty {
+                lastImport = imported
+            } else if store.book.importStartsLate(imported) {
+                importRefusal = Wording.importStartsLate
+            } else {
+                pendingImport = imported
+            }
             return imported
         } catch FetchError.rejected(let message), FetchError.rateLimited(let message, _) {
             failure = message
         } catch {
-            failure = "Couldn't read that file. Is the price service running?"
+            failure = "Couldn't read that file. The price service may not be answering."
         }
         return nil
+    }
+
+    public func keepImport() {
+        guard let imported = pendingImport else { return }
+        pendingImport = nil
+        // What proves the file partial can have been saved while it waited for an answer.
+        guard !store.book.importStartsLate(imported) else {
+            importRefusal = Wording.importStartsLate
+            return
+        }
+        store.keepImport(imported)
+        lastImport = imported
+        advance()
+    }
+
+    public func declineImport() {
+        pendingImport = nil
+        importRefusal = Wording.importNotWhole
     }
 
     public func skip() {
@@ -251,6 +285,8 @@ public final class ResolveModel {
     }
 
     public func undo() {
+        lastImport = nil
+        importRefusal = nil
         store.undo()
         advance()
     }

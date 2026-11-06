@@ -39,6 +39,13 @@ nonisolated enum HotWalletDebug {
 
     /// Sets up a state to look at. What this does goes through the same calls as the app's buttons.
     @MainActor static func applyLaunchArguments(to wallet: HotWallet, bridge: SiteBridge) {
+        // Stands in for a button that opens a device page. `macos/device-pages-test.sh` does the browser's part.
+        if CommandLine.arguments.contains("--print-device-page") {
+            Task {
+                let page = try? await DeviceBrowsers.page(for: URL(string: "https://hosted.invalid?addsavings=ledger")!)
+                FileHandle.standardError.write(Data("PID \(getpid())\nDEVICE_PAGE \(page?.absoluteString ?? "none")\n".utf8))
+            }
+        }
         if let url = value(after: "--answer-site-requests-from").flatMap(URL.init(string:)) { answerSiteRequests(bridge, from: url) }
         if CommandLine.arguments.contains("--create-wallet") { Task { await wallet.createWallet() } }
         // An address is public, and scripts driving a fork need it to fund the wallet.
@@ -66,6 +73,7 @@ nonisolated enum HotWalletDebug {
     }
 
     static func runSelfTestIfAsked() {
+        #if !PATINA_WATCH_ONLY
         if let name = isolatedName, CommandLine.arguments.contains("--reset-isolated-wallet") {
             let store = KeychainSealedKeyStore(service: isolatedService(name))
             for address in (try? store.addresses()) ?? [] { try? store.delete(address) }
@@ -96,8 +104,10 @@ nonisolated enum HotWalletDebug {
             }
         }
         never.wait()
+        #endif
     }
 
+    #if !PATINA_WATCH_ONLY
     private static func selfTest() async throws {
         let store = KeychainSealedKeyStore(service: service)
         for address in try store.addresses() { try store.delete(address) }
@@ -119,6 +129,7 @@ nonisolated enum HotWalletDebug {
         guard try await !vault.hasKey(address) else { throw Problem("The key is still there") }
         print("Deleted it.")
     }
+    #endif
 
     private struct Problem: Error, CustomStringConvertible {
         let description: String

@@ -4,10 +4,10 @@
 // or from a provider's order that matches a movement exactly. The rest come from here, and the fold then runs on the result.
 // An unanswered sender stays unknown: it could be the user's own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, emptyPosition, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, assertFoldFits, emptyPosition, firstMarks, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
-import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
+import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type ExchangeWithdrawal, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
 import { describeTransaction, purchaseSource } from "./wording.ts"
@@ -234,6 +234,9 @@ function purchasedLegs(sides: readonly Side[], book: Book): Map<string, Purchase
 /** What a purchase cost in the currency being folded. Null when that can't be said, which leaves it unknown. */
 const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: PricedLeg) => moneyIn(side, cost, leg) ?? (costUsdMicros === null ? null : moneyIn(side, { micros: costUsdMicros, currency: "USD" }, leg))
 
+/** What a withdrawal cost by this method. An average never stands in for oldest first, so with no figure for that, it stays unknown. */
+const withdrawalCost = ({ cost, fifoCostMicros }: ExchangeWithdrawal, method: Method): Money | undefined => (method === "average" ? cost : fifoCostMicros === null ? undefined : { micros: fifoCostMicros, currency: cost.currency })
+
 export function resolveLegs(sides: readonly Side[], method: Method, book: Book): Resolved {
   const linked = new Set(linkedWallets(book))
   const read = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
@@ -296,7 +299,8 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const latestNote = wallet.notes.filter((n) => n.txHash === leg.txHash && n.asset === leg.asset).at(-1)
     const note = latestNote && !noteIsAmbiguous(leg, side.view.legs) ? latestNote : undefined
     const sources = leg.kind === "transfer" && !leg.opening ? sourcesOf(leg) : null
-    const reportedMoney: Money | undefined = book.costs[costKey(address, leg.id)] ?? (note ? { micros: note.usdMicros, currency: "USD" } : undefined) ?? withdrawals.get(costKey(address, leg.id))?.cost
+    const withdrawal = withdrawals.get(costKey(address, leg.id))
+    const reportedMoney: Money | undefined = book.costs[costKey(address, leg.id)] ?? (note ? { micros: note.usdMicros, currency: "USD" } : undefined) ?? (withdrawal && withdrawalCost(withdrawal, method))
     const report = reportedMoney ? moneyIn(side, reportedMoney, leg) : null
 
     const pending: OpenItem[] = []
@@ -358,8 +362,12 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     return withPieces(leg, pieces)
   }
 
+  let at: PricedLeg | null = null
   for (const { side, leg, index } of steps) {
     const address = normalizeAddress(side.wallet.address)
+    // What's carried is only for this transaction. Kept any longer, it's as much memory as every lot times every move.
+    if (at && (at.blockNum !== leg.blockNum || at.txIndex !== leg.txIndex)) carried.clear()
+    at = leg
     const next = resolve(side, leg)
     ;(output.get(address) as PricedLeg[])[index] = next
     const key = `${address}:${next.asset}`
@@ -403,6 +411,17 @@ export type Question = {
   evidence: string[]
   /** What arrived, at its price then, which is how the most useful questions come first. Null when none of it has a price. */
   valueMicros: string | null
+}
+
+/**
+ * The answers a card offers, in order. An address with a name is an exchange's or a contract's, so nobody's wallet, and saying it's
+ * one would try to carry costs over from it. An answer that already says so stays as it is: that card is about the wallet it reached,
+ * so it still needs My wallet, and on the Mac the answer can be changed in Settings > Answers.
+ */
+export function answersOffered({ sender, known }: Pick<Question, "sender" | "known">, book: Book): SenderAnswer["kind"][] {
+  // What's already said to be a wallet can't also be an exchange account.
+  if (sender && book.senders[sender]?.kind === "mine") return ["mine", "someone-else"]
+  return known ? ["my-exchange", "someone-else"] : ["mine", "my-exchange", "someone-else"]
 }
 
 export type Meter = {
@@ -500,12 +519,17 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
     })
 }
 
-export function meterOf(questions: readonly Question[], book: Book, focus: WalletResponse, waiting: number): Meter {
+/** `read` is every wallet in view. One book answers for all of a user's wallets and the demo's, and an answer only moves this meter if it's about one of them. */
+export function meterOf(questions: readonly Question[], book: Book, focus: WalletResponse, read: readonly WalletResponse[], waiting: number): Meter {
   const open = new Set(questions.map((q) => q.sender).filter((s) => s !== null))
+  const behind = walletsBehind(book, focus)
+  const wallets = new Set([...read.map((wallet) => normalizeAddress(wallet.address)), ...behind])
+  const sentHere = new Set(read.flatMap((wallet) => wallet.legs.flatMap((leg) => (sourcesOf(leg) ?? []).map((source) => source.address))))
   // Saying a wallet's yours has no bearing on one that isn't, so it can't make this one's books balance. This one being yours is what follows from an answer, not an answer.
-  const counts = (address: string, answer: SenderAnswer) => answer.kind !== "mine" || (isOwnWallet(book, focus) && address !== normalizeAddress(focus.address))
+  const counts = (address: string, answer: SenderAnswer) => (answer.kind === "mine" ? isOwnWallet(book, focus) && address !== normalizeAddress(focus.address) && (behind.includes(address) || sentHere.has(address)) : wallets.has(address) || sentHere.has(address))
   const senders = Object.entries(book.senders).filter(([address, answer]) => !open.has(address) && counts(address, answer)).length
-  return { open: questions.length, answered: senders + Object.keys(book.costs).length, waiting }
+  const costs = Object.keys(book.costs).filter((key) => wallets.has(key.split(":", 1)[0] as string)).length
+  return { open: questions.length, answered: senders + costs, waiting }
 }
 
 export type BookFold = {
@@ -532,13 +556,16 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
   const address = normalizeAddress(focus.address)
   const linked = new Set(walletsBehind(book, focus))
   const sideOf = (wallet: WalletResponse): Side => ({ wallet, view: usd ? usdView(wallet) : viewWallet(wallet) })
-  const sides = [focus, ...others.filter((w) => normalizeAddress(w.address) !== address && linked.has(normalizeAddress(w.address)) && sameRead(w, focus))].map(sideOf)
+  const behind = others.filter((w) => normalizeAddress(w.address) !== address && linked.has(normalizeAddress(w.address)) && sameRead(w, focus))
+  // Working out what it inherits walks every lot, so a fold that can't fit stops here, before any of that.
+  const historyOf = ({ address, legs }: WalletResponse) => ({ address: normalizeAddress(address), legs })
+  assertFoldFits(historyOf(focus), behind.map(historyOf), method)
+  const sides = [focus, ...behind].map(sideOf)
   const view = (sides[0] as Side).view
   const { legs: resolved, open, purchases } = resolveLegs(sides, method, book)
   const legs = resolved.get(address) as PricedLeg[]
   // What came from a linked wallet was first paid for in its blocks, which only its oracle reads have.
-  const markPrice: MarkPrice = (blockNum, asset) => sides.map((side) => side.view.markPrice(blockNum, asset)).find((price) => price !== null) ?? null
-  const { positions, unreadAssets: unread, totals, pnlStatus, points, holdComparison } = foldWallet(focus, method, { ...view, legs, markPrice })
+  const { positions, unreadAssets: unread, totals, pnlStatus, points, holdComparison } = foldWallet(focus, method, { ...view, legs, ...firstMarks(sides.map((side) => side.view)) })
   const questions = questionsOf(open, sides, book)
   const legsByTx = legsByTransaction(legs)
   const facts = transactionFacts(legsByTx, positions, method, address, unconfirmedAssets(positions, unread))
@@ -552,7 +579,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
     points: points.map((point) => ({ ...point, summary: point.txHash ? describeTransaction(legsByTx.get(point.txHash) ?? [], view.currency) : null, ...((point.txHash && facts.get(point.txHash)) || NO_FACTS) })),
     holdComparison,
     questions,
-    meter: meterOf(questions, book, focus, missingWallets(book, focus, others).length),
+    meter: meterOf(questions, book, focus, sides.map((side) => side.wallet), missingWallets(book, focus, others).length),
     withheld: withheldIn(legs).filter(({ wallet }) => wallet !== address),
     purchases,
   }

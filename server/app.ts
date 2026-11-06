@@ -2,14 +2,15 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createOtherTokens, createQuery, createRangeStream, createRates, createRowStream, createWallets, describeError, feedRounds, followChain, followRawSql, followSql, followedWallets, followedWindowSql, readBlockHashes, readHeadMark, sharedMarket, updateRounds, type AmpQuery, type FollowConfig, type ReadRates, type Source } from "@pricetag/sdk/internal"
+import { OldestFirstTooBigError, WalletsTooBigError, limitFolds, currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { WalletTooBigError, WalletsBusyError, createRowBudget, foldBytesThatFit, rowsThatFit, DEFAULT_RPC_URL, createL1FeeReader, createOtherTokens, createQuery, createRangeStream, createRates, createRowStream, createWallets, describeError, feedRounds, followChain, followRawSql, followSql, followedWallets, followedWindowSql, readBlockHashes, readHeadMark, sharedMarket, updateRounds, type AmpQuery, type FollowConfig, type ReadRates, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fixtures.ts"
 import { foldBook, previewBook } from "../src/core/resolve.ts"
+import { withoutWhatItHas } from "./long-lists.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule } from "../src/core/rules.ts"
 import { refuse, type CheckoutRefusal } from "./hosting.ts"
 import { forEveryone } from "./lanes.ts"
@@ -24,6 +25,7 @@ import { warnOfNewAggregators, warnOfNewRateAggregators, warnOfNewTokenAggregato
 import { createManifestReader, createProofs, currentProofOf, currentRevision, currentVerificationOf, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
 import { rawSource, resolvingSource, settledL1Fees, sharedReads, type SharedReads } from "./source.ts"
 import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
+import { createContractCheck } from "./contract.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 
 type Env = Record<string, string | undefined>
@@ -45,14 +47,17 @@ const MAX_OTHER_WALLETS = 20
 /** How long a read of all the user's wallets waits on the slowest before answering with the rest. A wallet catching up takes far less. */
 const ALL_YOURS_WAIT_MS = 2_500
 
+/** How many sets of wallets keep their last answer. Their rows count against the same budget as any wallet's. */
+const LAST_ANSWERS_KEPT = 50
+
 /**
- * Waits for every job, or `ALL_YOURS_WAIT_MS`, whichever's first. If `enough` still says no by then, it keeps waiting, a job at
+ * Waits for every job, or `waitMs`, whichever's first. If `enough` still says no by then, it keeps waiting, a job at
  * a time, until it does or they're all done. Jobs that aren't done keep running, and never reject.
  */
-async function settleSome(jobs: readonly Promise<void>[], enough: () => boolean): Promise<void> {
+async function settleSome(jobs: readonly Promise<void>[], enough: () => boolean, waitMs: number): Promise<void> {
   const pending = new Set(jobs)
   for (const job of jobs) void job.finally(() => pending.delete(job))
-  await Promise.race([Promise.all(jobs), new Promise((resolve) => setTimeout(resolve, ALL_YOURS_WAIT_MS).unref())])
+  await Promise.race([Promise.all(jobs), new Promise((resolve) => setTimeout(resolve, waitMs).unref())])
   while (pending.size > 0 && !enough()) await Promise.race(pending)
 }
 
@@ -78,11 +83,20 @@ function pinned(dataset: string, hash: string | undefined): string {
   return `${dataset.split("@")[0]}@${hash}`
 }
 
+/** The most rows of wallet history this server holds at once: `PRICETAG_MAX_WALLET_ROWS`, or what fits in its heap. */
+function maxWalletRowsOf(env: Env): number {
+  if (!env.PRICETAG_MAX_WALLET_ROWS) return rowsThatFit()
+  const rows = Number(env.PRICETAG_MAX_WALLET_ROWS)
+  if (!Number.isSafeInteger(rows) || rows <= 0) throw new Error("PRICETAG_MAX_WALLET_ROWS must be a positive whole number")
+  return rows
+}
+
 /** A wallet read's rows, closing balance and latest price run side by side, and the head or another wallet needn't wait behind them. Few enough to be fair to a shared Amp. */
 const QUERIES_AT_ONCE = 3
 
 export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, { maxConcurrent: QUERIES_AT_ONCE }) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs; follow: FollowConfig; shared?: SharedReads; approvals?: Approvals } | null {
   if (!query) return null
+  const maxWalletRows = maxWalletRowsOf(env)
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
   const feedsDataset = env.PRICETAG_FEEDS_DATASET || undefined
@@ -115,11 +129,11 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
       // The same SQL for both. The header alone says which prices it reads, and the transactions always come from the
       // first, so they can't differ.
       const followed = followedOf(pin)
-      const shared = sharedReads(query.aliased({ pricetag: pin }), { baseDataset, dataset: "pricetag", network, followed })
+      const shared = sharedReads(query.aliased({ pricetag: pin }), { baseDataset, dataset: "pricetag", network, followed, maxWalletRows })
       const ruleSource = (id: string, name: string, hash: string | undefined, priceDataset: string): RuleSource => ({
         rule: { id, ...RULE_TEXT[id]!, dataset: name, hash: hash as string },
         // The stream reads the default rule's prices, so only that rule can use them.
-        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", feedsDataset, startBlock, network, followed: priceDataset === pin ? followed : undefined }, shared),
+        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", feedsDataset, startBlock, network, tokensDataset: env.PRICETAG_TOKENS_DATASET, followed: priceDataset === pin ? followed : undefined, maxWalletRows }, shared),
       })
       const rules = [
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, pin),
@@ -129,13 +143,13 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
       return { source: rules[0]!.source, rules, readRates, proofs, follow: followOf(followSql(pin), startBlock), shared, approvals }
     }
     const followed = followedOf(env.PRICETAG_DATASET)
-    const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network, followed })
+    const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network, followed, maxWalletRows })
     const approvals = createApprovals(query, { baseDataset, dataset: { reference: env.PRICETAG_DATASET, name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
-    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, feedsDataset, startBlock, network, followed }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET), startBlock), shared, approvals }
+    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, feedsDataset, startBlock, network, tokensDataset: env.PRICETAG_TOKENS_DATASET, followed, maxWalletRows }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET), startBlock), shared, approvals }
   }
   const historyBlocks = env.PRICETAG_HISTORY_BLOCKS ? Number(env.PRICETAG_HISTORY_BLOCKS) : null
   if (historyBlocks !== null && (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0)) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
-  const source = rawSource(query, { baseDataset, network, historyBlocks })
+  const source = rawSource(query, { baseDataset, network, historyBlocks, maxWalletRows })
   const approvals = createApprovals(query, { baseDataset, dataset: null, network, historyFrom: (head) => source.historyFrom?.(head) ?? head })
   return { source, readRates, proofs, follow: followOf(followRawSql(baseDataset)), approvals }
 }
@@ -167,6 +181,10 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 
 /** Query errors can quote our SQL or the endpoint. The browser gets a fixed message, and the detail stays in the server log. */
 function sendAmpError(res: ServerResponse, error: unknown, message = "Couldn't read this wallet's data.") {
+  if (error instanceof WalletTooBigError) return sendJson(res, 413, { error: "This wallet has too much history for this server to read, so there are no numbers to show for it." })
+  if (error instanceof OldestFirstTooBigError) return sendJson(res, 413, { error: "There's too much history here to work out by oldest first on this server. Average cost still works." })
+  if (error instanceof WalletsTooBigError) return sendJson(res, 413, { error: "These wallets have too much history to add up on this server. Each one can still be read on its own." })
+  if (error instanceof WalletsBusyError) return sendJson(res, 429, { error: "This server is busy reading other very large wallets. Try again in a minute." })
   console.error("Amp query failed:", describeError(error))
   sendJson(res, 502, { error: message })
 }
@@ -227,10 +245,13 @@ export type ApiOptions = {
   maxWallets?: number
   /** Counts a valid checkout just before it reaches the provider, or says why it can't go. */
   limitCheckout?: (req: IncomingMessage) => CheckoutRefusal | null
+  /** How long a read of all the user's wallets waits on the slowest. */
+  allYoursWaitMs?: number
 }
 
-export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env), { clientIp = () => null, maxWallets, limitCheckout = () => null }: ApiOptions = {}) {
+export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env), { clientIp = () => null, maxWallets, limitCheckout = () => null, allYoursWaitMs = ALL_YOURS_WAIT_MS }: ApiOptions = {}) {
   const source = created?.source ?? null
+  limitFolds(foldBytesThatFit())
 
   let head: Head | null = null
   let headReadAt = 0
@@ -266,6 +287,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     headRewinds += 1
     const oldTip = Math.max(head?.blockNum ?? 0, tip)
     readL1Fees.rewind(block, oldTip)
+    lastAnswers.clear()
     await Promise.all([created?.shared?.rewind(block, oldTip), ...[...new Set([wallets, ...rules.map((r) => r.wallets)])].map((w) => w?.rewind(block, oldTip))])
     created?.readRates.rewind?.(block)
     // The new chain can be shorter, and the head is only read from the last one on.
@@ -299,12 +321,20 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (subscribers.size > 0) void followLoop()
   }
 
+  const isContract = createContractCheck(env.BASE_RPC_URL || DEFAULT_RPC_URL)
   const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL, fetch, undefined, console, Number(env.BASE_RPC_RATE_LIMIT) || undefined), () => head?.blockNum ?? null)
   // Shared by the rules, since no rule changes what a token says about itself or what a wallet holds of it.
   const otherTokens = source?.readTokenFacts && createOtherTokens(source.readTokenFacts)
-  const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true, otherTokens }) : null
+  const budget = createRowBudget(maxWalletRowsOf(env))
+  /** Each set of wallets' last answer, all at one block, for while one of them can't be read. It's the first to go when memory's short, because reading doesn't need it, and a client keeps the one on its screen in case it does. */
+  const lastAnswers = new Map<string, WalletResponse[]>()
+  budget.join({
+    heldRows: () => [...lastAnswers.values()].flat().reduce((sum, wallet) => sum + wallet.legs.length, 0),
+    evictOldest: () => lastAnswers.delete(lastAnswers.keys().next().value as string),
+  })
+  const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true, otherTokens, budget }) : null
   // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
-  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true, otherTokens }) }))
+  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true, otherTokens, budget }) }))
 
   /**
    * Reads a wallet, or answers the request with why it can't.
@@ -417,12 +447,13 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   /**
    * Every one of the user's wallets that this request could read, in `currency`, and the ones it couldn't yet. Each wallet is
    * one job, its read and its rates together, so one slow or failing wallet doesn't hold up or fail the rest: after a moment
-   * whatever's done is the answer, and the rest are still reading or failed. With nothing done at all, it waits for the first.
-   * A wallet whose read this time failed or hasn't finished is left out, whatever was read of it before, because its balance
-   * then can be from before a move another wallet has already seen. `fresh: false` takes what's already been read, and
-   * leaves out a wallet whose last read failed.
+   * whatever's done is the answer, and the rest are still reading or failed. With nothing to answer with, it waits for the first.
+   * A wallet that's been in an answer never drops out of the next one. Its old balance can be from before a move another wallet
+   * has already seen, so it can't join a newer read of the others: the whole last answer stands instead, at its one block, until
+   * that wallet is back. `fresh: false` takes what's already been read, and treats a wallet whose last read failed as failed.
+   * `remember` is false for what isn't the user's own answers, like a preview's, whose rates aren't the ones to keep.
    */
-  async function readAllYours(addresses: readonly string[], currency: CurrencyCode, rule: (typeof rules)[number] | null, books: readonly Book[], fresh: boolean, res: ServerResponse, paidIn: readonly CurrencyCode[] = []): Promise<{ read: WalletResponse[]; unread: Unread } | null> {
+  async function readAllYours(addresses: readonly string[], currency: CurrencyCode, rule: (typeof rules)[number] | null, books: readonly Book[], fresh: boolean, remember: boolean, res: ServerResponse, paidIn: readonly CurrencyCode[] = []): Promise<{ read: WalletResponse[]; unread: Unread } | null> {
     const from = rule?.wallets ?? wallets
     const chain = rule?.source ?? source
     if (!from || !chain) {
@@ -430,8 +461,12 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return null
     }
     const ruled = (wallet: WalletResponse): WalletResponse => (rule ? { ...wallet, rule: rule.rule.id, ruleNote: rule.note } : wallet)
+    const lastKey = JSON.stringify([rule?.rule.id ?? null, currency, [...paidIn].sort(), [...addresses].sort()])
+    const startedAt = headRewinds
     const failed = new Set<string>()
     const done = new Map<string, WalletResponse>()
+    /** Why a wallet was refused, which says more than that it failed. */
+    let refusal: unknown = null
     const job = async (address: string): Promise<void> => {
       let wallet: WalletResponse | null
       try {
@@ -439,6 +474,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         if (fresh) linkedFailures.delete(address)
       } catch (error) {
         console.error("Wallet read failed:", describeError(error))
+        if (error instanceof WalletTooBigError || error instanceof WalletsBusyError) refusal = error
         linkedFailures.add(address)
         failed.add(address)
         return
@@ -455,7 +491,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         failed.add(address)
       }
     }
-    await settleSome(addresses.map(job), () => done.size > 0)
+    await settleSome(addresses.map(job), () => done.size > 0 || lastAnswers.has(lastKey), allYoursWaitMs)
 
     // What's done by now is the answer. A job that finishes later comes too late to be taken back to the block below, so it stays out, as still reading.
     const answer = new Map(done)
@@ -483,14 +519,38 @@ export function createApi(env: Env, created: Created | null = createSource(env),
           }
         }),
         () => true,
+        allYoursWaitMs,
       )
+    }
+
+    const last = lastAnswers.get(lastKey)
+    const kept = new Set(last?.map((wallet) => wallet.address.toLowerCase()))
+    const missing = [...kept].filter((address) => !answer.has(address))
+    if (last && missing.length > 0) {
+      const isNew = (address: string) => !kept.has(address)
+      return {
+        read: last,
+        unread: {
+          reading: addresses.filter((address) => isNew(address) && !failed.has(address)),
+          failed: addresses.filter((address) => isNew(address) && failed.has(address)),
+          updating: missing.filter((address) => !failed.has(address)),
+          outdated: missing.filter((address) => failed.has(address)),
+        },
+      }
     }
 
     const read = addresses.flatMap((address) => answer.get(address) ?? [])
     const unread = { reading: addresses.filter((address) => !answer.has(address) && !failed.has(address)), failed: addresses.filter((address) => !answer.has(address) && failed.has(address)) }
     if (read.length === 0 && fresh && unread.reading.length === 0) {
-      sendJson(res, 502, { error: "None of your wallets could be read." })
+      if (refusal) sendAmpError(res, refusal)
+      else sendJson(res, 502, { error: "None of your wallets could be read." })
       return null
+    }
+    // A reorg during this read can have replaced what it found.
+    if (remember && read.length > 0 && startedAt === headRewinds) {
+      lastAnswers.delete(lastKey)
+      lastAnswers.set(lastKey, read)
+      if (lastAnswers.size > LAST_ANSWERS_KEPT) lastAnswers.delete(lastAnswers.keys().next().value as string)
     }
     return { read, unread }
   }
@@ -510,11 +570,18 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const books = action === "preview" ? (candidates as Book[]) : [book]
     const paidIn = parsePaidIn(typeof body.paid === "string" ? body.paid : null)
     if (!paidIn) return sendJson(res, 400, { error: "That currency isn't supported." })
-    const found = await readAllYours(addresses, currency, rule, books, action === undefined || action === "wallets", res, paidIn)
+    const shown: unknown = body.shown ?? []
+    if (!Array.isArray(shown) || !shown.every((address) => typeof address === "string" && isAddress(address))) return sendJson(res, 400, { error: "The wallets shown are a list of Base addresses." })
+    const found = await readAllYours(addresses, currency, rule, books, action === undefined || action === "wallets", action !== "preview", res, paidIn)
     if (!found) return
     const { read, unread } = found
     // The wallets themselves, because the browser runs the fold, with answers that stay with it.
     if (action === "wallets") return sendJson(res, 200, { wallets: read, unread } satisfies AllYoursRead)
+    // A client that doesn't fold its own can be showing a wallet this server no longer has. Leaving it out here would contradict the total, and a file can't say so.
+    if (action === "explain" || action === "export") {
+      const answered = new Set(read.map((wallet) => wallet.address.toLowerCase()))
+      if (!(shown as string[]).every((address) => answered.has(address.toLowerCase()))) return sendJson(res, 409, { error: "One of your wallets isn't back yet, and this would leave it out. Try again once it's updated." })
+    }
     if (read.length === 0) {
       res.writeHead(204, { "cache-control": "no-store" })
       res.end()
@@ -522,15 +589,17 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     }
     if (action === "preview") return sendJson(res, 200, { previews: previewCombined(read, method, candidates as Book[], unread) })
     if (action === "export") {
+      // Worked out first, because it can be refused, and a refusal can't follow a 200.
+      const csv = exportCombined(read, method, book)
       res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" })
-      res.end(exportCombined(read, method, book))
+      res.end(csv)
       return
     }
     if (target) {
       const explanation = explainCombined(read, method, target, book, unread)
       return explanation ? sendJson(res, 200, explanation) : sendJson(res, 404, { error: "None of your wallets has anything like that." })
     }
-    sendJson(res, 200, combinedPortfolioOf(read, method, book, unread))
+    sendJson(res, 200, withoutWhatItHas(combinedPortfolioOf(read, method, book, unread), body.since))
   }
 
   /** The provider's detail stays in the server's log, and the client gets a sentence it can show. */
@@ -639,7 +708,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       res.end(exportCsv(positions, view.currency))
       return
     }
-    if (!target) return sendJson(res, 200, portfolioOf(wallet, method, others, linkedBooks[0], [...linkedFailures]))
+    if (!target) return sendJson(res, 200, withoutWhatItHas(portfolioOf(wallet, method, others, linkedBooks[0], [...linkedFailures]), body.since))
     const explanation = explainPortfolio(wallet, method, target, others, linkedBooks[0])
     if (explanation) sendJson(res, 200, explanation)
     else sendJson(res, 404, { error: "This wallet has nothing like that." })
@@ -764,6 +833,17 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    try {
+      return await route(req, res)
+    } catch (error) {
+      // Folds aren't all inside a read's `try`, and every one of them can ask for this.
+      if (!(error instanceof OldestFirstTooBigError || error instanceof WalletsTooBigError)) throw error
+      sendAmpError(res, error)
+      return true
+    }
+  }
+
+  async function route(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = pathOf(req)
     if (path === null) {
       sendJson(res, 400, { error: "Bad request" })
@@ -805,6 +885,15 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         return true
       }
       await answerRate(currency, res)
+      return true
+    }
+
+    const progressMatch = /^\/api\/wallet\/([^/]+)\/progress$/.exec(path)
+    if (progressMatch) {
+      const address = (progressMatch[1] as string).toLowerCase()
+      if (address === "demo" || address === DEMO_ADDRESS || demoWallet(address)) sendJson(res, 200, { stage: "costs", transfers: null, isContract: false })
+      else if (!isAddress(address)) sendJson(res, 400, { error: "That isn't a Base address." })
+      else sendJson(res, 200, { ...(wallets?.progress(address) ?? { stage: "waiting", transfers: null }), isContract: await isContract(address) })
       return true
     }
 

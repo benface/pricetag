@@ -578,7 +578,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     @Test func anOtherTokenNeverCountsTowardTheCapAndIsNeverSwept() async throws {
         // A fortune in something calling itself USDC, on a wallet well under its cap.
         let token = "0x00000000000000000000000000000000000000f1"
-        let copy = #"{ "token": "\#(token)", "kind": "token", "name": "USD Coin", "symbol": "USDC", "decimals": 6, "balance": "99999999999999", "state": "read", "note": null, "tucked": "It calls itself USDC, and it isn't the USDC we know." }"#
+        let copy = #"{ "token": "\#(token)", "kind": "token", "name": "USD Coin", "symbol": "USDC", "decimals": 6, "balance": "99999999999999", "state": "read", "note": null, "tucked": "It calls itself USDC, but it isn't the real USDC." }"#
         let rig = await Rig(snapshot(eth: oneEth / 10_000), portfolio: .success(portfolio(otherTokens: [copy])))
         await rig.wallet.readHistory()
         await rig.wallet.tick()
@@ -1616,16 +1616,16 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     }
 
     @Test func noticesFollowTheMainCurrencyAndItsRate() async throws {
-        var display = MoneyDisplay(main: .CAD, rateMicros: "1400000")
-        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei), withCold: false, moneyDisplay: { display })
+        let shown = Shown(MoneyDisplay(main: .CAD, rateMicros: "1400000"))
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei), withCold: false, moneyDisplay: { shown.display })
         await rig.wallet.tick()
         #expect(texts(rig.wallet).first?.contains("the cap stays at $35 ") == true)
         #expect(rig.wallet.money(dollars: 25) == "$35")
         #expect(rig.wallet.money(25 * Money.dollar) == "$35.00")
-        display = MoneyDisplay(main: .CAD)
+        shown.display = MoneyDisplay(main: .CAD)
         #expect(texts(rig.wallet).first?.contains("the cap stays at US$25 ") == true)
         #expect(rig.wallet.money(dollars: 25) == "US$25")
-        display = MoneyDisplay(main: .USD)
+        shown.display = MoneyDisplay(main: .USD)
         #expect(texts(rig.wallet).first?.contains("the cap stays at $25 ") == true)
         #expect(rig.wallet.money(dollars: 25) == "$25")
         #expect(rig.wallet.money(25 * Money.dollar) == "$25.00")
@@ -1641,14 +1641,14 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
     /// What moves money only ever looks at USD, whatever a rate says or stops saying.
     @Test func aChangingRateChangesWhatsShownAndNothingElse() async throws {
-        var display = MoneyDisplay(main: .CAD, rateMicros: "1400000")
-        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(80)]), moneyDisplay: { display })
+        let shown = Shown(MoneyDisplay(main: .CAD, rateMicros: "1400000"))
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(80)]), moneyDisplay: { shown.display })
         await rig.wallet.tick()
         let cap = rig.wallet.settings.capUsdMicros
         let plan = try #require(rig.wallet.plan)
         #expect(rig.wallet.capText == "$70")
         for rate in ["10000000", "100000", nil] as [String?] {
-            display = MoneyDisplay(main: .CAD, rateMicros: rate)
+            shown.display = MoneyDisplay(main: .CAD, rateMicros: rate)
             await rig.wallet.tick()
             #expect(rig.wallet.settings.capUsdMicros == cap)
             #expect(rig.wallet.plan?.excessUsdMicros == plan.excessUsdMicros)
@@ -1913,6 +1913,16 @@ private final class Seen: @unchecked Sendable {
     private var stored: Bool?
     var value: Bool? { lock.withLock { stored } }
     func set(_ value: Bool) { lock.withLock { stored = value } }
+}
+
+private final class Shown: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: MoneyDisplay
+    init(_ display: MoneyDisplay) { current = display }
+    var display: MoneyDisplay {
+        get { lock.withLock { current } }
+        set { lock.withLock { current = newValue } }
+    }
 }
 
 private final class Clock: @unchecked Sendable {

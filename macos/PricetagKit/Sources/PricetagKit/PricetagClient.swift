@@ -13,10 +13,16 @@ public enum FetchError: Error, Equatable, Sendable {
     case noAmpConfigured(String)
     /// The server refused the request, or sent something this version can't read.
     case rejected(String)
+    /// The wallet has more history than the server can hold. Trying again won't change that.
+    case tooBig(String)
+    /// The server only answers people it invited, and this request had no invite it takes.
+    case needsInvite(String)
     /// The server is holding this client back, and says how many seconds until there's room. It clears by itself.
     case rateLimited(String, retryAfter: Int)
     /// The server's price or update isn't the one a proof is about.
     case priceChanged(String)
+    /// What this needs hasn't caught up yet, like a wallet in All Yours' numbers that an answer would otherwise leave out. It clears by itself.
+    case notCaughtUp(String)
 }
 
 public protocol PortfolioSource: Sendable {
@@ -24,13 +30,15 @@ public protocol PortfolioSource: Sendable {
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio
     /// The same, from what the server last read, without waiting on a new read. It may be behind, so it's never live. Nil if the server hasn't read this wallet.
     func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio?
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation
     /// What each set of answers would do to the headline, in the same order.
     func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview]
-    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String
+    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> String
     func importCoinbase(csv: String) async throws -> ExchangeImport
     /// Empty when the server has only one, so there's nothing to choose.
     func rules() async throws -> [PricingRule]
+    /// How far a wallet's first read has got. Nil when this source can't tell, like a server from before it could.
+    func readProgress(address: String) async throws -> FirstReadProgress?
     func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof
@@ -53,7 +61,7 @@ extension PortfolioSource {
     public func headEvents() -> AsyncThrowingStream<Void, any Error>? { nil }
     public func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio? { nil }
     public func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview] { throw FetchError.unreachable }
-    public func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String { throw FetchError.unreachable }
+    public func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> String { throw FetchError.unreachable }
     public func importCoinbase(csv: String) async throws -> ExchangeImport { throw FetchError.unreachable }
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
     public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof { throw FetchError.unreachable }
@@ -62,10 +70,55 @@ extension PortfolioSource {
     public func priceVerification(asset: String, revision: String?, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
     public func approvals(address: String) async throws -> WalletApprovals { throw FetchError.unreachable }
     public func rules() async throws -> [PricingRule] { [] }
+    public func readProgress(address: String) async throws -> FirstReadProgress? { nil }
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
     public func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout { throw FetchError.unreachable }
     public func currentRate(currency: CurrencyCode) async throws -> String? { throw FetchError.unreachable }
     public func onrampOrders(ref: String) async throws -> [OnrampOrder] { throw FetchError.unreachable }
+}
+
+/// The last reply for each way of reading a wallet, so the next can leave out what it says. They're the same lists the store holds, not copies.
+private actor ReplyMemory {
+    /// One wallet by a few settings, or a few wallets being looked between. The newest is last.
+    private static let kept = 4
+    private var replies: [(key: String, portfolio: Portfolio)] = []
+
+    static func key(_ address: String, _ method: CostMethod, _ currency: CurrencyCode, _ rule: String?) -> String {
+        "\(address)|\(method.rawValue)|\(currency.rawValue)|\(rule ?? "")"
+    }
+
+    func last(_ key: String) -> Portfolio? { replies.last { $0.key == key }?.portfolio }
+
+    func remember(_ portfolio: Portfolio, _ key: String) {
+        replies.removeAll { $0.key == key }
+        // Nothing to send next time, so it's not worth holding on to.
+        guard portfolio.marks != nil else { return }
+        replies.append((key, portfolio))
+        replies.removeFirst(max(0, replies.count - Self.kept))
+    }
+}
+
+extension Portfolio {
+    /// This reply with what it left out put back from what the server compared it to, or nil if that isn't there to put back.
+    func restoring(from base: Portfolio?) -> Portfolio? {
+        guard let kept else { return self }
+        var whole = self
+        whole.kept = nil
+        if let count = kept.points {
+            guard let base, count == base.marks?.points?.markedCount, count <= base.points.count else { return nil }
+            whole.points = Array(base.points.prefix(count)) + points
+        }
+        if let count = kept.outgoingTxs {
+            guard let base, count == base.marks?.outgoingTxs?.markedCount, count <= base.outgoingTxs.count else { return nil }
+            whole.outgoingTxs = Array(base.outgoingTxs.prefix(count)) + outgoingTxs
+        }
+        return whole
+    }
+}
+
+private extension String {
+    /// How many entries a mark vouches for, which it starts with.
+    var markedCount: Int? { split(separator: ":").first.flatMap { Int($0) } }
 }
 
 public struct PricetagClient: PortfolioSource {
@@ -73,6 +126,7 @@ public struct PricetagClient: PortfolioSource {
     /// What a shared server knows this person by. It only goes over HTTPS, so a server on this Mac, or any other plain address, never gets it.
     let invite: String?
     private let session: URLSession
+    private let memory = ReplyMemory()
 
     /// A block every 2 s means the events are never quiet for this long, unless something's wrong.
     private static let eventsIdleTimeout: TimeInterval = 30
@@ -111,17 +165,24 @@ public struct PricetagClient: PortfolioSource {
     }
 
     public func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
-        try await decoded(post("/api/portfolio/\(address)", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book), timeout: timeout))
+        let key = ReplyMemory.key(address, method, currency, rule)
+        let portfolio = try await whole(key: key) { since in
+            try await post("/api/portfolio/\(address)", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book, since: since), timeout: timeout)
+        }
+        guard let portfolio else { throw FetchError.rejected("The price service sent something this version can't read.") }
+        return portfolio
     }
 
     public func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio? {
         // Past this, a real read is as quick, say when a currency's rates have to be read first.
-        let data = try await post("/api/portfolio/\(address)/last", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book), timeout: .seconds(5))
-        return data.isEmpty ? nil : try decoded(data) as Portfolio
+        let key = ReplyMemory.key(address, method, currency, rule)
+        return try await whole(key: key) { since in
+            try await post("/api/portfolio/\(address)/last", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book, since: since), timeout: .seconds(5))
+        }
     }
 
-    public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
-        try await decoded(post("/api/portfolio/\(address)/explain", query: target.queryItems, body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book), timeout: .seconds(30)))
+    public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
+        try await decoded(post("/api/portfolio/\(address)/explain", query: target.queryItems, body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book, shown: shown), timeout: .seconds(30)))
     }
 
     public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
@@ -166,8 +227,8 @@ public struct PricetagClient: PortfolioSource {
         return answer.previews
     }
 
-    public func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String {
-        let data = try await post("/api/portfolio/\(address)/export", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book), timeout: .seconds(30))
+    public func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> String {
+        let data = try await post("/api/portfolio/\(address)/export", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book, shown: shown), timeout: .seconds(30))
         guard let text = String(data: data, encoding: .utf8) else { throw FetchError.rejected("The price service sent something this version can't read.") }
         return text
     }
@@ -181,13 +242,17 @@ public struct PricetagClient: PortfolioSource {
         return body.rules
     }
 
+    public func readProgress(address: String) async throws -> FirstReadProgress? {
+        try await get("/api/wallet/\(address)/progress", query: [], timeout: .seconds(8))
+    }
+
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison {
         // It reads the wallet by both rules, and a first read can take a minute each.
         try await decoded(post("/api/portfolio/\(address)/compare", body: FoldBody(method: method, currency: currency, rule: nil, linked: linked, book: book), timeout: .seconds(180)))
     }
 
     public func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout {
-        try await decoded(post("/api/onramp/checkout", body: CheckoutBody(address: address, asset: asset, cryptoAmount: cryptoAmount, fiat: fiat.map { .init(amount: Format.plainAmount($0.micros), currency: $0.currency) }), timeout: .seconds(30)))
+        try await decoded(post("/api/onramp/checkout", body: CheckoutBody(address: address, asset: asset, cryptoAmount: cryptoAmount, fiat: fiat.flatMap { money in Format.plainMoney(money.micros).map { .init(amount: $0, currency: money.currency) } }), timeout: .seconds(30)))
     }
 
     public func currentRate(currency: CurrencyCode) async throws -> String? {
@@ -198,6 +263,24 @@ public struct PricetagClient: PortfolioSource {
     public func onrampOrders(ref: String) async throws -> [OnrampOrder] {
         let body: OrdersBody = try await get("/api/onramp/orders/\(ref)", query: [], timeout: .seconds(30))
         return body.orders
+    }
+
+    /// A reply with its lists whole, whatever the server left out. Nil if it has nothing to say. A reply that leaves out what this doesn't have can't be used, so it asks again for all of it.
+    private func whole(key: String, read: (LongLists<String>) async throws -> Data) async throws -> Portfolio? {
+        // What was asked with, not whatever's newest by the time the answer gets here: it's what the server compared.
+        let base = await memory.last(key)
+        let data = try await read(base?.marks ?? LongLists())
+        if data.isEmpty { return nil }
+        let reply: Portfolio = try decoded(data)
+        var portfolio = reply.restoring(from: base)
+        if portfolio == nil {
+            let again = try await read(LongLists())
+            if again.isEmpty { return nil }
+            portfolio = try (decoded(again) as Portfolio).restoring(from: nil)
+        }
+        guard let portfolio else { throw FetchError.rejected("The price service sent something this version can't read.") }
+        await memory.remember(portfolio, key)
+        return portfolio
     }
 
     private func decoded<Body: Decodable>(_ data: Data) throws -> Body {
@@ -256,8 +339,11 @@ public struct PricetagClient: PortfolioSource {
         switch status {
         case 502: throw FetchError.ampUnavailable(message)
         case 503: throw FetchError.noAmpConfigured(message)
+        case 413: throw FetchError.tooBig(message)
+        case 401: throw FetchError.needsInvite(message)
         case 429: throw FetchError.rateLimited(message, retryAfter: Self.retryAfter(response as? HTTPURLResponse))
         case 412: throw FetchError.priceChanged(message)
+        case 409: throw FetchError.notCaughtUp(message)
         default: throw FetchError.rejected(message)
         }
     }
@@ -301,6 +387,9 @@ public struct PricetagClient: PortfolioSource {
         let rule: String?
         let linked: [String]
         let book: Book
+        var since: LongLists<String>? = nil
+        /// All Yours' wallets in the numbers on screen, which an answer can't leave out.
+        var shown: [String]? = nil
     }
 
     private struct PreviewBody: Encodable {

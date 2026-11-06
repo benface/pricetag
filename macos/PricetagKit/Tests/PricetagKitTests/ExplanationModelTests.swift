@@ -35,7 +35,7 @@ final class ExplanationGate {
     let server = URL(string: "http://127.0.0.1:8787")!
 
     func request(address: String = "0xaaa", method: CostMethod = .average, server: URL? = nil, target: ExplainTarget = .asset("AERO", .realized)) -> ExplanationRequest {
-        ExplanationRequest(target: target, address: address, method: method, currency: .USD, rule: nil, linked: [], serverURL: server ?? self.server, book: Book())
+        ExplanationRequest(target: target, address: address, method: method, currency: .USD, rule: nil, linked: [], shown: nil, serverURL: server ?? self.server, book: Book())
     }
 
     func explanation(_ title: String) -> Explanation {

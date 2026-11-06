@@ -375,10 +375,12 @@ public enum AddSavingsWording {
         ["Choose your Ledger in \(browser)'s list.", "Pick an account.", "Press Add to the Mac app, and allow it to open."]
     }
 
-    public static let browserTroubles = [
-        Trouble(when: "Your Ledger isn't in the list", then: "Check it's unlocked and Ledger Wallet is closed, then unplug it and plug it back in."),
-        Trouble(when: "The page won't load", then: "This app's price service has to be running on this Mac."),
-    ]
+    public static func browserTroubles(server: URL) -> [Trouble] {
+        [
+            Trouble(when: "Your Ledger isn't in the list", then: "Check it's unlocked and Ledger Wallet is closed, then unplug it and plug it back in."),
+            Trouble(when: "The page won't load", then: server.isOnThisMac ? "This app's price service has to be running on this Mac." : "Check your internet connection, then open it again."),
+        ]
+    }
 
     public static func browserBody(_ browser: String, defaultThatCant: String?) -> String {
         let why = defaultThatCant.map { "\($0) can't reach a Ledger, so this opens \(browser) instead." } ?? "This Mac app can't reach a Ledger yet, so \(browser) does this part."

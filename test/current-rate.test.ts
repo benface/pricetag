@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { afterEach, beforeEach, describe, it, mock } from "node:test"
 import { setImmediate as settled } from "node:timers/promises"
 import { followCurrentRate, readCurrentRate } from "../src/core/current-rate.ts"
+import { failureOf, ReadError } from "../src/core/read-failure.ts"
 
 const MINUTE = 60 * 1000
 
@@ -72,6 +73,51 @@ describe("an open form's current rate", () => {
     assert.deepEqual(seen, ["1400000", null, "1500000"])
   })
 
+  it("waits as long as a server that's slowing it down says, and then reads again", async () => {
+    await start()
+    answer = new ReadError({ kind: "slowedDown", said: "Too many requests.", retryAfter: 45 })
+    await pass(5 * MINUTE)
+    assert.equal(reads, 2)
+    answer = "1500000"
+    await pass(44 * 1000)
+    assert.equal(reads, 2, "not at the usual retry, and not before the wait is over")
+    assert.deepEqual(seen, ["1400000"])
+    await pass(1000)
+    assert.equal(reads, 3)
+    assert.deepEqual(seen, ["1400000", "1500000"])
+  })
+
+  it("can wait less than the usual retry when that's what the server says", async () => {
+    answer = new ReadError({ kind: "slowedDown", said: "Too many requests.", retryAfter: 5 })
+    await start()
+    await pass(5 * 1000)
+    assert.equal(reads, 2)
+  })
+
+  it("still lets a rate go after an hour during a longer wait, without reading early", async () => {
+    await start()
+    answer = new ReadError({ kind: "slowedDown", said: "Too many requests.", retryAfter: 2 * 60 * 60 })
+    await pass(5 * MINUTE)
+    await pass(54 * MINUTE)
+    assert.deepEqual(seen, ["1400000"])
+    await pass(MINUTE)
+    assert.deepEqual(seen, ["1400000", null])
+    assert.equal(reads, 2)
+    answer = "1500000"
+    await pass(65 * MINUTE)
+    assert.equal(reads, 3)
+    assert.deepEqual(seen, ["1400000", null, "1500000"])
+  })
+
+  it("doesn't let a rate go after it's stopped, even during a long wait", async () => {
+    await start()
+    answer = new ReadError({ kind: "slowedDown", said: "Too many requests.", retryAfter: 2 * 60 * 60 })
+    await pass(5 * MINUTE)
+    stop()
+    await pass(60 * MINUTE)
+    assert.deepEqual(seen, ["1400000"])
+  })
+
   it("drops the rate straight away when the server says there's none", async () => {
     await start()
     answer = null
@@ -113,6 +159,14 @@ describe("reading the current rate", () => {
     assert.equal(await readCurrentRate("CAD", signal, send), "1400000")
     assert.equal(asked, "/api/rate?currency=CAD")
     assert.equal(await readCurrentRate("CAD", signal, answering(200, { rateMicros: null })), null)
+  })
+
+  it("reads how long a server that's slowing it down says to wait, whatever the body", async () => {
+    const refusing = (body: string, headers: Record<string, string>) => (async () => new Response(body, { status: 429, headers })) as typeof fetch
+    const failure = (send: typeof fetch) => readCurrentRate("CAD", signal, send).then(() => assert.fail("it should fail"), failureOf)
+    assert.deepEqual(await failure(refusing('{"error":"Too many requests from this invite."}', { "retry-after": "17" })), { kind: "slowedDown", said: "Too many requests.", retryAfter: 17 })
+    assert.deepEqual(await failure(refusing("<html>Slow down</html>", { "retry-after": "17" })), { kind: "slowedDown", said: "Too many requests.", retryAfter: 17 })
+    assert.deepEqual(await failure(refusing("<html>Slow down</html>", {})), { kind: "slowedDown", said: "Too many requests.", retryAfter: 60 })
   })
 
   it("counts anything else as a failed read, which isn't the same as no rate", async () => {

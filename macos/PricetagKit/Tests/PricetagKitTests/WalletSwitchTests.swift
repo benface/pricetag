@@ -19,7 +19,7 @@ actor HeldSource: PortfolioSource {
         lastReads[address]
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -325,6 +325,25 @@ final class TestClock: @unchecked Sendable {
         store.stop()
         #expect(store.readingSince == nil)
         await source.finish()
+    }
+
+    @Test func aSavedWalletsNumbersDontStopItBeingCheckedForAContract() async throws {
+        let directory = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = HeldSource()
+        let store = makeStore(source, wallet: walletA, directory: directory)
+        store.start()
+        await answer(store, source, walletA, with: try numbers(walletA))
+        store.stop()
+        await source.finish()
+        try await waitForFile(in: directory)
+
+        let next = makeStore(ContractSource(answer: true), wallet: walletA, directory: directory)
+        let firstRun = FirstRun(defaults: UserDefaults(suiteName: "switch-tests-\(UUID().uuidString)")!, isExistingInstall: false)
+        #expect(next.portfolio != nil, "there's no reading screen to do the asking")
+        firstRun.checkContract(of: next.address) { next.currentSource }
+        await until(firstRun.warnsOfContract(walletA))
+        #expect(firstRun.warnsOfContract(walletA))
     }
 
     @Test func aWalletsNumbersAreThereAtTheNextLaunchMarkedAsOld() async throws {

@@ -76,8 +76,9 @@ export function useBook() {
     return () => window.removeEventListener("storage", onStorage)
   }, [show])
 
+  // `onSaved` hears what the change was made to, since that can be more than what's on screen. It isn't called if the change wasn't saved.
   const change = useCallback(
-    (next: BookChange) => {
+    (next: BookChange, onSaved?: (before: Book) => void) => {
       const update = (latest: Book) => applyChange(latest, book, next)
       setBook(update)
       act(async () => {
@@ -87,6 +88,7 @@ export function useBook() {
           return update(latest)
         })
         if (!same(before, after)) setHistory([...history.current, { before, after }])
+        onSaved?.(before)
         return after
       })
     },

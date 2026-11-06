@@ -10,6 +10,7 @@ actor BookSource: PortfolioSource {
     private(set) var previewed: [[Book]] = []
     private(set) var previewRules: [String?] = []
     var previewAnswers: [BookPreview] = []
+    private var importAnswer = ExchangeImport(withdrawals: [ExchangeWithdrawal(exchange: "Coinbase", asset: "ETH", units: "1", at: "2026-11-04T00:00:00.000Z", cost: Money(micros: "5", currency: .USD), toAddress: nil)], skipped: 1, firstSeen: ["ETH": "2026-10-01T00:00:00.000Z"])
     /// How long each of the next previews says to wait, instead of answering.
     var previewRefusals: [Int] = []
 
@@ -30,7 +31,7 @@ actor BookSource: PortfolioSource {
         return portfolios.count > 1 ? portfolios.removeFirst() : portfolios[0]
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -41,7 +42,7 @@ actor BookSource: PortfolioSource {
         return previewAnswers
     }
 
-    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String {
+    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> String {
         books.append(book)
         return ""
     }
@@ -52,7 +53,11 @@ actor BookSource: PortfolioSource {
     }
 
     func importCoinbase(csv: String) async throws -> ExchangeImport {
-        ExchangeImport(withdrawals: [ExchangeWithdrawal(exchange: "Coinbase", asset: "ETH", units: "1", at: "2026-11-04T00:00:00.000Z", cost: Money(micros: "5", currency: .USD), toAddress: nil)], skipped: 1)
+        importAnswer
+    }
+
+    func answerImports(_ answer: ExchangeImport) {
+        importAnswer = answer
     }
 
 }
@@ -326,8 +331,144 @@ actor BookSource: PortfolioSource {
         let model = ResolveModel(store: store)
         let imported = await model.importCoinbase(csv: "anything")
         #expect(imported?.withdrawals.count == 1)
+        #expect(store.book.withdrawals.isEmpty, "not until someone says it's their whole history")
+        model.keepImport()
         #expect(store.book.withdrawals.count == 1)
-        #expect(model.failure?.contains("1 had no usable cost") == true)
+        #expect(model.lastImport?.skipped == 1)
+        #expect(model.lastImport?.needsALook == true)
+        #expect(model.failure == nil)
+    }
+
+    private func withdrawal(_ at: String, cost: String = "5", to: String? = nil) -> ExchangeWithdrawal {
+        ExchangeWithdrawal(exchange: "Coinbase", asset: "ETH", units: "1", at: at, cost: Money(micros: cost, currency: .USD), toAddress: to)
+    }
+
+    @Test func aLaterImportAddsToAnEarlierOne() {
+        let (earlier, later) = (withdrawal("2025-06-01T00:00:00.000Z"), withdrawal("2026-06-01T00:00:00.000Z"))
+        #expect(Book(withdrawals: [earlier]).importing([later]).withdrawals == [earlier, later])
+    }
+
+    @Test func importingTheSameFileTwiceChangesNothing() {
+        let (one, alike) = (withdrawal("2026-06-01T00:00:00.000Z"), withdrawal("2026-06-01T00:00:00.000Z"))
+        let book = Book().importing([one, alike])
+        #expect(book.withdrawals == [one, alike], "two alike in one file are two withdrawals")
+        #expect(book.importing([one, alike]) == book)
+    }
+
+    @Test func aWithdrawalKeepsItsOldestFirstCostAcrossASave() throws {
+        let sent = #"{"exchange":"Coinbase","asset":"ETH","units":"1","at":"2026-11-04T00:00:00.000Z","cost":{"micros":"2","currency":"USD"},"fifoCostMicros":"1"}"#
+        let read = try JSONDecoder().decode(ExchangeWithdrawal.self, from: Data(sent.utf8))
+        #expect(read.fifoCostMicros == "1")
+        #expect(try JSONDecoder().decode(ExchangeWithdrawal.self, from: JSONEncoder().encode(read)) == read)
+        #expect(withdrawal("2026-11-04T00:00:00.000Z").fifoCostMicros == nil, "saved before it had one")
+    }
+
+    @Test func aFileWithTheSameWithdrawalAgainTakesOver() {
+        let (earlier, other) = (withdrawal("2026-06-01T00:00:00.000Z", cost: "5"), withdrawal("2026-07-01T00:00:00.000Z"))
+        let corrected = withdrawal("2026-06-01T00:00:00.000Z", cost: "6")
+        #expect(Book(withdrawals: [earlier, other]).importing([corrected]).withdrawals == [other, corrected])
+    }
+
+    @Test func aWithdrawalToAnotherAddressIsAnotherWithdrawal() {
+        let (one, other) = (withdrawal("2026-06-01T00:00:00.000Z", to: "0xaa"), withdrawal("2026-06-01T00:00:00.000Z", to: "0xbb"))
+        #expect(Book(withdrawals: [one]).importing([other]).withdrawals == [one, other])
+    }
+
+    @Test func aFileThatIsntTheWholeHistoryKeepsNothing() async throws {
+        let (store, _, _) = try makeStore()
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        await _ = model.importCoinbase(csv: "anything")
+        #expect(model.pendingImport?.startsAt == "2026-10-01T00:00:00.000Z")
+        model.declineImport()
+        #expect(model.pendingImport == nil)
+        #expect(store.book.withdrawals.isEmpty)
+        #expect(model.importRefusal == Wording.importNotWhole)
+        #expect(model.lastImport == nil)
+    }
+
+    @Test func aFileStartingAfterAWithdrawalAlreadyImportedIsRefusedWithoutAsking() async throws {
+        let (store, source, _) = try makeStore()
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        let good = withdrawal("2025-06-01T00:00:00.000Z", cost: "9")
+        store.setBook(Book(withdrawals: [good]))
+        await source.answerImports(ExchangeImport(withdrawals: [ExchangeWithdrawal(exchange: "Coinbase", asset: "ETH", units: "1", at: "2026-02-01T00:00:00.000Z", cost: Money(micros: "5", currency: .USD), toAddress: nil)], skipped: 0, firstSeen: ["ETH": "2026-01-01T00:00:00.000Z"]))
+        await _ = model.importCoinbase(csv: "anything")
+        #expect(model.pendingImport == nil)
+        #expect(model.importRefusal == Wording.importStartsLate)
+        #expect(store.book.withdrawals == [good])
+    }
+
+    @Test func aWithdrawalSavedWhileAFileWaitsGetsItRefused() async throws {
+        let (store, source, _) = try makeStore()
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        let imported = ExchangeImport(withdrawals: [withdrawal("2026-02-01T00:00:00.000Z", cost: "6")], skipped: 0, firstSeen: ["ETH": "2026-01-01T00:00:00.000Z"])
+        await source.answerImports(imported)
+        await _ = model.importCoinbase(csv: "anything")
+        #expect(model.pendingImport != nil)
+        let saved = Book(withdrawals: [withdrawal("2025-06-01T00:00:00.000Z"), withdrawal("2026-02-01T00:00:00.000Z", cost: "4.5")])
+        store.setBook(saved)
+        model.keepImport()
+        #expect(store.book.withdrawals == saved.withdrawals)
+        #expect(model.pendingImport == nil)
+        #expect(model.importRefusal == Wording.importStartsLate)
+        #expect(model.lastImport == nil)
+    }
+
+    @Test func importingTheSameFileAgainIsStillAsked() {
+        let found = withdrawal("2025-06-01T00:00:00.000Z")
+        let imported = ExchangeImport(withdrawals: [found], skipped: 0, firstSeen: [found.asset: "2025-01-01T00:00:00.000Z"])
+        #expect(!Book(withdrawals: [found]).importStartsLate(imported))
+    }
+
+    @Test func aFileWithNothingInItKeepsWhatWasThereAndSaysSo() async throws {
+        let (store, source, _) = try makeStore()
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        await _ = model.importCoinbase(csv: "anything")
+        model.keepImport()
+        let before = store.book
+        #expect(!before.withdrawals.isEmpty)
+        await source.answerImports(ExchangeImport(withdrawals: [], skipped: 0, firstSeen: [:]))
+        await _ = model.importCoinbase(csv: "anything")
+        #expect(store.book == before)
+        #expect(model.lastImport?.needsALook == true)
+        #expect(model.lastImport?.withdrawals.isEmpty == true)
+        store.undo()
+        #expect(store.book.withdrawals.isEmpty, "it changed nothing, so the only thing to undo is the first import")
+    }
+
+    @Test func whatAnImportFoundOutlastsTheQuestionItAnswered() async throws {
+        let (store, _, _) = try makeStore()
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        await _ = model.importCoinbase(csv: "anything")
+        model.keepImport()
+        let first = try #require(model.current)
+        model.skip()
+        #expect(model.current?.id != first.id)
+        #expect(model.lastImport != nil)
+        model.undo()
+        #expect(model.lastImport == nil, "undoing it takes back what it said")
+    }
+
+    /// `test/resolve.test.ts` hands this to `parseBook`, so what this encoder leaves out can't make the server refuse every read.
+    /// Everything optional is nil, because that's what's left out. A new optional in a book belongs here too.
+    @Test func aBookWithNothingOptionalIsWhatTheServerReads() throws {
+        let book = Book(
+            senders: ["0x00000000000000000000000000000000000000aa": SenderAnswer(kind: .myExchange)],
+            costs: ["key": Money(micros: "5", currency: .USD)],
+            withdrawals: [withdrawal("2026-11-04T00:00:00.000Z")],
+            purchases: [Purchase(provider: "coinbase", order: "1", wallet: "0x00000000000000000000000000000000000000aa", asset: "ETH", units: "1", txHash: "0xabc", blockNum: nil, cost: Money(micros: "5", currency: .USD), costUsdMicros: nil)]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let text = String(decoding: try encoder.encode(book), as: UTF8.self) + "\n"
+        let url = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "Resources/mac-book.json")
+        if ProcessInfo.processInfo.environment["UPDATE_FIXTURES"] != nil { try text.write(to: url, atomically: true, encoding: .utf8) }
+        #expect(try String(contentsOf: url, encoding: .utf8) == text, "mac-book.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose, and run `pnpm check`.")
     }
 
     @Test func aWalletThatsNoLongerYoursStaysListed() throws {
@@ -467,6 +608,34 @@ actor BookSource: PortfolioSource {
         #expect(book.senders[watched]?.kind == .someoneElse)
         #expect(book.answering(sender, .mine, focus: watched).senders[watched]?.kind == .mine, "they can still change their mind")
         #expect(Book().answering(sender, .someoneElse, focus: watched).senders == [sender: .someoneElse], "that's only about a sender already said to be theirs")
+    }
+
+    @Test func anAddressWithANameIsntOfferedAsAWallet() async throws {
+        let (store, source, _) = try makeStore([try demoPortfolio()])
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        #expect(model.current?.known == nil)
+        #expect(model.options == Ownership.allCases, "nothing's known about this one, so it could be anything")
+        model.skip()
+        let sender = try #require(model.current?.sender)
+        #expect(model.current?.known?.kind == "exchange")
+        #expect(model.options == [.myExchange, .someoneElse], "its exchange account comes first")
+
+        model.answer(.mine)
+        #expect(store.book.senders[sender] == nil, "neither a key nor a swipe can say it")
+        await source.answerPreviews([BookPreview(pnlMicros: "1", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false, failed: false)])
+        await model.loadPreviews()
+        #expect(Array(model.previews.keys) == [.someoneElse], "so nothing asks what it would do")
+
+        store.setBook(store.book.answering(sender, .mine, focus: nil))
+        await _ = store.poll()
+        #expect(model.current?.sender == sender, "this fixture keeps asking, as a wallet that isn't theirs would")
+        #expect(model.options == [.mine, .someoneElse], "an answer given before still works, and this card is about the wallet it reached")
+        #expect(store.book.senders[sender]?.kind == .mine)
+        store.changeAnswer(try #require(store.answerEntries.first { $0.id == AnswerEntry.senderID(sender) }), to: .myExchange)
+        #expect(store.book.senders[sender]?.kind == .myExchange, "and it can be changed in Answers")
+        await _ = store.poll()
+        #expect(model.options == [.myExchange, .someoneElse])
     }
 
     @Test func aSenderSaidToBeAWalletCantAlsoBeAnExchange() async throws {

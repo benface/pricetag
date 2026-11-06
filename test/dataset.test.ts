@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { cautiousEthTablesSql, rateUpdatesSql, ptCautiousSource, ptGasSource, ptNetSource, ptPriceSource, tablesSql } from "../dataset/build.ts"
+import { cautiousEthTablesSql, rateUpdatesSql, ptCautiousSource, ptGasSource, ptNativeSource, ptNetSource, ptPriceSource, ptTradeSource, tablesSql, tokensTablesSql } from "../dataset/build.ts"
 import { gasPaid, type RawTx } from "../server/raw.ts"
 import { CURRENCIES, ETH_ADDRESS, MAX_ROUND_AGE_SECONDS, PRICE_FEEDS, SEED_TX, TOKENS, USDC_ADDRESS, WETH_ADDRESS, blockBefore, ptNet, ptPrice } from "@pricetag/sdk/core"
 import { LATEST_ROUND_SELECTOR, localManifest, readFeedSeeds } from "../dataset/local.ts"
@@ -19,6 +19,17 @@ type PtPrice = (a: string, b: string, c: string, d: string, e: string, f: string
 const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
 const CBBTC = "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"
 const STRANGER = "0x0000000000000000000000000000000000000bad"
+
+describe("the committed token market manifest", () => {
+  it("matches what build.ts generates", () => {
+    const tokens = JSON.parse(readFileSync(new URL("../dataset/tokens.json", import.meta.url), "utf8")) as typeof manifest & { dependencies: Record<string, string> }
+    const start = Number(/block_num\(\) >= (\d+)/.exec(tokens.tables.token_trades!.input.sql)![1])
+    assert.deepEqual(Object.fromEntries(Object.entries(tokens.tables).map(([k, v]) => [k, v.input.sql])), tokensTablesSql(start))
+    assert.equal(tokens.functions.pt_net!.source.source, ptNetSource())
+    assert.equal(tokens.functions.pt_native!.source.source, ptNativeSource())
+    assert.equal(tokens.functions.pt_trade!.source.source, ptTradeSource())
+  })
+})
 
 describe("the committed manifest", () => {
   it("is what build.ts generates, so the SQL and allowlist can't drift", () => {

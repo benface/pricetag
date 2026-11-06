@@ -210,7 +210,7 @@ function gasFrom(tx: TxRow, { block, txs }: BlockData): bigint | null {
   const previous = txs[tx.tx_index - 1]
   return gasPaid(
     { ...tx, ...hashedFees(tx), block_num: blockNum, timestamp: "" },
-    { cumulativeGas: new Map(previous ? [[`${blockNum}:${previous.tx_index}`, previous.gas_used]] : []), baseFeeByBlock: new Map([[blockNum, block.base_fee_per_gas ?? "0"]]) },
+    { cumulativeGas: new Map(previous ? [[`${blockNum}:${previous.tx_index}`, previous.gas_used]] : []), baseFeeByBlock: new Map(block.base_fee_per_gas === null ? [] : [[blockNum, block.base_fee_per_gas]]) },
   )
 }
 

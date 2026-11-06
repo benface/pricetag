@@ -5,7 +5,6 @@ import PricetagKit
 /// The hot wallet's sentences. It's "this device's spending money" and the cold wallet is "your savings", everywhere.
 public enum HotWalletWording {
     public static let title = "Spending Money"
-    public static let label = "Hackathon, small funds only"
     public static let summary = "A small balance for everyday use, with no recovery phrase to write down."
     public static let cannotBeRestored = "This money lives only on this device. There's no recovery phrase and no backup: if this device is lost or erased, what's on it is gone."
     public static let newDevice = "Getting a new device? Sweep everything to your savings first."
@@ -180,7 +179,9 @@ public enum HotWalletWording {
     public static func problem(_ error: any Error) -> String {
         switch error {
         case is RecordsNotSaved: cantSaveRecords
+        #if !PATINA_WATCH_ONLY
         case KeyVault.Failure.noSuchKey: keyMissing
+        #endif
         default: problemOnThisDevice
         }
     }

@@ -5,6 +5,9 @@ set -eu
 
 usage() {
   cat >&2 <<USAGE
+PATINA_WATCH_ONLY=1 in the environment draws what a watch-only build shows, from fixtures like everything else.
+PATINA_HOSTED=1 draws what the hosted build shows, the same way.
+
 Usage:
   shot.sh <scene> <output.png> [--dark] [--window]
   shot.sh all <folder> [--window]    Every scene, in light and dark.
@@ -25,8 +28,6 @@ USAGE
 
 here=$(cd "$(dirname "$0")" && pwd)
 name=$(sed -n 's/^APP_NAME = //p' "$here/Config/App.xcconfig")
-# Debug's, from App.xcconfig. A fixture run with this in front is the one thing this must never cause.
-bundle_id=$(sed -n 's/^PRODUCT_BUNDLE_IDENTIFIER\[config=Debug\] = //p' "$here/Config/App.xcconfig")
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 [ $# -ge 1 ] || usage
@@ -87,14 +88,26 @@ done
 
 # Without the sandbox, there's no container for macOS to stop the launch and ask about when a build's signature changes.
 # Fixtures come from the bundle and PNGs go to the run's folder, so this reads and writes nothing it wouldn't otherwise.
+products="$here/build/test-mode"
+if [ "${PATINA_WATCH_ONLY:-}" = 1 ]; then
+  products="$here/build/test-mode-watch-only"
+  set -- -xcconfig "$here/Config/WatchOnly.xcconfig"
+elif [ "${PATINA_HOSTED:-}" = 1 ]; then
+  products="$here/build/test-mode-hosted"
+  set -- -xcconfig "$here/Config/Hosted.xcconfig"
+else
+  set --
+fi
 "$here/swift-queue.sh" xcodebuild -quiet \
-  -project "$here/App.xcodeproj" -scheme App -configuration Debug \
-  -derivedDataPath "$here/build/test-mode" -destination 'platform=macOS' \
+  -project "$here/App.xcodeproj" -scheme App -configuration Debug "$@" \
+  -derivedDataPath "$products" -destination 'platform=macOS' \
   -onlyUsePackageVersionsFromResolvedFile ENABLE_APP_SANDBOX=NO build >&2
 
 run=$(mktemp -d "${TMPDIR:-/tmp}/patina-shot.XXXXXX")
-ditto "$here/build/test-mode/Build/Products/Debug/$name.app" "$run/$name.app"
+ditto "$products/Build/Products/Debug/$name.app" "$run/$name.app"
 binary="$run/$name.app/Contents/MacOS/$name"
+# From what was built, so it's right for every flavor. A fixture run with this in front is the one thing this must never cause.
+bundle_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$run/$name.app/Contents/Info.plist")
 
 started=
 watcher=

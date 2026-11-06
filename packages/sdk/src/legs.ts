@@ -77,8 +77,11 @@ export const isUnwrapClaim = (row: LegRow) => row.kind === "unwrap" && row.side 
  */
 export type UnseenEth = { blockNum: number; amount: string; txHashes: string[] }
 
-/** A successful transaction in a block where ETH arrived with no row: one that names the wallet in its calldata, or that it sent. */
-export type PayoutTx = { blockNum: number; txHash: string; from: string; to: string | null; input: string }
+/**
+ * A transaction in a block where ETH arrived with no row: a successful one that names the wallet in its calldata, or any
+ * the wallet sent. `failed` can't be behind the ETH, though its sender still paid its fee. `deposit` is an OP Stack deposit, which pays no fee here.
+ */
+export type PayoutTx = { blockNum: number; txHash: string; from: string; to: string | null; input: string; failed?: boolean; deposit?: boolean }
 
 /** Who to ask about ETH that arrived with no row. A null sender means there's nobody to name, only what it cost. */
 export type EthPayer = { txHash: string; sender: string | null }
@@ -206,7 +209,7 @@ const isPlainAmount = (amount: string) => /^\d+$/.test(amount)
  * What one account's rows of tokens off the allowlist amount to in one transaction, like the dataset's `unlisted_moves`.
  * `moves` has each asset's net movement that isn't zero, and `unreadable` says an amount couldn't be read.
  */
-function netUnlisted(rows: readonly LegRow[]): { moves: bigint[]; unreadable: boolean } {
+function netUnlisted(rows: readonly LegRow[]): { moves: bigint[]; unreadable: boolean; nets: Map<string, bigint> } {
   const nets = new Map<string, bigint>()
   let unreadable = false
   for (const row of rows) {
@@ -220,7 +223,7 @@ function netUnlisted(rows: readonly LegRow[]): { moves: bigint[]; unreadable: bo
     const size = isNft ? 1n : BigInt(row.amount)
     nets.set(asset, (nets.get(asset) ?? 0n) + (row.side === "credit" ? size : -size))
   }
-  return { moves: [...nets.values()].filter((delta) => delta !== 0n), unreadable }
+  return { moves: [...nets.values()].filter((delta) => delta !== 0n), unreadable, nets }
 }
 
 /**
@@ -539,11 +542,23 @@ export function creditUnseenEth({ rows, ethBalances, feeUnknownTxs, gasUnknownBl
 export function payerOf(candidates: readonly PayoutTx[], account: string, amount: string): EthPayer | null {
   const me = normalizeAddress(account).slice(2)
   const word = BigInt(amount).toString(16).padStart(64, "0")
-  const exact = candidates.filter(({ input }) => input.includes(me) && input.includes(word))
-  const tx = exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : undefined
+  const succeeded = candidates.filter((tx) => !tx.failed)
+  const exact = succeeded.filter(({ input }) => input.includes(me) && input.includes(word))
+  const tx = exact.length === 1 ? exact[0] : succeeded.length === 1 ? succeeded[0] : undefined
   if (!tx) return null
   const sender = tx.to === null ? null : normalizeAddress(tx.to)
   return { txHash: tx.txHash, sender: sender === normalizeAddress(account) ? null : sender }
+}
+
+/**
+ * Transactions the wallet sent with no gas row. Each paid a fee nothing here counts, and a credit for that block would
+ * take it out of what arrived, so the balance would match with the fee gone. Treated like gas that couldn't be worked
+ * out, which leaves the block's credit out and the difference showing.
+ */
+export function sentWithNoFee(txs: readonly PayoutTx[], rows: readonly LegRow[], account: string): GasUnknownTx[] {
+  const me = normalizeAddress(account)
+  const paid = new Set(rows.filter((row) => row.kind === "gas").map((row) => row.tx_hash))
+  return txs.filter((tx) => normalizeAddress(tx.from) === me && !tx.deposit && !paid.has(tx.txHash)).map((tx) => ({ tx_hash: tx.txHash, block_num: tx.blockNum }))
 }
 
 /**
@@ -591,12 +606,34 @@ function isSaneAgainstOracle(impliedUsdMicros: bigint, oracleUsdMicros: string):
 /** The guarded price of an asset's recent trades at or before a block. See `market.ts`. */
 export type MarketLookup = (asset: string, blockNum: number) => string | null
 
+/** What a token off the allowlist was worth at a block, in USD per its smallest unit, if it has a market. See `token-market.ts`. */
+export type TokenPriceLookup = (token: string, blockNum: number) => number | null
+
 type Input = {
   account: string
   rows: readonly LegRow[]
   references: readonly Reference[]
   priced: readonly PricedRow[]
   market?: MarketLookup
+  tokenPrice?: TokenPriceLookup
+}
+
+/**
+ * The one token off the allowlist this transaction swapped for the one that's on it, if its market says so. What left has to be
+ * worth about what arrived, by that market and with nothing else moving, which an LP exit, a vault withdrawal or a claim isn't. So
+ * it only ever says this was an exchange: the value still comes from the listed side, and a wrong market can't set it.
+ */
+function isExchangeForToken(net: { token: Token; delta: bigint }, usdMicros: string, nets: ReadonlyMap<string, bigint>, blockNum: number, tokenPrice: TokenPriceLookup): boolean {
+  const moves = [...nets].filter(([, delta]) => delta !== 0n)
+  if (moves.length !== 1) return false
+  const [token, delta] = moves[0] as [string, bigint]
+  if (delta < 0n === net.delta < 0n) return false
+  const price = tokenPrice(token, blockNum)
+  if (price === null) return false
+  const abs = (value: bigint) => Number(value < 0n ? -value : value)
+  const listedUsd = (abs(net.delta) * Number(usdMicros)) / 10 ** net.token.decimals / 1e6
+  const ratio = (abs(delta) * price) / listedUsd
+  return ratio >= ORACLE_BAND[0] && ratio <= ORACLE_BAND[1]
 }
 
 /**
@@ -604,7 +641,7 @@ type Input = {
  * then labels each leg's price and cost. Gas stays its own leg. Ordered for the fold: by block, then transaction,
  * with gas first because it's paid before the transaction runs.
  */
-export function buildPricedLegs({ account, rows, references, priced, market }: Input): PricedLeg[] {
+export function buildPricedLegs({ account, rows, references, priced, market, tokenPrice }: Input): PricedLeg[] {
   const me = normalizeAddress(account)
   const refs = new Map(references.map((r) => [r.blockNum, r]))
   const pricedByTx = new Map<string, PricedRow>()
@@ -683,7 +720,7 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
     }
     const moved = [...nets.values()].filter((n) => n.delta !== 0n)
     // One token out and one in is only a swap if nothing else moved. Otherwise the payment could be for both.
-    const { moves: unlistedMoves, unreadable: unlistedUnreadable } = netUnlisted(unlisted)
+    const { moves: unlistedMoves, unreadable: unlistedUnreadable, nets: unlistedNets } = netUnlisted(unlisted)
     const hasUnlisted = unlistedUnreadable || unlistedMoves.length > 0
     const unseenEth = txRows.some((row) => row.unseenEth)
     const isSwap = !hasUnlisted && !unsettledCredit && !unseenEth && moved.length === 2 && moved.some((n) => n.delta > 0n) && moved.some((n) => n.delta < 0n)
@@ -749,6 +786,16 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
       }
     }
 
+    // One listed token for one that isn't, whose market says what left was worth about what arrived. That's an estimate of what
+    // happened, so it's always labeled as one, and a sweep never acts on a gain that rests on it.
+    const only = resolved.length === 1 ? resolved[0] : undefined
+    const forToken =
+      only && tokenPrice && only.price !== null && !unlistedUnreadable && !unsettledCredit && !unseenEth && !unlisted.some((row) => row.kind === "unlisted_nft") && isExchangeForToken(only.net, only.price, unlistedNets, first.block_num, tokenPrice)
+    if (only && forToken) {
+      tradeUsd = worth(abs(only.net.delta), BigInt(only.price as string), only.net.token.decimals)
+      only.priceNote = null
+    }
+
     for (const { net, price, priceSource, priceNote } of resolved) {
       // What was paid is known even when the token's price isn't: price and cost are separate facts.
       const value = tradeUsd === null ? null : tradeUsd.toString()
@@ -767,7 +814,7 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
         costMicros: paid ? value : null,
         proceedsMicros: net.delta < 0n ? value : null,
         costLabel,
-        ...(marketSide && value !== null ? { estimated: true } : {}),
+        ...((marketSide || forToken) && value !== null ? { estimated: true } : {}),
         parts: net.parts.map(partOf),
         ...unsettled,
         ...(settledCredit ? { settledCredit } : {}),

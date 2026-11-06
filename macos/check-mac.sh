@@ -141,6 +141,8 @@ step "PricetagKit's tests" tests PricetagKit
 step "HotWalletKit's tests" tests HotWalletKit
 [ -z "$quick" ] || exit 0
 step "The app's Release build" "$here/run.sh" --build-only
+step "The watch-only build" "$here/watch-only.sh" --build-only
+step "The hosted build" "$here/hosted.sh" --build-only
 step "PricetagKit's iOS build" ios PricetagKit
 step "HotWalletKit's iOS build" ios HotWalletKit
 

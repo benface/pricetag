@@ -166,7 +166,13 @@ public enum Wording {
     public static func allBalancesMatch(_ portfolio: Portfolio) -> String? {
         let listed = portfolio.listedPositions
         // A balance that couldn't be read has no row, and hasn't been shown to match anything.
-        return !listed.isEmpty && portfolio.unreadAssets.isEmpty && listed.allSatisfy(\.isReconciled) ? "Every balance matches the chain." : nil
+        guard !listed.isEmpty, portfolio.unreadAssets.isEmpty, listed.allSatisfy(\.isReconciled) else { return nil }
+        return (["Every balance matches the chain."] + listed.compactMap(unrecorded)).joined(separator: " ")
+    }
+
+    /// Said wherever a match is, because this part of it can't fail.
+    static func unrecorded(_ position: Position) -> String? {
+        position.reconciliation?.unrecordedQty.map { "\(Format.amount($0, decimals: position.decimals)) \(position.asset) arrived with no transaction to show for it, so that part comes from the balance, and the match doesn't confirm it." }
     }
 
     /// What there is instead of a chart, so what's short isn't mistaken for nothing.
@@ -195,7 +201,7 @@ public enum Wording {
         guard let check = position.reconciliation else { return nil }
         switch check.status {
         case .reconciled:
-            return "Matches the actual balance exactly."
+            return (["Matches the actual balance exactly."] + [unrecorded(position)].compactMap(\.self)).joined(separator: " ")
         case .unchecked:
             return "Not checked. \(check.reason ?? "") PnL is unavailable until this balance is confirmed."
         case .incomplete:
@@ -376,9 +382,47 @@ public enum Wording {
         "Couldn't read \(names.formatted(.list(type: .and))), so \(names.count == 1 ? "it isn't" : "they aren't") in these numbers."
     }
 
+    /// Wallets in All Yours being read again, whose last read is what these numbers use.
+    public static func allYoursUpdating(_ names: [String]) -> String {
+        "Updating \(names.formatted(.list(type: .and))). These numbers use \(names.count == 1 ? "its" : "their") last read until then."
+    }
+
+    /// Wallets in All Yours whose latest read failed, whose last good read is what these numbers use.
+    public static func allYoursOutdated(_ names: [String]) -> String {
+        "Couldn't update \(names.formatted(.list(type: .and))), so these numbers use \(names.count == 1 ? "its" : "their") last read."
+    }
+
+    /// What an update says while some of All Yours' wallets are being read again, and are in these numbers as they were.
+    public static func updatingLastRead(_ count: Int) -> String {
+        "Updating. \(count == 1 ? "1 wallet is" : "\(count) wallets are") being read again, and these numbers use \(count == 1 ? "its" : "their") last read until then."
+    }
+
     /// What an update says while some of All Yours' wallets are still being read.
     public static func updatingWallets(_ count: Int) -> String {
         "Updating. \(count == 1 ? "1 wallet is" : "\(count) wallets are") still being read, and \(count == 1 ? "isn't" : "aren't") in these numbers yet."
+    }
+
+    /// What a Coinbase history had in it. Nothing changes when it had nothing usable, and that's worth saying.
+    public static func imported(found: Int, skipped: Int) -> String {
+        func withdrawals(_ count: Int) -> String { count == 1 ? "1 withdrawal" : "\(count) withdrawals" }
+        if found == 0 { return skipped == 0 ? "That file has no withdrawals, so nothing changed." : "Found \(withdrawals(skipped)) with no usable cost, so nothing changed." }
+        return skipped == 0 ? "Found \(withdrawals(found))." : "Found \(withdrawals(found)). \(skipped) more had no usable cost."
+    }
+
+    public static let importQuestion = "Does this file have your whole Coinbase history?"
+    public static let importNotWhole = "Nothing changed. These costs need your whole history, so download it from Coinbase going back to the start, and import that."
+    public static let importStartsLate = "This file starts after a withdrawal you've already imported, so part of your history is missing. Nothing changed. Download your whole history from Coinbase, and import that."
+
+    /// Takes the date as the file has it, in UTC, so the Mac and the web say the same day.
+    public static func importWhy(startsAt: String) -> String {
+        let parts = startsAt.prefix(10).split(separator: "-").compactMap { Int($0) }
+        let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        guard parts.count == 3, months.indices.contains(parts[1] - 1) else { return "What you bought before this file starts changes what these cost, so if anything's missing, they'd be wrong." }
+        return "It starts on \(months[parts[1] - 1]) \(parts[2]), \(parts[0]). What you bought before then changes what these cost, so if anything's missing, they'd be wrong."
+    }
+
+    public static func linkedReading(_ count: Int) -> String {
+        "Reading your other \(count == 1 ? "wallet" : "wallets"). Until then, what came from \(count == 1 ? "it" : "them") has an unknown cost."
     }
 
     public static func linkedFailed(_ count: Int) -> String {
@@ -411,7 +455,11 @@ public enum Wording {
     public static func holdSummary(_ comparison: HoldComparison, _ currency: CurrencyCode) -> String {
         switch comparison.status {
         case .unavailable: return "Not available yet"
-        case .partial: return "Not comparable yet"
+        case .partial:
+            guard let hold = comparison.holdMicros else { return "Not available yet" }
+            let count = comparison.unknownAmounts
+            let leavesOut = count == 0 ? "and the total PnL leaves some things out" : count == 1 ? "leaving out 1 amount" : "leaving out \(Format.block(count)) amounts"
+            return "Partial: \(comparison.estimated ? "about " : "")\(Format.signedMoney(hold, currency)) holding ETH, \(leavesOut)"
         case .complete:
             guard let difference = comparison.differenceMicros else { return "Not available yet" }
             return holdDifference(difference, currency, estimated: comparison.walletEstimated || comparison.estimated)
@@ -447,6 +495,8 @@ public enum Wording {
     public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet. The first read can take a minute."
     /// A failed read never touches what's onchain, so this is true of every problem the feed has.
+    /// Always on screen in a watch-only build, so nobody takes it for a wallet that can move money.
+    public static let watchOnlyNotice = "Test version. It only watches wallets: it can't hold a key, sign or send."
     public static let moneyUnaffected = "Your money isn't affected."
     public static let serverTooSlow = "The price service took too long to answer."
     public static let cantReachServer = "Can't reach the price service. Your money isn't affected."

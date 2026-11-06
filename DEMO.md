@@ -4,11 +4,39 @@
 
 All times are Montréal. Numbers marked *measured* come from the real server against staging, and say when if they're older than this morning. Button names come from the code on `main` at `a25c96a`, and from its screens rendered with fixtures. Nobody has clicked through this in the real window yet, so the rehearsal is the test.
 
+## The talk
+
+About 3 minutes of speaking, on top of the steps' 5, so about 8 in all. Numbers come from `AMP-ASSESSMENT.md` as of WORK-602's PR #197, and sections 9 and 7 say why it's worded this way.
+
+**Opening, before step 1:**
+
+"A chain records what moved, not what it was worth. So any wallet can show your balance, but what you paid and whether you're up has to be worked out. We wanted to find out how far Amp could take that. Pricetag is one Amp dataset on Base: 16 tables of SQL, with no fork, no contracts and no indexer of ours to run. It reads Chainlink's own logs and each swap's rate, and puts a dollar price on transfers of ETH and 9 other tokens, seconds behind the chain. An SDK turns those priced transfers into positions, cost and PnL for any wallet, back to Wednesday, when the dataset starts. And Patina is the wallet we built on it, to see if it holds up for real money."
+
+**How we used Amp, added to these steps:** steps 4 and 8 have about 10 s of waiting, so talk through it.
+
+| Step | Add |
+|---|---|
+| 2 | "The first version, six tables on a local Amp, reached chain head 29 minutes after we started. Agents did that work." If asked about staging: "3 hours 22, and about 2 of those were waiting for a token that could write." |
+| 4 | "Amp's rows carry almost everything that takes, and the rest comes from an RPC." |
+| 5 | "Finding it takes balances at past blocks. Amp's `rpc.eth_call` reads those, with no archive node of our own." |
+| 6 | "Working out what Coinbase's payouts look like took one query over a day of the whole chain: one sender, 1,437 ETH payouts." |
+| 7 | "A wrong fingerprint fails, instead of showing other numbers." |
+| 8 | "We could try rules like this because being wrong was cheap. On the first day, replacing the whole dataset took about 4 minutes, and we registered about 14 versions in about 5 hours." |
+
+**Close, after step 10:**
+
+"Amp delivered what this depended on. Of the alternatives whose docs we read, it's the only live, hosted SQL with joins. Where it fell short is what we'd improve for this use case. Top of the list: traces. Without them, ETH arriving through a contract is invisible, which is why we check balances and ask you. Second, complete OP Stack receipts, like the L1 fee, so a wallet's cost needs no separate RPC. Third, quick lookups by account. Bloom filters skip most of the data for one wallet, but a quiet wallet's first read was still 13 to 33 seconds this morning. Some of that may be our own queries, and we haven't broken it down. Fourth, reliability: stopping one job can panic another, and it stays down with no read error, so numbers just freeze. It's rare, but we run a small watcher for it today. All of this was on staging, a shared test environment, so it says little about production. The same SQL also ran on Ethereum, but correct gas needs per-chain work, and only some chains' raw data is fresh. We wrote it all up in an assessment, so ask me if you want it."
+
+**If asked:**
+- **Would something else have been better?** "For the whole idea, no. Of what we read, only Amp has live, hosted SQL with joins, though we read docs and tested none of them. For parts, yes. SQD and Allium document traces and the L1 fee on Base, and Goldsky Feeds already sells a price per transfer. For just a PnL number, Zerion's API would've taken an afternoon, but with its rules, and no explanation of a number."
+- **What did Amp do best?** "A small dataset beside the big one. A pricing rule is a 2-table fork, and rates and the other 8 feeds each became their own dataset, so the main one wasn't replaced. And questions about the whole chain took one query."
+- **Does Verify need Amp?** "No. Amp's rows made it easy, but it works on any source that returns complete block rows, including a plain RPC."
+
 ## The story
 
 **The line:** every transfer gets a price, and your wallet finally knows what you paid.
 
-**The problem.** A chain records what moved, not what it was worth. So wallets show a balance, and nobody can say what you paid or whether you're up.
+**The problem.** A chain records what moved, not what it was worth. So wallets can show a balance, but what you paid and whether you're up has to be worked out.
 
 **What we built.** Pricetag is one Amp derived dataset on Base, with no fork, validators or contracts. It reads Chainlink's own logs and each swap's implied rate, then puts a USD price on transfers of ETH and 9 other listed tokens. A token off the list shows up with its balance and no price, and it's never guessed. Patina is a self-custody Mac wallet built on those prices.
 
@@ -24,6 +52,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 **Don't claim:**
 - "Every token is priced." It's 10 assets. Any other token that's moved since the dataset's start shows its balance with no price, and likely spam is tucked away.
 - "Verify proves the SQL or the chain." It doesn't show that the header is on Base's real chain, that the SQL ran correctly, or that Chainlink's number is right. Say so, because it's more convincing.
+- "Every fee is checked." The check is on balances, to the smallest unit. ETH found from a balance can't fail it, and the app says how much of that there is (WORK-612).
 - "Audited." The hot wallet is an unreviewed build, for small funds only.
 - "Tested on a real Ledger or Keystone," until it has been.
 - "Under a second." Or "at most 6 s": prices were a median of about 7 s behind this morning, and at most about 15 s (*measured*, WORK-602).
@@ -33,6 +62,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 - "Nobody else prices transfers." Goldsky Feeds sells a price per transfer. Ours is an open dataset with source labels, a rule you can fork, and an honest "unknown".
 - "Any EVM chain." Say: "The same SQL ran on Ethereum, but correct gas needs per-chain work, and only some chains' raw data is fresh."
 - "Bloom filters made it fast." The demo wallet's cold read barely moved. A read past the first is what's quick.
+- "Install our SDK." It isn't on npm, so don't tell people to install it.
 
 ## Click by click
 
@@ -50,7 +80,7 @@ About 5 minutes. **Before you start:**
 | 3 | Click cbBTC's number in the holdings | "Any number opens what's behind it: what moved, at what price, and where that price came from." | Details on the right, with what you clicked in a menu at the top. Under Activity, each row starts with a plain sentence, like "Sold $1.00 of ETH.", then its price source and cost |
 | 4 | On a "Sold" or "Bought" row, click **Proof** under it, then **Verify block …** | "Our server recomputes the block's hashes from what Amp returned. It doesn't prove my SQL or Chainlink's number, and it says so." | "Checking this block…" for 8 to 11 s (*measured* on the 5th), then "The data Amp stored for this block matches its header, and so does Chainlink's update behind this price. Base's node agrees on both." and 7 passed checks. A row with no Chainlink update behind it has 6, and doesn't mention the update |
 | 4b | *Optional:* click a holding's Value, then **Proof of this price**, then **Verify block …** | "Every listed token's current price has a log behind it, not just ETH's and USDC's." | 4–12 s (*measured* on all 10 listed tokens on the 5th). A price from a token's recent trades has no such proof |
-| 5 | **Answer 1 Question** in the warning (the count is whatever's open), or press ⇧⌘R | "My ETH came from Coinbase inside a batched payout. No transaction points at my wallet, and this data has no traces. We found it from the balance. So it asks, instead of guessing." | "Who sent you this?", a line saying why it asks, and "From a Coinbase address". **My wallet**, **My exchange account** and **Someone else** below |
+| 5 | **Answer 1 Question** in the warning (the count is whatever's open), or press ⇧⌘R | "My ETH came from Coinbase inside a batched payout. No transaction points at my wallet, and this data has no traces. We found it from the balance. So it asks, instead of guessing." | "Who sent you this?", a line saying why it asks, and "From a Coinbase address". **My exchange account** and **Someone else** below |
 | 6 | **My exchange account**, type what you paid, **Save**, **Done** | "That stays on this Mac. Now everything adds up." | The warning is gone, and ETH has PnL and a return. "Compared with holding ETH" and a full chart appear |
 | 7 | In Settings > General, under Pricing rule, pick **Cautious ETH** | "Same transactions, different recipe. It counts ETH 1% lower. That's a second dataset version, two tables, with no app code for it. Here's its fingerprint." | The numbers change on their own. The fingerprint's under each rule's name |
 | 8 | **Compare Side by Side…**, just below | "Same block, same facts. The only difference is the rule." | ETH price differs by 1% and Value by 1% of the ETH held. About 11 s (*measured* on the 5th) |

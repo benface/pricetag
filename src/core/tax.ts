@@ -21,7 +21,7 @@
 // elsewhere, and CRA's crypto guide doesn't count moving between your own wallets as a disposition, so that keeps what they
 // first paid, which we can't see. Those stay estimates in every country, and the report says why.
 
-import { foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
+import { assertFoldFits, foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { rateSource } from "./explain.ts"
@@ -250,6 +250,9 @@ function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = 
     return { wallet, view, ...checksOf(wallet, view, method) }
   })
   const linking = wallets.length > 1 ? { ...book, linked: [...(book.linked ?? []), ...wallets.map((wallet) => wallet.address.toLowerCase())] } : book
+  // Working out what each inherits walks every lot, so a fold that can't fit stops here, before any of that.
+  const histories = sides.map(({ wallet }) => ({ address: normalizeAddress(wallet.address), legs: wallet.legs }))
+  for (const history of histories.slice(0, wallets.length)) assertFoldFits(history, histories.filter((other) => other !== history), method)
   const { legs } = resolveLegs(sides, method, linking)
   return sides.slice(0, wallets.length).map((side) => ({ ...side, view: { ...side.view, legs: legs.get(normalizeAddress(side.wallet.address)) as PricedLeg[] } }))
 }
@@ -429,8 +432,8 @@ function walletWarnings(source: Source, named: boolean): string[] {
   const who = named ? `${shortHash(wallet.address)}: ` : ""
   const lines: string[] = []
   if (wallet.mode === "demo") lines.push("Demo data, not a real wallet.")
-  if (!hasStarted(wallet)) lines.push(`${who}The dataset hasn't reached this wallet's first block yet, so nothing from it is here.`)
-  else if (isBehind(wallet)) lines.push(`${who}The dataset is ${plural(wallet.latest.blockNum - wallet.coverage.toBlock, "block")} behind the chain, so the newest transactions aren't here yet.`)
+  if (!hasStarted(wallet)) lines.push(`${who}The data hasn't reached this wallet's first block yet, so nothing from it is here.`)
+  else if (isBehind(wallet)) lines.push(`${who}The data is ${plural(wallet.latest.blockNum - wallet.coverage.toBlock, "block")} behind the chain, so the newest transactions aren't here yet.`)
   if (wallet.gasUnknownTxs.length > 0) lines.push(`${who}Network fees couldn't be worked out for ${plural(wallet.gasUnknownTxs.length, "transaction")}, so they aren't here.`)
   if (wallet.l1FeeUnknownTxs.length > 0) lines.push(`${who}Part of the network fee couldn't be read yet for ${plural(wallet.l1FeeUnknownTxs.length, "transaction")}, so those fees are low.`)
   if (wallet.openingUnread.length > 0) lines.push(`${who}What the wallet already held couldn't all be read yet (${wallet.openingUnread.join(", ")}).`)

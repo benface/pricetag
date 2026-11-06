@@ -140,7 +140,7 @@ struct SecurityPage: View {
                 Spacer()
                 Text("\(checks.count { $0.status == .done }) of \(checks.count) in place")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .monospacedDigit()
             }
             SecurityGroup {
@@ -189,7 +189,7 @@ struct SecurityPage: View {
             }
             Text(Self.whatApprovalsAre)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
             if let note = readOnlyNote(entry) {
                 Notice(.info, note)
@@ -213,7 +213,7 @@ struct SecurityPage: View {
                 SecurityGroup {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text("Reading this wallet's approvals…").foregroundStyle(.secondary)
+                        Text("Reading this wallet's approvals…").secondaryText()
                     }
                 }
             }
@@ -246,7 +246,7 @@ struct SecurityPage: View {
         SecurityGroup {
             if read.approvals.isEmpty {
                 Label(read.unreadable == 0 ? "No approvals found." : "None that could be read.", systemImage: "checkmark.seal")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
             ForEach(Array(read.approvals.enumerated()), id: \.element.id) { index, approval in
                 if index > 0 { Divider() }
@@ -297,7 +297,7 @@ struct SecurityPage: View {
                 }
                 if read.history.fromBlock > 0, read.mode != .demo {
                     Text("An approval to another app from before block \(Format.block(read.history.fromBlock)) wouldn't be found.")
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -340,12 +340,12 @@ struct SecurityPage: View {
             }
             Text(Self.whatSignedPermitsAre)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
             SecurityGroup {
                 if permits.isEmpty {
                     Label("Nothing signed here is waiting to be used.", systemImage: "checkmark.seal")
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
                 ForEach(Array(readable.enumerated()), id: \.element.id) { index, permit in
                     if index > 0 { Divider() }
@@ -388,7 +388,7 @@ struct SecurityPage: View {
                     Label("Moving the token to another of your wallets is the only sure way to protect it from a permit you signed. It doesn't cancel the permit, so tokens that come back to that wallet could still be taken.", systemImage: "arrow.right.circle")
                 }
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -441,7 +441,7 @@ private struct CheckRow: View {
                 Text(check.title)
                 Text(check.detail)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
@@ -510,7 +510,7 @@ private struct ApprovalRow: View {
                 .lineLimit(1)
                 Text(ApprovalWording.when(approval))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
             Spacer(minLength: 8)
             Text(ApprovalWording.amount(approval))
@@ -527,7 +527,7 @@ private struct ApprovalRow: View {
             } else if canRevokeHere {
                 Text("Revoke elsewhere")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .help("\(AppName.current) never calls a contract it doesn't track, so revoke this one from another wallet app.")
             }
         }
@@ -558,7 +558,7 @@ private struct SignedPermitRow: View {
                     .lineLimit(1)
                     Text(SignedPermitWording.when(permit, terms))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
                 Spacer(minLength: 8)
                 Text(terms.amount)
@@ -568,20 +568,20 @@ private struct SignedPermitRow: View {
             }
             Label(terms.howToStop, systemImage: "hand.raised")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
             switch check {
             case .notUsed:
                 Label("Not used as of the last check.", systemImage: "clock")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             case .couldntCheck:
                 WarningText("Couldn't check whether this has been used, so it may have been.")
                     .font(.caption)
             case nil:
                 Label("Not checked yet.", systemImage: "clock")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
         }
     }

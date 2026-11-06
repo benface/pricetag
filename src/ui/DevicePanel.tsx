@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ETH_ADDRESS, TOKENS, encodeNote, formatAmount, formatExactUsd, formatMoney, formatUsdIn, isAddress, labelUsd, normalizeAddress, shortHash, type CurrencyCode, type Token } from "@pricetag/sdk/core"
 import type { Hex, PublicClient } from "viem"
 import { linkedWallets, type Book } from "../core/book.ts"
@@ -45,8 +45,8 @@ type Props = {
   onLink: (addresses: readonly string[]) => void
   /** The last link couldn't be saved. */
   notSaved?: boolean
-  /** Opens a wallet in the main view. */
-  onView: (address: string) => void
+  /** Opens a wallet in the main view. The page the Mac app serves has none. */
+  onView?: (address: string) => void
   onClose: () => void
   connectors?: Connectors
   /** A test page starts partway through. */
@@ -320,7 +320,7 @@ export function DevicePanel({ link, book, currency = "USD", allYours = false, on
           <>
             <h3>{handingOff ? "Finish in the Mac app" : "Does your device show this?"}</h3>
             <p className="address-big mono">{groupAddress(account.address)}</p>
-            {busy && prompt ? <p className="notice">{PROMPTS[prompt]}</p> : null}
+            {busy && prompt ? <p className="notice" role="status">{PROMPTS[prompt]}</p> : null}
             {signer?.kind === "ledger" && !lookOnDevice && busy ? <p className="small">{handingOff ? LEDGER_HAND_OFF : LEDGER_VERIFY}</p> : null}
             {lookOnDevice ? <p className="small">{signer?.kind === "keystone" ? KEYSTONE_LOOK : `This page can't reach your device through ${name}. Have ${name} show this address on your device, or look it up on the device's receive screen.`}</p> : null}
             {handingOff ? (
@@ -359,30 +359,30 @@ export function DevicePanel({ link, book, currency = "USD", allYours = false, on
             <p className="notice">✓ You checked this address on your device.</p>
             <p className="address-big mono">{groupAddress(account.address)}</p>
             <div className="device-actions">
-              <button type="button" onClick={() => void navigator.clipboard.writeText(account.address)}>
-                Copy address
-              </button>
+              <CopyAddress address={account.address} />
               <button type="button" onClick={() => setStep("send")}>
                 Send to another of my wallets
               </button>
               <a className="button-link" href={toMac} onClick={handOff}>
                 Add to the Mac app as savings
               </a>
-              <button type="button" onClick={() => onView(account.address)}>
-                See this wallet
-              </button>
+              {onView ? (
+                <button type="button" onClick={() => onView(account.address)}>
+                  See this wallet
+                </button>
+              ) : null}
             </div>
             <p className="muted small">{activityWords(account.activity)}. Its account on your device is linked here, so costs follow what moves between your wallets.</p>
           </>
         ) : null}
 
-        {step === "send" && account && signer ? <SendForm link={link?.kind === "top-up" ? link : null} currency={currency} from={account} book={book} checked={checked} accounts={accounts} clientOf={clientOf} busy={busy} onLink={onLink} onSend={send} /> : null}
+        {step === "send" && account && signer ? <SendForm link={link?.kind === "top-up" ? link : null} currency={currency} from={account} book={book} checked={checked} accounts={accounts} clientOf={clientOf} busy={busy} onBack={() => setStep(link?.kind === "top-up" ? "accounts" : "ready")} onLink={onLink} onSend={send} /> : null}
 
         {step === "publish" && account && signer && link?.kind === "publish" ? <PublishForm link={link} currency={currency} busy={busy} onBack={() => setStep("accounts")} onSend={send} /> : null}
 
         {step === "sent" && sent ? (
           <>
-            <p className={sent.status === "failed" ? "notice warn" : "notice"}>{sent.status === "pending" ? "On its way…" : sent.status === "done" ? "✓ Done" : "⚠ It reached the network but failed. Your funds didn't move, apart from the network fee."}</p>
+            <p className={sent.status === "failed" ? "notice warn" : "notice"} role="status">{sent.status === "pending" ? "On its way…" : sent.status === "done" ? "✓ Done" : "⚠ It reached the network but failed. Your funds didn't move, apart from the network fee."}</p>
             <p className="small">{sent.what}</p>
             <p className="small">
               <a href={`https://basescan.org/tx/${sent.hash}`} target="_blank" rel="noreferrer noopener">
@@ -409,10 +409,10 @@ export function DevicePanel({ link, book, currency = "USD", allYours = false, on
           </div>
         ) : null}
 
-        {busy && prompt && !exchange && step !== "check" ? <p className="notice">{PROMPTS[prompt]}</p> : null}
-        {busy && !prompt && !exchange && step === "route" ? <p className="notice">Connecting…</p> : null}
-        {busy && !prompt && !exchange && step === "ledger" ? <p className="notice">Choose your Ledger in your browser's list.</p> : null}
-        {problem ? <p className="notice warn">⚠ {problem}</p> : null}
+        {busy && prompt && !exchange && step !== "check" ? <p className="notice" role="status">{PROMPTS[prompt]}</p> : null}
+        {busy && !prompt && !exchange && step === "route" ? <p className="notice" role="status">Connecting…</p> : null}
+        {busy && !prompt && !exchange && step === "ledger" ? <p className="notice" role="status">Choose your Ledger in your browser's list.</p> : null}
+        {problem ? <p className="notice warn" role="alert">⚠ {problem}</p> : null}
         {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
         {problem && step === "check" ? (
           <button type="button" onClick={checkOnDevice}>
@@ -424,7 +424,21 @@ export function DevicePanel({ link, book, currency = "USD", allYours = false, on
   )
 }
 
-function SendForm({ link, currency, from, book, checked, accounts, clientOf, busy, onLink, onSend }: {
+/** Says what happened, because a copy that failed looks just like one that worked. */
+function CopyAddress({ address }: { address: string }) {
+  const [said, setSaid] = useState("")
+  const copy = () => navigator.clipboard.writeText(address).then(() => setSaid("Copied."), () => setSaid("Couldn't copy it, so select it above instead."))
+  return (
+    <>
+      <button type="button" onClick={() => void copy()}>
+        Copy address
+      </button>
+      <span className="small muted" role="status">{said}</span>
+    </>
+  )
+}
+
+function SendForm({ link, currency, from, book, checked, accounts, clientOf, busy, onBack, onLink, onSend }: {
   link: Extract<DeviceLink, { kind: "top-up" }> | null
   currency: CurrencyCode
   from: SeenAccount
@@ -433,6 +447,7 @@ function SendForm({ link, currency, from, book, checked, accounts, clientOf, bus
   accounts: readonly SeenAccount[]
   clientOf: () => Promise<PublicClient>
   busy: boolean
+  onBack: () => void
   onLink: (addresses: readonly string[]) => void
   onSend: (request: ColdRequest, what: string, own: ReadonlySet<string>) => void
 }) {
@@ -444,6 +459,7 @@ function SendForm({ link, currency, from, book, checked, accounts, clientOf, bus
   const [ethPrice, setEthPrice] = useState<bigint | null>(null)
   const [check, setCheck] = useState<SendCheck | null>(null)
   const rateMicros = useCurrentRate(currency)
+  const amountError = useId()
 
   const knownOwn = useMemo(() => new Set([...linkedWallets(book), ...checked.map((c) => c.address), ...accounts.filter((a) => a.activity !== null && !isFresh(a.activity)).map((a) => a.address)]), [book, checked, accounts])
   const to = isAddress(typed.trim()) ? normalizeAddress(typed.trim()) : null
@@ -511,7 +527,7 @@ function SendForm({ link, currency, from, book, checked, accounts, clientOf, bus
       <div className="send-row">
         <label className="field">
           <span className="small muted">Amount</span>
-          <input inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => (setAmount(e.target.value), setTouched(true))} />
+          <input inputMode="decimal" placeholder="0.00" value={amount} aria-invalid={amount !== "" && !units} aria-describedby={amount && !units ? amountError : undefined} onChange={(e) => (setAmount(e.target.value), setTouched(true))} />
         </label>
         <label className="field">
           <span className="small muted">Token</span>
@@ -525,14 +541,19 @@ function SendForm({ link, currency, from, book, checked, accounts, clientOf, bus
         </label>
       </div>
       {usdMicros ? <p className="muted small">About {formatUsdIn(usdMicros.toString(), currency, rateMicros)}</p> : null}
-      {amount && !units ? <p className="small warn-text">⚠ That isn't an amount of {token.symbol}.</p> : null}
-      {refused && !needsAnswer ? <p className="small warn-text">⚠ {refused}</p> : null}
+      {amount && !units ? <p id={amountError} className="small warn-text">⚠ That isn't an amount of {token.symbol}.</p> : null}
+      {refused && !needsAnswer ? <p className="small warn-text" role="alert">⚠ {refused}</p> : null}
       {check?.feeUnits ? <p className="muted small">Network fee: about {formatAmount(check.feeUnits, 18)} ETH</p> : null}
-      {check?.problem ? <p className="small warn-text">⚠ {check.problem}</p> : null}
+      {check?.problem ? <p className="small warn-text" role="alert">⚠ {check.problem}</p> : null}
       <p className="muted small">Your device shows the same address and amount. Trust what it shows.</p>
-      <button type="button" className="primary" disabled={busy || !request || refused !== null || (needsAnswer && !isMine) || check?.blocks === true} onClick={go}>
-        Send from your device
-      </button>
+      <div className="device-actions">
+        <button type="button" disabled={busy} onClick={onBack}>
+          Back
+        </button>
+        <button type="button" className="primary" disabled={busy || !request || refused !== null || (needsAnswer && !isMine) || check?.blocks === true} onClick={go}>
+          Send from your device
+        </button>
+      </div>
     </>
   )
 }

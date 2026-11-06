@@ -1,6 +1,6 @@
 # Hot wallet security checklist
 
-The Mac app's hot wallet ("this device's spending money") is an unreviewed hackathon build. It's meant for small funds only, and it assumes it will get hacked: the cap is what makes the risk acceptable. This lists what it does, what's been checked and how, and what it doesn't protect against.
+The Mac app's hot wallet ("this device's spending money") is an unreviewed build. It's meant for small funds only, and it assumes it will get hacked: the cap is what makes the risk acceptable. This lists what it does, what's been checked and how, and what it doesn't protect against.
 
 To check it yourself: `pnpm check:mac` for the logic, `pnpm check:keychain` for the real Secure Enclave and Keychain, `pnpm check:anvil` for real signing against a local fork of Base, and `pnpm check:extension` for the browser extension on a real site, through to that fork.
 
@@ -58,6 +58,7 @@ A browser extension lets websites use this wallet. A site can do real damage wit
 - [x] Approvals only appear in the app's own window, showing the site and what's being signed. The wire protocol has no message for answering one, and a test sends the attempts anyone would try.
 - [x] Rejecting is one click, and Esc and closing the window do the same. Nothing approves with a key: Return only asks Touch ID again after a cancelled prompt. Connect and acknowledging a strong warning can't be pressed for the first second, so a window opening under the pointer can't catch a click. Everything else takes a touch, and Touch ID asks about 400 ms after the window's in front.
 - [x] Sending and signing also ask for Touch ID, right away, with the site and what's being signed on screen. A refused prompt leaves the request waiting, and signs nothing.
+- [x] The app only accepts connections for a device page, when it reads a hosted server: on `127.0.0.1` only, on a random port, only `GET` of files listed from its signed bundle, only with that exact `Host`, and never from another site (`Sec-Fetch-Site`). It stops when the page closes, and it can't reach a key: it has no code that does. `pnpm check:device-pages` tests all of this.
 - [x] The origin comes from the browser (`sender.origin`), not the page, and is checked again in the app. Only top-level pages on HTTPS or this Mac can ask: no iframes, and no plain HTTP that anyone on the network could change.
 - [x] Only the hot wallet is ever exposed. Nothing in the bridge can read a cold wallet, and a request naming any other address is refused.
 - [x] Only Base. Other chains are refused for switching, sending and typed data, and what's signed always carries chain ID 8453. A signature with no chain in its data gets a strong warning.
@@ -138,6 +139,8 @@ The RPC is configurable and untrusted.
 ## Signing and identity
 
 - [x] Only a provisioned build can reach the data protection Keychain. Without one, the app says it can't hold a key, and everything else works.
+- [x] **The build for colleagues (`pnpm mac:hosted`) holds keys on Macs that aren't registered.** It's signed with Developer ID and a profile with no device list, notarized, and checked by `pnpm check:hosted`. A key made by that signature goes through the same Secure Enclave and device-only Keychain, in a Keychain group of its own, so it can't read the wallet of a normal build on the same Mac, or the other way around. Tested on this Mac only, from the profile's `ProvisionsAllDevices`. A second Mac is on the list below.
+- [x] **Its one file outside the sandbox.** It may write each browser's native messaging manifest for this app, and make the folder that goes in, by a temporary exception in `Config/Hosted.entitlements`. Reading or changing another app's manifest, or the browser's own files, is refused (tried with a signed scratch app). It can see the names of other apps' manifests in that folder. It never replaces a manifest it didn't write. A compromised copy could still point this app's own host at something else, which `allowed_origins` limits to the extension.
 - [ ] **The Keychain ties the key to the signing team.** The team is pinned in `macos/run.sh`, and changing it makes an existing key unreadable. Sweep everything out first.
 - [ ] **The team's profile lasts a year.** It's Benface Inc.'s, and `pnpm mac` renews it. A build older than that stops launching, and a wallet that isn't running isn't sweeping.
 
@@ -149,4 +152,5 @@ These need a person at the Mac:
 - [ ] The approval window with a person at it. `pnpm check:extension` answers it through a debug build's stand-in, which a release build doesn't have.
 - [ ] A site with real funds on a real browser.
 - [ ] Reading an address on a real Ledger or Keystone screen.
+- [ ] The full build on a second Mac: installing the notarized `.dmg`, the first-launch prompt, a new key, the extension loaded unpacked, and a device page.
 - [ ] Anything with real funds. All sends so far have been on a local fork. Start with a dollar or two.
