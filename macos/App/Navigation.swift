@@ -73,6 +73,8 @@ final class Navigation {
     /// A wallet's name while it's being typed. Closing the list keeps it, whichever way the list closes, and only Esc cancels.
     let pendingWalletName = PendingWalletName()
     @ObservationIgnored var onSwitcherClosed: (() -> Void)?
+    /// Welcome was chosen in the Help menu, with a wallet already showing.
+    var isShowingWelcomeAgain = false
     /// The extension's Top Up button was pressed. Spending Money's page takes it from here.
     var wantsTopUp = false
     /// The menu bar's Send button was pressed. Spending Money's page takes it from here.
@@ -115,6 +117,17 @@ final class Navigation {
 
     func switchWallet() {
         isSwitchingWallet = true
+    }
+
+    /// Asked for from the Help menu, from whichever section this is on.
+    func showWelcome(_ firstRun: FirstRun) {
+        let hasWallet = store.address != nil
+        firstRun.showAgain(hasWallet: hasWallet)
+        if hasWallet {
+            isShowingWelcomeAgain = true
+        } else {
+            section = .overview
+        }
     }
 
     /// Spending Money is a wallet like any other, so this chooses it and goes to its page, or offers to make one.

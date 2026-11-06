@@ -84,12 +84,13 @@ extension WalletEntry {
 }
 
 extension WalletList {
-    /// For trying things while building the app. A fixture has no place in a release build, and scenes show what one looks like.
+    /// For trying things while building the app, and for a tester with no wallet on Base to try. Otherwise a fixture has no place in a release
+    /// build, and scenes show what one looks like.
     static var offersDemo: Bool {
         #if DEBUG
-        !TestMode.isRunning
+        Build.isForOtherPeople || !TestMode.isRunning
         #else
-        false
+        Build.isForOtherPeople
         #endif
     }
 }

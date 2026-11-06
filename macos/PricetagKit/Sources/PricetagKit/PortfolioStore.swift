@@ -79,6 +79,11 @@ public struct ExplanationRequest: Hashable, Sendable {
     public let book: Book
 }
 
+/// Whether anything answers at the server's address, whichever wallet is showing, and even with none.
+public enum ServerCheck: Equatable, Sendable {
+    case checking, answers, unreachable
+}
+
 @MainActor
 @Observable
 public final class PortfolioStore {
@@ -129,6 +134,8 @@ public final class PortfolioStore {
     public private(set) var invite: String?
     /// The server at `serverURL` answered that it needs an invite, and hasn't taken one since.
     public private(set) var needsInvite = false
+    /// What the last question to the server found, for when there's no wallet being read to say so.
+    public private(set) var serverCheck = ServerCheck.checking
     /// They said not now, so nothing asks again until they give an invite or move to another server.
     private var isInviteDeclined = false
     /// Whether to ask for an invite now. Giving one stops asking until the server answers, and if it's refused, this asks again.
@@ -679,15 +686,19 @@ public final class PortfolioStore {
     public func refreshRules() async {
         let asked = serverURL
         let askedInvite = invite
+        // An answer to an invite that's since been replaced says nothing about the new one.
+        let isCurrent = { [self] in asked == serverURL && askedInvite == invite }
         let next: [PricingRule]
         do {
             next = try await source.rules()
         } catch {
-            // A refusal of what was sent before an invite arrived says nothing about that invite.
-            if asked == serverURL, askedInvite == invite, case .needsInvite = error as? FetchError { needsInvite = true }
+            guard isCurrent() else { return }
+            serverCheck = error as? FetchError == .unreachable || error as? FetchError == .timedOut ? .unreachable : .answers
+            if case .needsInvite = error as? FetchError { needsInvite = true }
             return
         }
-        guard asked == serverURL, askedInvite == invite else { return }
+        guard isCurrent() else { return }
+        serverCheck = .answers
         needsInvite = false
         rules = next
         if let chosen = selectedRule, !next.contains(where: { $0.id == chosen }) {
@@ -703,12 +714,19 @@ public final class PortfolioStore {
         return try await source.comparison(address: address, method: method, currency: currency, linked: linked(for: address), book: bookToSend(book, for: address))
     }
 
+    /// Asks again, saying so until there's an answer.
+    public func checkServer() {
+        serverCheck = .checking
+        Task { await refreshRules() }
+    }
+
     public func setServerURL(_ url: URL) {
         guard url != serverURL else { return }
         serverURL = url
         defaults.set(url.absoluteString, forKey: Keys.server)
         invite = Self.invites(in: defaults)[Self.origin(of: url)]
         needsInvite = false
+        serverCheck = .checking
         isInviteDeclined = false
         source = makeSource(url)
         rules = []
@@ -727,12 +745,18 @@ public final class PortfolioStore {
         guard next != invite else { return }
         invite = next
         needsInvite = false
+        serverCheck = .checking
         var invites = Self.invites(in: defaults)
         invites[Self.origin(of: serverURL)] = next
         defaults.set(invites, forKey: Keys.invites)
         source = makeSource(serverURL)
         rules = []
         answersChanged()
+    }
+
+    /// They've changed their mind about Not Now.
+    public func askForInvite() {
+        isInviteDeclined = false
     }
 
     /// Not now. It only answers the question being asked, so it can't silence one the server hasn't raised yet.
@@ -1030,6 +1054,11 @@ public final class PortfolioStore {
         case .rateLimited(let message, _): .rateLimited(message)
         case .unreachable, .timedOut, nil: .serverUnreachable
         }
+    }
+
+    /// Whether this Mac has used the app before, from anything it would have saved by now.
+    public nonisolated static func hasBeenUsed(defaults: UserDefaults = .standard) -> Bool {
+        [Keys.wallet, Keys.method, Keys.currency, Keys.menuBar, Keys.server, Keys.invites, Keys.book, Keys.answerDetails, Keys.rule, Keys.savedWallets, Keys.walletOrder, Keys.hiddenWallets, Keys.holdingsSort].contains { defaults.object(forKey: $0) != nil }
     }
 
     private enum Keys {

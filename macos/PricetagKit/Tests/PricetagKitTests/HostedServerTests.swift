@@ -249,6 +249,9 @@ private struct InviteGateSource: PortfolioSource {
         store.declineInvite()
         store.setInvite("wrong")
         #expect(store.asksForInvite, "Even the same one again")
+        store.declineInvite()
+        store.askForInvite()
+        #expect(store.asksForInvite, "A page that needs one can ask for it after Not Now")
         store.stop()
     }
 
