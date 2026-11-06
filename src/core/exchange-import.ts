@@ -114,7 +114,7 @@ const MATCH_AFTER_MS = 60 * 60_000
 /** Something that arrived and might be a withdrawal. */
 export type ExchangeArrival = { key: string; wallet: string; asset: string; units: bigint; timestamp: string }
 
-function fits(withdrawal: ExchangeWithdrawal, { wallet, asset, units, timestamp }: ExchangeArrival): boolean {
+export function fits(withdrawal: ExchangeWithdrawal, { wallet, asset, units, timestamp }: Omit<ExchangeArrival, "key">): boolean {
   const sent = BigInt(withdrawal.units)
   const after = Date.parse(timestamp) - Date.parse(withdrawal.at)
   if (withdrawal.asset !== asset || after < -MATCH_BEFORE_MS || after > MATCH_AFTER_MS) return false

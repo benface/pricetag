@@ -179,7 +179,7 @@ public struct TaxReportView: View {
             Section {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Working it out…").foregroundStyle(.secondary)
+                    Text("Working it out…").secondaryText()
                 }
             }
         default:
@@ -195,10 +195,11 @@ public struct TaxReportView: View {
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            LabeledContent("Sales") { Text(Format.block(report.soldCount)).monospacedDigit() }
-            LabeledContent(Wording.networkFees) { Text(Format.block(report.feeCount)).monospacedDigit() }
+            // Each with its label, as one thing to read. Combining them would keep only the label.
+            countRow("Sales", report.soldCount)
+            countRow(Wording.networkFees, report.feeCount)
             if report.sentCount > 0 {
-                LabeledContent("Sent to other addresses") { Text(Format.block(report.sentCount)).monospacedDigit() }
+                countRow("Sent to other addresses", report.sentCount)
             }
             LabeledContent("Total gain") {
                 if let gain = report.gainMicros {
@@ -207,6 +208,8 @@ public struct TaxReportView: View {
                     WarningText("Unknown")
                 }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Spoken.number("Total gain", report.gainMicros.map { Format.signedMoney($0, report.currency) }))
             if report.unresolvedCount > 0 { unknownRow(report) }
         } header: {
             Text(report.year.map { "In \(String($0))" } ?? "In all years")
@@ -217,11 +220,17 @@ public struct TaxReportView: View {
                 ForEach(report.warnings + report.notes, id: \.self) { line in
                     Text(line)
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
+    }
+
+    private func countRow(_ label: String, _ count: Int) -> some View {
+        LabeledContent(label) { Text(Format.block(count)).monospacedDigit() }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(label), \(Format.block(count))")
     }
 
     /// What's unknown is never in the total, so this says how much is left out, and where to fix it.
@@ -279,7 +288,7 @@ public struct TaxReportView: View {
         Section {
             if report.preview.isEmpty {
                 Text(report.year.map { "Nothing to report in \(String($0))." } ?? "Nothing to report.")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
             ForEach(Array(report.preview.enumerated()), id: \.offset) { _, row in
                 previewRow(row, currency: report.currency)
@@ -297,6 +306,8 @@ public struct TaxReportView: View {
 
     private func previewRow(_ row: TaxPreviewRow, currency: CurrencyCode) -> some View {
         let amount = "\(Format.amount(row.amount, decimals: row.decimals)) \(row.asset)"
+        let title = row.type == "Network fee" ? "Network fee, \(amount)" : "\(row.type) \(amount)"
+        let date = parseTimestamp(row.timestamp).map { Format.utcDateTime($0) }
         return LabeledContent {
             if let gain = row.gainMicros {
                 Text(Format.signedMoney(gain, currency))
@@ -306,11 +317,13 @@ public struct TaxReportView: View {
                 WarningText("Unknown gain")
             }
         } label: {
-            Text(row.type == "Network fee" ? "Network fee, \(amount)" : "\(row.type) \(amount)")
-            if let date = parseTimestamp(row.timestamp) {
-                Text(Format.utcDateTime(date))
+            Text(title)
+            if let date {
+                Text(date)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Spoken.number([title, date, "gain"].compactMap(\.self).joined(separator: ", "), row.gainMicros.map { Format.signedMoney($0, currency) }))
     }
 }
 

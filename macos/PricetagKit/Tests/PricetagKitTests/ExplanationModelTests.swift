@@ -13,8 +13,16 @@ final class ExplanationGate {
         return try await withCheckedThrowingContinuation { waiting[request] = $0 }
     }
 
+    /// A failure rather than a test that spins forever, which keeps going even after `swift test` is killed.
     func waitUntilAsked(_ request: ExplanationRequest) async {
-        while waiting[request] == nil { await Task.yield() }
+        let deadline = Date.now.addingTimeInterval(10)
+        while waiting[request] == nil {
+            guard Date.now < deadline else {
+                Issue.record("Nothing asked for \(request.target).")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
     }
 
     func answer(_ request: ExplanationRequest, _ result: Result<Explanation, FetchError>) {

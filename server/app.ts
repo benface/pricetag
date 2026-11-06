@@ -2,8 +2,8 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { currentRateMicros, hasStarted, isAddress, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createWallets, describeError, followChain, followRawSql, followSql, readHeadMark, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
+import { currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createWallets, describeError, followChain, followRawSql, followSql, readBlockHashes, readHeadMark, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -12,8 +12,8 @@ import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fi
 import { foldBook, previewBook } from "../src/core/resolve.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule } from "../src/core/rules.ts"
 import { verifyLink } from "./links.ts"
-import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type Unread } from "./combined.ts"
-import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
+import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type AllYoursRead, type Unread } from "../src/core/combined.ts"
+import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../src/core/portfolio.ts"
 import { createCoinbase } from "./coinbase.ts"
 import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onramp.ts"
 import { createRates, readPaidRates } from "./rates.ts"
@@ -37,7 +37,7 @@ function parseScope(value: string | null): TaxScope | null {
   return value === "pooled" || value === "per-wallet" ? value : null
 }
 
-/** How many other wallets a report can add. Each is a full read. */
+/** How many other wallets a report, or any other request, can add. Each is a full read. */
 const MAX_OTHER_WALLETS = 20
 
 /** How long a read of all the user's wallets waits on the slowest before answering with the rest. A wallet catching up takes far less. */
@@ -59,6 +59,12 @@ function parseCurrency(value: string | null): CurrencyCode | null {
   return isMainCurrency(value) ? value : null
 }
 
+/** The other currencies a client's own answers are in, so it can fold them. It keeps those answers, and this is all it says about them. */
+function parsePaidIn(value: string | null): CurrencyCode[] | null {
+  const codes = value ? value.split(",") : []
+  return codes.every((code) => isCurrencyCode(code)) ? (codes as CurrencyCode[]) : null
+}
+
 /** A pricing rule, and where a wallet's rows come from when it's read through that rule. */
 type RuleSource = { rule: PricingRule; source: Source }
 
@@ -78,7 +84,7 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
   const readRates = createRates(env.PRICETAG_RATES_DATASET ? updateRounds(query, env.PRICETAG_RATES_DATASET, calls) : calls)
   if (env.PRICETAG_RATES_DATASET) void warnOfNewRateAggregators(env.BASE_RPC_URL || DEFAULT_RPC_URL)
   // How the server hears about new blocks. Amp's block ranges name a network with a dash, and its RPC functions with an underscore.
-  const followOf = (sql: string): FollowConfig => ({ stream: env.AMP_QUERY_URL ? createRangeStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")) : null, sql, readMark: (after) => readHeadMark(query, baseDataset, after) })
+  const followOf = (sql: string): FollowConfig => ({ stream: env.AMP_QUERY_URL ? createRangeStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")) : null, sql, readMark: (after) => readHeadMark(query, baseDataset, after), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks) })
   // Only a fork pins the default. Without one, a hash left in the env can be a hosted Amp's, which a local Amp doesn't have.
   const pin = env.PRICETAG_DATASET && env.PRICETAG_FORK_DATASET ? pinned(env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH) : null
   const proofs = createProofs(pin ? query.aliased({ pricetag: pin }) : query, {
@@ -185,9 +191,6 @@ const pollingOnly = (source: Source): FollowConfig => ({
 
 type Created = Omit<NonNullable<ReturnType<typeof createSource>>, "follow"> & { follow?: FollowConfig | undefined }
 
-/** What a client on this machine's address is, which says nothing a provider could use. */
-const isLocal = (ip: string) => ip === "::1" || ip === "::ffff:127.0.0.1" || ip.startsWith("127.")
-
 const NO_ONRAMP = "Buying isn't set up on this server."
 
 /** An amount typed in a currency, or undefined when it isn't one. */
@@ -197,7 +200,14 @@ function fiatOf(value: unknown): FiatAmount | undefined {
   return typeof currency === "string" && isMainCurrency(currency) ? { amount, currency } : undefined
 }
 
-export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env)) {
+export type ApiOptions = {
+  /** The client's address, for a provider to check where a purchase is made from, or null when it's this machine or isn't known. */
+  clientIp?: (req: IncomingMessage) => string | null
+  /** How many wallets each rule keeps read. A shared server has more people's wallets than one Mac, and one pushed out is read again in full. */
+  maxWallets?: number
+}
+
+export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env), { clientIp = () => null, maxWallets }: ApiOptions = {}) {
   const source = created?.source ?? null
 
   let head: Head | null = null
@@ -252,9 +262,9 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL), () => head?.blockNum ?? null)
-  const wallets = source ? createWallets(source, pollHead, readL1Fees) : null
+  const wallets = source ? createWallets(source, pollHead, readL1Fees, console, { maxWallets }) : null
   // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
-  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, pollHead, readL1Fees) }))
+  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, pollHead, readL1Fees, console, { maxWallets }) }))
 
   /**
    * Reads a wallet, or answers the request with why it can't.
@@ -283,18 +293,18 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   /** A wallet with the rates to show it in `currency`. Never falls back to USD. Throws when they can't be read. */
-  async function convert(wallet: WalletResponse, currency: CurrencyCode, books: readonly Book[] = []): Promise<WalletResponse> {
+  async function convert(wallet: WalletResponse, currency: CurrencyCode, books: readonly Book[] = [], paidIn: readonly CurrencyCode[] = []): Promise<WalletResponse> {
     const live = created && wallet.mode !== "demo" ? created : null
-    const paidRates = live ? await readPaidRates(live.readRates, wallet, currency, books) : undefined
+    const paidRates = await readPaidRates(live ? live.readRates : async (other) => demoRates(other), wallet, currency, books, paidIn)
     const paid = paidRates ? { ...wallet, paidRates } : wallet
     if (currency === "USD") return paid
     return { ...paid, currency, rates: live ? await live.readRates(currency, wallet) : demoRates(currency) }
   }
 
   /** A wallet with the rates to show it in `currency`, or answers the request with why it can't. Never falls back to USD. */
-  async function inCurrency(wallet: WalletResponse, currency: CurrencyCode, res: ServerResponse, books: readonly Book[] = []): Promise<WalletResponse | null> {
+  async function inCurrency(wallet: WalletResponse, currency: CurrencyCode, res: ServerResponse, books: readonly Book[] = [], paidIn: readonly CurrencyCode[] = []): Promise<WalletResponse | null> {
     try {
-      return await convert(wallet, currency, books)
+      return await convert(wallet, currency, books, paidIn)
     } catch (error) {
       sendAmpError(res, error)
       return null
@@ -354,8 +364,6 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         const read = from.peek(address)
         wallet = read && rule ? { ...read, rule: rule.rule.id, ruleNote: rule.note } : read
       }
-      // With no data source, only the demo's own wallets can ever be read, so this one isn't still reading.
-      if (!wallet && !wallets) linkedFailures.add(address)
       if (!wallet) continue
       const converted = await inCurrency(wallet, currency, res, books)
       if (!converted) return null
@@ -372,7 +380,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
    * then can be from before a move another wallet has already seen. `fresh: false` takes what's already been read, and
    * leaves out a wallet whose last read failed.
    */
-  async function readAllYours(addresses: readonly string[], currency: CurrencyCode, rule: (typeof rules)[number] | null, books: readonly Book[], fresh: boolean, res: ServerResponse): Promise<{ read: WalletResponse[]; unread: Unread } | null> {
+  async function readAllYours(addresses: readonly string[], currency: CurrencyCode, rule: (typeof rules)[number] | null, books: readonly Book[], fresh: boolean, res: ServerResponse, paidIn: readonly CurrencyCode[] = []): Promise<{ read: WalletResponse[]; unread: Unread } | null> {
     const from = rule?.wallets ?? wallets
     const chain = rule?.source ?? source
     if (!from || !chain) {
@@ -399,7 +407,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         return
       }
       try {
-        done.set(address, await convert(ruled(wallet), currency, books))
+        done.set(address, await convert(ruled(wallet), currency, books, paidIn))
       } catch (error) {
         console.error("Wallet rates failed:", describeError(error))
         failed.add(address)
@@ -426,7 +434,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
             // A history that starts after this block can't say what the wallet held at it.
             const at = facts && facts.fromBlock <= blockNum ? from.pricedOn(account, facts, prices, await from.marketOn(account, facts, prices)) : null
             if (!at) throw new Error(`It can't be read at block ${blockNum}.`)
-            answer.set(account, await convert(ruled(at), currency, books))
+            answer.set(account, await convert(ruled(at), currency, books, paidIn))
           } catch (error) {
             console.error("Wallet read at an earlier block failed:", describeError(error))
             failed.add(account)
@@ -458,9 +466,13 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const candidates = action === "preview" ? (Array.isArray(body.candidates) ? body.candidates.map(parseBook) : null) : []
     if (!candidates || candidates.includes(null) || candidates.length > 8) return sendJson(res, 400, { error: "Those answers can't be read." })
     const books = action === "preview" ? (candidates as Book[]) : [book]
-    const found = await readAllYours(addresses, currency, rule, books, action === undefined, res)
+    const paidIn = parsePaidIn(typeof body.paid === "string" ? body.paid : null)
+    if (!paidIn) return sendJson(res, 400, { error: "That currency isn't supported." })
+    const found = await readAllYours(addresses, currency, rule, books, action === undefined || action === "wallets", res, paidIn)
     if (!found) return
     const { read, unread } = found
+    // The wallets themselves, because the browser runs the fold, with answers that stay with it.
+    if (action === "wallets") return sendJson(res, 200, { wallets: read, unread } satisfies AllYoursRead)
     if (read.length === 0) {
       res.writeHead(204, { "cache-control": "no-store" })
       res.end()
@@ -512,8 +524,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       if (typeof cryptoAmount !== "string" || !/^\d{1,12}(\.\d{1,18})?$/.test(cryptoAmount) || !/[1-9]/.test(cryptoAmount)) return sendJson(res, 400, { error: "That isn't an amount." })
       const typed = fiat === undefined || fiat === null ? null : fiatOf(fiat)
       if (typed === undefined) return sendJson(res, 400, { error: "That isn't an amount." })
-      const ip = req.socket.remoteAddress
-      return onrampAnswer(res, () => onramp.checkout({ address, asset, cryptoAmount, fiat: typed, clientIp: ip && !isLocal(ip) ? ip : null }))
+      return onrampAnswer(res, () => onramp.checkout({ address, asset, cryptoAmount, fiat: typed, clientIp: clientIp(req) }))
     }
 
     const taxMatch = /^\/api\/tax-report\/([^/]+)$/.exec(path)
@@ -527,7 +538,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return taxReport(taxMatch[1] as string, { country: body.country, method: body.method, scope: body.scope, year: body.year }, also as string[], currency, book, res)
     }
 
-    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last))?$/.exec(path)
+    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last|wallets))?$/.exec(path)
     if (!match) return sendJson(res, 404, { error: "Not found" })
     const method = parseMethod(typeof body.method === "string" ? body.method : null)
     if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
@@ -539,12 +550,20 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (body.rule !== undefined && body.rule !== null && !rule) return sendJson(res, 400, { error: "That pricing rule isn't available here." })
     const action = match[2]
     if (match[1] === ALL_YOURS) return allYours(action, body, req, res, { method, currency, book, rule })
+    if (action === "wallets") return sendJson(res, 404, { error: "Not found" })
 
     const target = action === "explain" ? parseExplainTarget(new URL(req.url ?? "/", "http://localhost").searchParams) : null
     if (action === "explain" && !target) return sendJson(res, 400, { error: "That isn't a number this can explain." })
     const candidates = action === "preview" ? (Array.isArray(body.candidates) ? body.candidates.map(parseBook) : null) : []
     if (!candidates || candidates.includes(null) || candidates.length > 8) return sendJson(res, 400, { error: "Those answers can't be read." })
     const books = action === "preview" ? (candidates as Book[]) : [book]
+
+    // Every wallet this request could read, before any read starts: a shared server's reads queue for everyone.
+    const sent: unknown[] = Array.isArray(body.linked) ? body.linked : []
+    if (!sent.every((address) => typeof address === "string" && isAddress(address))) return sendJson(res, 400, { error: "Linked wallets are a list of Base addresses." })
+    const named = new Set([...(sent as string[]).map((address) => address.toLowerCase()), ...books.flatMap(linkedWallets)])
+    named.delete((match[1] as string).toLowerCase())
+    if (named.size > MAX_OTHER_WALLETS) return sendJson(res, 400, { error: `A request can add up to ${MAX_OTHER_WALLETS} other wallets.` })
 
     if (action === "compare") {
       const known = Array.isArray(body.linked) ? body.linked : []
@@ -772,8 +791,13 @@ export function createApi(env: Env, created: Created | null = createSource(env),
 
     const walletMatch = /^\/api\/wallet\/([^/]+)$/.exec(path)
     if (walletMatch) {
+      const paidIn = parsePaidIn(params.get("paid"))
+      if (!paidIn) {
+        sendJson(res, 400, { error: "That currency isn't supported." })
+        return true
+      }
       const read = await readWallet(walletMatch[1] as string, res, { fresh: true, rule })
-      const wallet = read && (await inCurrency(read, currency, res))
+      const wallet = read && (await inCurrency(read, currency, res, [], paidIn))
       if (wallet) sendJson(res, 200, wallet)
       return true
     }

@@ -1,6 +1,7 @@
 // Turns a wallet's rows in the dataset's shapes into the priced legs the fold reads.
 // Pure, so it can run on fixtures, on the raw dataset's rows and on the Pricetag dataset's rows alike.
 
+import type { CurrencyCode } from "./currency.ts"
 import { worth, type CostLabel, type FoldLeg } from "./fold.ts"
 import { ETH_ADDRESS, normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
 
@@ -142,6 +143,8 @@ export type PricedLeg = FoldLeg & {
   conversion?: LegConversion
   /** What the wallet already held before the first block read. It isn't a transaction, so `txHash` is empty. */
   opening?: boolean
+  /** The cost as entered, on an opening leg shown in another currency. Its cost here is an estimate, at the rate when the history starts. */
+  enteredAs?: { micros: string; currency: CurrencyCode }
   /** This transaction claims ETH reached the wallet, and the chain hasn't confirmed how much. See `isUnwrapClaim`. */
   unsettledCredit?: boolean
   /** On what moved in a transaction whose claims were settled. This outlives the credit's rows, which can merge or vanish. */

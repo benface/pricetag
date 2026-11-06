@@ -15,28 +15,43 @@ public enum Tone {
     public var style: AnyShapeStyle {
         switch self {
         case .neutral: AnyShapeStyle(.primary)
-        case .secondary: AnyShapeStyle(.secondary)
+        case .secondary: AnyShapeStyle(Self.readableSecondary(.standard))
         case .gain, .loss, .warning: AnyShapeStyle(color)
         }
     }
+
+    /// Quieter than the text, for what still says something: "Unknown", the label over a number, "partial", a comparison.
+    /// The system's secondary color measured 3.1:1 in light, so this is the text color, faded only as far as 4.5:1 allows, measured from a render.
+    /// Any amount, or anything saying something's unknown, waiting or how it went, uses this at any size. Only fine print that repeats what's
+    /// already said, names, dates and icons keep the system's. See `secondaryText()` and `ContrastTests`.
+    public static func readableSecondary(_ contrast: ColorSchemeContrast) -> Color {
+        Color.primary.opacity(contrast == .increased ? 0.92 : secondaryOpacity)
+    }
+
+    static let secondaryOpacity = 0.78
 
     /// With Increase Contrast on, the color stays but moves closer to the text's.
     func style(_ contrast: ColorSchemeContrast) -> AnyShapeStyle {
         guard contrast == .increased else { return style }
         return switch self {
-        case .neutral, .secondary: style
+        case .neutral: style
+        case .secondary: AnyShapeStyle(Self.readableSecondary(contrast))
         case .gain, .loss, .warning: AnyShapeStyle(color.mix(with: .primary, by: 0.25))
         }
     }
 
+    /// How faded a number is once it's stopped updating: the least that keeps text at 4.5:1 on the window, measured from a render, with some room.
+    /// 0.55 measured 2.9:1 in light, and 0.7 measured 4.3:1. See `stale(_:)` and `ContrastTests`.
+    static let staleOpacity = 0.8
+
     var color: Color {
         switch self {
         case .neutral: .primary
-        case .secondary: .secondary
-        // Mixed with the text color, so they hold enough contrast in both light and dark.
-        case .gain: Color.green.mix(with: .primary, by: 0.2)
-        case .loss: Color.red.mix(with: .primary, by: 0.1)
-        case .warning: Color.orange.mix(with: .primary, by: 0.15)
+        case .secondary: Self.readableSecondary(.standard)
+        // Mixed with the text color, so they read at 4.5:1 or more on the window, in light and dark. Light is the harder one. See `ContrastTests`.
+        case .gain: Color.green.mix(with: .primary, by: 0.45)
+        case .loss: Color.red.mix(with: .primary, by: 0.3)
+        case .warning: Color.orange.mix(with: .primary, by: 0.45)
         }
     }
 }
@@ -51,6 +66,7 @@ public struct LiveNumber: View {
     @Environment(\.backgroundProminence) private var prominence
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.isStale) private var isStale
 
     public init(_ text: String, tone: Tone = .neutral) {
         self.init(AttributedString(text), plain: text, tone: tone)
@@ -70,13 +86,16 @@ public struct LiveNumber: View {
     public var body: some View {
         Text(styled)
             .monospacedDigit()
-            .foregroundStyle(prominence == .increased ? Tone.neutral.style : tone.style(contrast))
+            // Faded already, a color or a grey on top would leave too little contrast. The words still say what's unknown.
+            .foregroundStyle(prominence == .increased || isStale ? Tone.neutral.style : tone.style(contrast))
             .contentTransition(transition)
             .animation(Motion.number, value: text)
     }
 }
 
 extension EnvironmentValues {
+    /// Set on numbers that have stopped updating. See `stale(_:)`.
+    @Entry public var isStale = false
     /// Set while a read runs and the numbers on screen may change once it's done, to what a mark beside them says. See `updatingMark`.
     @Entry public var updatingNote: String?
     /// What each of the user's wallets is called, by address, for saying which wallet something is in.
@@ -126,6 +145,40 @@ private struct UpdatingMark: View {
             }
         }
         .animation(Motion.state, value: note != nil)
+    }
+}
+
+extension View {
+    /// Secondary text that says something, readable at 4.5:1. Faded with numbers that stopped updating, it's the text color instead, as they are.
+    public func secondaryText() -> some View {
+        modifier(SecondaryText())
+    }
+
+    /// Numbers that have stopped updating, or a holding that's gone, faded so they read as old while staying readable: at least 4.5:1 in light and dark.
+    /// They lose their color too, which is about how things are going now. With Increase Contrast on, they don't fade at all, and the banner above them still says so.
+    public func stale(_ isStale: Bool) -> some View {
+        modifier(StaleModifier(isStale: isStale))
+    }
+}
+
+private struct SecondaryText: ViewModifier {
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.isStale) private var isStale
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(isStale ? Tone.neutral.style : AnyShapeStyle(Tone.readableSecondary(contrast)))
+    }
+}
+
+private struct StaleModifier: ViewModifier {
+    let isStale: Bool
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.isStale, isStale)
+            .opacity(isStale && contrast != .increased ? Tone.staleOpacity : 1)
+            .animation(Motion.state, value: isStale)
     }
 }
 
@@ -263,7 +316,7 @@ public struct Notice: View {
                 .foregroundStyle(kind == .warning ? Tone.warning.style : AnyShapeStyle(.secondary))
             VStack(alignment: .leading, spacing: 7) {
                 Text(text)
-                    .foregroundStyle(kind == .warning ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(kind == .warning ? AnyShapeStyle(.primary) : Tone.secondary.style)
                     .fixedSize(horizontal: false, vertical: true)
                 if actionTitle != nil || detail != nil {
                     HStack(spacing: 12) {
@@ -387,7 +440,7 @@ public struct FeedBadge: View {
             }
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
+        .secondaryText()
         .accessibilityElement(children: .combine)
         .help(portfolio.map { Wording.feedDetail($0.mode, block: $0.coverage.toBlock) } ?? "")
     }
