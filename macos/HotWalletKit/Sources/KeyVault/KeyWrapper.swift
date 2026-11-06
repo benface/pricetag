@@ -1,3 +1,5 @@
+// Key material only, so a watch-only build has none of it. See macos/watch-only.sh.
+#if !PATINA_WATCH_ONLY
 import CryptoKit
 import Foundation
 import Security
@@ -51,3 +53,4 @@ struct SecureEnclaveWrapper: KeyWrapper {
         return key
     }
 }
+#endif

@@ -5,7 +5,9 @@ import PricetagKit
 
 enum HotWalletFactory {
     static func make(store: PortfolioStore) -> HotWallet {
-        #if DEBUG
+        #if PATINA_WATCH_ONLY
+        let signer = WatchOnlySigner()
+        #elseif DEBUG
         if let name = HotWalletDebug.isolatedName {
             let settingsStore = UserDefaultsWalletSettingsStore(defaults: UserDefaults(suiteName: "isolated.\(name)") ?? .standard)
             HotWalletDebug.applySettingsArguments(to: settingsStore)

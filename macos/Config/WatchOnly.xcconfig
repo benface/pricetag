@@ -1,0 +1,15 @@
+// What makes a build watch-only. Only macos/watch-only.sh uses this, with xcodebuild's -xcconfig, so every target and package sees it
+// and `pnpm mac` never does. What it signs with is in WatchOnly.entitlements.
+
+// Takes the key code out of KeyVault, and what needs a key out of the app.
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) PATINA_WATCH_ONLY
+
+// Its own settings, records and sandbox, so it can't read the normal build's.
+APP_BUNDLE_ID = com.benface.pricetag.macos.watch
+// The same as Info.plist, without the patina:// scheme, which belongs to the normal build's device links.
+APP_INFOPLIST = Config/WatchOnly-Info.plist
+INFOPLIST_KEY_NSCameraUsageDescription =
+
+// The hosted server, by host name. WORK-529 sets this when it deploys. Empty builds a copy that reads this Mac's server, which is only
+// good for testing, so macos/watch-only.sh refuses to notarize it.
+PATINA_SERVER_HOST =

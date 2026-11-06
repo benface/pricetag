@@ -416,6 +416,8 @@ public enum Wording {
     public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet. The first read can take a minute."
     /// A failed read never touches what's onchain, so this is true of every problem the feed has.
+    /// Always on screen in a watch-only build, so nobody takes it for a wallet that can move money.
+    public static let watchOnlyNotice = "Test version. It only watches wallets: it can't hold a key, sign or send."
     public static let moneyUnaffected = "Your money isn't affected."
     public static let serverTooSlow = "The price service took too long to answer."
     public static let cantReachServer = "Can't reach the price service. Your money isn't affected."

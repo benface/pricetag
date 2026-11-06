@@ -160,6 +160,10 @@ The Mac app reads from a server because the server holds what the app can't ship
 
 `Dockerfile` builds it, and `fly.toml` runs it on Fly.io, on **one machine**: the wallet reads, the limits and the day's checkouts are counted in its memory, so a second one would split them. Fly starts two on a first deploy unless told otherwise, so deploy with `fly deploy --ha=false`, then check that `fly machine list` shows one. The app reads it when its build names it: `PATINA_SERVER_HOST` in `macos/Config/App.xcconfig`, which is empty, so builds read the Mac's own server. Its invite goes in Settings. It's saved for that server alone, so it never goes to another one, and it's only sent over HTTPS. See `.env.example` for the rest.
 
+### The watch-only build
+
+`pnpm mac:watch-only` builds the copy colleagues can install: a Developer ID `.dmg` with no key code in it and its own bundle ID, which reads the host in `macos/Config/WatchOnly.xcconfig`, notarized and stapled. It tells you what to do if this Mac has no notarytool profile yet. `pnpm check:watch-only` checks a built one, and `macos/WATCH-ONLY.md` is what to send people. `pnpm mac` never uses any of this.
+
 ## How it's put together
 
 - `packages/sdk/`: `@pricetag/sdk`, what other apps can build on too. [Its quickstart](packages/sdk/README.md) covers the tables, the API and plain SQL.
