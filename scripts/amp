@@ -40,9 +40,10 @@ RAW_DATASET="edgeandnode/base_mainnet@0.0.2"
 PRICETAG_DATASET="benface/pricetag@0.0.1"
 MANIFEST="$REPO_DIR/dataset/pricetag.json"
 DEFAULT_RPC_URL="https://mainnet.base.org"
-# Requests a second. The public RPC allows 25, and following the chain's head at 200 ms blocks needs about 10, all for
-# the raw dataset, which leaves the rest for catching up.
-DEFAULT_RPC_RATE_LIMIT=20
+# Requests a second the RPC allows. The relay gets 60% of it, and the app's server the rest for L1 fees. Of the public
+# RPC's 25, that's 15, and following the chain's head at 200 ms blocks needs about 10, all for the raw dataset, which
+# leaves the rest for catching up.
+DEFAULT_RPC_RATE_LIMIT=25
 # 6 minutes at 200 ms blocks. Each block costs the same requests however long it took, so a start can't cover an hour anymore.
 DEFAULT_HISTORY_BLOCKS=1800
 
@@ -205,7 +206,7 @@ check_ports() {
 
 # The URL and any key in it stay in this process's environment, so ampd and its files never see them.
 start_rpc_throttle() {
-  say "Starting the RPC throttle at $RPC_RATE_LIMIT requests a second..."
+  say "Starting the RPC throttle at 60% of $RPC_RATE_LIMIT requests a second..."
   (
     cd "$STATE_DIR"
     set -m

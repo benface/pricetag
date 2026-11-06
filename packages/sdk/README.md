@@ -83,6 +83,7 @@ There are three entry points:
 | `dataset` | The Pricetag dataset, like `benface/pricetag@0.0.1`. |
 | `startBlock` | The dataset's first block. Reads start here unless they pass a `from`. With neither, they throw. |
 | `rpcUrl` | Where `getPortfolio` and `getLegs` read L1 fees from. See below. |
+| `rpcRateLimit` | Calls a second `rpcUrl` allows, of which L1 fees use up to 40%. It defaults to 25, for the public RPC. |
 | `baseDataset` | The raw dataset the chain's head is read from. It defaults to `edgeandnode/base_mainnet@0.0.2`. |
 | `network` | Amp's name for the chain, used to read onchain balances. It defaults to `base_mainnet`. |
 | `timeoutMs` | How long one query can take. It defaults to 60 s. |
@@ -91,6 +92,8 @@ There are three entry points:
 Queries always run one at a time, because a hosted Amp is shared.
 
 L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anything can't have its ETH checked against the chain, so ETH is `unchecked`, `l1Fees` is `"no rpc url"`, and `missing` says so. `getLegs` can't confirm a swap paid out in unwrapped ETH either, so `l1Fees` says the same there and the swap stays unknown. The public RPC is `https://mainnet.base.org`, and it rate-limits.
+
+Fees are read at a little under 40% of `rpcRateLimit`, so about 9 a second by default, shared by all of a client's wallets. A wallet sending more than that never catches up, and its ETH stays `unchecked`. A wallet caught up needs 2 reads for each transaction, because a fee is read again once its block can't reorg, so give a dedicated RPC's real limit, at least 6 times the wallet's transactions a second, plus room to catch up. Each client keeps to its own share, so split the limit between clients that use the same RPC.
 
 ### What `getPortfolio` returns
 

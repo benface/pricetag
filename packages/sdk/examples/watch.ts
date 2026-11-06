@@ -2,7 +2,7 @@
 import { createPricetag, formatMoney, formatSignedMoney } from "@pricetag/sdk"
 
 const env = process.env
-const pricetag = createPricetag({ url: env.AMP_QUERY_URL!, token: env.AMP_QUERY_TOKEN, dataset: env.PRICETAG_DATASET!, startBlock: Number(env.PRICETAG_START_BLOCK), rpcUrl: env.BASE_RPC_URL || "https://mainnet.base.org" })
+const pricetag = createPricetag({ url: env.AMP_QUERY_URL!, token: env.AMP_QUERY_TOKEN, dataset: env.PRICETAG_DATASET!, startBlock: Number(env.PRICETAG_START_BLOCK), rpcUrl: env.BASE_RPC_URL || "https://mainnet.base.org", rpcRateLimit: Number(env.BASE_RPC_RATE_LIMIT) || undefined })
 
 const [address, updates = "Infinity"] = process.argv.slice(2)
 let left = Number(updates)
