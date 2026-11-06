@@ -205,15 +205,17 @@ describe("the RPC throttle", () => {
     const relayed = await listen(throttle)
     try {
       const read = createL1FeeReader(url, fetch, 100, console, limit)
-      const wallet = (n: number) => read(Array.from({ length: 60 }, (_, i) => ({ txHash: `0x${n}${i}`, blockNum: 100 })))
+      const wallet = (n: number, size: number) => read(Array.from({ length: size }, (_, i) => ({ txHash: `0x${n}${i}`, blockNum: 100 })))
       // 20 at a time, like a busy Amp, since this many sockets at once is more than a listening port queues.
       let left = 180
       const amp = async () => {
         while (left-- > 0) await call(relayed, JSON.stringify({ id: 1 }))
       }
-      const [first, second] = await Promise.all([wallet(1), wallet(2), ...Array.from({ length: 20 }, amp)])
-      assert.equal(first.size, 60)
-      assert.equal(second.size, 60)
+      // Different sizes, so partial batches come between full ones.
+      const [first, second, third] = await Promise.all([wallet(1, 59), wallet(2, 20), wallet(3, 41), ...Array.from({ length: 20 }, amp)])
+      assert.equal(first.size, 59)
+      assert.equal(second.size, 20)
+      assert.equal(third.size, 41)
       // The two add up to exactly the limit, so a timer running late can tip a call over. Both wait those out.
       assert.ok(refused <= 10, `refused ${refused}`)
       assert.equal(sent.length, 300)
