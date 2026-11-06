@@ -3,12 +3,11 @@ import { describe, it } from "node:test"
 import { ETH_ADDRESS, TOKEN_FEEDS, USDC_ADDRESS, buildPricedLegs, derivePricedRows, LAST_2S_BLOCK, markNeeds, marketPrice, marketTrades, pnlOverTime, referenceMarks, type LegRow, type MarketRow, type MarketTrade, type Reference } from "@pricetag/sdk/core"
 import type { Query } from "@pricetag/sdk/internal"
 import { resolvingSource } from "../server/source.ts"
+import { E18, E6 } from "./support/units.ts"
 
 const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
 const DEGEN = "0x4ed4e862860bed51a9570b96d89af5e1b0efefed"
 const ME = "0x00000000000000000000000000000000000000aa"
-const E18 = 10n ** 18n
-const E6 = 10n ** 6n
 
 const trade = (blockNum: number, txHash: string, usdMicros: string, notionalUsdMicros = "500000000", asset = "AERO"): MarketTrade => ({ blockNum, txHash, asset, usdMicros, notionalUsdMicros })
 

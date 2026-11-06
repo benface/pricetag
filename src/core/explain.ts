@@ -1,7 +1,6 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPaid, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
-import type { WalletResponse } from "./api.ts"
+import { CURRENCIES, TOKENS, TOKEN_FEEDS, formatAmount, formatMoney, formatPaid, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, shortHash, tokenByAddress, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, ESTIMATE_LINE, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, est, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unrecordedSentence, unseenEthCause } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "price" | "value" | "return" | "realized" | "unrealized" | "onchain"
@@ -49,15 +48,6 @@ export type ExplainContext = {
 
 /** Explaining a USD number: there's nothing to convert, and nothing to say about rates. */
 export const USD_CONTEXT: ExplainContext = { view: { currency: "USD", latestRate: null, missingRateTxs: [] }, source: null }
-
-export function explainContext(wallet: WalletResponse, view: WalletView, method: Method): ExplainContext {
-  const ruleNote = wallet.ruleNote ?? null
-  if (view.currency === "USD") return { view, source: null, ruleNote }
-  const usd = usdView(wallet)
-  const positions = foldPositions(usd.legs, method, usd.prices, wallet)
-  const unread = unreadAssets(positions, wallet)
-  return { view, ruleNote, source: { positions, totals: sumTotals(positions, unread), points: pnlOverTime(usd.legs, method, usd.prices, usd.markPrice, wallet.latest, unconfirmedAssets(positions, unread), undefined, undefined, usd.markEstimated) } }
-}
 
 /** Where a currency's rates come from, in words. It's said wherever a rate is used, since it isn't the source of the prices. */
 export function rateSource(currency: CurrencyCode): string {

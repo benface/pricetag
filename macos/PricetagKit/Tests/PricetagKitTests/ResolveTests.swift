@@ -355,6 +355,14 @@ actor BookSource: PortfolioSource {
         #expect(book.importing([one, alike]) == book)
     }
 
+    @Test func aWithdrawalKeepsItsOldestFirstCostAcrossASave() throws {
+        let sent = #"{"exchange":"Coinbase","asset":"ETH","units":"1","at":"2026-11-04T00:00:00.000Z","cost":{"micros":"2","currency":"USD"},"fifoCostMicros":"1"}"#
+        let read = try JSONDecoder().decode(ExchangeWithdrawal.self, from: Data(sent.utf8))
+        #expect(read.fifoCostMicros == "1")
+        #expect(try JSONDecoder().decode(ExchangeWithdrawal.self, from: JSONEncoder().encode(read)) == read)
+        #expect(withdrawal("2026-11-04T00:00:00.000Z").fifoCostMicros == nil, "saved before it had one")
+    }
+
     @Test func aFileWithTheSameWithdrawalAgainTakesOver() {
         let (earlier, other) = (withdrawal("2026-06-01T00:00:00.000Z", cost: "5"), withdrawal("2026-07-01T00:00:00.000Z"))
         let corrected = withdrawal("2026-06-01T00:00:00.000Z", cost: "6")
@@ -460,7 +468,7 @@ actor BookSource: PortfolioSource {
         let text = String(decoding: try encoder.encode(book), as: UTF8.self) + "\n"
         let url = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "Resources/mac-book.json")
         if ProcessInfo.processInfo.environment["UPDATE_FIXTURES"] != nil { try text.write(to: url, atomically: true, encoding: .utf8) }
-        #expect(try String(contentsOf: url, encoding: .utf8) == text, "mac-book.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.")
+        #expect(try String(contentsOf: url, encoding: .utf8) == text, "mac-book.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose, and run `pnpm check`.")
     }
 
     @Test func aWalletThatsNoLongerYoursStaysListed() throws {

@@ -7,7 +7,7 @@ const ME = "0x3762620fbcb400b0f98365da4aad7d2a250e5d89"
 const OTHER = "0x1111111111111111111111111111111111111111"
 const SENDER = "0x2222222222222222222222222222222222222222"
 const purchase: Purchase = { provider: "coinbase", order: "order-1", wallet: ME, asset: "USDC", units: "5000000", txHash: `0x${"ab".repeat(32)}`, blockNum: 100, cost: { micros: "5250000", currency: "USD" }, costUsdMicros: "5250000" }
-const withdrawal = { exchange: "coinbase", asset: "USDC", units: "1000000", at: "2026-11-05T00:00:00Z", cost: { micros: "1000000", currency: "USD" as const }, toAddress: null }
+const withdrawal = { exchange: "coinbase", asset: "USDC", units: "1000000", at: "2026-11-05T00:00:00Z", cost: { micros: "1000000", currency: "USD" as const }, fifoCostMicros: null, toAddress: null }
 
 function shelf(): KeptIn & { writes: number } {
   const kept = new Map<string, string>()

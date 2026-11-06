@@ -1,7 +1,6 @@
 // What a wallet made next to what simply holding ETH would have. One worked example per case, with the arithmetic by hand.
 
 import assert from "node:assert/strict"
-import { readFileSync, writeFileSync } from "node:fs"
 import { describe, it } from "node:test"
 import { PRICE_NOTES, compareWithHoldingEth, foldPositions, pnlStatus, sharePaidAt, sumTotals, type CostLabel, type CurrencyCode, type HoldComparison, type LatestPrices, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
@@ -11,9 +10,9 @@ import { DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } fro
 import { foldBook } from "../src/core/resolve.ts"
 import { holdCaveatSentence, holdDifferenceSentence } from "../src/core/wording.ts"
 import { explainPortfolio, parseExplainTarget, portfolioOf } from "../src/core/portfolio.ts"
+import { assertMatchesFixture } from "./support/fixtures.ts"
+import { E18, E6 } from "./support/units.ts"
 
-const E18 = 10n ** 18n
-const E6 = 10n ** 6n
 const usd = (dollars: number) => (BigInt(dollars) * E6).toString()
 const units = { ETH: E18, USDC: E6, AERO: E18 } as Record<string, bigint>
 const decimals = { ETH: 18, USDC: 6, AERO: 18 } as Record<string, number>
@@ -594,10 +593,7 @@ describe("the card's states", () => {
       ["USD", compare([deposit("ETH", 1, 1000, 100), { ...leg("USDC", 1000n * E6, 90), opening: true }, ...manyForOne(), leg("AERO", -2000n * E18, 200, { priceMicros: usd(1), priceSource: "oracle" })], prices(2000, { AERO: 1 }))],
     ]
     const vectors = cases.map(([currency, comparison]) => ({ currency, comparison, difference: comparison.differenceMicros && holdDifferenceSentence(comparison.differenceMicros, currency), aboutDifference: comparison.differenceMicros && holdDifferenceSentence(comparison.differenceMicros, currency, true), caveat: holdCaveatSentence(comparison, currency) }))
-    const url = new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/hold-vectors.json", import.meta.url)
-    const text = `${JSON.stringify(vectors, null, 2)}\n`
-    if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
-    assert.equal(readFileSync(url, "utf8"), text, "hold-vectors.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.")
+    assertMatchesFixture("hold-vectors.json", vectors)
     assert.deepEqual(new Set(cases.map(([, c]) => c.status)), new Set(["complete", "partial", "unavailable"]))
   })
 })

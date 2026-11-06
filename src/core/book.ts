@@ -29,7 +29,10 @@ export type ExchangeWithdrawal = {
   asset: string
   units: string
   at: string
+  /** What it cost going by the average of what was bought before it. */
   cost: Money
+  /** The same going oldest first, in the same currency. Null when that can't be said, or it was saved before this was worked out. */
+  fifoCostMicros: string | null
   toAddress: string | null
 }
 
@@ -233,8 +236,10 @@ function parseWithdrawal(value: unknown): ExchangeWithdrawal | null {
   if (typeof row.at !== "string" || Number.isNaN(Date.parse(row.at))) return null
   // The Mac app's encoder leaves out what it doesn't have.
   const toAddress = row.toAddress ?? null
+  const fifoCostMicros = row.fifoCostMicros ?? null
   if (toAddress !== null && (typeof toAddress !== "string" || !isAddress(toAddress))) return null
-  return { exchange: row.exchange, asset: row.asset, units: row.units, at: row.at, cost, toAddress: toAddress === null ? null : normalizeAddress(toAddress) }
+  if (fifoCostMicros !== null && !isMicros(fifoCostMicros)) return null
+  return { exchange: row.exchange, asset: row.asset, units: row.units, at: row.at, cost, fifoCostMicros, toAddress: toAddress === null ? null : normalizeAddress(toAddress) }
 }
 
 function parsePurchase(value: unknown): Purchase | null {

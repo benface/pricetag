@@ -7,7 +7,7 @@
 import { applyLegTaking, assertFoldFits, emptyPosition, firstMarks, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
-import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
+import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type ExchangeWithdrawal, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
 import { unitsOfDecimal } from "./decimal.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
@@ -234,6 +234,9 @@ function purchasedLegs(sides: readonly Side[], book: Book): Map<string, Purchase
 /** What a purchase cost in the currency being folded. Null when that can't be said, which leaves it unknown. */
 const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: PricedLeg) => moneyIn(side, cost, leg) ?? (costUsdMicros === null ? null : moneyIn(side, { micros: costUsdMicros, currency: "USD" }, leg))
 
+/** What a withdrawal cost by this method. An average never stands in for oldest first, so with no figure for that, it stays unknown. */
+const withdrawalCost = ({ cost, fifoCostMicros }: ExchangeWithdrawal, method: Method): Money | undefined => (method === "average" ? cost : fifoCostMicros === null ? undefined : { micros: fifoCostMicros, currency: cost.currency })
+
 export function resolveLegs(sides: readonly Side[], method: Method, book: Book): Resolved {
   const linked = new Set(linkedWallets(book))
   const read = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
@@ -296,7 +299,8 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const latestNote = wallet.notes.filter((n) => n.txHash === leg.txHash && n.asset === leg.asset).at(-1)
     const note = latestNote && !noteIsAmbiguous(leg, side.view.legs) ? latestNote : undefined
     const sources = leg.kind === "transfer" && !leg.opening ? sourcesOf(leg) : null
-    const reportedMoney: Money | undefined = book.costs[costKey(address, leg.id)] ?? (note ? { micros: note.usdMicros, currency: "USD" } : undefined) ?? withdrawals.get(costKey(address, leg.id))?.cost
+    const withdrawal = withdrawals.get(costKey(address, leg.id))
+    const reportedMoney: Money | undefined = book.costs[costKey(address, leg.id)] ?? (note ? { micros: note.usdMicros, currency: "USD" } : undefined) ?? (withdrawal && withdrawalCost(withdrawal, method))
     const report = reportedMoney ? moneyIn(side, reportedMoney, leg) : null
 
     const pending: OpenItem[] = []

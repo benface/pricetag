@@ -17,6 +17,8 @@ import { exportCsv } from "../src/core/export.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { taxRows } from "../src/core/tax.ts"
 import { costTag } from "../src/core/wording.ts"
+import { E6 } from "./support/units.ts"
+import { assertMatchesFixture } from "./support/fixtures.ts"
 
 const ME = "0x3762620fbcb400b0f98365da4aad7d2a250e5d89"
 const COINBASE = "0x4b5c71082d027d16d2a146465d66f9eec11634f6"
@@ -24,7 +26,6 @@ const SAVINGS = "0x00000000000000000000000000000000000000b1"
 const TX = `0x${"ab".repeat(32)}`
 const OTHER_TX = `0x${"cd".repeat(32)}`
 const BLOCK = 50
-const E6 = 10n ** 6n
 const ETH_BOUGHT = 2_061_830_000_000_000n
 
 const references = (blocks: number[]): Reference[] => blocks.map((blockNum) => ({ blockNum, ethUsd: "200000000000", usdcUsd: "100000000" }))
@@ -137,7 +138,7 @@ describe("a purchase's cost", () => {
 
   it("doesn't use up an imported withdrawal that belongs to something else", () => {
     const at = new Date(Date.UTC(2026, 10, 5) + BLOCK * 1000).toISOString()
-    const withdrawal = { exchange: "Coinbase", asset: "USDC", units: (25n * E6).toString(), at, cost: { micros: "99000000", currency: "USD" as const }, toAddress: null }
+    const withdrawal = { exchange: "Coinbase", asset: "USDC", units: (25n * E6).toString(), at, cost: { micros: "99000000", currency: "USD" as const }, fifoCostMicros: null, toAddress: null }
     const fold = foldBook(wallet(ME, [delivered]), [], "average", { ...bookWith(purchase()), withdrawals: [withdrawal] })
     assert.equal(fold.legs[0]!.costMicros, "25800000")
   })
@@ -587,6 +588,27 @@ describe("the routes", () => {
     })
   }
   const SESSION = { address: ME, asset: "ETH", cryptoAmount: "0.01" }
+
+  it("sends what the Swift tests read", async () => {
+    const row = { type: "ONRAMP_TRANSACTION_TYPE_BUY_AND_SEND", payment_method: "CARD", purchase_currency: "USDC", purchase_network: "base", purchase_amount: { value: "5", currency: "USDC" }, wallet_address: ME }
+    const delivery = { ...row, transaction_id: "delivered", status: "ONRAMP_TRANSACTION_STATUS_SUCCESS", payment_total: { value: "5.07", currency: "USD" }, payment_total_usd: { value: "5.07", currency: "USD" }, tx_hash: TX }
+    const transactions = [
+      delivery,
+      { ...delivery, transaction_id: "no-rate", payment_total: { value: "55", currency: "SEK" } },
+      { ...row, transaction_id: "pending", status: "ONRAMP_TRANSACTION_STATUS_IN_PROGRESS" },
+      { ...row, transaction_id: "failed", status: "ONRAMP_TRANSACTION_STATUS_FAILED", failure_reason: "FAILURE_REASON_SEND_FAILED" },
+    ]
+    const port = await serve(createOnramp(env, stub({ orders: () => Response.json({ transactions }) }).send))
+    const { json: checkout } = await call(port, "POST", "/api/onramp/checkout", SESSION)
+    const { json: orders } = await call(port, "GET", `/api/onramp/orders/${REF}`)
+    const ref = checkout.ref as string
+    assertMatchesFixture("onramp-vectors.json", {
+      // A new one each time, and nothing here depends on what it is.
+      checkout: { url: (checkout.url as string).replace(ref, REF), ref: REF },
+      orders: orders.orders,
+      matches: portfolioOf(wallet(ME, [delivered]), "average", [], bookWith(purchase(), purchase({ order: "order-2", cost: { micros: "1", currency: "USD" } }), purchase({ order: "order-3", txHash: OTHER_TX }))).purchases,
+    })
+  })
 
   let quiet: typeof console.error
   before(() => {

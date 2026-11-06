@@ -11,6 +11,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
 import { createServer, type ViteDevServer } from "vite"
+import { COST_QUESTION, SENDER_QUESTION } from "../src/core/wording.ts"
 
 const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 const ME = "0x3762620fbcb400b0f98365da4aad7d2a250e5d89"
@@ -723,11 +724,79 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
     assert.ok(await evaluate<boolean>(a, `JSON.parse(localStorage.getItem("patina.book")).purchases.length > 0`), "and the copy's put right")
   })
 
+  describe("the question on the card", () => {
+    const heading = (tab: string) => evaluate<string>(tab, `document.querySelector("dialog.resolve h2").textContent`)
+    const opened = async () => {
+      const [tab] = (await tabs(1, `${url}?panel`)) as [string]
+      await until(() => evaluate(tab, `document.body.textContent.includes("My exchange account")`), "a card")
+      return tab
+    }
+    const asksCost = (tab: string) => until(async () => (await heading(tab)) === COST_QUESTION, "the cost question")
+    const asksSender = (tab: string) => until(async () => (await heading(tab)) === SENDER_QUESTION, "the sender question")
+    const type = (tab: string, text: string) =>
+      evaluate(tab, `(() => {
+        const input = document.querySelector("dialog.resolve .cost-form input[inputmode=decimal]")
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, ${JSON.stringify(text)})
+        input.dispatchEvent(new Event("input", { bubbles: true }))
+      })()`)
+    const fromAddress = (tab: string) => evaluate<string>(tab, `document.querySelector(".who-card p").textContent`)
+
+    it("goes back to who it's from when the exchange answer is undone, with nothing left of the cost step", async () => {
+      const tab = await opened()
+      await evaluate(tab, `pick("My exchange account")`)
+      await asksCost(tab)
+      await until(() => evaluate(tab, "hook.canUndo"), "the answer to save")
+      await type(tab, "not an amount")
+      await evaluate(tab, `pick("Save")`)
+      await until(() => evaluate(tab, `document.body.textContent.includes("That isn't an amount.")`), "the complaint")
+      await evaluate(tab, `pick("Undo")`)
+      await asksSender(tab)
+      await until(() => evaluate(tab, `!document.body.textContent.includes("That isn't an amount.")`), "the complaint to go")
+      await evaluate(tab, `pick("My exchange account")`)
+      await asksCost(tab)
+      assert.equal(await evaluate(tab, `document.querySelector("dialog.resolve .cost-form input[inputmode=decimal]").value`), "", "what was typed went with the answer")
+    })
+
+    it("keeps asking the cost when an undo lands on a sender still answered as an exchange", async () => {
+      const tab = await opened()
+      const first = await fromAddress(tab)
+      await evaluate(tab, `pick("My exchange account")`)
+      await asksCost(tab)
+      await type(tab, "100")
+      await evaluate(tab, `pick("Save")`)
+      await until(async () => (await heading(tab)) !== COST_QUESTION || (await fromAddress(tab)) !== first, "the next card")
+      await until(() => evaluate(tab, "hook.canUndo"), "the cost to save")
+      await evaluate(tab, `pick("Undo")`)
+      await until(async () => (await fromAddress(tab)) === first, "the first card to come back")
+      assert.equal(await heading(tab), COST_QUESTION)
+    })
+
+    it("goes back to who it's from when the exchange answer couldn't be saved", async () => {
+      const tab = await opened()
+      await failNextSave(tab)
+      await evaluate(tab, `pick("My exchange account")`)
+      await until(() => evaluate(tab, "hook.notSaved"), "the failure")
+      await asksSender(tab)
+    })
+
+    it("doesn't ask the next card's cost when another tab answers this one", async () => {
+      const [tab, other] = (await tabs(2, `${url}?panel`)) as [string, string]
+      await until(() => evaluate(tab, `document.body.textContent.includes("My exchange account")`), "a card")
+      const first = await fromAddress(tab)
+      await evaluate(tab, `pick("My exchange account")`)
+      await asksCost(tab)
+      await until(() => evaluate(other, `document.querySelector("dialog.resolve h2").textContent === ${JSON.stringify(COST_QUESTION)}`), "the other tab to hear")
+      await evaluate(other, `pick("Use the price when it arrived")`)
+      await until(async () => (await fromAddress(tab)) !== first, "this tab to move on")
+      await asksSender(tab)
+    })
+  })
+
   describe("a file waiting for an answer", () => {
     const FILE = `Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes
 2026-01-01T00:00:00Z,Buy,ETH,1,USD,$0,$0,$6000,$0,x
 2026-02-01T00:00:00Z,Send,ETH,1,USD,$0,$0,$0,$0,x`
-    const withdrawal = (at: string, micros: string) => ({ exchange: "Coinbase", asset: "ETH", units: (10n ** 18n).toString(), at, cost: { micros, currency: "USD" }, toAddress: null })
+    const withdrawal = (at: string, micros: string) => ({ exchange: "Coinbase", asset: "ETH", units: (10n ** 18n).toString(), at, cost: { micros, currency: "USD" }, fifoCostMicros: null, toAddress: null })
     const SAME_DAY = "2026-02-01T00:00:00.000Z"
     /** Whether all of it is inside what the panel shows, without scrolling. */
     const inSight = (session: string, selector: string) =>

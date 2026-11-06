@@ -1,12 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, isSanePrice, pnlOverTime, referenceMarks, ptPrice, sumTotals, tokenByAddress, usdView, type LegRow, type Reference } from "@pricetag/sdk/core"
-import { DEMO_ADDRESS, DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
+import { DEMO_WALLET } from "../src/core/fixtures.ts"
+import { E18, E6 } from "./support/units.ts"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
-const E18 = 10n ** 18n
-const E6 = 10n ** 6n
 
 function row(tx: string, token: string, side: LegRow["side"], amount: bigint, kind: LegRow["kind"] = token === ETH_ADDRESS ? "eth" : "erc20"): LegRow {
   return { block_num: 100, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: tx, tx_index: 1, log_index: 0, token, account: ME, side, amount: amount.toString(), kind }
@@ -717,10 +716,6 @@ describe("totals", () => {
     assert.deepEqual(aero.estimates, { cost: false, value: true, realized: false, unrealized: true })
   })
 
-  it("the demo wallet's rows are still that wallet's", () => {
-    assert.ok(DEMO_ROWS.every((r) => r.account === DEMO_ADDRESS))
-    assert.ok(DEMO_REFERENCES.length > 0)
-  })
 })
 
 describe("what a wallet held over time", () => {

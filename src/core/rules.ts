@@ -13,6 +13,9 @@ export async function readRules(response: Response): Promise<PricingRule[]> {
   return body.rules
 }
 
+/** The server's rules. `useRules` keeps its empty list when this fails. */
+export const fetchRules = (signal: AbortSignal, send: typeof fetch = fetch): Promise<PricingRule[]> => send("/api/rules", { signal }).then(readRules)
+
 export const MARKET_RULE_ID = "market-price"
 export const CAUTIOUS_RULE_ID = "cautious-eth"
 
