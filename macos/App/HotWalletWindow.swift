@@ -326,7 +326,7 @@ struct HotWalletDetails<Overview: View>: View {
             capSlider
             Text(capFooter)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
@@ -735,7 +735,7 @@ private struct DetailsSection<Content: View>: View {
             if let footer {
                 Text(footer)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -757,7 +757,7 @@ private struct SettingLabel: View {
             Text(title)
             Text(detail)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
