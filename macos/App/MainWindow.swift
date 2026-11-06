@@ -341,13 +341,13 @@ struct MainWindow: View {
     }
 
     /// A section that shows a wallet, or says why there's nothing to show. The first numbers fade in over the spinner rather than replacing it at once.
-    private func walletPage(_ content: @escaping (Portfolio) -> some View) -> some View {
-        walletPageContent(content)
+    private func walletPage(isInsidePage: Bool = false, _ content: @escaping (Portfolio) -> some View) -> some View {
+        walletPageContent(isInsidePage: isInsidePage, content)
             .motion(Motion.state, value: portfolio == nil)
     }
 
     @ViewBuilder
-    private func walletPageContent(_ content: @escaping (Portfolio) -> some View) -> some View {
+    private func walletPageContent(isInsidePage: Bool, _ content: @escaping (Portfolio) -> some View) -> some View {
         if store.feed == .noWallet {
             if firstRun.isWelcoming {
                 FirstRunWelcome(store: store, hotWallet: hotWallet, navigation: navigation)
@@ -372,8 +372,8 @@ struct MainWindow: View {
             // Another wallet starts from the top with nothing selected, and its numbers appear rather than rolling from these.
             .id(store.address)
             .transition(.opacity)
-        } else if firstRun.isWelcoming, store.feed == .reading || store.feed == .tooSlow {
-            FirstRead(store: store, firstRun: firstRun)
+        } else if hasReadSteps, store.feed == .reading || store.feed == .tooSlow {
+            FirstRead(store: store, firstRun: firstRun, isInsidePage: isInsidePage)
                 .transition(.opacity)
         } else if store.feed == .reading {
             ContentUnavailableView {
@@ -391,6 +391,11 @@ struct MainWindow: View {
         }
     }
 
+    /// The server only reports on an address, which neither All Yours nor the demo wallet is. On the way to a first wallet, the demo wallet still has this page's way back.
+    private var hasReadSteps: Bool {
+        firstRun.isWelcoming || store.address.map(WalletAddress.isValid) == true
+    }
+
     private func checkContract() {
         firstRun.checkContract(of: store.address) { [store] in store.currentSource }
     }
@@ -406,7 +411,7 @@ struct MainWindow: View {
         GeometryReader { window in
             overviewPage(pageWidth: window.size.width) {
                 HotWalletDetails(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases, showsHoldings: !hasHoldingsInOverview) {
-                    walletPage { overview($0, pageHeight: window.size.height) }
+                    walletPage(isInsidePage: true) { overview($0, pageHeight: window.size.height) }
                         .frame(minHeight: hasHoldingsInOverview ? nil : 260)
                 }
             }

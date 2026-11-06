@@ -415,6 +415,8 @@ public struct FeedBadge: View {
             if portfolio.mode == .demo { return Mode.demo.label }
             return "Live"
         case .catchingUp: return "Catching up"
+        // A first read that's slow is still going, and with no numbers there's nothing to have stopped updating.
+        case .tooSlow where portfolio == nil: return "Slow to read"
         default:
             // A retry that's taking a while may be about to work, so it says it's trying rather than only that it's stopped.
             guard let seconds, seconds >= FeedState.longReadSeconds else { return "Not updating" }
