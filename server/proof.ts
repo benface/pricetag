@@ -6,9 +6,9 @@ import { datasetReader, describeError, hexOf, type PriceUpdate, type Query } fro
 import type { CheckStatus, ProofCheck, ProofDataset, ProofLink, ProofResponse, VerificationResponse } from "../src/core/api.ts"
 import type { PricingRule } from "../src/core/rules.ts"
 import { tokenLabel } from "../src/core/wording.ts"
-import { depositHashes, readBlock, type BlockData, type ReadDeposits } from "./block.ts"
+import { depositHashes, readBlock, type BlockData, type ReadBlockHash, type ReadDeposits } from "./block.ts"
 import { ANSWER_UPDATED_TOPIC, DEPOSIT_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, gasPaid } from "./raw.ts"
-import { checkHeader, checkReceipts, checkTransactions, type Commitment, type DepositDetails, type LogRow, type TxRow } from "./verify.ts"
+import { DEPOSIT_TX_TYPE, checkHeader, checkReceipts, checkSender, checkTransactions, type BlockRow, type Commitment, type DepositDetails, type LogRow, type TxRow } from "./verify.ts"
 
 const BASESCAN = "https://basescan.org"
 
@@ -142,9 +142,6 @@ function creditNote(leg: PricedLeg, legs: readonly PricedLeg[]): string | null {
   return partsBehind(leg, legs).some(isUnwrapCredit) ? `${limit} How much of it reached this wallet isn't confirmed.` : null
 }
 
-/** Whether this row's account comes from the transaction's stored sender. A log or a recipient is in what's hashed, but the sender is only signed for. */
-const reliesOnSender = (part: LegPart) => isFee(part) || (part.kind === "eth" && part.side === "debit") || (part.kind === "unwrap" && part.side === "credit")
-
 /** What checking this leg's block does and doesn't show. Nothing here can be left out for a passing result to read honestly. */
 function scopeOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: CurrencyCode, behind: PriceBehind | null): string[] {
   const hasEthereumFee = leg.parts.some((part) => part.kind === "l1_fee")
@@ -152,7 +149,7 @@ function scopeOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: CurrencyC
   const amounts = note ? "what the logs record" : "the amounts"
   const exchanged = note ? "what the logs record" : "the amounts exchanged"
   const scope = [
-    "Checking the block shows that the data Amp stored matches the block's header. It doesn't show that the header is on Base's real chain, or that the dataset's calculations ran correctly. A dataset's fingerprint only identifies its recipe.",
+    "Checking the block shows that the data Amp stored matches the block's header, and that one of Base's nodes reports the same block. It doesn't show that the header is on Base's real chain, or that the dataset's calculations ran correctly. A dataset's fingerprint only identifies its recipe.",
   ]
   const update = behind?.update
   const seed = isSeed(update)
@@ -169,7 +166,6 @@ function scopeOf(leg: PricedLeg, legs: readonly PricedLeg[], currency: CurrencyC
   }
   if (note) scope.push(note)
   if (hasEthereumFee) scope.push("It doesn't cover the fee paid to Ethereum, which only Base's receipts have.")
-  if (partsBehind(leg, legs).some(reliesOnSender)) scope.push("It doesn't confirm who sent this transaction: the sender Amp stored isn't checked against the transaction's signature.")
   if (currency !== "USD") scope.push(`It doesn't cover the USD to ${currency} rate from Chainlink, which isn't checked against a block yet.`)
   return scope
 }
@@ -272,7 +268,6 @@ function activityCheck(leg: PricedLeg, legs: readonly PricedLeg[], data: BlockDa
   const note = creditNote(leg, legs)
   if (note) sentences.push(note)
   if (parts.some((part) => part.kind === "l1_fee")) sentences.push("The fee paid to Ethereum wasn't compared.")
-  if (parts.some(reliesOnSender)) sentences.push("Its sender is as Amp stored it, and isn't checked against the signature.")
   return { title, status: "passed", detail: sentences.join(" ") }
 }
 
@@ -281,6 +276,13 @@ function commitmentCheck(title: string, commitment: Commitment, passed: string):
   if (commitment.status === "unchecked") return { title, status: "unchecked", detail: commitment.reason }
   if ("reason" in commitment) return { title, status: "failed", detail: commitment.reason }
   return { title, status: "failed", detail: `Worked out ${short(commitment.computed)}, but the block says ${short(commitment.expected)}.` }
+}
+
+/** Whether Base's node reports the block Amp stored. It's one node's word, so a match says less than it may sound like, and the check says so. */
+function nodeCommitment(block: BlockRow, nodeHash: string | null): Commitment {
+  if (nodeHash === null) return { status: "unchecked", reason: "Base's node didn't report this block's fingerprint, so it isn't compared." }
+  if (nodeHash === block.hash) return { status: "passed" }
+  return { status: "failed", reason: `Base's node says this block's fingerprint is ${short(nodeHash)}, but Amp stored ${short(block.hash)}. Base may have replaced this block since, or one of them is wrong.` }
 }
 
 /** What a leg's price should be, if it rests on this answer: the answer itself, or for a swap price, what was paid valued at it. */
@@ -300,7 +302,7 @@ function updateCheck(leg: PricedLeg, legs: readonly PricedLeg[], { feed, update,
   if (!read) return { title, status: "unchecked", detail: `Amp doesn't have block ${block}, which has this update, so the price isn't confirmed.` }
 
   const { block: header, txs, logs } = read.data
-  const commitments = [checkHeader(header), checkTransactions(header, txs, read.deposits), checkReceipts(header, txs, logs)].map((commitment) => commitmentCheck(title, commitment, ""))
+  const commitments = [checkHeader(header), checkTransactions(header, txs, read.deposits), checkReceipts(header, txs, logs), nodeCommitment(header, read.nodeHash)].map((commitment) => commitmentCheck(title, commitment, ""))
   const problem = commitments.find(({ status }) => status === "failed") ?? commitments.find(({ status }) => status === "unchecked")
   if (problem) return { title, status: problem.status, detail: `Block ${block}, which has this update: ${problem.detail}` }
 
@@ -309,33 +311,37 @@ function updateCheck(leg: PricedLeg, legs: readonly PricedLeg[], { feed, update,
   const isUpdate = log && tx?.tx_hash === hexOf(update.tx_hash) && feed.aggregators.some((address) => hexOf(address) === hexOf(log.address)) && log.topics[0] === ANSWER_UPDATED_TOPIC
   if (!isUpdate) return { title, status: "failed", detail: `Log #${update.log_index} of block ${block} isn't an update from Chainlink's ${feed.pair} contract.` }
   if (!update.answer || !log.topics[1] || BigInt(`0x${log.topics[1]}`) !== BigInt(update.answer)) return { title, status: "failed", detail: `Log #${update.log_index} of block ${block} doesn't say what the dataset says it does.` }
-  const where = `Block ${block} matches its header, and its log #${update.log_index}, from Chainlink's ${feed.pair} contract,`
+  const where = `Block ${block} matches its header and what Base's node reports, and its log #${update.log_index}, from Chainlink's ${feed.pair} contract,`
   if (byRule) return { title, status: "passed", detail: `${where} is the price this rule starts from. The dataset says it was the latest at block ${leg.blockNum.toLocaleString("en-US")}, and the rule's own dataset sets the price shown here from it.` }
   if (priceFrom(leg, legs, update.answer) !== leg.priceMicros) return { title, status: "failed", detail: `Log #${update.log_index} of block ${block} doesn't work out to the price shown here.` }
   return { title, status: "passed", detail: `${where} works out to the price shown here. The dataset says it was the latest at block ${leg.blockNum.toLocaleString("en-US")}.` }
 }
 
 const SUMMARIES: Record<CheckStatus, string> = {
-  passed: "The data Amp stored for this block matches its header.",
+  passed: "The data Amp stored for this block matches its header, and Base's node reports the same block.",
   failed: "Some of the data Amp stored for this block doesn't match. Don't rely on this number until that's explained.",
   unchecked: "Part of this block couldn't be checked, so it isn't confirmed. Try again in a moment.",
 }
 
 const SUMMARIES_WITH_UPDATE: Record<CheckStatus, string> = {
-  passed: "The data Amp stored for this block matches its header, and so does Chainlink's update behind this price.",
+  passed: "The data Amp stored for this block matches its header, and so does Chainlink's update behind this price. Base's node agrees on both.",
   failed: "Some of the data Amp stored for this block or for Chainlink's update doesn't match. Don't rely on this number until that's explained.",
   unchecked: "Part of this block or Chainlink's update couldn't be checked, so it isn't confirmed. Try again in a moment.",
 }
 
-export function verificationOf(leg: PricedLeg, legs: readonly PricedLeg[], data: BlockData, deposits: ReadonlyMap<string, DepositDetails> | null, checkedUpdate: CheckedUpdate | null = null): VerificationResponse {
+export function verificationOf(leg: PricedLeg, legs: readonly PricedLeg[], data: BlockData, deposits: ReadonlyMap<string, DepositDetails> | null, checkedUpdate: CheckedUpdate | null = null, nodeHash: string | null = null): VerificationResponse {
   const { block, txs, logs } = data
   const depositCount = depositHashes(txs).length
   const nodeHelped = depositCount === 0 ? "" : ` Amp doesn't store everything ${depositCount === 1 ? "a deposit's" : "deposits'"} hash covers, so Base's node supplied that, and a wrong answer would fail this.`
+  const tx = txs.find((candidate) => candidate.tx_hash === hexOf(leg.txHash))
+  const sender = tx?.type === DEPOSIT_TX_TYPE ? "A deposit isn't signed, and its hash covers who sent it." : `The transaction's signature works out to its stored sender, 0x${tx?.from.replace(/^0x/, "")}.`
   const count = (n: number, one: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : `${one}s`}`
   const checks: ProofCheck[] = [
     commitmentCheck("Block fingerprint", checkHeader(block), `The block's stored details hash to its fingerprint, ${short(block.hash)}.`),
     commitmentCheck("Transactions", checkTransactions(block, txs, deposits), `${count(txs.length, "stored transaction")} rebuild the summary of them in the block's header.${nodeHelped}`),
     commitmentCheck("Results and logs", checkReceipts(block, txs, logs), `${count(txs.length, "stored result")} and ${count(logs.length, "log")} rebuild the summary of them in the block's header.`),
+    commitmentCheck("Base's node", nodeCommitment(block, nodeHash), `It reports the same fingerprint for this block. That's one node's word, not proof that this block is on Base's real chain.`),
+    ...(tx ? [commitmentCheck("Who sent it", checkSender(tx), sender)] : []),
     activityCheck(leg, legs, data),
     ...(checkedUpdate ? [updateCheck(leg, legs, checkedUpdate.behind, checkedUpdate.read)] : []),
   ]
@@ -368,7 +374,8 @@ export function createManifestReader(adminUrl: string, token: string | undefined
   }
 }
 
-export type BlockRead = { data: BlockData; deposits: ReadonlyMap<string, DepositDetails> | null }
+/** `nodeHash` is the hash Base's node reports at this block's number, or null when it didn't say. */
+export type BlockRead = { data: BlockData; deposits: ReadonlyMap<string, DepositDetails> | null; nodeHash: string | null }
 
 /** What checking a price needs: the update behind it, and that update's block, or null when Amp doesn't have the block. */
 export type CheckedUpdate = { behind: PriceBehind; read: BlockRead | null }
@@ -403,7 +410,7 @@ function retrying(query: Query, pauseMs: number): Query {
 /** The wallet's dataset: its name for people, what the SQL calls it, and when it's pinned, the hash it's pinned to. A pinned hash is what was read, so it's shown without asking. */
 export type ProofDatasetSource = { name: string; reference: string; hash: string | null }
 
-export function createProofs(query: Query, config: { baseDataset: string; dataset: ProofDatasetSource | null; readDeposits: ReadDeposits; readManifestHash: ReadManifestHash; retryPauseMs?: number }): Proofs {
+export function createProofs(query: Query, config: { baseDataset: string; dataset: ProofDatasetSource | null; readDeposits: ReadDeposits; readBlockHash: ReadBlockHash; readManifestHash: ReadManifestHash; retryPauseMs?: number }): Proofs {
   const blockQuery = retrying(query, config.retryPauseMs ?? READ_PAUSE_MS)
   const reader = config.dataset ? datasetReader(blockQuery, { baseDataset: config.baseDataset, dataset: config.dataset.reference }) : null
   return {
@@ -421,7 +428,9 @@ export function createProofs(query: Query, config: { baseDataset: string; datase
     },
     async readBlock(blockNum) {
       const data = await readBlock(blockQuery, config.baseDataset, blockNum)
-      return data && { data, deposits: await config.readDeposits(depositHashes(data.txs)) }
+      if (!data) return null
+      const [deposits, nodeHash] = await Promise.all([config.readDeposits(depositHashes(data.txs)), config.readBlockHash(blockNum)])
+      return { data, deposits, nodeHash }
     },
   }
 }
