@@ -261,9 +261,9 @@ private func note(domain: String = #""name":"x","chainId":8453"#, text: String) 
         #expect(onPermit2.warnings.first == SiteWarning(SiteWording.unknownAllowance(spender: "0x4444…4444"), isStrong: true))
     }
 
-    // MARK: Typed data that isn't a shape anyone checked
+    // MARK: Typed data of any shape
 
-    @Test func anyShapeThatIsntCheckedIsStrong() throws {
+    @Test func everyShapeIsStrong() throws {
         let contract = #""chainId":8453,"verifyingContract":"\#(stranger)""#
         let shapes = [
             #"{"domain":{\#(contract)},"types":{"ForwardRequest":[{"name":"from","type":"address"},{"name":"to","type":"address"},{"name":"value","type":"uint256"},{"name":"gas","type":"uint256"},{"name":"nonce","type":"uint256"},{"name":"data","type":"bytes"}]},"primaryType":"ForwardRequest","message":{"from":"\#(stranger)","to":"\#(stranger)","value":"0","gas":"1","nonce":"0","data":"0x"}}"#,
@@ -275,6 +275,10 @@ private func note(domain: String = #""name":"x","chainId":8453"#, text: String) 
             // No contract, but there's something in it to act on.
             #"{"domain":{"chainId":8453},"types":{"Pay":[{"name":"to","type":"address"}]},"primaryType":"Pay","message":{"to":"\#(stranger)"}}"#,
             #"{"domain":{"chainId":8453},"types":{"Outer":[{"name":"inner","type":"Inner"}],"Inner":[{"name":"text","type":"string"}]},"primaryType":"Outer","message":{"inner":{"text":"hi"}}}"#,
+            // No contract and only words, but words can carry an address and a call, and a contract can still accept it.
+            #"{"domain":{"name":"Example","chainId":8453},"types":{"ForwardRequest":[{"name":"to","type":"string"},{"name":"data","type":"string"},{"name":"nonce","type":"string"}]},"primaryType":"ForwardRequest","message":{"to":"\#(stranger)","data":"0xabcdef","nonce":"1"}}"#,
+            #"{"domain":{"chainId":8453},"types":{"Note":[{"name":"text","type":"string"},{"name":"ok","type":"bool"}]},"primaryType":"Note","message":{"text":"hi","ok":true}}"#,
+            note(text: "hi"),
         ]
         for shape in shapes {
             let message = try review(shape)
@@ -283,21 +287,23 @@ private func note(domain: String = #""name":"x","chainId":8453"#, text: String) 
         }
     }
 
-    @Test func wordsForNoContractAreTheOneShapeThatsLeftAlone() throws {
-        #expect(try review(note(text: "hi")).warnings.isEmpty)
-        // What it's called still counts.
+    @Test func whatItsCalledOnlyPicksTheWarning() throws {
         let named = note(text: "hi").replacingOccurrences(of: "Note", with: "Permit")
-        #expect(try review(named).warnings.first?.isStrong == true)
+        #expect(try review(named).warnings.first == SiteWarning(SiteWording.typedPermit(spender: nil), isStrong: true))
     }
 
     // MARK: Text that pretends to be something else
+
+    /// Each is a letter, mark or symbol to Unicode, so only what it draws gives it away: nothing. JSON can't write the last one as one code.
+    private static let drawNothing = [(#"͏"#, #"\u{34F}"#), (#"ㅤ"#, #"\u{3164}"#), (#"ᅟ"#, #"\u{115F}"#), (#"ﾠ"#, #"\u{FFA0}"#), (#"️"#, #"\u{FE0F}"#), (#"⠀"#, #"\u{2800}"#), (#"𝅙"#, #"\u{1D159}"#)]
+    private static let hiddenInUnclear = [SiteWarning(SiteWording.typedUnclear, isStrong: true), SiteWarning(SiteWording.hiddenCharacters, isStrong: true)]
 
     @Test func aStringCantLookLikeAnotherField() throws {
         let message = try review(note(text: #"hi\nspender: Uniswap"#))
         #expect(message.body == #"text: hi\nspender: Uniswap"#)
         #expect(!message.body.contains("\n"))
-        // Harmless once it's on one line, so it's nothing to warn about.
-        #expect(message.warnings.isEmpty)
+        // Harmless once it's on one line, so it adds no warning of its own.
+        #expect(message.warnings == [SiteWarning(SiteWording.typedUnclear, isStrong: true)])
         for (escaped, code) in [(#"\u2028"#, #"\u{2028}"#), (#"\u2029"#, #"\u{2029}"#), (#"\u0085"#, #"\u{85}"#), (#"\r"#, #"\r"#), (#"\t"#, #"\t"#)] {
             let body = try review(note(text: "a\(escaped)b")).body
             #expect(body == "text: a\(code)b", "\(escaped)")
@@ -311,11 +317,31 @@ private func note(domain: String = #""name":"x","chainId":8453"#, text: String) 
     }
 
     @Test func charactersThatHideOrRearrangeAreShownAndWarnedAbout() throws {
-        for (escaped, code) in [(#"\u202e"#, #"\u{202E}"#), (#"\u200b"#, #"\u{200B}"#), (#"\u0007"#, #"\u{7}"#)] {
+        for (escaped, code) in [(#"\u202e"#, #"\u{202E}"#), (#"\u200b"#, #"\u{200B}"#), (#"\u0007"#, #"\u{7}"#)] + Self.drawNothing {
             let message = try review(note(text: "safe\(escaped)text"))
             #expect(message.body == "text: safe\(code)text", "\(escaped)")
-            #expect(message.warnings == [SiteWarning(SiteWording.hiddenCharacters, isStrong: true)], "\(escaped)")
+            #expect(message.warnings == Self.hiddenInUnclear, "\(escaped)")
         }
+    }
+
+    /// `spen\u034fder` looks just like `spender`, but it's another field.
+    @Test func aFieldsNameCantHideAnythingEither() throws {
+        for (escaped, code) in Self.drawNothing {
+            let json = #"{"domain":{"chainId":8453},"types":{"Note":[{"name":"spen\#(escaped)der","type":"string"}]},"primaryType":"Note","message":{"spen\#(escaped)der":"Uniswap"}}"#
+            let message = try review(json)
+            #expect(message.body == "spen\(code)der: Uniswap", "\(escaped)")
+            #expect(message.warnings == Self.hiddenInUnclear, "\(escaped)")
+        }
+    }
+
+    @Test func aPersonalMessageThatDrawsNothingIsShownAsHex() {
+        for scalar in ["\u{034F}", "\u{3164}", "\u{115F}", "\u{FFA0}", "\u{FE0F}", "\u{2800}", "\u{1D159}"] {
+            let bytes = Array("safe\(scalar)text".utf8)
+            let message = MessageReview(personal: bytes, origin: "https://app.example.com")
+            #expect(message.body == "0x" + Hex.encode(bytes), "\(scalar.unicodeScalars.first!.value)")
+            #expect(message.warnings == [SiteWarning(SiteWording.unreadableMessage, isStrong: true)])
+        }
+        #expect(MessageReview(personal: Array("caf\u{65}\u{301} ok".utf8), origin: "https://app.example.com").warnings.isEmpty)
     }
 
     @Test func aFieldsNameIsFilteredToo() throws {
@@ -325,11 +351,13 @@ private func note(domain: String = #""name":"x","chainId":8453"#, text: String) 
 
     @Test func aNameThatIsntPlainStaysOffTheTitle() throws {
         #expect(try review(note(domain: #""name":"USD Coin","chainId":8453"#, text: "hi")).title == "Sign this for USD Coin")
-        for name in [#"USD\nCoin"#, #"USD\u202eCoin"#, #"USD\u200bCoin"#, "USD  Coin"] {
+        for name in [#"USD\nCoin"#, #"USD\u202eCoin"#, #"USD\u200bCoin"#, "USD  Coin"] + Self.drawNothing.map({ "USD\($0.0)Coin" }) {
             let message = try review(note(domain: #""name":"\#(name)","chainId":8453"#, text: "hi"))
             #expect(message.title == "Sign this message", "\(name)")
         }
-        #expect(try review(note(domain: #""name":"USD\u202eCoin","chainId":8453"#, text: "hi")).warnings == [SiteWarning(SiteWording.hiddenCharacters, isStrong: true)])
+        for name in [#"USD\u202eCoin"#] + Self.drawNothing.map({ "USD\($0.0)Coin" }) {
+            #expect(try review(note(domain: #""name":"\#(name)","chainId":8453"#, text: "hi")).warnings == Self.hiddenInUnclear, "\(name)")
+        }
     }
 
     /// What a permit says comes from what's signed, so nothing a site named things reaches the window or Touch ID.

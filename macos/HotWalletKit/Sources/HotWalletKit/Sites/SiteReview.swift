@@ -450,11 +450,8 @@ extension MessageReview {
         let chain = try data.chainID
         if chain == nil { warnings.append(SiteWarning(SiteWording.anyChain, isStrong: true)) }
         let spender = Self.firstValue(of: ["spender", "operator", "delegate", "taker"], in: data.message)?.string.flatMap { EthereumAddress($0) }.map(SiteWording.who)
-        if Self.looksLikeAPermit(data) {
-            warnings.insert(SiteWarning(SiteWording.typedPermit(spender: spender), isStrong: true), at: 0)
-        } else if !Self.isOnlyWords(data) {
-            warnings.insert(SiteWarning(SiteWording.typedUnclear, isStrong: true), at: 0)
-        }
+        // Always strong: a contract can act on any shape, with or without naming itself in the domain. The word list only picks which warning.
+        warnings.insert(SiteWarning(Self.looksLikeAPermit(data) ? SiteWording.typedPermit(spender: spender) : SiteWording.typedUnclear, isStrong: true), at: 0)
         let name = data.domain["name"]?.string
         if Self.hasHiddenCharacters(data.message) || name.map(JSONValue.string).map(Self.hasHiddenCharacters) == true {
             warnings.append(SiteWarning(SiteWording.hiddenCharacters, isStrong: true))
@@ -469,8 +466,10 @@ extension MessageReview {
     }
 
     /// Line breaks are fine. Direction overrides, zero-width characters and the like can make a message read as something it isn't.
+    /// So can anything that draws nothing: Unicode's default-ignorable characters, plus two blanks it doesn't list as ignorable.
     private static func isPlainlyVisible(_ scalar: Unicode.Scalar) -> Bool {
-        switch scalar.properties.generalCategory {
+        if scalar.properties.isDefaultIgnorableCodePoint || scalar == "\u{2800}" || scalar == "\u{1D159}" { return false }
+        return switch scalar.properties.generalCategory {
         case .control: scalar == "\n" || scalar == "\t" || scalar == "\r"
         case .format, .privateUse, .surrogate, .unassigned: false
         default: true
@@ -525,14 +524,6 @@ extension MessageReview {
         let name = data.primaryType.lowercased()
         if ["permit", "approv", "allowance", "order", "delegat", "authoriz"].contains(where: name.contains) { return true }
         return firstValue(of: ["spender", "operator", "delegate", "taker"], in: data.message) != nil
-    }
-
-    /// The one shape checked as harmless: it names no contract to check it, and it's a single type with nothing in it but words and
-    /// yes-or-no, so no address, amount or data for anything to act on. Anything else can mean whatever the contract it's for says it does.
-    private static func isOnlyWords(_ data: TypedData) -> Bool {
-        guard data.domain["verifyingContract"] == nil, data.domain["salt"] == nil else { return false }
-        guard Set(data.types.keys) == [data.primaryType, "EIP712Domain"], let fields = data.types[data.primaryType] else { return false }
-        return fields.allSatisfy { ["string", "bool"].contains($0.type) }
     }
 
     private static func firstValue(of keys: [String], in value: JSONValue) -> JSONValue? {

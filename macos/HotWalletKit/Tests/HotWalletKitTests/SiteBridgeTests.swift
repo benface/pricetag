@@ -1083,7 +1083,7 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         let (task, approval) = await rig.start("eth_signTypedData_v4", .array([.string(hot), json]))
         guard case .message(let review) = approval.action else { Issue.record("Not a message"); return }
         #expect(review.title == "Sign this for Your bank, safe to approve")
-        await rig.bridge.approve(approval.id)
+        await rig.bridge.approve(approval.id, acknowledged: true)
         _ = try await task.value.get()
         #expect(rig.presence.reasons == ["sign this message for app.example.com"])
     }
@@ -1117,12 +1117,12 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         _ = await task.value
     }
 
-    @Test func plainTypedDataOnBaseIsntSomethingToBeAlarmedAbout() async {
+    @Test func evenPlainTypedDataOnBaseTakesAcknowledging() async {
         let rig = SiteRig()
         await rig.connect()
         let json = JSONValue.string(#"{"domain":{"name":"x","chainId":8453},"types":{"Note":[{"name":"text","type":"string"}]},"primaryType":"Note","message":{"text":"hi"}}"#)
         let (task, approval) = await rig.start("eth_signTypedData_v4", .array([.string(hot), json]))
-        #expect(!approval.needsAcknowledgment)
+        #expect(approval.needsAcknowledgment)
         rig.bridge.reject(approval.id)
         _ = await task.value
     }
