@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { createServer, request, type Server } from "node:http"
 import { tmpdir } from "node:os"
+import type { AddressInfo } from "node:net"
 import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
 import { createApi } from "../server/app.ts"
@@ -808,5 +809,37 @@ describe("a dataset whose tables haven't started", () => {
     const window = await datasetSource(query, config).readWindow("0x00000000000000000000000000000000000000cc", 1, 10)
     assert.deepEqual(window.rows.map((r) => [r.kind, r.amount]), [["unlisted", ""]])
     assert.deepEqual(window.gasUnknown, [{ tx_hash: "0xaa", block_num: 5 }])
+  })
+})
+
+describe("head reads that overlap", () => {
+  it("keeps the newer head when an older read finishes last", async () => {
+    const at = (blockNum: number) => ({ blockNum, timestamp: "2026-11-04T00:00:00.000Z" })
+    let finishOlder = () => {}
+    const older = new Promise<void>((resolve) => (finishOlder = resolve))
+    const heads = [() => older.then(() => at(1000)), async () => at(1010), async () => null]
+    const source: Source = {
+      mode: "raw",
+      startBlock: null,
+      historyFrom: (head) => head - 100,
+      head: () => (heads.shift() as () => Promise<ReturnType<typeof at> | null>)(),
+      processedThrough: async (_, head) => head,
+      readWindow: async () => ({ rows: [], priced: null, gasUnknown: [] }),
+      readReferences: async () => [],
+      readLatestReference: async () => null,
+      readBalances: async () => null,
+      readEthBalances: async () => new Map(),
+    }
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }, null)
+    const server = createServer((req, res) => void api(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const read = async (wallet: string) => (await (await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/portfolio/0x${wallet.repeat(40)}`)).json()) as { latest: { blockNum: number } }
+    const first = read("a")
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal((await read("b")).latest.blockNum, 1010)
+    finishOlder()
+    await first
+    assert.equal((await read("c")).latest.blockNum, 1010)
+    server.close()
   })
 })

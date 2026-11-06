@@ -1882,3 +1882,59 @@ describe("settling unwrap credits", () => {
     assert.deepEqual(ethDeltas((await createWallets(source, headAt(1000), fee).get(ME)).legs), ["1000"])
   })
 })
+
+describe("a wallet read with nothing new", () => {
+  const every = (amount: string) => Object.fromEntries(ASSETS.map((asset) => [asset, amount]))
+  const counted = () => {
+    let head = 1000
+    const reads: string[] = []
+    const { source } = fake(new Map([[950, [row(950)]]]), () => reference(head), (at) => at, async () => every("0"))
+    const logged = <A extends unknown[], R>(name: string, read: (...args: A) => Promise<R>) => (...args: A) => (reads.push(name), read(...args))
+    const wallets = createWallets(
+      { ...source, processedThrough: logged("processed", source.processedThrough), readWindow: logged("window", source.readWindow), readBalances: logged("balances", source.readBalances), readLatestReference: logged("latest", source.readLatestReference), readReferences: (blocks) => (blocks.length > 0 ? logged("references", source.readReferences)(blocks) : source.readReferences(blocks)) },
+      async () => headAt(head)(),
+      noFees,
+    )
+    return { reads, wallets, moveTo: (block: number) => void (head = block) }
+  }
+
+  it("only asks how far the tables got, the rows, the closing balance and the latest price", async () => {
+    const { reads, wallets, moveTo } = counted()
+    await wallets.get(ME)
+    reads.length = 0
+    moveTo(1100)
+    await wallets.get(ME)
+    assert.deepEqual([...reads].sort(), ["balances", "latest", "processed", "window"])
+  })
+
+  it("reads the rows, the balances and the latest price side by side", async () => {
+    const started = new Set<string>()
+    let startAll = () => {}
+    const allStarted = new Promise<void>((resolve) => (startAll = resolve))
+    const together = async <T,>(name: string, value: T) => {
+      started.add(name)
+      if (started.size === 3) startAll()
+      await allStarted
+      return value
+    }
+    const { source } = fake(new Map(), () => null, (at) => at)
+    const wallet = await createWallets(
+      { ...source, readWindow: () => together("rows", { rows: [row(950)], priced: null, gasUnknown: [] }), readBalances: (_, block) => together("balances", { blockNum: block, amounts: every("7") }), readLatestReference: () => together("latest", reference(1000)) },
+      headAt(1000),
+      noFees,
+    ).get(ME)
+    assert.equal(wallet.balances?.amounts.ETH, "7")
+    assert.equal(wallet.prices.ETH?.blockNum, 1000)
+  })
+
+  it("keeps nothing from a read whose latest price failed, and the next one starts over", async () => {
+    const { source, windows } = fake(new Map([[950, [row(950)]]]), () => reference(1000), (at) => at, async () => every("0"))
+    let failing = true
+    const wallets = createWallets({ ...source, readLatestReference: async () => (failing ? Promise.reject(new Error("boom")) : reference(1000)) }, headAt(1000), noFees)
+    await assert.rejects(wallets.get(ME), /boom/)
+    assert.equal(wallets.peek(ME), null)
+    failing = false
+    assert.equal((await wallets.get(ME)).legs.length, 1)
+    assert.deepEqual(windows, [[900, 1000], [900, 1000]])
+  })
+})

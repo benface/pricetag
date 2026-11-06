@@ -172,7 +172,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
      */
     async processedThrough(after: number, head: number, tables: readonly string[] = WALLET_TABLES): Promise<number | null> {
       const newestIn = (table: string) => `SELECT block_num FROM ${PRICE_TABLES.includes(table) ? prices : ds}.${table} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`
-      // One query, because this is on every wallet read and queries run one at a time. On staging it took about a third as long.
+      // One query, because this is on every wallet read and a hosted Amp is shared. On staging it took about a third as long.
       const merged = await query<Row>(tables.map((table) => `SELECT block_num FROM (${newestIn(table)})`).join(" UNION ALL ")).catch(async (error: unknown) => {
         if (!isNotStarted(error)) throw error
         // This error is about what tables have in common, so only asking each on its own says one really hasn't started.
