@@ -674,6 +674,7 @@ describe("reading a wallet by two pricing rules", () => {
         })
       })
       await new Promise<void>((resolve) => rpc.listen(0, "127.0.0.1", resolve))
+      t.after(() => rpc.close())
       const query = eachPart(async <T>(sql: string) => {
         if (/ORDER BY block_num DESC LIMIT 1/.test(sql)) return [{ block_num: 200, timestamp: 1_800_000_000_000, hash: "00" }] as T[]
         if (sql.includes(".legs")) return (inRange(sql, 100) ? [{ ...GAS, amount: state.amount }] : []) as T[]
@@ -709,20 +710,18 @@ describe("reading a wallet by two pricing rules", () => {
       const server = createServer((req, res) => void api(req, res))
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
       const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
-      const paid = async () => ((await (await fetch(`${base}/api/wallet/0x${ME}`)).json()) as WalletResponse).legs.find((leg) => leg.kind === "gas")?.delta
-      try {
-        assert.equal(await paid(), "-1024")
-        const events = (await fetch(`${base}/api/events`, { signal: t.signal })).body!.getReader()
-        await streamStarted
-        state = { amount: "2000", fee: 34 }
-        hand.send({ start: 100, end: 200, hash: "0xnew", complete: true })
-        for (let seen = ""; !seen.includes("event: head"); ) seen += new TextDecoder().decode((await events.read()).value)
-        assert.equal(await paid(), "-2034")
-      } finally {
+      t.after(() => {
         server.closeAllConnections()
         server.close()
-        rpc.close()
-      }
+      })
+      const paid = async () => ((await (await fetch(`${base}/api/wallet/0x${ME}`)).json()) as WalletResponse).legs.find((leg) => leg.kind === "gas")?.delta
+      assert.equal(await paid(), "-1024")
+      const events = (await fetch(`${base}/api/events`, { signal: t.signal })).body!.getReader()
+      await streamStarted
+      state = { amount: "2000", fee: 34 }
+      hand.send({ start: 100, end: 200, hash: "0xnew", complete: true })
+      for (let seen = ""; !seen.includes("event: head"); ) seen += new TextDecoder().decode((await events.read()).value)
+      assert.equal(await paid(), "-2034")
     })
   })
 
