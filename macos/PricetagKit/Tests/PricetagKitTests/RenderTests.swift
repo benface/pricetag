@@ -89,9 +89,9 @@ struct RenderTests {
     }
 
     @Test func sizesToTheViewUnlessToldOtherwise() throws {
-        let fitted = try #require(NSBitmapImageRep(data: OffscreenRenderer.png(of: Color.red.frame(width: 100, height: 50))))
+        let fitted = try #require(NSBitmapImageRep(data: OffscreenRenderer.png(of: Color.red.frame(width: 100, height: 50), settle: 0)))
         #expect(fitted.size == NSSize(width: 100, height: 50))
-        let told = try #require(NSBitmapImageRep(data: OffscreenRenderer.png(of: Color.red, size: CGSize(width: 40, height: 30))))
+        let told = try #require(NSBitmapImageRep(data: OffscreenRenderer.png(of: Color.red, size: CGSize(width: 40, height: 30), settle: 0)))
         #expect(told.size == NSSize(width: 40, height: 30))
     }
 
@@ -108,7 +108,7 @@ struct RenderTests {
 
     @Test func givesUpWhenWhatItWaitsForNeverArrives() {
         #expect(throws: OffscreenRenderer.Failure.neverReady) {
-            try OffscreenRenderer.png(of: Text("Waiting"), isReady: { false })
+            try OffscreenRenderer.png(of: Text("Waiting"), timeout: 0.1, isReady: { false })
         }
     }
 }

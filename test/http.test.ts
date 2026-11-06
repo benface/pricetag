@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import type { AddressInfo } from "node:net"
 import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
-import { createApi } from "../server/app.ts"
+import { createApi, createSource } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
 import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type Query, type ReadL1Fees, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
 import type { Approvals } from "../server/approvals.ts"
@@ -71,6 +71,21 @@ describe("the server", () => {
 
   it("has nothing to compare with only one rule", async () => {
     assert.equal((await get(server, "/api/portfolio/demo/compare")).status, 404)
+  })
+
+  it("bounds the first head lookup by the dataset's start block", async () => {
+    const asked: string[] = []
+    const query = Object.assign(async <T>(sql: string) => (asked.push(sql), [] as T[]), { aliased: () => query })
+    const hash = { PRICETAG_DATASET_HASH: "a".repeat(64), PRICETAG_FORK_DATASET: "a/c@0.0.1", PRICETAG_FORK_HASH: "b".repeat(64) }
+    const dataset = { AMP_QUERY_URL: "http://127.0.0.1:1", BASE_RPC_URL: "http://127.0.0.1:1", PRICETAG_DATASET: "a/b@0.0.1", PRICETAG_START_BLOCK: "5" }
+    for (const env of [dataset, { ...dataset, ...hash }]) {
+      const created = createSource(env, query)!
+      asked.length = 0
+      await created.source.head(null)
+      await created.follow.readMark(null)
+      assert.equal(asked.length, 2)
+      for (const sql of asked) assert.match(sql, /\.blocks WHERE block_num >= 5 ORDER BY/)
+    }
   })
 
   it("won't start with a fork it can't pin", () => {
@@ -180,20 +195,17 @@ describe("what a dataset adds to a wallet's rows", () => {
   const SENDER = "00000000000000000000000000000000000000dd"
   const leg = { block_num: 5, timestamp: 1, tx_hash: "aa", tx_index: 1, log_index: 3, token: "833589fcd6edb6e08f4c7c32d4f71b54bda02913", account: ME, side: "credit", amount: "7", kind: "erc20" }
 
-  it("says who sent each row, reading only the blocks that have one", async () => {
+  it("says who sent each row from the dataset, without reading the raw tables", async () => {
     const queries: string[] = []
     const query = async <T>(sql: string) => {
       queries.push(sql)
-      if (sql.includes(".legs")) return [leg, { ...leg, log_index: 0, token: "0000000000000000000000000000000000000000", kind: "eth", tx_hash: "bb" }] as T[]
-      if (sql.includes("base\".logs")) return [{ tx_hash: "aa", log_index: 3, topic1: SENDER.padStart(64, "0"), topic2: ME.padStart(64, "0") }] as T[]
-      if (sql.includes("base\".transactions")) return [{ tx_hash: "bb", from: SENDER, to: ME }] as T[]
+      if (sql.includes(".legs")) return [{ ...leg, counterparty: SENDER }, { ...leg, log_index: 0, token: "0000000000000000000000000000000000000000", kind: "eth", tx_hash: "bb", counterparty: SENDER }] as T[]
       return [] as T[]
     }
     const { rows } = await resolvingSource(query, config).readWindow(`0x${ME}`, 1, 10)
     assert.deepEqual(rows.map((r) => r.counterparty), [`0x${SENDER}`, `0x${SENDER}`])
-    const raw = queries.filter((q) => q.includes('"base"'))
-    assert.equal(raw.length, 2)
-    assert.ok(raw.every((q) => q.includes("block_num BETWEEN 5 AND 5")), "only that block")
+    assert.ok(queries.some((q) => /counterparty FROM "ds"\.legs/.test(q)))
+    assert.ok(!queries.some((q) => q.includes('"base".logs') || q.includes('"base".transactions')), "no raw lookups")
   })
 
   it("doesn't touch the raw tables for a wallet with nothing to look up", async () => {
@@ -285,9 +297,8 @@ describe("reading a wallet by two pricing rules", () => {
     const queries: string[] = []
     const query = async <T>(sql: string) => {
       queries.push(sql)
-      const leg = (block: number) => ({ block_num: block, timestamp: 1, tx_hash: `aa${block}`, tx_index: 1, log_index: 3, token: USDC, account: ME, side: "credit", amount: amountAt(block), kind: "erc20" })
+      const leg = (block: number) => ({ block_num: block, timestamp: 1, tx_hash: `aa${block}`, tx_index: 1, log_index: 3, token: USDC, account: ME, side: "credit", amount: amountAt(block), kind: "erc20", counterparty: SENDER })
       if (sql.includes(".legs")) return blocks.filter((block) => inRange(sql, block)).map(leg) as T[]
-      if (sql.includes('"base".logs')) return blocks.filter((block) => inRange(sql, block)).map((block) => ({ tx_hash: `aa${block}`, log_index: 3, topic1: SENDER.padStart(64, "0"), topic2: ME.padStart(64, "0") })) as T[]
       return [] as T[]
     }
     const reads = (table: string) => queries.filter((sql) => sql.includes(table))
@@ -306,8 +317,6 @@ describe("reading a wallet by two pricing rules", () => {
     assert.equal(reads('"market".priced_legs').length, 1)
     assert.equal(reads('"cautious".priced_legs').length, 1)
     assert.equal(reads('"ds".legs').filter((sql) => sql.includes("BETWEEN 1 AND 200")).length, 1, "the whole range once")
-    assert.equal(reads('"base".logs').filter((sql) => inRange(sql, 5)).length, 1, "a block no reorg can reach has one lookup")
-    assert.equal(reads('"base".logs').filter((sql) => inRange(sql, 150)).length, 1)
   })
 
   it("re-reads only what a reorg could reach, up to the blocks that are new", async () => {
@@ -319,7 +328,6 @@ describe("reading a wallet by two pricing rules", () => {
     assert.deepEqual(rows.map((r) => r.block_num).sort((a, b) => a - b), [5, 190, 205])
     assert.equal(reads('"ds".legs').length, 1)
     assert.ok(reads('"ds".legs')[0]!.includes(`BETWEEN ${settledThrough(200) + 1} AND 210`))
-    assert.ok(!reads('"base".logs').some((sql) => inRange(sql, 5)), "an old block's lookup isn't repeated")
   })
 
   it("a reorg in the blocks it re-reads replaces what's held, and older blocks stay", async () => {
@@ -719,7 +727,6 @@ describe("reading a wallet by two pricing rules", () => {
     assert.deepEqual(wb.legs.map((leg) => [leg.txHash, leg.blockNum]), wa.legs.map((leg) => [leg.txHash, leg.blockNum]))
     assert.ok(wa.legs.length >= 2)
     assert.equal(reads('"ds".legs').filter((sql) => sql.includes("BETWEEN 1 AND 200")).length, 1)
-    assert.equal(reads('"base".logs').filter((sql) => inRange(sql, 5)).length, 1)
   })
 })
 
@@ -793,6 +800,39 @@ describe("a dataset whose tables haven't started", () => {
       await source.readWindow(address, 1, 10)
       assert.equal(sqls.filter((sql) => sql.includes(".priced_legs")).length, 1)
     }
+  })
+
+  describe("when Amp says how far its tables have got", () => {
+    const answering = (end: () => Promise<number | null>) => {
+      const rows: string[] = []
+      const query: Query = Object.assign(async <T,>(sql: string) => (rows.push(sql), [] as T[]), { snapshotEnd: end })
+      return { source: datasetSource(query, config), rows }
+    }
+
+    it("counts a block as processed with no row in it, in one query", async () => {
+      const { source, rows } = answering(async () => 90)
+      assert.equal(await source.processedThrough(1, 100), 90)
+      assert.deepEqual(rows, [])
+    })
+
+    it("stops at the head a read asked for, and at nothing if the tables aren't that far", async () => {
+      const { source } = answering(async () => 90)
+      assert.equal(await source.processedThrough(1, 80), 80)
+      assert.equal(await source.processedThrough(91, 100), null)
+      assert.equal(await source.processedThrough(90, 100), 90)
+    })
+
+    it("reads as not processed when a table hasn't started, and a real failure still fails", async () => {
+      assert.equal(await answering(() => Promise.reject(notStarted)).source.processedThrough(1, 100), null)
+      await assert.rejects(answering(() => Promise.reject(new Error("connection refused"))).source.processedThrough(1, 100), /connection refused/)
+    })
+
+    it("falls back on each table's newest row when Amp doesn't say", async () => {
+      const { source, rows } = answering(async () => null)
+      assert.equal(await source.processedThrough(1, 100), null)
+      assert.equal(rows.length, 1)
+      for (const table of ["legs", "unlisted_legs", "priced_legs", "reference_prices"]) assert.ok(rows[0]!.includes(`.${table} WHERE`), table)
+    })
   })
 
   it("keeps an NFT row's kind and ID, including ID 0, so both data paths net it the same way", async () => {

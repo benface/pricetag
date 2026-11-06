@@ -3,7 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createRowStream, createWallets, describeError, followChain, followRawSql, followSql, followedWallets, readBlockHashes, readHeadMark, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
+import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createRates, createRowStream, createWallets, describeError, feedRounds, followChain, followRawSql, followSql, followedWallets, followedWindowSql, readBlockHashes, readHeadMark, sharedMarket, updateRounds, type AmpQuery, type FollowConfig, type ReadRates, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -16,11 +16,11 @@ import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previe
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../src/core/portfolio.ts"
 import { createCoinbase } from "./coinbase.ts"
 import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onramp.ts"
-import { createRates, readPaidRates } from "./rates.ts"
-import { createDepositReader } from "./block.ts"
+import { readPaidRates } from "./rates.ts"
+import { createBlockHashReader, createDepositReader } from "./block.ts"
 import { warnOfNewAggregators, warnOfNewRateAggregators } from "./feeds.ts"
 import { createManifestReader, createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
-import { followedSql, feedRounds, rawSource, resolvingSource, settledL1Fees, sharedReads, updateRounds, type SharedReads } from "./source.ts"
+import { rawSource, resolvingSource, settledL1Fees, sharedReads, type SharedReads } from "./source.ts"
 import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 
@@ -87,19 +87,20 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
   const readRates = createRates(env.PRICETAG_RATES_DATASET ? updateRounds(query, env.PRICETAG_RATES_DATASET, calls) : calls)
   if (env.PRICETAG_RATES_DATASET) void warnOfNewRateAggregators(env.BASE_RPC_URL || DEFAULT_RPC_URL)
   // How the server hears about new blocks. Amp's block ranges name a network with a dash, and its RPC functions with an underscore.
-  const followOf = (sql: string): FollowConfig => ({ stream: env.AMP_QUERY_URL ? createRangeStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")) : null, sql, readMark: (after) => readHeadMark(query, baseDataset, after), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks) })
+  const followOf = (sql: string, startBlock: number | null = null): FollowConfig => ({ stream: env.AMP_QUERY_URL ? createRangeStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")) : null, sql, readMark: (after) => readHeadMark(query, baseDataset, after ?? startBlock), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks) })
   // Only a fork pins the default. Without one, a hash left in the env can be a hosted Amp's, which a local Amp doesn't have.
   const pin = env.PRICETAG_DATASET && env.PRICETAG_FORK_DATASET ? pinned(env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH) : null
   const proofs = createProofs(pin ? query.aliased({ pricetag: pin }) : query, {
     baseDataset,
     dataset: env.PRICETAG_DATASET ? { name: env.PRICETAG_DATASET, reference: pin ? "pricetag" : env.PRICETAG_DATASET, hash: pin ? env.PRICETAG_DATASET_HASH! : null } : null,
     readDeposits: createDepositReader(env.BASE_RPC_URL || DEFAULT_RPC_URL),
+    readBlockHash: createBlockHashReader(env.BASE_RPC_URL || DEFAULT_RPC_URL),
     readManifestHash: createManifestReader(env.AMP_ADMIN_URL || `${env.AMP_QUERY_URL}/controller`, env.AMP_QUERY_TOKEN || undefined),
   })
   /** With `PRICETAG_WALLET_STREAM=on`, follows a wallet's rows once it's read, so its next read doesn't query for them. Off by default until it's been through a real reorg. */
   const followedOf = (dataset: string) =>
     env.AMP_QUERY_URL && env.PRICETAG_WALLET_STREAM === "on"
-      ? followedWallets({ stream: createRowStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")), sql: (address) => followedSql(address, { baseDataset, dataset }), readMark: (after) => readHeadMark(query, baseDataset, after), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks) })
+      ? followedWallets({ stream: createRowStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")), sql: (address) => followedWindowSql(address, dataset, { counterparties: true }), readMark: (after) => readHeadMark(query, baseDataset, after), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks) })
       : undefined
   if (env.PRICETAG_DATASET) {
     const startBlock = Number(env.PRICETAG_START_BLOCK)
@@ -120,12 +121,12 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
         ruleSource(CAUTIOUS_RULE_ID, env.PRICETAG_FORK_DATASET!, env.PRICETAG_FORK_HASH, pinned(env.PRICETAG_FORK_DATASET!, env.PRICETAG_FORK_HASH)),
       ]
       const approvals = createApprovals(query.aliased({ pricetag: pin }), { baseDataset, dataset: { reference: "pricetag", name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
-      return { source: rules[0]!.source, rules, readRates, proofs, follow: followOf(followSql(pin)), shared, approvals }
+      return { source: rules[0]!.source, rules, readRates, proofs, follow: followOf(followSql(pin), startBlock), shared, approvals }
     }
     const followed = followedOf(env.PRICETAG_DATASET)
     const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network, followed })
     const approvals = createApprovals(query, { baseDataset, dataset: { reference: env.PRICETAG_DATASET, name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
-    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network, followed }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET)), shared, approvals }
+    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network, followed }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET), startBlock), shared, approvals }
   }
   const historyBlocks = env.PRICETAG_HISTORY_BLOCKS ? Number(env.PRICETAG_HISTORY_BLOCKS) : null
   if (historyBlocks !== null && (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0)) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
@@ -291,7 +292,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (subscribers.size > 0) void followLoop()
   }
 
-  const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL), () => head?.blockNum ?? null)
+  const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL, fetch, undefined, console, Number(env.BASE_RPC_RATE_LIMIT) || undefined), () => head?.blockNum ?? null)
   const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) : null
   // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
   const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) }))
@@ -325,10 +326,12 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   /** A wallet with the rates to show it in `currency`. Never falls back to USD. Throws when they can't be read. */
   async function convert(wallet: WalletResponse, currency: CurrencyCode, books: readonly Book[] = [], paidIn: readonly CurrencyCode[] = []): Promise<WalletResponse> {
     const live = created && wallet.mode !== "demo" ? created : null
-    const paidRates = await readPaidRates(live ? live.readRates : async (other) => demoRates(other), wallet, currency, books, paidIn)
+    // A wallet can be as of an earlier block than the head, like one that's read at a block they've all reached.
+    const readRates: ReadRates = live ? (other, read, options) => live.readRates(other, read, { ...options, chainHead: head?.blockNum }) : async (other) => demoRates(other)
+    const paidRates = await readPaidRates(readRates, wallet, currency, books, paidIn)
     const paid = paidRates ? { ...wallet, paidRates } : wallet
     if (currency === "USD") return paid
-    return { ...paid, currency, rates: live ? await live.readRates(currency, wallet) : demoRates(currency) }
+    return { ...paid, currency, rates: await readRates(currency, wallet) }
   }
 
   /** A wallet with the rates to show it in `currency`, or answers the request with why it can't. Never falls back to USD. */
@@ -874,7 +877,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         sendAmpError(res, error, "Couldn't read this block.")
         return true
       }
-      if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits, checkedUpdate))
+      if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits, checkedUpdate, read.nodeHash))
       else sendJson(res, 404, { error: "The price service doesn't have this block." })
       return true
     }

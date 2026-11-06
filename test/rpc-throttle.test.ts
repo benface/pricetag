@@ -2,14 +2,20 @@ import assert from "node:assert/strict"
 import { createServer, type RequestListener, type Server } from "node:http"
 import { connect, type AddressInfo } from "node:net"
 import { describe, it } from "node:test"
+import { createL1FeeReader, relayRate } from "@pricetag/sdk/internal"
 import { createThrottle } from "../scripts/rpc-throttle.ts"
 
 const listen = (server: Server) =>
   new Promise<string>((resolve) => server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)))
 
-async function withThrottle(perSecond: number, upstream: RequestListener, run: (url: string) => Promise<void>) {
+async function withThrottle(
+  perSecond: number,
+  upstream: RequestListener,
+  run: (url: string) => Promise<void>,
+  clock?: Parameters<typeof createThrottle>[2],
+) {
   const rpc = createServer(upstream)
-  const throttle = createThrottle(await listen(rpc), perSecond)
+  const throttle = createThrottle(await listen(rpc), perSecond, clock)
   try {
     await run(await listen(throttle))
   } finally {
@@ -38,23 +44,40 @@ describe("the RPC throttle", () => {
   })
 
   it("holds a burst to its rate", async () => {
-    const arrivals: number[] = []
-    let started = 0
+    // A stopped clock, because under load real timers and arrivals drift by more than the gaps being measured.
+    const sleeps: number[] = []
+    let markAllWaiting = () => {}
+    const allWaiting = new Promise<void>((resolve) => {
+      markAllWaiting = resolve
+    })
+    let release = () => {}
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let arrivals = 0
     await withThrottle(
-      20,
+      50,
       (_req, res) => {
-        arrivals.push(Date.now())
+        arrivals += 1
         res.end("{}")
       },
       async (url) => {
-        started = Date.now()
-        await Promise.all(Array.from({ length: 10 }, () => call(url)))
+        const burst = Promise.all(Array.from({ length: 10 }, () => call(url)))
+        await allWaiting
+        assert.equal(arrivals, 0)
+        release()
+        await burst
+      },
+      {
+        now: () => 1_000,
+        sleep: (ms) => {
+          if (sleeps.push(ms) === 10) markAllWaiting()
+          return released
+        },
       },
     )
-    assert.equal(arrivals.length, 10)
-    // A busy event loop makes arrivals late and bunches them up, so the gaps between them prove nothing. What holds is that
-    // none comes ahead of its slot, 50 ms apart from before the burst, with room for timers firing a little early.
-    arrivals.forEach((arrival, i) => assert.ok(arrival - started >= i * 50 - 5, `arrival ${i} came ${arrival - started} ms in`))
+    assert.deepEqual(sleeps, [0, 20, 40, 60, 80, 100, 120, 140, 160, 180])
+    assert.equal(arrivals, 10)
   })
 
   it("retries a 429 instead of passing it on", async () => {
@@ -178,6 +201,55 @@ describe("the RPC throttle", () => {
     } finally {
       console.error = original
       throttle.closeAllConnections()
+      throttle.close()
+    }
+  })
+
+  it("and L1 fees stay within an RPC's limit together, with several wallets reading", async () => {
+    const limit = 100
+    const sent: number[] = []
+    let refused = 0
+    const rpc = createServer(async (req, res) => {
+      const chunks: Buffer[] = []
+      for await (const chunk of req) chunks.push(chunk as Buffer)
+      const body = JSON.parse(Buffer.concat(chunks).toString()) as { id: number }[] | { id: number }
+      const now = Date.now()
+      const calls = Array.isArray(body) ? body.length : 1
+      // A real limit: calls in the last second, counting each one in a batch.
+      if (sent.filter((at) => at > now - 1_000).length + calls > limit) {
+        refused++
+        res.writeHead(429).end()
+        return
+      }
+      for (let i = 0; i < calls; i++) sent.push(now)
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify(Array.isArray(body) ? body.map(({ id }) => ({ id, result: { blockNumber: "0x64", l1Fee: "0x10" } })) : { id: body.id, result: "0x1" }))
+    })
+    const url = await listen(rpc)
+    const throttle = createThrottle(url, relayRate(limit))
+    const relayed = await listen(throttle)
+    try {
+      const read = createL1FeeReader(url, fetch, 100, console, limit)
+      const wallet = (n: number, size: number) => read(Array.from({ length: size }, (_, i) => ({ txHash: `0x${n}${i}`, blockNum: 100 })))
+      // 20 at a time, like a busy Amp, since this many sockets at once is more than a listening port queues.
+      let left = 180
+      const amp = async () => {
+        while (left-- > 0) await call(relayed, JSON.stringify({ id: 1 }))
+      }
+      // Different sizes, so partial batches come between full ones.
+      const [first, second, third] = await Promise.all([wallet(1, 59), wallet(2, 20), wallet(3, 41), ...Array.from({ length: 20 }, amp)])
+      assert.equal(first.size, 59)
+      assert.equal(second.size, 20)
+      assert.equal(third.size, 41)
+      // The two add up to exactly the limit, so a timer running late can tip a call over. Both wait those out.
+      assert.ok(refused <= 10, `refused ${refused}`)
+      assert.equal(sent.length, 300)
+      // Both used their shares, rather than one starving the other: 300 calls at 100 a second.
+      assert.ok(sent.at(-1)! - sent[0]! >= 2_400, `took ${sent.at(-1)! - sent[0]!} ms`)
+    } finally {
+      rpc.closeAllConnections()
+      throttle.closeAllConnections()
+      rpc.close()
       throttle.close()
     }
   })

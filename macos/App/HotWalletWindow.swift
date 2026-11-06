@@ -10,11 +10,14 @@ struct HotWalletWindow: View {
     let siteBridge: SiteBridge
     let navigation: Navigation
     let purchases: PurchaseTracker
+    /// What a test scene has typed for the network.
+    var rpc = ""
+    var rpcError: String?
 
     var body: some View {
         if wallet.availability == .ready, wallet.address != nil {
             ScrollView {
-                HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases, showsHoldings: true) { EmptyView() }
+                HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases, showsHoldings: true, overview: { EmptyView() }, rpc: rpc, rpcError: rpcError)
                     .padding(20)
             }
         } else {
@@ -136,6 +139,10 @@ struct HotWalletDetails<Overview: View>: View {
     /// Once the overview has holdings, these would only say the same thing again.
     let showsHoldings: Bool
     @ViewBuilder let overview: Overview
+    /// What's typed for the network, and what's wrong with it. A test scene starts them off.
+    @State var rpc = ""
+    @State var rpcError: String?
+    @State private var isApplyingRPC = false
     @State private var isAddingCold = false
     @State private var isToppingUp = false
     @State private var isSending = false
@@ -144,6 +151,7 @@ struct HotWalletDetails<Overview: View>: View {
     @State private var isSweeping = false
     @State private var isConfirmingRotation = false
     @State private var isConfirmingAbandon = false
+    @State private var isConfirmingDelete = false
     /// The row a notification opened, lit up for a moment.
     @State private var litRow: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -167,10 +175,10 @@ struct HotWalletDetails<Overview: View>: View {
             if !shownPurchases.isEmpty { bought }
             overview
             if showsHoldings { holdings }
-            if !wallet.unlisted.isEmpty { untouched }
-            savings
-            if !wallet.connectedSites.isEmpty { sites }
             if !wallet.records.isEmpty { activity }
+            if !wallet.unlisted.isEmpty { untouched }
+            if !wallet.connectedSites.isEmpty { sites }
+            settings
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -222,7 +230,16 @@ struct HotWalletDetails<Overview: View>: View {
                 return model
             }(), wallets: store.walletList(hotWallet: wallet).pickable)
         }
+        .onChange(of: navigation.wantsDelete, initial: true) { _, wants in
+            guard wants else { return }
+            navigation.wantsDelete = false
+            if wallet.canDelete { isConfirmingDelete = true }
+        }
         .sheet(isPresented: $isSweeping) { SweepSheet(wallet: wallet) }
+        .onAppear {
+            // What didn't save stays, next to what's wrong with it.
+            if rpcError == nil { rpc = wallet.settings.rpcURL.absoluteString }
+        }
     }
 
     private func alarmBanner(_ alarm: StolenKeyAlarm) -> some View {
@@ -260,8 +277,8 @@ struct HotWalletDetails<Overview: View>: View {
         DetailsGroup {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
-                    DisplayNumber(wallet.plan.map { wallet.money($0.valueUsdMicros) } ?? "—", size: 20, tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
-                        .accessibilityLabel(Spoken.number("Balance", wallet.plan.map { wallet.money($0.valueUsdMicros) }) + (wallet.plan?.excessUsdMicros ?? 0 > 0 ? ", above the cap" : ""))
+                    DisplayNumber(wallet.valueUsdMicros.map(wallet.money) ?? "—", size: 20, tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
+                        .accessibilityLabel(Spoken.number("Balance", wallet.valueUsdMicros.map(wallet.money)) + (wallet.plan?.excessUsdMicros ?? 0 > 0 ? ", above the cap" : ""))
                     Button("of \(wallet.capText)") { isChangingCap.toggle() }
                         .buttonStyle(.link)
                         .help("Change the cap")
@@ -307,20 +324,19 @@ struct HotWalletDetails<Overview: View>: View {
 
     private var capEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
-            LabeledContent("Cap") {
-                HStack {
-                    Slider(value: Binding(get: { Double(wallet.settings.capInDollars) }, set: { wallet.setCap(dollars: Int($0)) }), in: 1...Double(wallet.settings.capCeiling / Money.dollar))
-                    Text(wallet.money(dollars: wallet.settings.capInDollars))
-                        .monospacedDigit()
-                        .frame(width: 56, alignment: .trailing)
-                }
-            }
-            Text("Anything above it moves to your savings.")
+            CapSlider(wallet: wallet)
+            Text(capFooter)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
         .frame(width: 320)
+    }
+
+    private var capFooter: String {
+        let ceiling = "It's \(wallet.display.whole(wallet.settings.capCeiling)) at most \(wallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build")."
+        return "Anything above the cap moves to your savings. \(ceiling)\(wallet.display.isConverted ? " \(HotWalletWording.capFollowsRate(wallet.display.main))" : "")"
     }
 
     private var gaugeValue: Double {
@@ -380,7 +396,7 @@ struct HotWalletDetails<Overview: View>: View {
     }
 
     private var untouched: some View {
-        DetailsSection("Other Tokens", footer: "Not tracked, and never touched. They can be malicious, so don't go looking for what they're worth.") {
+        DetailsSection("Other Tokens", footer: "Anyone can send a token to any address, so these may not be worth anything. This app doesn't track them or count them in your numbers, and it never moves them.") {
             ForEach(wallet.unlisted) { token in
                 AddressLine(EthereumAddress(token.token)?.checksummed ?? token.token)
                     .font(.caption)
@@ -408,21 +424,17 @@ struct HotWalletDetails<Overview: View>: View {
                             .minimumScaleFactor(0.8)
                     }
                     Spacer()
-                    Button("Show This Wallet", systemImage: "chart.xyaxis.line") { store.setWallet(cold.address.lowercased) }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
+                    Button("Show") { store.setWallet(cold.address.lowercased) }
                         .help("Show its cost and PnL")
-                    Button("Remove from Savings…", systemImage: "minus.circle") {
+                    Button("Remove…") {
                         navigation.removingFromSavings = WalletEntry(address: cold.address.lowercased, name: cold.name, kind: .savings)
                     }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
                     .help("Remove from savings")
                     .disabled(wallet.isWorking)
                 }
             }
             if !wallet.settings.coldWallets.isEmpty {
-                Picker("Sweeps go to", selection: Binding(get: { wallet.settings.sweepDestination }, set: { if let address = $0 { wallet.setSweepDestination(address) } })) {
+                Picker("Sweeps go to", selection: Binding(get: { wallet.settings.sweepDestination }, set: { address in if let address { Task { await wallet.setSweepDestination(address) } } })) {
                     ForEach(wallet.settings.coldWallets) { cold in
                         // Two can have the same name, and this decides where money goes.
                         Text("\(cold.name) (\(Format.shortHash(cold.address.checksummed)))").tag(Optional(cold.address))
@@ -430,6 +442,7 @@ struct HotWalletDetails<Overview: View>: View {
                 }
                 .pickerStyle(.radioGroup)
                 .accessibilityLabel("Sweeps go to")
+                .disabled(wallet.isWorking)
             }
             Button(HotWalletWording.addSavingsButton, systemImage: "plus") { isAddingCold = true }
         }
@@ -448,38 +461,31 @@ struct HotWalletDetails<Overview: View>: View {
 
     private var actions: some View {
         Group {
+            // What's done every day leads. Moving money to and from savings follows, and replacing the key is with the settings.
             ViewThatFits(in: .horizontal) {
                 HStack {
                     send
                     receive
+                    buy
+                    Spacer(minLength: 16)
                     topUp
                     sweep
-                    Spacer()
-                    replaceKey
                 }
                 VStack(alignment: .leading) {
                     HStack {
                         send
                         receive
-                        topUp
+                        buy
                     }
                     HStack {
+                        topUp
                         sweep
-                        replaceKey
                     }
                 }
             }
             if wallet.canLeaveOldKeyBehind {
                 Button("Delete the Old Key and Leave What's on It…", role: .destructive) { isConfirmingAbandon = true }
             }
-        }
-        .confirmationDialog("Replace this wallet's key?", isPresented: $isConfirmingRotation) {
-            Button("Replace Key") { Task { await wallet.replaceKey() } }
-            if wallet.settings.sweepDestination != nil, wallet.sweepPreview?.whyNothing == nil {
-                Button("Sweep Everything to Savings Instead") { isSweeping = true }
-            }
-        } message: {
-            Text("Makes a new key, moves every token this app tracks to it, then deletes the old one. If the old key holds other tokens, or some that gas makes too costly to move, it stays until you choose to leave them. This costs gas, and publicly links the two addresses. It also clears any token approvals the old key gave.")
         }
         .confirmationDialog("Delete the old key?", isPresented: $isConfirmingAbandon) {
             Button("Delete and Leave It Behind", role: .destructive) { Task { await wallet.finishRotationLeavingFundsBehind() } }
@@ -499,6 +505,10 @@ struct HotWalletDetails<Overview: View>: View {
             .disabled(!wallet.canTopUp)
     }
 
+    private var buy: some View {
+        Button("Buy…") { navigation.isBuying = true }
+    }
+
     private var topUp: some View {
         Button("\(HotWalletWording.topUpTitle(hasDestination: wallet.settings.sweepDestination != nil))…") { isToppingUp = true }
             .disabled(!wallet.canTopUp)
@@ -510,9 +520,85 @@ struct HotWalletDetails<Overview: View>: View {
             .help(wallet.settings.sweepDestination == nil ? "Add a savings wallet first" : wallet.sweepPreview?.whyNothing ?? "Move everything on this wallet to your savings. \(HotWalletWording.newDevice)")
     }
 
-    private var replaceKey: some View {
-        Button("Replace Key…") { isConfirmingRotation = true }
-            .disabled(wallet.rotation != nil || wallet.isWorking || wallet.isKeyMissing)
+    /// This wallet's own settings. App-wide ones are in Settings. What's rare and can't be undone comes last.
+    private var settings: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Settings")
+                .font(.title3.weight(.semibold))
+                .padding(.top, 10)
+            DetailsSection("Cap and Sweeps", footer: capFooter) {
+                CapSlider(wallet: wallet)
+                LabeledContent("Sweep realized gains to savings") {
+                    Toggle("Sweep realized gains to savings", isOn: Binding(get: { wallet.settings.sweepsRealizedGains }, set: { wallet.setSweepsRealizedGains($0) }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                }
+            }
+            savings
+            DetailsSection("Advanced", footer: "Where this wallet reads its balances and sends what you sign. It can't move anything by itself. Change it only if the default is busy.") {
+                LabeledContent("Base network address") {
+                    TextField("Base network address", text: $rpc, prompt: Text(Base.publicRPC.absoluteString))
+                        .labelsHidden()
+                        .frame(maxWidth: 280)
+                        .onSubmit(applyRPC)
+                        // Leaving the page counts as being done, because there's no Save button to say otherwise.
+                        .onDisappear(perform: applyRPC)
+                }
+                if let rpcError {
+                    WarningText(rpcError).font(.callout)
+                }
+            }
+            DetailsSection("Key") {
+                LabeledContent {
+                    Button("Replace…") { isConfirmingRotation = true }
+                        .disabled(wallet.rotation != nil || wallet.isWorking || wallet.isKeyMissing)
+                } label: {
+                    SettingLabel("Replace Key", "For when someone else may have it. A new key gets what this app tracks.")
+                }
+            }
+            .confirmationDialog("Replace this wallet's key?", isPresented: $isConfirmingRotation) {
+                Button("Replace Key") { Task { await wallet.replaceKey() } }
+                if wallet.settings.sweepDestination != nil, wallet.sweepPreview?.whyNothing == nil {
+                    Button("Sweep Everything to Savings Instead") { isSweeping = true }
+                }
+            } message: {
+                Text("Makes a new key, moves every token this app tracks to it, then deletes the old one. If the old key holds other tokens, or some that gas makes too costly to move, it stays until you choose to leave them. This costs gas, and publicly links the two addresses. It also clears any token approvals the old key gave.")
+            }
+            DetailsSection("Delete") {
+                LabeledContent {
+                    Button("Delete…", role: .destructive) { isConfirmingDelete = true }
+                        .disabled(!wallet.canDelete)
+                } label: {
+                    SettingLabel("Delete This Mac's Spending Money", wallet.canDelete ? "Deletes the key for good. Anything still on this wallet is lost." : HotWalletWording.deleteWaitsForRotation)
+                }
+            }
+            .confirmationDialog("Delete this wallet's key?", isPresented: $isConfirmingDelete) {
+                if wallet.settings.sweepDestination != nil, wallet.sweepPreview?.whyNothing == nil {
+                    Button("Sweep Everything to Savings First") { Task { await wallet.sweepEverything() } }
+                }
+                Button("Delete Forever", role: .destructive) { Task { await wallet.deleteWallet() } }
+            } message: {
+                Text("There's no recovery phrase and no backup. Whatever is still on this wallet is lost for good.")
+            }
+        }
+    }
+
+    private func applyRPC() {
+        let value = rpc.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https", url.host() != nil else {
+            rpcError = "That isn't a web address. It should look like \(Base.publicRPC.absoluteString)."
+            return
+        }
+        rpcError = nil
+        guard url != wallet.settings.rpcURL, !isApplyingRPC else { return }
+        isApplyingRPC = true
+        Task {
+            await wallet.setRPC(url)
+            isApplyingRPC = false
+            // If they said no, it's still the old one, and leaving the page shouldn't ask again.
+            rpc = wallet.settings.rpcURL.absoluteString
+        }
     }
 
     private var abandonMessage: String {
@@ -646,9 +732,30 @@ private struct DetailsSection<Content: View>: View {
             if let footer {
                 Text(footer)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+}
+
+/// A setting's name, with a line on what it does, as System Settings has.
+private struct SettingLabel: View {
+    let title: String
+    let detail: String
+
+    init(_ title: String, _ detail: String) {
+        self.title = title
+        self.detail = detail
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            Text(detail)
+                .font(.caption)
+                .secondaryText()
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -696,6 +803,8 @@ struct TopUpSheet: View {
     }
 
     private var room: Int { Int(wallet.topUpRoom / Money.dollar) }
+    /// Until then the room left is unknown, and would read as the whole cap.
+    private var hasRead: Bool { wallet.plan != nil }
     private var hasDestination: Bool { wallet.settings.sweepDestination != nil }
 
     private var deviceLink: URL? {
@@ -706,25 +815,25 @@ struct TopUpSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(HotWalletWording.topUpTitle(hasDestination: hasDestination))
                 .font(.sheetTitle)
-            if room < 1 {
+            if hasRead, room < 1 {
                 Notice(.info, HotWalletWording.topUpAtCap(wallet.capText, hasDestination: hasDestination))
             } else {
                 LabeledContent("Amount") {
                     HStack {
                         // A slider needs two ends, and with room for one dollar, the other end is too much.
                         Slider(value: $dollars, in: 1...Double(max(room, 2)), step: 1)
-                            .disabled(room < 2)
+                            .disabled(!hasRead || room < 2)
                         Text(amountText)
                             .monospacedDigit()
                             .frame(width: 56, alignment: .trailing)
                     }
                 }
-                Text(HotWalletWording.topUpRoom(wallet.money(wallet.topUpRoom), hasDestination: hasDestination))
+                Text(hasRead ? HotWalletWording.topUpRoom(wallet.money(wallet.topUpRoom), hasDestination: hasDestination) : "Reading this wallet…")
                     .font(.caption)
                     .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
                 if let deviceLink {
-                    DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.") { open(deviceLink, in: nil) }
+                    DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.", canUseDefault: hasRead) { open(deviceLink, in: nil) }
                 }
                 DisclosureGroup("Or do it by hand on the device") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -759,6 +868,7 @@ struct TopUpSheet: View {
                 if room >= 1, let deviceLink {
                     Button(found.continueTitle) { open(deviceLink, in: found.browser) }
                         .keyboardShortcut(.defaultAction)
+                        .disabled(!hasRead)
                 }
             }
         }
@@ -771,6 +881,8 @@ struct TopUpSheet: View {
     }
 
     private func open(_ link: URL, in browser: InstalledBrowser?) {
+        // The amount in the link is only worth sending once the room's known.
+        guard hasRead else { return }
         browsers.open(link, browser)
         dismiss()
     }
@@ -802,6 +914,46 @@ private extension View {
                     .padding(.horizontal, -6)
                     .padding(.vertical, -4)
             }
+        }
+    }
+}
+
+/// Lowering the cap asks for Touch ID, so a drag only counts where it ends, and a refusal puts it back. Keys and VoiceOver move it
+/// with no end to wait for, so a short pause counts as one.
+private struct CapSlider: View {
+    let wallet: HotWallet
+    @State private var draft: Int?
+    @State private var isDragging = false
+    @State private var isApplying = false
+
+    var body: some View {
+        let shown = draft ?? wallet.settings.capInDollars
+        LabeledContent("Cap") {
+            HStack {
+                Slider(value: Binding(get: { Double(shown) }, set: { draft = Int($0) }), in: 1...Double(wallet.settings.capCeiling / Money.dollar)) { isEditing in
+                    isDragging = isEditing
+                    if !isEditing { apply() }
+                }
+                .frame(maxWidth: 240)
+                .disabled(wallet.isWorking)
+                Text(wallet.money(dollars: shown))
+                    .monospacedDigit()
+                    .frame(width: 56, alignment: .trailing)
+            }
+        }
+        .task(id: draft) {
+            guard draft != nil, (try? await Task.sleep(for: .seconds(0.6))) != nil, !isDragging else { return }
+            apply()
+        }
+    }
+
+    private func apply() {
+        guard let dollars = draft, !isApplying else { return }
+        isApplying = true
+        Task {
+            await wallet.setCap(dollars: dollars)
+            draft = nil
+            isApplying = false
         }
     }
 }

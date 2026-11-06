@@ -4,6 +4,7 @@
 // Pure, so it can run on fixtures. Valid for blocks since Canyon (January 2024).
 // Keccak comes from @noble/hashes, because Node's depends on how it was built: 26.13.0 has it, and 26.8.1 and 22 don't.
 
+import { secp256k1 } from "@noble/curves/secp256k1"
 import { keccak_256 } from "@noble/hashes/sha3"
 
 export type BlockRow = {
@@ -188,30 +189,50 @@ export function headerHash(block: BlockRow): string {
 
 const accessListOf = (tx: TxRow): Rlp => tx.accessList.map(({ address, storageKeys }) => [bytes(address), storageKeys.map(bytes)])
 
-/** A transaction as the block's trie holds it, whose hash is the transaction's hash. */
-export function encodeTransaction(tx: TxRow, deposit: DepositDetails | undefined): Buffer {
+/** What a transaction's sender signs, in the order its encoding has them. A deposit isn't signed. */
+function signedFields(tx: TxRow): Rlp[] {
   const to = bytes(tx.to)
-  const signature = [int(tx.v_parity), scalar(tx.r), scalar(tx.s)]
-  const typed = (type: number, fields: Rlp[]) => Buffer.concat([Buffer.from([type]), rlp(fields)])
   const fees = [int(tx.max_priority_fee_per_gas), int(tx.max_fee_per_gas), int(tx.gas_limit), to, int(tx.value), bytes(tx.input), accessListOf(tx)]
   switch (tx.type) {
-    case 0: {
-      const v = tx.chain_id === null ? 27n + BigInt(tx.v_parity) : 35n + 2n * BigInt(tx.chain_id) + BigInt(tx.v_parity)
-      return rlp([int(tx.nonce), int(tx.gas_price), int(tx.gas_limit), to, int(tx.value), bytes(tx.input), int(v), scalar(tx.r), scalar(tx.s)])
-    }
+    case 0:
+      return [int(tx.nonce), int(tx.gas_price), int(tx.gas_limit), to, int(tx.value), bytes(tx.input)]
     case 1:
-      return typed(1, [int(tx.chain_id), int(tx.nonce), int(tx.gas_price), int(tx.gas_limit), to, int(tx.value), bytes(tx.input), accessListOf(tx), ...signature])
+      return [int(tx.chain_id), int(tx.nonce), int(tx.gas_price), int(tx.gas_limit), to, int(tx.value), bytes(tx.input), accessListOf(tx)]
     case 2:
-      return typed(2, [int(tx.chain_id), int(tx.nonce), ...fees, ...signature])
+      return [int(tx.chain_id), int(tx.nonce), ...fees]
     case 4: {
       const authorizations = tx.authorizationList.map((a) => [int(a.chainId), bytes(a.address), int(a.nonce), int(a.yParity), scalar(a.r), scalar(a.s)])
-      return typed(4, [int(tx.chain_id), int(tx.nonce), ...fees, authorizations, ...signature])
+      return [int(tx.chain_id), int(tx.nonce), ...fees, authorizations]
     }
-    case DEPOSIT_TX_TYPE:
-      if (!deposit) throw new UnreadableTransaction("A deposit's details are missing.")
-      return typed(DEPOSIT_TX_TYPE, [bytes(deposit.sourceHash), bytes(tx.from), to, int(deposit.mint), int(tx.value), int(tx.gas_limit), int(deposit.isSystemTx), bytes(tx.input)])
     default:
       throw new UnreadableTransaction(`Transaction type ${tx.type} can't be read.`)
+  }
+}
+
+/** A transaction as the block's trie holds it, whose hash is the transaction's hash. */
+export function encodeTransaction(tx: TxRow, deposit: DepositDetails | undefined): Buffer {
+  if (tx.type === DEPOSIT_TX_TYPE) {
+    if (!deposit) throw new UnreadableTransaction("A deposit's details are missing.")
+    return Buffer.concat([Buffer.from([DEPOSIT_TX_TYPE]), rlp([bytes(deposit.sourceHash), bytes(tx.from), bytes(tx.to), int(deposit.mint), int(tx.value), int(tx.gas_limit), int(deposit.isSystemTx), bytes(tx.input)])])
+  }
+  const fields = signedFields(tx)
+  if (tx.type === 0) {
+    const v = tx.chain_id === null ? 27n + BigInt(tx.v_parity) : 35n + 2n * BigInt(tx.chain_id) + BigInt(tx.v_parity)
+    return rlp([...fields, int(v), scalar(tx.r), scalar(tx.s)])
+  }
+  return Buffer.concat([Buffer.from([tx.type]), rlp([...fields, int(tx.v_parity), scalar(tx.r), scalar(tx.s)])])
+}
+
+/** The address a transaction's signature recovers to, or null when it recovers to none. Only reads public data: a signature and what it signed. */
+export function recoverSender(tx: TxRow): string | null {
+  const fields = signedFields(tx)
+  // A legacy transaction with a chain signs that chain followed by two blanks, where its signature will go.
+  const signed = tx.type !== 0 ? Buffer.concat([Buffer.from([tx.type]), rlp(fields)]) : rlp(tx.chain_id === null ? fields : [...fields, int(tx.chain_id), int(0), int(0)])
+  try {
+    const signature = new secp256k1.Signature(BigInt(`0x${tx.r.replace(/^0x/, "")}`), BigInt(`0x${tx.s.replace(/^0x/, "")}`)).addRecoveryBit(Number(tx.v_parity))
+    return toHex(keccak(signature.recoverPublicKey(keccak(signed)).toRawBytes(false).subarray(1))).slice(24)
+  } catch {
+    return null
   }
 }
 
@@ -280,4 +301,18 @@ export function checkReceipts(block: BlockRow, txs: readonly TxRow[], logs: read
     list.push(log)
   }
   return compare(orderedRoot(txs.map((tx) => encodeReceipt(tx, logsByTx.get(tx.tx_index) as LogRow[]))), block.receipt_root)
+}
+
+/** That the stored sender is who signed. A deposit isn't signed, and its hash covers its sender instead, which `checkTransactions` compares. */
+export function checkSender(tx: TxRow): Commitment {
+  if (tx.type === DEPOSIT_TX_TYPE) return { status: "passed" }
+  try {
+    const signer = recoverSender(tx)
+    const stored = toHex(bytes(tx.from))
+    if (signer === null) return { status: "failed", reason: "This transaction's signature doesn't work out to any address." }
+    return signer === stored ? { status: "passed" } : { status: "failed", reason: `The signature says 0x${signer} sent this transaction, but Amp stored 0x${stored}.` }
+  } catch (error) {
+    if (error instanceof UnreadableTransaction) return { status: "unchecked", reason: error.message }
+    throw error
+  }
 }
