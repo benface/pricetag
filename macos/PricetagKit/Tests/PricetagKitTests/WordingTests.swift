@@ -59,6 +59,7 @@ struct WordingVectors: Decodable {
         let detail: String
     }
     let problems: [Problem]
+    let problemsOnThisMachine: [Problem]
     let manifestHash: String
     let methods: [String: String]
     let modes: [String: String]
@@ -157,6 +158,18 @@ struct WordingVectors: Decodable {
             default: .rejected(said)
             }
             let problem = try #require(state.problem(serverURL: URL(string: "https://prices.example.com")!, portfolio: nil))
+            #expect(problem.message == vector.message)
+            #expect(problem.detail == vector.detail)
+        }
+    }
+
+    /// A server on this machine is one to restart, and it says so the same on the web.
+    @Test func aFailedReadOnThisMachineSaysTheSameOnTheWeb() throws {
+        #expect(vectors.problemsOnThisMachine.count == 2)
+        for vector in vectors.problemsOnThisMachine {
+            let said = vector.said ?? ""
+            let state: FeedState = vector.kind == "noSource" ? .noAmpConfigured(said) : .rejected(said)
+            let problem = try #require(state.problem(serverURL: URL(string: "http://127.0.0.1:8787")!, portfolio: nil))
             #expect(problem.message == vector.message)
             #expect(problem.detail == vector.detail)
         }

@@ -342,18 +342,22 @@ export type Problem = { message: string; detail: string | null }
 
 const SAID = (said: string) => `The price service said: ${said}`
 
+/** Where saying "restart it" is true. */
+const isOnThisMachine = (serverUrl: string) => URL.canParse(serverUrl) && ["127.0.0.1", "localhost", "[::1]"].includes(new URL(serverUrl).hostname)
+
 /** A wallet's read that failed, in `FeedState.problem`'s words on the Mac. `stale` says how old any numbers still on screen are. */
 export function feedProblem(failure: ReadFailure, serverUrl: string, stale: string | null = null): Problem {
   const say = (what: string, next: string, detail: string) => ({ message: [what, stale, MONEY_UNAFFECTED, next].filter((part) => part !== null).join(" "), detail })
+  const onThisMachine = isOnThisMachine(serverUrl)
   switch (failure.kind) {
     case "unreachable":
       return say("The price service isn't answering.", "Check your internet connection, then try again.", `Nothing answered at ${serverUrl}.`)
     case "unavailable":
       return say("The price service can't get its data right now.", "It usually clears up by itself, and updates start again when it does.", SAID(failure.said))
     case "noSource":
-      return say("The price service has no data source, so only the demo wallet works.", "Set one up, then restart the price service.", `${SAID(failure.said)} Its data source goes in .env.local.`)
+      return say("The price service has no data source, so only the demo wallet works.", onThisMachine ? "Set one up, then restart the price service." : "Whoever runs it needs to set one up.", onThisMachine ? `${SAID(failure.said)} Its data source goes in .env.local.` : SAID(failure.said))
     case "refused":
-      return say("The price service turned this request down.", "Try again. If it keeps happening, restart the price service.", SAID(failure.said))
+      return say("The price service turned this request down.", onThisMachine ? "Try again. If it keeps happening, restart the price service." : "Try again. If it keeps happening, let whoever runs the price service know.", SAID(failure.said))
     case "slowedDown":
       return say("The price service asked this app to slow down.", "Updates start again by themselves.", SAID(failure.said))
   }
