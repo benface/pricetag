@@ -52,6 +52,10 @@ struct MacApp: App {
         HotWalletDebug.applyLaunchArguments(to: hotWallet, bridge: siteBridge)
         #endif
         _bridgeServer = State(initialValue: Self.startBridge(siteBridge))
+        #if PATINA_HOSTED && !DEBUG
+        // `pnpm mac` does this with macos/install-bridge.sh. An installed copy has nothing else to do it.
+        BrowserHosts.install(app: Bundle.main.bundleURL)
+        #endif
         // Here and not in a view: the menu bar shows the total, and sweeps run, whether or not anything is open.
         hotWallet.start()
         store.start()
@@ -97,8 +101,8 @@ struct MacApp: App {
     private var opensAtLaunch: Bool {
         #if DEBUG
         !HotWalletDebug.isQuiet
-        #elseif PATINA_WATCH_ONLY
-        // So macos/watch-only-test.sh can launch the built app without taking anyone's focus. There's no key in this build to protect from it.
+        #elseif PATINA_WATCH_ONLY || PATINA_HOSTED
+        // So macos/watch-only-test.sh and macos/hosted-test.sh can launch the built app without taking anyone's focus. All this skips is opening a window.
         !UserDefaults.standard.bool(forKey: "launchesQuietly")
         #else
         true

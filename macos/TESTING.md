@@ -103,6 +103,14 @@ Don't do it yourself. Finish, and put a short checklist for benface in your hand
 - The spending money window's confirmation dialogs, and Touch ID, which asks inside the window. Its sheets are scenes, without the window behind them.
 - The app's look when it's active and in front.
 
+## The hosted build
+
+`pnpm check:hosted [--no-launch] [dmg]` tests the full build colleagues get. It reads the signature, profile, entitlements and what's in the image. Without `--no-launch` it also launches a release copy against a local server in hosted mode, and a debug copy signed the same way that makes a key in the real Keychain, sweeps and approves a site's transaction on a local fork. `PATINA_TEST_ENV_FILE=<a .env.local>` adds a first read and a question with real data.
+
+Nothing takes focus, but each launch puts an icon in the menu bar for a moment, so use `--no-launch` while someone's presenting from this Mac.
+
+**Never launch a quarantined copy here.** Even a notarized one puts macOS's first-launch dialog on the screen of whoever's using this Mac, and a script can't close it. Check Gatekeeper with `spctl --assess --type execute`, as this does. Each launched copy also has its `patina://` scheme taken out and is signed again, so it can't take that link from the normal build.
+
 ## The watch-only build
 
 `pnpm check:watch-only [dmg]` tests a built copy from a clean temporary folder, without opening a window or taking focus: its signature and entitlements, that the key code isn't in its binary, that the Keychain refuses what it's signed with, and that it reaches a local server in hosted mode and gets the 401 that opens the invite prompt. It launches a copy under its own test ID, so an installed copy's saved data is never touched, which also means the installed ID itself first launches on someone's Mac. It can't check Gatekeeper on another Mac, or HTTPS to the real host. `PATINA_WATCH_ONLY=1 macos/shot.sh <scene> out.png` draws any scene as that build shows it, like `invite-prompt`.
@@ -157,7 +165,7 @@ A test that waits for something needs a deadline. If it spins forever and `swift
 ## Which check to run
 
 - **While working: `pnpm check:mac:quick`.** Only the tests of both packages. It always runs them, and never counts as a pass, though failing forgets one.
-- **Before review or a merge: `pnpm check:mac`.** Everything: all the tests, the signed Release app, the watch-only app and both iOS builds. It says how long each step took on `[check:mac]` lines.
+- **Before review or a merge: `pnpm check:mac`.** Everything: all the tests, the signed Release app, the watch-only app, the hosted app and both iOS builds. It says how long each step took on `[check:mac]` lines.
 
 `check:mac` remembers a full pass for what's in `macos/`, committed or not, with this Xcode, Swift and macOS. If all of that is the same, it says `Nothing ran: this exact code already passed …` and exits 0 straight away, even from another worktree, or after merging a `main` that didn't touch `macos/`. Say so if you report it, because you didn't run it. A pass that's recorded is only ever a full one, recorded after the queue has verified its turn is over, and any change in `macos/`, even one character, runs everything. Any run of that same code that fails forgets the pass, including `--quick`, and `--force` forgets it as soon as its turn starts, so it's only back if that run passes. Only a pass from the latest run to start on that code counts, and one that's reported as stopped leaves none. To run it anyway, for example when chasing a flaky test, use `macos/check-mac.sh --force`. The records are in `~/Library/Caches/patina-check-mac/`, hold only a run's ID, a date and a path, and are safe to delete. A run with `ANVIL_RPC_URL`, `BASE_READ_RPC_URL` or another `CONFIGURATION` is never skipped or recorded.
 

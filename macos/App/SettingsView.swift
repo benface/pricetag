@@ -37,8 +37,8 @@ struct SettingsView: View {
         TabView(selection: $tab) {
             Tab("General", systemImage: "gearshape", value: Pane.general) { general }
             Tab("Answers", systemImage: "checklist", value: Pane.answers) { pane(.answers) { AnswersList(store: store) } }
-            // A watch-only build reads the server it was built for, and its invite is under General.
-            if !Build.isWatchOnly {
+            // A build for other people reads the server it was built for, and its invite is under General.
+            if !Build.isForOtherPeople {
                 Tab("Price Service", systemImage: "server.rack", value: Pane.server) { connection }
             }
         }
@@ -106,7 +106,7 @@ struct SettingsView: View {
                         .disabled(store.address == nil || store.address == WalletAddress.demo || WalletAddress.isAllYours(store.address))
                 }
             }
-            if Build.isWatchOnly {
+            if Build.isForOtherPeople {
                 Section {
                     LabeledContent("Invite") {
                         Button(store.invite == nil ? "Enter Invite…" : "Change Invite…") { isChangingInvite = true }
@@ -117,11 +117,14 @@ struct SettingsView: View {
                             .font(.callout)
                     }
                 } footer: {
-                    Text(Wording.watchOnlyNotice)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if Build.isWatchOnly {
+                        Text(Wording.watchOnlyNotice)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-            } else {
+            }
+            if !Build.isWatchOnly {
                 Section {
                     Toggle("Notify me when money moves", isOn: Binding(get: { notifications.isOn }, set: { notifications.setOn($0) }))
                     if notifications.isOn, notifications.authorization == .denied {

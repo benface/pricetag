@@ -99,7 +99,7 @@ struct MainWindow: View {
                 ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet) { AnyView(PublishFromDeviceButton(link: $0, browsers: .real)) }
             }
         }
-        .sheet(isPresented: Binding(get: { Build.isWatchOnly && store.asksForInvite }, set: { if !$0 { store.declineInvite() } })) {
+        .sheet(isPresented: Binding(get: { Build.isForOtherPeople && store.asksForInvite }, set: { if !$0 { store.declineInvite() } })) {
             // The store closes this when an invite's given, and opens it again if the server refuses that one.
             InvitePrompt(store: store, decline: store.declineInvite)
         }

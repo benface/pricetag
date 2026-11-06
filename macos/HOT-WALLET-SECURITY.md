@@ -138,6 +138,8 @@ The RPC is configurable and untrusted.
 ## Signing and identity
 
 - [x] Only a provisioned build can reach the data protection Keychain. Without one, the app says it can't hold a key, and everything else works.
+- [x] **The build for colleagues (`pnpm mac:hosted`) holds keys on Macs that aren't registered.** It's signed with Developer ID and a profile with no device list, notarized, and checked by `pnpm check:hosted`. A key made by that signature goes through the same Secure Enclave and device-only Keychain, in a Keychain group of its own, so it can't read the wallet of a normal build on the same Mac, or the other way around. Tested on this Mac only, from the profile's `ProvisionsAllDevices`. A second Mac is on the list below.
+- [x] **Its one file outside the sandbox.** It may write each browser's native messaging manifest for this app, and make the folder that goes in, by a temporary exception in `Config/Hosted.entitlements`. Reading or changing another app's manifest, or the browser's own files, is refused (tried with a signed scratch app). It can see the names of other apps' manifests in that folder. It never replaces a manifest it didn't write. A compromised copy could still point this app's own host at something else, which `allowed_origins` limits to the extension.
 - [ ] **The Keychain ties the key to the signing team.** The team is pinned in `macos/run.sh`, and changing it makes an existing key unreadable. Sweep everything out first.
 - [ ] **The team's profile lasts a year.** It's Benface Inc.'s, and `pnpm mac` renews it. A build older than that stops launching, and a wallet that isn't running isn't sweeping.
 
@@ -149,4 +151,5 @@ These need a person at the Mac:
 - [ ] The approval window with a person at it. `pnpm check:extension` answers it through a debug build's stand-in, which a release build doesn't have.
 - [ ] A site with real funds on a real browser.
 - [ ] Reading an address on a real Ledger or Keystone screen.
+- [ ] The full build on a second Mac: installing the notarized `.dmg`, the first-launch prompt, a new key, the extension loaded unpacked, and a device page.
 - [ ] Anything with real funds. All sends so far have been on a local fork. Start with a dollar or two.
