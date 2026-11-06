@@ -188,7 +188,7 @@ struct SettingsView: View {
             } footer: {
                 Text("The cap is \(hotWallet.display.whole(hotWallet.settings.capCeiling)) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build").\(hotWallet.display.isConverted ? " \(HotWalletWording.capFollowsRate(hotWallet.display.main))" : "")")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
         }
     }

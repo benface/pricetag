@@ -36,6 +36,19 @@ A scene with a hot wallet makes the address you gave its Spending Money, so `mai
 
 Never run a release build to look at something: it starts the real hot wallet, which can sweep by itself, and reads the real settings. Check one with `strings` and `nm` instead.
 
+### What VoiceOver finds
+
+```sh
+macos/shot.sh send-waiting out.txt --accessibility   # one scene
+macos/shot.sh all some-folder --accessibility        # every scene, one file each
+```
+
+This writes the tree macOS builds for VoiceOver, from the same offscreen render: each element's label, value and role, in reading order. It needs Accessibility in System Settings for whatever runs the script, because SwiftUI only builds the tree once an assistive app has asked. `AccessibilityTree` does the same in a Swift test, and those tests only run when it's allowed (see `AccessibilityTests.swift`).
+
+It shows what's said and in what order, not how VoiceOver pronounces it or where its cursor goes. It also leaves out a table's rows, which an offscreen table doesn't make, and the route-* scenes, which need a real window. Both stay on benface's checklist.
+
+macOS doesn't give other apps Dynamic Type: SwiftUI's text styles stay the same size whatever `dynamicTypeSize` says. Larger text on a Mac comes from the display's "Larger Text" setting, which makes the screen smaller, so the small-window scenes (`main-smallest`, `settings-small-display` and the like) are the check for it.
+
 ## 2. Capture a real window
 
 ```sh
