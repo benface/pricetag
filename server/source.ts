@@ -412,7 +412,7 @@ export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL
  * Pricing rules of one wallet history pass the same `shared`, so only what a rule changes is read for each.
  */
 export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string }, shared = sharedReads(query, config)): Source {
-  const { readPriced } = datasetReader(query, config)
+  const { readPricedOf } = datasetReader(query, config)
   const ds = `"${config.dataset}"`
   // What a fork of the pricing rule changes, so its market prices come from its own trades.
   const prices = `"${config.priceDataset ?? config.dataset}"`
@@ -423,7 +423,8 @@ export function resolvingSource(query: Query, config: { baseDataset: string; dat
     readFeedRounds: readFeedRoundsAt(query, config),
 
     async readWindow(address, from, to) {
-      return { ...(await shared.readLegs(address, from, to)), priced: await readPriced(address, from, to) }
+      const legs = await shared.readLegs(address, from, to)
+      return { ...legs, priced: await readPricedOf(legs.rows, address, from, to) }
     },
 
     async marketReady() {

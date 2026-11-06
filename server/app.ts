@@ -76,7 +76,10 @@ function pinned(dataset: string, hash: string | undefined): string {
   return `${dataset.split("@")[0]}@${hash}`
 }
 
-export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs; follow: FollowConfig; shared?: SharedReads; approvals?: Approvals } | null {
+/** A wallet read's rows, closing balance and latest price run side by side, and the head or another wallet needn't wait behind them. Few enough to be fair to a shared Amp. */
+const QUERIES_AT_ONCE = 3
+
+export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, { maxConcurrent: QUERIES_AT_ONCE }) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs; follow: FollowConfig; shared?: SharedReads; approvals?: Approvals } | null {
   if (!query) return null
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
@@ -191,6 +194,9 @@ const pollingOnly = (source: Source): FollowConfig => ({
 
 type Created = Omit<NonNullable<ReturnType<typeof createSource>>, "follow"> & { follow?: FollowConfig | undefined }
 
+/** How old a followed head can be for a wallet read to use it. Ticks are at least 2 s apart, and a read of the head is a query every read would otherwise wait for. */
+const FOLLOWED_HEAD_MS = 5000
+
 const NO_ONRAMP = "Buying isn't set up on this server."
 
 /** An amount typed in a currency, or undefined when it isn't one. */
@@ -211,16 +217,24 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   const source = created?.source ?? null
 
   let head: Head | null = null
+  let headReadAt = 0
   const subscribers = new Set<ServerResponse>()
   let following: AbortController | null = null
 
   async function pollHead(): Promise<Head> {
     if (!source) throw new Error("No Amp source")
     const next = await source.head(head?.blockNum ?? null)
-    if (next) head = next
+    // Reads overlap, so one that started first can finish last. A reorg lowers the head through `rewindTo`, not here.
+    if (next && (!head || next.blockNum >= head.blockNum)) {
+      head = next
+      headReadAt = Date.now()
+    }
     if (!head) throw new Error("No blocks yet")
     return head
   }
+
+  /** While the chain's followed, every tick reads the head and the next one reads the wallet again, so a read can start from one that's seconds old. */
+  const walletHead = async () => (head && following && Date.now() - headReadAt < FOLLOWED_HEAD_MS ? head : pollHead())
 
   const send = (message: string) => {
     for (const subscriber of subscribers) subscriber.write(message)
@@ -234,6 +248,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     created?.readRates.rewind?.(block)
     // The new chain can be shorter, and the head is only read from the last one on.
     if (head && head.blockNum >= block) head = { ...head, blockNum: block - 1 }
+    headReadAt = 0
   }
 
   // Only follows the chain while something is watching.
@@ -262,9 +277,9 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL), () => head?.blockNum ?? null)
-  const wallets = source ? createWallets(source, pollHead, readL1Fees, console, { maxWallets, priceSamples: true }) : null
+  const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) : null
   // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
-  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, pollHead, readL1Fees, console, { maxWallets, priceSamples: true }) }))
+  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) }))
 
   /**
    * Reads a wallet, or answers the request with why it can't.
