@@ -75,6 +75,7 @@ struct SecurityPage: View {
                 } else if WalletAddress.isAllYours(store.address) {
                     Notice(.info, "Each wallet has its own approvals. Choose one of your wallets to see what it lets apps spend.")
                 }
+                if showsSignedPermits { signedPermits }
                 unlisted
                 tips
             }
@@ -84,6 +85,7 @@ struct SecurityPage: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         .task { basics = await readBasics() }
+        .task(id: hotWallet.signedPermits.map(\.id)) { await hotWallet.checkSignedPermits() }
         .task(id: store.address) {
             selection = []
             guard let address = store.address, !WalletAddress.isAllYours(address) else {
@@ -308,13 +310,76 @@ struct SecurityPage: View {
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+    // MARK: - Signed here
+
+    /// They're Spending Money's, the only wallet that signs for sites, which All Yours includes.
+    private var showsSignedPermits: Bool {
+        guard let address = hotWallet.address else { return false }
+        return WalletAddress.isAllYours(store.address) || store.address == address.lowercased
+    }
+
+    @ViewBuilder
+    private var signedPermits: some View {
+        let permits = hotWallet.signedPermits
+        let readable = permits.filter { $0.terms != nil }
+        let unreadable = permits.filter { $0.terms == nil }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Signed Here, Not Used Yet").font(.headline)
+                Spacer(minLength: 8)
+                if hotWallet.isCheckingPermits {
+                    ProgressView().controlSize(.small)
+                }
+                if !readable.isEmpty {
+                    Button("Check Again", systemImage: "arrow.clockwise") { Task { await hotWallet.checkSignedPermits() } }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .help("Check again")
+                        .disabled(hotWallet.isCheckingPermits)
+                }
+            }
+            Text(Self.whatSignedPermitsAre)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            SecurityGroup {
+                if permits.isEmpty {
+                    Label("Nothing signed here is waiting to be used.", systemImage: "checkmark.seal")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(Array(readable.enumerated()), id: \.element.id) { index, permit in
+                    if index > 0 { Divider() }
+                    if let terms = permit.terms {
+                        SignedPermitRow(permit: permit, terms: terms, check: hotWallet.permitChecks[permit.id])
+                    }
+                }
+                if !unreadable.isEmpty {
+                    if !readable.isEmpty { Divider() }
+                    WarningText(Self.unreadablePermits(unreadable))
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    static let whatSignedPermitsAre = "Permits \(HotWalletWording.title) signed for sites. Each stays here until it expires, or the chain shows it can't be used anymore."
+
+    static func unreadablePermits(_ permits: [SignedPermit]) -> String {
+        var sites: [String] = []
+        for site in permits.map({ siteName($0.site) }) where !sites.contains(site) { sites.append(site) }
+        let names = sites.formatted(.list(type: .and))
+        let lead = permits.count == 1 ? "One signature, for \(names), looked like a permit but couldn't be read, so what it allows, and whether it's been used, isn't known." : "\(permits.count) signatures, for \(names), looked like permits but couldn't be read, so what they allow, and whether they've been used, isn't known."
+        return "\(lead) Moving your tokens to another of your wallets is the only sure way to stop them."
+    }
+
     // MARK: - What no one can list
 
     private var unlisted: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("What No One Can List").font(.headline)
             SecurityGroup {
-                Text("A permit you signed that hasn't been used yet isn't onchain, so no app can find it, \(AppName.current) included. Once it's used, some permits set an approval, and others move the tokens right away.")
+                Text("A permit signed in another app, or here before \(AppName.current) kept track of them, isn't onchain until it's used, so no app can find it, \(AppName.current) included. Once it's used, some permits set an approval, and others move the tokens right away.")
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 6) {
                     Label("Only sign permits on sites you trust. \(AppName.current) shows what one allows before you sign it.", systemImage: "signature")
@@ -465,6 +530,76 @@ private struct ApprovalRow: View {
                     .help("\(AppName.current) never calls a contract it doesn't track, so revoke this one from another wallet app.")
             }
         }
+    }
+}
+
+/// One permit: what it allows, who for, when it ends, and how to stop it.
+private struct SignedPermitRow: View {
+    let permit: SignedPermit
+    let terms: SignedPermit.Terms
+    let check: SignedPermit.Check?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(SignedPermitWording.what(terms))
+                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text(terms.who)
+                            .foregroundStyle(.secondary)
+                        CopyButton(title: "Copy", text: terms.spender.checksummed, help: "Copy this address")
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+                    }
+                    .font(.callout)
+                    .lineLimit(1)
+                    Text(SignedPermitWording.when(permit, terms))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Text(terms.amount)
+                    .monospacedDigit()
+                    .foregroundStyle(terms.amount == "Unlimited" ? Tone.warning.style : AnyShapeStyle(.primary))
+                    .fontWeight(terms.amount == "Unlimited" ? .semibold : .regular)
+            }
+            Label(terms.howToStop, systemImage: "hand.raised")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            switch check {
+            case .notUsed:
+                Label("Not used as of the last check.", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .couldntCheck:
+                WarningText("Couldn't check whether this has been used, so it may have been.")
+                    .font(.caption)
+            case nil:
+                Label("Not checked yet.", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+enum SignedPermitWording {
+    /// A token off the list is never named, because it can call itself anything.
+    static func what(_ terms: SignedPermit.Terms) -> String {
+        let token = terms.tokenSymbol ?? "Token \(Format.shortHash(terms.token.checksummed))"
+        return switch terms.kind {
+        case .allowance: token
+        case .permit2Allowance: "\(token), through Permit2"
+        case .permit2Transfer: "\(token), one transfer through Permit2"
+        }
+    }
+
+    static func when(_ permit: SignedPermit, _ terms: SignedPermit.Terms) -> String {
+        let until = terms.deadline.map { "Can be used until \(Date(timeIntervalSince1970: TimeInterval($0)).formatted(.dateTime.month(.abbreviated).day().hour().minute()))" } ?? "Can be used at any time, with no end date"
+        return "Signed for \(siteName(permit.site)) on \(permit.signedAt.formatted(.dateTime.month(.abbreviated).day())) · \(until)"
     }
 }
 

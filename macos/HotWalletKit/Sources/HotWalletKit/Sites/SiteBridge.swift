@@ -431,7 +431,7 @@ public final class SiteBridge {
         if case .failure(let error) = await ask(request, .message(review)) { return .failure(error) }
         if let problem = walletProblem(for: request.origin) { return .failure(problem) }
         do {
-            return .success(.string(try await wallet.signForSite(review.signable).hex))
+            return .success(.string(try await wallet.signForSite(review, origin: request.origin).hex))
         } catch {
             return .failure(Self.siteError(error))
         }

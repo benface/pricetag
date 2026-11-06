@@ -282,6 +282,7 @@ enum TestScene: String, CaseIterable {
     case mainTaxReport = "main-tax-report"
     case mainSecurity = "main-security"
     case security
+    case securitySignedPermits = "security-signed-permits"
     case securitySavings = "security-savings"
     case securityDemo = "security-demo"
     case securityReading = "security-reading"
@@ -664,7 +665,7 @@ enum TestScene: String, CaseIterable {
         case .walletSwitcherLong: TestScene.manyWallets.last?.address
         case .mainShowingSpendingMoney, .mainTransactionsSending, .mainSpendingMoney, .mainSpendingMoneySmall, .mainSpendingMoneyServerDown, .routeRemoveFromSavingsOpen, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest: HotWalletFixture.spending.lowercased
         case .mainSavings, .mainEmptySavings, .securitySavings: HotWalletFixture.savings.lowercased
-        case .mainSecurity, .security, .securityReading, .securityStale: HotWalletFixture.spending.lowercased
+        case .mainSecurity, .security, .securitySignedPermits, .securityReading, .securityStale: HotWalletFixture.spending.lowercased
         case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours: WalletAddress.allYours
         case .mainWatching: TestScene.recentWallet
         default: nil
@@ -673,7 +674,7 @@ enum TestScene: String, CaseIterable {
 
     private var listsWallets: Bool {
         switch self {
-        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .walletSwitcherNewKey, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendLookalike, .sendLookalikeChecked, .addSavingsOtherPaste, .addSavingsLedgerPaste, .addSavingsKeystoneType, .addSavingsPicked, .addSavingsPickedCheck, .mainNoWalletSaved, .mainNoWalletSavedSmall, .taxReportOtherWallets, .taxReportLeftOver, .settingsAnswers, .mainSecurity, .security, .securitySavings: true
+        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .walletSwitcherNewKey, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendLookalike, .sendLookalikeChecked, .addSavingsOtherPaste, .addSavingsLedgerPaste, .addSavingsKeystoneType, .addSavingsPicked, .addSavingsPickedCheck, .mainNoWalletSaved, .mainNoWalletSavedSmall, .taxReportOtherWallets, .taxReportLeftOver, .settingsAnswers, .mainSecurity, .security, .securitySignedPermits, .securitySavings: true
         default: false
         }
     }
@@ -690,6 +691,7 @@ enum TestScene: String, CaseIterable {
 
     private var hotWalletFixture: HotWalletFixture {
         switch self {
+        case .securitySignedPermits: .signedPermits
         case .hotWalletNotProvisioned, .popoverNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
         case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .routeRemoveFromSavingsOpen, .mainSpendingMoneyServerDown, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainTransactionsSending, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .routeBuy, .routeBuyOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletRecordShown, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletProblem, .settingsHotWalletCAD, .settingsHotWalletNoRate, .hotWalletNoRate, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendGoing, .sendSent, .sendStopped, .sendMoney, .sendMoneyCAD, .sendLookalike, .sendLookalikeChecked, .sendRefused, .sweep, .sweepCAD, .sweepStopped, .mainSecurity, .security, .securitySavings, .securityDemo, .securityReading, .securityStale, .revoke, .revokeOne: .funded
@@ -1159,7 +1161,7 @@ enum TestScene: String, CaseIterable {
             }
         case .mainSecurity:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 900), isReady: isReady)
-        case .security, .securitySavings, .securityDemo, .securityReading, .securityStale, .securityNoSpendingMoney:
+        case .security, .securitySignedPermits, .securitySavings, .securityDemo, .securityReading, .securityStale, .securityNoSpendingMoney:
             guard let address = store.address else { TestMode.fail("This scene has no wallet to show.") }
             let reads = ReadOnce()
             let model = ApprovalsModel(address: address) { [self] in
@@ -1176,7 +1178,7 @@ enum TestScene: String, CaseIterable {
                 }
             }
             let page = SecurityPage(store: store, hotWallet: hotWallet, navigation: navigation, readBasics: { MacBasics(hasPassword: true, fileVaultOn: nil) }, approvalsModel: model)
-            return TestScreen(view: AnyView(page.frame(width: 860, height: 1560).background(.background)), isReady: { [self] in isReady() && (self == .securityReading || model.approvals != nil) && (self != .securityStale || model.refreshFailure != nil) })
+            return TestScreen(view: AnyView(page.frame(width: 860, height: self == .securitySignedPermits ? 2120 : 1560).background(.background)), isReady: { [self] in isReady() && (self == .securityReading || model.approvals != nil) && (self != .securityStale || model.refreshFailure != nil) })
         case .revoke, .revokeOne:
             guard let approvals: WalletApprovals = try? FixtureSource.decode("demo-approvals") else { TestMode.fail("There's no approvals fixture.") }
             let revocations = approvals.approvals.compactMap(Revocation.init)
