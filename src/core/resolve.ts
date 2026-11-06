@@ -56,8 +56,8 @@ const E8 = 10n ** 8n
 
 /** USD for one unit of a currency when this arrived, from the wallet's own rates or the ones read for what's stored in another. */
 function answerAt({ wallet }: Side, currency: CurrencyCode, leg: PricedLeg): bigint | null {
-  const byBlock = currency === wallet.currency ? wallet.rates?.byBlock : wallet.paidRates?.[currency]
-  return usableAnswer(byBlock?.[leg.blockNum], leg.timestamp)
+  const own = currency === wallet.currency ? wallet.rates?.byBlock[leg.blockNum] : undefined
+  return usableAnswer(own ?? wallet.paidRates?.[currency]?.[leg.blockNum], leg.timestamp)
 }
 
 /**
@@ -323,7 +323,11 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     })
 
     // What's inherited wins, unless part of it can't be, or can't be yet, since an entered cost is for all of what arrived.
-    if ((unvouched.length > 0 || !pieces.some((p) => p.label === "inherited" && p.costMicros !== null)) && report !== null) return reported(leg, report)
+    if ((unvouched.length > 0 || !pieces.some((p) => p.label === "inherited" && p.costMicros !== null)) && report !== null) {
+      // When what was already held got paid for isn't known, so there's no rate for that day, only the one when the history starts.
+      const approximate = leg.opening && reportedMoney && reportedMoney.currency !== side.view.currency
+      return approximate ? { ...reported(leg, report), estimated: true, enteredAs: reportedMoney } : reported(leg, report)
+    }
     if (sources === null) {
       // What it cost is known, in USD, and only the rate is missing. Nobody can answer that, and it may yet be read.
       if (leg.conversion?.rateMicros !== null || leg.conversion.costUsdMicros === null) open.push({ wallet: address, leg, sender: null, units })
