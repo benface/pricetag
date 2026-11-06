@@ -40,7 +40,8 @@ const inTime = <T>(work: Promise<T>, onStalled: () => void): Promise<T> => {
 
 /**
  * IndexedDB decides what's true. localStorage holds a copy, which is what a page shows before it can read that, what a client
- * saved before this existed, and what tells other tabs to look, since a write there reaches them as a `storage` event.
+ * saved before this existed, and what tells other tabs to look, since a write there reaches them as a `storage` event. The one
+ * exception is what's been set aside, which can reach the copy alone when IndexedDB won't take it, so that's read from both.
  */
 export function browserShelf(): Shelf {
   let opening: Promise<IDBDatabase | null> | undefined
@@ -88,7 +89,8 @@ export function browserShelf(): Shelf {
           : undefined
       found.onsuccess = () => {
         const stored = typeof found.result === "string" ? found.result : null
-        result = work(stored ?? localStorage.getItem(key), store)
+        const inCopy = localStorage.getItem(key)
+        result = work(stored === null ? inCopy : key === SET_ASIDE_KEY ? withSetAsideIn(stored, inCopy) : stored, store)
       }
       transaction.oncomplete = () => {
         clearTimeout(timer)
@@ -146,6 +148,15 @@ function setAsideFrom(text: string | null): SetAside {
   }
   // This isn't thrown away either.
   return { entries: [{ key: SET_ASIDE_KEY, text }], seen: 0 }
+}
+
+/** Entries only get added and only go from unseen to seen, so everything either side has is still true. Those seen go first, since `seen` counts from the start. */
+function withSetAsideIn(stored: string, inCopy: string | null) {
+  if (inCopy === null || inCopy === stored) return stored
+  const [one, other] = [setAsideFrom(stored), setAsideFrom(inCopy)]
+  const distinct = (entries: SetAside["entries"]) => entries.filter((entry, i) => entries.findIndex(({ key, text }) => key === entry.key && text === entry.text) === i)
+  const told = distinct([...one.entries.slice(0, one.seen), ...other.entries.slice(0, other.seen)])
+  return JSON.stringify({ entries: distinct([...told, ...one.entries, ...other.entries]), seen: told.length })
 }
 
 async function setAside(shelf: Shelf, key: string, text: string) {
