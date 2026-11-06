@@ -11,6 +11,9 @@
 # Each run has a job folder and a watcher, which is the one thing that updates the list and stops the job while it's alive. Everything
 # else asks it to (the stop file) and waits for it to finish (the clean file). A run that gets the lock doesn't start until every earlier
 # run that started is clean, and if one's watcher is gone too, it finishes that run's cleanup itself.
+#
+# Cleanup that can't be verified leaves the stuck file, and the folder stays as the record of what's still the job's. That run doesn't count
+# as a pass, and each later run tries again and refuses to start until the job's verifiably gone, so nothing overlaps or gets forgotten.
 set -u
 
 # A check's own builds are already part of its turn.
@@ -29,10 +32,12 @@ elapsed() { # seconds
 
 # Lists everything alive that's in the job, which also goes in its list: in the command's session, descended from the command, or already
 # on the list. Fails if it couldn't find out, which isn't the same as finding nothing. A session's ID stays taken while anything's in it,
-# so if the root's PID belongs to something else now, the session is over and only the list counts.
+# so if the root's PID belongs to something else now, the session is over and only the list counts. A job with no root and no list hasn't
+# started anything, and once it's asked to stop it never will, so there's nothing to look for.
 job_pids() { # root, by PID and start time
   [ -d "$run" ] || return 0
-  list=$(mktemp "$run/pids.XXXXXX") || return 1
+  [ -n "${1:-}" ] || [ -s "$run/pids" ] || return 0
+  list=$(mktemp "$run/pids.XXXXXX" 2>/dev/null) || return 1
   # 310 is getsid, which Perl doesn't wrap. ps doesn't show sessions on macOS.
   if perl -e '
     my ($known, $root_key) = @ARGV;
@@ -65,8 +70,7 @@ job_pids() { # root, by PID and start time
   return 1
 }
 
-# Returns once the job's empty, or says so if it can't get it there. The next turn has to go ahead then, or one stuck process stops every
-# build on this Mac.
+# Returns once the job's verifiably empty. If it can't get it there in about 7 seconds, it says so and fails.
 stop_job() { # root
   tries=0
   told=
@@ -109,33 +113,46 @@ watcher_alive() { # job folder
   [ "$(ps -o pid=,lstart= -p "$pid" 2>/dev/null)" = "$(cat "$1/watcher" 2>/dev/null)" ]
 }
 
-# Waits for the watcher to finish stopping the job, or does it if the watcher's gone.
+# All at once, because a command that's just starting checks this folder for whether it's been stopped.
+remove_job() { # job folder
+  gone="$dir/gone.$(basename "$1")"
+  mv "$1" "$gone" 2>/dev/null && rm -rf "$gone"
+}
+
+finish_stopping() {
+  if stop_job "$(root_key)"; then touch "$run/clean" 2>/dev/null; else touch "$run/stuck" 2>/dev/null; fi
+}
+
+# Waits for the watcher to finish stopping the job, or does it if the watcher's gone. The stuck file says if that didn't work.
 await_clean() {
-  until [ -e "$run/clean" ] || [ ! -d "$run" ]; do
+  until [ -e "$run/clean" ] || [ -e "$run/stuck" ] || [ ! -d "$run" ]; do
     if ! watcher_alive "$run"; then
-      stop_job "$(root_key)"
-      touch "$run/clean" 2>/dev/null
+      finish_stopping
       return
     fi
     sleep 0.1
   done
 }
 
-# Waits until an earlier run that started has finished stopping, because killing its lockf freed the lock before that happened.
+# Waits until an earlier run that started has finished stopping, because killing its lockf freed the lock before that happened. Fails if
+# that run's processes can't be verified gone. Its folder stays for its own run to finish with, if that's still around.
 settle() { # job folder
-  while [ -d "$1" ] && [ ! -e "$1/clean" ]; do
-    if ! watcher_alive "$1"; then
-      (
-        run=$1
-        stop_job "$(root_key)"
-      )
-      rm -rf "$1"
-      return
-    fi
+  while [ -d "$1" ] && [ ! -e "$1/clean" ] && [ ! -e "$1/stuck" ] && watcher_alive "$1"; do
     [ -n "${settling:-}" ] || say "The last run is still stopping, so this one starts once it has."
     settling=1
     sleep 0.1
   done
+  [ -d "$1" ] || return 0
+  if [ ! -e "$1/clean" ]; then
+    touch "$1/stop" 2>/dev/null
+    (
+      run=$1
+      stop_job "$(root_key)"
+    ) || return 1
+    touch "$1/clean" 2>/dev/null
+  fi
+  watcher_alive "$1" || remove_job "$1"
+  return 0
 }
 
 # What lockf runs once it has the lock. It stays until the job's processes are gone, so the next turn never starts alongside them.
@@ -159,7 +176,13 @@ if [ "${1:-}" = --turn ]; then
   trap 'abort; await_clean; exit 130' INT
   trap 'abort; await_clean; exit 129' HUP
   for job in "$dir"/job.*; do
-    if [ "$job" != "$run" ] && [ -e "$job/turn" ]; then settle "$job"; fi
+    if [ "$job" != "$run" ] && [ -e "$job/turn" ] && ! settle "$job"; then
+      # Nothing's started, so this run has nothing to clean up, and it's no longer a run that started.
+      touch "$run/stop" 2>/dev/null
+      rm -f "$run/turn"
+      say "$label did not run: an earlier run's processes can't be verified gone, so it could overlap with them. This isn't a failed check. Run it again, and if this keeps happening, see $job and \"Compiling Swift takes turns\" in macos/TESTING.md."
+      exit 69
+    fi
   done
   # The command says who it is before it starts, then checks it wasn't stopped. The watcher does the opposite, so one of them finds out.
   SWIFT_QUEUE_TURN=1 perl -MPOSIX -e '
@@ -170,7 +193,7 @@ if [ "${1:-}" = --turn ]; then
     print $file "$$ @start\n";
     close $file;
     rename("$root.new", $root) or exit 70;
-    exit 70 if -e $stop;
+    exit 70 if -e $stop or !-e $root;
     POSIX::setsid() != -1 or die "Could not start a session: $!\n";
     exec { $ARGV[0] } @ARGV or die "Could not run $ARGV[0]: $!\n";
   ' "$run/root" "$run/stop" "$@" &
@@ -202,6 +225,10 @@ no_result() {
   else
     echo "$label was stopped while waiting, so it never ran and has no result. It didn't pass or fail: run it again."
   fi
+}
+
+not_a_pass() {
+  echo "$label isn't a pass: what it started couldn't be verified gone. Its record is in $run, and the next run won't start until they're gone."
 }
 
 waiting_message() {
@@ -236,14 +263,18 @@ watch() {
   done
   [ -d "$run" ] || return
   [ -e "$run/stop" ] || abort
-  stop_job "$(root_key)"
-  touch "$run/clean" 2>/dev/null
+  finish_stopping
   while [ -d "$run" ] && kill -0 "$script" 2>/dev/null; do sleep 0.1 </dev/null >/dev/null 2>&1; done
   [ -d "$run" ] || return
+  if [ -e "$run/finished" ]; then
+    [ ! -e "$run/clean" ] || remove_job "$run"
+    return
+  fi
   # The script was killed before it could say what happened.
   [ ! -r "$run/locker" ] || kill -TERM "$(cat "$run/locker")" 2>/dev/null
   say "$(no_result)"
-  rm -rf "$run"
+  [ ! -e "$run/stuck" ] || say "$(not_a_pass)"
+  [ -e "$run/stuck" ] && [ ! -e "$run/clean" ] || remove_job "$run"
 }
 
 stopped() { # status
@@ -255,7 +286,15 @@ stopped() { # status
 }
 
 finish() { # status
-  rm -rf "$run"
+  if [ -e "$run/stuck" ]; then
+    say "$(not_a_pass)"
+    [ "$1" -ne 0 ] || set -- 69
+    if [ ! -e "$run/clean" ]; then
+      touch "$run/finished" 2>/dev/null
+      exit "$1"
+    fi
+  fi
+  remove_job "$run"
   exit "$1"
 }
 
@@ -279,10 +318,12 @@ wait $!
 status=$?
 now=$(date +%s)
 
-if [ ! -e "$run/turn" ]; then
+# A later run can have finished cleaning up after this one and removed its folder, if this one's watcher was killed.
+if [ -d "$run" ] && [ ! -e "$run/turn" ]; then
   touch "$run/stop" 2>/dev/null
   await_clean
   case $status in
+    69) ;; # The turn said why.
     75) say "$label did not run: it was still waiting after $(elapsed "$max_wait"). This isn't a failed check, and nothing is left behind. Run it again." ;;
     *) say "$label did not run: lockf couldn't take the lock at $dir/lock (exit $status)." ;;
   esac
@@ -290,14 +331,15 @@ if [ ! -e "$run/turn" ]; then
 fi
 
 # If lockf ended without its command finishing, stop whatever's left of it.
-[ -e "$run/clean" ] || abort
+[ -e "$run/clean" ] || [ -e "$run/stuck" ] || abort
 await_clean
-started=$(cat "$run/turn")
+started=$(cat "$run/turn" 2>/dev/null)
+started=${started:-$now}
 took=$(elapsed $((now - started)))
 waited=
 [ $((started - queued_at)) -lt 2 ] || waited=", after waiting $(elapsed $((started - queued_at)))"
 case $status in
-  0) say "$label passed in $took$waited." ;;
+  0) [ -e "$run/stuck" ] || say "$label passed in $took$waited." ;;
   70 | 129 | 130 | 137 | 143) say "$(no_result)" ;;
   *) say "$label failed with exit $status in $took$waited." ;;
 esac

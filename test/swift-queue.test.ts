@@ -216,11 +216,27 @@ describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
     assert.ok(!isRunning(helper))
   })
 
+  test("a command whose turn was killed before it started never starts", async () => {
+    const ran = join(dir, "ran")
+    const fake = join(dir, "bin")
+    mkdirSync(fake)
+    // Holds the command back, just before it says who it is, until this run's cleanup is over.
+    writeFileSync(join(fake, "ps"), `#!/bin/sh\nif [ "$2" = lstart= ]; then /bin/sleep 3; fi\nexec /bin/ps "$@"\n`)
+    chmodSync(join(fake, "ps"), 0o755)
+    const run = start(`touch ${ran}`, { PATH: `${fake}:${process.env.PATH}` })
+    await until(() => existsSync(join(dir, "holder")) && turnPid() > 0)
+    process.kill(turnPid(), "SIGKILL")
+    assert.notEqual(await run.ended, 0)
+    await sleep(4000)
+    assert.ok(!existsSync(ran))
+  })
+
   test("a ps that fails doesn't look like there's nothing left to stop", async () => {
     const flag = join(dir, "ps-fails")
     const fake = join(dir, "bin")
     mkdirSync(fake)
-    writeFileSync(join(fake, "ps"), `#!/bin/sh\nif [ -e ${flag} ] && [ "$1" = -axo ]; then exit 1; fi\nexec /bin/ps "$@"\n`)
+    const failed = join(dir, "ps-failed")
+    writeFileSync(join(fake, "ps"), `#!/bin/sh\nif [ -e ${flag} ] && [ "$1" = -axo ]; then touch ${failed}; exit 1; fi\nexec /bin/ps "$@"\n`)
     chmodSync(join(fake, "ps"), 0o755)
     const run = start(`${withStray} echo holding; wait`, { PATH: `${fake}:${process.env.PATH}` })
     await until(() => run.output().includes("holding"))
@@ -228,7 +244,7 @@ describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
     await until(() => isTracked(stray))
     writeFileSync(flag, "")
     run.child.kill("SIGTERM")
-    await sleep(1000)
+    await until(() => existsSync(failed))
     assert.ok(isRunning(stray))
     assert.ok(!lockIsFree())
     rmSync(flag)
@@ -236,6 +252,63 @@ describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
     assert.ok(!isRunning(stray))
     assert.ok(lockIsFree())
   })
+
+  const endings: Record<string, (run: { child: ChildProcess }, gate: string) => void> = {
+    "its command finishing": (_, gate) => writeFileSync(gate, ""),
+    "its command finishing with the watcher killed": (_, gate) => {
+      process.kill(watcherPid(), "SIGKILL")
+      writeFileSync(gate, "")
+    },
+    "SIGTERM to the wrapper": (run) => run.child.kill("SIGTERM"),
+    "SIGKILL to the whole foreground group": killGroup,
+    "SIGKILL to the group and the watcher": (run) => {
+      process.kill(watcherPid(), "SIGKILL")
+      killGroup(run)
+    },
+  }
+
+  for (const [name, end] of Object.entries(endings)) {
+    test(`a ps that keeps failing after ${name} holds up later runs until cleanup can be verified`, async () => {
+      const flag = join(dir, "ps-fails")
+      const gate = join(dir, "release")
+      const fake = join(dir, "bin")
+      mkdirSync(fake)
+      writeFileSync(join(fake, "ps"), `#!/bin/sh\nif [ -e ${flag} ] && [ "$1" = -axo ]; then exit 1; fi\nexec /bin/ps "$@"\n`)
+      chmodSync(join(fake, "ps"), 0o755)
+      const failing = { PATH: `${fake}:${process.env.PATH}` }
+      const first = start(`set -m; sleep 300 >/dev/null 2>&1 & echo "stray $!"; set +m; until [ -e ${gate} ]; do sleep 0.05; done; exit 0`, failing, true)
+      await until(() => first.output().includes("stray"))
+      const stray = strayPid(first.output())
+      await until(() => isTracked(stray))
+      writeFileSync(flag, "")
+      const exited = new Promise<number | null>((resolve) => first.child.on("exit", (code) => resolve(code)))
+      end(first, gate)
+      assert.notEqual(await exited, 0)
+      // With its watcher killed too, nothing's left to say so, and the command still has its output open until the next run stops it.
+      if (!name.includes("group and the watcher")) {
+        await first.ended
+        assert.match(first.output(), /isn't a pass/)
+      }
+      assert.doesNotMatch(first.output(), /passed in/)
+      assert.ok(isRunning(stray))
+      assert.ok(isTracked(stray))
+
+      const blocked = start("echo RAN", failing)
+      assert.equal(await blocked.ended, 69)
+      assert.doesNotMatch(blocked.output(), /^RAN$/m)
+      assert.match(blocked.output(), /did not run: an earlier run's processes can't be verified gone/)
+      assert.ok(isRunning(stray))
+      assert.ok(isTracked(stray))
+      assert.ok(lockIsFree())
+
+      rmSync(flag)
+      const next = start(`kill -0 ${stray} 2>/dev/null && echo OVERLAP || echo CLEAR`)
+      assert.equal(await next.ended, 0)
+      assert.match(next.output(), /^CLEAR$/m)
+      assert.ok(!isRunning(stray))
+      await until(() => readdirSync(dir).every((name) => !name.startsWith("job.")))
+    })
+  }
 
   test("a killed wait leaves nothing behind", async () => {
     const holder = holdLock()
