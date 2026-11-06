@@ -146,7 +146,7 @@ export function activityTitle(count: number, shown: number): string {
 }
 
 /** How much of a wallet's PnL rests on an estimate, or null when none does. */
-export const estimatedSentence = (micros: string, currency: CurrencyCode): string | null => (BigInt(micros) > 0n ? `${formatMoney(micros, currency)} of this is an estimate, from market prices.` : null)
+export const estimatedSentence = (micros: string, currency: CurrencyCode): string | null => (BigInt(micros) > 0n ? `${formatMoney(micros, currency)} of this is an estimate, from market prices or exchange rates.` : null)
 
 /** What a total leaves out, or null when it leaves out nothing. */
 export function excludedSentence(excluded: readonly { asset: string; reason: string }[]): string | null {

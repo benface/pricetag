@@ -54,6 +54,7 @@ final class Navigation {
         didSet { if section != oldValue { forgetDetails() } }
     }
     var chartRange: ChartRange = .all
+    var chartMetric: ChartMetric = .pnl
     /// The number being explained in the details.
     var target: ExplainTarget? {
         didSet { if target == nil, let oldValue { closedTarget = oldValue } }

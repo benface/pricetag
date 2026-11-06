@@ -172,7 +172,7 @@ struct SettingsView: View {
                     Button("Delete This Mac's Spending Money…", role: .destructive) { isConfirmingDelete = true }
                         .disabled(!hotWallet.canDelete)
                         .confirmationDialog("Delete this wallet's key?", isPresented: $isConfirmingDelete) {
-                            if hotWallet.settings.sweepDestination != nil {
+                            if hotWallet.settings.sweepDestination != nil, hotWallet.sweepPreview?.whyNothing == nil {
                                 Button("Sweep Everything to Savings First") { Task { await hotWallet.sweepEverything() } }
                             }
                             Button("Delete Forever", role: .destructive) { Task { await hotWallet.deleteWallet() } }
@@ -188,7 +188,7 @@ struct SettingsView: View {
             } footer: {
                 Text("The cap is \(hotWallet.display.whole(hotWallet.settings.capCeiling)) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build").\(hotWallet.display.isConverted ? " \(HotWalletWording.capFollowsRate(hotWallet.display.main))" : "")")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
         }
     }

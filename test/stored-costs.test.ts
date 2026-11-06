@@ -4,9 +4,10 @@ import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { USDC_ADDRESS, buildPricedLegs, openingLegs, type CurrencyCode, type LegRow, type RateRound } from "@pricetag/sdk/core"
 import { createApi } from "../server/app.ts"
-import { readPaidRates } from "../server/rates.ts"
+import { createRates, readPaidRates } from "../server/rates.ts"
 import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { answerSender, costKey, currenciesIn, emptyBook, enterExchangeCosts, type Book, type ExchangeWithdrawal, type Money } from "../src/core/book.ts"
+import { describeConversion } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { walletUrl } from "../src/ui/useWallet.ts"
@@ -190,11 +191,101 @@ describe("which rates a stored cost reads", () => {
     assert.deepEqual(asked, [{ currency: "CAD", blocks: [10] }])
   })
 
-  it("reads what arrived, not what left or what was already held, for a client that keeps its answers", async () => {
+  it("reads what arrived and what was already held, not what left, for a client that keeps its answers", async () => {
     const { asked, readRates } = asks()
     const held = { ...w, legs: [...openingLegs({ blockNum: 4, amounts: { USDC: "5" } }, timeOf(5)), ...w.legs] }
     await readPaidRates(readRates, held, "USD", [], ["CAD", "USD"])
-    assert.deepEqual(asked, [{ currency: "CAD", blocks: [10, 20] }])
+    assert.deepEqual(asked, [{ currency: "CAD", blocks: [10, 20, 4] }])
+  })
+
+  it("reads the rate shown at the start of the history for a USD answer about what was held, and nothing with no such answer", async () => {
+    const held = { ...w, legs: [...openingLegs({ blockNum: 4, amounts: { USDC: "5" } }, timeOf(5)), ...w.legs] }
+    const client = asks()
+    await readPaidRates(client.readRates, held, "CAD", [], ["USD"])
+    assert.deepEqual(client.asked, [{ currency: "CAD", blocks: [4] }])
+    const none = asks()
+    assert.equal(await readPaidRates(none.readRates, held, "CAD", [emptyBook()]), undefined)
+    assert.deepEqual(none.asked, [])
+  })
+})
+
+describe("a cost entered for what the wallet already held", () => {
+  const blockOf = 4
+  const held = openingLegs({ blockNum: blockOf, amounts: { USDC: (100n * E6).toString() } }, timeOf(blockOf))[0]!
+  const key = costKey(ME, held.id)
+  const heldWallet = (changes: Partial<WalletResponse> = {}): WalletResponse => {
+    const base = wallet(ME, [])
+    return { ...base, legs: [held], balances: { blockNum: 100, amounts: { USDC: held.delta } }, ...changes }
+  }
+  const cost = (money: Money, changes: Partial<WalletResponse> = {}) => foldBook(heldWallet(changes), [], "average", { ...emptyBook(), costs: { [key]: money } }).legs[0]!
+  const paidRates = { CAD: { [blockOf]: round("75000000", blockOf) } }
+
+  it("stays exact in the currency it was entered in", () => {
+    const leg = cost(CAD_90, { currency: "CAD", rates: { byBlock: {}, latest: null } })
+    assert.equal(leg.costMicros, "90000000")
+    assert.equal(leg.costLabel, "self-reported")
+    assert.equal(leg.estimated, undefined)
+    assert.equal(describeConversion(leg, "CAD"), null)
+  })
+
+  it("converts at the rate when the history starts, and says that's an estimate", () => {
+    const leg = cost(CAD_90, { paidRates })
+    assert.equal(leg.costMicros, "67500000")
+    assert.equal(leg.costLabel, "self-reported")
+    assert.equal(leg.estimated, true)
+    assert.match(describeConversion(leg, "USD") as string, /^You entered CA\$90\.00\. The day you paid isn't known, .*estimate\.$/)
+  })
+
+  it("reads a USD cost in the currency shown at that same rate", () => {
+    const leg = cost({ micros: "75000000", currency: "USD" }, { currency: "CAD", rates: { byBlock: {}, latest: null }, paidRates })
+    assert.equal(leg.costMicros, "100000000")
+    assert.equal(leg.estimated, true)
+  })
+
+  it("counts it as estimated in what's held", () => {
+    const { positions } = foldBook(heldWallet({ paidRates }), [], "average", { ...emptyBook(), costs: { [key]: CAD_90 } })
+    assert.equal(positions[0]!.values.estimatedCostMicros, "67500000")
+  })
+
+  it("stays unknown with no rate, rather than guessing", () => {
+    const leg = cost(CAD_90)
+    assert.equal(leg.costLabel, "unknown")
+    assert.equal(leg.costMicros, null)
+    assert.equal(cost(CAD_90, { paidRates: { CAD: { [blockOf]: { answer: "75000000", updatedAt: Date.parse(timeOf(blockOf)) / 1000 - 4 * 24 * 60 * 60 } } } }).costMicros, null)
+  })
+
+  it("only asks the live reader for that block when something stored needs it", async () => {
+    const asked: number[][] = []
+    const readRates = createRates(async (_currency, blocks) => {
+      asked.push([...blocks])
+      return new Map(blocks.map((block) => [block, round("75000000", block)]))
+    })
+    const rates = await readPaidRates(readRates, heldWallet(), "USD", [{ ...emptyBook(), costs: { [key]: CAD_90 } }])
+    assert.equal(rates?.CAD?.[blockOf]?.answer, "75000000")
+    assert.deepEqual(asked, [[blockOf, 100]])
+    assert.equal(await readPaidRates(readRates, heldWallet(), "USD", [emptyBook()]), undefined)
+    assert.deepEqual(asked, [[blockOf, 100]])
+  })
+})
+
+describe("the demo wallet's opening DAI, saved at CA$90", () => {
+  const book: Book = { ...emptyBook(), costs: { [costKey(DEMO_WALLET.address, "opening:DAI")]: CAD_90 } }
+  const dai = (wallet: WalletResponse) => foldBook(wallet, [], "average", book).legs.find((leg) => leg.id === "opening:DAI")!
+
+  it("is CA$90 in CAD, and an estimate in USD and EUR", async () => {
+    const cad = await readPaidRates(async (other) => demoRates(other), DEMO_WALLET, "CAD", [book])
+    const inCad = dai({ ...DEMO_WALLET, currency: "CAD", rates: demoRates("CAD"), ...(cad ? { paidRates: cad } : {}) })
+    assert.deepEqual([inCad.costLabel, inCad.costMicros, inCad.estimated], ["self-reported", "90000000", undefined])
+
+    const usd = await readPaidRates(async (other) => demoRates(other), DEMO_WALLET, "USD", [book])
+    const inUsd = dai({ ...DEMO_WALLET, ...(usd ? { paidRates: usd } : {}) })
+    assert.deepEqual([inUsd.costLabel, inUsd.estimated], ["self-reported", true])
+    assert.equal(inUsd.costMicros, "66870000")
+
+    const eur = await readPaidRates(async (other) => demoRates(other), DEMO_WALLET, "EUR", [book])
+    const inEur = dai({ ...DEMO_WALLET, currency: "EUR", rates: demoRates("EUR"), ...(eur ? { paidRates: eur } : {}) })
+    assert.deepEqual([inEur.costLabel, inEur.estimated], ["self-reported", true])
+    assert.ok(inEur.costMicros)
   })
 })
 

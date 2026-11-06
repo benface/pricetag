@@ -56,19 +56,21 @@ public struct ExplanationPane: View {
                 VStack(alignment: .leading, spacing: 8) {
                     if !hasMetricPicker {
                         Text(explanation.title).font(.headline).help(Wording.pnlHelp(for: explanation.title) ?? "")
+                            .accessibilityAddTraits(.isHeader)
                     }
                     if let value = explanation.value {
                         LiveNumber(value).font(.sheetTitle).help(Wording.pnlHelp(for: explanation.title) ?? "")
+                            .accessibilityLabel(Spoken.number(explanation.title, value, isLive: !store.feed.isStale))
                     } else if !isBalanceCheck {
                         WarningText("Unavailable").font(.title3.weight(.semibold))
                     }
                     if let sourceValue = explanation.sourceValue {
-                        Text(sourceValue).font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                        Text(sourceValue).font(.callout).monospacedDigit().secondaryText()
                     }
                     ForEach(explanation.lines, id: \.self) { line in
                         Text(line)
                             .font(.callout)
-                            .foregroundStyle(.secondary)
+                            .secondaryText()
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                             .help(Wording.pnlHelp(for: line) ?? "")
@@ -153,7 +155,7 @@ public struct LegRow: View {
                 Text(leg.summary)
                     .font(isFee ? .callout : .body)
                     .fontWeight(isFee ? .regular : .medium)
-                    .foregroundStyle(isFee ? .secondary : .primary)
+                    .foregroundStyle(isFee ? Tone.secondary.style : AnyShapeStyle(.primary))
                     .fixedSize(horizontal: false, vertical: true)
                     .help(Wording.pnlHelp(for: leg.effect) ?? "")
                 Spacer(minLength: 8)
@@ -181,7 +183,7 @@ public struct LegRow: View {
                     WarningText(unknown).font(.callout).fixedSize(horizontal: false, vertical: true)
                 }
                 if let note = leg.priceNote {
-                    Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(note).font(.caption).secondaryText().fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 14) {
                     proofButton
@@ -226,18 +228,19 @@ public struct LegRow: View {
             .buttonStyle(.plain)
             .foregroundStyle(.tint)
             .font(.caption)
+            .accessibilityValue(showsProof ? "Showing" : "Hidden")
         }
     }
 
     /// How the sentence was worked out, the transaction, and where its price comes from. Proof stays one click away, since the demo shows it.
     private var details: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("\(leg.effect).").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            Text("\(leg.effect).").font(.caption).secondaryText().fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             if let netting = leg.netting {
-                Text(netting).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                Text(netting).font(.caption).secondaryText().fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             }
             if let conversion = leg.conversion {
-                Text(conversion).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                Text(conversion).font(.caption).secondaryText().fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             }
             if leg.hasTransaction {
                 Text("Block \(Format.block(leg.blockNum)) · \(Format.shortHash(leg.txHash))")
@@ -273,6 +276,7 @@ public struct LegRow: View {
         if let price = leg.priceMicros, let source = leg.priceSource {
             Tag("\(Format.price(price, currency)) · \(Wording.priceSource(source))")
                 .help("The price per \(leg.asset) at this block. Proof says where it comes from.")
+                .accessibilityLabel("Price, \(Format.price(price, currency)), \(Wording.priceSource(source))")
         } else {
             Tag("No price", isWarning: true)
         }
@@ -299,7 +303,7 @@ struct Tag: View {
             .font(.caption.weight(.medium))
             .monospacedDigit()
             .lineLimit(1)
-            .foregroundStyle(isWarning ? Tone.warning.style : AnyShapeStyle(.secondary))
+            .foregroundStyle(isWarning ? Tone.warning.style : Tone.secondary.style)
     }
 }
 

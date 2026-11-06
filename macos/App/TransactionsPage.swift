@@ -229,7 +229,8 @@ private struct TransactionsTable: View {
                 if let amount = item.amountText(currency) {
                     LiveNumber(amount, tone: item.amount?.micros == nil ? .secondary : .neutral)
                         .lineLimit(1)
-                        .opacity(isLive ? 1 : 0.55)
+                        .stale(!isLive)
+                        .accessibilityLabel(Spoken.number("Amount", amount, isLive: isLive))
                         .tableCell()
                 } else {
                     dash
@@ -243,8 +244,9 @@ private struct TransactionsTable: View {
                 if let gain = item.gainText(currency) {
                     LiveNumber(gain, tone: item.gain?.micros == nil ? .secondary : isLive ? Tone(signed: item.gain?.micros) : .neutral)
                         .lineLimit(1)
-                        .opacity(isLive ? 1 : 0.55)
+                        .stale(!isLive)
                         .help(Wording.realizedHelp)
+                        .accessibilityLabel(Spoken.number("Gain", gain, isLive: isLive))
                         .updatingMark()
                         .tableCell()
                 } else {

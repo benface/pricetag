@@ -365,8 +365,8 @@ struct MainWindow: View {
                 .fixedSize(horizontal: false, vertical: true)
             PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
                 .arrives()
-            PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange) { navigation.target = .transaction($0) }
-                .frame(height: portfolio.hasChartableData && !portfolio.isTooNewToChart ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
+            PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange, metric: $navigation.chartMetric) { navigation.target = .transaction($0) }
+                .frame(height: portfolio.canChart(navigation.chartMetric) ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
             HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, navigation: navigation)
             HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
         }
@@ -376,7 +376,7 @@ struct MainWindow: View {
 
     /// What can add or remove a whole block of the page.
     private func pageShape(_ portfolio: Portfolio) -> [Bool] {
-        [portfolio.attention == nil, portfolio.hasChartableData && !portfolio.isTooNewToChart, store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
+        [portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
     }
 
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
@@ -640,9 +640,17 @@ private struct CompactHolding: View {
         }
         .lineLimit(1)
         .padding(.vertical, 7)
-        .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
+        .stale(!isLive || !position.isHeld)
         .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(HoldingRow.spokenLabel(
+            position,
+            currency,
+            isLive: isLive,
+            amount: Format.amount(position.values.qty, decimals: position.decimals),
+            price: position.price.map { Format.estimate(Format.price($0.micros, currency), position.estimates.value) },
+            returnText: position.isHeld ? position.returnBps.map { Format.estimate(Format.percent(bps: $0), position.estimates.unrealized) } : nil
+        ))
     }
 
     private var amountAtPrice: String {
@@ -740,12 +748,12 @@ private struct HoldingsTable: View {
                 HStack(spacing: 5) {
                     Text(position.asset).fontWeight(.medium)
                     if let note = position.note {
-                        Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(note).font(.caption).secondaryText().lineLimit(1)
                     }
                     // Once per row, however many of its numbers it affects. A balance that matches says nothing.
                     balanceCheck(position)
                 }
-                .opacity(position.isHeld ? 1 : 0.6)
+                .stale(!position.isHeld)
                 .help(breakdown(position) ?? "")
                 .tableCell()
             }
@@ -877,7 +885,7 @@ private struct HoldingsTable: View {
     }
 
     private var dash: some View {
-        Text("—").foregroundStyle(.tertiary).tableCell()
+        Text("—").foregroundStyle(.tertiary).accessibilityLabel("None").tableCell()
     }
 
     private func balanceCheck(_ position: Position) -> some View {
@@ -913,12 +921,12 @@ private struct HoldingsTable: View {
                 .lineLimit(1)
                 // A long amount gets smaller rather than losing digits.
                 .minimumScaleFactor(0.7)
-                .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
+                .stale(!isLive || !position.isHeld)
                 .justKnown(justKnown.contains(position.asset) && (metric == .average || metric == .unrealized || metric == .return))
         }
         .buttonStyle(NumberButtonStyle())
         .help((text == Wording.unknown ? unknownIn(position) : nil) ?? metric.help ?? "")
-        .accessibilityLabel("\(position.asset) \(metric.label), \(text)")
+        .accessibilityLabel(Spoken.number("\(position.asset) \(metric.label)", text, isLive: isLive))
         .tableCell()
     }
 }

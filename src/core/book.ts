@@ -111,8 +111,16 @@ export const linkedWallets = (book: Book) => [...new Set([...Object.entries(book
  */
 export const isOwnWallet = (book: Book, { address, mode }: { address: string; mode?: string }) => mode === "demo" || (book.linked?.length ?? 0) > 0 || linkedWallets(book).includes(normalizeAddress(address))
 
-/** The user's wallets a read of this one goes with. A wallet that isn't theirs has nothing to do with them. */
-export const walletsBehind = (book: Book, wallet: { address: string; mode?: string }) => (isOwnWallet(book, wallet) ? linkedWallets(book) : [])
+const isDemoAddress = (address: string) => address === DEMO_ADDRESS || address === DEMO_SAVINGS_ADDRESS
+
+/** Whether this is one of the demo's fixtures. One book answers for both, but demo data and real data never mix. */
+export const isDemoWallet = (address: string) => isDemoAddress(normalizeAddress(address))
+
+/** The user's wallets a read of this one goes with. A wallet that isn't theirs has nothing to do with them, and the demo only goes with its own. */
+export const walletsBehind = (book: Book, wallet: { address: string; mode?: string }) => (isOwnWallet(book, wallet) ? linkedWallets(book).filter((address) => isDemoAddress(address) === isDemoWallet(wallet.address)) : [])
+
+/** The other wallets to read alongside the one on screen. Until it has loaded nothing says which side it's on, so none. */
+export const walletsToRead = (book: Book, shown: string | null, sender: string | null) => (shown === null ? [] : [...new Set([...linkedWallets(book), ...(sender ? [sender] : [])])].filter((address) => address !== shown && isDemoWallet(address) === isDemoWallet(shown)))
 
 const plainRecord = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
 
@@ -213,7 +221,7 @@ export function parseBook(value: unknown): Book | null {
  * another, and neither does the demo, whose wallets nobody owns even after answering for them.
  */
 export function proofOwner(book: Book, address: string, current: string): string {
-  const others = linkedWallets(book).filter((wallet) => wallet !== normalizeAddress(address) && wallet !== DEMO_ADDRESS && wallet !== DEMO_SAVINGS_ADDRESS)
+  const others = linkedWallets(book).filter((wallet) => wallet !== normalizeAddress(address) && !isDemoAddress(wallet))
   return others.find((wallet) => wallet === normalizeAddress(current)) ?? others[0] ?? normalizeAddress(address)
 }
 
