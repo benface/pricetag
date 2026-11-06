@@ -379,6 +379,12 @@ function readTokenActivityFrom(query: Query, dataset: string) {
   }
 }
 
+/** How far `token_trades` has got, which is its own, since it's its own dataset with its own job. */
+function tokenTradesThrough(query: Query, baseDataset: string, dataset: string) {
+  const { processedThrough } = datasetReader(query, { baseDataset, dataset })
+  return (after: number, head: number) => processedThrough(after, head, ["token_trades"])
+}
+
 /**
  * The SDK's `datasetSource`, plus what only working out a cost needs: who was on the other side, notes, and market prices.
  * Pricing rules of one wallet history pass the same `shared`, so only what a rule changes is read for each.
@@ -393,7 +399,7 @@ export function resolvingSource(query: Query, config: { baseDataset: string; dat
     readNotes: shared.readNotes,
     readEthBalances: shared.readEthBalances,
     readFeedRounds: config.feedsDataset ? updateFeedRounds(query, { baseDataset: config.baseDataset, feedsDataset: config.feedsDataset }, readFeedRoundsAt(query, config)) : readFeedRoundsAt(query, config),
-    ...(config.tokensDataset ? { readTokenActivity: readTokenActivityFrom(query, config.tokensDataset) } : {}),
+    ...(config.tokensDataset ? { readTokenActivity: readTokenActivityFrom(query, config.tokensDataset), tokenActivityThrough: tokenTradesThrough(query, config.baseDataset, config.tokensDataset) } : {}),
 
     async readWindow(address, from, to) {
       const legs = await shared.readLegs(address, from, to)
