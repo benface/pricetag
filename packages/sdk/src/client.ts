@@ -6,10 +6,11 @@ import { ORACLE_TABLES, SWAP_TABLES, WALLET_TABLES, datasetReader, datasetSource
 import type { Method } from "./fold.ts"
 import { answerToMicros, buildPricedLegs, type LegRow, type PricedLeg, type PriceSource, type Reference } from "./legs.ts"
 import { followChain, type FollowConfig, type Via } from "./live.ts"
-import { latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
+import { limitOldestFirst, latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
 import { createL1FeeReader, type ReadL1Fees } from "./receipts.ts"
 import { ASSETS, TOKENS, isAddress, normalizeAddress, tokenByAddress, type Token } from "./tokens.ts"
 import { describeMissing, foldWallet, hasStarted, type FoldedWallet, type WalletData } from "./wallet.ts"
+import { createRowBudget, oldestFirstLegsThatFit, rowsThatFit } from "./memory.ts"
 import { createWallets } from "./wallets.ts"
 
 export type PricetagConfig = {
@@ -34,6 +35,11 @@ export type PricetagConfig = {
   timeoutMs?: number | undefined
   /** Gets slow queries, and reads that failed and will be retried. It defaults to `console`. */
   logger?: Logger | undefined
+  /**
+   * The most rows of history to hold at once, across every wallet. Reading a wallet with more throws `WalletTooBigError`
+   * rather than run out of memory. It defaults to what fits in this process's heap, about 10 KB a row.
+   */
+  maxWalletRows?: number | undefined
 }
 
 /** Blocks to read, inclusive. Without `from`, it starts at the config's `startBlock`. Without `to`, it reads up to the chain's head. */
@@ -139,12 +145,13 @@ function findToken(token: string): Token {
 
 export function createPricetag(config: PricetagConfig) {
   if (!config.url) throw new Error("Pricetag needs Amp's query URL")
+  limitOldestFirst(oldestFirstLegsThatFit())
   const { timeoutMs, logger, rpcUrl } = config
   const stream = createRangeStream(config.url, config.token || undefined, (config.network ?? DEFAULT_NETWORK).replaceAll("_", "-"))
   return pricetagClient(createQuery(config.url, config.token || undefined, { timeoutMs, logger }), { ...config, stream, readL1Fees: rpcUrl ? createL1FeeReader(rpcUrl, fetch, undefined, logger) : undefined })
 }
 
-type ClientConfig = Pick<PricetagConfig, "dataset" | "baseDataset" | "startBlock" | "network" | "logger"> & {
+type ClientConfig = Pick<PricetagConfig, "dataset" | "baseDataset" | "startBlock" | "network" | "logger" | "maxWalletRows"> & {
   readL1Fees?: ReadL1Fees | undefined
   /** Without one, `watchWallet` polls. */
   stream?: StreamRanges | undefined
@@ -157,12 +164,13 @@ export function pricetagClient(query: Query, config: ClientConfig) {
   const { startBlock, readL1Fees, logger = console } = config
   if (startBlock !== undefined && !isBlock(startBlock)) throw new Error(`Bad start block: ${startBlock}. It's the block number the dataset starts from.`)
   const baseDataset = config.baseDataset ?? "edgeandnode/base_mainnet@0.0.2"
-  const source = datasetSource(query, { dataset: config.dataset, baseDataset, startBlock: startBlock ?? null, network: config.network ?? DEFAULT_NETWORK })
-  const reader = datasetReader(query, { dataset: config.dataset, baseDataset })
+  const maxWalletRows = config.maxWalletRows ?? rowsThatFit()
+  const source = datasetSource(query, { dataset: config.dataset, baseDataset, startBlock: startBlock ?? null, network: config.network ?? DEFAULT_NETWORK, maxWalletRows })
+  const reader = datasetReader(query, { dataset: config.dataset, baseDataset, maxWalletRows })
 
   // Read just before a wallet is. A wallet's history stays in memory between calls, so each call only reads what's new.
   let chainHead: Head | null = null
-  const wallets = createWallets(source, async () => chainHead as Head, readL1Fees ?? (async () => new Map()), config.logger)
+  const wallets = createWallets(source, async () => chainHead as Head, readL1Fees ?? (async () => new Map()), config.logger, { budget: createRowBudget(maxWalletRows) })
 
   const l1FeeStatus = (unknownTxs: readonly string[]): L1FeeStatus => (unknownTxs.length === 0 ? "read" : readL1Fees ? "pending" : "no rpc url")
 

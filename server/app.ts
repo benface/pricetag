@@ -2,8 +2,8 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createWallets, describeError, followChain, followRawSql, followSql, readBlockHashes, readHeadMark, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
+import { OldestFirstTooBigError, limitOldestFirst, currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { DEFAULT_RPC_URL, WalletTooBigError, WalletsBusyError, createL1FeeReader, createQuery, createRangeStream, createRowBudget, createWallets, describeError, followChain, followRawSql, followSql, oldestFirstLegsThatFit, readBlockHashes, readHeadMark, rowsThatFit, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -76,8 +76,17 @@ function pinned(dataset: string, hash: string | undefined): string {
   return `${dataset.split("@")[0]}@${hash}`
 }
 
+/** The most rows of wallet history this server holds at once: `PRICETAG_MAX_WALLET_ROWS`, or what fits in its heap. */
+function maxWalletRowsOf(env: Env): number {
+  if (!env.PRICETAG_MAX_WALLET_ROWS) return rowsThatFit()
+  const rows = Number(env.PRICETAG_MAX_WALLET_ROWS)
+  if (!Number.isSafeInteger(rows) || rows <= 0) throw new Error("PRICETAG_MAX_WALLET_ROWS must be a positive whole number")
+  return rows
+}
+
 export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs; follow: FollowConfig; shared?: SharedReads; approvals?: Approvals } | null {
   if (!query) return null
+  const maxWalletRows = maxWalletRowsOf(env)
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
   const calls = feedRounds(query, { baseDataset, network })
@@ -100,10 +109,10 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
     if (pin) {
       // The same SQL for both. The header alone says which prices it reads, and the transactions always come from the
       // first, so they can't differ.
-      const shared = sharedReads(query.aliased({ pricetag: pin }), { baseDataset, dataset: "pricetag", network })
+      const shared = sharedReads(query.aliased({ pricetag: pin }), { baseDataset, dataset: "pricetag", network, maxWalletRows })
       const ruleSource = (id: string, name: string, hash: string | undefined, priceDataset: string): RuleSource => ({
         rule: { id, ...RULE_TEXT[id]!, dataset: name, hash: hash as string },
-        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", startBlock, network }, shared),
+        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", startBlock, network, maxWalletRows }, shared),
       })
       const rules = [
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, pin),
@@ -112,13 +121,13 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
       const approvals = createApprovals(query.aliased({ pricetag: pin }), { baseDataset, dataset: { reference: "pricetag", name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
       return { source: rules[0]!.source, rules, readRates, proofs, follow: followOf(followSql(pin)), shared, approvals }
     }
-    const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network })
+    const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network, maxWalletRows })
     const approvals = createApprovals(query, { baseDataset, dataset: { reference: env.PRICETAG_DATASET, name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
-    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET)), shared, approvals }
+    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network, maxWalletRows }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET)), shared, approvals }
   }
   const historyBlocks = env.PRICETAG_HISTORY_BLOCKS ? Number(env.PRICETAG_HISTORY_BLOCKS) : null
   if (historyBlocks !== null && (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0)) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
-  const source = rawSource(query, { baseDataset, network, historyBlocks })
+  const source = rawSource(query, { baseDataset, network, historyBlocks, maxWalletRows })
   const approvals = createApprovals(query, { baseDataset, dataset: null, network, historyFrom: (head) => source.historyFrom?.(head) ?? head })
   return { source, readRates, proofs, follow: followOf(followRawSql(baseDataset)), approvals }
 }
@@ -150,6 +159,9 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 
 /** Query errors can quote our SQL or the endpoint. The browser gets a fixed message, and the detail stays in the server log. */
 function sendAmpError(res: ServerResponse, error: unknown, message = "Couldn't read this wallet's data.") {
+  if (error instanceof WalletTooBigError) return sendJson(res, 413, { error: "This wallet has too much history for this server to read, so there are no numbers to show for it." })
+  if (error instanceof OldestFirstTooBigError) return sendJson(res, 413, { error: "This wallet has too much history to work out by oldest first on this server. Average cost still works." })
+  if (error instanceof WalletsBusyError) return sendJson(res, 429, { error: "This server is busy reading other very large wallets. Try again in a minute." })
   console.error("Amp query failed:", describeError(error))
   sendJson(res, 502, { error: message })
 }
@@ -209,6 +221,7 @@ export type ApiOptions = {
 
 export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env), { clientIp = () => null, maxWallets }: ApiOptions = {}) {
   const source = created?.source ?? null
+  limitOldestFirst(oldestFirstLegsThatFit())
 
   let head: Head | null = null
   const subscribers = new Set<ServerResponse>()
@@ -262,9 +275,10 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL), () => head?.blockNum ?? null)
-  const wallets = source ? createWallets(source, pollHead, readL1Fees, console, { maxWallets }) : null
+  const budget = createRowBudget(maxWalletRowsOf(env))
+  const wallets = source ? createWallets(source, pollHead, readL1Fees, console, { maxWallets, budget }) : null
   // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
-  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, pollHead, readL1Fees, console, { maxWallets }) }))
+  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, pollHead, readL1Fees, console, { maxWallets, budget }) }))
 
   /**
    * Reads a wallet, or answers the request with why it can't.
@@ -390,6 +404,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const ruled = (wallet: WalletResponse): WalletResponse => (rule ? { ...wallet, rule: rule.rule.id, ruleNote: rule.note } : wallet)
     const failed = new Set<string>()
     const done = new Map<string, WalletResponse>()
+    /** Why a wallet was refused, which says more than that it failed. */
+    let refusal: unknown = null
     const job = async (address: string): Promise<void> => {
       let wallet: WalletResponse | null
       try {
@@ -397,6 +413,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         if (fresh) linkedFailures.delete(address)
       } catch (error) {
         console.error("Wallet read failed:", describeError(error))
+        if (error instanceof WalletTooBigError || error instanceof WalletsBusyError) refusal = error
         linkedFailures.add(address)
         failed.add(address)
         return
@@ -447,7 +464,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const read = addresses.flatMap((address) => answer.get(address) ?? [])
     const unread = { reading: addresses.filter((address) => !answer.has(address) && !failed.has(address)), failed: addresses.filter((address) => !answer.has(address) && failed.has(address)) }
     if (read.length === 0 && fresh && unread.reading.length === 0) {
-      sendJson(res, 502, { error: "None of your wallets could be read." })
+      if (refusal) sendAmpError(res, refusal)
+      else sendJson(res, 502, { error: "None of your wallets could be read." })
       return null
     }
     return { read, unread }
@@ -715,6 +733,17 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    try {
+      return await route(req, res)
+    } catch (error) {
+      // Folds aren't all inside a read's `try`, and every one of them can ask for this.
+      if (!(error instanceof OldestFirstTooBigError)) throw error
+      sendAmpError(res, error)
+      return true
+    }
+  }
+
+  async function route(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = pathOf(req)
     if (path === null) {
       sendJson(res, 400, { error: "Bad request" })

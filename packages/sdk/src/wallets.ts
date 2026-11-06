@@ -4,6 +4,7 @@
 import { describeError, type Logger } from "./amp.ts"
 import { LAST_2S_BLOCK, blockBefore, msBetweenBlocks, timestampOfBlock } from "./chain.ts"
 import { answerToMicros, buildPricedLegs, creditUnseenEth, derivePricedRows, isUnwrapClaim, oneWaySendBalanceBlocks, payerOf, settleUnwraps, unseenEthSearchBlocks, unwrapBalanceBlocks, type EthPayer, type GasUnknownTx, type LegRow, type PayoutTx, type PricedRow, type Reference } from "./legs.ts"
+import { WalletTooBigError, createRowBudget, rowsThatFit, type RowBudget } from "./memory.ts"
 import { MARKET_MAX_AGE_MS, markNeeds, marketPrice, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
 import type { CostNote } from "./notes.ts"
 import { feedPrice, foldPositions, latestPrices, type FeedRound, type Head, type LatestPrices } from "./portfolio.ts"
@@ -55,6 +56,8 @@ const REORG_MS = 60_000
 /** The newest block past any reorg, seen from `tip`. */
 export const settledThrough = (tip: number) => blockBefore(tip, REORG_MS)
 const MAX_WALLETS = 20
+/** Wallets refused as too big, remembered so asking again costs no reads. */
+const MAX_REFUSED = 1_000
 /** A busy wallet catches up over a few refreshes, and until then the swaps left say they aren't confirmed. */
 const MAX_ETH_BALANCES_PER_READ = 400
 /** Each block costs a scan of its transactions' calldata, so a wallet with many of these learns who to ask about them over a few refreshes. */
@@ -307,10 +310,22 @@ function headAsOf(head: Head, to: number | undefined): Head {
 
 const keyOf = (address: string, { from, to }: WalletRange) => `${address.toLowerCase()}:${from ?? ""}:${to ?? ""}`
 
-/** `maxWallets`: how many reads to keep, the oldest going first. A server that many people share wants more than one Mac does. */
-export function createWallets(source: Source, currentHead: () => Promise<Head>, readL1Fees: ReadL1Fees, logger: Logger = console, { maxWallets = MAX_WALLETS }: { maxWallets?: number | undefined } = {}) {
+/**
+ * `maxWallets`: how many reads to keep, the oldest going first. A server that many people share wants more than one Mac does.
+ * `budget`: the rows of history that fit in memory, which pricing rules reading the same wallets share.
+ */
+export function createWallets(source: Source, currentHead: () => Promise<Head>, readL1Fees: ReadL1Fees, logger: Logger = console, { maxWallets = MAX_WALLETS, budget = createRowBudget(rowsThatFit()) }: { maxWallets?: number | undefined; budget?: RowBudget | undefined } = {}) {
   const wallets = new Map<string, Cached>()
   const inflight = new Map<string, Promise<Cached>>()
+  /** Its history only grows, so a wallet that's too big stays too big, short of a reorg. */
+  const refused = new Set<string>()
+  budget.join({
+    heldRows: () => [...wallets].reduce((sum, [key, wallet]) => sum + (inflight.has(key) ? 0 : wallet.rows.length), 0),
+    evictOldest() {
+      for (const key of wallets.keys()) if (!inflight.has(key)) return wallets.delete(key)
+      return false
+    },
+  })
   const reorgs: Reorg[] = []
   /** How many reorgs have been told about. Prices are read outside a wallet's own read too, and one that crossed a reorg isn't kept. */
   let rewinds = 0
@@ -592,7 +607,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     unreadPayerBlocks(address, wallet).length === 0 &&
     !hasMarketReadsLeft(address, wallet, chain.blockNum)
 
-  async function refresh(address: string, key: string, range: WalletRange): Promise<Cached> {
+  async function refresh(address: string, key: string, range: WalletRange, reservation: { release?: () => void }): Promise<Cached> {
     const chain = await currentHead()
     const head = headAsOf(chain, range.to)
     const cached = wallets.get(key)
@@ -624,6 +639,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       replacedFrom = readFrom
       const window = await source.readWindow(address, readFrom, coveredTo)
       rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
+      if (rows.length > budget.maxRows) throw new WalletTooBigError(budget.maxRows)
+      reservation.release = budget.reserve(rows.length)
       for (const block of known.keys()) if (block >= readFrom) known.delete(block)
       for (const block of ethBalances.keys()) if (block >= readFrom) ethBalances.delete(block)
       for (const block of ethPayers.keys()) if (block >= readFrom) ethPayers.delete(block)
@@ -760,9 +777,23 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     async get(address: string, range: WalletRange = {}): Promise<WalletData> {
       const account = address.toLowerCase()
       const key = keyOf(account, range)
+      if (refused.has(key)) throw new WalletTooBigError(budget.maxRows)
       let pending = inflight.get(key)
       if (!pending) {
-        pending = refresh(account, key, range).finally(() => inflight.delete(key))
+        const reservation: { release?: () => void } = {}
+        pending = refresh(account, key, range, reservation)
+          .catch((error: unknown) => {
+            if (error instanceof WalletTooBigError) {
+              wallets.delete(key)
+              refused.add(key)
+              if (refused.size > MAX_REFUSED) refused.delete(refused.keys().next().value as string)
+            }
+            throw error
+          })
+          .finally(() => {
+            inflight.delete(key)
+            reservation.release?.()
+          })
         inflight.set(key, pending)
       }
       return responseOf(account, await pending)
@@ -849,6 +880,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
      */
     async rewind(block: number, tip: number): Promise<void> {
       rewinds += 1
+      refused.clear()
       reorgs.push({ from: block, oldTip: Math.max(tip, ...[...wallets.values()].flatMap((wallet) => [wallet.latest.blockNum, wallet.tablesReached])) })
       while (inflight.size > 0) await Promise.allSettled(inflight.values())
       forgetPricesFrom(block)

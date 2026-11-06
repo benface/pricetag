@@ -6,6 +6,7 @@ import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type Blo
 import { blockBefore } from "./chain.ts"
 import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
 import type { LegRow, PayoutTx, PricedRow, Reference } from "./legs.ts"
+import { WalletTooBigError } from "./memory.ts"
 import type { Head } from "./portfolio.ts"
 import type { PriceFeed } from "./tokens.ts"
 import type { Source } from "./wallets.ts"
@@ -130,7 +131,8 @@ export const SWAP_TABLES = ["legs", "unlisted_legs", "priced_legs"]
 /** The tables a pricing rule decides. Everything else is what happened on the chain, whichever rule prices it. */
 const PRICE_TABLES = ["priced_legs", "reference_prices"]
 
-export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined }) {
+/** `maxWalletRows`: a wallet with more rows than this is refused, without loading more of them than that. */
+export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; maxWalletRows?: number | undefined }) {
   const ds = `"${config.dataset}"`
   // A fork of the pricing rule only needs the tables the rule reaches, so these can come from somewhere else.
   const prices = `"${config.priceDataset ?? config.dataset}"`
@@ -144,8 +146,13 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   async function readLegs(address: string, from: number, to: number) {
     const me = hexOf(address)
     const range = `block_num BETWEEN ${from} AND ${to}`
-    const legRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
-    const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
+    const max = config.maxWalletRows
+    // One past the most it can use, which is how it knows there's more without loading it all.
+    const limit = (rows: number) => (max === undefined ? "" : ` LIMIT ${rows + 1}`)
+    const legRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'${limit(max ?? 0)}`)
+    if (max !== undefined && legRows.length > max) throw new WalletTooBigError(max)
+    const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'${limit((max ?? 0) - legRows.length)}`)
+    if (max !== undefined && legRows.length + unlistedRows.length > max) throw new WalletTooBigError(max)
     const rows = legRows.map(toLegRow)
     return {
       // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
@@ -283,7 +290,7 @@ export async function readPayoutTxsAt(query: Query, baseDataset: string, address
   return txs
 }
 
-export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock: number | null; network: string }): Source {
+export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock: number | null; network: string; maxWalletRows?: number | undefined }): Source {
   return {
     mode: "dataset",
     startBlock: config.startBlock,

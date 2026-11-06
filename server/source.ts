@@ -4,7 +4,7 @@
 // Every query is bounded by block, because staging is shared.
 
 import { CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, MAX_ROUND_AGE_SECONDS, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type CurrencyCode, type FeedRound, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
-import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, readPayoutTxsAt, settledThrough, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
+import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, readPayoutTxsAt, settledThrough, WalletTooBigError, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRound, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
 
 /** A currency's answer at each block, leaving out blocks where the read failed. */
@@ -106,8 +106,14 @@ async function readNotesAt(query: Query, dataset: string, address: string, block
 /** How far back a wallet's history goes when PRICETAG_HISTORY_BLOCKS doesn't say. */
 const DEFAULT_HISTORY_MS = 3_600_000
 
-export function rawSource(query: Query, config: { baseDataset: string; network: string; historyBlocks: number | null }): Source {
+export function rawSource(query: Query, config: { baseDataset: string; network: string; historyBlocks: number | null; maxWalletRows?: number | undefined }): Source {
   const ds = `"${config.baseDataset}"`
+  const max = config.maxWalletRows
+  // One past the most it can use, which is how it knows there's more without loading it all.
+  const limit = max === undefined ? "" : ` LIMIT ${max + 1}`
+  const refuseIfOver = (rows: number) => {
+    if (max !== undefined && rows > max) throw new WalletTooBigError(max)
+  }
 
   async function inBlocks<T>(blocks: readonly number[], sql: (filter: string, count: number) => string): Promise<T[]> {
     const result: T[] = []
@@ -154,8 +160,9 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
       const range = `block_num BETWEEN ${from} AND ${to}`
       const txRows = await query<Row>(
         `SELECT block_num, timestamp, tx_hash, tx_index, "from", "to", value, gas_used, gas_price, max_fee_per_gas, max_priority_fee_per_gas, status, type
-         FROM ${ds}.transactions WHERE ${range} AND ("from" = X'${me}' OR "to" = X'${me}')`,
+         FROM ${ds}.transactions WHERE ${range} AND ("from" = X'${me}' OR "to" = X'${me}')${limit}`,
       )
+      refuseIfOver(txRows.length)
       const txs: RawTx[] = txRows.map((t) => ({
         block_num: asNumber(t.block_num),
         timestamp: asIso(t.timestamp),
@@ -191,9 +198,10 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
            WHERE ${range} AND (
              (topic0 IN (X'${TRANSFER_TOPIC}', X'${DEPOSIT_TOPIC}', X'${WITHDRAWAL_TOPIC}') AND (topic1 = ${topic} OR topic2 = ${topic}))
              OR (topic0 IN (X'${TRANSFER_SINGLE_TOPIC}', X'${TRANSFER_BATCH_TOPIC}') AND (topic2 = ${topic} OR topic3 = ${topic}))
-           )`,
+           )${limit}`,
         )
       ).map(toLog)
+      refuseIfOver(txs.length + logs.length)
 
       const sent = txs.filter((t) => hexOf(t.from) === me)
       const sentBlocks = [...new Set(sent.map((t) => t.block_num))]
@@ -257,12 +265,22 @@ type SharedWallet = Pick<WindowRows, "rows" | "gasUnknown"> & { from: number; to
  * other, so the second usually wants a few blocks more than the first. Blocks a reorg could still reach are always read
  * again, and everything older comes from what's held, until `rewind` says a reorg went further back than that.
  */
-export function sharedReads(query: Query, config: { baseDataset: string; dataset: string; network: string }) {
+export function sharedReads(query: Query, config: { baseDataset: string; dataset: string; network: string; maxWalletRows?: number | undefined }) {
   const reader = datasetReader(query, config)
   const base = `"${config.baseDataset}"`
   const wallets = new Map<string, SharedWallet>()
   const turns = new Map<string, Promise<void>>()
   const reorgs: Reorg[] = []
+  const max = config.maxWalletRows ?? Infinity
+  /** These outlast what `createWallets` keeps, so they need a limit of their own. The newest always stays. */
+  function keepWithinMax() {
+    let rows = [...wallets.values()].reduce((sum, wallet) => sum + wallet.rows.length, 0)
+    for (const [address, wallet] of wallets) {
+      if (rows <= max || wallets.size === 1) return
+      wallets.delete(address)
+      rows -= wallet.rows.length
+    }
+  }
 
   // One at a time per wallet, so a read that starts while another is running can use what that one found.
   function inTurn<T>(address: string, read: () => Promise<T>): Promise<T> {
@@ -308,8 +326,10 @@ export function sharedReads(query: Query, config: { baseDataset: string; dataset
           ethBalances: held?.ethBalances ?? new Map(),
         }
         wallets.delete(address)
+        if (next.rows.length > max) throw new WalletTooBigError(max)
         wallets.set(address, next)
         if (wallets.size > MAX_SHARED_WALLETS) wallets.delete(wallets.keys().next().value as string)
+        keepWithinMax()
         const asked = ({ block_num }: { block_num: number }) => block_num >= from && block_num <= to
         return { rows: next.rows.filter(asked), gasUnknown: next.gasUnknown.filter(asked) }
       }),
@@ -407,7 +427,7 @@ export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL
  * The SDK's `datasetSource`, plus what only working out a cost needs: who was on the other side, notes, and market prices.
  * Pricing rules of one wallet history pass the same `shared`, so only what a rule changes is read for each.
  */
-export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string }, shared = sharedReads(query, config)): Source {
+export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string; maxWalletRows?: number | undefined }, shared = sharedReads(query, config)): Source {
   const { readPriced } = datasetReader(query, config)
   const ds = `"${config.dataset}"`
   // What a fork of the pricing rule changes, so its market prices come from its own trades.

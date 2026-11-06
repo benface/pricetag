@@ -101,7 +101,22 @@ export function unreadAssets(positions: readonly Position[], { unreadBalances }:
 /** The assets `pnlOverTime` has to leave out. */
 export const unconfirmedAssets = (positions: readonly Position[], unread: readonly string[] = []) => new Set([...positions.filter(isUnconfirmed).map((p) => p.asset), ...unread])
 
+/** Oldest first holds every lot at every step, so its memory grows with the square of the history (WORK-559). Average has no such limit. */
+export class OldestFirstTooBigError extends Error {
+  constructor() {
+    super("This history is too long to work out by oldest first in this much memory. Average cost still works.")
+    this.name = "OldestFirstTooBigError"
+  }
+}
+
+/** No limit in a browser, where running out only costs that one tab. A process that others rely on sets one. */
+let maxOldestFirstLegs = Number.POSITIVE_INFINITY
+export function limitOldestFirst(legs: number) {
+  maxOldestFirstLegs = legs
+}
+
 export function foldPositions(legs: readonly PricedLeg[], method: Method, prices: LatestPrices, onchain?: Onchain): Position[] {
+  if (method === "fifo" && legs.length > maxOldestFirstLegs) throw new OldestFirstTooBigError()
   const positions = new Map<string, { state: PositionState; effects: LegEffect[]; decimals: number }>()
   for (const leg of legs) {
     const position = positions.get(leg.asset) ?? { state: emptyPosition(method, leg.decimals), effects: [], decimals: leg.decimals }
