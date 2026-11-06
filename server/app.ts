@@ -324,7 +324,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   // Shared by the rules, since no rule changes what a token says about itself or what a wallet holds of it.
   const otherTokens = source?.readTokenFacts && createOtherTokens(source.readTokenFacts)
   const budget = createRowBudget(maxWalletRowsOf(env))
-  /** Each set of wallets' last answer, all at one block, for while one of them can't be read. It's the first to go when memory's short, because reading doesn't need it. */
+  /** Each set of wallets' last answer, all at one block, for while one of them can't be read. It's the first to go when memory's short, because reading doesn't need it, and a client keeps the one on its screen in case it does. */
   const lastAnswers = new Map<string, WalletResponse[]>()
   budget.join({
     heldRows: () => [...lastAnswers.values()].flat().reduce((sum, wallet) => sum + wallet.legs.length, 0),

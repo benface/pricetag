@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import type { WalletResponse } from "../core/api.ts"
-import { ALL_YOURS, type AllYoursRead } from "../core/combined.ts"
+import { ALL_YOURS, holdLastRead, type AllYoursRead } from "../core/combined.ts"
 import type { CurrencyCode } from "@pricetag/sdk/core"
 import { failureOf, readResponse, type ReadFailure } from "../core/read-failure.ts"
 
@@ -168,10 +168,19 @@ export function useWallet(address: string | null, currency: CurrencyCode, rule: 
 /**
  * Reads all the user's wallets together, so they're all at one block, and again on each new block. Each is its own read on the
  * server, so a slow one doesn't hold up the rest: it's listed as still reading or updating, and looked at again soon. Answering for another
- * wallet adds it without clearing what's on screen.
+ * wallet adds it without clearing what's on screen. A wallet that's been in the numbers stays in them, even if the server has
+ * forgotten its last answer.
  */
 export function useAllYours(addresses: readonly string[] | null, currency: CurrencyCode, rule: string | null, paid: string) {
   const [attempt, setAttempt] = useState(0)
-  const { value, loading, error } = useLiveRead(addresses ? ALL_YOURS : null, `${addresses?.join(",")}:${currency}:${rule}:${paid}`, (signal) => fetchAllYours(addresses as string[], currency, rule, paid, signal), { live: true, unfinished: ({ unread }) => unread.reading.length > 0 || (unread.updating?.length ?? 0) > 0 }, attempt)
+  const asking = `${currency}:${rule}:${paid}`
+  const shown = useRef<{ asking: string; read: AllYoursRead } | null>(null)
+  const readHolding = async (signal: AbortSignal) => {
+    const next = await fetchAllYours(addresses as string[], currency, rule, paid, signal)
+    const read = shown.current?.asking === asking ? holdLastRead(shown.current.read, next) : next
+    shown.current = { asking, read }
+    return read
+  }
+  const { value, loading, error } = useLiveRead(addresses ? ALL_YOURS : null, `${addresses?.join(",")}:${asking}`, readHolding, { live: true, unfinished: ({ unread }) => unread.reading.length > 0 || (unread.updating?.length ?? 0) > 0 }, attempt)
   return { read: value, loading, error, retry: () => setAttempt((n) => n + 1) }
 }

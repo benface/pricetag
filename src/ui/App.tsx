@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react"
 import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, formatTime, isAddress, isMainCurrency, msBetweenBlocks, normalizeAddress, returnBps, shortHash, sumTotals, type CurrencyCode, type HoldComparison, type Method, type OtherToken, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
-import { ALL_YOURS, combinedPortfolioOf, explainAcross, exportCombined, type CombinedPosition, type PositionPart } from "../core/combined.ts"
+import { ALL_YOURS, combinedPortfolioOf, explainAcross, exportCombined, feedBadge, type CombinedPortfolioResponse, type CombinedPosition, type PositionPart } from "../core/combined.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { firstSort, formatHoldingsSort, parseHoldingsSort, sortHoldings, type HoldingsColumn, type HoldingsSort } from "../core/holdings.ts"
 import { allBalancesMatch, attentionOf, attentionTarget, balanceFlag, isValuePartial, pastCostsNote, valueGaps, type Attention } from "../core/attention.ts"
@@ -577,7 +577,7 @@ export function App() {
         <button type="button" onClick={() => setBuying(true)}>
           Buy
         </button>
-        {showing ? <LiveBadge wallet={showing} stale={error !== null} updating={(combined?.linkedReading.length ?? 0) + (combined?.linkedUpdating.length ?? 0) > 0} /> : null}
+        {showing ? <LiveBadge wallet={showing} failing={error !== null} all={combined} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
       {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
@@ -830,12 +830,9 @@ function Stat({ label, help, partial, onClick, value }: { label: string; help?: 
   )
 }
 
-function LiveBadge({ wallet, stale, updating }: { wallet: Pick<WalletResponse, "mode" | "coverage" | "latest">; stale: boolean; updating: boolean }) {
-  if (wallet.mode === "demo") return <span className="badge">Demo data</span>
-  const detail = feedDetail(wallet.mode, wallet.coverage.toBlock)
+function LiveBadge({ wallet, failing, all }: { wallet: Pick<WalletResponse, "mode" | "coverage" | "latest">; failing: boolean; all: CombinedPortfolioResponse | null }) {
+  const says = feedBadge(wallet, failing, all)
+  if (says === "Demo data") return <span className="badge">{says}</span>
   // The notice under it says what's wrong.
-  if (stale) return <span className="badge" title={detail}>Not updating</span>
-  if (updating) return <span className="badge updating" title={detail}>Updating</span>
-  if (isBehind(wallet)) return <span className="badge" title={detail}>Catching up</span>
-  return <span className="badge live" title={detail}>Live</span>
+  return <span className={says === "Updating" ? "badge updating" : says === "Live" ? "badge live" : "badge"} title={feedDetail(wallet.mode, wallet.coverage.toBlock)}>{says}</span>
 }

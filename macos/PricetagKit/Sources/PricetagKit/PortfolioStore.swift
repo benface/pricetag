@@ -39,7 +39,8 @@ private struct WalletStep {
 
 public enum FeedState: Equatable, Sendable {
     case noWallet
-    /// Waiting on an answer, which the first time for a wallet can take a minute. Numbers on screen are the last answer, and may be old.
+    /// Waiting on an answer, which the first time for a wallet can take a minute, or on one of All Yours' wallets being read again.
+    /// Numbers on screen are the last answer, and may be old.
     case reading
     case live
     /// The server and Amp both answer, but Amp's newest block is old.
@@ -56,6 +57,8 @@ public enum FeedState: Equatable, Sendable {
     case tooBig(String)
     /// The server is holding this client back for now, which clears by itself.
     case rateLimited(String)
+    /// The server answers, but it couldn't update some of All Yours' wallets, so the numbers stay as they were last read. Those wallets' notices say which.
+    case walletsOutdated
 
     /// Only this state may show a number as current.
     public var isLive: Bool { self == .live }
@@ -64,7 +67,7 @@ public enum FeedState: Equatable, Sendable {
     public var isStale: Bool {
         switch self {
         case .noWallet, .reading, .live, .catchingUp: false
-        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .tooBig, .rateLimited: true
+        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .tooBig, .rateLimited, .walletsOutdated: true
         }
     }
 }
@@ -957,8 +960,9 @@ public final class PortfolioStore {
             let last = try? await source.lastRead(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address))
             guard isCurrent() else { return .zero }
             if let last, shouldShow(last) {
-                portfolio = last
-                cache.remember(last, of: address, on: serverURL, at: now())
+                let shown = holdingWhatsShown(last)
+                portfolio = shown
+                cache.remember(shown, of: address, on: serverURL, at: now())
             }
         }
         let isOtherRule = rule != nil && portfolio?.rule != rule
@@ -969,8 +973,9 @@ public final class PortfolioStore {
             try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address), timeout: timeout)
         }
         do {
-            let next = try await patiently(read, timeout: timeout, isCurrent: isCurrent)
+            let answer = try await patiently(read, timeout: timeout, isCurrent: isCurrent)
             guard isCurrent() else { return .zero }
+            let next = holdingWhatsShown(answer)
             portfolio = next
             updatedAt = now()
             needsInvite = false
@@ -992,6 +997,10 @@ public final class PortfolioStore {
             }
             return feed == .serverUnreachable ? unreachableDelay : reachableDelay
         }
+    }
+
+    private func holdingWhatsShown(_ answer: Portfolio) -> Portfolio {
+        portfolio.map(answer.holding) ?? answer
     }
 
     /// Not when it's behind numbers on screen that answer the same question, as it can be after a reorg or if the app has seen further.
@@ -1039,7 +1048,11 @@ public final class PortfolioStore {
     }
 
     private func state(of portfolio: Portfolio) -> FeedState {
-        guard portfolio.mode != .demo, let newest = portfolio.latest.date else { return .live }
+        guard portfolio.mode != .demo else { return .live }
+        // First, because they're why these numbers have stopped moving, however old that's made them.
+        if portfolio.linkedOutdated?.isEmpty == false { return .walletsOutdated }
+        if portfolio.linkedUpdating?.isEmpty == false { return .reading }
+        guard let newest = portfolio.latest.date else { return .live }
         let age = Int(now().timeIntervalSince(newest))
         if age > Self.behindAfterSeconds { return .behind(seconds: age) }
         return portfolio.progress.started && portfolio.progress.behindBlocks == 0 ? .live : .catchingUp

@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net"
 import { ASSETS, ETH_ADDRESS, formatSignedMoney, type LegPart, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import type { RatesReader, Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
-import { combinedPortfolioOf, explainAcross, explainCombined, previewCombined, type AllYoursRead, type CombinedPortfolioResponse } from "../src/core/combined.ts"
+import { combinedPortfolioOf, explainAcross, explainCombined, feedBadge, holdLastRead, previewCombined, type AllYoursRead, type CombinedPortfolioResponse } from "../src/core/combined.ts"
 import { portfolioOf } from "../src/core/portfolio.ts"
 import { NO_FACTS, combinedFacts, type TransactionGain } from "../src/core/activity.ts"
 import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
@@ -82,6 +82,66 @@ function assertMatchesFile(name: string, actual: unknown) {
   if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
   assert.equal(readFileSync(url, "utf8"), text, `${name} is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.`)
 }
+
+describe("what a client keeps of All Yours", () => {
+  const wallet = (address: string, blockNum: number): WalletResponse => ({ ...walletOf(address, []), mode: "raw", coverage: { fromBlock: 1, toBlock: blockNum }, latest: { blockNum, timestamp: "2026-11-04T00:00:00.000Z" } })
+  const nothing = { reading: [], failed: [] }
+  const last: AllYoursRead = { wallets: [wallet(HOT, 10), wallet(COLD, 10)], unread: nothing }
+
+  it("takes the new answer when it has every wallet", () => {
+    const next: AllYoursRead = { wallets: [wallet(HOT, 20), wallet(COLD, 20)], unread: nothing }
+    assert.equal(holdLastRead(last, next), next)
+  })
+
+  it("takes the server's own kept answer when it has every wallet", () => {
+    const next: AllYoursRead = { wallets: last.wallets, unread: { ...nothing, updating: [HOT], outdated: [COLD] } }
+    assert.equal(holdLastRead(last, next), next)
+  })
+
+  it("keeps every wallet at the last block when one is missing, updating or outdated by why", () => {
+    const reading = holdLastRead(last, { wallets: [wallet(HOT, 20)], unread: { reading: [COLD], failed: [] } })
+    assert.equal(reading.wallets, last.wallets)
+    assert.deepEqual(reading.unread, { reading: [], failed: [], updating: [COLD], outdated: [] })
+    const failed = holdLastRead(last, { wallets: [wallet(HOT, 20)], unread: { reading: [], failed: [COLD] } })
+    assert.equal(failed.wallets, last.wallets)
+    assert.deepEqual(failed.unread, { reading: [], failed: [], updating: [], outdated: [COLD] })
+    const empty = holdLastRead(last, { wallets: [], unread: { reading: [HOT], failed: [COLD] } })
+    assert.deepEqual(empty.unread, { reading: [], failed: [], updating: [HOT], outdated: [COLD] })
+  })
+
+  it("keeps a new wallet out of a kept answer, even when it's been read", () => {
+    const held = holdLastRead(last, { wallets: [wallet(HOT, 20), wallet(THIRD, 20)], unread: { reading: [COLD], failed: [] } })
+    assert.deepEqual(held.wallets.map((w) => w.address), [HOT, COLD])
+    assert.deepEqual(held.unread, { reading: [THIRD], failed: [], updating: [COLD], outdated: [] })
+    assert.deepEqual(holdLastRead(last, { wallets: [wallet(HOT, 20)], unread: { reading: [COLD], failed: [THIRD] } }).unread, { reading: [], failed: [THIRD], updating: [COLD], outdated: [] })
+  })
+
+  it("doesn't count a wallet that's no longer one of them", () => {
+    const next: AllYoursRead = { wallets: [wallet(HOT, 20)], unread: { reading: [THIRD], failed: [] } }
+    assert.equal(holdLastRead(last, next), next)
+  })
+
+  it("adds a wallet that's been read to an answer with nothing missing", () => {
+    const next: AllYoursRead = { wallets: [wallet(HOT, 20), wallet(COLD, 20), wallet(THIRD, 20)], unread: nothing }
+    assert.equal(holdLastRead(last, next), next)
+  })
+
+  it("says what the badge should for each mix of wallets, whatever the block says", () => {
+    const shown = wallet(HOT, 10)
+    const all = (linkedReading: string[], linkedUpdating: string[], linkedOutdated: string[]) => ({ linkedReading, linkedUpdating, linkedOutdated })
+    assert.equal(feedBadge(shown, false, all([], [], [])), "Live")
+    assert.equal(feedBadge({ ...shown, coverage: { fromBlock: 1, toBlock: 1 }, latest: { ...shown.latest, blockNum: 10_000 } }, false, all([], [], [])), "Catching up")
+    assert.equal(feedBadge(shown, false, null), "Live")
+    assert.equal(feedBadge(shown, false, all([COLD], [], [])), "Updating")
+    assert.equal(feedBadge(shown, false, all([], [COLD], [])), "Updating")
+    assert.equal(feedBadge(shown, false, all([], [], [COLD])), "Not updating")
+    assert.equal(feedBadge(shown, false, all([], [HOT, COLD], [])), "Updating")
+    assert.equal(feedBadge(shown, false, all([], [HOT], [COLD])), "Not updating", "one that failed outweighs one on its way")
+    assert.equal(feedBadge(shown, false, all([], [], [HOT, COLD])), "Not updating")
+    assert.equal(feedBadge(shown, true, all([], [], [])), "Not updating")
+    assert.equal(feedBadge({ ...shown, mode: "demo" }, false, all([], [], [COLD])), "Demo data")
+  })
+})
 
 describe("all your wallets as one", () => {
   it("sends what the Mac app reads", () => {
@@ -359,7 +419,7 @@ describe("all your wallets, when one of them can't keep up", () => {
   const move = { [HOT]: [row(15, "0x2", HOT, "credit", ONE, COLD)], [COLD]: [row(15, "0x2", COLD, "debit", ONE, HOT)] }
 
   /** A server over wallets whose rows and head the test moves on, with `trouble` for what one wallet's read or rates, or the price at a block, run into. */
-  function serve(trouble: { read?: (address: string) => Promise<void>; rates?: (address: string, block: number) => Promise<void>; reference?: () => Promise<void>; rollingHistory?: boolean; tokenReads?: string[]; maxWallets?: number }) {
+  function serve(trouble: { read?: (address: string) => Promise<void>; rates?: (address: string, block: number) => Promise<void>; reference?: () => Promise<void>; rollingHistory?: boolean; tokenReads?: string[]; maxWallets?: number; maxRows?: number }) {
     const state = { head: 10, rows: structuredClone(before) as Record<string, LegRow[]>, troubled: false }
     const source: Source = {
       mode: "raw",
@@ -392,7 +452,7 @@ describe("all your wallets, when one of them can't keep up", () => {
       if (state.troubled) await trouble.rates?.(wallet.legs.some((leg) => leg.txHash === "0x1") ? COLD : wallet.legs.some((leg) => leg.txHash === "0x2") ? HOT : THIRD, wallet.latest.blockNum)
       return { byBlock: {}, latest: null }
     }
-    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }, null, { maxWallets: trouble.maxWallets })
+    const api = createApi(trouble.maxRows ? { PRICETAG_MAX_WALLET_ROWS: String(trouble.maxRows) } : {}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }, null, { maxWallets: trouble.maxWallets })
     const server = createServer((req, res) => void api(req, res))
     const ready = new Promise<string>((resolve) => server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)))
     const post = async (path: string, body: unknown) => (await fetch(`${await ready}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json() as Promise<CombinedPortfolioResponse>
@@ -477,6 +537,82 @@ describe("all your wallets, when one of them can't keep up", () => {
     assert.equal(ethOf(last), ONE.toString())
     assert.deepEqual([last.linkedUpdating, last.linkedReading], [[HOT], []])
     assert.deepEqual(last.wallets.map((w) => w.state), ["updating", "read"])
+    api.close()
+  })
+
+  /** What a client that folds its own answers ends up showing after each read, and what the server said. */
+  function client(api: ReturnType<typeof serve>, linked: readonly string[]) {
+    let shown: AllYoursRead | null = null
+    return async () => {
+      const said = (await api.post("/api/portfolio/all/wallets", { ...body, linked })) as unknown as AllYoursRead
+      shown = shown ? holdLastRead(shown, said) : said
+      const read = shown.wallets
+      return { said, shown, all: combinedPortfolioOf(read, "average", emptyBook(), shown.unread) }
+    }
+  }
+  /** One wallet's worth of `count` rows that add up to 1 ETH, so a budget can be filled without changing what it holds. */
+  const oneEthIn = (account: string, count: number): LegRow[] => [row(1, `${account}-1`, account, "credit", ONE, STRANGER), ...Array.from({ length: count - 1 }, (_, i) => row(2, `${account}-${i + 2}`, account, i % 2 ? "debit" : "credit", 1n, STRANGER))]
+
+  it("keeps the total on a client when the server's run out of room for its last answer", async () => {
+    let stalled = false
+    let release = () => {}
+    const api = serve({ maxRows: 1000, read: async (address) => (stalled && address === COLD ? new Promise<void>((resolve) => (release = resolve)) : undefined) })
+    api.state.rows = { [HOT]: oneEthIn(HOT, 499), [COLD]: oneEthIn(COLD, 499) }
+    const read = client(api, [HOT, COLD])
+    const first = await read()
+    assert.equal(ethOf(first.all), (2n * ONE).toString())
+    // No transfers, so nothing here should change the total. One wallet's read makes room by giving up the last answer.
+    api.state.head = 20
+    api.state.troubled = true
+    stalled = true
+    const second = await read()
+    assert.deepEqual([second.said.wallets.map((w) => w.address), second.said.unread.reading, second.said.unread.updating ?? []], [[HOT], [COLD], []], "the server has forgotten it, and that's the bug this is here for")
+    assert.equal(ethOf(second.all), (2n * ONE).toString())
+    assert.deepEqual(second.all.wallets.map((w) => [w.address, w.state]), [[HOT, "read"], [COLD, "updating"]])
+    assert.deepEqual([second.all.linkedReading, second.all.linkedUpdating], [[], [COLD]])
+    assert.equal(second.all.coverage.toBlock, 10, "every wallet at the one block")
+    assert.equal(feedBadge(second.all, false, second.all), "Updating")
+    // And again, since the server now remembers a total of one wallet.
+    const third = await read()
+    assert.equal(ethOf(third.all), (2n * ONE).toString())
+    assert.deepEqual(third.all.linkedUpdating, [COLD])
+    stalled = false
+    release()
+    const back = await read()
+    assert.equal(ethOf(back.all), (2n * ONE).toString())
+    assert.equal(back.all.coverage.toBlock, 20)
+    assert.deepEqual(back.all.wallets.map((w) => w.state), ["read", "read"])
+    assert.equal(feedBadge(back.all, false, back.all), "Live")
+    api.close()
+  })
+
+  it("keeps the total on a client when the server's dropped its last answer for newer sets of wallets", async () => {
+    const api = serve({ read: async (address) => (address === COLD ? stuck() : undefined) })
+    const read = client(api, [HOT, COLD])
+    assert.equal(ethOf((await read()).all), ONE.toString())
+    const other = (i: number) => `0x${i.toString(16).padStart(40, "f")}`
+    for (let i = 0; i < 50; i++) await api.post("/api/portfolio/all/wallets", { ...body, linked: [HOT, other(i)] })
+    api.moveOn()
+    const { said, all } = await read()
+    assert.deepEqual([said.wallets.map((w) => w.address), said.unread.reading], [[HOT], [COLD]])
+    // Spending money has read the move and savings hasn't, and the total still counts that 1 ETH once.
+    assert.deepEqual(asLastRead(all), beforeTheMove)
+    assert.deepEqual(all.linkedUpdating, [COLD])
+    api.close()
+  })
+
+  it("says a client's total isn't updating when a read of every wallet failed", async () => {
+    let failing = false
+    const api = serve({ maxRows: 1000, read: async () => (failing ? Promise.reject(new Error("nope")) : undefined) })
+    const read = client(api, [HOT, COLD])
+    await read()
+    api.moveOn()
+    failing = true
+    const { all } = await read()
+    assert.deepEqual(asLastRead(all), beforeTheMove)
+    assert.deepEqual(all.linkedOutdated.sort(), [HOT, COLD].sort())
+    assert.deepEqual(all.wallets.map((w) => w.state), ["outdated", "outdated"])
+    assert.equal(feedBadge(all, false, all), "Not updating")
     api.close()
   })
 

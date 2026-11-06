@@ -27,9 +27,136 @@ private actor AllYoursSource: PortfolioSource {
     }
 }
 
+/// Answers each read with the next of the test's answers.
+private actor AnswersInTurn: PortfolioSource {
+    private var answers: [Result<Portfolio, FetchError>]
+
+    init(_ answers: [Result<Portfolio, FetchError>]) { self.answers = answers }
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+        try answers.removeFirst().get()
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
+        throw FetchError.unreachable
+    }
+}
+
+/// All Yours as the server would answer, from real data, with each wallet where it's got to and the numbers at `block`.
+private func answer(_ states: KeyValuePairs<String, CombinedWallet.State>, block: Int, value: String = "1000000", currency: CurrencyCode = .USD, at now: Date) throws -> Portfolio {
+    var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(try resource("all-yours-portfolio", as: Portfolio.self))) as! [String: Any]
+    object["mode"] = "raw"
+    object["currency"] = currency.rawValue
+    object["latest"] = ["blockNum": block, "timestamp": now.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))]
+    object["wallets"] = states.map { ["address": $0.key, "state": $0.value.rawValue] }
+    let inState = { (state: CombinedWallet.State) in states.filter { $0.value == state }.map(\.key) }
+    object["linkedReading"] = inState(.reading)
+    object["linkedFailed"] = inState(.failed)
+    object["linkedUpdating"] = inState(.updating)
+    object["linkedOutdated"] = inState(.outdated)
+    var totals = object["totals"] as! [String: Any]
+    totals["valueMicros"] = value
+    object["totals"] = totals
+    return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+}
+
 @MainActor
 struct AllYoursTests {
     private func date(_ seconds: TimeInterval) -> Date { Date(timeIntervalSince1970: seconds) }
+
+    private func allYoursStore(_ source: any PortfolioSource, at now: Date) -> PortfolioStore {
+        let defaults = UserDefaults(suiteName: "all-yours-held-\(UUID().uuidString)")!
+        defaults.set(WalletAddress.allYours, forKey: "wallet")
+        return PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now })
+    }
+
+    @Test func keepsTheLastAnswerWhenTheServerHasForgottenIt() async throws {
+        let now = Date()
+        let first = try answer([a: .read, b: .read], block: 10, value: "2000000", at: now)
+        let store = allYoursStore(AnswersInTurn([
+            .success(first),
+            // The server's let go of its last answer, and only has the wallet that's been read.
+            .success(try answer([a: .read, b: .reading], block: 20, value: "1000000", at: now)),
+            .success(try answer([a: .reading, b: .failed], block: 20, value: "1000000", at: now)),
+            .success(try answer([a: .read, b: .read], block: 20, value: "2100000", at: now)),
+        ]), at: now)
+        _ = await store.poll()
+        #expect(store.feed == .live)
+        _ = await store.poll()
+        #expect(store.portfolio?.totals == first.totals)
+        #expect(store.portfolio?.latest.blockNum == 10, "with every wallet at the one block")
+        #expect(store.portfolio?.wallets?.map(\.state) == [.read, .updating])
+        #expect(store.portfolio?.linkedUpdating == [b])
+        #expect(store.portfolio?.linkedReading == [])
+        #expect(store.feed == .reading)
+        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: $0).text == "Updating…" })
+        #expect(store.updatingNote == Wording.updatingLastRead(1))
+        _ = await store.poll()
+        #expect(store.portfolio?.totals == first.totals)
+        #expect(store.portfolio?.linkedUpdating == [a])
+        #expect(store.portfolio?.linkedOutdated == [b])
+        #expect(store.feed == .walletsOutdated)
+        _ = await store.poll()
+        #expect(store.portfolio?.totals.valueMicros == "2100000")
+        #expect(store.portfolio?.wallets?.map(\.state) == [.read, .read])
+        #expect(store.feed == .live)
+    }
+
+    @Test func aWalletThatsNewStaysOutOfAKeptAnswer() throws {
+        let now = Date()
+        let last = try answer([a: .read, b: .read], block: 10, at: now)
+        let held = try answer([a: .read, b: .reading, c: .read], block: 20, at: now).holding(last)
+        #expect(held.wallets?.map(\.address) == [a, b, c])
+        #expect(held.wallets?.map(\.state) == [.read, .updating, .reading])
+        #expect(held.latest.blockNum == 10)
+        #expect(held.linkedReading == [c])
+        let failed = try answer([a: .read, b: .reading, c: .failed], block: 20, at: now).holding(last)
+        #expect(failed.linkedFailed == [c])
+    }
+
+    @Test func onlyKeepsAnAnswerToTheSameQuestion() throws {
+        let now = Date()
+        let last = try answer([a: .read, b: .read], block: 10, at: now)
+        let whole = try answer([a: .read, b: .read, c: .read], block: 20, at: now)
+        #expect(whole.holding(last) == whole)
+        let withoutOne = try answer([a: .read, c: .reading], block: 20, at: now)
+        #expect(withoutOne.holding(last) == withoutOne, "b is no longer one of them")
+        let otherCurrency = try answer([a: .read, b: .reading], block: 20, currency: .CAD, at: now)
+        #expect(otherCurrency.holding(last) == otherCurrency)
+        let serverKept = try answer([a: .updating, b: .outdated], block: 10, at: now)
+        #expect(serverKept.holding(last) == serverKept)
+        let notYetIn = try answer([a: .read, b: .reading], block: 10, at: now)
+        #expect(try answer([a: .read, b: .read], block: 20, at: now).holding(notYetIn).wallets?.map(\.state) == [.read, .read])
+    }
+
+    @Test func oldNumbersAreNeverCalledLive() async throws {
+        let now = Date()
+        let cases: [(states: KeyValuePairs<String, CombinedWallet.State>, feed: FeedState, says: String, warns: Bool)] = [
+            ([a: .updating, b: .read], .reading, "Updating…", false),
+            ([a: .updating, b: .updating], .reading, "Updating…", false),
+            ([a: .outdated, b: .read], .walletsOutdated, "Can't update", true),
+            ([a: .outdated, b: .outdated], .walletsOutdated, "Can't update", true),
+            ([a: .updating, b: .outdated], .walletsOutdated, "Can't update", true),
+        ]
+        for (states, feed, says, warns) in cases {
+            let store = allYoursStore(AnswersInTurn([.success(try answer(states, block: 10, at: now))]), at: now)
+            _ = await store.poll()
+            #expect(store.feed == feed)
+            #expect(!store.feed.isLive)
+            for shows in MenuBarShows.allCases {
+                let summary = FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: shows)
+                #expect(summary.text == says)
+                #expect(summary.isWarning == warns)
+            }
+            // Which wallets, and what to do about them, are in the notices, so this adds no second copy of them.
+            #expect(store.feed.problem(serverURL: URL(string: "http://127.0.0.1:8787")!, portfolio: store.portfolio) == nil)
+            #expect(store.feed.shortProblem(portfolio: store.portfolio) == nil)
+        }
+    }
 
     @Test func transactionsSayWhichWalletAndCanBeFoundByIt() throws {
         let portfolio = try resource("all-yours-portfolio", as: Portfolio.self)

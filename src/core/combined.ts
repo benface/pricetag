@@ -9,7 +9,7 @@
 import { CHECK_LABELS } from "./wording.ts"
 import { NO_FACTS, combinedFacts, type TransactionFacts } from "./activity.ts"
 import { assertFoldsFit, combineOtherTokens, compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
-import type { BookPoint, BookPreview, ExplanationLeg, ExplanationResponse, PortfolioPosition, PortfolioResponse, WalletResponse } from "./api.ts"
+import { isBehind, type BookPoint, type BookPreview, type ExplanationLeg, type ExplanationResponse, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "./api.ts"
 import type { Book } from "./book.ts"
 import { explainHold, explainPoint, explainTarget, explainTotal, type ExplainTarget, type Explanation, type Metric } from "./explain.ts"
 import { exportCsv } from "./export.ts"
@@ -50,6 +50,37 @@ export type Unread = { reading: readonly string[]; failed: readonly string[]; up
 
 /** Every wallet that could be read, all at one block so a move between them is in both or neither, for a client that runs the fold itself. */
 export type AllYoursRead = { wallets: WalletResponse[]; unread: Unread }
+
+/**
+ * What to show after `next`, given that `last` is on screen and asks the same thing. The server keeps the last answer too, but
+ * it can run out of room for it. So when a wallet that's in `last` isn't in `next`, `last` stands, whole and at its one block
+ * so a move can't count twice, with that wallet updating or outdated. A wallet that's no longer one of them takes `next`.
+ */
+export function holdLastRead(last: AllYoursRead, next: AllYoursRead): AllYoursRead {
+  const kept = new Set(last.wallets.map((wallet) => wallet.address.toLowerCase()))
+  const { reading, failed, updating = [], outdated = [] } = next.unread
+  const asked = new Set([...next.wallets.map((wallet) => wallet.address.toLowerCase()), ...reading, ...failed])
+  const isGone = [...kept].some((address) => !asked.has(address))
+  if (isGone || ![...reading, ...failed].some((address) => kept.has(address))) return next
+  const isNew = (address: string) => !kept.has(address)
+  return {
+    wallets: last.wallets,
+    unread: {
+      reading: [...asked].filter((address) => isNew(address) && !failed.includes(address)),
+      failed: failed.filter(isNew),
+      updating: [...kept].filter((address) => reading.includes(address) || updating.includes(address)),
+      outdated: [...kept].filter((address) => failed.includes(address) || outdated.includes(address)),
+    },
+  }
+}
+
+/** What the badge by the numbers says. Numbers that are only as they were last read aren't live, even when the server answered fine. `all` is All Yours' answer, when that's what's showing. */
+export function feedBadge(wallet: Pick<WalletResponse, "mode" | "coverage" | "latest">, failing: boolean, all: Pick<CombinedPortfolioResponse, "linkedReading" | "linkedUpdating" | "linkedOutdated"> | null): "Demo data" | "Not updating" | "Updating" | "Catching up" | "Live" {
+  if (wallet.mode === "demo") return "Demo data"
+  if (failing || (all?.linkedOutdated.length ?? 0) > 0) return "Not updating"
+  if ((all?.linkedReading.length ?? 0) + (all?.linkedUpdating.length ?? 0) > 0) return "Updating"
+  return isBehind(wallet) ? "Catching up" : "Live"
+}
 
 type Folded = { address: string; wallet: WalletResponse; others: WalletResponse[]; fold: BookFold }
 
