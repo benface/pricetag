@@ -45,6 +45,8 @@ job_pids() {
 }
 
 stop_job() {
+  # First, because on a Mac this busy, ps can take minutes.
+  [ ! -r "$run/root" ] || kill -TERM "$(cat "$run/root")" 2>/dev/null
   tries=0
   while pids=$(job_pids) && [ -n "$pids" ]; do
     # shellcheck disable=SC2086
