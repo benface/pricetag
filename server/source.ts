@@ -4,7 +4,7 @@
 // Every query is bounded by block, because staging is shared.
 
 import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, MIN_TOKEN_TRADE_USD, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, TOKEN_FEED_WINDOW_SECONDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type TokenActivity, type CostNote, type FeedRound, type MarketTrade, type PricedRow } from "@pricetag/sdk/core"
-import { MARKET_BUCKET_BLOCKS, asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, decodeRoundAnswer, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readFeedRoundsAt, readHead, readPayoutTxsAt, settledThrough, type Followed, type PriceUpdate, type Query, type ReadL1Fees, type Row, type Source, type StreamedTable, type WindowRows } from "@pricetag/sdk/internal"
+import { MARKET_BUCKET_BLOCKS, asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, decodeRoundAnswer, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readTokenFactsAt, readEthBalancesAt, readFeedRoundsAt, readHead, readPayoutTxsAt, settledThrough, type Followed, type PriceUpdate, type Query, type ReadL1Fees, type Row, type Source, type StreamedTable, type WindowRows } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
 /** One `AnswerUpdated` of a token's feed, in the feeds dataset. */
@@ -124,6 +124,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
     readReferences,
     readLatestReference: async (head) => (await readReferences([head]))[0] ?? null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readTokenFacts: readTokenFactsAt(query, config.network),
     readNotes: (address, blocks) => readNotesAt(query, config.baseDataset, address, blocks),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     readPayoutTxs: (address, blocks) => readPayoutTxsAt(query, config.baseDataset, address, blocks),

@@ -430,6 +430,8 @@ function blockOf({ account = ME, rows, before, after, payer, opening = 0n, amoun
     marketChecked: true,
     marketMarks: {},
     unlisted: [],
+    otherTokens: [],
+    otherTokensLeftOut: 0,
   } as unknown as WalletResponse
 }
 

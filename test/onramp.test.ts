@@ -70,6 +70,8 @@ function wallet(address: string, rows: LegRow[], changes: Partial<WalletResponse
     marketChecked: true,
     marketMarks: {},
     unlisted: [],
+    otherTokens: [],
+    otherTokensLeftOut: 0,
     ...changes,
     legs,
   }
