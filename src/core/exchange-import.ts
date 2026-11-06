@@ -3,7 +3,7 @@
 // was bought before it changes every cost in it, so only the person who downloaded it can vouch for that.
 
 import { ASSETS, decimalsOf, isAddress, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
-import type { Book, ExchangeWithdrawal } from "./book.ts"
+import { MAX_EXCHANGE_LOTS, type Book, type ExchangeLot, type ExchangeWithdrawal } from "./book.ts"
 
 export type ExchangeImport = {
   withdrawals: ExchangeWithdrawal[]
@@ -73,9 +73,13 @@ function addLot(lots: Lot[], at: number, units: bigint, cost: bigint) {
   }
 }
 
-/** What these units cost, this far along the lots. Null when that can't be said, or the budget ran out before it could. */
-function costAlong({ lots, oldest }: Pool, from: bigint, units: bigint, budget: Budget): bigint | null {
-  let total: bigint | null = 0n
+/** Part of a lot, as taken: how much, what it cost, and whether a file says which came first within it. */
+type Part = { units: bigint; cost: bigint; tied: boolean }
+
+/** What these units cost lot by lot, this far along the lots. Null when that can't be said, or the budget ran out before it could. */
+function partsAlong({ lots, oldest }: Pool, from: bigint, units: bigint, budget: Budget): Part[] | null {
+  const parts: Part[] = []
+  let known = true
   let skip = from
   let left = units
   for (let i = oldest; i < lots.length && left > 0n; i++) {
@@ -86,13 +90,29 @@ function costAlong({ lots, oldest }: Pool, from: bigint, units: bigint, budget: 
       continue
     }
     const taken = left < lot.units - skip ? left : lot.units - skip
-    const cost = lot.cost === null || (lot.tied && taken < lot.units) ? null : (lot.cost * taken) / lot.units
-    total = total === null || cost === null ? null : total + cost
+    if (lot.cost === null || (lot.tied && taken < lot.units)) known = false
+    else addPart(parts, { units: taken, cost: (lot.cost * taken) / lot.units, tied: lot.tied })
     skip = 0n
     left -= taken
   }
-  return total
+  return known ? parts : null
 }
+
+/** Next to one at the same price, it's the same part, wherever the lots between them happened to divide. */
+function addPart(parts: Part[], part: Part) {
+  const last = parts.at(-1)
+  if (!last || last.tied || part.tied || last.cost * part.units !== part.cost * last.units) parts.push(part)
+  else {
+    last.units += part.units
+    last.cost += part.cost
+  }
+}
+
+const costOf = (parts: readonly Part[]) => parts.reduce((sum, { cost }) => sum + cost, 0n)
+
+const within = (a: bigint, b: bigint, rounding: bigint) => a - b <= rounding && b - a <= rounding
+
+const sameParts = (a: readonly Part[], b: readonly Part[], rounding: bigint) => a.length === b.length && a.every(({ units, cost, tied }, i) => units === b[i]?.units && tied === b[i]?.tied && within(cost, b[i].cost, rounding))
 
 /** Takes the oldest of these units, which leaves the rest. Rounding never loses any, because taking a whole lot takes all of its cost. */
 function takeOldest(pool: Pool, units: bigint) {
@@ -142,19 +162,24 @@ function positionsAfter(moment: ReadonlyMap<bigint, number>, size: bigint, budge
 /**
  * What a withdrawal this size cost oldest first, when that's the same whichever of its moment's other disposals went first.
  * Otherwise null. Dividing a lot can round differently from one position to the next, by up to a millionth per lot, which isn't
- * a different cost.
+ * a different cost. The same total can come in a different order, and then only all of it has that cost, as it does when
+ * there are too many lots to keep.
  */
-function costInAnyOrder(pool: Pool, moment: ReadonlyMap<bigint, number>, size: bigint, budget: Budget): bigint | null {
+function costInAnyOrder(pool: Pool, moment: ReadonlyMap<bigint, number>, size: bigint, budget: Budget): { cost: bigint; lots: ExchangeLot[] } | null {
   const positions = positionsAfter(moment, size, budget)
   if (positions === null) return null
-  const first = costAlong(pool, 0n, size, budget)
+  const first = partsAlong(pool, 0n, size, budget)
   if (first === null) return null
+  const cost = costOf(first)
   const rounding = BigInt(pool.lots.length - pool.oldest)
+  let settled = first.length <= MAX_EXCHANGE_LOTS
   for (const position of positions) {
-    const cost = costAlong(pool, position, size, budget)
-    if (cost === null || cost - first > rounding || first - cost > rounding) return null
+    const parts = partsAlong(pool, position, size, budget)
+    if (parts === null || !within(costOf(parts), cost, rounding)) return null
+    settled &&= sameParts(first, parts, rounding)
   }
-  return first
+  const lots = settled ? first.map((part) => ({ units: part.units.toString(), micros: part.cost.toString(), ...(part.tied ? { wholeCostOnly: true as const } : {}) })) : [{ units: size.toString(), micros: cost.toString(), wholeCostOnly: true as const }]
+  return { cost, lots }
 }
 
 /**
@@ -173,11 +198,14 @@ function settleDisposals(pool: Pool) {
   const moment = new Map([...counts].sort(([a], [b]) => (a < b ? -1 : 1)))
   const withdrawn = new Set(disposals.filter(({ withdrawal }) => withdrawal).map(({ units }) => units))
   const budget = disposals.length > 1 ? pool.budget : { left: Infinity }
-  const costs = new Map<bigint, bigint | null>()
+  const costs = new Map<bigint, { cost: bigint; lots: ExchangeLot[] } | null>()
   for (const size of moment.keys()) if (withdrawn.has(size)) costs.set(size, costInAnyOrder(pool, moment, size, budget))
   for (const { units, withdrawal } of disposals) {
-    const cost = costs.get(units) ?? null
-    if (withdrawal) withdrawal.fifoCostMicros = cost === null ? null : cost.toString()
+    const found = costs.get(units) ?? null
+    if (withdrawal && found) {
+      withdrawal.fifoCostMicros = found.cost.toString()
+      withdrawal.fifoLots = found.lots
+    }
   }
   takeOldest(pool, disposals.reduce((sum, { units }) => sum + units, 0n))
 }

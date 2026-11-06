@@ -1,10 +1,36 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { applyLeg, emptyPosition, returnBps, valuePosition, type FoldLeg, type Method } from "@pricetag/sdk/core"
+import { applyLeg, applyLegTaking, emptyPosition, lotSplitBy, returnBps, valuePosition, type FoldLeg, type Method } from "@pricetag/sdk/core"
 
 const USD = 1_000_000n
 const ETH = 10n ** 18n
+
+describe("a lot whose cost is only known for all of it", () => {
+  const pieces = [{ qty: (2n * ETH).toString(), costMicros: (4000n * USD).toString(), label: "self-reported" as const, estimatedCostMicros: "0", wholeCostOnly: true as const }]
+  const arrived: FoldLeg = { id: "in", delta: (2n * ETH).toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (4000n * USD).toString(), proceedsMicros: null, costLabel: "self-reported", pieces }
+  const held = applyLeg(emptyPosition("fifo", 18), arrived)
+  const sold = (qty: bigint, usd: bigint): FoldLeg => ({ id: "out", delta: (-qty).toString(), decimals: 18, kind: "swap", priceMicros: null, costMicros: null, proceedsMicros: ((qty * usd * USD) / ETH).toString(), costLabel: "unknown" })
+
+  it("keeps its cost while it's all there, and it all goes together", () => {
+    assert.equal(valuePosition(held, null).costMicros, (4000n * USD).toString())
+    const after = applyLeg(held, sold(2n * ETH, 3000n))
+    assert.deepEqual([after.realizedMicros, after.unresolvedDisposedQty], [(2000n * USD).toString(), "0"])
+  })
+
+  it("has no known cost for what's taken or what's left once part of it goes", () => {
+    const { state, taken } = applyLegTaking(held, sold(ETH, 3000n))
+    assert.deepEqual([state.realizedMicros, state.unknownCostDisposedQty, taken[0]?.costMicros, taken[0]?.wholeCostOnly], ["0", ETH.toString(), null, undefined])
+    assert.deepEqual([valuePosition(state, null).costMicros, valuePosition(state, null).unknownCostQty, valuePosition(state, null).realizedMicros], [null, ETH.toString(), null])
+  })
+
+  it("is only split by what doesn't reach the end of it", () => {
+    assert.equal(lotSplitBy(held, ETH), held.lots[0])
+    assert.equal(lotSplitBy(held, 2n * ETH), null)
+    assert.equal(lotSplitBy(held, 3n * ETH), null)
+    assert.equal(lotSplitBy(held, 0n), null)
+  })
+})
 
 function leg(partial: Partial<Omit<FoldLeg, "delta">> & { delta: bigint }): FoldLeg {
   const { delta, ...rest } = partial

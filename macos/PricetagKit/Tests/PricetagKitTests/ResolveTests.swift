@@ -363,6 +363,20 @@ actor BookSource: PortfolioSource {
         #expect(withdrawal("2026-11-04T00:00:00.000Z").fifoCostMicros == nil, "saved before it had one")
     }
 
+    @Test func aWithdrawalKeepsItsPurchasesAcrossASave() throws {
+        let sent = #"{"exchange":"Coinbase","asset":"ETH","units":"3","at":"2026-11-04T00:00:00.000Z","cost":{"micros":"6","currency":"USD"},"fifoCostMicros":"5","fifoLots":[{"units":"1","micros":"1"},{"units":"2","micros":"4","wholeCostOnly":true}]}"#
+        let read = try JSONDecoder().decode(ExchangeWithdrawal.self, from: Data(sent.utf8))
+        #expect(read.fifoLots?.map(\.units) == ["1", "2"])
+        #expect(read.fifoLots?.map(\.wholeCostOnly) == [nil, true])
+        let saved = try JSONEncoder().encode(read)
+        #expect(try JSONDecoder().decode(ExchangeWithdrawal.self, from: saved) == read)
+        let onward = try #require(try JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        let lots = try #require(onward["fifoLots"] as? [[String: Any]])
+        #expect(lots[0]["wholeCostOnly"] == nil, "the server refuses anything but true or nothing")
+        #expect(lots[1]["wholeCostOnly"] as? Bool == true)
+        #expect(withdrawal("2026-11-04T00:00:00.000Z").fifoLots == nil, "saved before it had them")
+    }
+
     @Test func aFileWithTheSameWithdrawalAgainTakesOver() {
         let (earlier, other) = (withdrawal("2026-06-01T00:00:00.000Z", cost: "5"), withdrawal("2026-07-01T00:00:00.000Z"))
         let corrected = withdrawal("2026-06-01T00:00:00.000Z", cost: "6")

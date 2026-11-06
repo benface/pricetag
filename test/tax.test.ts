@@ -7,6 +7,7 @@ import type { Source } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../src/core/api.ts"
 import { costKey, emptyBook, type Book } from "../src/core/book.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
+import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { TAX_COUNTRIES, parseTaxYear, readOtherWallets, savedOtherWallets, taxReportOf, taxRows, type TaxYear } from "../src/core/tax.ts"
 import { createApi } from "../server/app.ts"
@@ -579,6 +580,45 @@ describe("the user's answers in a report", () => {
     const book: Book = { ...emptyBook(), withdrawals: [{ exchange: "Coinbase", asset: "ETH", units: E18.toString(), at, cost: { micros: usd(1200), currency: "USD" }, fifoCostMicros: usd(1200), toAddress: A }] }
     const [row] = eventsOf(taxReportOf([wallet], US, { book }))
     assert.deepEqual([row?.Cost, row?.Status], ["1200.000000", "SELF-REPORTED"])
+  })
+
+  describe("selling part of what an exchange withdrawal brought", () => {
+    const file = (...rows: string[]) => parseCoinbaseCsv(`Timestamp,Transaction Type,Asset,Quantity Transacted,Price Currency,Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes\n${rows.join("\n")}\n`)!
+    const row = (when: string, type: string, quantity: string, total = "$0") => `${when},${type},ETH,${quantity},USD,$0,$0,${total},$0,x`
+    const twoEth = leg(10, 2n * E18, { kind: "transfer", parts: [part(A, "credit", 2n * E18, SELLER)] })
+    const at = twoEth.timestamp
+    const withdrawn = row(at, "Send", "2")
+    const bookOf = (...buys: string[]): Book => ({ ...emptyBook(), withdrawals: file(...buys, withdrawn).withdrawals })
+    const wallet = held([twoEth, sell(30, 1n, 2500)])
+    const DATED = [row("2026-10-01T10:00:00Z", "Buy", "1", "$1000"), row("2026-10-02T10:00:00Z", "Buy", "1", "$3000")]
+    const TIED = [row("2026-10-01T10:00:00Z", "Buy", "1", "$1000"), row("2026-10-01T10:00:00Z", "Buy", "1", "$3000")]
+
+    it("costs the oldest purchase, and the average in a report that averages", () => {
+      const [oldest] = eventsOf(taxReportOf([wallet], US, { book: bookOf(...DATED) }))
+      assert.deepEqual([oldest?.Cost, oldest?.Gain, oldest?.Status], ["1000.000000", "1500.000000", "SELF-REPORTED"])
+      const [average] = eventsOf(taxReportOf([wallet], { ...US, method: "average" }, { book: bookOf(...DATED) }))
+      assert.deepEqual([average?.Cost, average?.Gain], ["2000.000000", "500.000000"])
+    })
+
+    it("has no cost or gain when nothing says which purchase came first", () => {
+      const report = taxReportOf([wallet], US, { book: bookOf(...TIED) })
+      const rows = eventsOf(report)
+      assert.deepEqual(rows.map((r) => [r.Amount, r.Cost, r.Gain, r.Status]), [["1", "unknown", "unknown", "UNKNOWN GAIN"]])
+      assert.equal(report.gainMicros, foldBook(wallet, [], "fifo", bookOf(...TIED)).positions[0]?.values.realizedMicros)
+    })
+
+    it("still has all of it at its known cost, if all of it's sold", () => {
+      const [all] = eventsOf(taxReportOf([held([twoEth, sell(30, 2n, 5000)])], US, { book: bookOf(...TIED) }))
+      assert.deepEqual([all?.Cost, all?.Gain, all?.Status], ["4000.000000", "1000.000000", "SELF-REPORTED"])
+    })
+
+    it("keeps the row for what's known when the same sale also splits it", () => {
+      const oneThenTied = [row("2026-09-01T10:00:00Z", "Buy", "1", "$500"), ...TIED]
+      const threeEth = leg(10, 3n * E18, { kind: "transfer", parts: [part(A, "credit", 3n * E18, SELLER)] })
+      const book: Book = { ...emptyBook(), withdrawals: file(...oneThenTied, row(at, "Send", "3")).withdrawals }
+      const rows = eventsOf(taxReportOf([held([threeEth, sell(30, 2n, 5000)])], US, { book }))
+      assert.deepEqual(rows.map((r) => [r.Amount, r.Cost, r.Gain, r.Status]), [["1", "500.000000", "2000.000000", "SELF-REPORTED"], ["1", "unknown", "unknown", "UNKNOWN GAIN"]])
+    })
   })
 
   it("uses a cost entered for an exchange account, and marks it", () => {

@@ -7,7 +7,7 @@
 import { applyLegTaking, assertFoldFits, emptyPosition, firstMarks, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
-import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type ExchangeWithdrawal, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
+import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type ExchangeLot, type ExchangeWithdrawal, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
 import { describeTransaction, purchaseSource } from "./wording.ts"
@@ -72,9 +72,13 @@ function moneyIn(side: Side, money: Money, leg: PricedLeg): string | null {
   return from === null || to === null ? null : ((BigInt(money.micros) * from) / to).toString()
 }
 
+/** Part of a piece whose cost is only known for all of it, so this part has none, and neither does the rest. */
+const withoutItsCost = ({ qty, acquiredBlock, acquiredAt }: CostPiece, units: bigint): CostPiece => ({ qty: units.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }) })
+
 /** Part of a piece, with its share of the cost. Taking it all takes all of the cost, so rounding never loses any. */
 function slice(piece: CostPiece, qty: bigint): CostPiece {
   const whole = BigInt(piece.qty)
+  if (piece.wholeCostOnly && qty !== whole) return withoutItsCost(piece, qty)
   const share = (micros: string) => (qty === whole ? BigInt(micros) : (BigInt(micros) * qty) / whole).toString()
   const cost = piece.costMicros === null ? null : share(piece.costMicros)
   return {
@@ -89,6 +93,7 @@ function slice(piece: CostPiece, qty: bigint): CostPiece {
 
 /** What's left of a piece after a slice of it is gone. */
 function without(piece: CostPiece, taken: CostPiece): CostPiece {
+  if (piece.wholeCostOnly) return withoutItsCost(piece, BigInt(piece.qty) - BigInt(taken.qty))
   const less = (micros: string | null, gone: string | null) => (micros === null ? null : (BigInt(micros) - BigInt(gone as string)).toString())
   return {
     ...piece,
@@ -237,6 +242,32 @@ const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: Priced
 /** What a withdrawal cost by this method. An average never stands in for oldest first, so with no figure for that, it stays unknown. */
 const withdrawalCost = ({ cost, fifoCostMicros }: ExchangeWithdrawal, method: Method): Money | undefined => (method === "average" ? cost : fifoCostMicros === null ? undefined : { micros: fifoCostMicros, currency: cost.currency })
 
+/**
+ * What arrived from a withdrawal oldest first, purchase by purchase, so spending part of it takes the oldest. The network kept
+ * a little of each, in proportion, and what's left still cost all of it, so nothing here depends on how much it kept. Saved
+ * before its lots were kept, it's one cost for all of it, because treating that as one purchase would be a guess.
+ */
+function piecesOfWithdrawal(side: Side, { units, cost, fifoCostMicros, fifoLots }: ExchangeWithdrawal, leg: PricedLeg): CostPiece[] | null {
+  if (fifoCostMicros === null) return null
+  const lots: readonly ExchangeLot[] = fifoLots ?? [{ units, micros: fifoCostMicros, wholeCostOnly: true }]
+  const [sent, arrived] = [BigInt(units), BigInt(leg.delta)]
+  const pieces: CostPiece[] = []
+  let [unitsUpTo, microsUpTo, unitsGiven, microsGiven] = [0n, 0n, 0n, 0n]
+  for (const lot of lots) {
+    unitsUpTo += BigInt(lot.units)
+    microsUpTo += BigInt(lot.micros)
+    const qty = (unitsUpTo * arrived) / sent - unitsGiven
+    if (qty === 0n) continue
+    // Converted as a running total, so the pieces add up to exactly what all of it comes to.
+    const upTo = moneyIn(side, { micros: microsUpTo.toString(), currency: cost.currency }, leg)
+    if (upTo === null) return null
+    pieces.push({ qty: qty.toString(), costMicros: (BigInt(upTo) - microsGiven).toString(), label: "self-reported", estimatedCostMicros: "0", ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}) })
+    unitsGiven += qty
+    microsGiven = BigInt(upTo)
+  }
+  return pieces
+}
+
 export function resolveLegs(sides: readonly Side[], method: Method, book: Book): Resolved {
   const linked = new Set(linkedWallets(book))
   const read = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
@@ -346,6 +377,9 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     // What's inherited wins, unless part of it can't be, or can't be yet, since an entered cost is for all of what arrived.
     if ((unvouched.length > 0 || !pieces.some((p) => p.label === "inherited" && p.costMicros !== null)) && report !== null) {
       // When what was already held got paid for isn't known, so there's no rate for that day, only the one when the history starts.
+      const fromWithdrawal = withdrawal && method === "fifo" && !book.costs[costKey(address, leg.id)] && !note
+      const lots = fromWithdrawal ? piecesOfWithdrawal(side, withdrawal, leg) : null
+      if (lots) return withPieces(leg, lots)
       const approximate = leg.opening && reportedMoney && reportedMoney.currency !== side.view.currency
       return approximate ? { ...reported(leg, report), estimated: true, enteredAs: reportedMoney } : reported(leg, report)
     }

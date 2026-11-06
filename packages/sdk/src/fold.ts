@@ -70,6 +70,8 @@ export type CostPiece = {
   acquiredAt?: string
   /** What an average mixed together, paid at different moments. Missing means all of it at `acquiredBlock`. */
   paidAt?: PaidAt[]
+  /** Its cost is only known for all of it, so part of it has no known cost, and neither does the rest. */
+  wholeCostOnly?: true
 }
 
 export type Lot = {
@@ -95,6 +97,8 @@ export type Lot = {
   acquiredAt?: string
   /** When a position tracks it: what this lot mixes together. Missing means all of it at `acquiredBlock`. */
   paidAt?: PaidAt[]
+  /** Its cost is only known for all of it, so part of it has no known cost, and neither does the rest. */
+  wholeCostOnly?: true
 }
 
 export type PositionState = {
@@ -227,6 +231,7 @@ function lotOf({ tracksPaidAt }: PositionState, piece: CostPiece, legId: string)
     ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }),
     // Otherwise every leg's state would keep a copy of it, and the leg already has it for whoever needs it.
     ...(tracksPaidAt && known && piece.paidAt ? { paidAt: piece.paidAt } : {}),
+    ...(known && piece.wholeCostOnly ? { wholeCostOnly: true as const } : {}),
   }
 }
 
@@ -298,6 +303,20 @@ function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint; estima
   return { rest, cost, estimated, given, ...(paidAt ? { paidAt } : {}) }
 }
 
+/** The lot whose only known cost is for all of it, when taking this much would leave part of it behind. It has no known cost after that. */
+export function lotSplitBy({ lots }: Pick<PositionState, "lots">, qty: bigint): Lot | null {
+  let left = qty
+  for (const lot of lots) {
+    const lotQty = BigInt(lot.qty)
+    if (left < lotQty) return left > 0n && lot.wholeCostOnly ? lot : null
+    left -= lotQty
+  }
+  return null
+}
+
+/** This lot with no cost anyone can rely on. */
+const withoutCost = ({ qty, legId, unconfirmedBy, acquiredBlock, acquiredAt }: Lot): Lot => ({ qty, costMicros: null, label: "unknown", legId, ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }) })
+
 /** FIFO takes the oldest lots first. Average takes from the known and unknown pools in proportion. */
 function take(state: PositionState, qty: bigint): Taken {
   const held = state.lots.reduce((sum, l) => sum + BigInt(l.qty), 0n)
@@ -305,7 +324,9 @@ function take(state: PositionState, qty: bigint): Taken {
   const result: Taken = { lots: [], pieces: [], knownQty: 0n, knownCost: 0n, estimatedCost: 0n, unknownQty: 0n, shortfall: qty - taking }
 
   let remaining = taking
-  state.lots.forEach((lot, i) => {
+  const split = lotSplitBy(state, taking)
+  state.lots.forEach((current, i) => {
+    const lot = current === split ? withoutCost(current) : current
     const lotQty = BigInt(lot.qty)
     let n: bigint
     if (state.method === "fifo") n = remaining < lotQty ? remaining : lotQty
@@ -333,6 +354,7 @@ function take(state: PositionState, qty: bigint): Taken {
       ...unconfirmed(lot.unconfirmedBy),
       ...(lot.acquiredBlock === undefined ? {} : { acquiredBlock: lot.acquiredBlock, acquiredAt: lot.acquiredAt as string }),
       ...(paidAt ? { paidAt } : {}),
+      ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}),
     })
   })
   // Units we never saw arrive have no cost anyone can carry.
@@ -354,7 +376,7 @@ function withoutCosts(taken: Taken): Taken {
 
 /** What's still held, with no cost anyone can rely on, since how much of each lot is left depends on the same order. */
 function lotsWithoutCosts(state: PositionState, lots: readonly Lot[]): Lot[] {
-  return lots.reduce<Lot[]>((kept, { qty, legId, unconfirmedBy, acquiredBlock, acquiredAt }) => addLot(state, kept, { qty, costMicros: null, label: "unknown", legId, ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }) }), [])
+  return lots.reduce<Lot[]>((kept, lot) => addLot(state, kept, withoutCost(lot)), [])
 }
 
 /** Applies a leg, and says what a debit took, which is what a transfer to a linked wallet carries with it. */

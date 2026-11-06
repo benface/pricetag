@@ -22,6 +22,17 @@ export type SenderAnswer =
   | { kind: "my-exchange"; costs?: ExchangeCost[] }
   | { kind: "someone-else" }
 
+/** Part of a withdrawal, oldest first: how much of it, and what that cost. */
+export type ExchangeLot = {
+  units: string
+  micros: string
+  /** A file can't say which came first within it, so only all of it has a cost. */
+  wholeCostOnly?: true
+}
+
+/** The most lots a withdrawal keeps. More than that only has a cost as a whole, so one file can't weigh down every fold after it. */
+export const MAX_EXCHANGE_LOTS = 512
+
 /** A withdrawal found in an exchange's history. See `exchange-import.ts`. */
 export type ExchangeWithdrawal = {
   exchange: string
@@ -32,6 +43,8 @@ export type ExchangeWithdrawal = {
   cost: Money
   /** The same going oldest first, in the same currency. Null when that can't be said, or it was saved before this was worked out. */
   fifoCostMicros: string | null
+  /** What `fifoCostMicros` is made of, oldest first. Missing means it was saved before this was kept, so only all of it has that cost. */
+  fifoLots?: ExchangeLot[]
   toAddress: string | null
 }
 
@@ -228,6 +241,20 @@ function parseAnswer(value: unknown): SenderAnswer | null {
   return { kind: "my-exchange", costs }
 }
 
+/** The lots saved with a withdrawal, which have to add up to it. Null when they don't. */
+function parseExchangeLots(value: unknown[], units: string, fifoCostMicros: string | null): ExchangeLot[] | null {
+  if (fifoCostMicros === null || value.length === 0 || value.length > MAX_EXCHANGE_LOTS) return null
+  const lots: ExchangeLot[] = []
+  for (const item of value) {
+    const lot = plainRecord(item)
+    if (!lot || !isMicros(lot.units) || BigInt(lot.units) === 0n || !isMicros(lot.micros)) return null
+    if (lot.wholeCostOnly !== undefined && lot.wholeCostOnly !== true) return null
+    lots.push({ units: lot.units, micros: lot.micros, ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}) })
+  }
+  const adds = (pick: (lot: ExchangeLot) => string, total: string) => lots.reduce((sum, lot) => sum + BigInt(pick(lot)), 0n) === BigInt(total)
+  return adds((lot) => lot.units, units) && adds((lot) => lot.micros, fifoCostMicros) ? lots : null
+}
+
 function parseWithdrawal(value: unknown): ExchangeWithdrawal | null {
   const row = plainRecord(value)
   if (!row || typeof row.exchange !== "string" || typeof row.asset !== "string" || !isMicros(row.units)) return null
@@ -239,7 +266,11 @@ function parseWithdrawal(value: unknown): ExchangeWithdrawal | null {
   const fifoCostMicros = row.fifoCostMicros ?? null
   if (toAddress !== null && (typeof toAddress !== "string" || !isAddress(toAddress))) return null
   if (fifoCostMicros !== null && !isMicros(fifoCostMicros)) return null
-  return { exchange: row.exchange, asset: row.asset, units: row.units, at: row.at, cost, fifoCostMicros, toAddress: toAddress === null ? null : normalizeAddress(toAddress) }
+  const savedLots = row.fifoLots ?? null
+  if (savedLots !== null && !Array.isArray(savedLots)) return null
+  const fifoLots = savedLots && parseExchangeLots(savedLots, row.units, fifoCostMicros)
+  if (savedLots && !fifoLots) return null
+  return { exchange: row.exchange, asset: row.asset, units: row.units, at: row.at, cost, fifoCostMicros, ...(fifoLots ? { fifoLots } : {}), toAddress: toAddress === null ? null : normalizeAddress(toAddress) }
 }
 
 function parsePurchase(value: unknown): Purchase | null {
