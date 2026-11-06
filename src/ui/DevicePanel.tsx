@@ -45,8 +45,8 @@ type Props = {
   onLink: (addresses: readonly string[]) => void
   /** The last link couldn't be saved. */
   notSaved?: boolean
-  /** Opens a wallet in the main view. */
-  onView: (address: string) => void
+  /** Opens a wallet in the main view. The page the Mac app serves has none. */
+  onView?: (address: string) => void
   onClose: () => void
   connectors?: Connectors
   /** A test page starts partway through. */
@@ -368,9 +368,11 @@ export function DevicePanel({ link, book, currency = "USD", allYours = false, on
               <a className="button-link" href={toMac} onClick={handOff}>
                 Add to the Mac app as savings
               </a>
-              <button type="button" onClick={() => onView(account.address)}>
-                See this wallet
-              </button>
+              {onView ? (
+                <button type="button" onClick={() => onView(account.address)}>
+                  See this wallet
+                </button>
+              ) : null}
             </div>
             <p className="muted small">{activityWords(account.activity)}. Its account on your device is linked here, so costs follow what moves between your wallets.</p>
           </>

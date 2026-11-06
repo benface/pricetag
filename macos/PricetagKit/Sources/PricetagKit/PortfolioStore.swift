@@ -70,6 +70,14 @@ public enum FeedState: Equatable, Sendable {
         case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .tooBig, .rateLimited, .walletsOutdated: true
         }
     }
+
+    /// A blip, usually, so the status alone says so until it's gone on a while. The others say the numbers are old from the start.
+    public var canBeBrief: Bool {
+        switch self {
+        case .serverUnreachable, .tooSlow, .ampUnavailable, .rateLimited: true
+        default: false
+        }
+    }
 }
 
 /// One number's explanation, in full context, because the same number means something else on another wallet, method or server.
@@ -118,10 +126,22 @@ public final class PortfolioStore {
     /// Goes up each time `portfolio` is replaced, however that happens: a read, the last read on the server, or what's kept from
     /// before. `updatedAt` only changes with a fresh read, so whatever's worked out from `portfolio` keys on this instead.
     public private(set) var portfolioRevision = 0
-    public private(set) var feed: FeedState
+    public private(set) var feed: FeedState {
+        didSet { noteProblem() }
+    }
+    /// Whether what's wrong has been worth saying beyond the status: it can't clear by itself in a moment, or it's had `longProblem` to. A read that's trying again keeps it.
+    public private(set) var isProblemLong = false
+    @ObservationIgnored private var longProblemTask: Task<Void, Never>?
+    /// What was wrong when someone asked to try again. It stands until that read answers.
+    public private(set) var retriedProblem: FeedState?
     /// When the read that's running now started, so a long one can say how long it's been, including a retry after a failure. nil between reads.
     /// A change starts a new read, so it starts this over. A read that waits longer on the same request keeps it.
-    public private(set) var readingSince: Date?
+    public private(set) var readingSince: Date? {
+        didSet { noteRead() }
+    }
+    /// Whether the read that's running has gone on for `longReadSeconds`, so it's worth saying more than that it's running.
+    public private(set) var isReadLong = false
+    @ObservationIgnored private var longReadTask: Task<Void, Never>?
     /// Which read `readingSince` belongs to, so one a change left behind can't clear it when it finally ends.
     @ObservationIgnored private var readCount = 0
     public private(set) var updatedAt: Date?
@@ -173,7 +193,21 @@ public final class PortfolioStore {
     /// Taken off the list, but still the user's, so costs keep following their money.
     public private(set) var hiddenWallets: [String]
 
-    @ObservationIgnored private(set) var source: any PortfolioSource
+    @ObservationIgnored private(set) var source: any PortfolioSource {
+        didSet {
+            sourceChanges += 1
+            rulesRetry?.cancel()
+            rulesRetry = nil
+            rulesRead = nil
+            rateHeldUntil = nil
+        }
+    }
+    /// How many times `source` has been replaced, so an answer from an earlier one can tell.
+    @ObservationIgnored private var sourceChanges = 0
+    /// Asks for the rules again once the server has room. While it's there, nobody else asks.
+    @ObservationIgnored private var rulesRetry: Task<Void, Never>?
+    /// The read of the rules that's under way, which anyone else asking joins, so one answer settles it.
+    @ObservationIgnored private var rulesRead: Task<Void, Never>?
     @ObservationIgnored private var cache: PortfolioCache
     /// Something changed, so the server can answer from what it last read while the real read runs.
     @ObservationIgnored private var wantsLastRead = true
@@ -186,6 +220,7 @@ public final class PortfolioStore {
     @ObservationIgnored private let pushedDelay: Duration
     /// When the server said it'd have room again, after holding this client back.
     @ObservationIgnored private var heldUntil: Date?
+    private let longProblem: Duration
     @ObservationIgnored private let liveFor: Duration
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var eventsTask: Task<Void, Never>?
@@ -196,6 +231,10 @@ public final class PortfolioStore {
     @ObservationIgnored private var sleeper: Task<Void, Never>?
     @ObservationIgnored private var rateTask: Task<Void, Never>?
     @ObservationIgnored private let rateRetryDelay: Duration
+    /// When the server said it'd have room for a rate read again. Starting over doesn't change that, but another server or invite does.
+    @ObservationIgnored private var rateHeldUntil: Date?
+    /// Lets a rate go at the end of its time, when the server said to wait past that.
+    @ObservationIgnored private var rateExpiry: Task<Void, Never>?
     private static let rateDelay: Duration = .seconds(300)
     private static let rateLasts: TimeInterval = 60 * 60
     /// A block arrived during a read, which may have missed it.
@@ -213,8 +252,10 @@ public final class PortfolioStore {
         pushedDelay: Duration = .seconds(15),
         // The longest wait for a block, plus as long as a read gets before it's marked as on its way anyway.
         liveFor: Duration = .seconds(30),
-        rateRetryDelay: Duration = .seconds(30)
+        rateRetryDelay: Duration = .seconds(30),
+        longProblem: Duration = .seconds(60)
     ) {
+        self.longProblem = longProblem
         self.rateRetryDelay = rateRetryDelay
         self.defaults = defaults
         self.customSource = makeSource
@@ -255,6 +296,7 @@ public final class PortfolioStore {
 
     /// Reads now, with the numbers on screen marked as on their way, because someone asked and should see it happen.
     public func refresh() {
+        if feed.isStale { retriedProblem = feed }
         if address != nil { feed = .reading }
         start()
     }
@@ -265,7 +307,7 @@ public final class PortfolioStore {
         Task { await refreshRules() }
         rateTask = Task { [weak self] in
             while !Task.isCancelled {
-                guard let hasRead = await self?.readRate(), let delay = self?.rateRetryDelay else { return }
+                guard let hasRead = await self?.readRate(), let delay = self?.rateHoldLeft ?? self?.rateRetryDelay else { return }
                 try? await Task.sleep(for: hasRead ? Self.rateDelay : delay)
             }
         }
@@ -284,6 +326,8 @@ public final class PortfolioStore {
     public func stop() {
         rateTask?.cancel()
         rateTask = nil
+        rateExpiry?.cancel()
+        rateExpiry = nil
         pollTask?.cancel()
         pollTask = nil
         readCount += 1
@@ -350,6 +394,7 @@ public final class PortfolioStore {
         // In the same moment as the address, so one wallet's numbers are never on screen under another.
         portfolio = lastKnown()
         updatedAt = nil
+        retriedProblem = nil
         feed = next == nil ? .noWallet : .reading
         wantsLastRead = true
         start()
@@ -610,7 +655,9 @@ public final class PortfolioStore {
             currentRate = nil
             return true
         }
+        guard rateHoldLeft == nil else { return rateNotRead() }
         let source = self.source
+        let asked = sourceChanges
         let server = serverURL
         do {
             let micros = try await source.currentRate(currency: currency)
@@ -618,9 +665,39 @@ public final class PortfolioStore {
             currentRate = micros.map { CurrentRate(currency: currency, micros: $0, readAt: now()) }
             return true
         } catch {
+            // The server said it whether or not anyone's still waiting on this read, and the longest wait it's given is the one that counts.
+            if case FetchError.rateLimited(_, let retryAfter) = error, asked == sourceChanges {
+                let until = now().addingTimeInterval(TimeInterval(retryAfter))
+                rateHeldUntil = max(rateHeldUntil ?? until, until)
+            }
             if Task.isCancelled { return true }
-            if let currentRate, now().timeIntervalSince(currentRate.readAt) > Self.rateLasts { self.currentRate = nil }
-            return false
+            return rateNotRead()
+        }
+    }
+
+    /// How much of the server's wait is left, if any.
+    private var rateHoldLeft: Duration? {
+        guard let left = rateHeldUntil?.timeIntervalSince(now()), left > 0 else { return nil }
+        return .seconds(left)
+    }
+
+    /// There's no new rate, so the last one only stays while it's new enough.
+    private func rateNotRead() -> Bool {
+        if let currentRate, now().timeIntervalSince(currentRate.readAt) > Self.rateLasts { self.currentRate = nil }
+        if let rateHoldLeft { expireRate(within: rateHoldLeft) }
+        return false
+    }
+
+    /// The next read is too late to notice a rate getting too old if it runs out within this time, and a server that said to wait isn't asked any sooner.
+    private func expireRate(within wait: Duration) {
+        guard let currentRate else { return }
+        let left = Self.rateLasts - now().timeIntervalSince(currentRate.readAt)
+        guard .seconds(left) < wait else { return }
+        rateExpiry?.cancel()
+        rateExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(left))
+            guard !Task.isCancelled, let self, self.currentRate == currentRate else { return }
+            self.currentRate = nil
         }
     }
 
@@ -689,22 +766,43 @@ public final class PortfolioStore {
         return rules.first { $0.id == id }?.name
     }
 
-    /// Asks the server what rules it has. A rule it doesn't have would fail every read, so that choice goes.
+    /// Asks the server what rules it has, and again when it says to wait. A rule it doesn't have would fail every read, so that choice goes.
     public func refreshRules() async {
-        let asked = serverURL
-        let askedInvite = invite
-        // An answer to an invite that's since been replaced says nothing about the new one.
-        let isCurrent = { [self] in asked == serverURL && askedInvite == invite }
+        guard rulesRetry == nil else {
+            // A retry only waits on a server that answered, and a new source cancels it.
+            serverCheck = .answers
+            return
+        }
+        if let rulesRead { return await rulesRead.value }
+        let source = self.source
+        let asked = sourceChanges
+        let read = Task<Void, Never> { [weak self] in await self?.readRules(from: source, asked: asked) }
+        rulesRead = read
+        await read.value
+    }
+
+    private func readRules(from source: any PortfolioSource, asked: Int) async {
+        defer { if asked == sourceChanges { rulesRead = nil } }
         let next: [PricingRule]
         do {
             next = try await source.rules()
         } catch {
-            guard isCurrent() else { return }
+            // An answer to an invite that's since been replaced says nothing about the new one.
+            guard asked == sourceChanges else { return }
             serverCheck = error as? FetchError == .unreachable || error as? FetchError == .timedOut ? .unreachable : .answers
             if case .needsInvite = error as? FetchError { needsInvite = true }
+            if case .rateLimited(_, let retryAfter) = error as? FetchError {
+                // Owned by the store, so closing Settings doesn't leave the list out of date.
+                rulesRetry = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(retryAfter))
+                    guard !Task.isCancelled, let self else { return }
+                    self.rulesRetry = nil
+                    await self.refreshRules()
+                }
+            }
             return
         }
-        guard isCurrent() else { return }
+        guard asked == sourceChanges else { return }
         serverCheck = .answers
         needsInvite = false
         rules = next
@@ -1016,6 +1114,50 @@ public final class PortfolioStore {
         return last.latest.blockNum >= portfolio.latest.blockNum
     }
 
+    /// By the same clock as `ReadingClock`, so this agrees with the seconds on screen.
+    private func noteRead() {
+        longReadTask?.cancel()
+        longReadTask = nil
+        isReadLong = false
+        guard let readingSince else { return }
+        let remaining = Double(FeedState.longReadSeconds) - Date.now.timeIntervalSince(readingSince)
+        guard remaining > 0 else {
+            isReadLong = true
+            return
+        }
+        longReadTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(remaining))
+            guard let self, !Task.isCancelled else { return }
+            isReadLong = true
+        }
+    }
+
+    private func noteProblem() {
+        if feed != .reading { retriedProblem = nil }
+        guard feed.isStale else {
+            // A read says nothing yet, so whatever was wrong stands until it answers.
+            if feed != .reading {
+                longProblemTask?.cancel()
+                longProblemTask = nil
+                isProblemLong = false
+            }
+            return
+        }
+        guard !isProblemLong else { return }
+        guard feed.canBeBrief, longProblem > .zero else {
+            longProblemTask?.cancel()
+            longProblemTask = nil
+            isProblemLong = true
+            return
+        }
+        guard longProblemTask == nil else { return }
+        longProblemTask = Task { [weak self, longProblem] in
+            try? await Task.sleep(for: longProblem)
+            guard let self, !Task.isCancelled else { return }
+            isProblemLong = true
+        }
+    }
+
     /// Stops calling these numbers live once they're older than a read should leave them, say after a Mac sleeps. Checking when a read starts
     /// wouldn't do, because one from before it slept can still be running. This sleep counts time the Mac is asleep, so it ends on waking. Demo data
     /// doesn't age. `stop` leaves this running, because starting over doesn't make the numbers any newer.
@@ -1101,7 +1243,7 @@ public final class PortfolioStore {
 
 private struct ReadTooSlow: Error {}
 
-private struct CurrentRate {
+private struct CurrentRate: Equatable {
     let currency: CurrencyCode
     let micros: String
     let readAt: Date

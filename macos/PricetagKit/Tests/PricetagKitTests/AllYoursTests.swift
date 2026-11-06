@@ -279,10 +279,24 @@ struct AllYoursTests {
                 #expect(summary.text == says)
                 #expect(summary.isWarning == warns)
             }
-            // Which wallets, and what to do about them, are in the notices, so this adds no second copy of them.
+            // Which wallets, and what to do about them, are in the status's details, so this adds no second copy of them.
             #expect(store.feed.problem(serverURL: URL(string: "http://127.0.0.1:8787")!, portfolio: store.portfolio) == nil)
             #expect(store.feed.shortProblem(portfolio: store.portfolio) == nil)
         }
+    }
+
+    @Test func theStatusSaysWhichWalletsAreBehind() async throws {
+        let now = Date()
+        let names = [a: "Savings", b: "Spending Money"]
+        let store = allYoursStore(AnswersInTurn([.success(try answer([a: .updating, b: .read], block: 10, at: now)), .success(try answer([a: .read, b: .outdated], block: 10, at: now))]), at: now)
+        _ = await store.poll()
+        #expect(store.statusMessages(names: names) == [Wording.allYoursUpdating(["Savings"])])
+        #expect(store.hasStatusDetails)
+        #expect(!store.canRetryStatus, "It's on its way already.")
+        _ = await store.poll()
+        #expect(store.statusMessages(names: names) == [Wording.allYoursOutdated(["Spending Money"])])
+        #expect(store.hasStatusDetails)
+        #expect(store.canRetryStatus)
     }
 
     @Test func transactionsSayWhichWalletAndCanBeFoundByIt() throws {

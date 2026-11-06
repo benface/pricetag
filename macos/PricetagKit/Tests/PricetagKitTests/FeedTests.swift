@@ -132,12 +132,13 @@ actor TimedOutThenGatedSource: PortfolioSource {
 }
 
 /// `demoPortfolio()`, but from a real source, and with its newest block at a given time.
-func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod = .average, currency: CurrencyCode = .USD, progress: ReadProgress? = nil) throws -> Portfolio {
+func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod = .average, currency: CurrencyCode = .USD, progress: ReadProgress? = nil, linkedFailed: [String] = []) throws -> Portfolio {
     var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
     object["mode"] = "raw"
     object["method"] = method.rawValue
     object["currency"] = currency.rawValue
     object["latest"] = ["blockNum": 53_505_400, "timestamp": date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))]
+    if !linkedFailed.isEmpty { object["linkedFailed"] = linkedFailed }
     if let status { object["pnlStatus"] = status.rawValue }
     if let progress { object["progress"] = ["started": progress.started, "behindBlocks": progress.behindBlocks] }
     return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
@@ -174,6 +175,93 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         let notice = try #require(store.feed.staleNotice(serverURL: store.serverURL, portfolio: store.portfolio))
         #expect(notice.contains("aren't updating"))
         #expect(!notice.contains("block"))
+    }
+
+    @Test func aBlipOnlyShowsInTheStatusUntilItsGoneOnAWhile() async throws {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let now = now
+        let source = ScriptedSource([.success(try realPortfolio(at: now)), .failure(.unreachable), .success(try realPortfolio(at: now))])
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now }, longProblem: .milliseconds(30))
+        await _ = store.poll()
+        await _ = store.poll()
+        #expect(store.feed == .serverUnreachable)
+        #expect(store.staleNote == nil)
+        #expect(store.statusLines.isEmpty)
+        #expect(!store.statusMessages(names: [:]).isEmpty, "A click still says what's wrong.")
+        #expect(store.canRetryStatus)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(store.staleNote?.contains("aren't updating") == true)
+        #expect(store.statusLines.first?.hasPrefix("Last update") == true)
+        await _ = store.poll()
+        #expect(store.feed.isLive)
+        #expect(!store.isProblemLong)
+        #expect(store.statusMessages(names: [:]).isEmpty)
+    }
+
+    @Test func aRetryKeepsWhatsWrongUntilItAnswers() async throws {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let now = now
+        let source = ScriptedSource([.success(try realPortfolio(at: now)), .failure(.unreachable), .success(try realPortfolio(at: now))])
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now }, longProblem: .zero)
+        await _ = store.poll()
+        await _ = store.poll()
+        let said = store.statusMessages(names: [:])
+        store.refresh()
+        store.stop()
+        #expect(store.feed == .reading)
+        #expect(store.statusFeed == .serverUnreachable)
+        #expect(store.statusMessages(names: [:]) == said)
+        #expect(store.hasStatusDetails)
+        #expect(store.canRetryStatus)
+        #expect(store.statusLines.first?.hasPrefix("Last update") == true)
+        await _ = store.poll()
+        #expect(store.retriedProblem == nil)
+        #expect(!store.hasStatusDetails)
+        #expect(store.statusLines.isEmpty)
+    }
+
+    @Test func aLongReadSaysHowOldTheNumbersAre() async throws {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let gate = TimedOutThenGatedSource(first: try realPortfolio(at: now))
+        // As long ago as it takes, so this doesn't wait out the real seconds.
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in gate }, now: { Date().addingTimeInterval(-72) })
+        await _ = store.poll()
+        #expect(!store.isUpdatingLong)
+        let read = Task { await store.poll() }
+        await gate.waitUntilAsked()
+        #expect(store.feed == .reading)
+        #expect(store.isUpdatingLong)
+        #expect(store.hasStatusDetails)
+        #expect(store.statusLines.first?.hasPrefix("Last update") == true)
+        await gate.answer(.success(try realPortfolio(at: now)))
+        await _ = read.value
+        #expect(!store.isReadLong)
+        #expect(!store.hasStatusDetails)
+        #expect(store.statusLines.isEmpty)
+    }
+
+    @Test func aWalletThatCouldntBeReadIsWhatTheStatusSays() async throws {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let now = now
+        let source = ScriptedSource([.success(try realPortfolio(at: now, linkedFailed: ["0xdef"])), .failure(.unreachable)])
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now }, longProblem: .zero)
+        await _ = store.poll()
+        #expect(store.feed == .live)
+        #expect(store.statusWarning == "Couldn't read 1 wallet")
+        #expect(store.statusLines.isEmpty, "The status itself says so.")
+        await _ = store.poll()
+        #expect(store.statusLines.contains("Couldn't read 1 wallet"), "It's still missing while the status says something else.")
+    }
+
+    @Test func aProblemThatWontClearByItselfSaysSoAtOnce() {
+        #expect(!FeedState.rejected("no").canBeBrief)
+        #expect(!FeedState.behind(seconds: 600).canBeBrief)
+        #expect(FeedState.serverUnreachable.canBeBrief)
+        #expect(FeedState.rateLimited("wait").canBeBrief)
     }
 
     @Test func knowsWhenAReadStartedUntilItsDone() async throws {
@@ -832,6 +920,16 @@ actor RuledSource: PortfolioSource {
     private(set) var asked: [String?] = []
     private(set) var askedAboutProof: [String?] = []
     var failing = false
+    /// The waits it'll answer `rules()` with before it gives the list.
+    private var rulesRefusals: [Int]
+    private let rulesTake: Duration?
+    private(set) var rulesAskedAt: [ContinuousClock.Instant] = []
+    var rulesAsked: Int { rulesAskedAt.count }
+
+    init(rulesRefusals: [Int] = [], rulesTake: Duration? = nil) {
+        self.rulesRefusals = rulesRefusals
+        self.rulesTake = rulesTake
+    }
 
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         asked.append(rule)
@@ -860,18 +958,37 @@ actor RuledSource: PortfolioSource {
         return try resource("verification", as: Verification.self)
     }
 
-    func rules() async throws -> [PricingRule] { [Self.market, Self.cautious] }
+    func rules() async throws -> [PricingRule] {
+        rulesAskedAt.append(.now)
+        let refusal = rulesRefusals.isEmpty ? nil : rulesRefusals.removeFirst()
+        if let rulesTake { try await Task.sleep(for: rulesTake) }
+        if let refusal { throw FetchError.rateLimited("Too many requests.", retryAfter: refusal) }
+        return [Self.market, Self.cautious]
+    }
 
     func setFailing() { failing = true }
+}
+
+/// A new source each time the store makes one, staying on the last.
+final class Sources: @unchecked Sendable {
+    private var left: [RuledSource]
+
+    init(_ sources: [RuledSource]) { left = sources }
+
+    func next() -> RuledSource { left.count > 1 ? left.removeFirst() : left[0] }
 }
 
 @MainActor
 @Suite struct RuleTests {
     func makeStore(_ source: RuledSource, stored: String? = nil) -> PortfolioStore {
+        makeStore(Sources([source]), stored: stored)
+    }
+
+    func makeStore(_ sources: Sources, stored: String? = nil) -> PortfolioStore {
         let defaults = UserDefaults(suiteName: "rules-\(UUID().uuidString)")!
         defaults.set("demo", forKey: "wallet")
         if let stored { defaults.set(stored, forKey: "pricingRule") }
-        return PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: .seconds(60))
+        return PortfolioStore(defaults: defaults, makeSource: { _ in sources.next() }, reachableDelay: .seconds(60))
     }
 
     @Test func asksForTheServersDefaultUntilARuleIsChosen() async {
@@ -937,6 +1054,147 @@ actor RuledSource: PortfolioSource {
         _ = try await store.proof(leg: "x", address: "demo")
         _ = try await store.verification(leg: "x", address: "demo")
         #expect(await source.askedAboutProof == [nil, RuledSource.cautious.id, RuledSource.cautious.id])
+    }
+
+    private func waitForRules(_ store: PortfolioStore) async throws {
+        for _ in 0..<2000 where store.rules.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(!store.rules.isEmpty)
+    }
+
+    @Test func aServerThatSaysToWaitIsAskedForRulesOnceThen() async throws {
+        let source = RuledSource(rulesRefusals: [1])
+        let store = makeStore(source)
+        await store.refreshRules()
+        #expect(store.rules.isEmpty)
+        // Nobody else asks during the wait, like Settings opening.
+        await store.refreshRules()
+        await store.refreshRules()
+        #expect(await source.rulesAsked == 1)
+        try await waitForRules(store)
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 2)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+    }
+
+    @Test func checkingAServerThatSaidToWaitAnswersWithoutAskingEarly() async throws {
+        let source = RuledSource(rulesRefusals: [1])
+        let store = makeStore(source)
+        await store.refreshRules()
+        #expect(store.serverCheck == .answers)
+        store.checkServer()
+        #expect(store.serverCheck == .checking)
+        for _ in 0..<100 where store.serverCheck == .checking { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(store.serverCheck == .answers)
+        #expect(await source.rulesAsked == 1)
+    }
+
+    @Test func aServerThatKeepsSayingToWaitKeepsBeingWaitedFor() async throws {
+        let source = RuledSource(rulesRefusals: [1, 1])
+        let store = makeStore(source)
+        await store.refreshRules()
+        try await waitForRules(store)
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 3)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+        #expect(askedAt[2] - askedAt[1] >= .seconds(1))
+    }
+
+    @Test func twoReadsAtOnceAskOnceAndWaitAsLongAsTheyreTold() async throws {
+        let source = RuledSource(rulesRefusals: [1, 1], rulesTake: .milliseconds(50))
+        let store = makeStore(source)
+        async let first: Void = store.refreshRules()
+        async let second: Void = store.refreshRules()
+        _ = await (first, second)
+        #expect(await source.rulesAsked == 1)
+        try await waitForRules(store)
+        try await Task.sleep(for: .milliseconds(100))
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 3)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+        #expect(askedAt[2] - askedAt[1] >= .seconds(1))
+    }
+
+    @Test func twoReadsAtOnceHonorADifferentWaitNext() async throws {
+        let source = RuledSource(rulesRefusals: [1, 2], rulesTake: .milliseconds(100))
+        let store = makeStore(source)
+        async let first: Void = store.refreshRules()
+        async let second: Void = store.refreshRules()
+        _ = await (first, second)
+        try await waitForRules(store)
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 3)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+        #expect(askedAt[2] - askedAt[1] >= .seconds(2))
+    }
+
+    @Test func aReadThatStartsDuringAnotherJoinsIt() async throws {
+        let source = RuledSource(rulesRefusals: [1, 1], rulesTake: .milliseconds(200))
+        let store = makeStore(source)
+        async let first: Void = store.refreshRules()
+        try await Task.sleep(for: .milliseconds(100))
+        // Partway through the first read, and then partway through the one after the wait.
+        await store.refreshRules()
+        #expect(await source.rulesAsked == 1)
+        await first
+        try await Task.sleep(for: .milliseconds(1100))
+        await store.refreshRules()
+        try await waitForRules(store)
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 3)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+        #expect(askedAt[2] - askedAt[1] >= .seconds(1))
+    }
+
+    @Test func aWaitEndsWithTheInviteItWasFor() async throws {
+        let refused = RuledSource(rulesRefusals: [1])
+        let next = RuledSource()
+        let store = makeStore(Sources([refused, next]))
+        await store.refreshRules()
+        store.setInvite("another")
+        store.stop()
+        try await waitForRules(store)
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(await refused.rulesAsked == 1)
+        #expect(await next.rulesAsked == 1)
+    }
+
+    @Test func aWaitEndsWithTheServerItWasFor() async throws {
+        let refused = RuledSource(rulesRefusals: [1])
+        let next = RuledSource()
+        let store = makeStore(Sources([refused, next]))
+        await store.refreshRules()
+        store.setServerURL(URL(string: "http://127.0.0.1:1")!)
+        store.stop()
+        try await waitForRules(store)
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(await refused.rulesAsked == 1)
+        #expect(await next.rulesAsked == 1)
+    }
+
+    @Test func anAnswerFromBeforeAnInviteChangeDoesntCount() async throws {
+        let slow = RuledSource(rulesTake: .milliseconds(100))
+        let next = RuledSource(rulesRefusals: [60])
+        let store = makeStore(Sources([slow, next]))
+        async let asked: Void = store.refreshRules()
+        try await Task.sleep(for: .milliseconds(20))
+        store.setInvite("another")
+        store.stop()
+        await asked
+        #expect(store.rules.isEmpty)
+    }
+
+    @Test func aWaitFromBeforeAnInviteChangeDoesntCount() async throws {
+        let slow = RuledSource(rulesRefusals: [1], rulesTake: .milliseconds(100))
+        let next = RuledSource()
+        let store = makeStore(Sources([slow, next]))
+        async let asked: Void = store.refreshRules()
+        try await Task.sleep(for: .milliseconds(20))
+        store.setInvite("another")
+        store.stop()
+        await asked
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(await slow.rulesAsked == 1)
+        #expect(!store.rules.isEmpty)
     }
 }
 

@@ -2,7 +2,7 @@
 
 import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPaid, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
-import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unrecordedSentence, unseenEthCause } from "./wording.ts"
+import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, ESTIMATE_LINE, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, est, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unrecordedSentence, unseenEthCause } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "price" | "value" | "return" | "realized" | "unrealized" | "onchain"
 
@@ -56,7 +56,7 @@ export function explainContext(wallet: WalletResponse, view: WalletView, method:
   const usd = usdView(wallet)
   const positions = foldPositions(usd.legs, method, usd.prices, wallet)
   const unread = unreadAssets(positions, wallet)
-  return { view, ruleNote, source: { positions, totals: sumTotals(positions, unread), points: pnlOverTime(usd.legs, method, usd.prices, usd.markPrice, wallet.latest, unconfirmedAssets(positions, unread)) } }
+  return { view, ruleNote, source: { positions, totals: sumTotals(positions, unread), points: pnlOverTime(usd.legs, method, usd.prices, usd.markPrice, wallet.latest, unconfirmedAssets(positions, unread), undefined, undefined, usd.markEstimated) } }
 }
 
 /** Where a currency's rates come from, in words. It's said wherever a rate is used, since it isn't the source of the prices. */
@@ -125,13 +125,16 @@ export function describeEffect({ leg, before, after }: LegEffect, currency: Curr
   const unresolved = diff(after.unresolvedDisposedQty, before.unresolvedDisposedQty)
   const shortfall = diff(after.shortfallQty, before.shortfallQty)
   if (leg.kind === "gas") parts.push(leg.priceMicros === null ? "Network fee, with no price at this block" : `Network fee: ${money(diff(after.gasMicros, before.gasMicros))} spent`)
-  if (leg.kind === "swap") parts.push(leg.proceedsMicros === null ? "Sold, but what you received has no usable value" : `Sold for ${money(leg.proceedsMicros)}`)
+  if (leg.kind === "swap") parts.push(leg.proceedsMicros === null ? "Sold, but what you received has no usable value" : `Sold for ${leg.estimated ? "about " : ""}${money(leg.proceedsMicros)}`)
   if (leg.kind === "transfer") {
-    const carried = diff(after.transferredOutCostMicros, before.transferredOutCostMicros)
-    parts.push(`Sent out with ${money(carried)} of known cost, so no gain or loss`)
+    const carried = `${diff(after.transferredOutEstimatedMicros, before.transferredOutEstimatedMicros) > 0n ? "about " : ""}${money(diff(after.transferredOutCostMicros, before.transferredOutCostMicros))} of known cost`
+    const unknownQty = diff(after.transferredOutUnknownQty, before.transferredOutUnknownQty)
+    if (unknownQty === 0n) parts.push(`Sent out with ${carried}, so no gain or loss`)
+    else if (unknownQty < -BigInt(leg.delta)) parts.push(`Sent out with ${carried}, and ${formatAmount(unknownQty, leg.decimals)} ${leg.asset} at an unknown cost, so no gain or loss`)
+    else parts.push("Sent out at an unknown cost, so no gain or loss")
   }
   if (leg.kind !== "transfer") {
-    if (realized !== 0n) parts.push(`realized ${signed(realized)}`)
+    if (realized !== 0n) parts.push(`realized ${diff(after.estimatedRealizedMicros, before.estimatedRealizedMicros) > 0n ? "about " : ""}${signed(realized)}`)
     if (unresolved > 0n) parts.push(`PnL unavailable on ${formatAmount(unresolved, leg.decimals)} ${leg.asset}`)
   }
   if (shortfall > 0n) parts.push(`${formatAmount(shortfall, leg.decimals)} ${leg.asset} more than we saw arrive`)
@@ -147,26 +150,30 @@ export function summarizeEffect({ leg, before, after }: LegEffect, currency: Cur
   const value = leg.priceMicros === null ? null : worth(qty, BigInt(leg.priceMicros), leg.decimals)
   // Money first, as people count it. Without a price, the amount is all there is to say.
   const what = (micros: bigint | string | null, about = false) => (micros === null ? amount(qty) : `${about ? "about " : ""}${money(micros)} of ${leg.asset}`)
+  // What it's worth at a market price is an estimate, and it's only ever that price that says so.
+  const atMarket = leg.priceSource === "market"
   // Nobody can answer which came first, or what the chain hasn't confirmed yet.
   const orderUnknown = orderMatters(leg, before.method)
   if (BigInt(leg.delta) > 0n) {
     const unknown = leg.costMicros !== null ? null : leg.pieces?.some((p) => p.costMicros !== null) ? "What part of this cost isn't known yet." : "What this cost isn't known yet."
     const facts = { unknown, answerable: unknown !== null && !orderUnknown && !leg.unsettledCredit }
-    if (leg.opening) return { summary: `Already held ${what(value)} when this history starts.`, ...facts }
+    if (leg.opening) return { summary: `Already held ${what(value, atMarket)} when this history starts.`, ...facts }
     // Bought and then moved here keeps what was paid as its cost, but this movement is the move.
     if (leg.costLabel !== "inherited" && (leg.kind === "swap" || leg.purchaseSource)) {
       // Money after "Bought" reads as what was paid, so a price's worth says so when that's all there is.
-      if (leg.costMicros === null) return { summary: `Bought ${amount(qty)}${value === null ? "" : `, worth ${money(value)}`}.`, ...facts }
+      if (leg.costMicros === null) return { summary: `Bought ${amount(qty)}${value === null ? "" : `, worth ${atMarket ? "about " : ""}${money(value)}`}.`, ...facts }
       return { summary: `Bought ${what(leg.costMicros, leg.estimated)}${leg.purchaseSource ? ", fees included" : ""}.`, ...facts }
     }
-    return { summary: `Received ${what(value)}${leg.costLabel === "inherited" ? " from your other wallet" : ""}.`, ...facts }
+    return { summary: `Received ${what(value, atMarket)}${leg.costLabel === "inherited" ? " from your other wallet" : ""}.`, ...facts }
   }
   const realized = diff(after.realizedMicros, before.realizedMicros)
   const unresolved = diff(after.unresolvedDisposedQty, before.unresolvedDisposedQty)
   const shortfall = diff(after.shortfallQty, before.shortfallQty)
   if (leg.kind === "transfer") {
-    const unknown = shortfall > 0n ? `${amount(shortfall)} more left than we saw arrive, so what it cost isn't known.` : null
-    return { summary: `Sent ${what(value)}, with no gain or loss.`, unknown, answerable: false }
+    // Its unknown cost is the one it arrived with, which a question can be about. What's short never arrived.
+    const missing = diff(after.transferredOutUnknownQty, before.transferredOutUnknownQty) - shortfall
+    const unknown = shortfall > 0n ? `${amount(shortfall)} more left than we saw arrive, so what it cost isn't known.` : missing > 0n ? (missing < qty ? "What part of this cost isn't known yet." : "What this cost isn't known yet.") : null
+    return { summary: `Sent ${what(value, atMarket)}, with no gain or loss.`, unknown, answerable: missing > 0n && !orderUnknown }
   }
   // A shortfall is also an unknown cost, but it isn't one any question is about, since nothing is known to have arrived.
   const missingCost = diff(after.unknownCostDisposedQty, before.unknownCostDisposedQty) - shortfall
@@ -183,7 +190,7 @@ export function summarizeEffect({ leg, before, after }: LegEffect, currency: Cur
   }
   if (leg.proceedsMicros === null) return { summary: `Sold ${amount(qty)}, for something with no usable value.`, unknown, answerable }
   const sold = `Sold ${what(leg.proceedsMicros, leg.estimated)}`
-  const gain = `a ${money(realized < 0n ? -realized : realized)} ${realized < 0n ? "loss" : "gain"}`
+  const gain = `${diff(after.estimatedRealizedMicros, before.estimatedRealizedMicros) > 0n ? "about " : ""}a ${money(realized < 0n ? -realized : realized)} ${realized < 0n ? "loss" : "gain"}`
   if (unknown) return { summary: realized === 0n ? `${sold}.` : `${sold}, ${gain} on part of it.`, unknown, answerable }
   if (realized === 0n) return { summary: `${sold}, with no gain or loss.`, unknown, answerable }
   return { summary: `${sold}, ${gain}.`, unknown, answerable }
@@ -252,12 +259,25 @@ function costSourceLine({ state, asset, decimals }: Position, money: (micros: bi
   return `Cost: ${parts.join(", ")}.${estimated > 0n ? ` ${money(estimated)} of that is an estimate.` : ""}`
 }
 
+/** Whether the main screen marks this number as an estimate, so its explanation does too. */
+export function metricIsEstimate({ estimates }: Pick<Position, "estimates">, metric: Metric): boolean {
+  if (metric === "average") return estimates.cost
+  if (metric === "price" || metric === "value") return estimates.value
+  if (metric === "realized") return estimates.realized
+  return (metric === "return" || metric === "unrealized") && estimates.unrealized
+}
+
+export function totalIsEstimate(totals: Pick<Totals, "estimated" | "estimatedMicros">, metric: TotalMetric): boolean {
+  if (metric === "pnl") return BigInt(totals.estimatedMicros) > 0n
+  return metric !== "gas" && totals.estimated[metric]
+}
+
 export function explainMetric(position: Position, metric: Metric, context: ExplainContext): Explanation {
   const { view, source } = context
   const { currency } = view
   const money = (micros: string | bigint) => formatMoney(micros, currency)
   const signed = (micros: string | bigint) => formatSignedMoney(micros, currency)
-  const { asset, decimals, values, state, price, effects, reconciliation } = position
+  const { asset, decimals, values, state, price, effects, reconciliation, estimates } = position
   const unknown = BigInt(values.unknownCostQty) > 0n
   const qty = `${formatAmount(values.qty, decimals)} ${asset}`
   const unknownQty = `${formatAmount(values.unknownCostQty, decimals)} ${asset}`
@@ -293,7 +313,7 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
     case "average":
       value = values.averageCostMicros && formatPrice(values.averageCostMicros, currency)
       if (unknown) lines.push(`${unknownQty} of ${qty} has an unknown cost, so there's no average. It's never counted as zero.`)
-      else if (values.costMicros) lines.push(`${money(values.costMicros)} of cost ÷ ${qty}, using the ${METHOD_LABELS[state.method]} method.`)
+      else if (values.costMicros) lines.push(`${est(money(values.costMicros), estimates.cost)} of cost ÷ ${qty}, using the ${METHOD_LABELS[state.method]} method.`)
       if (costSources) lines.push(costSources)
       break
     case "price":
@@ -308,7 +328,7 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
     case "realized":
       value = values.realizedMicros && signed(values.realizedMicros)
       if (values.realizedMicros === null) {
-        const known = BigInt(state.resolvedDisposedQty) > 0n ? ` ${signed(state.realizedMicros)} is the part that is known.` : ""
+        const known = BigInt(state.resolvedDisposedQty) > 0n ? ` ${est(signed(state.realizedMicros), estimates.realized)} is the part that is known.` : ""
         const soldAt = (units: string, what: string) => (BigInt(units) > 0n ? [`${formatAmount(units, decimals)} ${asset} was sold or spent at ${what}`] : [])
         const unknowns = [...soldAt(state.unknownCostDisposedQty, "an unknown cost"), ...soldAt(state.unknownProceedsQty, "an unknown price")]
         lines.push(`${unknowns.join(", and ")}, so its gain can't be known.${known}`)
@@ -320,7 +340,7 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
       lines.push(priceLine)
       if (unknown) lines.push(`${unknownQty} of ${qty} has an unknown cost, so there's no return. It's never counted as zero.`)
       else if (values.costMicros && values.unrealizedMicros && bps === null) lines.push("It cost nothing, so there's no return as a share of what it cost.")
-      else if (values.costMicros && values.unrealizedMicros) lines.push(`${signed(values.unrealizedMicros)} unrealized ÷ ${money(values.costMicros)} cost.`)
+      else if (values.costMicros && values.unrealizedMicros) lines.push(`${est(signed(values.unrealizedMicros), estimates.unrealized)} unrealized ÷ ${est(money(values.costMicros), estimates.cost)} cost.`)
       if (costSources) lines.push(costSources)
       break
     }
@@ -328,10 +348,14 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
       value = values.unrealizedMicros && signed(values.unrealizedMicros)
       lines.push(priceLine)
       if (unknown) lines.push(`${unknownQty} of ${qty} has an unknown cost, so PnL is unavailable. It's never counted as zero.`)
-      else if (values.costMicros && values.valueMicros) lines.push(`${money(values.valueMicros)} value − ${money(values.costMicros)} cost.`)
+      else if (values.costMicros && values.valueMicros) lines.push(`${est(money(values.valueMicros), estimates.value)} value − ${est(money(values.costMicros), estimates.cost)} cost.`)
       if (costSources) lines.push(costSources)
       break
   }
+  const isEstimate = value !== null && metricIsEstimate(position, metric)
+  if (isEstimate) value = est(value as string, true)
+  // The price or the cost may already say why.
+  if (isEstimate && !lines.some((line) => line.includes("estimate"))) lines.push(ESTIMATE_LINE)
   // A return is a share, not an amount, so it has no USD to show beside it. It still depends on the rates.
   const isMoney = metric !== "amount" && metric !== "onchain" && metric !== "return"
   if (isMoney || metric === "return") lines.push(...exchangeLines(view, metric === "value" || metric === "price" ? "current" : metric === "unrealized" || metric === "return" ? "both" : "past"))
@@ -362,26 +386,28 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
   const { currency } = view
   const money = (micros: string | bigint) => formatMoney(micros, currency)
   const signed = (micros: string | bigint) => formatSignedMoney(micros, currency)
-  const showSigned = (micros: string | null) => (micros === null ? "unavailable" : signed(micros))
-  const value: string | null = {
+  const showSigned = (micros: string | null, isEstimate: boolean) => (micros === null ? "unavailable" : est(signed(micros), isEstimate))
+  const isEstimate = totalIsEstimate(totals, metric)
+  const unmarked: string | null = {
     pnl: totals.pnlMicros && signed(totals.pnlMicros),
     value: totals.valueMicros && money(totals.valueMicros),
     realized: totals.realizedMicros && signed(totals.realizedMicros),
     unrealized: totals.unrealizedMicros && signed(totals.unrealizedMicros),
     gas: totals.gasMicros && money(totals.gasMicros),
   }[metric]
+  const value = unmarked && est(unmarked, isEstimate)
   const lines: string[] = []
   if (metric === "pnl") {
     if (value === null) lines.push("Everything here depends on an unknown cost or price, so there's no PnL to show. It isn't zero.")
-    else lines.push(`Realized ${showSigned(totals.realizedMicros)}, unrealized ${showSigned(totals.unrealizedMicros)}, less ${totals.gasMicros === null ? "network fees that are unavailable" : `${money(totals.gasMicros)} of network fees`}.`)
+    else lines.push(`Realized ${showSigned(totals.realizedMicros, totals.estimated.realized)}, unrealized ${showSigned(totals.unrealizedMicros, totals.estimated.unrealized)}, less ${totals.gasMicros === null ? "network fees that are unavailable" : `${money(totals.gasMicros)} of network fees`}.`)
   }
   for (const position of positions) {
     const v = position.values
     const part = {
       pnl: null,
-      value: v.valueMicros && BigInt(v.qty) > 0n ? money(v.valueMicros) : null,
-      realized: v.realizedMicros && BigInt(position.state.resolvedDisposedQty) > 0n ? signed(v.realizedMicros) : null,
-      unrealized: v.unrealizedMicros && BigInt(v.qty) > 0n ? signed(v.unrealizedMicros) : null,
+      value: v.valueMicros && BigInt(v.qty) > 0n ? est(money(v.valueMicros), position.estimates.value) : null,
+      realized: v.realizedMicros && BigInt(position.state.resolvedDisposedQty) > 0n ? est(signed(v.realizedMicros), position.estimates.realized) : null,
+      unrealized: v.unrealizedMicros && BigInt(v.qty) > 0n ? est(signed(v.unrealizedMicros), position.estimates.unrealized) : null,
       gas: BigInt(position.state.gasMicros) > 0n ? money(position.state.gasMicros) : null,
     }[metric]
     if (part) lines.push(`${position.asset}: ${part}`)
@@ -400,6 +426,7 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
       if (reconciliation?.status === "unchecked" && !reconciliation.heldIsCurrent) lines.push(`${asset}'s value is an estimate, because its balance couldn't be read.`)
     }
   }
+  if (value !== null && isEstimate) lines.push(ESTIMATE_LINE)
   lines.push(...exchangeLines(view, metric === "value" ? "current" : metric === "gas" || metric === "realized" ? "past" : "both"))
   return {
     currency,
@@ -418,27 +445,28 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
 export function explainHold(positions: readonly Position[], comparison: HoldComparison, { view, source }: ExplainContext, { combined = false } = {}): Explanation {
   const { currency } = view
   const money = (micros: string) => formatMoney(micros, currency)
-  const signed = (micros: string | null) => (micros === null ? "unavailable" : formatSignedMoney(micros, currency))
-  const { holdMicros, ethValueMicros, ethPriceMicros, ethQty, putInMicros, takenOutMicros, walletMicros, gainThatLeftMicros, differenceMicros, ranOut } = comparison
+  const signed = (micros: string | null, isEstimate: boolean) => (micros === null ? "unavailable" : est(formatSignedMoney(micros, currency), isEstimate))
+  const { holdMicros, ethValueMicros, ethPriceMicros, ethQty, putInMicros, takenOutMicros, walletMicros, gainThatLeftMicros, differenceMicros, ranOut, estimated, walletEstimated } = comparison
   const caveat = holdCaveatSentence(comparison, currency, { combined })
   const [here, these] = combined ? ["your wallets", "Your wallets"] : ["this wallet", "This wallet"]
   const lines = [
     `Takes each amount put in ${here}, turns it into ETH at that moment's price, and values that ETH at today's price.`,
     `Put in means whatever arrived from outside ${here}, at what it cost you, or at its price when it arrived if that's all that's known. Exchanges inside ${combined ? "them" : "the wallet"} aren't put in${combined ? ", and neither are moves between them" : ""}.`,
-    ...(BigInt(takenOutMicros) > 0n ? [`${money(takenOutMicros)} left ${here}, so it leaves the ETH too, at its price when it left.${ranOut ? " Holding ETH would have run out before all of it could leave." : ""}`] : []),
-    ...(ethValueMicros !== null && ethPriceMicros !== null ? [`${money(putInMicros)} put in leaves ${formatAmount(ethQty, 18)} ETH, worth ${money(ethValueMicros)} at today's ${formatPrice(ethPriceMicros, currency)}.`] : []),
-    `${these}: ${signed(walletMicros)}. That's ${combined ? "their" : "its"} total PnL after network fees${BigInt(gainThatLeftMicros) === 0n ? "" : `, and ${signed(gainThatLeftMicros)} on what left ${combined ? "them" : "it"}, which total PnL doesn't count because a transfer isn't a sale`}. Holding ETH pays no fees.`,
-    `${HOLD_ETH}: ${signed(holdMicros)}.`,
-    ...(differenceMicros !== null ? [holdDifferenceSentence(differenceMicros, currency)] : []),
+    ...(BigInt(takenOutMicros) > 0n ? [`${est(money(takenOutMicros), estimated)} left ${here}, so it leaves the ETH too, at its price when it left.${ranOut ? " Holding ETH would have run out before all of it could leave." : ""}`] : []),
+    ...(ethValueMicros !== null && ethPriceMicros !== null ? [`${est(money(putInMicros), estimated)} put in leaves ${formatAmount(ethQty, 18)} ETH, worth ${est(money(ethValueMicros), estimated)} at today's ${formatPrice(ethPriceMicros, currency)}.`] : []),
+    `${these}: ${signed(walletMicros, walletEstimated)}. That's ${combined ? "their" : "its"} total PnL after network fees${BigInt(gainThatLeftMicros) === 0n ? "" : `, and ${signed(gainThatLeftMicros, walletEstimated)} on what left ${combined ? "them" : "it"}, which total PnL doesn't count because a transfer isn't a sale`}. Holding ETH pays no fees.`,
+    `${HOLD_ETH}: ${signed(holdMicros, estimated)}.`,
+    ...(differenceMicros !== null ? [holdDifferenceSentence(differenceMicros, currency, walletEstimated || estimated)] : []),
     ...(caveat ? [caveat] : []),
+    ...(holdMicros !== null && (walletEstimated || estimated) ? [ESTIMATE_LINE] : []),
     ...exchangeLines(view, "both"),
     HOLD_PAST,
   ]
   return {
     currency,
     title: HOLD_ETH,
-    value: holdMicros && formatSignedMoney(holdMicros, currency),
-    sourceValue: source?.holdComparison?.holdMicros ? inUsd(formatSignedMoney(source.holdComparison.holdMicros, "USD")) : null,
+    value: holdMicros && est(formatSignedMoney(holdMicros, currency), estimated),
+    sourceValue: source?.holdComparison?.holdMicros ? inUsd(est(formatSignedMoney(source.holdComparison.holdMicros, "USD"), source.holdComparison.estimated)) : null,
     lines,
     effects: holdEffects(positions).reverse(),
   }
@@ -449,9 +477,9 @@ export function explainPoint(positions: readonly Position[], point: PnlPoint, { 
   return {
     currency: view.currency,
     title: `Transaction ${shortHash(point.txHash as string)}`,
-    value: point.pnlMicros && formatSignedMoney(point.pnlMicros, view.currency),
-    sourceValue: usd?.pnlMicros ? inUsd(formatSignedMoney(usd.pnlMicros, "USD")) : null,
-    lines: [`Total PnL after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`, ...exchangeLines(view, "past")],
+    value: point.pnlMicros && est(formatSignedMoney(point.pnlMicros, view.currency), point.pnlEstimated === true),
+    sourceValue: usd?.pnlMicros ? inUsd(est(formatSignedMoney(usd.pnlMicros, "USD"), usd.pnlEstimated === true)) : null,
+    lines: [`Total PnL after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`, ...(point.pnlMicros !== null && point.pnlEstimated ? [ESTIMATE_LINE] : []), ...exchangeLines(view, "past")],
     effects: positions.flatMap((p) => p.effects).filter((e) => e.leg.txHash === point.txHash),
   }
 }

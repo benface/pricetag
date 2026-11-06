@@ -24,7 +24,7 @@ export class ReadError extends Error {
 export const failureOf = (error: unknown): ReadFailure => (error instanceof ReadError ? error.failure : { kind: "unreachable" })
 
 /** In seconds, as this server sends it. Anything else waits a minute, which is as long as its shortest limit lasts. */
-function retryAfterOf(response: Response): number {
+export function retryAfterOf(response: Response): number {
   const seconds = Number(response.headers.get("retry-after"))
   return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : 60
 }
