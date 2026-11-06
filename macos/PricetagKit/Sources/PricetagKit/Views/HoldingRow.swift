@@ -22,7 +22,7 @@ public struct HoldingRow: View {
 
     static func valueText(_ position: Position, _ currency: CurrencyCode) -> String {
         if !position.isHeld { return "—" }
-        return position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price"
+        return position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? Wording.noPrice
     }
 
     public var body: some View {

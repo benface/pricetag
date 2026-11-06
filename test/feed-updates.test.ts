@@ -19,7 +19,7 @@ const FIXTURE = JSON.parse(readFileSync(new URL("./support/base-update-block.jso
   deposits: Record<string, DepositDetails>
 }
 const data = FIXTURE.block
-const read: BlockRead = { data, deposits: new Map(Object.entries(FIXTURE.deposits)) }
+const read: BlockRead = { data, deposits: new Map(Object.entries(FIXTURE.deposits)), nodeHash: data.block.hash }
 const log = data.logs.find((candidate) => candidate.log_index === 2) as LogRow
 const tx = data.txs.find((candidate) => candidate.tx_index === log.tx_index) as TxRow
 const BLOCK = Number(data.block.block_num)
@@ -65,19 +65,20 @@ describe("the feeds dataset", () => {
 describe("feeds' answers from logs", () => {
   const exactRound = (block: number) => ({ answer: "999", updatedAt: 1, blockNum: block, timestamp: "2026-11-04T00:00:00.000Z" })
   function reader(rows: object[] | Error) {
-    const exact: { assets: readonly string[]; block: number }[] = []
+    const exact: { assets: readonly string[]; blocks: readonly number[] }[] = []
     const sql: string[] = []
     const query = (async (text: string) => {
       sql.push(text)
-      if (text.includes(".blocks")) return [{ timestamp: Date.parse("2026-11-05T00:00:00.000Z") }]
+      if (text.includes(".blocks")) return (/IN \(([^)]*)\)/.exec(text)?.[1] ?? "").split(", ").map((block) => ({ block_num: block, timestamp: Date.parse("2026-11-05T00:00:00.000Z") }))
       if (rows instanceof Error) throw rows
       return rows
     }) as unknown as Query
-    const read = updateFeedRounds(query, { baseDataset: "base", feedsDataset: "a/feeds@1" }, async (assets, block) => {
-      exact.push({ assets, block })
-      return Object.fromEntries(assets.map((asset) => [asset, exactRound(block)]))
+    const rounds = updateFeedRounds(query, { baseDataset: "base", feedsDataset: "a/feeds@1" }, async (assets, blocks) => {
+      exact.push({ assets, blocks })
+      return new Map(blocks.map((block) => [block, Object.fromEntries(assets.map((asset) => [asset, exactRound(block)]))]))
     })
-    return { exact, read, sql }
+    const read = async (assets: readonly string[], block: number) => (await rounds(assets, [block])).get(block) ?? {}
+    return { exact, read, rounds, sql }
   }
 
   it("takes each asset's latest at or before the block, at that block's time, with no contract call", async () => {
@@ -90,11 +91,22 @@ describe("feeds' answers from logs", () => {
     assert.match(sql[0] as string, /FROM "a\/feeds@1"\.feed_updates WHERE block_num >= \d+ ORDER BY block_num, log_index$/)
   })
 
+  it("answers a chart's blocks together, each from the table or, past its newest row, the contract", async () => {
+    const { exact, rounds, sql } = reader([row(90, "AERO", "60"), row(100, "AERO", "61"), row(120, "DAI", "100")])
+    const answers = await rounds(["AERO"], [95, 110, 120, 500])
+    assert.equal(answers.get(95)?.AERO?.answer, "60")
+    assert.equal(answers.get(110)?.AERO?.answer, "61")
+    assert.equal(answers.get(120)?.AERO?.answer, "999")
+    assert.equal(answers.get(500)?.AERO?.answer, "999")
+    assert.deepEqual(exact, [{ assets: ["AERO"], blocks: [120, 500] }])
+    assert.equal(sql.filter((text) => text.includes("feed_updates")).length, 1, "one read of the table however many blocks")
+  })
+
   it("reads the contract from the table's newest row on, so a lagging table never gives an old answer", async () => {
     const { exact, read } = reader([row(90, "AERO", "60"), row(100, "DAI", "100")])
     assert.equal((await read(["AERO"], 100)).AERO?.answer, "999")
     assert.equal((await read(["AERO"], 500)).AERO?.answer, "999")
-    assert.deepEqual(exact.map(({ block }) => block), [100, 500])
+    assert.deepEqual(exact.map(({ blocks }) => blocks), [[100], [500]])
   })
 
   it("stops reading the table for blocks past its newest row, and still reads it for older ones", async () => {
@@ -105,7 +117,7 @@ describe("feeds' answers from logs", () => {
     await read(["AERO"], 530)
     await read(["AERO"], 560)
     assert.equal(reads(), 1, "the head costs no read of the table")
-    assert.deepEqual(exact.map(({ block }) => block), [500, 530, 560])
+    assert.deepEqual(exact.map(({ blocks }) => blocks), [[500], [530], [560]])
     assert.equal((await read(["AERO"], 95)).AERO?.answer, "60")
     assert.equal(reads(), 2)
   })
@@ -115,7 +127,7 @@ describe("feeds' answers from logs", () => {
     const rounds = await read(["AERO", "VIRTUAL"], 150)
     assert.equal(rounds.AERO?.answer, "60")
     assert.equal(rounds.VIRTUAL?.answer, "999")
-    assert.deepEqual(exact, [{ assets: ["VIRTUAL"], block: 150 }])
+    assert.deepEqual(exact, [{ assets: ["VIRTUAL"], blocks: [150] }])
   })
 
   it("falls back to the contract when the table can't be read or hasn't started", async () => {
@@ -130,8 +142,8 @@ describe("feeds' answers from logs", () => {
   })
 
   it("has nothing to ask about a token with no feed", async () => {
-    const { read, sql } = reader([])
-    assert.deepEqual(await read(["ETH"], 50), {})
+    const { rounds, sql } = reader([])
+    assert.deepEqual(await rounds(["ETH"], [50]), new Map())
     assert.equal(sql.length, 0)
   })
 
@@ -215,7 +227,7 @@ describe("finding what's behind a current price", () => {
       if (sql.includes(".price_updates")) return [{ block_num: "990", tx_hash: TX, log_index: "3", answer: "300000000000" }]
       return []
     }) as unknown as Query
-    return { queries, proofs: createProofs(query, { baseDataset: "a/base@1", dataset: { name: "a/pricetag@1", reference: "a/pricetag@1", hash: null }, feedsDataset, readDeposits: async () => new Map(), readManifestHash: async () => "c".repeat(64), retryPauseMs: 0 }) }
+    return { queries, proofs: createProofs(query, { baseDataset: "a/base@1", dataset: { name: "a/pricetag@1", reference: "a/pricetag@1", hash: null }, feedsDataset, readDeposits: async () => new Map(), readBlockHash: async () => null, readManifestHash: async () => "c".repeat(64), retryPauseMs: 0 }) }
   }
   const price = (micros: string, blockNum = 1000): LatestPrice => ({ micros, source: "oracle", blockNum })
 
@@ -276,7 +288,7 @@ describe("the proof and verify routes, for a current price", () => {
     readLatestReference: async () => ({ blockNum: BLOCK + 60, ethUsd: ANSWER, usdcUsd: "100000000" }),
     readBalances: async (_address, block) => ({ blockNum: block, amounts: { ...Object.fromEntries(ASSETS.map((asset) => [asset, "0"])), AERO: "1000000000000000000" } }),
     readEthBalances: async () => new Map(),
-    readFeedRounds: async (assets, block) => Object.fromEntries(assets.map((asset) => [asset, { answer: "63000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }])),
+    readFeedRounds: async (assets, blocks) => new Map(blocks.map((block) => [block, Object.fromEntries(assets.map((asset) => [asset, { answer: "63000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }]))])),
   }
   async function serve(currentPriceBehind: Proofs["currentPriceBehind"], source = aeroSource) {
     const asked: string[] = []

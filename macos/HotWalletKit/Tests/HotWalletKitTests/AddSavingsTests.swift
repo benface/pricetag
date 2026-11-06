@@ -38,7 +38,7 @@ import Testing
         #expect(model.parsed == EthereumAddress(address))
         #expect(!model.canAdd)
         #expect(!model.matches)
-        try model.add()
+        try await model.add()
         #expect(model.added == nil)
         model.matches = true
         #expect(model.canAdd)
@@ -155,11 +155,11 @@ import Testing
         flow.choose(.other)
         flow.address = address
         flow.next()
-        try flow.add()
+        try await flow.add()
         #expect(wallet.settings.coldWallets.isEmpty)
         #expect(flow.step == .check)
         flow.matches = true
-        try flow.add()
+        try await flow.add()
         #expect(wallet.settings.coldWallets.map(\.address) == [EthereumAddress(address)!])
         #expect(flow.step == .finished)
         #expect(flow.sweepsGoHere)
@@ -182,12 +182,39 @@ import Testing
         flow.matches = true
         flow.receive(link(another))
         #expect(!flow.matches)
-        try flow.add()
+        try await flow.add()
         #expect(wallet.settings.coldWallets.isEmpty)
         // Even the same address, since it's a new claim.
         flow.matches = true
         flow.receive(link(another))
         #expect(!flow.matches)
+    }
+
+    @Test func aLinkArrivingWhileTouchIDAsksAddsNothing() async throws {
+        let prompt = OpenPrompt()
+        let rig = await Rig(withCold: false, userPresence: prompt)
+        let flow = AddSavingsModel(wallet: rig.wallet)
+        flow.address = address
+        flow.matches = true
+        prompt.whileOpen = { flow.receive(link(another)) }
+        try await flow.add()
+        #expect(flow.added == nil)
+        #expect(flow.step == .check)
+        #expect(flow.address == another)
+        #expect(rig.wallet.settings.coldWallets.isEmpty)
+    }
+
+    @Test func aRefusedTouchIDStaysOnTheCheckAndSaysSo() async throws {
+        let rig = await Rig(withCold: false, presence: false)
+        let flow = AddSavingsModel(wallet: rig.wallet)
+        flow.address = address
+        flow.matches = true
+        try await flow.add()
+        #expect(flow.added == nil)
+        #expect(flow.step != .finished)
+        #expect(!flow.isAdding)
+        #expect(flow.addProblem == HotWalletWording.touchIDDidNotConfirm)
+        #expect(rig.wallet.settings.coldWallets.isEmpty)
     }
 
     @Test func aLinkWithABadChecksumCantBeAdded() async throws {
@@ -196,7 +223,7 @@ import Testing
         #expect(flow.parsed == nil)
         flow.matches = true
         #expect(!flow.canAdd)
-        try flow.add()
+        try await flow.add()
         #expect(wallet.settings.coldWallets.isEmpty)
     }
 
@@ -208,7 +235,7 @@ import Testing
         #expect(!flow.canAdd)
         flow.address = address
         flow.matches = true
-        try flow.add()
+        try await flow.add()
         let again = AddSavingsModel(wallet: wallet)
         again.address = address
         #expect(again.problem == AddSavingsWording.alreadyAdded)
@@ -219,7 +246,7 @@ import Testing
         flow.receive(link(address, linked: another))
         #expect(flow.suggestedAccounts == [another])
         flow.matches = true
-        try flow.add()
+        try await flow.add()
         #expect(wallet.settings.deviceAccounts.isEmpty)
     }
 
@@ -230,11 +257,11 @@ import Testing
         let before = wallet.settings.sweepDestination
         flow.address = address
         flow.matches = true
-        try flow.add()
+        try await flow.add()
         #expect(!flow.sweepsGoHere)
         #expect(wallet.settings.sweepDestination == before)
         #expect(flow.sweepDestinationName != nil)
-        flow.sweepHere()
+        await flow.sweepHere()
         #expect(flow.sweepsGoHere)
     }
 
@@ -244,7 +271,7 @@ import Testing
         flow.address = address
         flow.name = first.name
         flow.matches = true
-        try flow.add()
+        try await flow.add()
         #expect(flow.sweepDestinationName == nil)
     }
 
@@ -255,7 +282,7 @@ import Testing
         flow.address = address
         #expect(flow.wouldStartSweeps)
         flow.matches = true
-        try flow.add()
+        try await flow.add()
         #expect(flow.startedSweeps)
         #expect(flow.sweepsGoHere)
         #expect(!flow.wouldStartSweeps)
@@ -265,7 +292,9 @@ import Testing
         let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(100)]), withCold: false)
         await rig.chain.hold(snapshots: true)
         let firstRead = Task { await rig.wallet.tick() }
-        while await rig.chain.heldCalls == 0 { await Task.yield() }
+        let deadline = Date.now.addingTimeInterval(10)
+        while await rig.chain.heldCalls == 0, Date.now < deadline { try await Task.sleep(for: .milliseconds(1)) }
+        #expect(await rig.chain.heldCalls > 0)
         let flow = AddSavingsModel(wallet: rig.wallet)
         flow.address = address
         flow.matches = true
@@ -273,7 +302,7 @@ import Testing
         #expect(flow.wouldStartSweeps)
         #expect(flow.sweepNotice == AddSavingsWording.balanceUnread)
         do {
-            try flow.add()
+            try await flow.add()
         } catch {
             await rig.chain.release()
             await firstRead.value
@@ -297,7 +326,7 @@ import Testing
         #expect(!flow.wouldStartSweeps)
         #expect(flow.sweepNotice == AddSavingsWording.firstWallet)
         flow.matches = true
-        try flow.add()
+        try await flow.add()
         #expect(!flow.startedSweeps)
         #expect(!flow.mayBeSweeping)
         #expect(flow.sweepNotice == nil)
@@ -309,7 +338,7 @@ import Testing
         let flow = AddSavingsModel(wallet: rig.wallet)
         flow.address = address
         flow.matches = true
-        try flow.add()
+        try await flow.add()
         #expect(!flow.mayBeSweeping)
         await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(500)]))
         await rig.wallet.tick()

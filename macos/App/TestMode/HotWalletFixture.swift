@@ -15,6 +15,7 @@ struct HotWalletFixture {
     /// Fixed, so a scene looks the same whenever it's taken.
     private nonisolated static let today = Date(timeIntervalSince1970: 1_793_750_400)
     static let savings = EthereumAddress("0x00000000000000000000000000000000000de302")!
+    private static let secondSavings = EthereumAddress("0x00000000000000000000000000000000000de308")!
     static let site = "https://app.example.com"
     /// What a simulation says these do, in `FixtureChain`.
     static let swapRouter = "0x2626664c2603336e57b271c5c0b26f421741e481"
@@ -24,6 +25,7 @@ struct HotWalletFixture {
     private var hasWallet = true
     private var wasDeleted = false
     private var hasSavings = true
+    private var hasSecondSavings = false
     private var balances: [String: UInt128] = ["ETH": 5_000_000_000_000_000, "USDC": 20_000_000]
     private var keys = KeyAnswer.hasIt
     private var unexplainedTransactions = 0
@@ -34,17 +36,22 @@ struct HotWalletFixture {
     private var isConnectedToSite = false
     private var hasSiteActivity = false
     private var isReplaced = false
+    private var hasSignedPermits = false
 
     /// No wallet yet, which is also what every scene that isn't about one gets.
     static let none = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:])
     static let notProvisioned = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:], keys: .notProvisioned)
     static let unreadableRecords = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:], recordsAreUnreadable: true)
     static let funded = HotWalletFixture(hasRecords: true)
+    /// Every kind of permit a site could have, and one the chain shows is spent, which doesn't appear.
+    static let signedPermits = HotWalletFixture(hasRecords: true, hasSignedPermits: true)
+    static let twoSavings = HotWalletFixture(hasSecondSavings: true)
     static let connectedToSite = HotWalletFixture(isConnectedToSite: true)
     /// Connected to a site and to one on this Mac, with the first's transactions: one that went through, and one that fails once it's read.
     static let usedBySites = HotWalletFixture(hasSiteActivity: true)
     static let noSavings = HotWalletFixture(hasSavings: false, balances: ["ETH": 1_000_000_000_000_000, "USDC": 10_000_000])
     static let noPrice = HotWalletFixture(balances: ["ETH": 5_000_000_000_000_000, "USDC": 20_000_000, "AERO": 12_000_000_000_000_000_000])
+    static let nothingToSweep = HotWalletFixture(balances: [:])
     static let nearCap = HotWalletFixture(balances: ["ETH": 5_000_000_000_000_000, "USDC": 36_000_000])
     static let overCap = HotWalletFixture(balances: ["ETH": 10_000_000_000_000_000, "USDC": 80_000_000])
     static let overCapNoSavings = HotWalletFixture(hasSavings: false, balances: ["ETH": 10_000_000_000_000_000, "USDC": 80_000_000])
@@ -60,18 +67,18 @@ struct HotWalletFixture {
     static let replaced = HotWalletFixture(hasRecords: true, isReplaced: true)
     static let replacingKeyMissing = HotWalletFixture(keys: .isMissing, rotation: Rotation(from: spending, to: replacement, destination: replacement))
 
-    func make(source: any PortfolioSource, costMethod: @escaping @MainActor () -> CostMethod, moneyDisplay: @escaping @MainActor () -> MoneyDisplay) -> HotWallet {
+    func make(source: any PortfolioSource, costMethod: @escaping @MainActor () -> CostMethod, moneyDisplay: @escaping @MainActor () -> MoneyDisplay, confirmsAddingSavings: Bool = false) -> HotWallet {
         HotWallet(
             signer: NoKeys(answer: keys),
             settingsStore: FixedSettings(settings: settings),
             stateStore: FixedState(state: recordsAreUnreadable ? nil : state),
-            presence: NoOneThere(),
+            presence: confirmsAddingSavings ? SaysYes() : NoOneThere(),
             portfolioSource: { source },
             costMethod: costMethod,
             moneyDisplay: moneyDisplay,
-            makeChain: { [snapshot, isConnectedToSite, failing] url -> any ChainClient in
+            makeChain: { [snapshot, isConnectedToSite, hasSignedPermits, failing] url -> any ChainClient in
                 if TestMode.live != nil { return ReadOnlyChain(node: RPCChainClient(url: url)) }
-                return FixtureChain(snapshot: snapshot, canQuote: isConnectedToSite, failing: failing)
+                return FixtureChain(snapshot: snapshot, canQuote: isConnectedToSite, answersPermitChecks: hasSignedPermits, failing: failing)
             },
             now: { TestMode.live == nil ? Self.today : .now }
         )
@@ -80,6 +87,7 @@ struct HotWalletFixture {
     private var settings: WalletSettings {
         var settings = WalletSettings()
         if hasSavings { settings.add(ColdWallet(address: Self.savings, name: "Ledger", confirmedOnDeviceAt: Self.today)) }
+        if hasSecondSavings { settings.add(ColdWallet(address: Self.secondSavings, name: "Trezor", confirmedOnDeviceAt: Self.today)) }
         return settings
     }
 
@@ -92,6 +100,7 @@ struct HotWalletFixture {
         state.rotation = rotation
         if isConnectedToSite { state.connectedSites = [Self.site] }
         if hasRecords, TestMode.live == nil { state.records[Self.spending] = records }
+        if hasSignedPermits, TestMode.live == nil { state.signedPermits = [Self.spending: signedPermits] }
         if hasSiteActivity, TestMode.live == nil {
             state.connectedSites = [Self.site, "http://localhost:5173"]
             state.records[Self.spending] = siteRecords
@@ -103,6 +112,28 @@ struct HotWalletFixture {
         if !canActOnChain { state.settledThroughBlock = TestMode.live == nil ? Self.block + 1 : .max }
         return state
     }
+
+    private var signedPermits: [SignedPermit] {
+        let usdc = EthereumAddress("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")!
+        let router = EthereumAddress("0x6ff5693b99212da76ad316178a184ab56d299b43")!
+        let stranger = EthereumAddress("0x00000000000000000000000000000000000de306")!
+        let weekLater = UInt64(Self.today.timeIntervalSince1970) + 7 * 86_400
+        func permit(_ id: String, _ terms: SignedPermit.Terms?) -> SignedPermit {
+            SignedPermit(id: id, site: Self.site, signedAt: Self.today.addingTimeInterval(-3600), terms: terms)
+        }
+        return [
+            permit("unread-1", nil),
+            permit("unread-2", nil),
+            // The fixture's node says Permit2's nonce for this wallet has moved past this one.
+            permit("spent", .init(kind: .permit2Allowance, token: usdc, tokenSymbol: "USDC", spender: stranger, amount: "5 USDC", deadline: weekLater, nonce: 0)),
+            permit("stranger-token", .init(kind: .allowance, token: stranger, tokenSymbol: nil, spender: Self.unknownSpender, amount: "1000 units", deadline: nil, nonce: 1)),
+            permit("transfer", .init(kind: .permit2Transfer, token: usdc, tokenSymbol: "USDC", spender: router, amount: "25 USDC", deadline: weekLater, nonce: 1)),
+            permit("allowance", .init(kind: .allowance, token: usdc, tokenSymbol: "USDC", spender: router, amount: "Unlimited", deadline: weekLater, nonce: 1)),
+            permit("permit2", .init(kind: .permit2Allowance, token: usdc, tokenSymbol: "USDC", spender: router, amount: "Unlimited", deadline: weekLater, nonce: 1)),
+        ]
+    }
+
+    private static let unknownSpender = EthereumAddress("0x00000000000000000000000000000000000de305")!
 
     private var snapshot: ChainSnapshot {
         ChainSnapshot(
@@ -195,6 +226,11 @@ private nonisolated struct FixedState: DeviceStateStore {
     func save(_ state: DeviceWalletState) throws {}
 }
 
+/// For the scenes that show what comes after adding a savings wallet.
+private nonisolated struct SaysYes: UserPresence {
+    func confirm(reason: String) async throws {}
+}
+
 private nonisolated struct NoOneThere: UserPresence {
     func confirm(reason: String) async throws { TestMode.fail("A scene asked for Touch ID: \(reason).") }
 }
@@ -215,6 +251,7 @@ private nonisolated struct ReadOnlyChain: ChainClient {
 private nonisolated struct FixtureChain: ChainClient {
     let snapshot: ChainSnapshot
     let canQuote: Bool
+    var answersPermitChecks = false
     let failing: String?
 
     func snapshot(of address: EthereumAddress) async throws -> ChainSnapshot { snapshot }
@@ -229,6 +266,14 @@ private nonisolated struct FixtureChain: ChainClient {
 
     /// Only what a preview asks. A node that can't simulate is what `site-transaction` shows.
     func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer {
+        if answersPermitChecks {
+            if method == "eth_chainId" { return .success(.string("0x2105")) }
+            guard method == "eth_call", let data = parameters[0]?["data"]?.string else { TestMode.fail("A scene tried to read for a site.") }
+            // `allowance` has three words, and the last is its nonce, which is 1 only for the spender in the "spent" permit. Every other answer is nothing set.
+            let isAllowance = data.hasPrefix("0x927da105")
+            let spent = isAllowance && data.hasSuffix("de306")
+            return .success(.string("0x" + String(repeating: "0", count: isAllowance ? 191 : 64) + (isAllowance ? (spent ? "1" : "0") : "")))
+        }
         guard canQuote, method == "eth_simulateV1" else { TestMode.fail("A scene tried to read for a site.") }
         guard let call = parameters[0]?["blockStateCalls"]?[0]?["calls"]?[0], let wallet = call["from"]?.string, let to = call["to"]?.string else { TestMode.fail("That isn't a simulation.") }
         let usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"

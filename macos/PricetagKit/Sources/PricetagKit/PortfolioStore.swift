@@ -419,6 +419,12 @@ public final class PortfolioStore {
         future = []
     }
 
+    /// Whether the change is the last thing done, with nothing undone since. Only then can the wallet list still talk about it, and take it back without costing Redo anything.
+    public func isLatestChange(_ snapshot: WalletListSnapshot) -> Bool {
+        guard let entry = snapshot.undoEntry else { return false }
+        return history.last?.id == entry && future.isEmpty
+    }
+
     private func putBack(_ snapshot: WalletListSnapshot) {
         let address = snapshot.address
         let isUnchanged = { (book: Book) in book.senders[address] == snapshot.changedAnswer }

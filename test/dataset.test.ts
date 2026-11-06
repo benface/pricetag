@@ -222,6 +222,31 @@ describe("a dataset with no blocks before its start", () => {
   })
 })
 
+describe("who was on the other side", () => {
+  const sql = manifest.tables.base_legs!.input.sql
+
+  it("names the other side of a transfer and of a transaction's own ETH, and nothing for what has none", () => {
+    assert.match(sql, /t\.from AS account, 'debit' AS side, t\.value AS amount, 'erc20' AS kind, t\.to AS counterparty/)
+    assert.match(sql, /t\.to AS account, 'credit' AS side, t\.value AS amount, 'erc20' AS kind, t\.from AS counterparty/)
+    assert.match(sql, /"from" AS account, 'debit' AS side, value AS amount, 'eth' AS kind, "to" AS counterparty/)
+    assert.match(sql, /"to" AS account, 'credit' AS side, value AS amount, 'eth' AS kind, "from" AS counterparty/)
+    for (const kind of ["wrap", "unwrap"]) assert.match(sql, new RegExp(`'${kind}' AS kind, arrow_cast\\(NULL, 'FixedSizeBinary\\(20\\)'\\) AS counterparty`))
+    assert.match(manifest.tables.gas_legs!.input.sql, /arrow_cast\(NULL, 'FixedSizeBinary\(20\)'\) AS counterparty/)
+    assert.match(manifest.tables.legs!.input.sql, /kind, counterparty FROM self\.unwrap_legs/)
+  })
+})
+
+describe("bloom filters", () => {
+  it("are on the account of each table a wallet's read filters by it", () => {
+    const blooms = (file: string) => {
+      const { tables } = JSON.parse(readFileSync(new URL(file, import.meta.url), "utf8")) as { tables: Record<string, { bloom_filter_columns?: { column: string }[] }> }
+      return Object.keys(tables).filter((name) => tables[name]!.bloom_filter_columns?.some(({ column }) => column === "account")).sort()
+    }
+    assert.deepEqual(blooms("../dataset/pricetag.json"), ["legs", "priced_legs", "unlisted_legs"])
+    assert.deepEqual(blooms("../dataset/cautious-eth.json"), ["priced_legs"])
+  })
+})
+
 describe("unlisted_legs", () => {
   const sql = manifest.tables.unlisted_legs!.input.sql
 
@@ -375,6 +400,10 @@ describe("the fork", () => {
     assert.equal(fork.functions.pt_cautious!.source.source, ptCautiousSource())
   })
 
+  it("starts from the same block as the dataset it forks", () => {
+    assert.equal(start, Number(/block_num\(\) >= (\d+)/.exec(manifest.tables.reference_prices!.input.sql)![1]))
+  })
+
   it("only has the tables a pricing rule decides, and depends only on what it forks", () => {
     assert.deepEqual(Object.keys(fork.tables).sort(), ["priced_legs", "reference_prices"])
     assert.deepEqual(Object.keys(fork.dependencies), ["pricetag"])
@@ -407,9 +436,7 @@ describe("the fork", () => {
 describe("exchange rates from logs", () => {
   const rates = JSON.parse(readFileSync(new URL("../dataset/rates.json", import.meta.url), "utf8")) as typeof manifest
   const sql = rates.tables.rate_updates!.input.sql
-  // The start staging serves, which the fork was built at too. The committed pricetag.json is from an earlier start.
-  const fork = JSON.parse(readFileSync(new URL("../dataset/cautious-eth.json", import.meta.url), "utf8")) as typeof manifest
-  const start = Number(/block_num\(\) >= (\d+)/.exec(fork.tables.reference_prices!.input.sql)![1])
+  const start = Number(/block_num\(\) >= (\d+)/.exec(manifest.tables.reference_prices!.input.sql)![1])
 
   it("is what build.ts writes, for the Pricetag dataset's start, on the same Base dataset, with no RPC", () => {
     assert.deepEqual(Object.keys(rates.tables), ["rate_updates"])

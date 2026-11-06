@@ -4,13 +4,11 @@ import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
-import { CURRENCIES, atCurrentRate, currentRateMicros, foldPositions, formatMoney, formatUsdIn, formatPrice, formatRate, formatSignedMoney, openingLegs, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, viewWallet, type LegEffect, type PricedLeg, type RateRound, type Rates } from "@pricetag/sdk/core"
+import { CURRENCIES, atCurrentRate, currentRateMicros, foldPositions, formatMoney, formatUsdIn, formatPrice, formatRate, formatSignedMoney, openingLegs, foldWallet, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, viewWallet, type LegEffect, type PricedLeg, type RateRound, type Rates } from "@pricetag/sdk/core"
 import { describeConversion, describeEffect, explainContext, explainTarget, priceProofKey, type ExplainTarget } from "../src/core/explain.ts"
 import { createApi } from "../server/app.ts"
-import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
-import { createRates } from "../server/rates.ts"
-import { feedRounds, updateRounds, type RoundReader } from "../server/source.ts"
-import { decodeRound } from "../server/raw.ts"
+import { explainPortfolio, portfolioOf } from "../src/core/portfolio.ts"
+import { createRates, decodeRound, feedRounds, updateRounds, type RoundReader } from "@pricetag/sdk/internal"
 
 const E18 = 10n ** 18n
 const BUY_BLOCK = 100
@@ -341,6 +339,66 @@ describe("what a wallet already held", () => {
     await createRates(read)("CAD", { legs: [...opening, buy], latest: { blockNum: HEAD, timestamp: time(HEAD) } })
     assert.deepEqual(asked, [[BUY_BLOCK, HEAD]])
   })
+
+  it("reads rates where a chart read prices between transactions, too", async () => {
+    const asked: number[][] = []
+    const read: RoundReader = async (_feed, blocks) => {
+      asked.push([...blocks])
+      return new Map(blocks.map((block) => [block, round(block, 1.5)]))
+    }
+    const priceSamples = [{ blockNum: 150, ethUsd: "200000000000", usdcUsd: "100000000" }]
+    const rates = await createRates(read)("CAD", { legs: [buy], priceSamples, latest: { blockNum: HEAD, timestamp: time(HEAD) } })
+    assert.deepEqual(asked, [[BUY_BLOCK, 150, HEAD]])
+    assert.ok(rates?.byBlock[150])
+  })
+
+  describe("a price read between transactions", () => {
+    const priceSamples = [{ blockNum: 150, ethUsd: "300000000000", usdcUsd: "100000000" }]
+    const sampled = (byBlock: Rates["byBlock"]) => {
+      const wallet = walletWith({ legs: [buy, sell], priceSamples, references: [{ blockNum: BUY_BLOCK, ethUsd: "200000000000", usdcUsd: "100000000" }, { blockNum: SELL_BLOCK, ethUsd: "200000000000", usdcUsd: "100000000" }], rates: { ...RATES, byBlock } })
+      return foldWallet(wallet, "average").points
+    }
+
+    it("converts at the rate of its own block", () => {
+      const point = sampled({ ...RATES.byBlock, 150: round(150, 1.25) })[1]!
+      assert.equal(point.blockNum, 150)
+      // 1 ETH at $3,000, at 1.25.
+      assert.equal(point.valueMicros, "3750000000")
+      assert.equal(point.valueRead, true)
+    })
+
+    describe("that failed, at a block with a transaction", () => {
+      const references = [{ blockNum: BUY_BLOCK, ethUsd: "200000000000", usdcUsd: "100000000" }, { blockNum: SELL_BLOCK, ethUsd: "200000000000", usdcUsd: "100000000" }]
+      const empty = [BUY_BLOCK, SELL_BLOCK].map((blockNum) => ({ blockNum, ethUsd: "", usdcUsd: "" }))
+      const atTransactions = (changes: Partial<WalletResponse>) => foldWallet(walletWith({ legs: [buy, sell], references, ...changes }), "average").points.filter((p) => p.txHash !== null).map((p) => [p.txHash, p.pnlMicros, p.valueMicros, p.valueBeforeMicros])
+
+      it("leaves its value and PnL alone in USD", () => {
+        const points = atTransactions({ priceSamples: empty })
+        assert.deepEqual(points, atTransactions({}))
+        assert.ok(points[0]![1] !== null && points[0]![2] !== null)
+      })
+
+      it("leaves its value and PnL alone in another currency", () => {
+        const points = atTransactions({ priceSamples: empty, currency: "CAD", rates: RATES })
+        assert.deepEqual(points, atTransactions({ currency: "CAD", rates: RATES }))
+        assert.ok(points[0]![1] !== null && points[0]![2] !== null)
+      })
+
+      it("keeps the rate the transaction used, not one judged by an estimated time", () => {
+        // A head whose time is well past what its block says makes the rate look stale, if it's judged by that.
+        const latest = { blockNum: HEAD, timestamp: "2027-06-01T00:00:00.000Z" }
+        const points = atTransactions({ priceSamples: empty, currency: "CAD", rates: RATES, latest })
+        assert.deepEqual(points, atTransactions({ currency: "CAD", rates: RATES, latest }))
+        assert.ok(points[0]![2] !== null)
+      })
+    })
+
+    it("adds no point without one, rather than leaving the rate out", () => {
+      const points = sampled(RATES.byBlock)
+      assert.deepEqual(points.map((p) => p.blockNum), [BUY_BLOCK, SELL_BLOCK, HEAD])
+      assert.equal(points[1]!.valueRead, undefined)
+    })
+  })
 })
 
 describe("a portfolio in another currency", () => {
@@ -509,6 +567,24 @@ describe("reading rates", () => {
     assert.deepEqual(asked.at(-1), [100, 1000])
     assert.ok(second?.byBlock[100])
     assert.equal(second?.latest?.blockNum, 1000)
+  })
+
+  it("goes by the chain's head for a wallet as of an earlier block", async () => {
+    const { asked, read } = scripted()
+    const ratesFor = createRates(read)
+    const wallet = walletAt(190, [100, 175])
+    await ratesFor("CAD", wallet, { chainHead: 200 })
+    assert.deepEqual(asked, [[100, 175, 190]])
+    await ratesFor("CAD", wallet, { chainHead: 200 })
+    assert.deepEqual(asked.at(-1), [175], "a recent transaction's block, as ever, but not 190 without a new block")
+    await ratesFor("CAD", wallet, { chainHead: 201 })
+    assert.deepEqual(asked.at(-1), [175, 190], "100 is settled, seen from the chain's head. The rest aren't yet.")
+    await ratesFor("CAD", wallet, { chainHead: 220 })
+    assert.deepEqual(asked.at(-1), [175, 190])
+    const settled = await ratesFor("CAD", wallet, { chainHead: 221 })
+    assert.equal(asked.length, 4, "past any reorg, so that read was the last")
+    assert.equal(settled?.latest?.blockNum, 190)
+    assert.deepEqual(Object.keys(settled?.latest ?? {}).sort(), ["blockNum", "round"])
   })
 
   it("reads nothing for USD", async () => {

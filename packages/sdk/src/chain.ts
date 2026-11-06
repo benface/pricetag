@@ -25,6 +25,37 @@ export function blockBefore(block: number, ms: number): number {
   return Math.max(0, Math.min(block, LAST_2S_BLOCK) - Math.ceil((ms - fastSpan) / SLOW_MS))
 }
 
+const MINUTE_MS = 60_000
+const DAY_MS = 1440 * MINUTE_MS
+/** How often to read prices for a chart, by how long ago: about a tick of each of its timeframes. Each step is a multiple of the one before, so a read stays useful as it ages, for as long as it's on the coarser one. */
+const SAMPLE_STEPS = [
+  { withinMs: 60 * MINUTE_MS, stepMs: 5 * MINUTE_MS },
+  { withinMs: DAY_MS, stepMs: 60 * MINUTE_MS },
+  { withinMs: 7 * DAY_MS, stepMs: 360 * MINUTE_MS },
+  { withinMs: 30 * DAY_MS, stepMs: DAY_MS },
+  { withinMs: Number.POSITIVE_INFINITY, stepMs: 7 * DAY_MS },
+]
+
+/**
+ * The blocks in `from`..`through` to read prices at for a chart, oldest first. They sit on fixed multiples, so the same
+ * blocks come back on each refresh, and each one's only read once.
+ */
+export function priceSampleBlocks(from: number, through: number): number[] {
+  const blocks = new Set<number>()
+  for (const { withinMs, stepMs } of SAMPLE_STEPS) {
+    const size = (block: number) => stepMs / (block > LAST_2S_BLOCK ? FAST_MS : SLOW_MS)
+    const start = Math.max(from, blockBefore(through, withinMs))
+    for (let block = start + (size(start) - start % size(start)) % size(start); block <= through; ) {
+      blocks.add(block)
+      // Past the upgrade the multiples are of a bigger number, so the next one might be further than one step.
+      const next = block + size(block + 1)
+      const aligned = next - next % size(next)
+      block = aligned > block ? aligned : aligned + size(next)
+    }
+  }
+  return [...blocks].sort((a, b) => a - b)
+}
+
 /**
  * The `timestamp` of `block`, from a block at or after it. Timestamps are in whole seconds, so `from`'s can be up to 800 ms
  * short of when that block came. This puts that back first, so the answer doesn't change with which block it's counted from.

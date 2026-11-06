@@ -106,9 +106,10 @@ public enum HotWalletWording {
     public static let noEthPrice = "ETH's price can't be read right now, so gas can't be valued and nothing is swept automatically."
     public static let wrongChain = "The network address in Settings isn't on Base, so nothing will be signed."
     public static let cantReachChain = "Can't reach the network, so balances may be old and nothing is being swept."
-    public static let cantCheckAmp = "Can't read this wallet's history from Amp right now, so it isn't being compared with what this app signed. It still checks how many transactions this key has sent."
+    public static let cantCheckAmp = "Can't read this wallet's history right now, so it isn't being compared with what this app signed. It still checks how many transactions this key has sent."
     public static let feesLookWrong = "The network is quoting far higher fees than Base ever charges, so nothing was signed. Check the network address in Settings."
     public static let keyMissing = "This device no longer has this wallet's key, so nothing here can be moved. This can happen after restoring onto a different device."
+    public static let keyCameBack = "This device still had another key that's been used, so it's your wallet now rather than being lost. You can delete it too if you don't want it."
     public static let rotating = "Moving everything off the old key. It's deleted once there's nothing left on it."
     public static let deleteWaitsForRotation = "This wallet's key is being replaced, and some of its money may already be on the new key. You can delete it once that's finished."
 
@@ -123,6 +124,12 @@ public enum HotWalletWording {
 
     public static func nothingToSweep(tooCostly symbols: [String]) -> String {
         symbols.isEmpty ? "There's nothing on this wallet to sweep." : "There's nothing to sweep except \(tooCostlyToMove(symbols))."
+    }
+
+    /// Why moving everything wouldn't move anything, if it wouldn't.
+    public static func whyNothingSweeps(_ plan: SweepPlan) -> String? {
+        guard plan.transfers.isEmpty else { return nil }
+        return plan.blockers.contains(.notEnoughGas) ? noGas : nothingToSweep(tooCostly: plan.notWorthTheGas.map(\.symbol))
     }
 
     /// A sweep that stopped partway. The rest stays on this wallet, and sweeping again moves it once this has landed.

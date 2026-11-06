@@ -10,13 +10,16 @@ export type BrowserWallet = { name: string; rdns: string; icon: string; provider
 /** Our own extension announces itself too, but it's the hot wallet, and savings can't go through it. */
 const NOT_A_ROUTE = new Set(["com.benface.patina"])
 
-/** The wallets in this browser, through EIP-6963. They answer right away or not at all. */
-export function findBrowserWallets(waitMs = 150): Promise<BrowserWallet[]> {
+/** The wallets a device can stand behind. */
+export const findBrowserWallets = async (waitMs = 150) => (await findAllWallets(waitMs)).filter(({ rdns }) => !NOT_A_ROUTE.has(rdns))
+
+/** Every wallet in this browser, through EIP-6963. They answer right away or not at all. */
+export function findAllWallets(waitMs = 150): Promise<BrowserWallet[]> {
   return new Promise((resolve) => {
     const found = new Map<string, BrowserWallet>()
     const announced = (event: Event) => {
       const { info, provider } = (event as CustomEvent<{ info: { name: string; rdns: string; icon: string }; provider: EIP1193Provider }>).detail
-      if (!NOT_A_ROUTE.has(info.rdns)) found.set(info.rdns, { name: info.name, rdns: info.rdns, icon: info.icon, provider })
+      found.set(info.rdns, { name: info.name, rdns: info.rdns, icon: info.icon, provider })
     }
     window.addEventListener("eip6963:announceProvider", announced)
     window.dispatchEvent(new Event("eip6963:requestProvider"))

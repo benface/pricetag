@@ -240,23 +240,36 @@ describe("reading the token feeds", () => {
 
   it("reads every feed in one bounded query, and leaves out a failed one", async () => {
     const { asked, source } = fakeQuery({ ...BLOCK, f0: { data: roundData(63_000_000n, 1000n) }, f1: null })
-    const rounds = await source.readFeedRounds?.(["AERO", "DAI"], 50)
-    assert.deepEqual(rounds, { AERO: { answer: "63000000", updatedAt: 1000, blockNum: 50, timestamp: "2026-11-04T00:00:00.000Z" } })
+    const rounds = await source.readFeedRounds?.(["AERO", "DAI"], [50])
+    assert.deepEqual(rounds, new Map([[50, { AERO: { answer: "63000000", updatedAt: 1000, blockNum: 50, timestamp: "2026-11-04T00:00:00.000Z" } }]]))
     assert.equal(asked.length, 1)
     assert.ok(asked[0]?.includes(TOKEN_FEEDS.AERO!.address))
     assert.ok(asked[0]?.includes(TOKEN_FEEDS.DAI!.address))
     assert.ok(asked[0]?.includes(`FROM (SELECT block_num, timestamp FROM "base".blocks WHERE block_num BETWEEN 50 AND 50 AND block_num IN (50) LIMIT 1)`), "see the note on eth_call's shape in readReferences")
   })
 
+  it("shares a query between blocks, each with its own answers", async () => {
+    const asked: string[] = []
+    const query = (async (sql: string) => {
+      asked.push(sql)
+      return [50, 60].map((block) => ({ block_num: block, timestamp: Date.parse("2026-11-04T00:00:00.000Z"), f0: { data: roundData(BigInt(block), 1000n) } }))
+    }) as unknown as Query
+    const source = resolvingSource(query, { baseDataset: "base", dataset: "pricetag", startBlock: 1, network: "base_mainnet" })
+    const rounds = await source.readFeedRounds?.(["AERO"], [60, 50, 70])
+    assert.deepEqual([...(rounds?.entries() ?? [])].map(([block, { AERO }]) => [block, AERO?.answer, AERO?.blockNum]), [[50, "50", 50], [60, "60", 60]], "and 70 has no row")
+    assert.equal(asked.length, 1)
+    assert.ok(asked[0]?.includes(`WHERE block_num BETWEEN 50 AND 70 AND block_num IN (50, 60, 70) LIMIT 3)`))
+  })
+
   it("has nothing to ask about a token with no feed, or a block with no row", async () => {
     const none = fakeQuery(null)
-    assert.deepEqual(await none.source.readFeedRounds?.(["ETH"], 50), {})
+    assert.deepEqual(await none.source.readFeedRounds?.(["ETH"], [50]), new Map())
     assert.equal(none.asked.length, 0)
-    assert.deepEqual(await none.source.readFeedRounds?.(["AERO"], 50), {})
+    assert.deepEqual(await none.source.readFeedRounds?.(["AERO"], [50]), new Map())
   })
 
   it("leaves out a negative answer", async () => {
     const { source } = fakeQuery({ ...BLOCK, f0: { data: roundData((1n << 256n) - 1n, 1000n) } })
-    assert.deepEqual(await source.readFeedRounds?.(["AERO"], 50), {})
+    assert.deepEqual(await source.readFeedRounds?.(["AERO"], [50]), new Map([[50, {}]]))
   })
 })

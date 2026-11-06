@@ -3,7 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createWallets, describeError, followChain, followRawSql, followSql, readHeadMark, sharedMarket, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
+import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createRates, createRowStream, createWallets, describeError, feedRounds, followChain, followRawSql, followSql, followedWallets, followedWindowSql, readBlockHashes, readHeadMark, sharedMarket, updateRounds, type AmpQuery, type FollowConfig, type ReadRates, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -12,15 +12,15 @@ import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fi
 import { foldBook, previewBook } from "../src/core/resolve.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule } from "../src/core/rules.ts"
 import { verifyLink } from "./links.ts"
-import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type Unread } from "./combined.ts"
-import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
+import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type AllYoursRead, type Unread } from "../src/core/combined.ts"
+import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../src/core/portfolio.ts"
 import { createCoinbase } from "./coinbase.ts"
 import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onramp.ts"
-import { createRates, readPaidRates } from "./rates.ts"
-import { createDepositReader } from "./block.ts"
+import { readPaidRates } from "./rates.ts"
+import { createBlockHashReader, createDepositReader } from "./block.ts"
 import { warnOfNewAggregators, warnOfNewRateAggregators, warnOfNewTokenAggregators } from "./feeds.ts"
 import { createManifestReader, createProofs, currentProofOf, currentRevision, currentVerificationOf, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
-import { feedRounds, rawSource, resolvingSource, settledL1Fees, sharedReads, updateRounds, type SharedReads } from "./source.ts"
+import { rawSource, resolvingSource, settledL1Fees, sharedReads, type SharedReads } from "./source.ts"
 import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 
@@ -76,7 +76,10 @@ function pinned(dataset: string, hash: string | undefined): string {
   return `${dataset.split("@")[0]}@${hash}`
 }
 
-export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs; follow: FollowConfig; shared?: SharedReads; approvals?: Approvals } | null {
+/** A wallet read's rows, closing balance and latest price run side by side, and the head or another wallet needn't wait behind them. Few enough to be fair to a shared Amp. */
+const QUERIES_AT_ONCE = 3
+
+export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, { maxConcurrent: QUERIES_AT_ONCE }) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs; follow: FollowConfig; shared?: SharedReads; approvals?: Approvals } | null {
   if (!query) return null
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
@@ -85,7 +88,7 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
   const readRates = createRates(env.PRICETAG_RATES_DATASET ? updateRounds(query, env.PRICETAG_RATES_DATASET, calls) : calls)
   if (env.PRICETAG_RATES_DATASET) void warnOfNewRateAggregators(env.BASE_RPC_URL || DEFAULT_RPC_URL)
   // How the server hears about new blocks. Amp's block ranges name a network with a dash, and its RPC functions with an underscore.
-  const followOf = (sql: string): FollowConfig => ({ stream: env.AMP_QUERY_URL ? createRangeStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")) : null, sql, readMark: (after) => readHeadMark(query, baseDataset, after) })
+  const followOf = (sql: string, startBlock: number | null = null): FollowConfig => ({ stream: env.AMP_QUERY_URL ? createRangeStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")) : null, sql, readMark: (after) => readHeadMark(query, baseDataset, after ?? startBlock), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks) })
   // Only a fork pins the default. Without one, a hash left in the env can be a hosted Amp's, which a local Amp doesn't have.
   const pin = env.PRICETAG_DATASET && env.PRICETAG_FORK_DATASET ? pinned(env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH) : null
   const proofs = createProofs(pin ? query.aliased({ pricetag: pin }) : query, {
@@ -93,8 +96,14 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
     dataset: env.PRICETAG_DATASET ? { name: env.PRICETAG_DATASET, reference: pin ? "pricetag" : env.PRICETAG_DATASET, hash: pin ? env.PRICETAG_DATASET_HASH! : null } : null,
     feedsDataset: env.PRICETAG_DATASET ? (feedsDataset ?? null) : null,
     readDeposits: createDepositReader(env.BASE_RPC_URL || DEFAULT_RPC_URL),
+    readBlockHash: createBlockHashReader(env.BASE_RPC_URL || DEFAULT_RPC_URL),
     readManifestHash: createManifestReader(env.AMP_ADMIN_URL || `${env.AMP_QUERY_URL}/controller`, env.AMP_QUERY_TOKEN || undefined),
   })
+  /** With `PRICETAG_WALLET_STREAM=on`, follows a wallet's rows once it's read, so its next read doesn't query for them. Off by default until it's been through a real reorg. */
+  const followedOf = (dataset: string) =>
+    env.AMP_QUERY_URL && env.PRICETAG_WALLET_STREAM === "on"
+      ? followedWallets({ stream: createRowStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")), sql: (address) => followedWindowSql(address, dataset, { counterparties: true }), readMark: (after) => readHeadMark(query, baseDataset, after), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks) })
+      : undefined
   if (env.PRICETAG_DATASET) {
     if (env.PRICETAG_FEEDS_DATASET) void warnOfNewTokenAggregators(env.BASE_RPC_URL || DEFAULT_RPC_URL)
     const startBlock = Number(env.PRICETAG_START_BLOCK)
@@ -103,21 +112,24 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
     if (pin) {
       // The same SQL for both. The header alone says which prices it reads, and the transactions always come from the
       // first, so they can't differ.
-      const shared = sharedReads(query.aliased({ pricetag: pin }), { baseDataset, dataset: "pricetag", network })
+      const followed = followedOf(pin)
+      const shared = sharedReads(query.aliased({ pricetag: pin }), { baseDataset, dataset: "pricetag", network, followed })
       const ruleSource = (id: string, name: string, hash: string | undefined, priceDataset: string): RuleSource => ({
         rule: { id, ...RULE_TEXT[id]!, dataset: name, hash: hash as string },
-        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", feedsDataset, startBlock, network }, shared),
+        // The stream reads the default rule's prices, so only that rule can use them.
+        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", feedsDataset, startBlock, network, followed: priceDataset === pin ? followed : undefined }, shared),
       })
       const rules = [
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, pin),
         ruleSource(CAUTIOUS_RULE_ID, env.PRICETAG_FORK_DATASET!, env.PRICETAG_FORK_HASH, pinned(env.PRICETAG_FORK_DATASET!, env.PRICETAG_FORK_HASH)),
       ]
       const approvals = createApprovals(query.aliased({ pricetag: pin }), { baseDataset, dataset: { reference: "pricetag", name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
-      return { source: rules[0]!.source, rules, readRates, proofs, follow: followOf(followSql(pin)), shared, approvals }
+      return { source: rules[0]!.source, rules, readRates, proofs, follow: followOf(followSql(pin), startBlock), shared, approvals }
     }
-    const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network })
+    const followed = followedOf(env.PRICETAG_DATASET)
+    const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network, followed })
     const approvals = createApprovals(query, { baseDataset, dataset: { reference: env.PRICETAG_DATASET, name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
-    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, feedsDataset, startBlock, network }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET)), shared, approvals }
+    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, feedsDataset, startBlock, network, followed }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET), startBlock), shared, approvals }
   }
   const historyBlocks = env.PRICETAG_HISTORY_BLOCKS ? Number(env.PRICETAG_HISTORY_BLOCKS) : null
   if (historyBlocks !== null && (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0)) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
@@ -194,6 +206,9 @@ const pollingOnly = (source: Source): FollowConfig => ({
 
 type Created = Omit<NonNullable<ReturnType<typeof createSource>>, "follow"> & { follow?: FollowConfig | undefined }
 
+/** How old a followed head can be for a wallet read to use it. Ticks are at least 2 s apart, and a read of the head is a query every read would otherwise wait for. */
+const FOLLOWED_HEAD_MS = 5000
+
 const NO_ONRAMP = "Buying isn't set up on this server."
 
 /** An amount typed in a currency, or undefined when it isn't one. */
@@ -214,16 +229,29 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   const source = created?.source ?? null
 
   let head: Head | null = null
+  let headReadAt = 0
+  /** Goes up when a reorg starts and when it's been applied, so a read of the head can tell it spanned one. */
+  let headRewinds = 0
   const subscribers = new Set<ServerResponse>()
   let following: AbortController | null = null
 
   async function pollHead(): Promise<Head> {
     if (!source) throw new Error("No Amp source")
+    const startedAt = headRewinds
     const next = await source.head(head?.blockNum ?? null)
-    if (next) head = next
+    // What it found can be the replaced chain's, and higher than the new one, so its height says nothing. Only `rewindTo` changes this, so it can't go on for long.
+    if (startedAt !== headRewinds) return pollHead()
+    // Reads overlap, so one that started first can finish last. A reorg lowers the head through `rewindTo`, not here.
+    if (next && (!head || next.blockNum >= head.blockNum)) {
+      head = next
+      headReadAt = Date.now()
+    }
     if (!head) throw new Error("No blocks yet")
     return head
   }
+
+  /** While the chain's followed, every tick reads the head and the next one reads the wallet again, so a read can start from one that's seconds old. */
+  const walletHead = async () => (head && following && Date.now() - headReadAt < FOLLOWED_HEAD_MS ? head : pollHead())
 
   const send = (message: string) => {
     for (const subscriber of subscribers) subscriber.write(message)
@@ -231,12 +259,15 @@ export function createApi(env: Env, created: Created | null = createSource(env),
 
   /** Blocks some already-read wallets hold were replaced. The next read of each replaces them, however far back it was. */
   async function rewindTo(block: number, tip: number) {
+    headRewinds += 1
     const oldTip = Math.max(head?.blockNum ?? 0, tip)
     readL1Fees.rewind(block, oldTip)
     await Promise.all([created?.shared?.rewind(block, oldTip), ...[...new Set([wallets, ...rules.map((r) => r.wallets)])].map((w) => w?.rewind(block, oldTip))])
     created?.readRates.rewind?.(block)
     // The new chain can be shorter, and the head is only read from the last one on.
     if (head && head.blockNum >= block) head = { ...head, blockNum: block - 1 }
+    headReadAt = 0
+    headRewinds += 1
   }
 
   // Only follows the chain while something is watching.
@@ -264,10 +295,10 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (subscribers.size > 0) void followLoop()
   }
 
-  const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL), () => head?.blockNum ?? null)
-  const wallets = source ? createWallets(source, pollHead, readL1Fees, console, { maxWallets }) : null
+  const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL, fetch, undefined, console, Number(env.BASE_RPC_RATE_LIMIT) || undefined), () => head?.blockNum ?? null)
+  const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) : null
   // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
-  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, pollHead, readL1Fees, console, { maxWallets }) }))
+  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) }))
 
   /**
    * Reads a wallet, or answers the request with why it can't.
@@ -298,10 +329,12 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   /** A wallet with the rates to show it in `currency`. Never falls back to USD. Throws when they can't be read. */
   async function convert(wallet: WalletResponse, currency: CurrencyCode, books: readonly Book[] = [], paidIn: readonly CurrencyCode[] = []): Promise<WalletResponse> {
     const live = created && wallet.mode !== "demo" ? created : null
-    const paidRates = await readPaidRates(live ? live.readRates : async (other) => demoRates(other), wallet, currency, books, paidIn)
+    // A wallet can be as of an earlier block than the head, like one that's read at a block they've all reached.
+    const readRates: ReadRates = live ? (other, read, options) => live.readRates(other, read, { ...options, chainHead: head?.blockNum }) : async (other) => demoRates(other)
+    const paidRates = await readPaidRates(readRates, wallet, currency, books, paidIn)
     const paid = paidRates ? { ...wallet, paidRates } : wallet
     if (currency === "USD") return paid
-    return { ...paid, currency, rates: live ? await live.readRates(currency, wallet) : demoRates(currency) }
+    return { ...paid, currency, rates: await readRates(currency, wallet) }
   }
 
   /** A wallet with the rates to show it in `currency`, or answers the request with why it can't. Never falls back to USD. */
@@ -367,8 +400,6 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         const read = from.peek(address)
         wallet = read && rule ? { ...read, rule: rule.rule.id, ruleNote: rule.note } : read
       }
-      // With no data source, only the demo's own wallets can ever be read, so this one isn't still reading.
-      if (!wallet && !wallets) linkedFailures.add(address)
       if (!wallet) continue
       const converted = await inCurrency(wallet, currency, res, books)
       if (!converted) return null
@@ -385,7 +416,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
    * then can be from before a move another wallet has already seen. `fresh: false` takes what's already been read, and
    * leaves out a wallet whose last read failed.
    */
-  async function readAllYours(addresses: readonly string[], currency: CurrencyCode, rule: (typeof rules)[number] | null, books: readonly Book[], fresh: boolean, res: ServerResponse): Promise<{ read: WalletResponse[]; unread: Unread } | null> {
+  async function readAllYours(addresses: readonly string[], currency: CurrencyCode, rule: (typeof rules)[number] | null, books: readonly Book[], fresh: boolean, res: ServerResponse, paidIn: readonly CurrencyCode[] = []): Promise<{ read: WalletResponse[]; unread: Unread } | null> {
     const from = rule?.wallets ?? wallets
     const chain = rule?.source ?? source
     if (!from || !chain) {
@@ -412,7 +443,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         return
       }
       try {
-        done.set(address, await convert(ruled(wallet), currency, books))
+        done.set(address, await convert(ruled(wallet), currency, books, paidIn))
       } catch (error) {
         console.error("Wallet rates failed:", describeError(error))
         failed.add(address)
@@ -439,7 +470,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
             // A history that starts after this block can't say what the wallet held at it.
             const at = facts && facts.fromBlock <= blockNum ? from.pricedOn(account, facts, prices, await from.marketOn(account, facts, prices)) : null
             if (!at) throw new Error(`It can't be read at block ${blockNum}.`)
-            answer.set(account, await convert(ruled(at), currency, books))
+            answer.set(account, await convert(ruled(at), currency, books, paidIn))
           } catch (error) {
             console.error("Wallet read at an earlier block failed:", describeError(error))
             failed.add(account)
@@ -471,9 +502,13 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const candidates = action === "preview" ? (Array.isArray(body.candidates) ? body.candidates.map(parseBook) : null) : []
     if (!candidates || candidates.includes(null) || candidates.length > 8) return sendJson(res, 400, { error: "Those answers can't be read." })
     const books = action === "preview" ? (candidates as Book[]) : [book]
-    const found = await readAllYours(addresses, currency, rule, books, action === undefined, res)
+    const paidIn = parsePaidIn(typeof body.paid === "string" ? body.paid : null)
+    if (!paidIn) return sendJson(res, 400, { error: "That currency isn't supported." })
+    const found = await readAllYours(addresses, currency, rule, books, action === undefined || action === "wallets", res, paidIn)
     if (!found) return
     const { read, unread } = found
+    // The wallets themselves, because the browser runs the fold, with answers that stay with it.
+    if (action === "wallets") return sendJson(res, 200, { wallets: read, unread } satisfies AllYoursRead)
     if (read.length === 0) {
       res.writeHead(204, { "cache-control": "no-store" })
       res.end()
@@ -539,7 +574,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return taxReport(taxMatch[1] as string, { country: body.country, method: body.method, scope: body.scope, year: body.year }, also as string[], currency, book, res)
     }
 
-    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last))?$/.exec(path)
+    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last|wallets))?$/.exec(path)
     if (!match) return sendJson(res, 404, { error: "Not found" })
     const method = parseMethod(typeof body.method === "string" ? body.method : null)
     if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
@@ -551,6 +586,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (body.rule !== undefined && body.rule !== null && !rule) return sendJson(res, 400, { error: "That pricing rule isn't available here." })
     const action = match[2]
     if (match[1] === ALL_YOURS) return allYours(action, body, req, res, { method, currency, book, rule })
+    if (action === "wallets") return sendJson(res, 404, { error: "Not found" })
 
     const target = action === "explain" ? parseExplainTarget(new URL(req.url ?? "/", "http://localhost").searchParams) : null
     if (action === "explain" && !target) return sendJson(res, 400, { error: "That isn't a number this can explain." })
@@ -884,8 +920,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         sendAmpError(res, error, "Couldn't read this block.")
         return true
       }
-      if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits, checkedUpdate))
-      else sendJson(res, 404, { error: "Amp doesn't have this block." })
+      if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits, checkedUpdate, read.nodeHash))
+      else sendJson(res, 404, { error: "The price service doesn't have this block." })
       return true
     }
 

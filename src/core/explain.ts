@@ -420,7 +420,7 @@ export function explainHold(positions: readonly Position[], comparison: HoldComp
   const money = (micros: string) => formatMoney(micros, currency)
   const signed = (micros: string | null) => (micros === null ? "unavailable" : formatSignedMoney(micros, currency))
   const { holdMicros, ethValueMicros, ethPriceMicros, ethQty, putInMicros, takenOutMicros, walletMicros, gainThatLeftMicros, differenceMicros, ranOut } = comparison
-  const caveat = holdCaveatSentence(comparison, currency)
+  const caveat = holdCaveatSentence(comparison, currency, { combined })
   const [here, these] = combined ? ["your wallets", "Your wallets"] : ["this wallet", "This wallet"]
   const lines = [
     `Takes each amount put in ${here}, turns it into ETH at that moment's price, and values that ETH at today's price.`,

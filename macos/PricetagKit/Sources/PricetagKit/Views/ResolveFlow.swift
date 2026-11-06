@@ -24,6 +24,13 @@ public struct ResolveFlow: View {
         _model = State(initialValue: ResolveModel(store: store, firstAsset: firstAsset, noteWriter: noteWriter))
     }
 
+    /// With questions already dealt with, to show where that leads.
+    public init(store: PortfolioStore, model: ResolveModel) {
+        self.store = store
+        publishFromDevice = nil
+        _model = State(initialValue: model)
+    }
+
     private static let swipeDistance: CGFloat = 110
 
     public var body: some View {
@@ -333,9 +340,11 @@ public struct ResolveFlow: View {
             if let portfolio = store.portfolio {
                 finalNumber(portfolio)
                 if let excluded = Wording.excluded(portfolio.totals.excluded) {
-                    Text("Every question's answered.")
+                    Text(Wording.finishNote(portfolio.meter))
                         .font(.callout)
                         .secondaryText()
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                         .help(excluded)
                 }
             }

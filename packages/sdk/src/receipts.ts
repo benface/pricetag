@@ -16,15 +16,34 @@ export type FeeRequest = { txHash: string; blockNum: number }
 /** L1 fees in wei by transaction hash. A transaction with no answer yet isn't in it. */
 export type ReadL1Fees = (requests: readonly FeeRequest[]) => Promise<Map<string, string>>
 
-const BATCH = 5
-// The public RPC allows 25 calls a second per IP, counting each one in a batch, and a local Amp's relay can be using
-// most of that. So this is slow on purpose, and it waits out a 429 before giving up until the next refresh.
-const PAUSE_MS = 500
+// The public RPC allows 25 calls a second per IP, counting each one in a batch. A local Amp's relay needs about 10 of
+// them just to follow the head, so the two split a limit: fees get 40%, the relay the rest. So this is slow on purpose,
+// and it waits out a 429 before giving up until the next refresh. A faster RPC says so with its rate limit.
+export const DEFAULT_RPC_RATE_LIMIT = 25
+const L1_FEE_SHARE = 0.4
+/** The shares add up to the whole limit, so calls reaching the RPC a few ms off their schedule would tip a batch over, and a refused batch costs a pause. This much slower leaves room for that. */
+const PACE_MARGIN = 1.1
+const MAX_BATCH = 25
 const PAUSE_AFTER_429_MS = 1_000
 const RETRIES = 3
 /** A busy wallet catches up over a few refreshes, and until then its ETH says it isn't checked yet. */
-const MAX_PER_READ = 200
+const SECONDS_PER_READ = 20
 const TIMEOUT_MS = 15_000
+
+/** Calls a second a local Amp's relay can send to an RPC that allows `rateLimit`, which is what L1 fees leave of it. */
+export const relayRate = (rateLimit: number) => rateLimit * (1 - L1_FEE_SHARE)
+
+/**
+ * How to stay under the fees' share of `rateLimit`: at the default, 5 receipts every 550 ms, and at most 180 in a read.
+ * A whole number of batches fits in each second, so no second of it can hold an extra one.
+ */
+export function l1FeePace(rateLimit: number = DEFAULT_RPC_RATE_LIMIT) {
+  const callsPerSecond = (rateLimit > 0 ? rateLimit : DEFAULT_RPC_RATE_LIMIT) * L1_FEE_SHARE
+  const batchesPerSecond = Math.max(2, Math.ceil(callsPerSecond / MAX_BATCH))
+  const batch = Math.max(1, Math.floor(callsPerSecond / batchesPerSecond))
+  const pauseMs = Math.max(1_000 / batchesPerSecond, (batch * 1_000) / callsPerSecond) * PACE_MARGIN
+  return { batch, pauseMs, maxPerRead: batch * Math.max(1, Math.floor((SECONDS_PER_READ * 1_000) / pauseMs)) }
+}
 
 type Receipt = { blockNumber?: string; l1Fee?: string } | null
 type RpcResult = { id: number; result?: Receipt }
@@ -36,19 +55,47 @@ export function l1FeeOf(receipt: Receipt | undefined, blockNum: number): string 
   return receipt.l1Fee ? BigInt(receipt.l1Fee).toString() : "0"
 }
 
-export function createL1FeeReader(url: string, send: typeof fetch = fetch, pauseAfter429Ms = PAUSE_AFTER_429_MS, logger: Logger = console): ReadL1Fees {
+export function createL1FeeReader(url: string, send: typeof fetch = fetch, pauseAfter429Ms = PAUSE_AFTER_429_MS, logger: Logger = console, rateLimit?: number): ReadL1Fees {
+  const { batch: batchSize, pauseMs, maxPerRead } = l1FeePace(rateLimit)
+  // Wallets read at the same time share these, so together they stay at one pace. Any pause holds at most one batch's worth of receipts, however they're split, so a small read doesn't cost a whole pause, and a bigger batch can't follow it too soon.
+  let notBefore = 0
+  let sent: { at: number; size: number }[] = []
+  const slotFor = (size: number) => {
+    const earliest = Math.max(Date.now(), notBefore)
+    let used = size
+    for (let i = sent.length - 1; i >= 0; i--) {
+      used += sent[i]!.size
+      if (used > batchSize) return Math.max(earliest, sent[i]!.at + pauseMs)
+    }
+    return earliest
+  }
+  const waitForSlot = (size: number) => {
+    const slot = slotFor(size)
+    notBefore = slot
+    sent = sent.filter(({ at }) => at + pauseMs > slot)
+    sent.push({ at: slot, size })
+    // A timer of 0 still fires late, which would put this batch closer to the next one than its slot says.
+    const wait = Math.ceil(slot - Date.now())
+    return wait > 0 ? new Promise((resolve) => setTimeout(resolve, wait)) : undefined
+  }
   return async (requests) => {
     const fees = new Map<string, string>()
-    const wanted = requests.slice(0, MAX_PER_READ)
-    for (let i = 0; i < wanted.length; i += BATCH) {
-      if (i > 0) await new Promise((resolve) => setTimeout(resolve, PAUSE_MS))
-      const batch = wanted.slice(i, i + BATCH)
+    const wanted = requests.slice(0, maxPerRead)
+    const started = Date.now()
+    for (let i = 0; i < wanted.length; i += batchSize) {
+      const batch = wanted.slice(i, i + batchSize)
+      // Sharing the pace makes each read slower, so what doesn't fit waits for the next refresh instead of holding this one up.
+      if (i > 0 && slotFor(batch.length) - started > SECONDS_PER_READ * 1_000) break
       try {
         const body = JSON.stringify(batch.map(({ txHash }, id) => ({ jsonrpc: "2.0", id, method: "eth_getTransactionReceipt", params: [txHash] })))
-        const post = () => send(url, { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(TIMEOUT_MS) })
+        const post = async () => {
+          await waitForSlot(batch.length)
+          return send(url, { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(TIMEOUT_MS) })
+        }
         let response = await post()
         for (let retry = 0; response.status === 429 && retry < RETRIES; retry++) {
-          await new Promise((resolve) => setTimeout(resolve, pauseAfter429Ms))
+          // Every read waits, since the next batch would get a 429 too.
+          notBefore = Math.max(notBefore, Date.now() + pauseAfter429Ms)
           response = await post()
         }
         if (!response.ok) throw new RpcAnswerError(`status ${response.status}`)

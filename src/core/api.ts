@@ -217,8 +217,11 @@ export type TaxReportResponse = {
   csv: string
 }
 
-/** A derived table is normally a few seconds behind the chain. More than this is worth saying out loud. */
-const BEHIND_MS = 10_000
+/**
+ * A derived table is normally about 5 seconds behind the chain, and one read in a dozen lands over 10, up to 17 when measured. More than this is worth saying out loud.
+ * A table that's stopped falls further behind with every second, so it still gets past this quickly.
+ */
+const BEHIND_MS = 30_000
 
 export const isBehind = ({ coverage, latest }: Pick<WalletResponse, "coverage" | "latest">) => msBetweenBlocks(coverage.toBlock, latest.blockNum) > BEHIND_MS
 

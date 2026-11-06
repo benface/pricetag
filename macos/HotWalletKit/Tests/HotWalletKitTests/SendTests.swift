@@ -385,6 +385,63 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         #expect(await rig.signer.signed.isEmpty)
     }
 
+    /// With no Touch ID to give, asking would end in nothing moving and no reason why, so a reason means it never asked.
+    @Test(arguments: [
+        (snapshot(eth: 0), "There's nothing on this wallet to sweep."),
+        (snapshot(eth: 0, tokens: [usdc: 1]), "There's nothing to sweep except some USDC that gas makes too costly to move right now."),
+        (snapshot(eth: 0, tokens: [usdc: usdcUnits(10)]), HotWalletWording.noGas),
+    ]) func sweepingWhatTheLastReadSaysCantMoveDoesntAskForTouchID(held: ChainSnapshot, problem: String) async throws {
+        let rig = await Rig(held, presence: false)
+        await rig.wallet.tick()
+        #expect(rig.wallet.sweepPreview?.whyNothing == problem)
+        #expect(await approveSweep(on: rig.wallet) == .stopped(problem))
+    }
+
+    /// An automatic sweep needs no Touch ID, so one can be going with none to give. A reason means it never asked.
+    @Test func sweepingWhileASweepIsOnItsWayDoesntAskForTouchID() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)]), presence: false)
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.count == 1)
+        #expect(await approveSweep(on: rig.wallet) == .stopped(HotWalletWording.lastOneOnItsWay))
+        #expect(await rig.chain.sent.count == 1)
+    }
+
+    @Test func sweepingBeforeTheLastSweepShowsUpDoesntAskForTouchID() async throws {
+        let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)]), presence: false)
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.wallet.tick()
+        #expect(rig.stateStore.saved.settledThroughBlock == 1001)
+        #expect(await approveSweep(on: rig.wallet) == .stopped(HotWalletWording.lastOneStillShowingUp))
+        #expect(await rig.chain.sent.count == 1)
+    }
+
+    @Test func aSweepWithSomethingToMoveHasNoReasonItWouldnt() async throws {
+        let rig = await Rig(funded)
+        await rig.wallet.tick()
+        #expect(rig.wallet.sweepPreview?.whyNothing == nil)
+    }
+
+    @Test func moneyArrivingAfterNothingToSweepCanBeSwept() async throws {
+        let rig = await Rig(snapshot(eth: 0))
+        await rig.wallet.tick()
+        #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
+        await rig.chain.set(funded)
+        await rig.wallet.tick()
+        #expect(rig.wallet.sweepPreview?.whyNothing == nil)
+        #expect(await rig.wallet.sweepEverything(in: PresencePrompt()))
+        #expect(await rig.chain.sent.count == 2)
+    }
+
+    /// The last read isn't what decides: it had something, and only the fresh one after Touch ID knows it's gone.
+    @Test func aSweepOfWhatsAlreadyGoneStillSaysSo() async throws {
+        let rig = await Rig(funded)
+        await rig.wallet.tick()
+        await rig.chain.set(snapshot(eth: 0))
+        #expect(await approveSweep(on: rig.wallet) == .stopped("There's nothing on this wallet to sweep."))
+        #expect(await rig.signer.signed.isEmpty)
+    }
+
     @Test func aSweepThatStopsPartwaySaysWhatWentAndWhatDidnt() async throws {
         let rig = await Rig(funded)
         await rig.chain.setSendFailure(.rejected("nonce too low"), afterSends: 1)
@@ -395,7 +452,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         // What went has to land first, so trying again can't reuse its nonce. Then only what's left goes.
         await rig.chain.setSendFailure(nil)
         #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
-        #expect(rig.wallet.sweepProblem == "A sweep is still on its way. Try again in a moment.")
+        #expect(rig.wallet.sweepProblem == HotWalletWording.lastOneOnItsWay)
         #expect(await rig.chain.sent.count == 1)
 
         await rig.chain.confirmAll()
@@ -528,6 +585,21 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(5)]))
         #expect(await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: friend)) == false)
         #expect(rig.wallet.sweepProblem == HotWalletWording.noGasToSend)
+    }
+
+    /// What's in the way isn't always a sweep, so the wait doesn't call it one.
+    @Test func sweepingAfterASendSaysTheLastTransactionIsInTheWay() async throws {
+        let rig = await Rig(funded)
+        #expect(await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: friend)))
+        #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
+        #expect(rig.wallet.sweepProblem == HotWalletWording.lastOneOnItsWay)
+
+        await rig.chain.confirmAll()
+        await rig.wallet.tick()
+        #expect(rig.stateStore.saved.settledThroughBlock == 1001)
+        #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
+        #expect(rig.wallet.sweepProblem == HotWalletWording.lastOneStillShowingUp)
+        #expect(await rig.chain.sent.count == 1)
     }
 
     @Test func oneAtATimeUntilTheLastHasLanded() async throws {
@@ -709,7 +781,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         let rig = await Rig(funded)
         let store = makeStore()
         _ = makeModel(rig, store: store)
-        try rig.wallet.addColdWallet(address: friend.lowercased, name: "Keystone")
+        try await rig.wallet.addColdWallet(address: friend.lowercased, name: "Keystone")
         #expect(store.book.senders[friend.lowercased]?.kind == .mine)
         rig.wallet.removeColdWallet(friend)
         #expect(store.book.senders[friend.lowercased] == nil)
