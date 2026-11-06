@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, formatTime, isAddress, isMainCurrency, msBetweenBlocks, normalizeAddress, returnBps, shortHash, sumTotals, type CurrencyCode, type HoldComparison, type Method, type Position } from "@pricetag/sdk/core"
+import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, formatTime, isAddress, isMainCurrency, msBetweenBlocks, normalizeAddress, returnBps, shortHash, sumTotals, type CurrencyCode, type HoldComparison, type Method, type OtherToken, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ALL_YOURS, combinedPortfolioOf, explainAcross, exportCombined, type CombinedPosition, type PositionPart } from "../core/combined.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
@@ -21,6 +21,10 @@ import {
   NOT_AN_ADDRESS,
   NOT_STARTED,
   NO_PRICE,
+  OTHER_TOKENS_NOTE,
+  OTHER_TOKENS_TITLE,
+  POSSIBLE_SPAM_RULE,
+  POSSIBLE_SPAM_TITLE,
   PNL_HELP,
   READING,
   READING_ALL,
@@ -41,7 +45,11 @@ import {
   holdSummarySentence,
   inWallets,
   linkedFailedSentence,
+  NOT_SAVED,
   noMarketSentence,
+  otherTokenAmount,
+  otherTokenName,
+  otherTokensLeftOutSentence,
   pnlHelp,
   staleSentence,
   unknownCostIn,
@@ -62,9 +70,12 @@ import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
 import { foldBook, type Question } from "../core/resolve.ts"
+import { PurchaseList } from "./PurchaseList.tsx"
+import { usePurchases } from "./usePurchases.ts"
 
 // Only loads when someone asks for it, so looking at a wallet never pulls in any device code.
 const DevicePanel = lazy(() => import("./DevicePanel.tsx").then((m) => ({ default: m.DevicePanel })))
+const BuyPanel = lazy(() => import("./BuyPanel.tsx").then((m) => ({ default: m.BuyPanel })))
 
 function readAddress(): string | null {
   const value = new URLSearchParams(window.location.search).get("address")
@@ -102,6 +113,60 @@ const holdingOf = (position: CombinedPosition): Holding => ({ ...position, state
 const partsWhere = ({ wallets }: Holding, has: (part: PositionPart) => boolean) => (wallets ?? []).filter(has).map(({ wallet }) => wallet)
 
 const est = (text: string, isEstimate: boolean) => (isEstimate ? `≈${text}` : text)
+
+function OtherTokenRows({ tokens }: { tokens: readonly OtherToken[] }) {
+  return (
+    <div className="table-scroll">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Token</th>
+            <th className="num">Amount</th>
+            <th className="num">Price</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tokens.map((token) => (
+            <tr key={token.token}>
+              <td>
+                <strong>{otherTokenName(token)}</strong>
+                {token.symbol && token.name ? <span className="muted small"> {token.symbol}</span> : null}
+                <span className="muted small holding-wallets mono" title={token.token}>{shortHash(token.token)}</span>
+                {token.tucked ? <span className="muted small holding-wallets">{token.tucked}</span> : null}
+                {token.note ? <span className="muted small holding-wallets">{token.note}</span> : null}
+              </td>
+              <td className="num">{otherTokenAmount(token)}</td>
+              <td className="num muted">{NO_PRICE}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/** Holdings with no price. They stay out of the table above, because nothing about them adds up to anything. */
+function OtherTokens({ tokens, leftOut }: { tokens: readonly OtherToken[]; leftOut: number }) {
+  if (tokens.length === 0 && leftOut === 0) return null
+  const shown = tokens.filter((token) => token.tucked === null)
+  const tucked = tokens.filter((token) => token.tucked !== null)
+  const more = otherTokensLeftOutSentence(leftOut)
+  return (
+    <section className="card">
+      <h2>{OTHER_TOKENS_TITLE}</h2>
+      <p className="muted small">{OTHER_TOKENS_NOTE}</p>
+      {shown.length > 0 ? <OtherTokenRows tokens={shown} /> : null}
+      {tucked.length > 0 ? (
+        <details className="other-tokens-spam">
+          <summary>{POSSIBLE_SPAM_TITLE} ({tucked.length})</summary>
+          <p className="muted small">{POSSIBLE_SPAM_RULE}</p>
+          <OtherTokenRows tokens={tucked} />
+        </details>
+      ) : null}
+      {more ? <p className="muted small">{more}</p> : null}
+    </section>
+  )
+}
 
 /** A header that sorts by its column. Clicking it again turns the order around. */
 function SortHeader({ column, sort, onSort, numeric = true, title, children }: { column: HoldingsColumn; sort: HoldingsSort; onSort: (column: HoldingsColumn) => void; numeric?: boolean; title?: string; children: ReactNode }) {
@@ -309,7 +374,9 @@ export function App() {
   const [taxYear, setTaxYear] = useState<TaxYear>("latest")
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
-  const { book, change, undo, canUndo, linkAccounts } = useBook()
+  const { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase } = useBook()
+  const { purchases, problem: purchasesProblem, begin: beginPurchase, dismiss: dismissPurchase } = usePurchases(addPurchase)
+  const [buying, setBuying] = useState(false)
   const paidIn = currenciesIn(book).join(",")
   const [device, setDevice] = useState<{ link: DeviceLink | null } | null>(() => {
     const link = parseDeviceLink(window.location.search)
@@ -431,7 +498,7 @@ export function App() {
   const attention = showing && pnlStatus ? attentionOf({ positions, unread, totals, pnlStatus, gasUnknownTxs: showing.gasUnknownTxs, l1FeeUnknownTxs: showing.l1FeeUnknownTxs, withheld, currency, missingRateTxs, hasCurrentRate: !noCurrentRate }) : null
   const pastCosts = pastCostsNote(attention, questions.length)
   const attentionBox = attention ? <AttentionBox attention={attention} questionCount={questions.length} onResolve={() => setResolving({ asset: null })} onShow={() => setTarget(attentionTarget(positions))} /> : pastCosts ? <PastCostsLine note={pastCosts} questionCount={questions.length} onResolve={() => setResolving({ asset: null })} /> : null
-  const noMarket = showing ? noMarketSentence(totals.noMarket, showing.unlisted.length) : null
+  const noMarket = showing ? noMarketSentence(totals.noMarket, showing.otherTokens.length + showing.otherTokensLeftOut) : null
   const about = showing ? [...(started ? [coverageSentence(showing.coverage, TOKENS.length - 1, showing.openingUnread.length > 0, { combined: isAll })] : []), ...(noMarket ? [noMarket] : [])] : []
   // With no table to sit beside, what it covers stays on the page.
   const aboutNotices = about.map((line) => <p className="notice" key={line}>{line}</p>)
@@ -505,10 +572,16 @@ export function App() {
         <button type="button" onClick={() => setDevice({ link: null })}>
           Hardware wallet
         </button>
+        <button type="button" onClick={() => setBuying(true)}>
+          Buy
+        </button>
         {showing ? <LiveBadge wallet={showing} stale={error !== null} updating={(combined?.linkedReading.length ?? 0) > 0} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
+      {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
       {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={rule} address={isAll ? null : single} method={method} currency={currency} book={book} /> : null}
+
+      <PurchaseList purchases={purchases} problem={purchasesProblem} matches={combined?.purchases ?? fold?.purchases ?? []} currency={chosenCurrency} showing={wallet?.address ?? null} onView={go} onDismiss={dismissPurchase} />
 
       {!single && !isAll ? (
         <section className="empty">
@@ -553,7 +626,13 @@ export function App() {
             </p>
           ) : null}
 
-          {positions.length === 0 && !started ? attentionBox : positions.length === 0 && unread.length === 0 ? (
+          {positions.length === 0 && !started ? attentionBox : positions.length === 0 && unread.length === 0 && (showing?.otherTokens.length ?? 0) + (showing?.otherTokensLeftOut ?? 0) > 0 ? (
+            <>
+              {aboutNotices}
+              {attentionBox}
+              <OtherTokens tokens={showing?.otherTokens ?? []} leftOut={showing?.otherTokensLeftOut ?? 0} />
+            </>
+          ) : positions.length === 0 && unread.length === 0 ? (
             <>
               {aboutNotices}
               {attentionBox}
@@ -597,6 +676,7 @@ export function App() {
               {attentionBox}
               <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
               {listed.length > 0 ? <Holdings positions={listed} unread={unread} about={about} currency={currency} questions={questions} method={method} onMethod={setMethod} explain={setTarget} onResolve={(asset) => setResolving({ asset })} /> : aboutNotices}
+              <OtherTokens tokens={showing?.otherTokens ?? []} leftOut={showing?.otherTokensLeftOut ?? 0} />
               {holdComparison ? <HoldLine comparison={holdComparison} combined={isAll} currency={currency} onOpen={() => setTarget({ kind: "hold" })} /> : null}
               <p className="exports">
                 <button type="button" className="link" onClick={download}>
@@ -619,8 +699,21 @@ export function App() {
       ) : null}
 
       {explanation && showing ? <ExplainPanel explanation={explanation} address={showing.address} rule={rule} onClose={close} /> : null}
-      {resolving && together ? <ResolvePanel wallet={together.read[0] as WalletResponse} others={together.read.slice(1)} all={together.unread} failed={together.unread.failed} onRetry={allRead.retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
-      {resolving && !together && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
+      {resolving && together ? <ResolvePanel wallet={together.read[0] as WalletResponse} others={together.read.slice(1)} all={together.unread} failed={together.unread.failed} onRetry={allRead.retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} notSaved={notSaved} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
+      {resolving && !together && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} notSaved={notSaved} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
+      {buying ? (
+        <Suspense fallback={null}>
+          <BuyPanel
+            currency={chosenCurrency}
+            onBegin={beginPurchase}
+            onView={(next) => {
+              setBuying(false)
+              if (next !== wallet?.address.toLowerCase()) go(next)
+            }}
+            onClose={() => setBuying(false)}
+          />
+        </Suspense>
+      ) : null}
       {device ? (
         <Suspense fallback={null}>
           <DevicePanel
@@ -629,6 +722,7 @@ export function App() {
             currency={chosenCurrency}
             allYours={isAll}
             onLink={linkAccounts}
+            notSaved={notSaved}
             onView={(next) => {
               setDevice(null)
               go(next)

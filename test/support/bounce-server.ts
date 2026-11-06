@@ -36,7 +36,7 @@ const source: Source = {
   readEthBalances: async () => new Map(),
   readBalances: async (address, blockNum) => ({ blockNum, amounts: Object.fromEntries(ASSETS.map((asset) => [asset, asset === "USDC" ? held(address, blockNum).toString() : "0"])) }),
 }
-const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }, null)
+const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }, null)
 const server = createServer(createHandler(api, null))
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`

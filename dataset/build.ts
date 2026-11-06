@@ -8,21 +8,31 @@
 //   FORK_OF=benface/pricetag@0.1.0 AMP_ADMIN_URL=... node dataset/build.ts --fork [start block]
 //
 // Writes dataset/rates.json with --rates: exchange rates, as their own small dataset, so adding a currency doesn't replace the one
-// the app's prices come from. The start block is the Pricetag dataset's, and it reaches back from there. It defaults to the fork's,
-// which is the one staging serves.
+// the app's prices come from. The start block is the Pricetag dataset's, and it reaches back from there.
 //
 //   AMP_ADMIN_URL=... node dataset/build.ts --rates [start block]
+//
+// Writes dataset/feeds.json with --feeds: the updates of the feeds in TOKEN_FEEDS, as their own small dataset, for the same reason.
+//
+//   AMP_ADMIN_URL=... node dataset/build.ts --feeds [start block]
+//
+// Writes dataset/tokens.json with --tokens: what any token traded for in a pool, as its own dataset, so adding it doesn't replace
+// the one the app's prices come from. FORK_OF names the Pricetag version it reads.
+//
+//   FORK_OF=benface/pricetag@0.3.0 AMP_ADMIN_URL=... node dataset/build.ts --tokens [start block]
 //
 // It needs an Amp with edgeandnode/base_mainnet@0.0.2 registered, and only reads from it. What a table can look like
 // comes from WORK-319: every table needs its own top-level `block_num()` filter, at most one join, explicit columns,
 // and UDFs that never return null or throw, because one bad row stops the whole dataset.
 
 import { readFileSync, writeFileSync } from "node:fs"
-import { APPROVAL_LOGS, CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, MAX_ROUND_AGE_SECONDS, PRICE_FEEDS, SEED_TX, TOKENS, WETH_ADDRESS, blockBefore, type PriceFeed } from "@pricetag/sdk/core"
+import { APPROVAL_LOGS, CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, MAX_ROUND_AGE_SECONDS, PRICE_FEEDS, SEED_TX, TOKENS, TOKEN_FEED_AGGREGATORS, TOKEN_FEED_WINDOW_SECONDS, USDC_ADDRESS, WETH_ADDRESS, blockBefore, type PriceFeed } from "@pricetag/sdk/core"
 
 const MANIFEST = new URL("./pricetag.json", import.meta.url)
 const CAUTIOUS_MANIFEST = new URL("./cautious-eth.json", import.meta.url)
 const RATES_MANIFEST = new URL("./rates.json", import.meta.url)
+const FEEDS_MANIFEST = new URL("./feeds.json", import.meta.url)
+const TOKENS_MANIFEST = new URL("./tokens.json", import.meta.url)
 
 const hex = (address: string) => address.replace(/^0x/, "")
 
@@ -39,6 +49,9 @@ const allowlist = ERC20_ADDRESSES.map((a) => `X'${hex(a)}'`).join(", ")
 const ethToken = `arrow_cast(X'${hex(ETH_ADDRESS)}', 'FixedSizeBinary(20)')`
 const logColumns = "block_num, timestamp, tx_hash, tx_index, log_index, address AS token"
 const legColumns = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
+// Who was on the other side, for what names one: an ERC-20 transfer or a transaction's own ETH. A wallet's read used to look this up in the raw tables.
+const legsWithCounterparty = `${legColumns}, counterparty`
+const noCounterparty = "arrow_cast(NULL, 'FixedSizeBinary(20)') AS counterparty"
 
 function decoded(signature: string, where: string) {
   return `SELECT ${logColumns}, evm_decode_log(topic1, topic2, topic3, data, '${signature}') AS t
@@ -91,12 +104,25 @@ ${[logs, ...rows].join("\nUNION ALL\n")}
  * Pricetag dataset's first block could have been set, so that block has one.
  */
 export function rateUpdatesSql(start: number) {
-  const feeds = Object.values(CURRENCIES).flatMap(({ code, feed }) => (feed ? feed.aggregators.map((address) => ({ code, address })) : []))
-  return `SELECT block_num, timestamp, tx_hash, log_index, CASE ${feeds.map(({ code, address }) => `WHEN address = X'${hex(address)}' THEN '${code}'`).join(" ")} END AS currency,
+  const feeds = Object.values(CURRENCIES).flatMap(({ code, feed }) => (feed ? feed.aggregators.map((address) => ({ name: code, address })) : []))
+  return updatesSql("currency", feeds, blockBefore(start, MAX_ROUND_AGE_SECONDS * 1000))
+}
+
+/**
+ * Every update of a token's feed in `TOKEN_FEEDS`, with its asset. Like `rateUpdatesSql`, nothing joins on it, so it has no table
+ * carrying each one forward: over 8 feeds that would add about 164 rows to every block, around 16 times what `carried` holds.
+ */
+export function feedUpdatesSql(start: number) {
+  const feeds = Object.entries(TOKEN_FEED_AGGREGATORS).flatMap(([name, aggregators]) => (aggregators ?? []).map((address) => ({ name, address })))
+  return updatesSql("asset", feeds, blockBefore(start, TOKEN_FEED_WINDOW_SECONDS * 1000))
+}
+
+function updatesSql(column: string, feeds: readonly { name: string; address: string }[], from: number) {
+  return `SELECT block_num, timestamp, tx_hash, log_index, CASE ${feeds.map(({ name, address }) => `WHEN address = X'${hex(address)}' THEN '${name}'`).join(" ")} END AS ${column},
   get_field(t, 'current') AS answer, get_field(t, 'roundId') AS round_id, get_field(t, 'updatedAt') AS updated_at
 FROM (SELECT block_num, timestamp, tx_hash, log_index, address, evm_decode_log(topic1, topic2, topic3, data, '${ANSWER_UPDATED}') AS t
   FROM base.logs WHERE topic0 = evm_topic('${ANSWER_UPDATED}') AND address IN (${addressList(feeds.map(({ address }) => address))}))
-WHERE block_num() >= ${blockBefore(start, MAX_ROUND_AGE_SECONDS * 1000)}`
+WHERE block_num() >= ${from}`
 }
 
 function unlistedSelect(account: string, side: string, amount: string, kind: string, from: string) {
@@ -114,18 +140,18 @@ export function tablesSql(start: number, seeds: readonly FeedSeed[] | null = nul
   const weth = `address = X'${hex(WETH_ADDRESS)}'`
   return {
     // WETH emits Deposit and Withdrawal instead of Transfer when it's wrapped and unwrapped, so those count too.
-    base_legs: `SELECT ${legColumns} FROM (
-  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, t.value AS amount, 'erc20' AS kind FROM (${transfer})
+    base_legs: `SELECT ${legsWithCounterparty} FROM (
+  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.from AS account, 'debit' AS side, t.value AS amount, 'erc20' AS kind, t.to AS counterparty FROM (${transfer})
   UNION ALL
-  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, t.value AS amount, 'erc20' AS kind FROM (${transfer})
+  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.to AS account, 'credit' AS side, t.value AS amount, 'erc20' AS kind, t.from AS counterparty FROM (${transfer})
   UNION ALL
-  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.dst AS account, 'credit' AS side, t.wad AS amount, 'wrap' AS kind FROM (${decoded(DEPOSIT, weth)})
+  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.dst AS account, 'credit' AS side, t.wad AS amount, 'wrap' AS kind, ${noCounterparty} FROM (${decoded(DEPOSIT, weth)})
   UNION ALL
-  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.src AS account, 'debit' AS side, t.wad AS amount, 'unwrap' AS kind FROM (${decoded(WITHDRAWAL, weth)})
+  SELECT block_num, timestamp, tx_hash, tx_index, log_index, token, t.src AS account, 'debit' AS side, t.wad AS amount, 'unwrap' AS kind, ${noCounterparty} FROM (${decoded(WITHDRAWAL, weth)})
   UNION ALL
-  SELECT block_num, timestamp, tx_hash, tx_index, arrow_cast(0, 'UInt32') AS log_index, ${ethToken} AS token, "from" AS account, 'debit' AS side, value AS amount, 'eth' AS kind FROM base.transactions WHERE status AND value <> '0'
+  SELECT block_num, timestamp, tx_hash, tx_index, arrow_cast(0, 'UInt32') AS log_index, ${ethToken} AS token, "from" AS account, 'debit' AS side, value AS amount, 'eth' AS kind, "to" AS counterparty FROM base.transactions WHERE status AND value <> '0'
   UNION ALL
-  SELECT block_num, timestamp, tx_hash, tx_index, arrow_cast(0, 'UInt32') AS log_index, ${ethToken} AS token, "to" AS account, 'credit' AS side, value AS amount, 'eth' AS kind FROM base.transactions WHERE status AND value <> '0' AND "to" IS NOT NULL
+  SELECT block_num, timestamp, tx_hash, tx_index, arrow_cast(0, 'UInt32') AS log_index, ${ethToken} AS token, "to" AS account, 'credit' AS side, value AS amount, 'eth' AS kind, "from" AS counterparty FROM base.transactions WHERE status AND value <> '0' AND "to" IS NOT NULL
 ) WHERE ${since}`,
 
     // Tokens off the allowlist have no decimals, so they get no leg or price. This table is only evidence that money
@@ -159,7 +185,7 @@ WHERE a.type <> ${OP_DEPOSIT_TX_TYPE} AND ${since}`,
 
     // An empty amount means the gas couldn't be worked out. The app reports those.
     gas_legs: `SELECT g.block_num, g.timestamp, g.tx_hash, g.tx_index, arrow_cast(0, 'UInt32') AS log_index, ${ethToken} AS token, g.account AS account, 'debit' AS side,
-  self.pt_gas(g.cumulative, g.previous, g.gas_price, g.max_fee, g.max_priority, CAST(b.base_fee_per_gas AS VARCHAR)) AS amount, 'gas' AS kind
+  self.pt_gas(g.cumulative, g.previous, g.gas_price, g.max_fee, g.max_priority, CAST(b.base_fee_per_gas AS VARCHAR)) AS amount, 'gas' AS kind, ${noCounterparty}
 FROM self.tx_gas g
 JOIN base.blocks b ON g._block_num = b._block_num
 WHERE ${since}`,
@@ -168,17 +194,17 @@ WHERE ${since}`,
     // contract can send the ETH elsewhere, and this table can't read balances to check. So its rows keep their own kind,
     // and clients settle them against the chain. See `settleUnwraps` in the SDK.
     unwrap_legs: `SELECT l.block_num, l.timestamp, l.tx_hash, l.tx_index, l.log_index, ${ethToken} AS token, x."from" AS account, 'credit' AS side,
-  get_field(evm_decode_log(l.topic1, l.topic2, l.topic3, l.data, '${WITHDRAWAL}'), 'wad') AS amount, 'unwrap' AS kind
+  get_field(evm_decode_log(l.topic1, l.topic2, l.topic3, l.data, '${WITHDRAWAL}'), 'wad') AS amount, 'unwrap' AS kind, ${noCounterparty}
 FROM base.logs l
 JOIN base.transactions x ON l._block_num = x._block_num AND l.tx_hash = x.tx_hash
 WHERE l.address = X'${hex(WETH_ADDRESS)}' AND l.topic0 = evm_topic('${WITHDRAWAL}') AND ${since}`,
 
-    legs: `SELECT ${legColumns} FROM (
-  SELECT ${legColumns} FROM self.base_legs
+    legs: `SELECT ${legsWithCounterparty} FROM (
+  SELECT ${legsWithCounterparty} FROM self.base_legs
   UNION ALL
-  SELECT ${legColumns} FROM self.gas_legs
+  SELECT ${legsWithCounterparty} FROM self.gas_legs
   UNION ALL
-  SELECT ${legColumns} FROM self.unwrap_legs
+  SELECT ${legsWithCounterparty} FROM self.unwrap_legs
 ) WHERE ${since}`,
 
     price_updates: priceUpdatesSql(start, seeds),
@@ -280,6 +306,146 @@ FROM pricetag.reference_prices WHERE ${since}`,
   }
 }
 
+const SWAP_V2 = "Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to)"
+const SWAP_SOLIDLY = "Swap(address indexed sender, address indexed to, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out)"
+const SWAP_V3 = "Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)"
+const SWAP_V4 = "Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee)"
+/** Uniswap v4 keeps every pool in this one contract. */
+const POOL_MANAGER = "0x498581ff718922c3f8e6a244956af099b2652b2b"
+
+/**
+ * What every token traded for against ETH or USDC, as a pool saw it. Only a contract that emits a swap event can be a row's pool, so
+ * two wallets paying each other any rate they like never set a price, and a pool's own movement is one row per trade however
+ * many routers it went through. A pool that moved anything else in the transaction is out, since its payment could be for that.
+ *
+ * No decimals and no allowlist: the amounts stay in a token's smallest unit, and what they're worth comes from the ETH or USDC
+ * side. What makes a token's trading real is decided when it's read, because that's a window over many blocks. See
+ * packages/sdk/src/token-market.ts.
+ */
+export function tokensTablesSql(start: number): Record<string, string> {
+  const since = `block_num() >= ${start}`
+  const quotes = addressList([ETH_ADDRESS, WETH_ADDRESS, USDC_ADDRESS])
+  const moveColumns = "block_num, timestamp, tx_hash, account, token, side, amount"
+  const sameMove = (a: string, b: string) => `${a}._block_num = ${b}._block_num AND ${a}.tx_hash = ${b}.tx_hash AND ${a}.account = ${b}.account`
+  const inSwapLog = (legs: string) => `${legs} l JOIN self.swap_logs s ON l._block_num = s._block_num AND l.tx_hash = s.tx_hash AND l.account = s.pool`
+  return {
+    swap_logs: `SELECT block_num, tx_hash, pool, swaps FROM (
+  SELECT block_num, tx_hash, address AS pool, COUNT(*) AS swaps FROM base.logs
+  WHERE topic0 IN (${[SWAP_V2, SWAP_SOLIDLY, SWAP_V3, SWAP_V4].map((signature) => `evm_topic('${signature}')`).join(", ")})
+  GROUP BY block_num(), block_num, tx_hash, address
+) WHERE ${since}`,
+
+    // An amount that can't be read, as with ERC-1155, isn't something a pool's price can come from.
+    pool_unlisted: `SELECT l.block_num, l.timestamp, l.tx_hash, l.account, l.token, l.side, l.amount FROM ${inSwapLog("pricetag.unlisted_legs")}
+WHERE l.kind = 'unlisted' AND l.amount <> '' AND ${since}`,
+
+    pool_unlisted_net: `SELECT block_num, timestamp, tx_hash, account, token, get_field(net, 'side') AS side, get_field(net, 'amount') AS amount FROM (
+  SELECT block_num, timestamp, tx_hash, account, token, self.pt_net(string_agg(CASE WHEN side = 'credit' THEN amount ELSE concat('-', amount) END, ',')) AS net
+  FROM self.pool_unlisted
+  GROUP BY block_num(), block_num, timestamp, tx_hash, account, token
+) WHERE get_field(net, 'side') <> '' AND ${since}`,
+
+    pool_listed: `SELECT l.block_num, l.timestamp, l.tx_hash, l.account, l.token, l.side, l.amount FROM ${inSwapLog("pricetag.net_legs")}
+WHERE ${since}`,
+
+    pool_moves: `SELECT ${moveColumns} FROM (
+  SELECT ${moveColumns} FROM self.pool_unlisted_net
+  UNION ALL
+  SELECT ${moveColumns} FROM self.pool_listed
+) WHERE ${since}`,
+
+    move_counts: `SELECT bn, tx_hash, account, moves FROM (
+  SELECT block_num() AS bn, tx_hash, account, COUNT(*) AS moves FROM self.pool_moves GROUP BY block_num(), tx_hash, account
+) WHERE ${since}`,
+
+    single_moves: `SELECT m.block_num, m.timestamp, m.tx_hash, m.account, m.token, m.side, m.amount
+FROM self.pool_moves m
+JOIN self.move_counts c ON ${sameMove("m", "c")}
+WHERE c.moves = 2 AND m.amount <> '' AND ${since}`,
+
+    // One side has to be what we have a Chainlink price for, and only one, or there's no token to price.
+    trade_pairs: `SELECT a.block_num, a.timestamp, a.tx_hash, a.account AS pool, a.token AS gave_token, a.amount AS gave_amount, b.token AS got_token, b.amount AS got_amount
+FROM self.single_moves a
+JOIN self.single_moves b ON ${sameMove("a", "b")}
+WHERE a.side = 'debit' AND b.side = 'credit' AND (a.token IN (${quotes})) <> (b.token IN (${quotes})) AND ${since}`,
+
+    // A v4 pool paying in ETH moves it inside the pool manager, with no log and no transfer. So the manager shows one token moving,
+    // and its Swap log says what ETH moved. Several swaps can't be told apart, so only a transaction with one counts.
+    v4_swaps: `SELECT block_num, tx_hash, swaps, amount0, amount1 FROM (
+  SELECT block_num, tx_hash, COUNT(*) AS swaps, min(amount0) AS amount0, min(amount1) AS amount1 FROM (
+    SELECT block_num, tx_hash, arrow_cast(get_field(t, 'amount0'), 'Utf8') AS amount0, arrow_cast(get_field(t, 'amount1'), 'Utf8') AS amount1 FROM (
+      SELECT block_num, tx_hash, evm_decode_log(topic1, topic2, topic3, data, '${SWAP_V4}') AS t FROM base.logs
+      WHERE address = X'${hex(POOL_MANAGER)}' AND topic0 = evm_topic('${SWAP_V4}')
+    )
+  ) GROUP BY block_num(), block_num, tx_hash
+) WHERE swaps = 1 AND ${since}`,
+
+    v4_single_moves: `SELECT m.block_num, m.timestamp, m.tx_hash, m.account, m.token, m.side, m.amount
+FROM self.pool_moves m
+JOIN self.move_counts c ON ${sameMove("m", "c")}
+WHERE c.moves = 1 AND m.account = X'${hex(POOL_MANAGER)}' AND m.amount <> '' AND m.token NOT IN (${quotes}) AND ${since}`,
+
+    // Its empty amounts are filtered by what reads it. A filter on a JS function's result over a join fails in the job.
+    v4_native_trades: `SELECT m.block_num, m.timestamp, m.tx_hash, m.account AS pool, m.token AS token, m.amount AS token_amount, CASE WHEN m.side = 'debit' THEN 'buy' ELSE 'sell' END AS side,
+  self.pt_native(m.side, m.amount, s.amount0, s.amount1) AS quote_amount
+FROM self.v4_single_moves m
+JOIN self.v4_swaps s ON m._block_num = s._block_num AND m.tx_hash = s.tx_hash
+WHERE ${since}`,
+
+    pool_trades: `SELECT block_num, timestamp, tx_hash, pool, token, token_amount, side, quote_token, quote_amount FROM (
+  SELECT block_num, timestamp, tx_hash, pool,
+    CASE WHEN got_token IN (${quotes}) THEN gave_token ELSE got_token END AS token,
+    CASE WHEN got_token IN (${quotes}) THEN gave_amount ELSE got_amount END AS token_amount,
+    CASE WHEN got_token IN (${quotes}) THEN 'buy' ELSE 'sell' END AS side,
+    CASE WHEN got_token IN (${quotes}) THEN got_token ELSE gave_token END AS quote_token,
+    CASE WHEN got_token IN (${quotes}) THEN got_amount ELSE gave_amount END AS quote_amount
+  FROM self.trade_pairs
+  UNION ALL
+  SELECT block_num, timestamp, tx_hash, pool, token, token_amount, side, ${ethToken} AS quote_token, quote_amount FROM self.v4_native_trades WHERE quote_amount <> ''
+) WHERE ${since}`,
+
+    priced_trades: `SELECT t.block_num, t.timestamp, t.tx_hash, t.pool, t.token, t.token_amount, t.side, t.quote_token, t.quote_amount,
+  self.pt_trade(evm_decode_hex(t.quote_token), t.quote_amount, r.eth_answer, r.usdc_answer) AS usd_micros
+FROM self.pool_trades t
+JOIN pricetag.reference_prices r ON t._block_num = r._block_num
+WHERE ${since}`,
+
+    // Who sent it, because a thousand trades from one sender aren't a market.
+    token_trades: `SELECT t.block_num, t.timestamp, t.tx_hash, x."from" AS sender, t.pool, t.token, t.token_amount, t.side, t.quote_token, t.quote_amount, t.usd_micros
+FROM self.priced_trades t
+JOIN base.transactions x ON t._block_num = x._block_num AND t.tx_hash = x.tx_hash
+WHERE t.usd_micros <> '' AND ${since}`,
+  }
+}
+
+/** What a v4 swap's ETH side moved, or empty unless its other side is exactly what the pool manager shows moving, the opposite way. A token paid in ETH is always `currency1`, since ETH's address sorts first. */
+export function ptNativeSource(): string {
+  return `
+function pt_native(side, amount, amount0, amount1) {
+  if (!/^\\d+$/.test(String(amount)) || !/^-?\\d+$/.test(String(amount0)) || !/^-?\\d+$/.test(String(amount1))) return '';
+  const token = BigInt(amount1), eth = BigInt(amount0);
+  const gave = side === 'debit';
+  if (gave ? token <= 0n || eth >= 0n : token >= 0n || eth <= 0n) return '';
+  if ((token < 0n ? -token : token) !== BigInt(amount)) return '';
+  return (eth < 0n ? -eth : eth).toString();
+}
+`
+}
+
+/** What a trade's ETH or USDC side was worth, in USD millionths, or empty when that has no price. */
+export function ptTradeSource(): string {
+  return `
+function pt_trade(quoteToken, quoteAmount, ethUsd, usdcUsd) {
+  const token = String(quoteToken).replace(/^0x/, '').toLowerCase();
+  const usdc = token === '${hex(USDC_ADDRESS)}';
+  const answer = usdc ? usdcUsd : ethUsd;
+  if (!/^\\d+$/.test(String(quoteAmount)) || !/^\\d+$/.test(String(answer))) return '';
+  if (!usdc && token !== '${hex(WETH_ADDRESS)}' && token !== '${hex(ETH_ADDRESS)}') return '';
+  return (BigInt(quoteAmount) * BigInt(answer) / (10n ** BigInt(usdc ? 8 : 20))).toString();
+}
+`
+}
+
 /** The dataset's copy of `ptPrice` in packages/sdk/src/legs.ts. test/dataset.test.ts runs both on the same inputs. */
 export function ptPriceSource(): string {
   const tokens = TOKENS.map((t) => `  '${hex(t.address)}': { symbol: '${t.symbol}', decimals: ${t.decimals}, asset: '${t.asset}', oracle: ${t.oracle ? `'${t.oracle}'` : "null"} }`).join(",\n")
@@ -376,6 +542,23 @@ function functions() {
 
 const DEPENDENCIES = { base: "edgeandnode/base_mainnet@0.0.2" }
 
+function tokenFunctions() {
+  const { pt_net } = functions()
+  return {
+    pt_net,
+    pt_native: { inputTypes: ["Utf8", "Utf8", "Utf8", "Utf8"], outputType: "Utf8", source: { source: ptNativeSource(), filename: "pt_native.js" } },
+    pt_trade: { inputTypes: ["Utf8", "Utf8", "Utf8", "Utf8"], outputType: "Utf8", source: { source: ptTradeSource(), filename: "pt_trade.js" } },
+  }
+}
+
+/**
+ * Bloom filters on `account`, so a wallet's read skips files it isn't in: 3 of 60 row groups left instead of 17 of 53, and a
+ * cold read about twice as fast (WORK-493). An `ndv` is about how many accounts a file holds. Amp marks this as experimental.
+ */
+const ACCOUNT_BLOOM: Record<string, number> = { legs: 200_000, unlisted_legs: 200_000, priced_legs: 20_000 }
+/** A wallet asks about a few tokens, and a file holds thousands of them. */
+const TOKEN_BLOOM: Record<string, number> = { token_trades: 5_000 }
+
 type Manifest = { dependencies: Record<string, string>; tables: Record<string, string>; functions: Record<string, unknown> }
 
 const startOf = (manifest: URL) => JSON.parse(readFileSync(manifest, "utf8")).tables.reference_prices.input.sql.match(/block_num\(\) >= (\d+)/)[1]
@@ -392,7 +575,10 @@ async function write(admin: string, file: URL, { dependencies, tables: sql, func
     Object.entries(sql).map(([name, query]) => {
       const inferred = schemas[name]
       if (!inferred) throw new Error(`No schema for ${name}`)
-      return [name, { input: { sql: query }, schema: inferred, network: "base-mainnet" }]
+      const ndv = ACCOUNT_BLOOM[name]
+      const tokenNdv = TOKEN_BLOOM[name]
+      const blooms = [...(ndv ? [{ column: "account", ndv }] : []), ...(tokenNdv ? [{ column: "token", ndv: tokenNdv }] : [])]
+      return [name, { input: { sql: query }, schema: inferred, network: "base-mainnet", ...(blooms.length > 0 ? { bloom_filter_columns: blooms } : {}) }]
     }),
   )
   writeFileSync(file, `${JSON.stringify({ kind: "manifest", dependencies, tables, functions }, null, 2)}\n`)
@@ -412,8 +598,18 @@ async function build() {
     await write(admin, CAUTIOUS_MANIFEST, { dependencies: { pricetag: forkOf }, tables: cautiousEthTablesSql(start), functions: { pt_price, pt_cautious } })
     return
   }
+  if (args[0] === "--tokens") {
+    const forkOf = process.env.FORK_OF
+    if (!forkOf) throw new Error("Set FORK_OF to the Pricetag version this reads, like benface/pricetag@0.3.0")
+    await write(admin, TOKENS_MANIFEST, { dependencies: { ...DEPENDENCIES, pricetag: forkOf }, tables: tokensTablesSql(Number(args[1] ?? startOf(MANIFEST))), functions: tokenFunctions() })
+    return
+  }
   if (args[0] === "--rates") {
-    await write(admin, RATES_MANIFEST, { dependencies: DEPENDENCIES, tables: { rate_updates: rateUpdatesSql(Number(args[1] ?? startOf(CAUTIOUS_MANIFEST))) }, functions: {} })
+    await write(admin, RATES_MANIFEST, { dependencies: DEPENDENCIES, tables: { rate_updates: rateUpdatesSql(Number(args[1] ?? startOf(MANIFEST))) }, functions: {} })
+    return
+  }
+  if (args[0] === "--feeds") {
+    await write(admin, FEEDS_MANIFEST, { dependencies: DEPENDENCIES, tables: { feed_updates: feedUpdatesSql(Number(args[1] ?? startOf(MANIFEST))) }, functions: {} })
     return
   }
   await write(admin, MANIFEST, { dependencies: DEPENDENCIES, tables: tablesSql(Number(args[0] ?? startOf(MANIFEST))), functions: functions() })

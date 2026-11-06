@@ -1,6 +1,7 @@
 // Runs the fold over a wallet's priced legs, and adds up what can honestly be added up.
 
 import { applyLeg, emptyPosition, worth, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
+import { timestampOfBlock } from "./chain.ts"
 import type { RateRound } from "./currency.ts"
 import { answerToMicros, isSanePrice, type PricedLeg, type Reference } from "./legs.ts"
 import type { MarketMarks } from "./market.ts"
@@ -556,12 +557,22 @@ export type PnlPoint = {
    * can't say. Otherwise `valueBeforeMicros` can't be compared to that point's `valueMicros`.
    */
   valueContinues: boolean
+  /**
+   * Prices were read as often as a chart can show all the way from the point before, so what's between them is known and
+   * not a guess. Only there when it's true.
+   */
+  valueRead?: boolean
 }
 
 /**
  * Total PnL after each transaction, plus a last point at `latest` and current prices, matching the headline.
  * Tokens are marked to that block's oracle or market price, and never to a trade's own price, so a trade can't make a
  * spike. Without one, like in the headline, a token adds no unrealized PnL and counts in `excludedCount`.
+ *
+ * Each of `sampleBlocks` adds a point with no transaction, between two that have one, wherever it can price what those
+ * can. Only for value: PnL holds still between transactions, so those points say what it was at the one before. One it
+ * can't price, or that nobody's read yet, adds nothing, and that stretch stays a guess. One that prices more than the point
+ * before can't be joined to it, so it starts a new stretch.
  */
 export function pnlOverTime(
   legs: readonly PricedLeg[],
@@ -573,6 +584,8 @@ export function pnlOverTime(
   unconfirmed: ReadonlySet<string> = new Set(),
   /** Assets with no market, which can't affect PnL. */
   noMarket: ReadonlySet<string> = new Set(),
+  /** Blocks with prices that aren't there for a transaction. */
+  sampleBlocks: readonly number[] = [],
 ): PnlPoint[] {
   const states = new Map<string, PositionState>()
   const points: PnlPoint[] = []
@@ -641,18 +654,39 @@ export function pnlOverTime(
   let before: Worth | null = null
   let previous: Worth | null = null
   let arrivedUnnamed = false
+  let sampleMissed = false
   const valueAround = (before: Worth | null, after: Worth) => {
+    const valueContinues = previous !== null && before !== null && !arrivedUnnamed && leavesOutTheSame(previous, before)
     const value = {
       valueMicros: after.valueMicros,
       valueBeforeMicros: before !== null && leavesOutTheSame(before, after) ? before.valueMicros : null,
       valueExcludedCount: after.excluded.length,
-      valueContinues: previous !== null && before !== null && !arrivedUnnamed && leavesOutTheSame(previous, before),
+      valueContinues,
+      ...(valueContinues && sampleBlocks.length > 0 && !sampleMissed ? { valueRead: true } : {}),
     }
     previous = after
     arrivedUnnamed = false
+    sampleMissed = false
     return value
   }
+  const samples = [...new Set(sampleBlocks)].sort((a, b) => a - b)
+  let nextSample = 0
+  let lastPoint: PnlPoint | undefined
+  const sampleBefore = (block: number) => {
+    for (; (samples[nextSample] ?? Number.POSITIVE_INFINITY) < block; nextSample++) {
+      const blockNum = samples[nextSample] as number
+      if (!lastPoint || !latest || !previous) continue
+      const now = worthNow((asset) => markPrice(blockNum, asset))
+      if (!leavesOutTheSame(previous, now) && !leavesOutLess(now, previous)) {
+        sampleMissed = true
+        continue
+      }
+      lastPoint = { blockNum, timestamp: timestampOfBlock(blockNum, latest), txHash: null, pnlMicros: lastPoint.pnlMicros, excludedCount: lastPoint.excludedCount, ...valueAround(now, now) }
+      points.push(lastPoint)
+    }
+  }
   legs.forEach((leg, i) => {
+    sampleBefore(leg.blockNum)
     const at = (asset: string) => markPrice(leg.blockNum, asset)
     if (!leg.opening && leg.txHash && legs[i - 1]?.txHash !== leg.txHash) before = worthNow(at)
     states.set(leg.asset, applyLeg(states.get(leg.asset) ?? emptyPosition(method, leg.decimals), leg))
@@ -663,9 +697,11 @@ export function pnlOverTime(
     }
     if (legs[i + 1]?.txHash === leg.txHash) return
     const after = worthNow(at)
-    points.push({ blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure(at), ...valueAround(before, after) })
+    lastPoint = { blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure(at), ...valueAround(before, after) }
+    points.push(lastPoint)
   })
   if (latest && (states.size > 0 || unconfirmed.size > 0)) {
+    sampleBefore(latest.blockNum)
     const now = worthNow((asset) => prices[asset]?.micros ?? null)
     points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.micros ?? null), ...valueAround(now, now) })
   }
@@ -676,3 +712,6 @@ type Worth = { valueMicros: string | null; excluded: string[] }
 
 /** Two values can only be compared when they leave out the same things. */
 const leavesOutTheSame = (a: Worth, b: Worth) => a.excluded.join() === b.excluded.join()
+
+/** Everything `a` leaves out, `than` does too, and it leaves out more. */
+const leavesOutLess = (a: Worth, than: Worth) => a.excluded.length < than.excluded.length && a.excluded.every((asset) => than.excluded.includes(asset))

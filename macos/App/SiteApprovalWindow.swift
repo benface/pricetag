@@ -134,7 +134,7 @@ private struct SiteRequestSummary<Footer: View>: View {
             // A permit this app can read says what it allows, and what's signed is one click away. Anything else is shown as it is.
             // A token's own permit already shows its address as the token.
             let contract = review.contract.flatMap { $0 == review.permit?.token ? nil : [Self.contractRow($0)] } ?? []
-            ConfirmationView(asker: .site(approval.site), hero: .words(review.headline), rows: (review.permit.map(permitRows) ?? []) + contract, warnings: approval.warnings, message: review.permit == nil ? review.body : nil, data: review.permit == nil ? nil : review.body) {
+            ConfirmationView(asker: .site(approval.site), hero: .words(review.title), rows: (review.permit.map(permitRows) ?? []) + contract, warnings: approval.warnings, message: review.permit == nil ? review.body : nil, data: review.permit == nil ? nil : review.body) {
                 footer
             }
         }

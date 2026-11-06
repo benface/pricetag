@@ -39,6 +39,24 @@ export const TOKEN_FEEDS: Readonly<Record<string, TokenFeed | undefined>> = {
   DEGEN: usdFeed("0xe62bce5d7cb9d16ab8b4d622538bc0a50a5799c2", "DEGEN / USD", DAILY_HEARTBEAT),
 }
 
+/**
+ * The contracts that emit each of `TOKEN_FEEDS`' `AnswerUpdated`, by asset. A new one goes here, and needs a new version of the
+ * feeds dataset. Longest gaps seen over 17 days: 24 h for USDT, DAI and wstETH, 21 min for cbETH and cbBTC, 3.7 h for AERO, 5.3 h for VIRTUAL and 14 h for DEGEN.
+ */
+export const TOKEN_FEED_AGGREGATORS: Readonly<Record<string, readonly string[] | undefined>> = {
+  USDT: ["0x84640bb7b71b0963e8eb57ad379a0b204eb2fdc8"],
+  DAI: ["0x4bb0a4edbafd66e6891fdcf23f95428fd5b27564"],
+  cbETH: ["0x71e021bc2e8a709b72ac7b6036e5b2bf30f263d0"],
+  wstETH: ["0x1b70e0ee4041fa9f0e0fa2879b8818eaf4e2d81c"],
+  cbBTC: ["0x51ce3091cf646587e02cad83b580992f8723e718"],
+  AERO: ["0xfcddfb2294beba43987516371febb2e677eb403e"],
+  VIRTUAL: ["0xf9036c275a07f5ce669416ca1108388e071d6ab2"],
+  DEGEN: ["0x8597c19e048ea1deff99e9ef233eaf2ff6c0d508"],
+}
+
+/** How far back an update of `TOKEN_FEEDS` can still count. */
+export const TOKEN_FEED_WINDOW_SECONDS = Math.max(...Object.values(TOKEN_FEEDS).map((feed) => feed?.maxAgeSeconds ?? 0))
+
 export type FeedName = "eth" | "usdc"
 
 export type PriceFeed = {
@@ -97,7 +115,8 @@ export const TOKENS: readonly Token[] = [
 const BY_ADDRESS = new Map(TOKENS.map((t) => [t.address, t]))
 
 export function tokenByAddress(address: string): Token | undefined {
-  return BY_ADDRESS.get(normalizeAddress(address))
+  // Nearly always already normalized, and this runs for every row a busy wallet has, several times a read.
+  return BY_ADDRESS.get(address) ?? BY_ADDRESS.get(normalizeAddress(address))
 }
 
 export function normalizeAddress(address: string): string {

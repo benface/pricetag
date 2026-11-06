@@ -73,6 +73,8 @@ export function responseOf(wallet: WalletResponse, method: Method, others: reado
     gasUnknownTxs: wallet.gasUnknownTxs,
     outgoingTxs: outgoingTxsOf(wallet),
     unlisted: wallet.unlisted,
+    otherTokens: wallet.otherTokens,
+    otherTokensLeftOut: wallet.otherTokensLeftOut,
     l1FeeUnknownTxs: wallet.l1FeeUnknownTxs,
     openingUnread: wallet.openingUnread,
     unreadAssets: unread,
@@ -137,6 +139,7 @@ export function explainPortfolio(wallet: WalletResponse, method: Method, target:
     value: explanation.value,
     sourceValue: explanation.sourceValue,
     lines: explanation.lines,
+    priceProof: explanation.priceProof ? { ...explanation.priceProof, wallet: wallet.address } : null,
     legCount: explanation.effects.length,
     legs: explanation.effects.slice(0, MAX_LEGS).map((effect) => legOf(effect, explanation.currency)),
   }

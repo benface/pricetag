@@ -36,6 +36,10 @@ struct PopoverView: View {
                 Divider()
                 spendingMoney
             }
+            if Build.isWatchOnly {
+                Divider()
+                WatchOnlyNotice()
+            }
             Divider()
             footer
         }
@@ -102,6 +106,8 @@ struct PopoverView: View {
                     .help(Wording.notStarted)
             case (_, let portfolio?) where portfolio.isEmpty:
                 Text("No activity so far").secondaryText()
+            case (_, let portfolio?) where portfolio.holdsOnlyOtherTokens:
+                Text(Wording.nothingPriced).secondaryText()
             case (_, let portfolio?):
                 headline(portfolio)
             case (.reading, nil):
@@ -374,12 +380,12 @@ struct PopoverView: View {
         } else if hotWallet.address == nil {
             Button("Set Up…", action: openHotWallet)
                 .controlSize(.small)
-        } else if let plan = hotWallet.plan {
-            Text("\(hotWallet.money(plan.valueUsdMicros)) of \(hotWallet.capText)")
+        } else if let plan = hotWallet.plan, let value = hotWallet.valueUsdMicros {
+            Text("\(hotWallet.money(value)) of \(hotWallet.capText)")
                 .monospacedDigit()
                 .secondaryText()
-                .contentTransition(.numericText(value: Double(plan.valueUsdMicros)))
-                .motion(Motion.number, value: plan.valueUsdMicros)
+                .contentTransition(.numericText(value: Double(value)))
+                .motion(Motion.number, value: value)
                 .help(plan.gasKeptWei > 0 ? HotWalletWording.keptOutOfCap(plan.gasKeptWei) : "")
         } else {
             Text("Reading…").secondaryText()

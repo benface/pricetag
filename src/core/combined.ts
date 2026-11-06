@@ -8,7 +8,7 @@
 
 import { CHECK_LABELS } from "./wording.ts"
 import { NO_FACTS, combinedFacts, type TransactionFacts } from "./activity.ts"
-import { assertFoldsFit, compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
+import { assertFoldsFit, combineOtherTokens, compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
 import type { BookPoint, BookPreview, ExplanationLeg, ExplanationResponse, PortfolioPosition, PortfolioResponse, WalletResponse } from "./api.ts"
 import type { Book } from "./book.ts"
 import { explainHold, explainPoint, explainTarget, explainTotal, type ExplainTarget, type Explanation, type Metric } from "./explain.ts"
@@ -159,7 +159,7 @@ function combinedPoints(started: readonly Folded[], mark: MarkPrice, latest: { b
   for (const { address, fold } of started) for (const position of fold.positions) prices[key(address, position.asset)] = fold.view.prices[position.asset]
   const unconfirmed = new Set(started.flatMap(({ address, fold }) => [...unconfirmedAssets(fold.positions, fold.unread)].map((asset) => key(address, asset))))
   const noMarket = new Set(started.flatMap(({ address, fold }) => fold.totals.noMarket.map((asset) => key(address, asset))))
-  return pnlOverTime(legs, method, prices, (blockNum, keyed) => mark(blockNum, assetOf(keyed)), latest, unconfirmed, noMarket)
+  return pnlOverTime(legs, method, prices, (blockNum, keyed) => mark(blockNum, assetOf(keyed)), latest, unconfirmed, noMarket, started.flatMap(({ wallet }) => (wallet.priceSamples ?? []).map((sample) => sample.blockNum)))
 }
 
 /** What a transaction did across the wallets. A move between them says so, rather than that one sent and another received. */
@@ -269,6 +269,7 @@ export function combinedPortfolioOf(read: readonly WalletResponse[], method: Met
     gasUnknownTxs,
     outgoingTxs: unique(responses.flatMap((r) => r.outgoingTxs)),
     unlisted: [...unlisted].map(([token, transfers]) => ({ token, transfers })),
+    ...combineOtherTokens(responses),
     l1FeeUnknownTxs: unique(responses.flatMap((r) => r.l1FeeUnknownTxs)),
     openingUnread: unique(responses.flatMap((r) => r.openingUnread)),
     unreadAssets: unique(responses.flatMap((r) => r.unreadAssets)),
@@ -292,7 +293,7 @@ export function combinedPortfolioOf(read: readonly WalletResponse[], method: Met
 export type ExplanationPart = { wallet: string; value: string | null; lines: string[] }
 
 /** The same explanation with its legs folded, for a client that shows them itself. `walletOf` says which wallet each is in. */
-export type CombinedExplanation = Explanation & { parts: ExplanationPart[]; walletOf: (leg: PricedLeg) => string }
+export type CombinedExplanation = Explanation & { parts: ExplanationPart[]; walletOf: (leg: PricedLeg) => string; priceProof?: { asset: string; price: string; wallet: string } }
 
 /** What's behind one number across the wallets: the number, each wallet's side of it, and every leg, saying which wallet it's in. */
 export type CombinedExplanationResponse = Omit<ExplanationResponse, "legs"> & { parts: ExplanationPart[]; legs: (ExplanationLeg & { wallet: string })[] }
@@ -356,7 +357,10 @@ export function explainAcross(read: readonly WalletResponse[], method: Method, t
     if (!position || parts.length === 0) return null
     const { title } = (parts[0] as (typeof parts)[number]).explanation
     const lines = parts.length > 1 ? [`Across ${parts.length} of your wallets.`] : []
-    return { currency, title, value: assetValue(position, target.metric, currency), sourceValue: null, lines, parts: partsOut, effects, walletOf: whose }
+    // The same price in every wallet that holds it, so any of them can show where it comes from.
+    const priced = parts.find(({ explanation }) => explanation.priceProof)
+    const priceProof = priced?.explanation.priceProof ? { priceProof: { ...priced.explanation.priceProof, wallet: priced.wallet } } : {}
+    return { currency, title, value: assetValue(position, target.metric, currency), sourceValue: null, lines, ...priceProof, parts: partsOut, effects, walletOf: whose }
   }
   const point = points.find((p) => p.txHash === target.txHash)
   if (!point) return null

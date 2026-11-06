@@ -5,11 +5,15 @@ import PricetagKit
 
 enum HotWalletFactory {
     static func make(store: PortfolioStore) -> HotWallet {
-        #if DEBUG
+        #if PATINA_WATCH_ONLY
+        let signer = WatchOnlySigner()
+        #elseif DEBUG
         if let name = HotWalletDebug.isolatedName {
+            let settingsStore = UserDefaultsWalletSettingsStore(defaults: UserDefaults(suiteName: "isolated.\(name)") ?? .standard)
+            HotWalletDebug.applySettingsArguments(to: settingsStore)
             return HotWallet(
                 signer: KeyVault(store: KeychainSealedKeyStore(service: HotWalletDebug.isolatedService(name))),
-                settingsStore: UserDefaultsWalletSettingsStore(defaults: UserDefaults(suiteName: "isolated.\(name)") ?? .standard),
+                settingsStore: settingsStore,
                 stateStore: FileDeviceStateStore(url: HotWalletDebug.isolatedStateURL(name)),
                 presence: HotWalletDebug.presence,
                 portfolioSource: { store.currentSource },

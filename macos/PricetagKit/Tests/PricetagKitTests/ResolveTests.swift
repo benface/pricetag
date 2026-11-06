@@ -10,6 +10,8 @@ actor BookSource: PortfolioSource {
     private(set) var previewed: [[Book]] = []
     private(set) var previewRules: [String?] = []
     var previewAnswers: [BookPreview] = []
+    /// How long each of the next previews says to wait, instead of answering.
+    var previewRefusals: [Int] = []
 
     init(_ portfolios: [Portfolio]) {
         self.portfolios = portfolios
@@ -17,6 +19,10 @@ actor BookSource: PortfolioSource {
 
     func answerPreviews(_ answers: [BookPreview]) {
         previewAnswers = answers
+    }
+
+    func refusePreviews(retryAfter: Int) {
+        previewRefusals.append(retryAfter)
     }
 
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
@@ -31,6 +37,7 @@ actor BookSource: PortfolioSource {
     func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview] {
         previewed.append(candidates)
         previewRules.append(rule)
+        if !previewRefusals.isEmpty { throw FetchError.rateLimited("Too many requests.", retryAfter: previewRefusals.removeFirst()) }
         return previewAnswers
     }
 
@@ -87,7 +94,7 @@ actor BookSource: PortfolioSource {
     @Test func saysWhatHasNoMarket() throws {
         let text = try #require(Wording.noMarket(try demoPortfolio()))
         #expect(text.contains("DEGEN"))
-        #expect(text.contains("2 tokens"))
+        #expect(text.contains("3 tokens"))
     }
 
     @Test func answersAreSentAlongAndKeptOnThisDevice() async throws {
@@ -104,6 +111,74 @@ actor BookSource: PortfolioSource {
         store.setRule("cautious-eth")
         _ = try await store.previews(of: [Book()])
         #expect(await source.previewRules == ["cautious-eth"])
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        for _ in 0..<200 where !condition() { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(condition())
+    }
+
+    @Test func previewsASlowedDownServerRefusedComeBackByThemselves() async throws {
+        let portfolio = try demoPortfolio()
+        let (store, source, _) = try makeStore([portfolio])
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        let answer = BookPreview(pnlMicros: "12400000", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false, failed: false)
+        await source.answerPreviews([answer, answer])
+        await source.refusePreviews(retryAfter: 5)
+        let load = Task { await model.loadPreviews() }
+        try await waitUntil { model.previewsAreHeldBack }
+        #expect(model.previews.isEmpty)
+        #expect(!model.costPreviewIsHeldBack, "the cost being typed isn't what's waiting")
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await source.previewed.count == 1, "nothing asks again until it's time")
+        await load.value
+        #expect(await source.previewed.count == 2)
+        #expect(!model.previewsAreHeldBack)
+        #expect(model.previews[.mine] == answer)
+    }
+
+    @Test func aHeldBackPreviewStopsWhenTheQuestionMovesOn() async throws {
+        let (store, source, _) = try makeStore([try demoPortfolio()])
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        await source.refusePreviews(retryAfter: 60)
+        let load = Task { await model.loadPreviews() }
+        try await waitUntil { model.previewsAreHeldBack }
+        model.skip()
+        load.cancel()
+        await load.value
+        #expect(!model.previewsAreHeldBack)
+        #expect(await source.previewed.count == 1)
+    }
+
+    @Test func aTypedCostWaitsOutARefusalAndGoesByTheLatestTyping() async throws {
+        let (store, source, _) = try makeStore([try demoPortfolio()])
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        let question = try #require(model.current)
+        let typed = { (amount: String) in Dictionary(uniqueKeysWithValues: question.arrivals.map { ($0.asset, amount) }) }
+        let answer = BookPreview(pnlMicros: "12400000", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false, failed: false)
+        await source.answerPreviews([answer])
+        // What's on screen is about the amount before this one.
+        await model.previewCost(typed("1"))
+        #expect(model.costPreview == answer)
+        await source.refusePreviews(retryAfter: 5)
+        let first = Task { await model.previewCost(typed("2")) }
+        try await waitUntil { model.costPreviewIsHeldBack }
+        #expect(model.costPreview == nil, "that was for a different amount")
+        #expect(!model.previewsAreHeldBack)
+        first.cancel()
+        await first.value
+        let second = Task { await model.previewCost(typed("3")) }
+        try await waitUntil { model.costPreviewIsHeldBack }
+        #expect(await source.previewed.count == 2, "typing more doesn't ask a server that's said to wait")
+        await second.value
+        #expect(!model.costPreviewIsHeldBack)
+        #expect(model.costPreview == answer)
+        let asked = await source.previewed
+        #expect(asked.count == 3)
+        #expect(asked[2] != asked[1], "it asked about what's typed now")
     }
 
     @Test func undoGoesBackOneAnswerAtATime() throws {

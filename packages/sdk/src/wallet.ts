@@ -6,13 +6,14 @@ import type { Method } from "./fold.ts"
 import { compareWithHoldingEth, type HoldComparison } from "./hold.ts"
 import type { PricedLeg, Reference, UnseenEth } from "./legs.ts"
 import type { MarketMarks } from "./market.ts"
+import type { OtherToken } from "./other-tokens.ts"
 import type { CostNote } from "./notes.ts"
 import { foldPositions, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type Head, type LatestPrices, type PnlPoint, type PnlStatus, type Position, type Totals } from "./portfolio.ts"
 import type { BalanceSnapshot } from "./reconcile.ts"
 
 export type Mode = "demo" | "raw" | "dataset"
 
-/** A token off the allowlist that this wallet holds. It has no trusted price and may be malicious, so nothing ever calls it. */
+/** A token off the allowlist that this wallet holds. It has no trusted price and may be malicious, so nothing ever sends it. Its only use is knowing a key isn't empty. */
 export type UnlistedToken = { token: string; transfers: number }
 
 /** Everything read about a wallet, before any method folds it. The app's server sends this to the browser as is. */
@@ -37,6 +38,10 @@ export type WalletData = {
   /** Set when that rule isn't the default, because the prices it shows aren't what their labels alone would say. */
   ruleNote?: string | null
   unlisted: UnlistedToken[]
+  /** The same tokens with what the chain says about them, which is only for showing. Nothing adds them to a total or moves them. Empty for a wallet read as of a fixed block. */
+  otherTokens: OtherToken[]
+  /** Past the limit, moved through this wallet and not read at all. */
+  otherTokensLeftOut: number
   /** What this is meant to be shown in. Its money is always USD, and `viewWallet` converts it. */
   currency: CurrencyCode
   /** Null for USD. */
@@ -63,6 +68,11 @@ export type WalletData = {
   marketChecked: boolean
   /** What this wallet's tokens the dataset has no oracle reads for were worth at the blocks of its transactions, by their feed or else their market, for a chart. Some can still be unread. */
   marketMarks: MarketMarks
+  /**
+   * Oracle reads at evenly spread blocks with no transaction in them, for a chart. A block whose read hasn't worked yet has
+   * empty answers, because it's still somewhere a chart needs a price. Left out when nobody asked for them.
+   */
+  priceSamples?: Reference[]
 }
 
 export const hasStarted = ({ coverage }: Pick<WalletData, "coverage">) => coverage.toBlock >= coverage.fromBlock
@@ -97,13 +107,13 @@ export function foldWallet(wallet: WalletData, method: Method, view: WalletView 
     unreadAssets: unread,
     totals,
     pnlStatus: status,
-    points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket)),
+    points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket), wallet.priceSamples?.map((sample) => sample.blockNum)),
     holdComparison: compareWithHoldingEth(positions, totals, status, view.prices, view.markPrice),
   }
 }
 
 /** What a wallet's numbers leave out, in words. Empty when nothing is. */
-export function describeMissing({ totals, gasUnknownTxs, l1FeeUnknownTxs }: { totals: Totals; gasUnknownTxs: readonly string[]; l1FeeUnknownTxs: readonly string[] }): string[] {
+export function describeMissing({ totals, gasUnknownTxs, l1FeeUnknownTxs, missingRateTxs = [], otherTokens = 0 }: { totals: Totals; gasUnknownTxs: readonly string[]; l1FeeUnknownTxs: readonly string[]; missingRateTxs?: readonly string[]; otherTokens?: number }): string[] {
   const reasons = new Map<string, string[]>()
   for (const { asset, reason } of totals.excluded) reasons.set(asset, [...(reasons.get(asset) ?? []), reason])
   return [
@@ -111,5 +121,7 @@ export function describeMissing({ totals, gasUnknownTxs, l1FeeUnknownTxs }: { to
     ...(totals.unpricedGas ? ["gas with no price"] : []),
     ...(gasUnknownTxs.length > 0 ? [`gas that couldn't be worked out, in ${gasUnknownTxs.length} tx, so ETH is overstated`] : []),
     ...(l1FeeUnknownTxs.length > 0 ? [`the L1 fees of ${l1FeeUnknownTxs.length} tx, so ETH can't be checked`] : []),
+    ...(missingRateTxs.length > 0 ? [`the exchange rate of ${missingRateTxs.length} tx, so what they moved has no amount in this currency`] : []),
+    ...(otherTokens > 0 ? [`${otherTokens} other ${otherTokens === 1 ? "token" : "tokens"} with no price`] : []),
   ]
 }

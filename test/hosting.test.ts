@@ -4,8 +4,11 @@ import { after, before, describe, it } from "node:test"
 import { ASSETS } from "@pricetag/sdk/core"
 import type { Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
-import { clientIpOf, createCounter, gate, hashOf, hostingOf, parseInvites, redact, useStructuredLogs } from "../server/hosting.ts"
+import { checkoutLimit, clientIpOf, createCounter, gate, hashOf, hostingOf, parseInvites, redact, useStructuredLogs } from "../server/hosting.ts"
 import { createHandler } from "../server/http.ts"
+import { laneOf } from "../server/lanes.ts"
+import { createCoinbase } from "../server/coinbase.ts"
+import type { Onramp } from "../server/onramp.ts"
 
 const INVITE = "an-invite-for-tests-only-0123456789"
 const ME = "0x3762620fbcb400b0f98365da4aad7d2a250e5d89"
@@ -33,9 +36,28 @@ describe("hosting settings", () => {
 
   it("won't host without invites, which would share the token and key with anyone", () => {
     assert.throws(() => hostingOf({ PRICETAG_HOSTED: "1" }), /PRICETAG_INVITES/)
-    const hosting = hostingOf({ PRICETAG_HOSTED: "1", PRICETAG_INVITES: `ben:${hashOf(INVITE)}` })
+    const hosting = hostingOf({ PRICETAG_HOSTED: "1", PRICETAG_INVITES: `ben:${hashOf(INVITE)}`, PRICETAG_CLIENT_IP_HEADER: "fly-client-ip" })
     assert.equal(hosting.host, "0.0.0.0")
     assert.equal(hosting.servesApp, false)
+  })
+
+  it("won't listen where others can reach it without invites, hosted or not", () => {
+    for (const HOST of ["0.0.0.0", "::", "192.168.1.20", "my-mac.local"]) assert.throws(() => hostingOf({ HOST }), /PRICETAG_INVITES/, HOST)
+    for (const HOST of ["127.0.0.1", "127.0.0.53", "::1", "localhost"]) assert.equal(hostingOf({ HOST }).host, HOST)
+    assert.equal(hostingOf({ HOST: "0.0.0.0", PRICETAG_INVITES: `ben:${hashOf(INVITE)}` }).host, "0.0.0.0")
+  })
+
+  it("won't host without being told where the client's address is, which Coinbase would get wrong", () => {
+    const invited = { PRICETAG_HOSTED: "1", PRICETAG_INVITES: `ben:${hashOf(INVITE)}` }
+    assert.throws(() => hostingOf(invited), /PRICETAG_CLIENT_IP_HEADER/)
+    assert.throws(() => hostingOf({ ...invited, PRICETAG_CLIENT_IP_HEADER: "  " }), /PRICETAG_CLIENT_IP_HEADER/)
+    assert.equal(hostingOf({ ...invited, PRICETAG_CLIENT_IP_HEADER: "Fly-Client-IP" }).clientIpHeader, "fly-client-ip")
+  })
+
+  it("run three people's queries at once when hosted, unless told otherwise", () => {
+    assert.equal(hostingOf({}).ampLanes, 3)
+    assert.equal(hostingOf({ PRICETAG_AMP_LANES: "1" }).ampLanes, 1)
+    assert.throws(() => hostingOf({ PRICETAG_AMP_LANES: "0" }), /PRICETAG_AMP_LANES/)
   })
 
   it("refuse an invite list with a typo rather than lock someone out", () => {
@@ -47,8 +69,24 @@ describe("hosting settings", () => {
   it("read the client's address from the host's header only when told to", () => {
     const req = (headers: Record<string, string>, remoteAddress: string) => ({ headers, socket: { remoteAddress } }) as unknown as IncomingMessage
     assert.equal(clientIpOf(req({ "fly-client-ip": "203.0.113.9" }, "10.0.0.1"), "fly-client-ip"), "203.0.113.9")
-    assert.equal(clientIpOf(req({ "fly-client-ip": "203.0.113.9" }, "10.0.0.1"), null), "10.0.0.1")
-    assert.equal(clientIpOf(req({}, "127.0.0.1"), null), null)
+    assert.equal(clientIpOf(req({ "fly-client-ip": "203.0.113.9" }, "198.51.100.7"), null), "198.51.100.7")
+    assert.equal(clientIpOf(req({}, "::ffff:198.51.100.7"), null), "198.51.100.7")
+    assert.equal(clientIpOf(req({}, "2001:db8::7"), null), "2001:db8::7")
+  })
+
+  it("say nothing rather than a wrong address", () => {
+    const req = (headers: Record<string, string>, remoteAddress: string) => ({ headers, socket: { remoteAddress } }) as unknown as IncomingMessage
+    for (const local of ["127.0.0.1", "::1", "::ffff:127.0.0.1", "10.0.0.1", "192.168.1.5", "172.16.0.9", "fdaa::3", "fe80::1"]) assert.equal(clientIpOf(req({}, local), null), null, local)
+    // Behind a proxy with no header set, the socket is the proxy, and a client's own `x-forwarded-for` doesn't change that.
+    assert.equal(clientIpOf(req({ "x-forwarded-for": "203.0.113.9" }, "10.0.0.1"), null), null)
+    assert.equal(clientIpOf(req({}, "10.0.0.1"), "fly-client-ip"), null, "the header's missing")
+    assert.equal(clientIpOf(req({ "fly-client-ip": "203.0.113.9, 198.51.100.7" }, "198.51.100.1"), "fly-client-ip"), null, "a client's entry could be first in a list")
+    assert.equal(clientIpOf(req({ "fly-client-ip": "not an address" }, "198.51.100.1"), "fly-client-ip"), null)
+  })
+
+  it("refuse to start on a header a client can write", () => {
+    for (const header of ["x-forwarded-for", "X-Forwarded-For", "forwarded", "x-real-ip"]) assert.throws(() => hostingOf({ PRICETAG_CLIENT_IP_HEADER: header }), /a client can write its own/)
+    assert.equal(hostingOf({ PRICETAG_CLIENT_IP_HEADER: "Fly-Client-IP" }).clientIpHeader, "fly-client-ip")
   })
 })
 
@@ -88,17 +126,120 @@ describe("the gate", () => {
     assert.equal((await call(server, "/api/wallet/demo", { invite: INVITE })).status, 200)
   })
 
-  it("holds an invite to its checkouts an hour, before Coinbase is asked", async () => {
-    now = 120_000
-    const body = JSON.stringify({ address: ME, asset: "ETH", cryptoAmount: "0.01" })
-    // No provider here, so the first one gets through to say buying isn't set up.
-    assert.equal((await call(server, "/api/onramp/checkout", { method: "POST", invite: INVITE, body })).status, 503)
-    assert.equal((await call(server, "/api/onramp/checkout", { method: "POST", invite: INVITE, body })).status, 429)
-  })
-
   it("stops taking the host's checks once it's shutting down", async () => {
     api.drain()
     assert.equal((await call(server, "/healthz")).status, 503)
+  })
+})
+
+describe("checkouts", () => {
+  const OTHER = "another-invite-for-tests-only-0123456"
+  const CHECKOUT = "/api/onramp/checkout"
+  const valid = JSON.stringify({ address: ME, asset: "ETH", cryptoAmount: "0.01" })
+  let now = 0
+  let asked = 0
+
+  async function serving(onramp: Onramp | null, limits: { checkoutsPerHour: number; checkoutsPerDay: number }): Promise<Server> {
+    const base = hostingOf({ PRICETAG_INVITES: `ben:${hashOf(INVITE)},ana:${hashOf(OTHER)}` })
+    const hosting = { ...base, limits: { ...base.limits, perMinute: 1000, ...limits } }
+    const api = createApi({}, null, onramp, { limitCheckout: checkoutLimit(hosting, () => now) })
+    const server = createServer(createHandler(gate(api, hosting, () => ({ amp: false, buying: onramp !== null }), () => now), null))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    return server
+  }
+  const onramp: Onramp = {
+    checkout: async () => {
+      asked += 1
+      return { url: "https://pay.coinbase.com/buy", ref: "a-ref" }
+    },
+    orders: async () => [],
+  }
+
+  it("only use up the hour's when they're valid, and stop before Coinbase is asked", async () => {
+    now = 0
+    asked = 0
+    const server = await serving(onramp, { checkoutsPerHour: 1, checkoutsPerDay: 100 })
+    try {
+      const invalid = [JSON.stringify({ address: "nope", asset: "ETH", cryptoAmount: "0.01" }), JSON.stringify({ address: ME, asset: "DOGE", cryptoAmount: "0.01" }), JSON.stringify({ address: ME, asset: "ETH", cryptoAmount: "lots" }), JSON.stringify({ address: ME, asset: "ETH", cryptoAmount: "1", fiat: { amount: "x", currency: "USD" } })]
+      for (const body of invalid) assert.equal((await call(server, CHECKOUT, { method: "POST", invite: INVITE, body })).status, 400, body)
+      assert.equal((await call(server, CHECKOUT, { method: "POST", invite: INVITE, body: valid })).status, 200, "None of those counted")
+      const limited = await call(server, CHECKOUT, { method: "POST", invite: INVITE, body: valid })
+      assert.equal(limited.status, 429)
+      assert.equal(limited.headers["retry-after"], "3600")
+      assert.equal(asked, 1)
+      assert.equal((await call(server, CHECKOUT, { method: "POST", invite: OTHER, body: valid })).status, 200, "Each invite has its own")
+    } finally {
+      server.close()
+    }
+  })
+
+  it("hold everyone together to the day's, without invalid ones using it up", async () => {
+    now = 0
+    const server = await serving(onramp, { checkoutsPerHour: 100, checkoutsPerDay: 1 })
+    const logged = console.error
+    console.error = () => {}
+    try {
+      assert.equal((await call(server, CHECKOUT, { method: "POST", invite: INVITE, body: JSON.stringify({ address: "nope" }) })).status, 400)
+      assert.equal((await call(server, CHECKOUT, { method: "POST", invite: INVITE, body: valid })).status, 200)
+      assert.equal((await call(server, CHECKOUT, { method: "POST", invite: OTHER, body: valid })).status, 429)
+    } finally {
+      console.error = logged
+      server.close()
+    }
+  })
+
+  it("answer plainly on a host with no Coinbase key, and take nothing from the limits", async () => {
+    assert.equal(createCoinbase({}), null)
+    assert.equal(createCoinbase({ COINBASE_ONRAMP_KEY_ID: "only-half-a-key" }), null)
+    const server = await serving(null, { checkoutsPerHour: 1, checkoutsPerDay: 1 })
+    try {
+      assert.deepEqual(JSON.parse((await call(server, "/healthz")).body), { ok: true, amp: false, buying: false })
+      for (const answer of [await call(server, CHECKOUT, { method: "POST", invite: INVITE, body: valid }), await call(server, CHECKOUT, { method: "POST", invite: INVITE, body: valid }), await call(server, "/api/onramp/orders/a-ref", { invite: INVITE })]) {
+        assert.equal(answer.status, 503)
+        assert.deepEqual(JSON.parse(answer.body), { error: "Buying isn't set up on this server." })
+      }
+      assert.equal((await call(server, CHECKOUT, { method: "POST", body: valid })).status, 401, "And it still takes an invite to find that out")
+    } finally {
+      server.close()
+    }
+  })
+})
+
+describe("whose queries they are", () => {
+  it("are the invite's, except the head's and the chain's, which are everyone's", async () => {
+    const lanes: Record<string, (string | undefined)[]> = { head: [], window: [] }
+    const blocks = { blockNum: 20, timestamp: "2026-11-04T00:00:00.000Z" }
+    const source: Source = {
+      mode: "raw",
+      startBlock: 1,
+      historyFrom: null,
+      head: async () => {
+        lanes.head!.push(laneOf())
+        return blocks
+      },
+      processedThrough: async (_, head) => head,
+      readWindow: async () => {
+        lanes.window!.push(laneOf())
+        return { rows: [], priced: null, gasUnknown: [] }
+      },
+      readReferences: async () => [],
+      readLatestReference: async () => null,
+      readEthBalances: async () => new Map(),
+      readBalances: async (_, block) => ({ blockNum: block, amounts: {} }),
+    }
+    const created = { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }
+    const hosting = hostingOf({ PRICETAG_INVITES: `ben:${hashOf(INVITE)}` })
+    const server = createServer(createHandler(gate(createApi({}, created, null), hosting, () => ({ amp: true, buying: false })), null))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    try {
+      assert.equal((await call(server, `/api/portfolio/${ME}`, { method: "POST", invite: INVITE, body: "{}" })).status, 200)
+      assert.ok(lanes.window!.length > 0)
+      assert.ok(lanes.window!.every((lane) => lane === "ben"), "The wallet's read is theirs")
+      assert.ok(lanes.head!.length > 0)
+      assert.ok(lanes.head!.every((lane) => lane === undefined), "The head isn't, even when their read asked for it")
+    } finally {
+      server.close()
+    }
   })
 })
 
@@ -177,7 +318,7 @@ describe("one request's reads", () => {
   const post = (path: string, body: unknown) => call(server, path, { method: "POST", body: JSON.stringify(body) })
 
   before(async () => {
-    server = createServer(createHandler(createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }), null))
+    server = createServer(createHandler(createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }), null))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   })
   after(() => server.close())

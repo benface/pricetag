@@ -227,7 +227,7 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     /// nil when nothing is known at this point, which isn't $0.
     public let pnlMicros: String?
     public let excludedCount: Int
-    /// What its transaction did, in words. The last point has no transaction.
+    /// What its transaction did, in words. The last point has no transaction, and nor do the ones that only read prices between transactions.
     public var summary: String? = nil
     /// What was held right after it, at that moment's prices. Only what's known, and nil when nothing is, which isn't $0.
     public var valueMicros: String? = nil
@@ -237,6 +237,8 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public var valueExcludedCount: Int? = nil
     /// Only prices moved since the point before: what's held is the same, and so is what's left out. Otherwise there's nothing to join it to.
     public var valueContinues: Bool? = nil
+    /// Prices were read as often as a chart can show all the way from the point before, so what's between them is known and not a guess.
+    public var valueRead: Bool? = nil
     /// What moved, apart from network fees. The rest of these are empty or nil on the last point, which has no transaction.
     public var assets: [String] = []
     /// The one address on the other side, or nil when there's none or more than one.
@@ -248,6 +250,8 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public var unknownCost: [String] = []
     /// Which of the user's wallets its transaction is in, when several are shown as one.
     public var wallets: [String]? = nil
+    /// `valueMicros` was worked out for where a chart's range starts, between prices that were read, so it's never from a server.
+    var valueEstimated = false
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
     public var date: Date? { parseTimestamp(timestamp) }
@@ -255,7 +259,7 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
 
 extension PnlPoint {
     private enum CodingKeys: String, CodingKey {
-        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, valueMicros, valueBeforeMicros, valueExcludedCount, valueContinues, assets, counterparty, amount, gain, unknownCost, wallets
+        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, valueMicros, valueBeforeMicros, valueExcludedCount, valueContinues, valueRead, assets, counterparty, amount, gain, unknownCost, wallets
     }
 
     /// A server from before a transaction had facts still sends the rest.
@@ -271,6 +275,7 @@ extension PnlPoint {
         valueBeforeMicros = try container.decodeIfPresent(String.self, forKey: .valueBeforeMicros)
         valueExcludedCount = try container.decodeIfPresent(Int.self, forKey: .valueExcludedCount)
         valueContinues = try container.decodeIfPresent(Bool.self, forKey: .valueContinues)
+        valueRead = try container.decodeIfPresent(Bool.self, forKey: .valueRead)
         assets = try container.decodeIfPresent([String].self, forKey: .assets) ?? []
         counterparty = try container.decodeIfPresent(String.self, forKey: .counterparty)
         amount = try container.decodeIfPresent(TransactionAmount.self, forKey: .amount)
@@ -324,6 +329,29 @@ public struct ReadProgress: Codable, Sendable, Equatable {
 public struct UnlistedToken: Codable, Sendable, Equatable, Identifiable {
     public let token: String
     public let transfers: Int
+
+    public var id: String { token }
+}
+
+/// A token off the allowlist that a wallet holds, with what the chain says about it. It's only for showing: it's in no total, and nothing here ever moves it.
+/// Its name and symbol are whatever its contract claims, already cleaned up by the server, so always show them as plain text with the address.
+public struct OtherToken: Codable, Sendable, Equatable, Identifiable {
+    public enum Kind: String, Codable, Sendable { case token, collectible }
+    public enum State: String, Codable, Sendable { case reading, read, unreadable }
+
+    public let token: String
+    public let kind: Kind
+    public let name: String?
+    public let symbol: String?
+    /// nil when the contract gave no usable answer, so `balance` is in its smallest unit.
+    public let decimals: Int?
+    /// nil while it's being read, or when it can't be. Never 0 for that.
+    public let balance: String?
+    public let state: State
+    /// What's wrong with it, in words.
+    public let note: String?
+    /// Why it's tucked away as possible spam, in words, or nil when it's shown with the rest. It doesn't mean it's worthless.
+    public let tucked: String?
 
     public var id: String { token }
 }
@@ -391,6 +419,9 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let gasUnknownTxs: [String]
     public let outgoingTxs: [String]
     public let unlisted: [UnlistedToken]
+    /// nil in a portfolio saved before these existed.
+    public let otherTokens: [OtherToken]?
+    public let otherTokensLeftOut: Int?
     public let l1FeeUnknownTxs: [String]
     /// Assets whose balance before the first block couldn't be read yet.
     public let openingUnread: [String]
@@ -423,6 +454,14 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public var listedPositions: [Position] { positions.filter { !$0.noMarket } }
     public var noMarketPositions: [Position] { positions.filter(\.noMarket) }
 
+    /// Other tokens to show with the holdings, and those tucked away as possible spam.
+    public var shownOtherTokens: [OtherToken] { (otherTokens ?? []).filter { $0.tucked == nil } }
+    public var tuckedOtherTokens: [OtherToken] { (otherTokens ?? []).filter { $0.tucked != nil } }
+    /// Whether there's anything to say about other tokens, including how many weren't read.
+    public var hasOtherTokens: Bool { !(otherTokens ?? []).isEmpty || (otherTokensLeftOut ?? 0) > 0 }
+    /// Nothing here has a price to add up, so there are no numbers to show, and adding up nothing would say $0.
+    public var holdsOnlyOtherTokens: Bool { positions.isEmpty && unreadAssets.isEmpty && hasOtherTokens }
+
     /// What a glance lists: what's held, most valuable first. One with no price can't be ranked, so it goes last, and it isn't treated as worth nothing.
     public func largestHoldings(_ limit: Int) -> [Position] {
         Array(listedPositions.filter(\.isHeld).sorted(using: HoldingsSort.largestFirst).prefix(limit))
@@ -430,7 +469,7 @@ public struct Portfolio: Codable, Sendable, Equatable {
 
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
     /// A balance that couldn't be read doesn't count as nothing.
-    public var isEmpty: Bool { positions.isEmpty && unreadAssets.isEmpty }
+    public var isEmpty: Bool { positions.isEmpty && unreadAssets.isEmpty && !hasOtherTokens }
     public var hasChartableData: Bool { hasChartableData(.pnl) }
     public var isTooNewToChart: Bool { isTooNewToChart(.pnl) }
 
@@ -500,8 +539,22 @@ public struct Explanation: Codable, Sendable, Equatable {
     public let lines: [String]
     /// Each wallet's side of the number, when several are shown as one.
     public var parts: [ExplanationPart]? = nil
+    /// Where to read the proof of the current price this number rests on, when that price comes from Chainlink.
+    public var priceProof: ExplanationPriceProof? = nil
     public let legCount: Int
     public let legs: [ExplanationLeg]
+}
+
+public struct ExplanationPriceProof: Codable, Sendable, Equatable {
+    public let asset: String
+    /// The price on screen, in USD micros, which its proof has to be about.
+    public let price: String
+    public let wallet: String
+
+    /// A different one for anything a proof or its result depends on, so neither outlives it.
+    func panelID(currency: CurrencyCode, rule: String?) -> String {
+        "\(wallet):\(asset):\(price):\(currency.rawValue):\(rule ?? "")"
+    }
 }
 
 /// One wallet's side of a number shown across several.
@@ -542,6 +595,8 @@ public struct Proof: Codable, Sendable, Equatable {
     public let scope: [String]
     /// Why the block can't be checked. nil when it can.
     public let unavailable: String?
+    /// What a current price's proof describes, which checking it has to name. Only set when it has an update behind it.
+    public var revision: String? = nil
 }
 
 public enum CheckStatus: String, Codable, Sendable {

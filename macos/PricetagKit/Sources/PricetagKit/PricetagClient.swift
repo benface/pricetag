@@ -15,6 +15,12 @@ public enum FetchError: Error, Equatable, Sendable {
     case rejected(String)
     /// The wallet has more history than the server can hold. Trying again won't change that.
     case tooBig(String)
+    /// The server only answers people it invited, and this request had no invite it takes.
+    case needsInvite(String)
+    /// The server is holding this client back, and says how many seconds until there's room. It clears by itself.
+    case rateLimited(String, retryAfter: Int)
+    /// The server's price or update isn't the one a proof is about.
+    case priceChanged(String)
 }
 
 public protocol PortfolioSource: Sendable {
@@ -29,10 +35,14 @@ public protocol PortfolioSource: Sendable {
     func importCoinbase(csv: String) async throws -> ExchangeImport
     /// Empty when the server has only one, so there's nothing to choose.
     func rules() async throws -> [PricingRule]
+    /// How far a wallet's first read has got. Nil when this source can't tell, like a server from before it could.
+    func readProgress(address: String) async throws -> FirstReadProgress?
     func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof
     func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification
+    func priceProof(asset: String, price: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof
+    func priceVerification(asset: String, revision: String?, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification
     /// What a wallet lets others spend, checked onchain just now.
     func approvals(address: String) async throws -> WalletApprovals
     /// One element each time the server says there's a new block, until the connection goes. Nil when this source can't say.
@@ -54,8 +64,11 @@ extension PortfolioSource {
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
     public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof { throw FetchError.unreachable }
     public func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
+    public func priceProof(asset: String, price: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof { throw FetchError.unreachable }
+    public func priceVerification(asset: String, revision: String?, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
     public func approvals(address: String) async throws -> WalletApprovals { throw FetchError.unreachable }
     public func rules() async throws -> [PricingRule] { [] }
+    public func readProgress(address: String) async throws -> FirstReadProgress? { nil }
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
     public func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout { throw FetchError.unreachable }
     public func currentRate(currency: CurrencyCode) async throws -> String? { throw FetchError.unreachable }
@@ -89,7 +102,9 @@ public struct PricetagClient: PortfolioSource {
             let task = Task {
                 do {
                     let (bytes, response) = try await session.bytes(for: request)
-                    guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw FetchError.unreachable }
+                    let answer = response as? HTTPURLResponse
+                    if answer?.statusCode == 429 { throw FetchError.rateLimited("Too many requests.", retryAfter: Self.retryAfter(answer)) }
+                    guard answer?.statusCode == 200 else { throw FetchError.unreachable }
                     for try await line in bytes.lines where line == "event: head" {
                         continuation.yield()
                     }
@@ -125,8 +140,20 @@ public struct PricetagClient: PortfolioSource {
         try await get("/api/portfolio/\(address)/verify", query: legQuery(leg, currency, rule), timeout: .seconds(120))
     }
 
+    public func priceProof(asset: String, price: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
+        try await get("/api/portfolio/\(address)/proof", query: proofQuery("asset", asset, currency, rule) + [URLQueryItem(name: "price", value: price)], timeout: .seconds(30))
+    }
+
+    public func priceVerification(asset: String, revision: String?, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
+        try await get("/api/portfolio/\(address)/verify", query: proofQuery("asset", asset, currency, rule) + [URLQueryItem(name: "revision", value: revision)], timeout: .seconds(120))
+    }
+
     private func legQuery(_ leg: String, _ currency: CurrencyCode, _ rule: String?) -> [URLQueryItem] {
-        var items = [URLQueryItem(name: "leg", value: leg), URLQueryItem(name: "currency", value: currency.rawValue)]
+        proofQuery("leg", leg, currency, rule)
+    }
+
+    private func proofQuery(_ name: String, _ value: String, _ currency: CurrencyCode, _ rule: String?) -> [URLQueryItem] {
+        var items = [URLQueryItem(name: name, value: value), URLQueryItem(name: "currency", value: currency.rawValue)]
         if let rule { items.append(URLQueryItem(name: "rule", value: rule)) }
         return items
     }
@@ -159,6 +186,10 @@ public struct PricetagClient: PortfolioSource {
     public func rules() async throws -> [PricingRule] {
         let body: RulesBody = try await get("/api/rules", query: [], timeout: .seconds(15))
         return body.rules
+    }
+
+    public func readProgress(address: String) async throws -> FirstReadProgress? {
+        try await get("/api/wallet/\(address)/progress", query: [], timeout: .seconds(8))
     }
 
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison {
@@ -237,8 +268,16 @@ public struct PricetagClient: PortfolioSource {
         case 502: throw FetchError.ampUnavailable(message)
         case 503: throw FetchError.noAmpConfigured(message)
         case 413: throw FetchError.tooBig(message)
+        case 401: throw FetchError.needsInvite(message)
+        case 429: throw FetchError.rateLimited(message, retryAfter: Self.retryAfter(response as? HTTPURLResponse))
+        case 412: throw FetchError.priceChanged(message)
         default: throw FetchError.rejected(message)
         }
+    }
+
+    /// In seconds, as this server sends it. Anything else waits a minute, which is as long as its shortest limit lasts.
+    private static func retryAfter(_ response: HTTPURLResponse?) -> Int {
+        response?.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil } ?? 60
     }
 
     private struct CheckoutBody: Encodable {

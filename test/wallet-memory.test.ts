@@ -207,11 +207,10 @@ describe("what the SDK loads of it", () => {
     const query: Query = async <T>(sql: string) => {
       sqls.push(sql)
       if (sql.includes("X'4d2301cc") || sql.includes("eth_call")) return [] as T[]
-      if (/ORDER BY block_num DESC LIMIT 1/.test(sql)) return [{ block_num: "200", timestamp: Date.parse(HEAD.timestamp) }] as T[]
-      const count = sql.includes(".unlisted_legs") ? unlisted : sql.includes(".legs") ? legs : 0
+      if (/ORDER BY block_num DESC LIMIT 1/.test(sql)) return sql.split(" UNION ALL ").map(() => ({ block_num: "200", timestamp: Date.parse(HEAD.timestamp) })) as T[]
+      const count = (sql.includes(".legs") ? legs : 0) + (sql.includes(".unlisted_legs") ? unlisted : 0)
       const limit = Number(/LIMIT (\d+)$/.exec(sql)?.[1] ?? Infinity)
-      const first = sql.includes(".unlisted_legs") ? 1_000 : 1
-      return Array.from({ length: Math.min(count, limit) }, (_, i) => leg(first + i)) as T[]
+      return Array.from({ length: Math.min(count, limit) }, (_, i) => leg(1 + i)) as T[]
     }
     return { sqls, client: pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 1, maxWalletRows: 10, logger: { warn() {} } }) }
   }
@@ -221,13 +220,13 @@ describe("what the SDK loads of it", () => {
     const { client, sqls } = amp(1_000, 0)
     await assert.rejects(client.getLegs(ME), WalletTooBigError)
     assert.match(asked(sqls, "legs")!, /LIMIT 11$/)
-    assert.equal(asked(sqls, "unlisted_legs"), undefined)
   })
 
   it("counts both tables together", async () => {
     const { client, sqls } = amp(7, 1_000)
     await assert.rejects(client.getLegs(ME), WalletTooBigError)
-    assert.match(asked(sqls, "unlisted_legs")!, /LIMIT 4$/)
+    assert.match(asked(sqls, "unlisted_legs")!, /LIMIT 11$/)
+    assert.equal(asked(sqls, "unlisted_legs"), asked(sqls, "legs"))
   })
 
   it("loses nothing from a wallet that fits", async () => {
@@ -336,7 +335,7 @@ describe("wallets that pass lots between them", () => {
   let server: Server
   let base: string
   before(async () => {
-    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }, null)
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }, null)
     server = createServer(createHandler(api, null))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -455,7 +454,7 @@ describe("what the API answers", () => {
   let server: Server
   let base: string
   before(async () => {
-    const api = createApi({ PRICETAG_MAX_WALLET_ROWS: "10" }, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }, null)
+    const api = createApi({ PRICETAG_MAX_WALLET_ROWS: "10" }, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }, null)
     server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -500,7 +499,7 @@ describe("wallets that each fit, added up", () => {
   let server: Server
   let base: string
   before(async () => {
-    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }, null)
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }, null)
     server = createServer(createHandler(api, null))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`

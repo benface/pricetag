@@ -84,12 +84,13 @@ extension WalletEntry {
 }
 
 extension WalletList {
-    /// For trying things while building the app. A fixture has no place in a release build, and scenes show what one looks like.
+    /// For trying things while building the app, and for a tester with no wallet on Base to try. Otherwise a fixture has no place in a release
+    /// build, and scenes show what one looks like.
     static var offersDemo: Bool {
         #if DEBUG
-        !TestMode.isRunning
+        Build.isWatchOnly || !TestMode.isRunning
         #else
-        false
+        Build.isWatchOnly
         #endif
     }
 }
@@ -138,7 +139,7 @@ struct WalletButton: View {
             Button("Switch Wallet…") { navigation.switchWallet() }
         }
         .popover(isPresented: $navigation.isSwitchingWallet, arrowEdge: .bottom) {
-            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: navigation.pendingWalletName, onOpenSpendingMoney: navigation.showSpendingMoney, onRemoveFromSavings: { navigation.removingFromSavings = $0 }, onDeleteSpendingMoney: { navigation.settingsPane = .spendingMoney }) { navigation.isSwitchingWallet = false }
+            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: navigation.pendingWalletName, onOpenSpendingMoney: navigation.showSpendingMoney, onRemoveFromSavings: { navigation.removingFromSavings = $0 }, onDeleteSpendingMoney: navigation.deleteSpendingMoney) { navigation.isSwitchingWallet = false }
         }
     }
 }
@@ -159,7 +160,6 @@ struct WalletSwitcher: View {
     /// Where the pointer was when the arrows last moved. Rows scrolling under a still pointer report a hover that nobody made.
     @State private var pointerAtLastKey: CGPoint?
     @FocusState private var focus: Field?
-    @Environment(\.openSettings) private var openSettings
 
     private enum Field: Hashable {
         case add, rename
@@ -227,7 +227,7 @@ struct WalletSwitcher: View {
             VStack(alignment: .leading, spacing: 0) {
                 if offersSpendingMoney || cantOpenSpendingMoney { createSpendingMoney }
                 addRow
-                if let note { noteRow(note).arrives() }
+                if let note, note.change.map(store.isLatestChange) ?? true { noteRow(note).arrives() }
             }
             .padding(6)
         }
@@ -420,12 +420,10 @@ struct WalletSwitcher: View {
         }
         if entry.kind == .spendingMoney {
             Divider()
-            // It holds a key, so deleting it is never one click away, and only Settings does it.
-            Button("Delete in Settings…") {
-                onDeleteSpendingMoney()
+            // It holds a key, so deleting it is never one click away: its page asks first, and offers to sweep it.
+            Button("Delete…", role: .destructive) {
                 onDone()
-                openSettings()
-                DockPresence.bringForward()
+                onDeleteSpendingMoney()
             }
         }
     }
@@ -436,7 +434,7 @@ struct WalletSwitcher: View {
         let account = hotWallet?.settings.deviceAccounts.first { $0.lowercased == entry.address }
         let relink = { [hotWallet] in if let account { hotWallet?.linkDeviceAccounts([account.lowercased]) } }
         let before = store.changeWallet(entry.address, name: name, alsoUndo: relink, action)
-        note = WalletListNote(text: text) { [store] in
+        note = WalletListNote(text: text, change: before) { [store] in
             relink()
             store.restore(before)
         }
@@ -499,6 +497,8 @@ struct WalletSwitcher: View {
 /// What a change to the list did.
 struct WalletListNote {
     let text: String
+    /// Shows only while this is the latest change, so the Edit menu's Undo hides it and its Redo brings it back.
+    var change: WalletListSnapshot?
     var undo: (() -> Void)?
 }
 

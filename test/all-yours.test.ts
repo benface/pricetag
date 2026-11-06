@@ -4,11 +4,10 @@ import { after, before, describe, it } from "node:test"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { ASSETS, ETH_ADDRESS, formatSignedMoney, type LegPart, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
-import type { Source } from "@pricetag/sdk/internal"
+import type { RatesReader, Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
 import { combinedPortfolioOf, explainAcross, explainCombined, previewCombined, type AllYoursRead, type CombinedPortfolioResponse } from "../src/core/combined.ts"
 import { portfolioOf } from "../src/core/portfolio.ts"
-import type { RatesReader } from "../server/rates.ts"
 import { NO_FACTS, combinedFacts, type TransactionGain } from "../src/core/activity.ts"
 import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, answerSender, emptyBook, yourWallets, type Book } from "../src/core/book.ts"
@@ -277,7 +276,7 @@ describe("all your wallets over the api", () => {
   let server: Server
   let base: string
   before(async () => {
-    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
     server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -358,7 +357,7 @@ describe("all your wallets, when one of them can't keep up", () => {
   const move = { [HOT]: [row(15, "0x2", HOT, "credit", ONE, COLD)], [COLD]: [row(15, "0x2", COLD, "debit", ONE, HOT)] }
 
   /** A server over wallets whose rows and head the test moves on, with `trouble` for what one wallet's read or rates, or the price at a block, run into. */
-  function serve(trouble: { read?: (address: string) => Promise<void>; rates?: (address: string, block: number) => Promise<void>; reference?: () => Promise<void>; rollingHistory?: boolean }) {
+  function serve(trouble: { read?: (address: string) => Promise<void>; rates?: (address: string, block: number) => Promise<void>; reference?: () => Promise<void>; rollingHistory?: boolean; tokenReads?: string[] }) {
     const state = { head: 10, rows: structuredClone(before) as Record<string, LegRow[]>, troubled: false }
     const source: Source = {
       mode: "raw",
@@ -378,8 +377,12 @@ describe("all your wallets, when one of them can't keep up", () => {
       readEthBalances: async () => new Map(),
       readBalances: async (address, block) => {
         const amounts: Record<string, string> = Object.fromEntries(ASSETS.map((asset) => [asset, "0"]))
-        for (const r of state.rows[address] ?? []) if (r.block_num <= block) amounts.ETH = (BigInt(amounts.ETH as string) + (r.side === "credit" ? BigInt(r.amount) : -BigInt(r.amount))).toString()
+        for (const r of state.rows[address] ?? []) if (r.kind !== "unlisted" && r.block_num <= block) amounts.ETH = (BigInt(amounts.ETH as string) + (r.side === "credit" ? BigInt(r.amount) : -BigInt(r.amount))).toString()
         return { blockNum: block, amounts }
+      },
+      readTokenFacts: async (address, requests) => {
+        trouble.tokenReads?.push(address)
+        return new Map(requests.map(({ token }) => [token, { balance: "5", name: "Jackfruit", symbol: "JACK", decimals: 0 }]))
       },
     }
     // Rates are read for one wallet at a time, which the server doesn't say here, so it's told apart by its transactions.
@@ -387,7 +390,7 @@ describe("all your wallets, when one of them can't keep up", () => {
       if (state.troubled) await trouble.rates?.(wallet.legs.some((leg) => leg.txHash === "0x1") ? COLD : wallet.legs.some((leg) => leg.txHash === "0x2") ? HOT : THIRD, wallet.latest.blockNum)
       return { byBlock: {}, latest: null }
     }
-    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
     const server = createServer((req, res) => void api(req, res))
     const ready = new Promise<string>((resolve) => server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)))
     const post = async (path: string, body: unknown) => (await fetch(`${await ready}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json() as Promise<CombinedPortfolioResponse>
@@ -397,7 +400,7 @@ describe("all your wallets, when one of them can't keep up", () => {
       state.head = 20
       state.troubled = true
     }
-    return { post, moveOn, close: () => server.close() }
+    return { post, moveOn, state, close: () => server.close() }
   }
   const ethOf = (all: CombinedPortfolioResponse) => all.positions.find((p) => p.asset === "ETH")?.values.qty
   const stuck = () => new Promise<void>(() => {})
@@ -451,6 +454,52 @@ describe("all your wallets, when one of them can't keep up", () => {
     const all = await api.post("/api/portfolio/all", body)
     assert.deepEqual(all.positions.find((p) => p.asset === "ETH")?.wallets.map((w) => [w.wallet, w.qty]), [[HOT, ONE.toString()], [COLD, "0"]])
     api.close()
+  })
+
+  describe("with a token we have no price for", () => {
+    const JACK = "0x00000000000000000000000000000000000000f1"
+    const jack = (account: string, block_num: number, side: LegRow["side"] = "credit"): LegRow => ({ block_num, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: `0xjack${block_num}`, tx_index: 0, log_index: 0, token: JACK, account, side, amount: "5", kind: "unlisted", counterparty: null }) as LegRow
+    const tokenReadsFinish = () => new Promise((resolve) => setTimeout(resolve, 20))
+    const jackOf = (all: CombinedPortfolioResponse) => all.otherTokens.map((t) => [t.token, t.state, t.balance])
+    /** Both hold it and have been read. Spending money then reads past the move by itself, so All Yours takes it back to savings' block. */
+    async function aligned(afterMove: readonly LegRow[] = []) {
+      const api = serve({})
+      for (const address of [HOT, COLD]) api.state.rows[address]?.push(jack(address, 5))
+      await api.post("/api/portfolio/all", body)
+      await tokenReadsFinish()
+      api.moveOn()
+      api.state.rows[HOT]?.push(...afterMove)
+      await api.post(`/api/portfolio/${HOT}`, { method: "average" })
+      await tokenReadsFinish()
+      return api
+    }
+
+    it("keeps it when one wallet is taken back to an earlier block", async () => {
+      const api = await aligned()
+      assert.deepEqual(jackOf(await api.post("/api/portfolio/all/last", body)), [[JACK, "read", "10"]])
+      api.close()
+    })
+
+    it("has no sum when it moved between that block and the read", async () => {
+      const api = await aligned([jack(HOT, 15, "debit")])
+      assert.deepEqual(jackOf(await api.post("/api/portfolio/all/last", body)), [[JACK, "reading", null]])
+      api.close()
+    })
+
+    it("fills in every wallet from refreshes of them all, with no wallet opened by itself", async () => {
+      const tokenReads: string[] = []
+      const api = serve({ tokenReads })
+      for (const address of [HOT, COLD]) api.state.rows[address]?.push(jack(address, 5))
+      for (let refresh = 0; refresh < 3; refresh++) {
+        api.state.head += 1
+        await api.post("/api/portfolio/all", body)
+        await tokenReadsFinish()
+      }
+      assert.deepEqual([...new Set(tokenReads)].sort(), [COLD, HOT].sort())
+      assert.ok(tokenReads.length <= 2 * 2 * 3, "at most two queries for each wallet read")
+      assert.deepEqual(jackOf(await api.post("/api/portfolio/all/last", body)), [[JACK, "read", "10"]])
+      api.close()
+    })
   })
 
   it("leaves out a wallet whose rates fail or take too long, and answers with the rest", async () => {

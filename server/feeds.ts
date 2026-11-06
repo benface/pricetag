@@ -2,7 +2,7 @@
 // emits no log, so a pinned address just goes quiet, and its price turns `unknown` once its window passes. No table can
 // see that coming, but the proxy can be asked.
 
-import { CURRENCIES, PRICE_FEEDS } from "@pricetag/sdk/core"
+import { CURRENCIES, PRICE_FEEDS, TOKEN_FEEDS, TOKEN_FEED_AGGREGATORS } from "@pricetag/sdk/core"
 import { RpcAnswerError, describeRpcError, hexOf } from "@pricetag/sdk/internal"
 
 /** The first four bytes of the Keccak of `aggregator()`. */
@@ -43,5 +43,11 @@ export function warnOfNewAggregators(url: string, send: typeof fetch = fetch, wa
 /** The same for exchange rates, when they're read from logs. Until a rate's age passes the limit, it's the last one the old contract gave. */
 export function warnOfNewRateAggregators(url: string, send: typeof fetch = fetch, warn: (message: string) => void = console.warn): Promise<void> {
   const feeds = Object.values(CURRENCIES).flatMap(({ feed }) => (feed ? [{ pair: feed.pair, proxy: feed.address, aggregators: feed.aggregators, lost: "which isn't in CURRENCIES. That rate stops moving, and turns unknown within 3 days of its last update. Add the address and deploy a new version of the rates dataset." }] : []))
+  return warnOfNew(feeds, url, send, warn)
+}
+
+/** The same for tokens' feeds, when they're read from logs. What's held now still reads the contract, so what stops moving is a chart's points, and Verify. */
+export function warnOfNewTokenAggregators(url: string, send: typeof fetch = fetch, warn: (message: string) => void = console.warn): Promise<void> {
+  const feeds = Object.entries(TOKEN_FEEDS).flatMap(([asset, feed]) => (feed ? [{ pair: feed.description, proxy: feed.address, aggregators: TOKEN_FEED_AGGREGATORS[asset] ?? [], lost: "which isn't in TOKEN_FEED_AGGREGATORS. Add the address and deploy a new version of the feeds dataset." }] : []))
   return warnOfNew(feeds, url, send, warn)
 }

@@ -4,6 +4,13 @@ import LocalAuthentication
 import Observation
 import os
 
+/// How often a site has been told no, or asked and gone away.
+private struct Refusals {
+    var times: [Date] = []
+    var cooldowns = 0
+    var cooldownUntil: Date?
+}
+
 /// One thing a site wants, waiting in the app for an answer. Nothing outside the app's own window can answer it: the bridge's
 /// wire protocol has no message for that, and pages only ever reach `handle`.
 public struct SiteApproval: Identifiable, Equatable, Sendable {
@@ -59,6 +66,8 @@ private final class LiveRequest {
     let requester: Requester
     var task: Task<RPCAnswer, Never>?
     var approvalID: UUID?
+    /// Still at the node, on its way to the window, so it counts as waiting.
+    var isBeingQuoted = false
     private(set) var isCancelled = false
 
     var origin: String { request.origin }
@@ -149,18 +158,31 @@ public final class SiteBridge {
     private let now: @Sendable () -> Date
     @ObservationIgnored private var waiting: [UUID: CheckedContinuation<Bool, Never>] = [:]
     @ObservationIgnored private var live: [LiveRequest] = []
-    @ObservationIgnored private var rejections: [String: [Date]] = [:]
-    @ObservationIgnored private var readsThisSecond: (second: Int, count: Int) = (0, 0)
+    @ObservationIgnored private var refusals: [String: Refusals] = [:]
+    @ObservationIgnored private var readsThisSecond: (second: Int, count: Int, byFamily: [String: Int]) = (0, 0, [:])
+    @ObservationIgnored private var quotes: [String: [Date]] = [:]
     @ObservationIgnored private var lastKnownAddress: EthereumAddress?
     @ObservationIgnored private var lastKnownSites: [String] = []
 
-    static let maxPending = 8
+    /// Only so that memory has a limit, since it takes a real domain to get anywhere near this.
+    static let maxPending = 32
+    /// All of these are per domain, as `family(of:)` counts them.
     static let maxPendingPerOrigin = 3
     /// Rejecting this many times in `rejectionWindow` stops a site asking for a while, so it can't wear someone down until they click yes.
+    /// A page that asks and then goes away counts too, or reloading would be a way to take focus forever.
     static let rejectionsBeforeCooldown = 3
     static let rejectionWindow: TimeInterval = 60
-    /// Reads share the node with the wallet's own, and the public node allows 25 a second per IP. See `NodePacer`.
-    nonisolated static let readsPerSecond = 10
+    /// Each cooldown in a row is twice the last, up to about an hour, and an hour after the last one ends it starts over.
+    static let longestCooldownDoubling = 6
+    static let cooldownsForgottenAfter: TimeInterval = 3600
+    /// Reads share the node with the wallet's own, and the public node allows 25 a second per IP. See `NodePacer`. This is for all sites
+    /// together, and one site's limit is less, so a single tab can't use up what the others get.
+    nonisolated static let readsPerSecond = 12
+    nonisolated static let readsPerSecondPerFamily = 8
+    /// Pricing a transaction takes a whole wallet read and more, so this is what keeps a connected site that sends one after another that
+    /// can't be priced, which never reach the window, from taking the wallet's share of the node. Only connected sites get this far.
+    static let quotesPerWindow = 10
+    static let quoteWindow: TimeInterval = 60
 
     /// What a site can read from the node. Anything else that isn't handled here is refused, not passed along.
     static let reads: Set<String> = [
@@ -282,7 +304,7 @@ public final class SiteBridge {
 
     public func reject(_ id: UUID) {
         guard let approval = pending.first(where: { $0.id == id }) else { return }
-        rejections[approval.origin, default: []].append(now())
+        noteRefusal(by: approval.origin)
         wallet.noteAnswer()
         finish(id, approved: false)
     }
@@ -296,6 +318,7 @@ public final class SiteBridge {
         let requester = Requester(connection: connection, id: id)
         for request in live where request.requester == requester { request.cancel() }
         for approval in pending where approval.requester == requester {
+            noteRefusal(by: approval.origin)
             finish(approval.id, approved: false)
         }
     }
@@ -303,6 +326,7 @@ public final class SiteBridge {
     public func cancelAll(connection: UUID) {
         for request in live where request.requester.connection == connection { request.cancel() }
         for approval in pending where approval.requester.connection == connection {
+            noteRefusal(by: approval.origin)
             finish(approval.id, approved: false)
         }
     }
@@ -382,8 +406,13 @@ public final class SiteBridge {
         } catch {
             return .failure(error)
         }
+        // Before any of it goes to the node, so being turned away costs nothing.
+        if let refusal = whyNotAdmitted(request) { return .failure(refusal) }
+        guard noteQuote(by: request.origin) else { return .failure(.readLimit) }
+        request.isBeingQuoted = true
         do {
             quote = try await wallet.quoteForSite(transaction)
+            request.isBeingQuoted = false
         } catch {
             return .failure(Self.siteError(error))
         }
@@ -431,7 +460,7 @@ public final class SiteBridge {
         if case .failure(let error) = await ask(request, .message(review)) { return .failure(error) }
         if let problem = walletProblem(for: request.origin) { return .failure(problem) }
         do {
-            return .success(.string(try await wallet.signForSite(review.signable).hex))
+            return .success(.string(try await wallet.signForSite(review, origin: request.origin).hex))
         } catch {
             return .failure(Self.siteError(error))
         }
@@ -439,9 +468,11 @@ public final class SiteBridge {
 
     private func read(_ request: LiveRequest) async -> RPCAnswer {
         let second = Int(now().timeIntervalSince1970)
-        if readsThisSecond.second != second { readsThisSecond = (second, 0) }
-        guard readsThisSecond.count < Self.readsPerSecond else { return .failure(.readLimit) }
+        if readsThisSecond.second != second { readsThisSecond = (second, 0, [:]) }
+        let family = Self.family(of: request.origin)
+        guard readsThisSecond.count < Self.readsPerSecond, readsThisSecond.byFamily[family, default: 0] < Self.readsPerSecondPerFamily else { return .failure(.readLimit) }
         readsThisSecond.count += 1
+        readsThisSecond.byFamily[family, default: 0] += 1
         do {
             return try await wallet.readForSite(request.method, request.parameters ?? .array([]))
         } catch {
@@ -457,7 +488,7 @@ public final class SiteBridge {
         case ChainError.rateLimited: SiteError(code: -32005, message: HotWalletWording.networkBusy)
         case ChainError.unreachable: SiteError(code: 4900, message: HotWalletWording.cantReachChain)
         case ChainError.unreadable: SiteError(code: 4900, message: HotWalletWording.unreadableAnswer)
-        default: SiteError(code: -32603, message: "\(couldntSign): \(error).")
+        default: SiteError(code: -32603, message: "\(couldntSign): \(HotWalletWording.problem(error))")
         }
     }
 
@@ -509,11 +540,8 @@ public final class SiteBridge {
     private func ask(_ request: LiveRequest, _ action: SiteApproval.Action) async -> RPCAnswer {
         // Working out what to show takes a while, and the site may be gone by now.
         guard !request.isCancelled else { return .failure(.rejected) }
-        recentRejections(of: request.origin)
-        if (rejections[request.origin]?.count ?? 0) >= Self.rejectionsBeforeCooldown { return .failure(.rejected) }
-        let fromThisOrigin = pending.filter { $0.origin == request.origin }
-        guard pending.count < Self.maxPending, fromThisOrigin.count < Self.maxPendingPerOrigin else { return .failure(.tooManyRequests) }
-        if action == .connect, fromThisOrigin.contains(where: { $0.action == .connect }) { return .failure(.tooManyRequests) }
+        if let refusal = whyNotAdmitted(request) { return .failure(refusal) }
+        if action == .connect, pending.contains(where: { $0.origin == request.origin && $0.action == .connect }) { return .failure(.tooManyRequests) }
 
         let approval = SiteApproval(id: UUID(), origin: request.origin, action: action, requester: request.requester)
         request.approvalID = approval.id
@@ -523,10 +551,78 @@ public final class SiteBridge {
         return approved && !request.isCancelled ? .success(.null) : .failure(.rejected)
     }
 
-    private func recentRejections(of origin: String) {
-        let cutoff = now().addingTimeInterval(-Self.rejectionWindow)
-        rejections[origin]?.removeAll { $0 < cutoff }
+    /// Why a site can't ask for anything just now, if it can't. Transactions still being priced hold their place, or a site could have any
+    /// number of them at the node.
+    private func whyNotAdmitted(_ request: LiveRequest) -> SiteError? {
+        let family = Self.family(of: request.origin)
+        if let until = refusals[family]?.cooldownUntil, until > now() { return .rejected }
+        let waiting = pending.map(\.origin) + live.filter(\.isBeingQuoted).map(\.origin)
+        guard waiting.count < Self.maxPending, waiting.filter({ Self.family(of: $0) == family }).count < Self.maxPendingPerOrigin else { return .tooManyRequests }
+        return nil
     }
+
+    /// False if this site has had all the transactions priced it can for now.
+    private func noteQuote(by origin: String) -> Bool {
+        let time = now()
+        let family = Self.family(of: origin)
+        let recent = quotes[family, default: []].filter { $0 > time.addingTimeInterval(-Self.quoteWindow) }
+        guard recent.count < Self.quotesPerWindow else {
+            quotes[family] = recent
+            return false
+        }
+        quotes[family] = recent + [time]
+        return true
+    }
+
+    private func noteRefusal(by origin: String) {
+        let time = now()
+        let family = Self.family(of: origin)
+        var record = refusals[family, default: Refusals()]
+        record.times = record.times.filter { $0 >= time.addingTimeInterval(-Self.rejectionWindow) } + [time]
+        if record.times.count >= Self.rejectionsBeforeCooldown {
+            if let until = record.cooldownUntil, until.addingTimeInterval(Self.cooldownsForgottenAfter) < time { record.cooldowns = 0 }
+            let doublings = min(record.cooldowns, Self.longestCooldownDoubling)
+            record.cooldownUntil = time.addingTimeInterval(Self.rejectionWindow * Double(1 << doublings))
+            record.cooldowns += 1
+            record.times = []
+        }
+        refusals[family] = record
+    }
+
+    /// What a site's limits count against: its domain, since subdomains cost nothing to make and would each get their own. Without the
+    /// whole public suffix list this only knows the usual suffixes below, so anything else counts as one domain. That means `a.net.de` and
+    /// `b.net.de`, and sites on one shared host like `vercel.app`, count as one, which is the safe way to be wrong.
+    static func family(of origin: String) -> String {
+        guard let host = URLComponents(string: origin)?.host?.lowercased() else { return origin }
+        let labels = host.split(separator: ".")
+        guard labels.count > 2, let last = labels.last, last.contains(where: \.isLetter) else { return host }
+        let isPublicSuffix = publicSecondLevels[String(last)]?.contains(String(labels[labels.count - 2])) == true
+        return labels.suffix(isPublicSuffix ? 3 : 2).joined(separator: ".")
+    }
+
+    /// Each one is in the ICANN part of the public suffix list, as of version 2026-11-04. A name that isn't can be one person's domain,
+    /// who then gets a family per subdomain, so only add what's there.
+    private static let publicSecondLevels: [String: Set<String>] = [
+        "ar": ["com", "edu", "gob", "gov", "int", "mil", "net", "org"],
+        "au": ["asn", "com", "edu", "gov", "id", "net", "org"],
+        "br": ["com", "edu", "gov", "mil", "net", "org"],
+        "cn": ["ac", "com", "edu", "gov", "mil", "net", "org"],
+        "hk": ["com", "edu", "gov", "idv", "net", "org"],
+        "id": ["ac", "biz", "co", "go", "mil", "my", "net", "or", "sch", "web"],
+        "il": ["ac", "co", "gov", "k12", "muni", "net", "org"],
+        "in": ["ac", "co", "com", "edu", "gov", "me", "mil", "net", "org", "res"],
+        "jp": ["ac", "ad", "co", "ed", "go", "gr", "lg", "ne", "or"],
+        "kr": ["ac", "co", "go", "me", "mil", "ne", "or"],
+        "mx": ["com", "edu", "gob", "net", "org"],
+        "my": ["biz", "com", "edu", "gov", "mil", "name", "net", "org"],
+        "nz": ["ac", "co", "geek", "gen", "govt", "iwi", "kiwi", "maori", "mil", "net", "org", "school"],
+        "sg": ["com", "edu", "gov", "net", "org"],
+        "th": ["ac", "co", "go", "in", "mi", "net", "or"],
+        "tr": ["biz", "com", "edu", "gen", "gov", "info", "k12", "mil", "name", "net", "org", "tv", "web"],
+        "tw": ["club", "com", "ebiz", "edu", "game", "gov", "idv", "mil", "net", "org"],
+        "uk": ["ac", "co", "gov", "ltd", "me", "net", "nhs", "org", "plc", "police"],
+        "za": ["ac", "co", "edu", "gov", "law", "mil", "net", "ngo", "nom", "org", "school", "web"],
+    ]
 
     private func finish(_ id: UUID, approved: Bool) {
         pending.removeAll { $0.id == id }

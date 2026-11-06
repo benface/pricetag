@@ -60,6 +60,8 @@ struct PnlSeries {
 /// What a chart can point at.
 protocol PlottedSeries {
     var plotted: [PnlSeries.Plotted] { get }
+    /// Everything drawn, for VoiceOver's own chart tools.
+    func spokenPoints(_ currency: CurrencyCode) -> [Spoken.ChartPoint]
 }
 
 extension PlottedSeries {
@@ -76,8 +78,8 @@ extension PlottedSeries {
 
 extension PnlSeries: PlottedSeries {}
 
-/// What was held, which is only known where prices were read: at the wallet's own transactions, and now.
-/// At each one it's known just before and just after, so a deposit is a jump. Between them only prices moved, and nobody read them, so that stretch is a straight line marked as an estimate.
+/// What was held, which is only known where prices were read: at the wallet's own transactions, between them where the server read some, and now.
+/// At each transaction it's known just before and just after, so a deposit is a jump. Between them only prices moved. If they were read along the way, that stretch is known. If nobody read them, it's a straight line marked as an estimate.
 /// Where it's unknown there's a gap. So is a stretch where more than prices moved: two points that leave out different things, or ETH that arrived with no transaction to show for it.
 struct ValueSeries: PlottedSeries {
     struct Line: Identifiable, Equatable {
@@ -86,11 +88,22 @@ struct ValueSeries: PlottedSeries {
         let steps: [PnlSeries.Step]
     }
 
+    /// A value the line goes through.
+    struct Reading: Equatable {
+        let plotted: PnlSeries.Plotted
+        let micros: String
+        let value: Double
+        /// It's what was held just before the transaction, not after it.
+        let isBefore: Bool
+    }
+
     let lines: [Line]
     let gaps: [ClosedRange<Date>]
     let plotted: [PnlSeries.Plotted]
-    /// Every value drawn, before and after each transaction, for the scale.
-    let values: [Double]
+    /// Every value drawn, before and after each transaction, in order.
+    let readings: [Reading]
+    /// The same, for the scale.
+    var values: [Double] { readings.map(\.value) }
     /// Known points with no line to or from them, which only a dot can show.
     let isolated: Set<String>
 
@@ -100,7 +113,7 @@ struct ValueSeries: PlottedSeries {
         }
         var lines: [Line] = []
         var gaps: [ClosedRange<Date>] = []
-        var values: [Double] = []
+        var readings: [Reading] = []
         var gapStart: Date?
         var previous: PnlSeries.Plotted?
         for item in plotted {
@@ -116,7 +129,7 @@ struct ValueSeries: PlottedSeries {
             let before = item.point.valueBeforeMicros.map(Format.chartValue)
             if let previous, let from = previous.value {
                 if let before, item.point.valueContinues == true {
-                    lines.append(Line(id: lines.count, known: false, steps: [PnlSeries.Step(id: previous.id, date: previous.date, value: from), PnlSeries.Step(id: "\(item.id):before", date: item.date, value: before)]))
+                    lines.append(Line(id: lines.count, known: item.point.valueRead == true, steps: [PnlSeries.Step(id: previous.id, date: previous.date, value: from), PnlSeries.Step(id: "\(item.id):before", date: item.date, value: before)]))
                 } else {
                     gaps.append(previous.date...item.date)
                 }
@@ -124,8 +137,12 @@ struct ValueSeries: PlottedSeries {
             if let before, before != after {
                 lines.append(Line(id: lines.count, known: true, steps: [PnlSeries.Step(id: "\(item.id):before", date: item.date, value: before), PnlSeries.Step(id: item.id, date: item.date, value: after)]))
             }
-            values.append(after)
-            if let before { values.append(before) }
+            if let before, before != after, let micros = item.point.valueBeforeMicros {
+                readings.append(Reading(plotted: item, micros: micros, value: before, isBefore: true))
+            }
+            if let micros = item.point.valueMicros {
+                readings.append(Reading(plotted: item, micros: micros, value: after, isBefore: false))
+            }
             previous = item
         }
         if let start = gapStart, let end = plotted.last?.date { gaps.append(start...end) }
@@ -133,7 +150,7 @@ struct ValueSeries: PlottedSeries {
         self.lines = lines
         self.gaps = gaps
         self.plotted = plotted
-        self.values = values
+        self.readings = readings
         isolated = Set(plotted.filter { $0.value != nil && !joined.contains($0.id) }.map(\.id))
     }
 }

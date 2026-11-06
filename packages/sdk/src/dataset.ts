@@ -4,16 +4,20 @@
 
 import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type BlockMark, type Query } from "./amp.ts"
 import { blockBefore } from "./chain.ts"
-import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
+import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt, readTokenFactsAt } from "./balances.ts"
+import type { RateRound } from "./currency.ts"
+import type { Followed } from "./followed.ts"
 import type { LegRow, PayoutTx, PricedRow, Reference } from "./legs.ts"
 import { WalletTooBigError } from "./memory.ts"
-import type { Head } from "./portfolio.ts"
-import type { PriceFeed } from "./tokens.ts"
+import type { FeedRound, Head } from "./portfolio.ts"
+import { TOKEN_FEEDS, type PriceFeed } from "./tokens.ts"
 import type { Source } from "./wallets.ts"
 
 export type Row = Record<string, unknown>
 
 const BLOCKS_PER_QUERY = 200
+/** `reference_prices` has one small row per block. 20,000 of them took 1 s on staging, against 0.3 s for 200 named blocks. */
+const REFERENCE_SPAN = 20_000
 
 /**
  * WHERE clauses for a list of blocks, split so no query names too many.
@@ -25,6 +29,27 @@ export function blockFilters(blocks: readonly number[]): { filter: string; count
   for (let i = 0; i < sorted.length; i += BLOCKS_PER_QUERY) {
     const part = sorted.slice(i, i + BLOCKS_PER_QUERY)
     result.push({ filter: `block_num BETWEEN ${part[0]} AND ${part[part.length - 1]} AND block_num IN (${part.join(", ")})`, count: part.length })
+  }
+  return result
+}
+
+/** How far apart blocks can be, on average, for a range to be the cheaper way to read them. */
+const MAX_AVERAGE_GAP = 20
+
+/**
+ * WHERE clauses for a list of blocks, for reads that can ignore whatever else is in the range. Naming blocks takes a query
+ * per 200, however close together they are, so a busy wallet's blocks are read as ranges of up to `span` blocks instead.
+ */
+export function blockRanges(blocks: readonly number[], span: number): string[] {
+  const sorted = [...new Set(blocks)].sort((a, b) => a - b)
+  const [first, last] = [sorted[0] ?? 0, sorted.at(-1) ?? 0]
+  if (sorted.length <= BLOCKS_PER_QUERY || last - first > sorted.length * MAX_AVERAGE_GAP) return blockFilters(sorted).map(({ filter }) => filter)
+  const result: string[] = []
+  for (let i = 0; i < sorted.length; ) {
+    const from = sorted[i] as number
+    let to = from
+    for (; i < sorted.length && (sorted[i] as number) < from + span; i++) to = sorted[i] as number
+    result.push(`block_num BETWEEN ${from} AND ${to}`)
   }
   return result
 }
@@ -41,6 +66,10 @@ export function txFilters(txs: readonly { block_num: number; tx_hash: string }[]
   return result
 }
 
+/**
+ * The newest block from `after` on. With no newer block to go from, pass the dataset's start block if there is one:
+ * Amp only skips files on a range, and on staging this query took 8 s with no bound and 0.4 s with one.
+ */
 export async function readHead(query: Query, dataset: string, after: number | null): Promise<Head | null> {
   const where = after === null ? "" : `WHERE block_num >= ${after}`
   const rows = await query<Row>(`SELECT block_num, timestamp FROM "${dataset}".blocks ${where} ORDER BY block_num DESC LIMIT 1`, 15_000)
@@ -78,8 +107,8 @@ export const followRawSql = (baseDataset: string) => `SELECT block_num FROM "${b
 /** A derived table runs a few seconds behind the head, and older than this isn't a current price. */
 const MAX_PRICE_AGE_MS = 120_000
 
-const LEG_COLUMNS = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
-const PRICED_COLUMNS = "block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced"
+export const LEG_COLUMNS = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
+export const PRICED_COLUMNS = "block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced"
 const ORACLE_COLUMNS = { eth: "eth_answer", usdc: "usdc_answer" }
 const REFERENCE_COLUMNS = `block_num, ${ORACLE_COLUMNS.eth} AS eth_usd, ${ORACLE_COLUMNS.usdc} AS usdc_usd, eth_tx, usdc_tx`
 
@@ -102,6 +131,7 @@ const toLegRow = (l: Row): LegRow => ({
   side: l.side as LegRow["side"],
   amount: l.amount == null ? "" : String(l.amount),
   kind: l.kind as LegRow["kind"],
+  ...(l.counterparty == null ? {} : { counterparty: prefixed(String(l.counterparty)) }),
 })
 
 const toPricedRow = (p: Row): PricedRow => ({
@@ -131,9 +161,25 @@ export const SWAP_TABLES = ["legs", "unlisted_legs", "priced_legs"]
 /** The tables a pricing rule decides. Everything else is what happened on the chain, whichever rule prices it. */
 const PRICE_TABLES = ["priced_legs", "reference_prices"]
 
+/** What can come from a stream instead of a query. */
+export type StreamedTable = "legs" | "unlisted_legs" | "priced_legs"
+
+/** What to follow for a wallet's `readWindow`. They're the queries below with no range of blocks, so `counterparties` has to match the reader's. Only `legs` has a counterparty. */
+export function followedWindowSql(address: string, dataset: string, { counterparties = false }: { counterparties?: boolean } = {}): Record<StreamedTable, string> {
+  const where = `WHERE account = X'${hexOf(address)}'`
+  return {
+    legs: `SELECT ${counterparties ? `${LEG_COLUMNS}, counterparty` : LEG_COLUMNS} FROM "${dataset}".legs ${where}`,
+    unlisted_legs: `SELECT ${LEG_COLUMNS} FROM "${dataset}".unlisted_legs ${where}`,
+    priced_legs: `SELECT ${PRICED_COLUMNS} FROM "${dataset}".priced_legs ${where}`,
+  }
+}
+
 /** `maxWalletRows`: a wallet with more rows than this is refused, without loading more of them than that. */
-export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; maxWalletRows?: number | undefined }) {
+export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock?: number | null | undefined; counterparties?: boolean | undefined; followed?: Followed<StreamedTable> | undefined; maxWalletRows?: number | undefined }) {
   const ds = `"${config.dataset}"`
+  // Only `legs` has a counterparty, so `unlisted_legs` needs a null of the same type to share its query.
+  const listedLegColumns = config.counterparties ? `${LEG_COLUMNS}, counterparty` : LEG_COLUMNS
+  const unlistedLegColumns = config.counterparties ? `${LEG_COLUMNS}, arrow_cast(NULL, 'FixedSizeBinary(20)') AS counterparty` : LEG_COLUMNS
   // A fork of the pricing rule only needs the tables the rule reaches, so these can come from somewhere else.
   const prices = `"${config.priceDataset ?? config.dataset}"`
   const readOrEmpty = (sql: string) =>
@@ -145,60 +191,75 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   /** What moved in a wallet, which no pricing rule changes. */
   async function readLegs(address: string, from: number, to: number) {
     const me = hexOf(address)
-    const range = `block_num BETWEEN ${from} AND ${to}`
+    const where = `WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${me}'`
     const max = config.maxWalletRows
     // One past the most it can use, which is how it knows there's more without loading it all.
-    const limit = (rows: number) => (max === undefined ? "" : ` LIMIT ${rows + 1}`)
-    const legRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'${limit(max ?? 0)}`)
-    if (max !== undefined && legRows.length > max) throw new WalletTooBigError(max)
-    const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'${limit((max ?? 0) - legRows.length)}`)
-    if (max !== undefined && legRows.length + unlistedRows.length > max) throw new WalletTooBigError(max)
-    const rows = legRows.map(toLegRow)
+    const limit = max === undefined ? "" : ` LIMIT ${max + 1}`
+    const listed = await config.followed?.read(address, "legs", from, to)
+    const unlisted = listed && (await config.followed?.read(address, "unlisted_legs", from, to))
+    const read = listed && unlisted ? [...listed, ...unlisted] : await query<Row>(`SELECT ${listedLegColumns} FROM ${ds}.legs ${where} UNION ALL SELECT ${unlistedLegColumns} FROM ${ds}.unlisted_legs ${where}${limit}`)
+    if (max !== undefined && read.length > max) throw new WalletTooBigError(max)
+    const rows = read.map(toLegRow)
+    const isUnlisted = (r: LegRow) => r.kind === "unlisted" || r.kind === "unlisted_nft"
     return {
       // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
       // An unlisted row stays either way, because it's evidence that something moved.
-      rows: [...rows.filter((r) => r.amount !== "" && r.amount !== "0"), ...unlistedRows.map(toLegRow)],
+      rows: [...rows.filter((r) => !isUnlisted(r) && r.amount !== "" && r.amount !== "0"), ...rows.filter(isUnlisted)],
       gasUnknown: rows.filter((r) => r.kind === "gas" && r.amount === "").map(({ tx_hash, block_num }) => ({ tx_hash, block_num })),
     }
   }
 
   /** What this rule's `priced_legs` says about a wallet. */
   async function readPriced(address: string, from: number, to: number) {
-    const pricedRows = await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${prices}.priced_legs WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${hexOf(address)}'`)
+    const pricedRows = (await config.followed?.read(address, "priced_legs", from, to)) ?? (await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${prices}.priced_legs WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${hexOf(address)}'`))
     return pricedRows.map(toPricedRow)
   }
 
+  /** A priced row only counts through a leg of its transaction, so a range with none, as most re-reads are, has nothing to ask. */
+  const readPricedOf = async (rows: readonly LegRow[], address: string, from: number, to: number) => (rows.length > 0 ? readPriced(address, from, to) : [])
+
   return {
-    head: (after: number | null) => readHead(query, config.baseDataset, after),
+    head: (after: number | null) => readHead(query, config.baseDataset, after ?? config.startBlock ?? null),
 
     /**
      * The newest block, in `after`..`head`, that all these tables have processed, or null if one has none.
      * Reads never go past this. A derived table can lag the chain, and a block read before it's processed looks empty.
      */
     async processedThrough(after: number, head: number, tables: readonly string[] = WALLET_TABLES): Promise<number | null> {
-      // Together, because this is on every wallet read, and a slow minute on staging makes each one take seconds.
-      const newest = await Promise.all(tables.map((table) => readOrEmpty(`SELECT block_num FROM ${PRICE_TABLES.includes(table) ? prices : ds}.${table} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`)))
-      let through = head
-      for (const rows of newest) {
-        if (!rows[0]) return null
-        through = Math.min(through, asNumber(rows[0].block_num))
-      }
-      return through
+      const tableOf = (table: string) => `${PRICE_TABLES.includes(table) ? prices : ds}.${table}`
+      // One query matching no rows: Amp says how far all its tables have got, and a table can be done with a block it has no row for.
+      const end = await query.snapshotEnd?.(tables.map((table) => `SELECT block_num FROM ${tableOf(table)} WHERE false`).join(" UNION ALL ")).catch((error: unknown) => {
+        if (isNotStarted(error)) return null
+        throw error
+      })
+      if (end !== undefined && end !== null) return end < after ? null : Math.min(end, head)
+      // Without that, a table's newest row is as far as it can be shown to have got.
+      const newestIn = (table: string) => `SELECT block_num FROM ${tableOf(table)} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`
+      // One query, because this is on every wallet read and a hosted Amp is shared. On staging it took about a third as long.
+      const merged = await query<Row>(tables.map((table) => `SELECT block_num FROM (${newestIn(table)})`).join(" UNION ALL ")).catch(async (error: unknown) => {
+        if (!isNotStarted(error)) throw error
+        // This error is about what tables have in common, so only asking each on its own says one really hasn't started.
+        return (await Promise.all(tables.map((table) => readOrEmpty(newestIn(table))))).flat()
+      })
+      if (merged.length < tables.length) return null
+      return Math.min(head, ...merged.map((row) => asNumber(row.block_num)))
     },
 
     readLegs,
 
-    readPriced,
+    readPricedOf,
 
     async readWindow(address: string, from: number, to: number) {
-      return { ...(await readLegs(address, from, to)), priced: await readPriced(address, from, to) }
+      const legs = await readLegs(address, from, to)
+      return { ...legs, priced: await readPricedOf(legs.rows, address, from, to) }
     },
 
     async readReferences(blocks: readonly number[]): Promise<Reference[]> {
+      const wanted = new Set(blocks)
       const result: Reference[] = []
-      for (const { filter } of blockFilters(blocks)) {
+      for (const filter of blockRanges(blocks, REFERENCE_SPAN)) {
         const rows = await query<Row>(`SELECT ${REFERENCE_COLUMNS} FROM ${prices}.reference_prices WHERE ${filter}`)
-        result.push(...rows.map(toReference))
+        for (const row of rows) if (wanted.has(asNumber(row.block_num))) result.push(toReference(row))
       }
       return result
     },
@@ -290,14 +351,59 @@ export async function readPayoutTxsAt(query: Query, baseDataset: string, address
   return txs
 }
 
+/** The `answer` word of a `latestRoundData()` result, or "" when the read failed. */
+export function decodeRoundAnswer(data: string | null | undefined): string {
+  const word = data?.slice(64, 128)
+  if (!word || word.length !== 64) return ""
+  const answer = BigInt(`0x${word}`)
+  return answer >> 255n === 1n ? "" : answer.toString()
+}
+
+/** A `latestRoundData()` result's answer and when it last updated, or null when the read failed or it isn't a positive answer. */
+export function decodeRound(data: string | null | undefined): RateRound | null {
+  const answer = decodeRoundAnswer(data)
+  const updatedAt = data?.slice(192, 256)
+  if (!answer || answer === "0" || !updatedAt || updatedAt.length !== 64) return null
+  return { answer, updatedAt: Number(BigInt(`0x${updatedAt}`)) }
+}
+
+/**
+ * One query however many feeds and blocks: a wallet that holds several asks for them all at once, and a chart's points share one. The filter sits in an inner subquery
+ * with a LIMIT, and the outer query reads no field of the result. WORK-320 found the other shapes can run eth_call on every block on the chain.
+ */
+export function readFeedRoundsAt(query: Query, config: { baseDataset: string; network: string }): NonNullable<Source["readFeedRounds"]> {
+  return async (assets, blocks) => {
+    const result = new Map<number, Record<string, FeedRound>>()
+    const feeds = assets.flatMap((asset) => {
+      const feed = TOKEN_FEEDS[asset]
+      return feed ? [{ asset, address: feed.address }] : []
+    })
+    if (feeds.length === 0) return result
+    const calls = feeds.map(({ address }, i) => `rpc.${config.network}.eth_call(NULL, evm_encode_hex('${address}'), evm_encode_params('latestRoundData()'), block_num) AS f${i}`)
+    for (const { filter, count } of blockFilters(blocks)) {
+      for (const row of await query<Row>(`SELECT block_num, timestamp, ${calls.join(", ")} FROM (SELECT block_num, timestamp FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)) {
+        const rounds: Record<string, FeedRound> = {}
+        feeds.forEach(({ asset }, i) => {
+          const round = decodeRound((row[`f${i}`] as { data?: string } | null)?.data)
+          if (round) rounds[asset] = { ...round, blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) }
+        })
+        result.set(asNumber(row.block_num), rounds)
+      }
+    }
+    return result
+  }
+}
+
 export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock: number | null; network: string; maxWalletRows?: number | undefined }): Source {
   return {
     mode: "dataset",
     startBlock: config.startBlock,
     historyFrom: null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readTokenFacts: readTokenFactsAt(query, config.network),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     readPayoutTxs: (address, blocks) => readPayoutTxsAt(query, config.baseDataset, address, blocks),
+    readFeedRounds: readFeedRoundsAt(query, config),
     ...datasetReader(query, config),
   }
 }

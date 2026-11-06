@@ -103,6 +103,10 @@ Don't do it yourself. Finish, and put a short checklist for benface in your hand
 - The spending money window's confirmation dialogs, and Touch ID, which asks inside the window. Its sheets are scenes, without the window behind them.
 - The app's look when it's active and in front.
 
+## The watch-only build
+
+`pnpm check:watch-only [dmg]` tests a built copy from a clean temporary folder, without opening a window or taking focus: its signature and entitlements, that the key code isn't in its binary, that the Keychain refuses what it's signed with, and that it reaches a local server in hosted mode and gets the 401 that opens the invite prompt. It launches a copy under its own test ID, so an installed copy's saved data is never touched, which also means the installed ID itself first launches on someone's Mac. It can't check Gatekeeper on another Mac, or HTTPS to the real host. `PATINA_WATCH_ONLY=1 macos/shot.sh <scene> out.png` draws any scene as that build shows it, like `invite-prompt`.
+
 ## How it's kept apart from the real app
 
 - All of it is in `App/TestMode/` and `OffscreenRenderer.swift`, inside `#if DEBUG`. The fixtures are left out of release builds in `App.xcconfig`.
@@ -113,10 +117,10 @@ Don't do it yourself. Finish, and put a short checklist for benface in your hand
 
 ## Compiling Swift takes turns
 
-Only one thing compiles Swift or runs its tests at a time, across every worktree on this Mac. `pnpm check:mac`, `pnpm mac:build`, `pnpm check:keychain`, `pnpm check:extension`, `pnpm check:anvil` and the build in `shot.sh` all queue by themselves, in the order they started, and only hold the lock while compiling or testing. `pnpm mac` never waits. Run anything else through the queue, like one test:
+Only one thing compiles Swift or runs its tests at a time, across every worktree on this Mac. `pnpm check:mac`, `pnpm check:mac:quick`, `pnpm mac:build`, `pnpm check:keychain`, `pnpm check:extension`, `pnpm check:anvil` and the build in `shot.sh` all queue by themselves, in the order they started, and only hold the lock while compiling or testing. `pnpm mac` never waits. Run anything else through the queue, like one test, with `--scratch-path` so it reuses what `check:mac` compiled:
 
 ```sh
-macos/swift-queue.sh swift test --package-path macos/PricetagKit --filter FeedTests
+macos/swift-queue.sh swift test --package-path macos/PricetagKit --scratch-path macos/.build --filter FeedTests
 ```
 
 From an agent, a foreground command can hit the tool's time limit while it queues, so:
@@ -125,7 +129,7 @@ From an agent, a foreground command can hit the tool's time limit while it queue
 - Write the output to a file and filter it afterward, because a pipe to `grep` hides the queue's messages until it's over. Use a path in your own task folder, and take the exit code from the command, not the filter.
 
 ```sh
-pnpm check:mac > ../check-mac.log 2>&1; echo "exit $?"; grep -E '^\[swift-queue\]|error:|Test run with' ../check-mac.log | tail -n 20
+pnpm check:mac > ../check-mac.log 2>&1; echo "exit $?"; grep -E '^\[(swift-queue|check:mac)\]|error:|Test run with' ../check-mac.log | tail -n 20
 ```
 
 - If the tool moves the command to the background when its limit runs out, as Claude Code's does, it's still queued or running, and it isn't a failure. Don't start a second copy. If your turn can wait, read its output file until the final `[swift-queue]` line appears. Multica ends a run's background work with the turn, so never finish a turn on one of these. If the tool kills it instead, there's no result, so run it again.
@@ -146,7 +150,20 @@ If what a run started can't be verified gone after about 7 seconds, because some
 
 The lock is at `~/Library/Caches/patina-swift-queue/`, outside the repo so that every worktree shares it. Don't delete it: a run waiting on the old file wouldn't see the new one.
 
+The queue has its own tests, in `macos/swift-queue.test.ts`, because they take about a minute and only protect the Mac's builds, so they're not in `pnpm test`. `pnpm check:swift-queue` runs them, and a full `pnpm check:mac` runs them first, before its turn, because they use their own queue and compile nothing. `--quick` and a run that finds its code already passed skip them. They're in `macos/`, so changing them runs everything again. Run them whenever you change `swift-queue.sh`: this lock protects every run on this Mac. A failure names its test, and so does a signal: `Its tests got SIGTERM during "…"` came from outside them, so it has no result, like `… was stopped partway`.
+
 A test that waits for something needs a deadline. If it spins forever and `swift test` is killed outside the queue, its `swiftpm-testing-helper` keeps using a whole core with nobody to stop it.
+
+## Which check to run
+
+- **While working: `pnpm check:mac:quick`.** Only the tests of both packages. It always runs them, and never counts as a pass, though failing forgets one.
+- **Before review or a merge: `pnpm check:mac`.** Everything: all the tests, the signed Release app, the watch-only app and both iOS builds. It says how long each step took on `[check:mac]` lines.
+
+`check:mac` remembers a full pass for what's in `macos/`, committed or not, with this Xcode, Swift and macOS. If all of that is the same, it says `Nothing ran: this exact code already passed …` and exits 0 straight away, even from another worktree, or after merging a `main` that didn't touch `macos/`. Say so if you report it, because you didn't run it. A pass that's recorded is only ever a full one, recorded after the queue has verified its turn is over, and any change in `macos/`, even one character, runs everything. Any run of that same code that fails forgets the pass, including `--quick`, and `--force` forgets it as soon as its turn starts, so it's only back if that run passes. Only a pass from the latest run to start on that code counts, and one that's reported as stopped leaves none. To run it anyway, for example when chasing a flaky test, use `macos/check-mac.sh --force`. The records are in `~/Library/Caches/patina-check-mac/`, hold only a run's ID, a date and a path, and are safe to delete. A run with `ANVIL_RPC_URL`, `BASE_READ_RPC_URL` or another `CONFIGURATION` is never skipped or recorded.
+
+Build products stay in each worktree on purpose, so one branch's can't pass as another's, and nothing signed or cryptographic is shared. Seeding a new worktree from another's would save about a third of a package's first build, not skip it, because the paths in them are absolute. So a new worktree's first `check:mac` compiles everything, and the largest part of that is the Release build, at over a minute.
+
+`RenderTests` and `ContrastTests` really draw, on the main actor, and other tests on the main actor wait behind them. So a test's reported time can say more about what ran beside it than about the test: run it alone with `--filter` before calling it slow.
 
 ## Adding a scene
 

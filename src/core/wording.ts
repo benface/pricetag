@@ -2,18 +2,20 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
+import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type OtherToken, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 import type { ValueGaps } from "./attention.ts"
 import type { ReadFailure } from "./read-failure.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
-export const METHOD_NAME = "How cost is worked out"
+export const METHOD_NAME = "Cost method"
 export const METHOD_HELP = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
 
 export const AVERAGE_PRICE_PAID = "Average price paid"
 export const AVERAGE_PAID = "Average paid"
 export const NETWORK_FEES = "Network fees"
+/** An answer, an undo or a device's accounts that didn't reach what's stored, so they're back as they were. */
+export const NOT_SAVED = "This browser couldn't save that, so it's back as it was. Try again."
 export const BALANCE_CHECK = "Balance check"
 export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Doesn't match", unchecked: "Not checked" }
 export const STARTING_BALANCE = "Starting balance"
@@ -42,6 +44,14 @@ export const COST_WHY = "Nothing shows what this cost, so PnL leaves it out unti
 export const EXCHANGE_COST_WHY = "You said it came from your exchange account, which knows what you paid. Until you say, PnL leaves it out."
 export const ALL_ANSWERED = "All answered"
 export const NOTHING_LEFT = "That's all for now"
+/** Under what the questions were for, when it still leaves something out. Past the last card, what's still open is what was skipped. */
+export function finishNote({ open, answered, waiting }: { open: number; answered: number; waiting: number }): string {
+  const leftOut = "PnL still leaves some things out."
+  const notAQuestion = "What's left isn't a question, like a balance that doesn't match the chain."
+  if (open > 0) return answered > 0 ? `Not everything's answered, so ${leftOut}` : `Nothing's answered yet, so ${leftOut}`
+  if (waiting > 0) return answered > 0 ? `Every question so far is answered, but ${leftOut}` : `There's nothing to ask so far, but ${leftOut}`
+  return answered > 0 ? `Every question's answered. ${notAQuestion}` : `There's nothing to ask. ${notAQuestion}`
+}
 
 /** The tooltip for a title or sentence that says PnL, or nothing when it doesn't. */
 export const pnlHelp = (text: string): string | undefined => (text.includes("PnL") ? PNL_HELP : undefined)
@@ -53,7 +63,6 @@ export const ETH_NOTE = "incl. wrapped ETH"
 export const DEMO_NOTICE = "Demo data, not a real wallet."
 export const PNL_UNAVAILABLE = "PnL unavailable"
 export const UNKNOWN = "Unknown"
-export const NO_PRICE = "No price"
 export const UNAVAILABLE = "Unavailable"
 export const ABOUT_THIS_DATA = "What this covers"
 export const MARKET_ESTIMATES = "Some prices are estimates, from the market."
@@ -146,6 +155,12 @@ export function costTag(label: CostLabel, source: string | null = null): string 
 /** How a purchase's provider is named wherever its cost shows up. */
 export const purchaseSource = (provider: "coinbase", paid?: string) => `${{ coinbase: "Bought on Coinbase" }[provider]}${paid ? ` for ${paid}` : ""}`
 
+/** Where a bought cost comes from. That's on this device, so the server's proof can't say. */
+export const costProof = (source: string, label: CostLabel) =>
+  label === "inherited"
+    ? `${source}, by your other wallet. This transaction only moved it here, so the order isn't for this one. What's shown is this amount's share of what you paid, fees included.`
+    : `${source}. The order says what you paid, fees included, and matches this transaction exactly.`
+
 /** A cost's source, to finish "from …". */
 export const COST_WORDS: Record<CostLabel, string> = {
   paid: "what you paid",
@@ -193,11 +208,36 @@ export function leavesOutSentence({ unresolvedMicros, estimatedMicros }: { unres
 export const unreadBalancesSentence = (assets: readonly string[]) => `Couldn't read the ${assets.join(", ")} ${assets.length === 1 ? "balance" : "balances"}.`
 
 /** What isn't listed with the holdings, and why it doesn't matter to the numbers. null when there's nothing. */
-export function noMarketSentence(listed: readonly string[], unlisted: number): string | null {
-  const total = listed.length + unlisted
+export function noMarketSentence(listed: readonly string[], others: number): string | null {
+  const total = listed.length + others
   if (total === 0) return null
-  const off = unlisted > 0 ? `${listed.length > 0 ? ", plus " : ""}${unlisted} we don't track` : ""
-  return `${total} ${total === 1 ? "token" : "tokens"} with no market: ${listed.join(", ")}${off}. Often spam, and not counted in any total.`
+  const which = listed.length === 0 ? "" : `: ${listed.join(", ")}${others > 0 ? `, plus ${others} ${others === 1 ? "other" : "others"}` : ""}`
+  return `${total} ${total === 1 ? "token" : "tokens"} with no price${which}. Not counted in any total.`
+}
+
+/** The heading's line for tokens with a balance and no price. */
+export const OTHER_TOKENS_TITLE = "Other Tokens"
+export const NO_PRICE = "No price"
+export const POSSIBLE_SPAM_TITLE = "Possible Spam"
+/** The rule, for whoever wonders why something's tucked away. `tuckedReason` in the SDK is what applies it. */
+export const POSSIBLE_SPAM_RULE = "Tucked away if nothing you sent moved it, its name points to a website, it copies a token we know, or its contract doesn't answer properly. This can be wrong: some of these are real, and none of it says what one is worth."
+/** What's true of every one of them. */
+export const OTHER_TOKENS_NOTE = "These have no price, so they aren't in any total. Names are whatever the token's contract claims, so go by its address. This app never moves them."
+
+export function otherTokensLeftOutSentence(count: number): string | null {
+  return count > 0 ? `${count} more ${count === 1 ? "token" : "tokens"} moved through this wallet and weren't read. Only the most recent are.` : null
+}
+
+export function otherTokenName({ name, symbol }: Pick<OtherToken, "name" | "symbol">): string {
+  return name ?? symbol ?? "Unnamed token"
+}
+
+/** How much of it is held, never as $0 or 0 when that isn't known. */
+export function otherTokenAmount({ kind, balance, decimals, state }: Pick<OtherToken, "kind" | "balance" | "decimals" | "state">): string {
+  if (state === "reading") return "Reading…"
+  if (balance === null) return "Unknown"
+  if (kind === "collectible") return `${formatAmount(balance, 0)} ${balance === "1" ? "item" : "items"}`
+  return decimals === null ? `${formatAmount(balance, 0)} units` : formatAmount(balance, decimals)
 }
 
 /** What a total leaves out, or null when it leaves out nothing. */
@@ -304,12 +344,14 @@ export function feedProblem(failure: ReadFailure, serverUrl: string, stale: stri
       return say("The price service has no data source, so only the demo wallet works.", "Set one up, then restart the price service.", `${SAID(failure.said)} Its data source goes in .env.local.`)
     case "refused":
       return say("The price service turned this request down.", "Try again. If it keeps happening, restart the price service.", SAID(failure.said))
+    case "slowedDown":
+      return say("The price service asked this app to slow down.", "Updates start again by themselves.", SAID(failure.said))
   }
 }
 
 /** A failure in a panel, which answers one question and doesn't update by itself. A refusal already says what about that question went wrong. */
 export function panelProblem(failure: ReadFailure, serverUrl: string): Problem {
-  if (failure.kind === "refused") return { message: failure.said, detail: null }
+  if (failure.kind === "refused" || failure.kind === "slowedDown") return { message: failure.said, detail: null }
   if (failure.kind === "unavailable") return { message: `The price service can't get its data right now. ${MONEY_UNAFFECTED} It usually clears up by itself, so try again in a moment.`, detail: SAID(failure.said) }
   return feedProblem(failure, serverUrl)
 }

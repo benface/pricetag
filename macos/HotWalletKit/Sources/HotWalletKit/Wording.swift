@@ -1,4 +1,5 @@
 import Foundation
+import KeyVault
 import PricetagKit
 
 /// The hot wallet's sentences. It's "this device's spending money" and the cold wallet is "your savings", everywhere.
@@ -109,6 +110,7 @@ public enum HotWalletWording {
     public static let cantCheckAmp = "Can't read this wallet's history right now, so it isn't being compared with what this app signed. It still checks how many transactions this key has sent."
     public static let feesLookWrong = "The network is quoting far higher fees than Base ever charges, so nothing was signed. Check the network address in Settings."
     public static let keyMissing = "This device no longer has this wallet's key, so nothing here can be moved. This can happen after restoring onto a different device."
+    public static let keyCameBack = "This device still had another key that's been used, so it's your wallet now rather than being lost. You can delete it too if you don't want it."
     public static let rotating = "Moving everything off the old key. It's deleted once there's nothing left on it."
     public static let deleteWaitsForRotation = "This wallet's key is being replaced, and some of its money may already be on the new key. You can delete it once that's finished."
 
@@ -168,6 +170,23 @@ public enum HotWalletWording {
     public static let sendingToARetiredKey = "That's an old key from this Mac, whose private key is gone. Nothing could ever move what's sent there."
     public static let sendingToNobody = "Nobody can use that address. What's sent there is gone."
     public static let sendingToAToken = "That's a token's contract, not a wallet. What's sent there is usually gone for good."
+    public static let cantReadRecords = "This wallet's records can't be read on this device, so it's stopped rather than starting over without them."
+    public static let cantSaveRecords = "This wallet's records can't be saved on this device right now. Check that it has free disk space."
+    public static let cantSaveRecordsYet = cantSaveRecords + " A restart could lose what's changed since, so this keeps trying."
+    public static let shortCantSaveRecords = "Can't save records"
+    public static let problemOnThisDevice = "A problem on this device stopped this. Try again."
+
+    /// For anything this app didn't word itself. An error's own description can say things like a local file path, so it's never shown, or told to a site.
+    public static func problem(_ error: any Error) -> String {
+        switch error {
+        case is RecordsNotSaved: cantSaveRecords
+        #if !PATINA_WATCH_ONLY
+        case KeyVault.Failure.noSuchKey: keyMissing
+        #endif
+        default: problemOnThisDevice
+        }
+    }
+
     public static let touchIDDidNotConfirm = "Touch ID didn't confirm this, so nothing happened."
     public static let lastOneStillShowingUp = "The last transaction is still showing up. Try again in a moment."
     public static let lastOneOnItsWay = "The last transaction is still on its way. Try again in a moment."

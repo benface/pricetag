@@ -119,9 +119,14 @@ public struct DeviceWalletState: Codable, Equatable, Sendable {
     public var settledThroughBlock: UInt64?
     /// The sites the user let see this key's address, by origin. Optional because older records don't have it.
     public var connectedSites: [String]?
+    /// Permits each key signed for sites that may still be used. Optional because older records don't have it.
+    public var signedPermits: [EthereumAddress: [SignedPermit]]?
 
     public init() {}
 }
+
+/// The real failure can name a local file, so nothing past here gets to repeat it.
+struct RecordsNotSaved: Error {}
 
 public protocol DeviceStateStore: Sendable {
     func load() throws -> DeviceWalletState
