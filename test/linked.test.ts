@@ -8,6 +8,7 @@ import { portfolioOf } from "../server/portfolio.ts"
 import type { Source } from "@pricetag/sdk/internal"
 import { unlistedTokens } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
+import { emptyBook, walletsToRead } from "../src/core/book.ts"
 import { DEMO_SAVINGS_ADDRESS, DEMO_WALLET } from "../src/core/fixtures.ts"
 
 const HOT = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -323,5 +324,22 @@ describe("the portfolio endpoint with linked wallets", () => {
     const response = await fetch(`http://127.0.0.1:${(other.address() as AddressInfo).port}/api/portfolio/${COLD}?linked=${HOT}`)
     other.close()
     assert.equal(response.status, 502)
+  })
+})
+
+describe("the other wallets to read", () => {
+  const book = { ...emptyBook(), senders: { [HOT]: { kind: "mine" as const }, [DEMO_SAVINGS_ADDRESS]: { kind: "mine" as const } } }
+
+  it("waits for the wallet on screen, since opening the demo mustn't read a real one", () => {
+    assert.deepEqual(walletsToRead(book, null, COLD), [])
+  })
+
+  it("stays on that wallet's side, sender included", () => {
+    assert.deepEqual(walletsToRead(book, DEMO_WALLET.address, COLD), [DEMO_SAVINGS_ADDRESS])
+    assert.deepEqual(walletsToRead(book, NEXT, COLD), [HOT, COLD])
+  })
+
+  it("leaves out the wallet itself", () => {
+    assert.deepEqual(walletsToRead(book, HOT, HOT), [])
   })
 })

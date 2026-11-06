@@ -112,6 +112,9 @@ export const isDemoWallet = (address: string) => isDemoAddress(normalizeAddress(
 /** The user's wallets a read of this one goes with. A wallet that isn't theirs has nothing to do with them, and the demo only goes with its own. */
 export const walletsBehind = (book: Book, wallet: { address: string; mode?: string }) => (isOwnWallet(book, wallet) ? linkedWallets(book).filter((address) => isDemoAddress(address) === isDemoWallet(wallet.address)) : [])
 
+/** The other wallets to read alongside the one on screen. Until it has loaded nothing says which side it's on, so none. */
+export const walletsToRead = (book: Book, shown: string | null, sender: string | null) => (shown === null ? [] : [...new Set([...linkedWallets(book), ...(sender ? [sender] : [])])].filter((address) => address !== shown && isDemoWallet(address) === isDemoWallet(shown)))
+
 const plainRecord = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
 
 const isMicros = (value: unknown): value is string => typeof value === "string" && /^\d{1,30}$/.test(value)
