@@ -1,54 +1,51 @@
-import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isMainCurrency, msBetweenBlocks, normalizeAddress, returnBps, shortHash, sumTotals, type Coverage, type CurrencyCode, type HoldComparison, type Method, type Position } from "@pricetag/sdk/core"
+import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react"
+import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, formatTime, isAddress, isMainCurrency, msBetweenBlocks, normalizeAddress, returnBps, shortHash, sumTotals, type CurrencyCode, type HoldComparison, type Method, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ALL_YOURS, combinedPortfolioOf, explainAcross, exportCombined, type CombinedPosition, type PositionPart } from "../core/combined.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { firstSort, formatHoldingsSort, parseHoldingsSort, sortHoldings, type HoldingsColumn, type HoldingsSort } from "../core/holdings.ts"
-import { explainTarget, missingRatesLine, mismatchCause, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
+import { allBalancesMatch, attentionOf, attentionTarget, balanceFlag, isValuePartial, pastCostsNote, valueGaps, type Attention } from "../core/attention.ts"
+import { explainTarget, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
 import {
+  ABOUT_THIS_DATA,
   ALL_YOURS_TITLE,
-  AVERAGE_PRICE_PAID,
-  BALANCE_CHECK,
-  CHECK_LABELS,
+  AVERAGE_PAID,
   DEMO_NOTICE,
   ETH_NOTE,
-  HOLD_ETH,
   HOLD_PAST,
   HOLD_TITLE,
-  HOLD_WALLET,
-  HOLD_WALLETS,
   METHOD_HELP,
   METHOD_LABELS,
   METHOD_NAME,
   NETWORK_FEES,
   NOT_AN_ADDRESS,
   NOT_STARTED,
+  NO_PRICE,
   PNL_HELP,
-  PNL_UNAVAILABLE,
   READING,
   READING_ALL,
-  ANSWER_QUESTIONS,
   REALIZED_HELP,
   RETURN_HELP,
-  UNPRICED_FEES,
+  SHOW_MISSING,
+  UNAVAILABLE,
+  UNKNOWN,
   UNREALIZED_HELP,
   allYoursFailedSentence,
   allYoursReadingSentence,
   answerQuestionsLabel,
   behindSentence,
   coverageSentence,
-  excludedSentence,
   feedDetail,
-  feesUnknownSentence,
   holdCaveatSentence,
-  holdDifferenceSentence,
+  feedProblem,
+  holdSummarySentence,
   inWallets,
   linkedFailedSentence,
-  networkFeeUnknownSentence,
-  withheldSentence,
+  noMarketSentence,
+  pnlHelp,
   staleSentence,
   unknownCostIn,
-  unseenEthCause,
+  valueGapsSentence,
   walletCount,
 } from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
@@ -59,11 +56,12 @@ import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useAllYours, useWallet } from "./useWallet.ts"
+import { ProblemNotice } from "./ProblemNotice.tsx"
 import { currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
-import { foldBook } from "../core/resolve.ts"
+import { foldBook, type Question } from "../core/resolve.ts"
 
 // Only loads when someone asks for it, so looking at a wallet never pulls in any device code.
 const DevicePanel = lazy(() => import("./DevicePanel.tsx").then((m) => ({ default: m.DevicePanel })))
@@ -84,7 +82,7 @@ function readCurrency(): CurrencyCode {
   return isMainCurrency(value) ? value : "USD"
 }
 
-function Num({ onClick, label, children, tone }: { onClick: () => void; label: string; children: ReactNode; tone?: "gain" | "loss" | "warn" | null }) {
+function Num({ onClick, label, children, tone }: { onClick: () => void; label: string; children: ReactNode; tone?: "gain" | "loss" | "quiet" | null }) {
   return (
     <button type="button" className={`num-button ${tone ?? ""}`} onClick={onClick} aria-label={label}>
       {children}
@@ -92,7 +90,8 @@ function Num({ onClick, label, children, tone }: { onClick: () => void; label: s
   )
 }
 
-const toneOf = (micros: string | null) => (micros === null ? "warn" : BigInt(micros) > 0n ? "gain" : BigInt(micros) < 0n ? "loss" : null)
+// What's unknown says so in gray, and the warning under the headline says it once.
+const toneOf = (micros: string | null) => (micros === null ? "quiet" : BigInt(micros) > 0n ? "gain" : BigInt(micros) < 0n ? "loss" : null)
 
 /** A row of the holdings table, of one wallet or, with `wallets`, several. */
 type Holding = Pick<Position, "asset" | "decimals" | "price" | "values" | "reconciliation" | "noMarket" | "estimates"> & { state: Pick<Position["state"], "shortfallQty">; wallets?: PositionPart[] }
@@ -101,13 +100,6 @@ const holdingOf = (position: CombinedPosition): Holding => ({ ...position, state
 
 /** The wallets a holding's parts qualify for. */
 const partsWhere = ({ wallets }: Holding, has: (part: PositionPart) => boolean) => (wallets ?? []).filter(has).map(({ wallet }) => wallet)
-
-function OnchainCheck({ position, onClick }: { position: Holding; onClick: () => void }) {
-  const status = position.reconciliation?.status
-  if (status === "reconciled") return <Num label={`${position.asset} matches its actual balance`} onClick={onClick} tone="gain">✓ {CHECK_LABELS.reconciled}</Num>
-  if (status === "incomplete") return <Num label={`${position.asset} doesn't match its actual balance`} onClick={onClick} tone="warn">⚠ {CHECK_LABELS.incomplete}</Num>
-  return <Num label={`${position.asset} not checked against its actual balance`} onClick={onClick} tone="warn">⚠ {CHECK_LABELS.unchecked}</Num>
-}
 
 const est = (text: string, isEstimate: boolean) => (isEstimate ? `≈${text}` : text)
 
@@ -130,15 +122,32 @@ function SortHeader({ column, sort, onSort, numeric = true, title, children }: {
 function ReturnCell({ position, onClick }: { position: Holding; onClick: () => void }) {
   const { asset, values, estimates } = position
   const bps = returnBps(values)
-  const text = bps !== null ? est(formatReturn(bps), estimates.unrealized) : values.costMicros === null ? "⚠ Unknown" : values.valueMicros === null ? "⚠ No price" : "—"
+  const text = bps !== null ? est(formatReturn(bps), estimates.unrealized) : values.costMicros === null ? UNKNOWN : values.valueMicros === null ? NO_PRICE : "—"
   return (
-    <Num label={`${asset} return`} onClick={onClick} tone={bps === null ? (text === "—" ? null : "warn") : BigInt(bps) > 0n ? "gain" : BigInt(bps) < 0n ? "loss" : null}>
+    <Num label={`${asset} return`} onClick={onClick} tone={bps === null ? "quiet" : BigInt(bps) > 0n ? "gain" : BigInt(bps) < 0n ? "loss" : null}>
       {text}
     </Num>
   )
 }
 
-function Holdings({ positions, currency, resolvable, explain, onResolve }: { positions: Holding[]; currency: CurrencyCode; resolvable: ReadonlyMap<string, readonly string[]>; explain: (target: ExplainTarget) => void; onResolve: (asset: string) => void }) {
+/** What this covers, for whoever wants to know, one click away from the numbers. */
+function AboutData({ lines }: { lines: string[] }) {
+  const id = useId()
+  return (
+    <>
+      <button type="button" className="about-button" popoverTarget={id} aria-label={ABOUT_THIS_DATA} title={ABOUT_THIS_DATA}>
+        ⓘ
+      </button>
+      <div id={id} popover="auto" className="about-text small">
+        {lines.map((line) => (
+          <p key={line}>{line}</p>
+        ))}
+      </div>
+    </>
+  )
+}
+
+function Holdings({ positions, unread, about, currency, questions, method, onMethod, explain, onResolve }: { positions: Holding[]; unread: readonly string[]; about: string[]; currency: CurrencyCode; questions: readonly Question[]; method: Method; onMethod: (method: Method) => void; explain: (target: ExplainTarget) => void; onResolve: (asset: string) => void }) {
   const open = ({ asset }: Holding, metric: Metric) => () => explain({ kind: "asset", asset, metric })
   const money = (micros: string) => formatMoney(micros, currency)
   const signed = (micros: string) => formatSignedMoney(micros, currency)
@@ -148,9 +157,26 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
     localStorage.setItem(HOLDINGS_SORT_KEY, formatHoldingsSort(next))
     setSort(next)
   }
+  const matches = allBalancesMatch(positions, unread)
+  const questionsAbout = (asset: string) => questions.filter((q) => q.arrivals.some((a) => a.asset === asset))
   return (
     <section className="card">
-      <h2>Holdings</h2>
+      <div className="holdings-head">
+        <h2>Holdings</h2>
+        {matches ? <span className="matches small" title={matches}>✓ <span className="muted">{matches}</span></span> : null}
+        <span className="spacer" />
+        <label className="cost-method small" title={METHOD_HELP}>
+          <span className="muted">Cost:</span>
+          <select aria-label={METHOD_NAME} value={method} onChange={(e) => onMethod(e.target.value as Method)}>
+            {(["average", "fifo"] as const).map((m) => (
+              <option key={m} value={m}>
+                {METHOD_LABELS[m]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {about.length > 0 ? <AboutData lines={about} /> : null}
+      </div>
       <div className="table-scroll">
         <table className="table">
           <thead>
@@ -158,7 +184,6 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
               <SortHeader column="asset" sort={sort} onSort={changeSort} numeric={false}>
                 Asset
               </SortHeader>
-              <th>{BALANCE_CHECK}</th>
               <SortHeader column="amount" sort={sort} onSort={changeSort}>
                 Amount
               </SortHeader>
@@ -166,7 +191,7 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
                 Price
               </SortHeader>
               <SortHeader column="average" sort={sort} onSort={changeSort}>
-                {AVERAGE_PRICE_PAID}
+                {AVERAGE_PAID}
               </SortHeader>
               <SortHeader column="value" sort={sort} onSort={changeSort}>
                 Value
@@ -184,94 +209,86 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
           </thead>
           <tbody>
             {sortHoldings(positions, sort).map((position) => {
-              const { asset, decimals, values, state } = position
+              const { asset, decimals, values } = position
               const held = BigInt(values.qty) > 0n
               const unknown = BigInt(values.unknownCostQty) > 0n
-              const mismatch = position.reconciliation?.status === "incomplete" ? position.reconciliation : null
-              const flagged = mismatch !== null || BigInt(state.shortfallQty) > 0n
+              const flag = balanceFlag(position, { combined: position.wallets !== undefined })
+              const askable = held && unknown ? questionsAbout(asset).length : 0
               const heldIn = partsWhere(position, ({ qty }) => BigInt(qty) > 0n)
               const unknownIn = partsWhere(position, ({ unknownCostQty }) => BigInt(unknownCostQty) > 0n)
               const mismatchedIn = partsWhere(position, ({ reconciliation }) => reconciliation === "incomplete")
-              const askedIn = position.wallets ? (resolvable.get(asset) ?? []) : []
+              const askedIn = position.wallets ? [...new Set(questionsAbout(asset).map(({ wallet }) => wallet))] : []
               return (
-                <Fragment key={asset}>
-                  <tr className={`${held ? "" : "closed"} ${mismatch ? "mismatched" : ""}`}>
-                    <td>
-                      <strong>{asset}</strong>
-                      {asset === "ETH" ? <span className="muted small"> {ETH_NOTE}</span> : null}
-                      {heldIn.length > 0 ? <span className="muted small holding-wallets" title={position.wallets?.map(({ wallet, qty }) => `${shortHash(wallet)}: ${formatAmount(qty, decimals)} ${asset}`).join("\n")}>{inWallets(heldIn)}</span> : null}
-                      {unknownIn.length > 0 ? <span className="small holding-wallets warn-text">⚠ {unknownCostIn(unknownIn)}</span> : null}
-                    </td>
-                    <td>
-                      <OnchainCheck position={position} onClick={open(position, "onchain")} />
-                    </td>
-                    <td className="num">
-                      <Num label={`${asset} amount`} onClick={open(position, "amount")} tone={flagged ? "warn" : null}>
-                        {flagged ? "⚠ " : ""}
-                        {formatAmount(values.qty, decimals)}
+                <tr key={asset} className={held ? "" : "closed"}>
+                  <td>
+                    <strong>{asset}</strong>
+                    {asset === "ETH" ? <span className="muted small"> {ETH_NOTE}</span> : null}
+                    {/* Once per row, however many of its numbers it affects. */}
+                    {flag ? (
+                      <button type="button" className="row-flag" title={mismatchedIn.length > 0 ? `${inWallets(mismatchedIn)}. ${flag.help}` : flag.help} aria-label={`${asset}: ${flag.label}`} onClick={open(position, flag.metric)}>
+                        ⚠
+                      </button>
+                    ) : null}
+                    {heldIn.length > 0 ? <span className="muted small holding-wallets" title={position.wallets?.map(({ wallet, qty }) => `${shortHash(wallet)}: ${formatAmount(qty, decimals)} ${asset}`).join("\n")}>{inWallets(heldIn)}</span> : null}
+                    {unknownIn.length > 0 ? <span className="muted small holding-wallets">{unknownCostIn(unknownIn)}</span> : null}
+                  </td>
+                  <td className="num">
+                    <Num label={`${asset} amount`} onClick={open(position, "amount")}>
+                      {formatAmount(values.qty, decimals)}
+                    </Num>
+                  </td>
+                  <td className="num">
+                    {position.price ? (
+                      <Num label={`${asset} price`} onClick={open(position, "price")}>
+                        {est(formatPrice(position.price.micros, currency), position.estimates.value)}
                       </Num>
-                    </td>
-                    <td className="num">
-                      {position.price ? (
-                        <Num label={`${asset} price`} onClick={open(position, "price")}>
-                          {est(formatPrice(position.price.micros, currency), position.estimates.value)}
-                        </Num>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td className="num">
-                      {held ? (
-                        <Num label={`${asset} ${AVERAGE_PRICE_PAID.toLowerCase()}`} onClick={open(position, "average")} tone={unknown ? "warn" : null}>
-                          {values.averageCostMicros ? est(formatPrice(values.averageCostMicros, currency), position.estimates.cost) : "⚠ Unknown"}
-                        </Num>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td className="num">
-                      {held ? (
-                        <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueMicros === null ? "warn" : null}>
-                          {values.valueMicros ? est(money(values.valueMicros), position.estimates.value) : "⚠ No price"}
-                        </Num>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td className="num" title={REALIZED_HELP}>
-                      <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedMicros)}>
-                        {values.realizedMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : est(signed(values.realizedMicros), position.estimates.realized)}
+                    ) : (
+                      <span className="muted">{NO_PRICE}</span>
+                    )}
+                  </td>
+                  <td className="num">
+                    {held ? (
+                      <Num label={`${asset} ${AVERAGE_PAID.toLowerCase()}`} onClick={open(position, "average")} tone={unknown ? "quiet" : null}>
+                        {values.averageCostMicros ? est(formatPrice(values.averageCostMicros, currency), position.estimates.cost) : UNKNOWN}
                       </Num>
-                    </td>
-                    <td className="num" title={UNREALIZED_HELP}>
-                      {held ? (
-                        <>
-                          <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedMicros)}>
-                            {values.unrealizedMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : est(signed(values.unrealizedMicros), position.estimates.unrealized)}
-                          </Num>
-                          {unknown && resolvable.has(asset) ? (
-                            <button type="button" className="resolve-button" aria-label={`Answer questions about ${asset}${askedIn.length > 0 ? `, ${inWallets(askedIn).toLowerCase()}` : ""}`} title={askedIn.length > 0 ? inWallets(askedIn) : undefined} onClick={() => onResolve(asset)}>
-                              {ANSWER_QUESTIONS}
-                            </button>
-                          ) : null}
-                        </>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td className="num" title={RETURN_HELP}>
-                      {held ? <ReturnCell position={position} onClick={open(position, "return")} /> : <span className="muted">—</span>}
-                    </td>
-                  </tr>
-                  {mismatch ? (
-                    <tr className="mismatch">
-                      <td colSpan={9}>
-                        {mismatchedIn.length > 0 ? `${inWallets(mismatchedIn)}. ` : null}Worked out {formatAmount(mismatch.computedQty, decimals)} · Actual {formatAmount(mismatch.actualQty, decimals)} · Difference {formatSignedAmount(mismatch.differenceQty, decimals)} {asset}. {mismatchCause(asset, mismatch.differenceQty)}
-                        {mismatch.unseenEth ? ` ${unseenEthCause(mismatch.unseenEth)}` : null}
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td className="num">
+                    {held ? (
+                      <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueMicros === null ? "quiet" : null}>
+                        {values.valueMicros ? est(money(values.valueMicros), position.estimates.value) : NO_PRICE}
+                      </Num>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td className="num" title={REALIZED_HELP}>
+                    <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedMicros)}>
+                      {values.realizedMicros === null ? UNKNOWN : est(signed(values.realizedMicros), position.estimates.realized)}
+                    </Num>
+                  </td>
+                  <td className="num" title={UNREALIZED_HELP}>
+                    {held ? (
+                      <>
+                        {askable > 0 ? (
+                          <button type="button" className="row-action" title={`${answerQuestionsLabel(askable)} about ${asset}, so what you paid is known${askedIn.length > 0 ? `. ${inWallets(askedIn)}` : ""}`} aria-label={`${answerQuestionsLabel(askable)} about ${asset}${askedIn.length > 0 ? `, ${inWallets(askedIn).toLowerCase()}` : ""}`} onClick={() => onResolve(asset)}>
+                            ?
+                          </button>
+                        ) : null}
+                        <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedMicros)}>
+                          {values.unrealizedMicros === null ? UNKNOWN : est(signed(values.unrealizedMicros), position.estimates.unrealized)}
+                        </Num>
+                      </>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td className="num" title={RETURN_HELP}>
+                    {held ? <ReturnCell position={position} onClick={open(position, "return")} /> : <span className="muted">—</span>}
+                  </td>
+                </tr>
               )
             })}
           </tbody>
@@ -306,7 +323,7 @@ export function App() {
   const singleRead = useWallet(single, chosenCurrency, chosenRule, paidIn)
   const allRead = useAllYours(isAll ? yours : null, chosenCurrency, chosenRule, paidIn)
   const { wallet } = singleRead
-  const { error } = isAll ? allRead : singleRead
+  const { error, retry: retryRead } = isAll ? allRead : singleRead
   // A read that came back with none of them yet has nothing to show, and it's still reading until one does.
   const loading = isAll ? allRead.loading || (allRead.read !== null && allRead.read.wallets.length === 0 && allRead.read.unread.reading.length > 0) : singleRead.loading
   const together = useMemo(() => (isAll && allRead.read && allRead.read.wallets.length > 0 ? { read: allRead.read.wallets, unread: allRead.read.unread } : null), [isAll, allRead.read])
@@ -397,16 +414,11 @@ export function App() {
   const totals = combined?.totals ?? fold?.totals ?? sumTotals([])
   const points = combined?.points ?? fold?.points ?? []
   const questions = combined?.questions ?? fold?.questions ?? []
+  const pnlStatus = combined?.pnlStatus ?? fold?.pnlStatus ?? null
   const holdComparison = combined?.holdComparison ?? fold?.holdComparison ?? null
   const withheld = combined?.withheld ?? fold?.withheld ?? []
   const missingRateTxs = combined ? (combined.exchange?.missingRateTxs ?? []) : (view?.missingRateTxs ?? [])
   const noCurrentRate = combined ? combined.exchange !== null && combined.exchange.latestRateMicros === null : currency !== "USD" && view !== null && !view.latestRate
-  /** Which wallets each asset's questions are about. */
-  const resolvable = useMemo(() => {
-    const byAsset = new Map<string, string[]>()
-    for (const { wallet: where, arrivals } of questions) for (const { asset } of arrivals) byAsset.set(asset, [...new Set([...(byAsset.get(asset) ?? []), where])])
-    return byAsset
-  }, [questions])
   /** How many questions each wallet on screen has. A wallet that isn't read yet isn't here, since that isn't known. */
   const questionsIn = useMemo(() => {
     const counts = new Map<string, number>()
@@ -416,8 +428,13 @@ export function App() {
     return counts
   }, [together, single, questions])
   const listed = positions.filter((p) => !p.noMarket)
-  const noMarketCount = totals.noMarket.length + (showing?.unlisted.length ?? 0)
-  const caveat = [BigInt(totals.unresolvedMicros) > 0n ? `${formatMoney(totals.unresolvedMicros, currency)} cost unknown` : null, BigInt(totals.estimatedMicros) > 0n ? `${formatMoney(totals.estimatedMicros, currency)} estimated` : null].filter(Boolean).join(" · ")
+  const attention = showing && pnlStatus ? attentionOf({ positions, unread, totals, pnlStatus, gasUnknownTxs: showing.gasUnknownTxs, l1FeeUnknownTxs: showing.l1FeeUnknownTxs, withheld, currency, missingRateTxs, hasCurrentRate: !noCurrentRate }) : null
+  const pastCosts = pastCostsNote(attention, questions.length)
+  const attentionBox = attention ? <AttentionBox attention={attention} questionCount={questions.length} onResolve={() => setResolving({ asset: null })} onShow={() => setTarget(attentionTarget(positions))} /> : pastCosts ? <PastCostsLine note={pastCosts} questionCount={questions.length} onResolve={() => setResolving({ asset: null })} /> : null
+  const noMarket = showing ? noMarketSentence(totals.noMarket, showing.unlisted.length) : null
+  const about = showing ? [...(started ? [coverageSentence(showing.coverage, TOKENS.length - 1, showing.openingUnread.length > 0, { combined: isAll })] : []), ...(noMarket ? [noMarket] : [])] : []
+  // With no table to sit beside, what it covers stays on the page.
+  const aboutNotices = about.map((line) => <p className="notice" key={line}>{line}</p>)
   const download = () => {
     const link = document.createElement("a")
     link.href = URL.createObjectURL(new Blob([together ? exportCombined(together.read, method, book) : exportCsv(fold?.positions ?? [], currency)], { type: "text/csv" }))
@@ -434,6 +451,11 @@ export function App() {
     return explainTarget(target, fold, { view: fold.view, ruleNote: wallet.ruleNote ?? null, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points, holdComparison: usd.holdComparison } })
   }, [target, together, fold, wallet, others, method, book])
   const close = useCallback(() => setTarget(null), [])
+  const tryRead = (
+    <button type="button" className="link" onClick={retryRead}>
+      Try again
+    </button>
+  )
   const openTotal = (metric: TotalMetric) => setTarget({ kind: "total", metric })
 
   return (
@@ -504,11 +526,11 @@ export function App() {
         </section>
       ) : null}
 
-      {!showing && error ? <p className="notice warn">⚠ {error}</p> : null}
+      {!showing && error ? <ProblemNotice problem={feedProblem(error, location.origin)} action={tryRead} /> : null}
 
       {showing ? (
         <main>
-          {error ? <p className="notice warn">⚠ {error} {staleSentence(formatTime(showing.latest.timestamp))}</p> : null}
+          {error ? <ProblemNotice problem={feedProblem(error, location.origin, started ? staleSentence(formatTime(showing.latest.timestamp)) : null)} action={tryRead} /> : null}
           {combined && combined.linkedReading.length > 0 ? <p className="notice">{allYoursReadingSentence(combined.linkedReading)}</p> : null}
           {combined && combined.linkedFailed.length > 0 ? (
             <p className="notice warn">
@@ -522,8 +544,6 @@ export function App() {
             <p className="notice warn">⚠ {started ? behindSentence(msBetweenBlocks(showing.coverage.toBlock, showing.latest.blockNum)) : NOT_STARTED}</p>
           ) : null}
           {showing.mode === "demo" ? <p className="notice">{DEMO_NOTICE}</p> : null}
-          {started ? <p className="notice">{coverageSentence(showing.coverage, TOKENS.length - 1, showing.openingUnread.length > 0, { combined: isAll })}</p> : null}
-          {showing.gasUnknownTxs.length > 0 ? <p className="notice warn">⚠ {feesUnknownSentence(showing.gasUnknownTxs.length)}</p> : null}
           {linkedFailed.length > 0 ? (
             <p className="notice warn">
               ⚠ {linkedFailedSentence(linkedFailed.length)}{" "}
@@ -532,61 +552,56 @@ export function App() {
               </button>
             </p>
           ) : null}
-          {withheld.map(({ wallet: from, asset }) => <p className="notice warn" key={`${from}:${asset}`}>⚠ {withheldSentence(from, asset)}</p>)}
-          {missingRateTxs.length > 0 ? <p className="notice warn">⚠ {missingRatesLine(missingRateTxs.length, currency)}</p> : null}
-          {noCurrentRate ? <p className="notice warn">⚠ There's no current USD to {currency} rate, so what's held has no current value.</p> : null}
-          {showing.l1FeeUnknownTxs.length > 0 ? <p className="notice warn" title={PNL_HELP}>⚠ {networkFeeUnknownSentence(showing.l1FeeUnknownTxs.length)}</p> : null}
 
-          {positions.length === 0 && !started ? null : positions.length === 0 && unread.length === 0 ? (
-            <section className="empty">
-              <p>
-                {wallet ? (
-                  <>
-                    No activity for <code>{wallet.address}</code> in this time.
-                  </>
-                ) : (
-                  "No activity in your wallets in this time."
-                )}
-              </p>
-            </section>
+          {positions.length === 0 && !started ? attentionBox : positions.length === 0 && unread.length === 0 ? (
+            <>
+              {aboutNotices}
+              {attentionBox}
+              <section className="empty">
+                <p>
+                  {wallet ? (
+                    <>
+                      No activity for <code>{wallet.address}</code> in this time.
+                    </>
+                  ) : (
+                    "No activity in your wallets in this time."
+                  )}
+                </p>
+              </section>
+            </>
           ) : (
             <>
               <section className="summary">
-                <div className="headline">
-                  <span className="muted small" title={PNL_HELP}>
-                    Total PnL · {currency}
-                  </span>
-                  <Num label="Total PnL" onClick={() => openTotal("pnl")} tone={toneOf(totals.pnlMicros)}>
-                    <span className="big">{totals.pnlMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : est(formatSignedMoney(totals.pnlMicros, currency), BigInt(totals.estimatedMicros) > 0n)}</span>
-                  </Num>
-                  {caveat ? <p className="caveat">{caveat}</p> : null}
-                  {questions.length > 0 ? (
-                    <button type="button" className="resolve-button big" onClick={() => setResolving({ asset: null })}>
-                      {answerQuestionsLabel(questions.length)}
-                    </button>
-                  ) : null}
-                  {totals.excluded.length > 0 ? (
-                    <p className="excluded">⚠ {excludedSentence(totals.excluded)}</p>
-                  ) : (
-                    <p className="muted small">Nothing excluded.</p>
-                  )}
-                  {totals.unpricedGas ? <p className="excluded">⚠ {UNPRICED_FEES}</p> : null}
+                <div className="lead">
+                  <div title={isValuePartial(totals) ? valueGapsSentence(valueGaps(positions, unread)) : undefined}>
+                    <span className="muted small">Value · {currency}</span>
+                    <Num label={`Value${isValuePartial(totals) ? ", partial" : ""}`} onClick={() => openTotal("value")} tone={totals.valueMicros === null ? "quiet" : null}>
+                      <span className="big">{totals.valueMicros === null ? UNAVAILABLE : est(formatMoney(totals.valueMicros, currency), totals.estimated.value)}</span>
+                    </Num>
+                  </div>
+                  <div>
+                    <span className="muted small" title={PNL_HELP}>
+                      Total PnL
+                    </span>
+                    <Num label={`Total PnL${pnlStatus === "partial" ? ", partial" : ""}`} onClick={() => openTotal("pnl")} tone={toneOf(totals.pnlMicros)}>
+                      <span className="second">{totals.pnlMicros === null ? UNAVAILABLE : est(formatSignedMoney(totals.pnlMicros, currency), BigInt(totals.estimatedMicros) > 0n)}</span>
+                    </Num>
+                  </div>
                 </div>
                 <dl className="stats">
-                  <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value} value={totals.valueMicros && est(formatMoney(totals.valueMicros, currency), totals.estimated.value)} />
-                  <Stat label="Realized" help={REALIZED_HELP} onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedMicros && est(formatSignedMoney(totals.realizedMicros, currency), totals.estimated.realized)} />
-                  <Stat label="Unrealized" help={UNREALIZED_HELP} onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedMicros && est(formatSignedMoney(totals.unrealizedMicros, currency), totals.estimated.unrealized)} />
-                  <Stat label={NETWORK_FEES} onClick={() => openTotal("gas")} coverage={{ known: 1, missing: totals.unpricedGas ? 1 : 0 }} value={totals.gasMicros && formatMoney(totals.gasMicros, currency)} />
+                  <Stat label="Realized" help={REALIZED_HELP} partial={totals.coverage.realized.missing > 0} onClick={() => openTotal("realized")} value={totals.realizedMicros && est(formatSignedMoney(totals.realizedMicros, currency), totals.estimated.realized)} />
+                  <Stat label="Unrealized" help={UNREALIZED_HELP} partial={totals.coverage.unrealized.missing > 0} onClick={() => openTotal("unrealized")} value={totals.unrealizedMicros && est(formatSignedMoney(totals.unrealizedMicros, currency), totals.estimated.unrealized)} />
+                  <Stat label={NETWORK_FEES} partial={totals.unpricedGas} onClick={() => openTotal("gas")} value={totals.gasMicros && formatMoney(totals.gasMicros, currency)} />
                 </dl>
-                <div className="method" role="group" aria-label={METHOD_NAME} title={METHOD_HELP}>
-                  {(["average", "fifo"] as const).map((m) => (
-                    <button key={m} type="button" className={method === m ? "on" : ""} aria-pressed={method === m} onClick={() => setMethod(m)}>
-                      {METHOD_LABELS[m]}
-                    </button>
-                  ))}
-                </div>
               </section>
-              <p className="tax-link">
+              {attentionBox}
+              <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
+              {listed.length > 0 ? <Holdings positions={listed} unread={unread} about={about} currency={currency} questions={questions} method={method} onMethod={setMethod} explain={setTarget} onResolve={(asset) => setResolving({ asset })} /> : aboutNotices}
+              {holdComparison ? <HoldLine comparison={holdComparison} combined={isAll} currency={currency} onOpen={() => setTarget({ kind: "hold" })} /> : null}
+              <p className="exports">
+                <button type="button" className="link" onClick={download}>
+                  Export as CSV
+                </button>
                 <button
                   type="button"
                   className="link"
@@ -596,20 +611,6 @@ export function App() {
                   }}
                 >
                   Export a tax report…
-                </button>
-              </p>
-              {holdComparison ? <HoldCard comparison={holdComparison} combined={isAll} currency={currency} onOpen={() => setTarget({ kind: "hold" })} /> : null}
-              <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
-              {listed.length > 0 ? <Holdings positions={listed} currency={currency} resolvable={resolvable} explain={setTarget} onResolve={(asset) => setResolving({ asset })} /> : null}
-              {noMarketCount > 0 ? (
-                <p className="notice">
-                  {noMarketCount} {noMarketCount === 1 ? "token" : "tokens"} with no market{totals.noMarket.length > 0 ? `: ${totals.noMarket.join(", ")}` : ""}
-                  {showing.unlisted.length > 0 ? `${totals.noMarket.length > 0 ? ", plus" : ":"} ${showing.unlisted.length} we don't track` : ""}. Often spam, and not counted in any total.
-                </p>
-              ) : null}
-              <p>
-                <button type="button" className="link" onClick={download}>
-                  Export as CSV
                 </button>
               </p>
             </>
@@ -657,46 +658,68 @@ export function App() {
   )
 }
 
-/** Calm on purpose: no colors for ahead or behind, and it asks nothing of anyone. Clicking it says how it's worked out. */
-function HoldCard({ comparison, combined, currency, onOpen }: { comparison: HoldComparison; combined: boolean; currency: CurrencyCode; onOpen: () => void }) {
-  const { walletMicros, walletLeavesOut, walletEstimated, holdMicros, differenceMicros, status, estimated } = comparison
-  const caveat = holdCaveatSentence(comparison, currency, { combined })
-  const signed = (micros: string | null, isEstimate: boolean) => (micros === null ? "⚠ Unavailable" : est(formatSignedMoney(micros, currency), isEstimate))
+/** What the numbers above leave out, once, in a sentence, with what to do about it. The full list is a hover or a click away. */
+function AttentionBox({ attention, questionCount, onResolve, onShow }: { attention: Attention; questionCount: number; onResolve: () => void; onShow: () => void }) {
   return (
-    <section className="card hold">
-      <div className="card-head">
-        <h2 className="muted small">{HOLD_TITLE} · {currency}</h2>
-        <span className="muted small">{HOLD_PAST}</span>
+    <section className="attention" title={attention.fullList ?? undefined}>
+      <span className="attention-mark" role="img" aria-label="Warning">⚠</span>
+      <div className="attention-text">
+        <p title={pnlHelp(attention.title)}>{attention.title}</p>
+        {attention.details.map((line) => (
+          <p key={line} className="muted small" title={pnlHelp(line)}>
+            {line}
+          </p>
+        ))}
       </div>
-      <button type="button" className="hold-numbers" onClick={onOpen} aria-label={`${HOLD_TITLE}. Shows how this is worked out`}>
-        <span>
-          <span className="muted small">{combined ? HOLD_WALLETS : HOLD_WALLET}</span>
-          <strong>{signed(walletMicros, walletEstimated)}</strong>
-          {walletMicros !== null && walletLeavesOut ? <span className="partial">⚠ partial</span> : null}
-        </span>
-        <span>
-          <span className="muted small">{HOLD_ETH}</span>
-          <strong>{signed(holdMicros, estimated)}</strong>
-          {status === "partial" ? <span className="partial">⚠ partial</span> : null}
-        </span>
-        {differenceMicros !== null ? <span className="hold-difference">{holdDifferenceSentence(differenceMicros, currency, walletEstimated || estimated)}</span> : null}
-      </button>
-      {caveat ? <p className="caveat">⚠ {caveat}</p> : null}
+      {questionCount > 0 ? (
+        <button type="button" className="quiet-button" onClick={onResolve}>
+          {answerQuestionsLabel(questionCount)}
+        </button>
+      ) : (
+        <button type="button" className="quiet-button" onClick={onShow}>
+          {SHOW_MISSING}
+        </button>
+      )}
     </section>
   )
 }
 
-function Stat({ label, help, onClick, coverage, value }: { label: string; help?: string; onClick: () => void; coverage: Coverage; value: string | null }) {
+/** Questions that remain when the numbers above leave nothing out. Nothing's wrong, so there's no warning, but they can still be answered. */
+function PastCostsLine({ note, questionCount, onResolve }: { note: string; questionCount: number; onResolve: () => void }) {
+  return (
+    <section className="attention">
+      <p className="attention-text muted">{note}</p>
+      <button type="button" className="quiet-button" onClick={onResolve}>
+        {answerQuestionsLabel(questionCount)}
+      </button>
+    </section>
+  )
+}
+
+/** This wallet next to simply holding ETH, in a line. Calm on purpose: no colors for ahead or behind, and it asks nothing of anyone. Clicking it shows the numbers and how they're worked out. */
+function HoldLine({ comparison, combined, currency, onOpen }: { comparison: HoldComparison; combined: boolean; currency: CurrencyCode; onOpen: () => void }) {
+  // The fine print, a hover or a click away.
+  const fine = [holdCaveatSentence(comparison, currency, { combined }), comparison.status === "unavailable" ? null : HOLD_PAST].filter((part) => part !== null).join(" ")
+  return (
+    <button type="button" className="hold-line" title={fine} aria-label={`${HOLD_TITLE}. ${holdSummarySentence(comparison, currency)} Shows how this is worked out`} onClick={onOpen}>
+      <span>{HOLD_TITLE}</span>
+      <span className="muted">{holdSummarySentence(comparison, currency)}</span>
+      <span className="muted" aria-hidden="true">›</span>
+    </button>
+  )
+}
+
+/** One of the sums beside the headline. What it leaves out is said once, under the headline. */
+function Stat({ label, help, partial, onClick, value }: { label: string; help?: string; partial: boolean; onClick: () => void; value: string | null }) {
   return (
     <div>
       <dt className="muted small" title={help}>
         {label}
       </dt>
       <dd>
-        <Num label={label} onClick={onClick} tone={value === null ? "warn" : null}>
-          {value ?? "⚠ Unavailable"}
+        <Num label={`${label}${value !== null && partial ? ", partial" : ""}`} onClick={onClick} tone={value === null ? "quiet" : null}>
+          {value ?? UNAVAILABLE}
         </Num>
-        {value !== null && hasAnswer(coverage) && coverage.missing > 0 ? <span className="partial">⚠ partial</span> : null}
       </dd>
     </div>
   )
@@ -705,8 +728,9 @@ function Stat({ label, help, onClick, coverage, value }: { label: string; help?:
 function LiveBadge({ wallet, stale, updating }: { wallet: Pick<WalletResponse, "mode" | "coverage" | "latest">; stale: boolean; updating: boolean }) {
   if (wallet.mode === "demo") return <span className="badge">Demo data</span>
   const detail = feedDetail(wallet.mode, wallet.coverage.toBlock)
-  if (stale) return <span className="badge warn" title={detail}>⚠ Not updating</span>
+  // The notice under it says what's wrong.
+  if (stale) return <span className="badge" title={detail}>Not updating</span>
   if (updating) return <span className="badge updating" title={detail}>Updating</span>
-  if (isBehind(wallet)) return <span className="badge warn" title={detail}>⚠ Catching up</span>
+  if (isBehind(wallet)) return <span className="badge" title={detail}>Catching up</span>
   return <span className="badge live" title={detail}>Live</span>
 }

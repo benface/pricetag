@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { chartMoneyTicks, formatChartSpan, formatSignedMoney, formatTime, shortHash, type CurrencyCode } from "@pricetag/sdk/core"
 import type { BookPoint } from "../core/api.ts"
-import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../core/chart-times.ts"
+import { END_LABEL_GAP, TICK_GAP, chartLeftMargin, chartRightMargin, placeChartTimes } from "../core/chart-times.ts"
 import { NOTHING_TO_CHART, PNL_HELP, inWallets } from "../core/wording.ts"
 
 const HEIGHT = 220
@@ -25,6 +25,9 @@ export function PnlChart({ points, currency, onSelect }: Props) {
   const tickLabels = useRef<SVGGElement>(null)
   const [tickWidths, setTickWidths] = useState<number[]>([])
   const left = chartLeftMargin(tickWidths, MARGIN.left)
+  const endLabel = useRef<SVGTextElement>(null)
+  const [endLabelWidth, setEndLabelWidth] = useState(0)
+  const right = chartRightMargin(endLabelWidth, MARGIN.right)
 
   useEffect(() => {
     if (!box.current) return
@@ -42,7 +45,7 @@ export function PnlChart({ points, currency, onSelect }: Props) {
     const high = ticks[ticks.length - 1]?.value ?? 1
     const start = times[0] ?? 0
     const end = times[times.length - 1] ?? 1
-    const plotWidth = Math.max(40, width - left - MARGIN.right)
+    const plotWidth = Math.max(40, width - left - right)
     const plotHeight = HEIGHT - MARGIN.top - MARGIN.bottom
     const x = (t: number) => left + (end === start ? plotWidth : ((t - start) / (end - start)) * plotWidth)
     const y = (v: number) => MARGIN.top + (1 - (v - low) / (high - low || 1)) * plotHeight
@@ -61,7 +64,7 @@ export function PnlChart({ points, currency, onSelect }: Props) {
       drawing = true
     })
     return { times, values, ticks, x, y, path, plotWidth, hasData: known.length > 0 }
-  }, [points, width, left, currency])
+  }, [points, width, left, right, currency])
 
   const nearest = (clientX: number) => {
     const rect = box.current?.getBoundingClientRect()
@@ -96,6 +99,11 @@ export function PnlChart({ points, currency, onSelect }: Props) {
   useLayoutEffect(() => {
     setTickWidths(Array.from(tickLabels.current?.querySelectorAll("text") ?? [], (text) => text.getComputedTextLength()))
   }, [tickText, asTable, chart.hasData])
+
+  const endText = last && lastValue !== null && lastValue !== undefined ? showPnl(last) : null
+  useLayoutEffect(() => {
+    setEndLabelWidth(endLabel.current?.getComputedTextLength() ?? 0)
+  }, [endText, asTable, chart.hasData])
 
   const placedTimes = placeChartTimes(xLabels.map((_, i) => timeWidths[i] ?? 0), { start: left, end: left + chart.plotWidth, width })
   const rows = Math.max(0, ...placedTimes.map(({ row }) => row))
@@ -149,7 +157,7 @@ export function PnlChart({ points, currency, onSelect }: Props) {
           </table>
         </div>
       ) : null}
-      {!asTable && !chart.hasData ? <p className="notice warn chart-empty">⚠ {NOTHING_TO_CHART}</p> : null}
+      {!asTable && !chart.hasData ? <p className="notice chart-empty">{NOTHING_TO_CHART}</p> : null}
       <div
         ref={box}
         className="chart"
@@ -187,9 +195,9 @@ export function PnlChart({ points, currency, onSelect }: Props) {
                 return value === null || value === undefined ? null : <circle key={`${p.blockNum}-${i}`} cx={chart.x(chart.times[i] as number)} cy={chart.y(value)} r={4} className="dot" />
               })
             : null}
-          {last && lastValue !== null && lastValue !== undefined ? (
-            <text x={chart.x(chart.times[points.length - 1] as number) + 10} y={chart.y(lastValue)} dy="0.32em" className="end-label">
-              {showPnl(last)}
+          {endText !== null && lastValue !== null && lastValue !== undefined ? (
+            <text ref={endLabel} x={chart.x(chart.times[points.length - 1] as number) + END_LABEL_GAP} y={chart.y(lastValue)} dy="0.32em" className="end-label">
+              {endText}
             </text>
           ) : null}
           {active !== null ? <line x1={chart.x(chart.times[active] as number)} x2={chart.x(chart.times[active] as number)} y1={MARGIN.top} y2={HEIGHT - MARGIN.bottom} className="crosshair" /> : null}

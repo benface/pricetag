@@ -9,7 +9,7 @@ import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../sr
 import { costKey, emptyBook, type Book } from "../src/core/book.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { foldBook } from "../src/core/resolve.ts"
-import { TAX_COUNTRIES, parseTaxYear, readOtherWallets, taxReportOf, taxRows, type TaxYear } from "../src/core/tax.ts"
+import { TAX_COUNTRIES, parseTaxYear, readOtherWallets, savedOtherWallets, taxReportOf, taxRows, type TaxYear } from "../src/core/tax.ts"
 import { createApi } from "../server/app.ts"
 
 const E18 = 10n ** 18n
@@ -319,6 +319,20 @@ describe("readOtherWallets", () => {
 
   it("ignores what's saved on the demo wallet, where the field for fixing it isn't shown", () => {
     assert.deepEqual(readOtherWallets(`0xnope\n${B}`, "demo"), { others: [], bad: null })
+  })
+})
+
+describe("savedOtherWallets", () => {
+  it("keeps only the addresses, once each", () => {
+    const upper = `0x${"A".repeat(40)}`
+    assert.equal(savedOtherWallets(`${upper}\n ${B}, ${A}`), `${A}\n${B}`)
+  })
+
+  it("keeps nothing of what isn't an address", () => {
+    assert.equal(savedOtherWallets("some words pasted by mistake"), "")
+    assert.equal(savedOtherWallets(`0x${"a".repeat(64)}`), "")
+    assert.equal(savedOtherWallets(`words ${B} 0x${B.slice(2, 10)}`), B)
+    assert.equal(savedOtherWallets(""), "")
   })
 })
 
