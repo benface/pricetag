@@ -12,8 +12,10 @@ const jwt = (exp: number) => `x.${Buffer.from(JSON.stringify({ exp: exp / 1000 }
 
 type Call = { method: string; url: string; authorization: string | null; body?: string }
 
+const ALL = { AMP_QUERY_TOKEN: "read-token", PRICETAG_DATASET: REF, PRICETAG_FORK_DATASET: "benface/pricetag_cautious@0.2.0", PRICETAG_FEEDS_DATASET: "benface/pricetag_feeds@0.1.0" }
+
 function setup(options: { status?: string; postStatus?: number; token?: () => string; env?: () => Env } = {}) {
-  const state = { status: options.status ?? "RUNNING", postStatus: options.postStatus ?? 200, now: NOW, getStatus: 200 }
+  const state = { status: options.status ?? "RUNNING", postStatus: options.postStatus ?? 200, postFails: false, now: NOW, getStatus: 200 }
   const calls: Call[] = []
   const logs: string[] = []
   const alerts: string[] = []
@@ -24,6 +26,7 @@ function setup(options: { status?: string; postStatus?: number; token?: () => st
       const authorization = new Headers(init.headers).get("authorization")
       calls.push({ method, url, authorization, body: init.body as string | undefined })
       if (method === "POST") {
+        if (state.postFails) throw new TypeError("fetch failed with http://secret.test")
         if (state.postStatus === 200) state.status = "SCHEDULED"
         return new Response("{}", { status: state.postStatus })
       }
@@ -124,19 +127,114 @@ describe("the job watch", () => {
     await watch.tick()
     assert.equal(posts().length, 0)
     assert.equal(calls.length, 3)
+    // That alert may be old news by now, so the job that died gets its own.
+    assert.equal(alerts.length, 2)
+    assert.match(alerts[1]!, new RegExp(`${REF} is FATAL and can't be restarted`))
+    await watch.tick()
+    assert.equal(alerts.length, 2)
+  })
+
+  for (const empty of ["", " \n\t "]) {
+    it(`doesn't take ${JSON.stringify(empty)} for a token, from the start`, async () => {
+      const { watch, alerts, logs, posts } = setup({ status: "FATAL", token: () => empty })
+      await watch.tick()
+      await watch.tick()
+      assert.equal(posts().length, 0)
+      assert.equal(alerts.length, 2)
+      assert.match(alerts[0]!, /admin token is empty or malformed/)
+      assert.match(alerts[1]!, new RegExp(`${REF} is FATAL and can't be restarted`))
+      assert.ok(!logs.some((line) => /usable admin token again/.test(line)))
+    })
+  }
+
+  it("doesn't send a token that can't go in a header", async () => {
+    const { watch, alerts, posts } = setup({ status: "FATAL", token: () => "two\nlines" })
+    await watch.tick()
+    assert.equal(posts().length, 0)
+    assert.match(alerts[0]!, /admin token is empty or malformed/)
+  })
+
+  it("keeps warning from an unreadable token, through an empty one, until a usable one's there", async () => {
+    let token: string | undefined
+    const { watch, state, alerts, logs, posts } = setup({
+      status: "FATAL",
+      token: () => {
+        if (token === undefined) throw new Error("gone")
+        return token
+      },
+    })
+    await watch.tick()
+    assert.match(alerts[0]!, /admin token can't be read/)
+
+    token = "  "
+    await watch.tick()
+    await watch.tick()
+    assert.equal(posts().length, 0)
+    assert.equal(alerts.filter((line) => /admin token is empty/.test(line)).length, 1)
+    assert.ok(!logs.some((line) => /usable admin token again/.test(line)))
+
+    token = jwt(NOW + 3_600_000)
+    state.now += 30_000
+    await watch.tick()
+    assert.equal(posts().length, 1)
+    assert.ok(logs.includes("There's a usable admin token again."))
+    assert.match(alerts.at(-1)!, /its job was restarted/)
   })
 
   it("says plainly when the token is refused, and restarts once a new one's in place", async () => {
     const { watch, state, alerts, logs, posts } = setup({ status: "FATAL", postStatus: 401 })
     await watch.tick()
     await watch.tick()
-    assert.equal(alerts.length, 1)
-    assert.match(alerts[0]!, /admin token was refused \(401\)/)
+    assert.equal(alerts.length, 2)
+    assert.match(alerts[0]!, /admin token was refused/)
+    assert.match(alerts[1]!, new RegExp(`${REF} is FATAL and can't be restarted: the admin token was refused \\(401\\)`))
     state.postStatus = 200
     await watch.tick()
     assert.equal(posts().length, 3)
-    assert.match(alerts[1]!, /restarted/)
-    assert.ok(logs.includes("The admin token works again."))
+    assert.match(alerts[2]!, /restarted/)
+    assert.ok(logs.includes("There's a usable admin token again."))
+  })
+
+  for (const statuses of [[401], [403], [401, 403]]) {
+    it(`reports a token refused with ${statuses.join(" then ")} once, however many datasets and checks`, async () => {
+      let token = "old-token"
+      const { watch, state, alerts, logs, posts } = setup({ status: "FATAL", env: () => ALL, token: () => token })
+      for (let tick = 0; tick < 6; tick++) {
+        state.postStatus = statuses[tick % statuses.length]!
+        await watch.tick()
+        state.now += 30_000
+      }
+      assert.equal(posts().length, 18)
+      assert.equal(alerts.filter((line) => /^The admin token was refused/.test(line)).length, 1)
+      assert.equal(alerts.filter((line) => /is FATAL and can't be restarted/.test(line)).length, 3)
+      assert.equal(alerts.length, 4)
+
+      token = jwt(NOW + 3_600_000)
+      state.postStatus = 200
+      await watch.tick()
+      assert.equal(posts().length, 21)
+      assert.equal(posts().at(-1)!.authorization, `Bearer ${token}`)
+      assert.equal(alerts.filter((line) => /its job was restarted/.test(line)).length, 3)
+      assert.ok(logs.includes("There's a usable admin token again."))
+
+      state.status = "RUNNING"
+      await watch.tick()
+      assert.equal(posts().length, 21)
+      assert.equal(alerts.length, 7)
+    })
+  }
+
+  it("alerts again when the token that replaces a refused one is refused too", async () => {
+    let token = "old-token"
+    const { watch, alerts, logs } = setup({ status: "FATAL", postStatus: 401, token: () => token })
+    await watch.tick()
+    await watch.tick()
+    assert.equal(alerts.filter((line) => /^The admin token was refused/.test(line)).length, 1)
+    token = "new-token"
+    await watch.tick()
+    await watch.tick()
+    assert.equal(alerts.filter((line) => /^The admin token was refused/.test(line)).length, 2)
+    assert.equal(logs.filter((line) => /usable admin token again/.test(line)).length, 1)
   })
 
   it("retries a restart that failed for another reason", async () => {
@@ -147,6 +245,30 @@ describe("the job watch", () => {
     state.postStatus = 200
     await watch.tick()
     assert.equal(posts().length, 3)
+  })
+
+  it("alerts once when a restart can't reach the controller, without quoting the request", async () => {
+    const { watch, state, alerts, posts } = setup({ status: "FATAL" })
+    state.postFails = true
+    await watch.tick()
+    await watch.tick()
+    assert.equal(posts().length, 2)
+    assert.equal(alerts.length, 1)
+    assert.match(alerts[0]!, /the request failed \(TypeError\)/)
+    assert.ok(!alerts[0]!.includes("secret"))
+    state.postFails = false
+    await watch.tick()
+    assert.match(alerts[1]!, /its job was restarted/)
+  })
+
+  it("alerts again when a job that recovered on its own dies again and can't be restarted", async () => {
+    const { watch, state, alerts } = setup({ status: "FATAL", postStatus: 503 })
+    await watch.tick()
+    state.status = "RUNNING"
+    await watch.tick()
+    state.status = "FATAL"
+    await watch.tick()
+    assert.equal(alerts.length, 2)
   })
 
   it("logs an outage once and survives it", async () => {

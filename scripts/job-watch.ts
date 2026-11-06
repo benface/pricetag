@@ -68,7 +68,7 @@ export function createJobWatch(watcher: Watcher) {
   let env: Env = {}
   let lastEnvProblem: string | undefined
   let lastTokenProblem: string | undefined
-  let tokenRefused = false
+  let refusedToken: string | undefined
   let lastDatasets = ""
 
   const seenFor = (ref: string) => {
@@ -86,9 +86,14 @@ export function createJobWatch(watcher: Watcher) {
   function usableToken(): string | undefined {
     let token: string
     try {
-      token = readAdminToken()
+      token = readAdminToken().trim()
     } catch {
       tokenProblem("The admin token can't be read, so a job that dies can't be restarted. Checking continues.")
+      return undefined
+    }
+    // It goes in a header, where anything else would fail the request instead of being refused.
+    if (!/^[\x21-\x7e]+$/.test(token)) {
+      tokenProblem("The admin token is empty or malformed, so a job that dies can't be restarted. Checking continues. Put a new token in staging.jwt.")
       return undefined
     }
     const expiry = expiryOf(token)
@@ -96,8 +101,8 @@ export function createJobWatch(watcher: Watcher) {
       tokenProblem(`The admin token expired at ${new Date(expiry).toISOString()}, so a job that dies can't be restarted. Checking continues. Put a new token in staging.jwt.`)
       return undefined
     }
-    // Only a restart can show that a refused token is fine now.
-    if (!tokenRefused) clearTokenProblem()
+    // Only a restart can show that a refused token is fine now, but a different one gets its own chance.
+    if (token !== refusedToken) clearTokenProblem()
     return token
   }
 
@@ -107,32 +112,42 @@ export function createJobWatch(watcher: Watcher) {
   }
 
   function clearTokenProblem() {
-    if (lastTokenProblem) log("The admin token works again.")
+    if (lastTokenProblem) log("There's a usable admin token again.")
     lastTokenProblem = undefined
-    tokenRefused = false
+    refusedToken = undefined
+  }
+
+  /** Alerts once per death, so a job that can't be restarted can't go unnoticed, or repeat every 30 s. */
+  function cantRestart(ref: string, entry: Seen, why: string) {
+    const line = `${ref} is FATAL and can't be restarted: ${why} It tries again every 30 s.`
+    if (!entry.restartProblem) alert(line)
+    else if (entry.restartProblem !== line) log(line)
+    entry.restartProblem = line
   }
 
   async function restart(ref: string, entry: Seen) {
     const token = usableToken()
-    if (!token) return
-    const response = await fetch(`${controller}${versionPath(ref)}`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: "{}",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    })
+    if (!token) return cantRestart(ref, entry, "there's no usable admin token.")
+    let response: Response
+    try {
+      response = await fetch(`${controller}${versionPath(ref)}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: "{}",
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      })
+    } catch (error) {
+      // Only the error's name, because a message can quote a request.
+      return cantRestart(ref, entry, `the request failed (${error instanceof Error ? error.name : "unknown error"}).`)
+    }
     await response.body?.cancel()
     if (response.status === 401 || response.status === 403) {
-      tokenRefused = true
-      tokenProblem(`The admin token was refused (${response.status}), so ${ref} stays FATAL and can't be restarted. Put a new token in staging.jwt.`)
-      return
+      refusedToken = token
+      // Without a dataset or status, because this is one problem however many jobs run into it.
+      tokenProblem("The admin token was refused, so a job that dies can't be restarted. Checking continues. Put a new token in staging.jwt.")
+      return cantRestart(ref, entry, `the admin token was refused (${response.status}).`)
     }
-    if (!response.ok) {
-      const line = `Couldn't restart ${ref}: ${response.status}. It tries again every 30 s.`
-      if (entry.restartProblem !== line) alert(line)
-      entry.restartProblem = line
-      return
-    }
+    if (!response.ok) return cantRestart(ref, entry, `the controller returned ${response.status}.`)
     clearTokenProblem()
     entry.restartProblem = undefined
     entry.restartedAt = now()
@@ -159,6 +174,7 @@ export function createJobWatch(watcher: Watcher) {
       entry.status = status
 
       if (status !== "FATAL") {
+        entry.restartProblem = undefined
         if (entry.restartedAt !== undefined && status === "RUNNING") {
           log(`${ref}: running again ${Math.round((now() - entry.restartedAt) / 1000)} s after the restart`)
           entry.restartedAt = undefined
@@ -211,7 +227,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     controller: CONTROLLER,
     fetch,
     readEnv: () => parseEnv(readFileSync(envPath, "utf8")),
-    readAdminToken: () => readFileSync(join(homedir(), ".config/pricetag/staging.jwt"), "utf8").trim(),
+    readAdminToken: () => readFileSync(join(homedir(), ".config/pricetag/staging.jwt"), "utf8"),
     now: Date.now,
     log,
     alert(line) {
