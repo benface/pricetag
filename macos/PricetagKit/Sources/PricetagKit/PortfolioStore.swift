@@ -67,6 +67,14 @@ public enum FeedState: Equatable, Sendable {
         case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .tooBig, .rateLimited: true
         }
     }
+
+    /// A blip, usually, so the status alone says so until it's gone on a while. The others say the numbers are old from the start.
+    public var canBeBrief: Bool {
+        switch self {
+        case .serverUnreachable, .tooSlow, .ampUnavailable, .rateLimited: true
+        default: false
+        }
+    }
 }
 
 /// One number's explanation, in full context, because the same number means something else on another wallet, method or server.
@@ -113,7 +121,12 @@ public final class PortfolioStore {
     /// Goes up each time `portfolio` is replaced, however that happens: a read, the last read on the server, or what's kept from
     /// before. `updatedAt` only changes with a fresh read, so whatever's worked out from `portfolio` keys on this instead.
     public private(set) var portfolioRevision = 0
-    public private(set) var feed: FeedState
+    public private(set) var feed: FeedState {
+        didSet { noteProblem() }
+    }
+    /// Whether what's wrong has been worth saying beyond the status: it can't clear by itself in a moment, or it's had `longProblem` to. A read that's trying again keeps it.
+    public private(set) var isProblemLong = false
+    @ObservationIgnored private var longProblemTask: Task<Void, Never>?
     /// When the read that's running now started, so a long one can say how long it's been, including a retry after a failure. nil between reads.
     /// A change starts a new read, so it starts this over. A read that waits longer on the same request keeps it.
     public private(set) var readingSince: Date?
@@ -181,6 +194,7 @@ public final class PortfolioStore {
     @ObservationIgnored private let pushedDelay: Duration
     /// When the server said it'd have room again, after holding this client back.
     @ObservationIgnored private var heldUntil: Date?
+    private let longProblem: Duration
     @ObservationIgnored private let liveFor: Duration
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var eventsTask: Task<Void, Never>?
@@ -208,8 +222,10 @@ public final class PortfolioStore {
         pushedDelay: Duration = .seconds(15),
         // The longest wait for a block, plus as long as a read gets before it's marked as on its way anyway.
         liveFor: Duration = .seconds(30),
-        rateRetryDelay: Duration = .seconds(30)
+        rateRetryDelay: Duration = .seconds(30),
+        longProblem: Duration = .seconds(60)
     ) {
+        self.longProblem = longProblem
         self.rateRetryDelay = rateRetryDelay
         self.defaults = defaults
         self.customSource = makeSource
@@ -998,6 +1014,31 @@ public final class PortfolioStore {
     private func shouldShow(_ last: Portfolio) -> Bool {
         guard let portfolio, isForCurrentSettings(portfolio) else { return true }
         return last.latest.blockNum >= portfolio.latest.blockNum
+    }
+
+    private func noteProblem() {
+        guard feed.isStale else {
+            // A read says nothing yet, so whatever was wrong stands until it answers.
+            if feed != .reading {
+                longProblemTask?.cancel()
+                longProblemTask = nil
+                isProblemLong = false
+            }
+            return
+        }
+        guard !isProblemLong else { return }
+        guard feed.canBeBrief, longProblem > .zero else {
+            longProblemTask?.cancel()
+            longProblemTask = nil
+            isProblemLong = true
+            return
+        }
+        guard longProblemTask == nil else { return }
+        longProblemTask = Task { [weak self, longProblem] in
+            try? await Task.sleep(for: longProblem)
+            guard let self, !Task.isCancelled else { return }
+            isProblemLong = true
+        }
     }
 
     /// Stops calling these numbers live once they're older than a read should leave them, say after a Mac sleeps. Checking when a read starts

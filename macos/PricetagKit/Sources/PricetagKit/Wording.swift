@@ -394,6 +394,10 @@ public enum Wording {
         return skipped == 0 ? "Found \(withdrawals(found))." : "Found \(withdrawals(found)). \(skipped) more had no usable cost."
     }
 
+    public static func linkedReading(_ count: Int) -> String {
+        "Reading your other \(count == 1 ? "wallet" : "wallets"). Until then, what came from \(count == 1 ? "it" : "them") has an unknown cost."
+    }
+
     public static func linkedFailed(_ count: Int) -> String {
         count == 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : "Couldn't read \(count) of your other wallets, so what came from them may show an unknown cost."
     }
@@ -424,7 +428,11 @@ public enum Wording {
     public static func holdSummary(_ comparison: HoldComparison, _ currency: CurrencyCode) -> String {
         switch comparison.status {
         case .unavailable: return "Not available yet"
-        case .partial: return "Not comparable yet"
+        case .partial:
+            guard let hold = comparison.holdMicros else { return "Not available yet" }
+            let count = comparison.unknownAmounts
+            let leavesOut = count == 0 ? "and the total PnL leaves some things out" : count == 1 ? "leaving out 1 amount" : "leaving out \(Format.block(count)) amounts"
+            return "Partial: \(comparison.estimated ? "about " : "")\(Format.signedMoney(hold, currency)) holding ETH, \(leavesOut)"
         case .complete:
             guard let difference = comparison.differenceMicros else { return "Not available yet" }
             return holdDifference(difference, currency, estimated: comparison.walletEstimated || comparison.estimated)

@@ -77,6 +77,12 @@ button { font: inherit; cursor: pointer; color: inherit; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .badge.updating::before { animation: none; } }
 .badge.warn { background: var(--warn-fill); border-color: var(--warn-border); color: var(--warn-ink); }
+.status { position: relative; }
+.status > summary { cursor: pointer; list-style: none; display: inline-block; }
+.status > summary::-webkit-details-marker { display: none; }
+.status-details { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; width: 300px; display: grid; gap: 8px; justify-items: start; padding: 12px; font-size: 13px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); }
+.status-details p { margin: 0; }
+.attention-slot { min-height: 44px; }
 .notice { font-size: 13px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary); margin-bottom: 10px; }
 .notice.warn { background: var(--warn-fill); border-color: var(--warn-border); color: var(--warn-ink); }
 .empty { padding: 56px 20px; text-align: center; max-width: 560px; margin: 0 auto; }

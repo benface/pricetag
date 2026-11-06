@@ -151,7 +151,7 @@ const common = {
   unlisted: [{ token: "0x00000000000000000000000000000000000000f1", transfers: 1 }],
   otherTokens: [
     { token: "0x00000000000000000000000000000000000000f1", kind: "token" as const, name: "Jackfruit", symbol: "JACK", decimals: 18, balance: (9n * E18).toString(), state: "read" as const, note: null, tucked: null },
-    { token: "0x00000000000000000000000000000000000000f2", kind: "token" as const, name: "USD Coin", symbol: "USDC", decimals: 6, balance: (5_000n * E6).toString(), state: "read" as const, note: null, tucked: "It calls itself USDC, and it isn't the USDC we know." },
+    { token: "0x00000000000000000000000000000000000000f2", kind: "token" as const, name: "USD Coin", symbol: "USDC", decimals: 6, balance: (5_000n * E6).toString(), state: "read" as const, note: null, tucked: "It calls itself USDC, but it isn't the real USDC." },
   ],
   otherTokensLeftOut: 0,
   l1FeeUnknownTxs: [],

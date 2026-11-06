@@ -947,7 +947,7 @@ enum TestScene: String, CaseIterable {
         let source: any PortfolioSource = TestMode.live.map { PricetagClient(serverURL: $0.server) } ?? FixtureSource(feed: feed, hasRate: !hasNoRate, rules: self == .settingsRules || self == .settingsSmallDisplay ? TestScene.twoRules : [], rulesAnswer: rulesAnswer, progress: readProgress, progressDelay: self == .mainWelcomeNumbersContract ? .seconds(1) : .zero)
         // A read that's been going a while, so these show how a long one looks. The store's clock is only behind for scenes that never finish a read.
         let readStarted: TimeInterval = TestMode.live == nil && [.neverAnswers, .updating, .retrying, .retryingWithNumbers].contains(feed) && self != .mainReadingStart && self != .mainWelcomeFirstReadStart ? 72 : 0
-        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { Date().addingTimeInterval(-readStarted) }, reachableDelay: TestMode.live == nil ? .milliseconds(50) : .seconds(30), unreachableDelay: .seconds(30))
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { Date().addingTimeInterval(-readStarted) }, reachableDelay: TestMode.live == nil ? .milliseconds(50) : .seconds(30), unreachableDelay: .seconds(30), longProblem: self == .mainRetryingNumbers ? .seconds(60) : .zero)
         store.start()
         let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method }, moneyDisplay: { store.moneyDisplay }, confirmsAddingSavings: [.addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere].contains(self))
         if !hasWallet, TestMode.live == nil, store.address != nil { TestMode.fail("This scene should start with no wallet, but it's showing \(store.address ?? "").") }

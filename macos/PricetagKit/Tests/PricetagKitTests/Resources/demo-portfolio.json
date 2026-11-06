@@ -56,7 +56,7 @@
       "balance": "5000000000",
       "state": "read",
       "note": null,
-      "tucked": "It calls itself USDC, and it isn't the USDC we know."
+      "tucked": "It calls itself USDC, but it isn't the real USDC."
     }
   ],
   "otherTokensLeftOut": 0,

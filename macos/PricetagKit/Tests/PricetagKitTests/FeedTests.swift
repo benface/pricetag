@@ -176,6 +176,35 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(!notice.contains("block"))
     }
 
+    @Test func aBlipOnlyShowsInTheStatusUntilItsGoneOnAWhile() async throws {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let now = now
+        let source = ScriptedSource([.success(try realPortfolio(at: now)), .failure(.unreachable), .success(try realPortfolio(at: now))])
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now }, longProblem: .milliseconds(30))
+        await _ = store.poll()
+        await _ = store.poll()
+        #expect(store.feed == .serverUnreachable)
+        #expect(store.staleNote == nil)
+        #expect(store.statusLine == nil)
+        #expect(!store.statusMessages(names: [:]).isEmpty, "A click still says what's wrong.")
+        #expect(store.canRetryStatus)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(store.staleNote?.contains("aren't updating") == true)
+        #expect(store.statusLine?.hasPrefix("Last update") == true)
+        await _ = store.poll()
+        #expect(store.feed.isLive)
+        #expect(!store.isProblemLong)
+        #expect(store.statusMessages(names: [:]).isEmpty)
+    }
+
+    @Test func aProblemThatWontClearByItselfSaysSoAtOnce() {
+        #expect(!FeedState.rejected("no").canBeBrief)
+        #expect(!FeedState.behind(seconds: 600).canBeBrief)
+        #expect(FeedState.serverUnreachable.canBeBrief)
+        #expect(FeedState.rateLimited("wait").canBeBrief)
+    }
+
     @Test func knowsWhenAReadStartedUntilItsDone() async throws {
         let clock = TestClock(now)
         let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
