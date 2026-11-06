@@ -1538,6 +1538,52 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
         assert.deepEqual(oldest(row(day(1), "Buy", "2", "$2000"), row(day(2), "Buy", "1", "$3000"), ...fills, sendTo(A, "0.5")), [null])
       })
 
+      describe("when a second is crowded", () => {
+        const second = (n: number) => new Date(Date.UTC(2026, 8, 1, 0, 0, n)).toISOString()
+        // Far more lots at one price than the budget can scan from every position, so only the budget can give up on these.
+        const ones = Array.from({ length: 4100 }, (_, i) => row(second(i), "Buy", "1", "$1000"))
+        const crowd = Array.from({ length: 12 }, (_, i) => sendTo(A, String(2 ** i)))
+        const lone = row(day(4), "Send", "1")
+
+        it("works out many sends of one size once, and keeps their cost", () => {
+          const sends = Array.from({ length: 1000 }, () => sendTo(A))
+          assert.deepEqual(oldest(row(day(1), "Buy", "1000", "$1000"), ...sends), sends.map(() => "1000000"))
+        })
+
+        it("knows what comes after many of one size, whether or not it can say what they cost", () => {
+          const sends = Array.from({ length: 1000 }, () => sendTo(A))
+          assert.deepEqual(oldest(row(day(1), "Buy", "1000", "$1000"), row(day(2), "Buy", "1", "$5000"), ...sends, lone), [...sends.map(() => "1000000"), "5000000000"])
+          assert.deepEqual(oldest(row(day(1), "Buy", "500", "$500"), row(day(2), "Buy", "500", "$5000"), ...sends, row(day(3), "Buy", "1", "$7"), lone), [...sends.map(() => null), "7000000"])
+        })
+
+        it("gives up when the budget runs out, and what's left still comes out right", () => {
+          assert.deepEqual(oldest(...ones, ...crowd, lone), [...crowd.map(() => null), "1000000000"])
+        })
+
+        it("gets the same answers whichever order the file has them in", () => {
+          // Small enough that the budget covers some of these sizes and not others, which is when its order could show.
+          const partly = crowd.slice(0, 10)
+          const bySize = (...rows: string[]) => new Map(parse(...rows).withdrawals.map((w) => [w.units, w.fifoCostMicros]))
+          const forwards = bySize(...ones, ...partly)
+          assert.deepEqual(forwards, bySize(...ones, ...partly.toReversed()))
+          assert.ok(forwards.has("1000000000000000000") && forwards.get("1000000000000000000") === "1000000000")
+          assert.equal(forwards.get("512000000000000000000"), null)
+        })
+
+        it("has no budget left for that asset's later crowds, but lone sends and other assets don't need it", () => {
+          const coin = (when: string, type: string, quantity: string, total = "$0") => row(when, type, quantity, total).replace(",ETH,", ",USDC,")
+          const later = "2026-10-05T00:00:00Z"
+          const sent = parse(...ones, ...crowd, row(later, "Send", "1"), row(later, "Send", "1"), lone, coin(day(1), "Buy", "2", "$2"), coin(later, "Send", "1"), coin(later, "Send", "1"))
+          assert.deepEqual(sent.withdrawals.filter((w) => w.asset === "ETH").slice(-3).map((w) => w.fifoCostMicros), ["1000000000", null, null])
+          assert.deepEqual(sent.withdrawals.filter((w) => w.asset === "USDC").map((w) => w.fifoCostMicros), ["1000000", "1000000"])
+        })
+
+        it("keeps the average, which doesn't depend on any of this", () => {
+          const sent = parse(...ones, ...crowd).withdrawals
+          assert.ok(sent.every((w) => w.cost.micros === String(BigInt(w.units) / E18 * 1000000000n)))
+        })
+      })
+
       it("follows through to a fold, whichever way round the arrivals' sends are", () => {
         const arrivals = (address: string, block: number) => wallet(address, [{ ...move(block, `0x${block}`, address, "credit", E18, COINBASE, ETH_ADDRESS), timestamp: "2026-10-03T00:03:00.000Z" }])
         for (const rows of [[sendTo(A), sendTo(WALLET_B)], [sendTo(WALLET_B), sendTo(A)]]) {
