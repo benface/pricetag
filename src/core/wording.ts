@@ -130,6 +130,12 @@ export function costTag(label: CostLabel, source: string | null = null): string 
 /** How a purchase's provider is named wherever its cost shows up. */
 export const purchaseSource = (provider: "coinbase", paid?: string) => `${{ coinbase: "Bought on Coinbase" }[provider]}${paid ? ` for ${paid}` : ""}`
 
+/** Where a bought cost comes from. That's on this device, so the server's proof can't say. */
+export const costProof = (source: string, label: CostLabel) =>
+  label === "inherited"
+    ? `${source}, by your other wallet. This transaction only moved it here, so the order isn't for this one. What's shown is this amount's share of what you paid, fees included.`
+    : `${source}. The order says what you paid, fees included, and matches this transaction exactly.`
+
 /** A cost's source, to finish "from …". */
 export const COST_WORDS: Record<CostLabel, string> = {
   paid: "what you paid",

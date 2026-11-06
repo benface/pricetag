@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../core/api.ts"
-import { emptyBook, linkDeviceAccounts, parseBook, type Book } from "../core/book.ts"
+import { emptyBook, linkDeviceAccounts, parseBook, recordPurchase, type Book, type Purchase } from "../core/book.ts"
 import { readKey, readsMatching } from "../core/resolve.ts"
 import { walletUrl } from "./useWallet.ts"
 
@@ -42,7 +42,13 @@ export function useBook() {
     setHistory((earlier) => earlier.map((one) => linkDeviceAccounts(one, addresses)))
   }, [])
 
-  return { book, change, undo, canUndo: history.length > 0, linkAccounts }
+  // What an order says, and not an answer either.
+  const addPurchase = useCallback((purchase: Purchase) => {
+    setBook((current) => recordPurchase(current, purchase))
+    setHistory((earlier) => earlier.map((one) => recordPurchase(one, purchase)))
+  }, [])
+
+  return { book, change, undo, canUndo: history.length > 0, linkAccounts, addPurchase }
 }
 
 /**

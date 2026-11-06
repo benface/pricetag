@@ -13,7 +13,7 @@ async function read<T>(url: string, signal?: AbortSignal): Promise<T> {
 }
 
 /** Where a row's price comes from, the datasets behind it, and a check of its block that says plainly what it doesn't cover. */
-export function ProofPanel({ address, legId, currency, rule }: { address: string; legId: string; currency: CurrencyCode; rule: string | null }) {
+export function ProofPanel({ address, legId, currency, rule, costNote = null }: { address: string; legId: string; currency: CurrencyCode; rule: string | null; costNote?: string | null }) {
   const query = `leg=${encodeURIComponent(legId)}&currency=${currency}${rule ? `&rule=${encodeURIComponent(rule)}` : ""}`
   const [proof, setProof] = useState<ProofResponse | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
@@ -66,6 +66,12 @@ export function ProofPanel({ address, legId, currency, rule }: { address: string
           </p>
         ))}
       </div>
+      {costNote ? (
+        <div>
+          <h4>Where its cost comes from</h4>
+          <p>{costNote}</p>
+        </div>
+      ) : null}
       {proof.datasets.length > 0 ? (
         <div>
           <h4>The recipe</h4>

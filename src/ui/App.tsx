@@ -54,9 +54,12 @@ import { currenciesIn, linkedWallets, walletsBehind } from "../core/book.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
 import { foldBook } from "../core/resolve.ts"
+import { PurchaseList } from "./PurchaseList.tsx"
+import { usePurchases } from "./usePurchases.ts"
 
 // Only loads when someone asks for it, so looking at a wallet never pulls in any device code.
 const DevicePanel = lazy(() => import("./DevicePanel.tsx").then((m) => ({ default: m.DevicePanel })))
+const BuyPanel = lazy(() => import("./BuyPanel.tsx").then((m) => ({ default: m.BuyPanel })))
 
 function readAddress(): string | null {
   const value = new URLSearchParams(window.location.search).get("address")
@@ -266,7 +269,9 @@ export function App() {
   const [taxYear, setTaxYear] = useState<TaxYear>("latest")
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
-  const { book, change, undo, canUndo, linkAccounts } = useBook()
+  const { book, change, undo, canUndo, linkAccounts, addPurchase } = useBook()
+  const { purchases, problem: purchasesProblem, begin: beginPurchase, dismiss: dismissPurchase } = usePurchases(addPurchase)
+  const [buying, setBuying] = useState(false)
   const paidIn = currenciesIn(book).filter((code) => code !== "USD").join(",")
   const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule, paidIn)
   const [device, setDevice] = useState<{ link: DeviceLink | null } | null>(() => {
@@ -400,10 +405,15 @@ export function App() {
         <button type="button" onClick={() => setDevice({ link: null })}>
           Hardware wallet
         </button>
+        <button type="button" onClick={() => setBuying(true)}>
+          Buy
+        </button>
         {wallet ? <LiveBadge wallet={wallet} stale={error !== null} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
       {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={wallet?.rule ?? null} address={address} method={method} currency={currency} book={book} /> : null}
+
+      <PurchaseList purchases={purchases} problem={purchasesProblem} matches={fold?.purchases ?? []} currency={chosenCurrency} showing={wallet?.address ?? null} onView={go} onDismiss={dismissPurchase} />
 
       {!address ? (
         <section className="empty">
@@ -521,6 +531,19 @@ export function App() {
 
       {explanation && wallet ? <ExplainPanel explanation={explanation} address={wallet.address} rule={wallet.rule ?? null} onClose={close} /> : null}
       {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
+      {buying ? (
+        <Suspense fallback={null}>
+          <BuyPanel
+            currency={chosenCurrency}
+            onBegin={beginPurchase}
+            onView={(next) => {
+              setBuying(false)
+              if (next !== wallet?.address.toLowerCase()) go(next)
+            }}
+            onClose={() => setBuying(false)}
+          />
+        </Suspense>
+      ) : null}
       {device ? (
         <Suspense fallback={null}>
           <DevicePanel

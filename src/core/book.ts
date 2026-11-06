@@ -96,6 +96,13 @@ export function linkDeviceAccounts(book: Book, addresses: readonly string[]): Bo
   return { ...book, senders }
 }
 
+/** A purchase in the book. An order's read again as more is known, like its block, so this takes over from what it said before. If nothing's new, it's the same book. */
+export function recordPurchase(book: Book, purchase: Purchase): Book {
+  const earlier = book.purchases ?? []
+  if (earlier.some((one) => JSON.stringify(one) === JSON.stringify(purchase))) return book
+  return { ...book, purchases: [...earlier.filter(({ order }) => order !== purchase.order), purchase] }
+}
+
 /** Saying what was paid for a sender's open receipts, by asset. It takes over for those receipts, and any others keep their earlier answers. */
 export function enterExchangeCosts(book: Book, focus: string, sender: string, receipts: readonly Receipt[], amounts: Readonly<Record<string, Money>>): Book {
   const earlier = book.senders[sender]?.kind === "my-exchange" ? (book.senders[sender].costs ?? []) : []
