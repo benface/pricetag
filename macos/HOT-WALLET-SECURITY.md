@@ -1,6 +1,6 @@
 # Hot wallet security checklist
 
-The Mac app's hot wallet ("this device's spending money") is an unreviewed hackathon build. It's meant for small funds only, and it assumes it will get hacked: the cap is what makes the risk acceptable. This lists what it does, what's been checked and how, and what it doesn't protect against.
+The Mac app's hot wallet ("this device's spending money") is an unreviewed build. It's meant for small funds only, and it assumes it will get hacked: the cap is what makes the risk acceptable. This lists what it does, what's been checked and how, and what it doesn't protect against.
 
 To check it yourself: `pnpm check:mac` for the logic, `pnpm check:keychain` for the real Secure Enclave and Keychain, `pnpm check:anvil` for real signing against a local fork of Base, and `pnpm check:extension` for the browser extension on a real site, through to that fork.
 
