@@ -39,6 +39,13 @@ nonisolated enum HotWalletDebug {
 
     /// Sets up a state to look at. What this does goes through the same calls as the app's buttons.
     @MainActor static func applyLaunchArguments(to wallet: HotWallet, bridge: SiteBridge) {
+        // Stands in for a button that opens a device page. `macos/device-pages-test.sh` does the browser's part.
+        if CommandLine.arguments.contains("--print-device-page") {
+            Task {
+                let page = try? await DeviceBrowsers.page(for: URL(string: "https://hosted.invalid?addsavings=ledger")!)
+                FileHandle.standardError.write(Data("PID \(getpid())\nDEVICE_PAGE \(page?.absoluteString ?? "none")\n".utf8))
+            }
+        }
         if let url = value(after: "--answer-site-requests-from").flatMap(URL.init(string:)) { answerSiteRequests(bridge, from: url) }
         if CommandLine.arguments.contains("--create-wallet") { Task { await wallet.createWallet() } }
         // An address is public, and scripts driving a fork need it to fund the wallet.

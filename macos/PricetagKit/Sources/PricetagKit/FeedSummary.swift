@@ -154,7 +154,7 @@ extension FeedState {
     }
 
     /// Where saying "on this Mac" and "start it" is true.
-    private static func isOnThisMac(_ url: URL) -> Bool {
+    static func isOnThisMac(_ url: URL) -> Bool {
         ["127.0.0.1", "localhost", "::1"].contains(url.host() ?? "")
     }
 

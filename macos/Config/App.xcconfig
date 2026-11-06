@@ -21,7 +21,8 @@ MACOSX_DEPLOYMENT_TARGET = 27.0
 SWIFT_VERSION = 6.0
 SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor
 SWIFT_APPROACHABLE_CONCURRENCY = YES
-ENABLE_USER_SCRIPT_SANDBOXING = YES
+// This target's only script is copy-device-pages.sh, which copies a folder whose files aren't known until it's built. The sandbox only allows named files.
+ENABLE_USER_SCRIPT_SANDBOXING = NO
 
 // A menu bar app with no Dock icon until its window opens. See DockPresence.swift.
 GENERATE_INFOPLIST_FILE = YES
@@ -33,9 +34,11 @@ INFOPLIST_KEY_NSHumanReadableCopyright =
 
 // Sandboxed, and its only permissions are to open connections, to read or write a file the user picks in a dialog, which is how an
 // exchange history comes in and a CSV goes out, and the camera, which reads a Keystone's address. It touches no other files but its own.
+// It only accepts connections for a device page, on 127.0.0.1, for as long as that page is open. See DevicePageServer.swift.
 ENABLE_APP_SANDBOX = YES
 ENABLE_USER_SELECTED_FILES = readwrite
 ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES
+ENABLE_INCOMING_NETWORK_CONNECTIONS = YES
 ENABLE_RESOURCE_ACCESS_CAMERA = YES
 INFOPLIST_KEY_NSCameraUsageDescription = Reads the address on your hardware wallet's screen. The picture stays on this Mac, and nothing's saved.
 ENABLE_HARDENED_RUNTIME = YES
