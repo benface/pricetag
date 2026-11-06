@@ -1321,6 +1321,152 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(await rig.chain.sent.isEmpty, "nothing moves to a key that's gone")
     }
 
+    @Test func aNewWalletThatCouldntBeWrittenLeavesNothingBehind() async throws {
+        struct DiskFull: Error {}
+        let signer = FakeSigner(keys: [], next: [hotAddress])
+        let store = MemoryStateStore()
+        let portfolios = ScriptedPortfolios(.success(portfolio()))
+        let chain = FakeChain(snapshot(eth: 0))
+        let wallet = HotWallet(signer: signer, settingsStore: MemorySettingsStore(), stateStore: store, presence: FakePresence(allows: true), portfolioSource: { portfolios }, makeChain: { _ in chain })
+        store.failSaves(with: DiskFull())
+        await wallet.createWallet()
+        #expect(wallet.address == nil)
+        #expect(wallet.sweepProblem != nil)
+        #expect(await signer.addresses().isEmpty)
+    }
+
+    /// A wallet partway through a rotation, loaded from disk, so its first look at the vault hasn't happened yet.
+    private func walletMidRotation(_ chain: ChainSnapshot) throws -> (wallet: HotWallet, signer: FakeSigner, store: MemoryStateStore) {
+        let signer = FakeSigner(keys: [hotAddress, nextAddress])
+        let store = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hotAddress
+        state.rotation = Rotation(from: hotAddress, to: nextAddress, destination: nextAddress)
+        try store.save(state)
+        let portfolios = ScriptedPortfolios(.success(portfolio(toBlock: 2000)))
+        let fake = FakeChain(chain)
+        return (HotWallet(signer: signer, settingsStore: MemorySettingsStore(), stateStore: store, presence: FakePresence(allows: true), portfolioSource: { portfolios }, makeChain: { _ in fake }), signer, store)
+    }
+
+    @Test func anOldKeyStaysUntilItsRetirementIsWritten() async throws {
+        struct DiskFull: Error {}
+        let (wallet, signer, store) = try walletMidRotation(snapshot(eth: 0))
+        var retirements = 0
+        wallet.onKeyRetired = { _, _ in retirements += 1 }
+        store.failSaves(with: DiskFull())
+        await wallet.finishRotationLeavingFundsBehind()
+        #expect(wallet.sweepProblem != nil)
+        #expect(wallet.address == hotAddress)
+        #expect(wallet.rotation != nil)
+        #expect(wallet.state.retired.isEmpty, "what's here has to match what's on disk")
+        #expect(retirements == 0)
+
+        await wallet.tick()
+        #expect(await signer.addresses() == [hotAddress, nextAddress], "a restart would find this key active")
+        #expect(store.saved.active == hotAddress)
+
+        store.failSaves(with: nil)
+        await wallet.finishRotationLeavingFundsBehind()
+        #expect(wallet.address == nextAddress)
+        #expect(store.saved.active == nextAddress)
+        #expect(store.saved.retired == [hotAddress])
+        #expect(retirements == 1)
+        #expect(await signer.addresses() == [nextAddress])
+    }
+
+    @Test func aRotationThatFinishesByItselfWaitsForItsRetirementToBeWritten() async throws {
+        struct DiskFull: Error {}
+        let (wallet, signer, store) = try walletMidRotation(snapshot(eth: 0))
+        await wallet.readHistory()
+        store.failSaves(with: DiskFull())
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await wallet.tick() }
+        #expect(wallet.address == hotAddress)
+        #expect(await signer.addresses() == [hotAddress, nextAddress])
+
+        store.failSaves(with: nil)
+        await wallet.tick()
+        #expect(wallet.address == nextAddress)
+        #expect(store.saved.active == nextAddress)
+        #expect(await signer.addresses() == [nextAddress])
+    }
+
+    @Test func aDeleteThatCouldntBeWrittenKeepsTheWalletAndItsKey() async throws {
+        struct DiskFull: Error {}
+        let rig = await Rig(snapshot(eth: 0))
+        rig.stateStore.failSaves(with: DiskFull())
+        await rig.wallet.deleteWallet()
+        #expect(rig.wallet.sweepProblem != nil)
+        #expect(rig.wallet.address == hotAddress)
+        #expect(rig.stateStore.saved.active == hotAddress)
+        #expect(await rig.signer.addresses() == [hotAddress], "a restart would find this key active")
+
+        rig.stateStore.failSaves(with: nil)
+        await rig.wallet.deleteWallet()
+        #expect(rig.wallet.address == nil)
+        #expect(rig.stateStore.saved.active == nil)
+        #expect(await rig.signer.addresses().isEmpty)
+    }
+
+    @Test func aKeyThatWouldntDeleteAfterDeletingTheWalletIsTriedAgain() async throws {
+        let rig = await Rig(snapshot(eth: oneEth))
+        await rig.signer.setDeleteFailure(KeyVault.Failure.noSuchKey)
+        await rig.wallet.deleteWallet()
+        #expect(rig.wallet.address == nil)
+        #expect(rig.stateStore.saved.retired == [hotAddress])
+        #expect(await rig.signer.addresses() == [hotAddress])
+
+        await rig.signer.setDeleteFailure(nil)
+        await rig.wallet.tick()
+        #expect(rig.wallet.address == nil, "what's on it doesn't bring it back")
+        #expect(await rig.signer.addresses().isEmpty)
+    }
+
+    /// No active wallet because one was deleted here, and `nextAddress` still in the vault.
+    private func walletAfterDeleting(_ chain: FakeChain) throws -> (wallet: HotWallet, signer: FakeSigner, store: MemoryStateStore) {
+        let signer = FakeSigner(keys: [nextAddress], next: [coldAddress])
+        let store = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.retired = [hotAddress]
+        try store.save(state)
+        let portfolios = ScriptedPortfolios(.success(portfolio()))
+        return (HotWallet(signer: signer, settingsStore: MemorySettingsStore(), stateStore: store, presence: FakePresence(allows: true), portfolioSource: { portfolios }, makeChain: { _ in chain }), signer, store)
+    }
+
+    @Test func aLeftoverKeyThatCouldntBeWrittenTriesAgain() async throws {
+        struct DiskFull: Error {}
+        let (wallet, _, store) = try walletAfterDeleting(FakeChain(snapshot(eth: oneEth / 100)))
+        store.failSaves(with: DiskFull())
+        await wallet.tick()
+        #expect(wallet.address == nil)
+
+        store.failSaves(with: nil)
+        await wallet.tick()
+        #expect(wallet.address == nextAddress)
+        #expect(store.saved.active == nextAddress)
+        #expect(wallet.notices.contains { $0.text == HotWalletWording.keyCameBack })
+    }
+
+    @Test func aNewWalletWaitingOnALookAtTheChainDoesntReplaceTheKeyItFinds() async throws {
+        let chain = FakeChain(snapshot(eth: oneEth / 100))
+        let (wallet, signer, store) = try walletAfterDeleting(chain)
+        await chain.hold(snapshots: true)
+        let look = Task { await wallet.tick() }
+        while await chain.heldCalls == 0 { await Task.yield() }
+        #expect(wallet.address == nil)
+        #expect(!wallet.isWorking, "so the button's there to press")
+        let create = Task { await wallet.createWallet() }
+        while !wallet.isWorking { await Task.yield() }
+        await chain.release()
+        await look.value
+        await create.value
+        wallet.stop()
+
+        #expect(wallet.address == nextAddress)
+        #expect(store.saved.active == nextAddress)
+        #expect(wallet.linkedWallets.contains(nextAddress.lowercased))
+        #expect(await signer.addresses() == [nextAddress])
+    }
+
     @Test func aRotationThatFinishesDuringTheLeaveBehindPromptOnlyFinishesOnce() async throws {
         let prompt = OpenPrompt()
         let rig = await Rig(snapshot(eth: 0), userPresence: prompt, portfolio: .success(portfolio(toBlock: 2000)))

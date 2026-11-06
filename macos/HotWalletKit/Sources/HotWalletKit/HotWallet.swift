@@ -307,8 +307,8 @@ public final class HotWallet {
                 let snapshot = try await chain.snapshot(of: key)
                 guard snapshot.chainID == Base.chainID else { return }
                 if snapshot.nonce > 0 || snapshot.balances.values.contains(where: { $0 > 0 }) {
-                    cameBackWithSomethingOnIt = true
                     try activate(key)
+                    cameBackWithSomethingOnIt = true
                     return
                 }
             }
@@ -318,8 +318,7 @@ public final class HotWallet {
     }
 
     private func activate(_ key: EthereumAddress) throws {
-        state.active = key
-        try persist()
+        try save { $0.active = key }
         publishLinkedWallets()
     }
 
@@ -332,6 +331,8 @@ public final class HotWallet {
                 try await signer.deleteKey(key)
             }
             retiredKeysAreGone = true
+        } catch let error as KeychainSealedKeyStore.Failure where error == .notProvisioned {
+            availability = .notProvisioned
         } catch {}
     }
 
@@ -381,7 +382,7 @@ public final class HotWallet {
             rotationHold = nil
             // Deleting a key can't be undone, so one read saying it's empty isn't enough.
             emptyReads += 1
-            if emptyReads >= Self.readsBeforeAlarm { try await finishRotation(rotation) }
+            if emptyReads >= Self.readsBeforeAlarm { try await retire(rotation.from, activating: rotation.to) }
             return
         }
         if let pausedUntil, now() < pausedUntil { return }
@@ -620,9 +621,10 @@ public final class HotWallet {
     public func createWallet() async {
         guard address == nil else { return }
         await work { [self] in
+            // A look at the chain can bring a wallet back while this waits its turn, and a new key would hide what's on it.
+            guard self.address == nil else { return }
             let address = try await signer.createKey()
-            state.active = address
-            try persist()
+            try await keepingKey(address) { $0.active = address }
             publishLinkedWallets()
             start()
         }
@@ -702,15 +704,8 @@ public final class HotWallet {
             guard self.address == address, rotation == nil else { return }
             let next = try await signer.createKey()
             let destination = alarm != nil ? settings.sweepDestination ?? next : next
-            state.rotation = Rotation(from: address, to: next, destination: destination)
-            do {
-                try persist()
-            } catch {
-                // Nothing's on the new key, and nobody's seen its address. A rotation that isn't on disk mustn't move anything to it.
-                state.rotation = nil
-                try? await signer.deleteKey(next)
-                throw error
-            }
+            // A rotation that isn't on disk mustn't move anything to the new key.
+            try await keepingKey(next) { $0.rotation = Rotation(from: address, to: next, destination: destination) }
             publishLinkedWallets()
             Task { await tick() }
         }
@@ -722,16 +717,8 @@ public final class HotWallet {
         await work(confirming: "delete the old key and leave what's on it behind") { [self] in
             // The rotation can finish while the prompt's open, and the new key can be deleted after that. This mustn't undo either.
             guard state.rotation == rotation, self.address == rotation.from else { return }
-            try await finishRotation(rotation)
+            try await retire(rotation.from, activating: rotation.to)
         }
-    }
-
-    private func finishRotation(_ rotation: Rotation) async throws {
-        retire(rotation.from, activating: rotation.to)
-        try persist()
-        publishLinkedWallets()
-        retiredKeysAreGone = false
-        await deleteRetiredKeys()
     }
 
     /// Deletes the key for good. What's still on it is lost, so the view offers a sweep first.
@@ -741,29 +728,34 @@ public final class HotWallet {
             // A rotation can start or finish while the prompt's open, and then this key isn't all there is.
             guard self.address == address else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
             guard canDelete else { throw ChainError.rejected(HotWalletWording.deleteWaitsForRotation) }
-            try await signer.deleteKey(address)
-            retire(address, activating: nil)
-            try persist()
-            publishLinkedWallets()
+            try await retire(address, activating: nil)
             await reconcileKeys()
         }
     }
 
-    private func retire(_ key: EthereumAddress, activating next: EthereumAddress?) {
-        state.retired.append(key)
-        state.active = next
-        forgetTheOldKeysState()
+    /// The key only goes once its retirement is on disk. If that can't be written the wallet carries on as it was, and if the key
+    /// won't delete or the app quits first, the next look deletes it. The other way round, a restart would find a wallet with no key.
+    private func retire(_ key: EthereumAddress, activating next: EthereumAddress?) async throws {
+        try save {
+            $0.retired.append(key)
+            $0.active = next
+            // Its alarms, dismissals and block numbers say nothing about the next key.
+            $0.connectedSites = nil
+            $0.rotation = nil
+            $0.alarm = nil
+            $0.acknowledged = []
+            $0.acknowledgedThroughNonce = nil
+            $0.settledThroughBlock = nil
+        }
+        forgetTheOldKeysReads()
         onKeyRetired?(key, next)
+        publishLinkedWallets()
+        retiredKeysAreGone = false
+        await deleteRetiredKeys()
     }
 
-    /// Everything that was about one key, whose alarms, dismissals, block numbers and reads say nothing about the next one.
-    private func forgetTheOldKeysState() {
-        state.connectedSites = nil
-        state.rotation = nil
-        state.alarm = nil
-        state.acknowledged = []
-        state.acknowledgedThroughNonce = nil
-        state.settledThroughBlock = nil
+    /// Everything else that was about one key, and that's not worth writing down.
+    private func forgetTheOldKeysReads() {
         snapshot = nil
         plan = nil
         portfolio = nil
@@ -1342,6 +1334,24 @@ public final class HotWallet {
 
     private func persist() throws {
         try stateStore.save(state)
+    }
+
+    /// For a change that decides which keys count. It only takes effect once it's on disk, so nothing acts on what a restart wouldn't know.
+    private func save(_ change: (inout DeviceWalletState) -> Void) throws {
+        var changed = state
+        change(&changed)
+        try stateStore.save(changed)
+        state = changed
+    }
+
+    /// For a change about a key just made. Nothing's on it and nobody's seen its address, so it goes if the change can't be written.
+    private func keepingKey(_ key: EthereumAddress, _ change: (inout DeviceWalletState) -> Void) async throws {
+        do {
+            try save(change)
+        } catch {
+            try? await signer.deleteKey(key)
+            throw error
+        }
     }
 }
 
