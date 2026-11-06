@@ -9,7 +9,7 @@ const HOUR = 3_600_000
 const NOW = 1_800_000_000_000
 const TOKEN = "0x00000000000000000000000000000000000000cc"
 
-const row = (ago: number, sender: string, side: "buy" | "sell", usd = 100, usdPerRaw = 2e-18): TokenActivity => ({ token: TOKEN, timeMs: NOW - ago, sender, side, usd, raw: usd / usdPerRaw, trades: 1 })
+const row = (ago: number, sender: string, side: "buy" | "sell", usd = 100, usdPerRaw = 2e-18): TokenActivity => ({ token: TOKEN, bin: 0, timeMs: NOW - ago, sender, side, usd, raw: usd / usdPerRaw, trades: 1 })
 
 /** Trading that passes: 12 senders on each side, every hour for 12 hours. */
 const healthy = (usdPerRaw = 2e-18) =>
@@ -142,7 +142,12 @@ describe("a wallet reading a token's market", () => {
   const timeOf = (block: number) => Math.floor((block > ANCHOR.blockNum ? ANCHOR.ms + msBetweenBlocks(ANCHOR.blockNum, block) : ANCHOR.ms - msBetweenBlocks(block, ANCHOR.blockNum)) / 1000) * 1000
   const quiet = { warn() {}, error() {}, log() {}, info() {}, debug() {} } as unknown as Console
 
-  type Trade = { block: number; activity: TokenActivity }
+  type Trade = { block: number; activity: Omit<TokenActivity, "bin"> }
+  /** The source's: the last block of the pricing bucket a trade's grouped into. */
+  const binOf = (block: number) => {
+    const size = block > LAST_2S_BLOCK ? 1500 : 150
+    return block + size - 1 - ((block + size - 1) % size)
+  }
   /** 12 senders on each side, every hour for 12 hours, up to `block`. */
   const healthyTo = (block: number, hourBlocks = HOUR_BLOCKS): Trade[] =>
     Array.from({ length: 12 }, (_, hour) => Array.from({ length: 12 }, (_, sender) =>
@@ -176,7 +181,7 @@ describe("a wallet reading a token's market", () => {
       async readTokenActivity(_, from, to) {
         if (state.fail) throw new Error("down")
         state.reads.push([from, to])
-        return state.trades.filter((t) => t.block >= from && t.block <= to && t.block <= (state.reached ?? -1)).map((t) => t.activity)
+        return state.trades.filter((t) => t.block >= from && t.block <= to && t.block <= (state.reached ?? -1)).map((t) => ({ ...t.activity, bin: binOf(t.block) }))
       },
     }
     const wallets = createWallets(source, async () => ({ blockNum: state.head, timestamp: new Date(timeOf(state.head)).toISOString() }), async () => new Map(), quiet)
@@ -294,14 +299,11 @@ describe("a wallet reading a token's market", () => {
     /** The source's SQL: a sender's side over a bucket's blocks, dated by its last trade. */
     const groupedSetup = (rows: LegRow[], trades: Trade[], start?: Parameters<typeof setup>[2]) => {
       const set = setup(rows, trades, start)
-      const blockOf = new Map(trades.map((t) => [t.activity, t.block]))
       const read = set.source.readTokenActivity!
       set.source.readTokenActivity = async (tokens, from, to) => {
         const groups = new Map<string, TokenActivity>()
         for (const row of await read(tokens, from, to)) {
-          const block = blockOf.get(row)!
-          const size = block > LAST_2S_BLOCK ? 1500 : 150
-          const key = `${row.token}:${row.sender}:${row.side}:${Math.floor((block + size - 1) / size) * size}`
+          const key = `${row.token}:${row.sender}:${row.side}:${row.bin}`
           const old = groups.get(key)
           groups.set(key, old ? { ...row, timeMs: Math.max(old.timeMs, row.timeMs), raw: old.raw + row.raw, usd: old.usd + row.usd, trades: old.trades + row.trades } : row)
         }
@@ -369,6 +371,62 @@ describe("a wallet reading a token's market", () => {
         return (await usdcOf(wallets)).costMicros
       }))
       assert.deepEqual(costs, Array(5).fill(COST))
+    })
+
+    describe("where a later block has the same timestamp as a bucket's start", () => {
+      const FAST = LAST_2S_BLOCK - (LAST_2S_BLOCK % 1500) + 240_000
+      const FAST_NEXT = FAST + 1500
+      const trade = (block: number, sender: string, side: "buy" | "sell") => ({ block, activity: { token: TOKEN, timeMs: timeOf(block), sender, side, usd: 100, raw: 100 / 2e-18, trades: 1 } })
+      // Two of the 3 senders the last hour needs before the bucket's start, and the third in the very next block.
+      const trades = [...healthyTo(FAST - 18_100, 18_000), trade(FAST - 30, "a", "buy"), trade(FAST - 31, "b", "sell"), trade(FAST + 1, "c", "sell")]
+      const rows = [...sale(ME, FAST), ...sale(OTHER, FAST_NEXT)]
+      const start = { head: FAST_NEXT + 1000, reached: FAST_NEXT + 1000 }
+      const build = () => groupedSetup(rows, trades, start)
+
+      it("really is the same timestamp", () => {
+        assert.equal(timeOf(FAST), timeOf(FAST + 1))
+      })
+
+      it("doesn't let a wider read use that block", async () => {
+        const { state, wallets } = build()
+        assertUnknown(await usdcOf(wallets, ME))
+        assertPriced(await usdcOf(wallets, OTHER))
+        assert.ok(state.reads.at(-1)![1] > FAST, "the second read went further")
+        assertUnknown(await usdcOf(wallets, ME))
+      })
+
+      it("doesn't let a wider read that came first use it either", async () => {
+        const { wallets } = build()
+        assertPriced(await usdcOf(wallets, OTHER))
+        assertUnknown(await usdcOf(wallets, ME))
+      })
+
+      it("agrees with a fresh read, whichever is read first", async () => {
+        const fresh = await usdcOf(build().wallets, ME)
+        for (const order of [[ME, OTHER], [OTHER, ME]]) {
+          const { wallets } = build()
+          for (const address of order) await usdcOf(wallets, address)
+          assert.deepEqual(await usdcOf(wallets, ME), fresh)
+        }
+      })
+    })
+
+    it("doesn't use a wider read's older rows, even dated inside the price's 24 hours", async () => {
+      const older = SALE - 23 * HOUR_BLOCKS
+      // One buyer short of a market, with the last one's bin before the first block this price looks at.
+      const trades = [...healthyTo(BUCKET).filter((t) => !["buy9", "buy10", "buy11"].includes(t.activity.sender)), { block: BUCKET - 24 * HOUR_BLOCKS - 300, activity: { token: TOKEN, timeMs: timeOf(BUCKET) - 2 * HOUR, sender: "buy9", side: "buy" as const, usd: 100, raw: 100 / 2e-18, trades: 1 } }]
+      const rows = [...sale(ME, SALE), ...sale(OTHER, older)]
+      assertUnknown(await usdcOf(groupedSetup(rows, trades).wallets, ME))
+      const { state, wallets } = groupedSetup(rows, trades)
+      await usdcOf(wallets, OTHER)
+      assertUnknown(await usdcOf(wallets, ME))
+      assert.ok(state.reads.at(-1)![0] <= BUCKET - 24 * HOUR_BLOCKS - 300, "the read went further back")
+    })
+
+    it("says which bucket each row's in", async () => {
+      const query = (async () => [{ token: TOKEN.slice(2), sender: "s", side: "buy", bin: "3000", at: NOW, usd_micros: 1e8, raw: 5e19, trades: 2 }]) as unknown as Query
+      const [read] = await resolvingSource(query, { baseDataset: "base", dataset: "pricetag", tokensDataset: "benface/pricetag_tokens@0.1.1", startBlock: 0, network: "base" }).readTokenActivity!([TOKEN], 1, 3000)
+      assert.equal(read!.bin, 3000)
     })
 
     it("asks for its buckets in the query, not the clock's", async () => {

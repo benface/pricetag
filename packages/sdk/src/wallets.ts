@@ -46,7 +46,7 @@ export type Source = {
   readMarketTrades?(asset: string, from: number, to: number): Promise<MarketTrade[]>
   /**
    * Trades of these tokens off the allowlist in a block range, with `from` and `to` on the edges of a pricing bucket. Rows have to be grouped
-   * by those buckets, or by something inside them, so a wider read gives the same rows for what it shares. Only a dataset with `token_trades`
+   * by those buckets, with `bin` their last block, so a wider read gives the same rows for what it shares. Only a dataset with `token_trades`
    * has them. Leaving this or `tokenActivityThrough` out changes nothing about any wallet.
    */
   readTokenActivity?(tokens: readonly string[], from: number, to: number): Promise<TokenActivity[]>
@@ -573,7 +573,9 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const known = tokenPrices.get(key)
     if (known !== undefined) return known
     // At the bucket's start, so no block in it is priced by what came after it, and in whole seconds like the trades, so it's the same whichever block asks first.
-    const { usdPerRaw } = tokenMarketPrice(tokenReads.get(token)?.activity ?? [], Date.parse(timestampOfBlock(blocks.to, { blockNum: block, timestamp })))
+    // Only its own blocks, by block: a read can go further than this price needs, and past the 200 ms upgrade, a later block can have the same timestamp.
+    const activity = tokenReads.get(token)?.activity.filter(({ bin }) => bin >= blocks.from && bin <= blocks.to) ?? []
+    const { usdPerRaw } = tokenMarketPrice(activity, Date.parse(timestampOfBlock(blocks.to, { blockNum: block, timestamp })))
     const price = usdPerRaw ?? null
     tokenPrices.set(key, price)
     return price

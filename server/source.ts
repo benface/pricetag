@@ -381,7 +381,7 @@ function readTokenActivityFrom(query: Query, dataset: string) {
        GROUP BY token, sender, side, bin`,
       120_000,
     )
-    return rows.map((r) => ({ token: prefixed(String(r.token)), timeMs: Number(r.at), sender: String(r.sender), side: r.side as "buy" | "sell", usd: Number(r.usd_micros) / 1e6, raw: Number(r.raw), trades: Number(r.trades) }))
+    return rows.map((r) => ({ token: prefixed(String(r.token)), bin: Number(r.bin), timeMs: Number(r.at), sender: String(r.sender), side: r.side as "buy" | "sell", usd: Number(r.usd_micros) / 1e6, raw: Number(r.raw), trades: Number(r.trades) }))
   }
 }
 

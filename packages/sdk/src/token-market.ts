@@ -4,8 +4,11 @@
 // A chain can't prove trading is honest: wallets are free to make, and a pool's fees go back to whoever funds it. So these make faking
 // slow and bound what it can do, and what a price is used for has to stay safe when it's wrong. See README.md's "Pricing any token".
 
-/** One sender's trades on one side of a token, over a few minutes. Amounts are in the token's smallest unit, so no decimals are needed, and a token can't lie about them to change what it's worth. */
-export type TokenActivity = { token: string; timeMs: number; sender: string; side: "buy" | "sell"; usd: number; raw: number; trades: number }
+/**
+ * One sender's trades on one side of a token, over a few minutes, up to the block `bin`. Amounts are in the token's smallest unit, so no decimals
+ * are needed, and a token can't lie about them to change what it's worth.
+ */
+export type TokenActivity = { token: string; bin: number; timeMs: number; sender: string; side: "buy" | "sell"; usd: number; raw: number; trades: number }
 
 export type TokenMarketRules = {
   /** How far back trading has to look real. Long enough that a token can't pass within an hour of being made. */
