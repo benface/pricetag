@@ -576,7 +576,7 @@ describe("the user's answers in a report", () => {
   it("uses what was imported from an exchange, and marks it", () => {
     const wallet = held([arrived(10, SELLER), sell(30, 1n, 2500)])
     const at = wallet.legs[0]?.timestamp as string
-    const book: Book = { ...emptyBook(), withdrawals: [{ exchange: "Coinbase", asset: "ETH", units: E18.toString(), at, cost: { micros: usd(1200), currency: "USD" }, toAddress: A }] }
+    const book: Book = { ...emptyBook(), withdrawals: [{ exchange: "Coinbase", asset: "ETH", units: E18.toString(), at, cost: { micros: usd(1200), currency: "USD" }, fifoCostMicros: usd(1200), toAddress: A }] }
     const [row] = eventsOf(taxReportOf([wallet], US, { book }))
     assert.deepEqual([row?.Cost, row?.Status], ["1200.000000", "SELF-REPORTED"])
   })

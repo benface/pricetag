@@ -138,7 +138,7 @@ describe("a purchase's cost", () => {
 
   it("doesn't use up an imported withdrawal that belongs to something else", () => {
     const at = new Date(Date.UTC(2026, 10, 5) + BLOCK * 1000).toISOString()
-    const withdrawal = { exchange: "Coinbase", asset: "USDC", units: (25n * E6).toString(), at, cost: { micros: "99000000", currency: "USD" as const }, toAddress: null }
+    const withdrawal = { exchange: "Coinbase", asset: "USDC", units: (25n * E6).toString(), at, cost: { micros: "99000000", currency: "USD" as const }, fifoCostMicros: null, toAddress: null }
     const fold = foldBook(wallet(ME, [delivered]), [], "average", { ...bookWith(purchase()), withdrawals: [withdrawal] })
     assert.equal(fold.legs[0]!.costMicros, "25800000")
   })

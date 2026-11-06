@@ -785,8 +785,11 @@ public struct ExchangeWithdrawal: Codable, Sendable, Equatable {
     public let asset: String
     public let units: String
     public let at: String
+    /// What it cost going by the average of what was bought before it.
     public let cost: Money
     public let toAddress: String?
+    /// The same going oldest first, in the same currency. Nil when that can't be said, or it was saved before this was worked out.
+    public var fifoCostMicros: String? = nil
 }
 
 public struct ExchangeImport: Codable, Sendable, Equatable {
