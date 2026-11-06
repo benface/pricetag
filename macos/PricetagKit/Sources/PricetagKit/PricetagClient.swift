@@ -31,6 +31,8 @@ public protocol PortfolioSource: Sendable {
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof
     func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification
+    /// What a wallet lets others spend, checked onchain just now.
+    func approvals(address: String) async throws -> WalletApprovals
     /// One element each time the server says there's a new block, until the connection goes. Nil when this source can't say.
     func headEvents() -> AsyncThrowingStream<Void, any Error>?
     /// A provider's page for buying `asset` for this address, and what to ask about its order by. It starts at `fiat`, what was typed, when the provider can start from that currency, and otherwise at `cryptoAmount`.
@@ -50,6 +52,7 @@ extension PortfolioSource {
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
     public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof { throw FetchError.unreachable }
     public func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
+    public func approvals(address: String) async throws -> WalletApprovals { throw FetchError.unreachable }
     public func rules() async throws -> [PricingRule] { [] }
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
     public func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout { throw FetchError.unreachable }
@@ -127,6 +130,11 @@ public struct PricetagClient: PortfolioSource {
     }
 
     /// Reads every wallet in it, so it gets as long as a first read.
+    /// The first read of a wallet's history can take a while, until the dataset has its own table of approvals.
+    public func approvals(address: String) async throws -> WalletApprovals {
+        try await get("/api/approvals/\(address)", query: [], timeout: .seconds(180))
+    }
+
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
         try await decoded(post("/api/tax-report/\(request.address)", body: request.body, timeout: .seconds(180)))
     }
@@ -138,7 +146,7 @@ public struct PricetagClient: PortfolioSource {
 
     public func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String {
         let data = try await post("/api/portfolio/\(address)/export", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book), timeout: .seconds(30))
-        guard let text = String(data: data, encoding: .utf8) else { throw FetchError.rejected("The server sent something this version can't read.") }
+        guard let text = String(data: data, encoding: .utf8) else { throw FetchError.rejected("The price service sent something this version can't read.") }
         return text
     }
 
@@ -174,14 +182,14 @@ public struct PricetagClient: PortfolioSource {
         do {
             return try JSONDecoder().decode(Body.self, from: data)
         } catch {
-            throw FetchError.rejected("The server sent something this version can't read.")
+            throw FetchError.rejected("The price service sent something this version can't read.")
         }
     }
 
     private func url(_ path: String, query: [URLQueryItem]) throws -> URL {
         var components = URLComponents(url: serverURL.appending(path: path), resolvingAgainstBaseURL: false)
         if !query.isEmpty { components?.queryItems = query }
-        guard let url = components?.url else { throw FetchError.rejected("That server address isn't a valid URL.") }
+        guard let url = components?.url else { throw FetchError.rejected("The price service's address isn't a valid URL.") }
         return url
     }
 
@@ -222,7 +230,7 @@ public struct PricetagClient: PortfolioSource {
         }
         guard let status = (response as? HTTPURLResponse)?.statusCode else { throw FetchError.unreachable }
         if status == 200 || status == 204 { return data }
-        let message = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error ?? "The server answered with an error (\(status))."
+        let message = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error ?? "The price service answered with an error (\(status))."
         switch status {
         case 502: throw FetchError.ampUnavailable(message)
         case 503: throw FetchError.noAmpConfigured(message)

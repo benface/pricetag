@@ -14,7 +14,7 @@ const PAGE = "https://pay.coinbase.com/buy/select-asset"
 const NETWORK = "base"
 const TIMEOUT_MS = 15_000
 /** What its docs say `presetFiatAmount` works in. In anything else, the page starts from a token amount and shows its own price. */
-const PRESET_FIAT: ReadonlySet<string> = new Set(["USD", "CAD", "GBP", "EUR"])
+export const PRESET_FIAT: ReadonlySet<string> = new Set(["USD", "CAD", "GBP", "EUR"])
 
 /** Ed25519 keys are base64 of the seed and the public key. Older ones are EC keys in PEM form. */
 function signerOf(secret: string): { alg: "EdDSA" | "ES256"; sign: (data: Buffer) => Buffer } {

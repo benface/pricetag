@@ -46,6 +46,28 @@ extension View {
     public func arrives(from edge: Edge = .top) -> some View {
         modifier(ArrivalModifier(edge: edge))
     }
+
+    /// A cost that's just become known, lit softly and fading by itself. The number's already what's real by then.
+    public func justKnown(_ isOn: Bool) -> some View {
+        lit(isOn, Tone.gain.color)
+    }
+
+    /// Something new in a list, like what was just sent, so the eye finds it. It fades the same way.
+    public func justAdded(_ isOn: Bool) -> some View {
+        lit(isOn, .accentColor, opacity: 0.12)
+    }
+
+    private func lit(_ isOn: Bool, _ color: Color, opacity: Double = 0.2) -> some View {
+        background {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(color)
+                .opacity(isOn ? opacity : 0)
+                .padding(.horizontal, -5)
+                .padding(.vertical, -2)
+                // It comes up quickly and goes slowly.
+                .animation(isOn ? Motion.feedback : .easeOut(duration: 0.8 * Motion.slowdown), value: isOn)
+        }
+    }
 }
 
 private struct MotionModifier<Value: Equatable>: ViewModifier {

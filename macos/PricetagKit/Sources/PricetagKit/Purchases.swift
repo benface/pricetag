@@ -133,9 +133,15 @@ public enum PurchaseWording {
         return "\(chosen) of \(purchase.order?.asset ?? purchase.asset)"
     }
 
+    /// What its page can start from a typed amount in: `PRESET_FIAT` in `server/coinbase.ts`. In anything else, it starts from a token amount.
+    static let startsFromAmountIn: Set<CurrencyCode> = [.USD, .CAD, .GBP, .EUR]
+
     /// What the amount in the sheet will do once it's on the provider's page, so what it charges is no surprise.
     public static func checkoutNote(_ display: MoneyDisplay) -> String {
         let account = "You'll need a \(provider) account."
+        if display.isConverted, !startsFromAmountIn.contains(display.currency) {
+            return "\(account) Its page can't start from an amount in \(display.currency.rawValue), so it starts from about that much of the token, and shows its own price and fees before you pay. What it charges, fees included, becomes the cost here."
+        }
         if display.isConverted {
             return "\(account) Its page starts at this amount in \(display.currency.rawValue) and shows its fees before you pay. What it charges, fees included, becomes the cost here."
         }
@@ -206,7 +212,13 @@ public final class PurchaseTracker {
     public static func message(for error: any Error) -> String { failureMessage(for: error) }
 
     public func purchases(of wallet: String) -> [TrackedPurchase] {
-        purchases.filter { $0.wallet == wallet.lowercased() }.reversed()
+        purchases(of: [wallet])
+    }
+
+    /// Newest first, across all of them.
+    public func purchases(of wallets: Set<String>) -> [TrackedPurchase] {
+        let wallets = Set(wallets.map { $0.lowercased() })
+        return purchases.filter { wallets.contains($0.wallet) }.reversed()
     }
 
     public func phase(of purchase: TrackedPurchase) -> PurchasePhase {
@@ -231,7 +243,7 @@ public final class PurchaseTracker {
     /// Asks the server for a page, and starts following it. Throws when there's no page to open, with something to say about why.
     public func begin(wallet: String, asset: String, dollars: Int, cryptoAmount: String, typed: Money? = nil) async throws -> URL {
         let checkout = try await store.currentSource.onrampCheckout(address: wallet, asset: asset, cryptoAmount: cryptoAmount, fiat: typed)
-        guard let page = checkout.page else { throw FetchError.rejected("The server sent a page that isn't \(PurchaseWording.provider)'s.") }
+        guard let page = checkout.page else { throw FetchError.rejected("The price service sent a page that isn't \(PurchaseWording.provider)'s.") }
         purchases.append(TrackedPurchase(ref: checkout.ref, wallet: wallet.lowercased(), asset: asset, dollars: dollars, typed: typed, startedAt: now()))
         save()
         start()

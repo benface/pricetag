@@ -1,3 +1,4 @@
+import Synchronization
 import Foundation
 import Testing
 @testable import PricetagKit
@@ -26,7 +27,21 @@ import Testing
         #expect(!held.isEmpty)
         #expect(held.allSatisfy { $0.explainableMetrics.contains(.average) })
         let usdc = try #require(held.first { $0.asset == "USDC" })
-        #expect(usdc.explainableMetrics.map(\.title) == ["Balance check", "Amount", "Average price paid", "Value", "Realized PnL", "Unrealized PnL"])
+        #expect(usdc.explainableMetrics.map(\.title) == ["Balance check", "Amount", "Price", "Average price paid", "Value", "Realized PnL", "Unrealized PnL", "Return"])
+    }
+
+    /// The details say why there's no price, so a holding without one can still open it.
+    @Test func aMissingPriceCanStillBeOpened() throws {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
+        var positions = object["positions"] as! [[String: Any]]
+        let index = try #require(positions.firstIndex { $0["asset"] as? String == "AERO" })
+        positions[index]["price"] = NSNull()
+        object["positions"] = positions
+        let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        let aero = try #require(portfolio.listedPositions.first { $0.asset == "AERO" })
+        #expect(aero.price == nil)
+        #expect(aero.explainableMetrics.contains(.price))
+        #expect(portfolio.listedPositions.allSatisfy { $0.explainableMetrics.contains(.price) })
     }
 
     @Test func keepsUnknownPointsUnknown() throws {
@@ -105,7 +120,7 @@ import Testing
 
 @Test func anOpeningBalanceIsNotATransaction() throws {
     let json = """
-    {"id":"opening:DAI","asset":"DAI","delta":"5","decimals":18,"kind":"transfer","priceMicros":null,"priceSource":null,"priceNote":null,"costLabel":"unknown","estimated":false,"partlyUnknown":false,"blockNum":1,"timestamp":"2026-11-04T00:00:00.000Z","txHash":"","opening":true,"effect":"Adds 5 DAI","netting":null}
+    {"id":"opening:DAI","asset":"DAI","delta":"5","decimals":18,"kind":"transfer","priceMicros":null,"priceSource":null,"priceNote":null,"costLabel":"unknown","estimated":false,"partlyUnknown":false,"blockNum":1,"timestamp":"2026-11-04T00:00:00.000Z","txHash":"","opening":true,"summary":"Already held 5 DAI when this history starts.","unknown":"What this cost isn't known yet.","answerable":true,"effect":"Adds 5 DAI","netting":null}
     """
     let leg = try JSONDecoder().decode(ExplanationLeg.self, from: Data(json.utf8))
     #expect(leg.transactionURL == nil)
@@ -113,7 +128,7 @@ import Testing
 
 @Test func ethThatArrivedWithNoTransactionToNameHasNoLinkOrProof() throws {
     let json = """
-    {"id":"unseen:53525052:ETH","asset":"ETH","delta":"2061830000000000","decimals":18,"kind":"transfer","priceMicros":"2424450000","priceSource":"oracle","priceNote":null,"costLabel":"unknown","estimated":false,"partlyUnknown":false,"blockNum":53525052,"timestamp":"2026-11-05T00:44:04.000Z","txHash":"","opening":false,"effect":"Adds 0.00206 ETH at an unknown cost","netting":null,"conversion":null}
+    {"id":"unseen:53525052:ETH","asset":"ETH","delta":"2061830000000000","decimals":18,"kind":"transfer","priceMicros":"2424450000","priceSource":"oracle","priceNote":null,"costLabel":"unknown","estimated":false,"partlyUnknown":false,"blockNum":53525052,"timestamp":"2026-11-05T00:44:04.000Z","txHash":"","opening":false,"summary":"Received $5.00 of ETH.","unknown":"What this cost isn't known yet.","answerable":true,"effect":"Adds 0.00206 ETH at an unknown cost","netting":null,"conversion":null}
     """
     let leg = try JSONDecoder().decode(ExplanationLeg.self, from: Data(json.utf8))
     #expect(leg.isIncoming)
@@ -140,4 +155,43 @@ import Testing
     #expect(try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: json)).isEmpty)
     json["unreadAssets"] = ["ETH"]
     #expect(try !JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: json)).isEmpty)
+}
+
+@Suite struct ApprovalsModelTests {
+    @Test func readsWhatTheServerSends() throws {
+        let approvals = try resource("demo-approvals", as: WalletApprovals.self)
+        #expect(approvals.mode == .demo)
+        #expect(approvals.approvals.count == 4)
+        #expect(approvals.unlimitedCount == 3)
+        #expect(approvals.approvals.contains { $0.kind == .permit2 && $0.expiry != nil && $0.amountText == "250 USDC" })
+        #expect(approvals.approvals.allSatisfy { $0.grantedDate != nil })
+    }
+
+    @MainActor @Test func aFailedRefreshKeepsTheListButSaysItsOld() async throws {
+        let approvals = try resource("demo-approvals", as: WalletApprovals.self)
+        let fails = Mutex(false)
+        let model = ApprovalsModel(address: approvals.address) { _ in
+            if fails.withLock({ $0 }) { throw FetchError.unreachable }
+            return approvals
+        }
+        await model.load()
+        #expect(model.refreshFailure == nil)
+        fails.withLock { $0 = true }
+        await model.load()
+        #expect(model.approvals == approvals)
+        #expect(model.refreshFailure == "Can't reach the server.")
+        fails.withLock { $0 = false }
+        await model.load()
+        #expect(model.refreshFailure == nil)
+    }
+
+    @MainActor @Test func neverShowsAnotherWalletsList() async throws {
+        let approvals = try resource("demo-approvals", as: WalletApprovals.self)
+        let model = ApprovalsModel(address: "0x00000000000000000000000000000000000a11ce") { _ in approvals }
+        await model.load()
+        #expect(model.approvals == nil)
+        let matching = ApprovalsModel(address: approvals.address) { _ in approvals }
+        await matching.load()
+        #expect(matching.approvals == approvals)
+    }
 }

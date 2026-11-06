@@ -51,18 +51,28 @@ public struct DisplayNumber: View {
 public struct AddressLine: View {
     let address: String
     let gap: CGFloat
+    let marked: Set<Int>
 
-    /// `gap` is in points. It suits the small sizes addresses appear at.
-    public init(_ address: String, gap: CGFloat = 3.5) {
+    /// `gap` is in points. It suits the small sizes addresses appear at. `marked` are characters to call out, counting `0x`, like where two
+    /// addresses differ.
+    public init(_ address: String, gap: CGFloat = 3.5, marked: Set<Int> = []) {
         self.address = address
         self.gap = gap
+        self.marked = marked
     }
 
     private var grouped: AttributedString {
         var result = AttributedString()
+        var offset = 0
         for group in Format.addressGroups(address) {
             var run = AttributedString(group)
+            for (index, position) in run.characters.indices.enumerated() where marked.contains(offset + index) {
+                let range = position..<run.characters.index(after: position)
+                run[range].foregroundColor = Tone.warning.color
+                run[range].inlinePresentationIntent = .stronglyEmphasized
+            }
             if let last = run.characters.indices.last { run[last..<run.endIndex].kern = gap }
+            offset += group.count
             result += run
         }
         return result
@@ -72,5 +82,6 @@ public struct AddressLine: View {
         Text(grouped)
             .monospaced()
             .accessibilityLabel(address)
+            .contextMenu { AddressActions(address: address) }
     }
 }

@@ -32,6 +32,8 @@ public struct SignedRecord: Codable, Equatable, Identifiable, Sendable {
         case sent
         /// A cost the user published. `symbol` is the token it's about, and nothing moved.
         case note
+        /// Approvals taken back. `to` is who could spend, `symbol` what they could spend, and nothing moved.
+        case revoke
     }
 
     public let hash: String

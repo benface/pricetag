@@ -79,13 +79,25 @@ public struct LiveNumber: View {
 extension EnvironmentValues {
     /// Set while a read runs and the numbers on screen may change once it's done, to what a mark beside them says. See `updatingMark`.
     @Entry public var updatingNote: String?
+    /// What each of the user's wallets is called, by address, for saying which wallet something is in.
+    @Entry public var walletNames: [String: String] = [:]
+}
+
+extension [String: String] {
+    /// A wallet's name, or its short address when it has none here.
+    public func walletName(_ address: String) -> String {
+        self[address.lowercased()] ?? Format.shortHash(address)
+    }
 }
 
 extension PortfolioStore {
-    /// nil unless there are numbers on screen that this read may change.
+    /// nil unless there are numbers on screen that this read may change. All Yours also changes when a wallet that's still
+    /// being read is done, so it says so until then.
     public var updatingNote: String? {
-        guard feed == .reading, let portfolio else { return nil }
-        return Wording.updating(lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp)
+        guard let portfolio else { return nil }
+        if feed == .reading { return Wording.updating(lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp) }
+        if portfolio.isAllYours, !portfolio.linkedReading.isEmpty, !feed.isStale { return Wording.updatingWallets(portfolio.linkedReading.count) }
+        return nil
     }
 }
 
@@ -102,14 +114,18 @@ extension View {
 private struct UpdatingMark: View {
     @Environment(\.updatingNote) private var note
 
+    /// It fades, whatever Reduce Motion says, because nothing moves. The numbers it sits beside don't animate with it.
     var body: some View {
-        if let note {
-            ProgressView()
-                .controlSize(.mini)
-                .help(note)
-                .accessibilityLabel("Updating")
-                .transition(.opacity)
+        ZStack {
+            if let note {
+                ProgressView()
+                    .controlSize(.mini)
+                    .help(note)
+                    .accessibilityLabel("Updating")
+                    .transition(.opacity)
+            }
         }
+        .animation(Motion.state, value: note != nil)
     }
 }
 
@@ -227,13 +243,16 @@ public struct Notice: View {
 
     let kind: Kind
     let text: String
+    let detail: String?
     let actionTitle: String?
     let action: () -> Void
     @Environment(\.colorSchemeContrast) private var contrast
 
-    public init(_ kind: Kind, _ text: String, actionTitle: String? = nil, action: @escaping () -> Void = {}) {
+    /// `detail` is the technical side, behind a Details button.
+    public init(_ kind: Kind, _ text: String, detail: String? = nil, actionTitle: String? = nil, action: @escaping () -> Void = {}) {
         self.kind = kind
         self.text = text
+        self.detail = detail
         self.actionTitle = actionTitle
         self.action = action
     }
@@ -246,8 +265,15 @@ public struct Notice: View {
                 Text(text)
                     .foregroundStyle(kind == .warning ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                     .fixedSize(horizontal: false, vertical: true)
-                if let actionTitle {
-                    Button(actionTitle, action: action)
+                if actionTitle != nil || detail != nil {
+                    HStack(spacing: 12) {
+                        if let actionTitle {
+                            Button(actionTitle, action: action)
+                        }
+                        if let detail {
+                            DetailsButton(detail: detail)
+                        }
+                    }
                 }
             }
             Spacer(minLength: 0)
@@ -267,27 +293,79 @@ public struct Notice: View {
     }
 }
 
+/// The technical side of a problem, for whoever wants it, without putting it in front of everyone else.
+public struct DetailsButton: View {
+    let detail: String
+    @State private var isShown = false
+
+    public init(detail: String) {
+        self.detail = detail
+    }
+
+    public var body: some View {
+        Button("Details") { isShown.toggle() }
+            #if os(macOS)
+            .buttonStyle(.link)
+            #else
+            .buttonStyle(.borderless)
+            #endif
+            .popover(isPresented: $isShown) {
+                Text(detail)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 280, alignment: .leading)
+                    .padding(12)
+            }
+    }
+}
+
+/// Redraws every second from `since`, so a read that's taking a while visibly keeps going. Its content gets the whole seconds so far.
+public struct ReadingClock<Content: View>: View {
+    let since: Date
+    let content: (Int) -> Content
+
+    public init(since: Date, @ViewBuilder content: @escaping (Int) -> Content) {
+        self.since = since
+        self.content = content
+    }
+
+    public var body: some View {
+        TimelineView(.periodic(from: since, by: 1)) { context in
+            content(Int(context.date.timeIntervalSince(since)))
+        }
+    }
+}
+
 /// Says whether the numbers are current. Never says live unless the last read worked.
 public struct FeedBadge: View {
     let feed: FeedState
     let portfolio: Portfolio?
+    let readingSince: Date?
 
-    public init(feed: FeedState, portfolio: Portfolio?) {
+    public init(feed: FeedState, portfolio: Portfolio?, readingSince: Date? = nil) {
         self.feed = feed
         self.portfolio = portfolio
+        self.readingSince = readingSince
     }
 
-    private var text: String {
+    private func text(seconds: Int?) -> String {
         switch feed {
         case .noWallet: return "No wallet"
         // With numbers on screen, they're the previous answer until the new one arrives.
-        case .reading: return portfolio == nil ? "Reading" : "Updating"
+        case .reading:
+            let label = portfolio == nil ? "Reading" : "Updating"
+            guard let seconds, seconds >= FeedState.longReadSeconds else { return label }
+            return "\(label) · \(Format.elapsed(seconds: seconds))"
         case .live:
             guard let portfolio else { return "Reading" }
             if portfolio.mode == .demo { return Mode.demo.label }
             return "Live"
         case .catchingUp: return "Catching up"
-        default: return "Not updating"
+        default:
+            // A retry that's taking a while may be about to work, so it says it's trying rather than only that it's stopped.
+            guard let seconds, seconds >= FeedState.longReadSeconds else { return "Not updating" }
+            return "Trying again · \(Format.elapsed(seconds: seconds))"
         }
     }
 
@@ -301,12 +379,21 @@ public struct FeedBadge: View {
 
     public var body: some View {
         HStack(spacing: 5) {
-            Circle().fill(color).frame(width: 7, height: 7).animation(Motion.state, value: text)
-            Text(text).monospacedDigit().contentTransition(.opacity).animation(Motion.state, value: text)
+            Circle().fill(color).frame(width: 7, height: 7).animation(Motion.state, value: color)
+            if let readingSince, feed == .reading || feed.isStale {
+                ReadingClock(since: readingSince) { label(text(seconds: $0)) }
+            } else {
+                label(text(seconds: nil))
+            }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
         .help(portfolio.map { Wording.feedDetail($0.mode, block: $0.coverage.toBlock) } ?? "")
+    }
+
+    /// A count that ticks rolls its digits. Anything else fades from one state to the next.
+    private func label(_ text: String) -> some View {
+        Text(text).monospacedDigit().contentTransition(readingSince != nil ? .numericText() : .opacity).animation(Motion.state, value: text)
     }
 }

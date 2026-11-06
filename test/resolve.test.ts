@@ -3,7 +3,7 @@ import { describe, it } from "node:test"
 import { verifyLink } from "../server/links.ts"
 import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
 import { createWallets, type Source } from "@pricetag/sdk/internal"
-import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, shortHash, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
+import { ASSETS, CURRENCIES, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, shortHash, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
 import { answerSender, costKey, emptyBook, enterExchangeCosts, linkMessage, linkedWallets, parseBook, proofOwner, type Book, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
 import { matchWithdrawals, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -1630,5 +1630,24 @@ describe("a cost as typed", () => {
 
   it("refuses a comma it can't tell apart", () => {
     for (const bad of ["1.234,50", "12,3456", "1,23,456", "0,125", ",5", ""]) assert.equal(microsOf(bad), null, bad)
+  })
+
+  it("takes the main currency's own symbol, before or after, and refuses any other", () => {
+    assert.equal(microsOf("€46,20", "EUR"), "46200000")
+    assert.equal(microsOf("46,20 €", "EUR"), "46200000")
+    assert.equal(microsOf("46.20 EUR", "EUR"), "46200000")
+    assert.equal(microsOf("CHF 46", "CHF"), "46000000")
+    assert.equal(microsOf("$46", "AUD"), "46000000")
+    assert.equal(microsOf("A$46", "AUD"), "46000000")
+    assert.equal(microsOf("R$46", "BRL"), "46000000")
+    // `€46` published as 46 dollars can't be taken back, so a note's USD stays in dollars.
+    assert.equal(microsOf("€46"), null)
+    for (const { code, symbol, label } of Object.values(CURRENCIES)) {
+      for (const mark of new Set([code, symbol.trim(), label.trim()])) {
+        assert.equal(microsOf(`${mark}46`, code), "46000000", `${mark}46`)
+        assert.equal(microsOf(`46 ${mark}`, code), "46000000", `46 ${mark}`)
+      }
+    }
+    for (const [text, currency] of [["$46", "EUR"], ["US$46", "CAD"], ["£46", "EUR"], ["R$46", "ZAR"], ["CA$46", "AUD"]] as const) assert.equal(microsOf(text, currency), null, `${text} in ${currency}`)
   })
 })

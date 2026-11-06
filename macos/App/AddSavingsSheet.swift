@@ -195,8 +195,7 @@ private struct StepPage<Extra: View>: View {
             }
             if let picture {
                 DevicePicture(picture)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
+                    .stepPicture()
             }
             Text(page.title)
                 .font(.sheetTitle)
@@ -219,17 +218,26 @@ extension StepPage where Extra == EmptyView {
 private struct StepDots: View {
     let current: Int
     let total: Int
+    static let height: CGFloat = 7
 
     var body: some View {
         HStack(spacing: 5) {
             ForEach(0..<total, id: \.self) { index in
                 Circle()
                     .fill(index <= current ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary))
-                    .frame(width: 7, height: 7)
+                    .frame(width: Self.height, height: Self.height)
             }
         }
         .accessibilityElement()
         .accessibilityLabel("Step \(current + 1) of \(total)")
+    }
+}
+
+extension View {
+    /// The same room for every step's picture, whether it's a device or a symbol, so titles land in the same place from one step to the next.
+    /// Keystone's is taller, and stays taller across its own steps.
+    fileprivate func stepPicture() -> some View {
+        frame(maxWidth: .infinity, minHeight: 76)
     }
 }
 
@@ -311,8 +319,7 @@ private struct LedgerBrowserStep: View {
             Image(systemName: "safari")
                 .font(.system(size: 44, weight: .light))
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
+                .stepPicture()
                 .accessibilityHidden(true)
             Text(found.browser.map { "Continue in \($0.name)" } ?? page.title)
                 .font(.sheetTitle)
@@ -506,12 +513,13 @@ private struct FinishedStep: View {
     let model: AddSavingsModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
+            // Where the steps' dots were, so the title stays where every step had it.
+            Color.clear.frame(height: StepDots.height)
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 44))
-                .foregroundStyle(.green)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
+                .foregroundStyle(Tone.gain.style)
+                .stepPicture()
                 .accessibilityHidden(true)
             Text(AddSavingsWording.page(.finished, device: model.device).title)
                 .font(.sheetTitle)
