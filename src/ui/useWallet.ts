@@ -27,7 +27,14 @@ const RECONNECT_MS = 3000
 /** How soon to read again while a wallet's still being read, since nothing else says when it's done. */
 const READ_AGAIN_MS = 2000
 
-type LiveState<T> = { value: T | null; loading: boolean; error: ReadFailure | null }
+export type LiveState<T> = {
+  value: T | null
+  loading: boolean
+  /** Why the latest read failed. */
+  readFailure: ReadFailure | null
+  /** Why new blocks aren't arriving. A read that started before they stopped doesn't clear it. */
+  updateFailure: ReadFailure | null
+}
 
 type LiveOptions<T> = {
   /** Whether new blocks can change it. */
@@ -36,89 +43,103 @@ type LiveOptions<T> = {
   unfinished?: (value: T) => boolean
 }
 
+/** What to tell the user. A read's own failure says what's wrong, which a lost connection can't. Until a read has finished, it's still the one to say how it went. */
+export function liveError<T>({ value, readFailure, updateFailure }: LiveState<T>): ReadFailure | null {
+  if (readFailure && readFailure.kind !== "unreachable") return readFailure
+  if (value === null && readFailure === null) return null
+  return updateFailure ?? readFailure
+}
+
 /**
- * Reads something, then reads it again on each new block. A block that arrives during a read waits for the next one. `showing`
- * is what's on screen, and only a change to that clears it. Any other change to `request` keeps the numbers up until the new
- * ones arrive, since they say what they're in. `attempt` reads again now.
+ * Reads something, then reads it again on each new block. A block that arrives during a read waits for the next one. Returns
+ * how to stop.
  */
-function useLiveRead<T>(showing: string | null, request: string, read: (signal: AbortSignal) => Promise<T>, { live, unfinished }: LiveOptions<T>, attempt = 0): LiveState<T> {
-  const [state, setState] = useState<LiveState<T>>({ value: null, loading: false, error: null })
+export function followRead<T>(read: (signal: AbortSignal) => Promise<T>, { live, unfinished }: LiveOptions<T>, update: (change: (state: LiveState<T>) => LiveState<T>) => void): () => void {
+  const abort = new AbortController()
+  let busy = false
+  let readAgain = false
+  // No updates can arrive while this is false, so a read that finishes then doesn't mean the numbers are current.
+  let connected = true
+  // Counts dropped connections, so a read that started before the last one can't clear its warning.
+  let drops = 0
+  let soon: ReturnType<typeof setTimeout> | undefined
+
+  const refresh = () => {
+    if (busy) {
+      readAgain = readAgain || !connected
+      return
+    }
+    busy = true
+    readAgain = false
+    clearTimeout(soon)
+    const dropsAtStart = drops
+    read(abort.signal)
+      .then((value) => {
+        update((s) => ({ value, loading: false, readFailure: null, updateFailure: connected && drops === dropsAtStart ? null : s.updateFailure }))
+        if (unfinished?.(value)) soon = setTimeout(refresh, READ_AGAIN_MS)
+      })
+      .catch((error: unknown) => {
+        if (abort.signal.aborted) return
+        update((s) => ({ ...s, loading: false, readFailure: failureOf(error) }))
+      })
+      .finally(() => {
+        busy = false
+        if (readAgain && !abort.signal.aborted) refresh()
+      })
+  }
+  refresh()
+
+  const stop = () => {
+    clearTimeout(soon)
+    abort.abort()
+  }
+  if (!live) return stop
+
+  let events: EventSource
+  let retry: ReturnType<typeof setTimeout> | undefined
+  const connect = () => {
+    events = new EventSource("/api/events")
+    events.addEventListener("open", () => {
+      if (connected) return
+      // Blocks may have gone by unseen, so catch up. The warning clears only once that read succeeds.
+      connected = true
+      readAgain = busy
+      refresh()
+    })
+    events.addEventListener("head", refresh)
+    events.addEventListener("down", () => update((s) => ({ ...s, updateFailure: { kind: "unavailable", said: "Can't reach the data source." } })))
+    events.addEventListener("error", () => {
+      connected = false
+      drops++
+      update((s) => ({ ...s, updateFailure: { kind: "unreachable" } }))
+      // The browser retries a dropped connection by itself, but gives up for good on an error response.
+      if (events.readyState === EventSource.CLOSED) retry = setTimeout(connect, RECONNECT_MS)
+    })
+  }
+  connect()
+  return () => {
+    clearTimeout(retry)
+    events.close()
+    stop()
+  }
+}
+
+/**
+ * `followRead` for what's on screen. `showing` is what's on screen, and only a change to that clears it. Any other change to
+ * `request` keeps the numbers up until the new ones arrive, since they say what they're in. `attempt` reads again now.
+ */
+function useLiveRead<T>(showing: string | null, request: string, read: (signal: AbortSignal) => Promise<T>, options: LiveOptions<T>, attempt = 0): { value: T | null; loading: boolean; error: ReadFailure | null } {
+  const [state, setState] = useState<LiveState<T>>({ value: null, loading: false, readFailure: null, updateFailure: null })
   const shown = useRef<string | null>(null)
 
   useEffect(() => {
-    if (shown.current !== showing) setState({ value: null, loading: showing !== null, error: null })
+    if (shown.current !== showing) setState({ value: null, loading: showing !== null, readFailure: null, updateFailure: null })
     shown.current = showing
     if (showing === null) return
-    const abort = new AbortController()
-    let busy = false
-    let readAgain = false
-    // No updates can arrive while this is false, so a read that finishes then doesn't mean the numbers are current.
-    let connected = true
-    // Counts dropped connections, so a read that started before the last one can't clear its warning.
-    let drops = 0
-    let soon: ReturnType<typeof setTimeout> | undefined
-
-    const refresh = () => {
-      if (busy) {
-        readAgain = readAgain || !connected
-        return
-      }
-      busy = true
-      readAgain = false
-      clearTimeout(soon)
-      const dropsAtStart = drops
-      read(abort.signal)
-        .then((value) => {
-          setState((s) => ({ value, loading: false, error: connected && drops === dropsAtStart ? null : s.error }))
-          if (unfinished?.(value)) soon = setTimeout(refresh, READ_AGAIN_MS)
-        })
-        .catch((error: unknown) => {
-          if (abort.signal.aborted) return
-          setState((s) => ({ ...s, loading: false, error: failureOf(error) }))
-        })
-        .finally(() => {
-          busy = false
-          if (readAgain && !abort.signal.aborted) refresh()
-        })
-    }
-    refresh()
-
-    const stop = () => {
-      clearTimeout(soon)
-      abort.abort()
-    }
-    if (!live) return stop
-
-    let events: EventSource
-    let retry: ReturnType<typeof setTimeout> | undefined
-    const connect = () => {
-      events = new EventSource("/api/events")
-      events.addEventListener("open", () => {
-        if (connected) return
-        // Blocks may have gone by unseen, so catch up. The warning clears only once that read succeeds.
-        connected = true
-        readAgain = busy
-        refresh()
-      })
-      events.addEventListener("head", refresh)
-      events.addEventListener("down", () => setState((s) => ({ ...s, error: { kind: "unavailable", said: "Can't reach the data source." } })))
-      events.addEventListener("error", () => {
-        connected = false
-        drops++
-        setState((s) => ({ ...s, loading: false, error: { kind: "unreachable" } }))
-        // The browser retries a dropped connection by itself, but gives up for good on an error response.
-        if (events.readyState === EventSource.CLOSED) retry = setTimeout(connect, RECONNECT_MS)
-      })
-    }
-    connect()
-    return () => {
-      clearTimeout(retry)
-      events.close()
-      stop()
-    }
+    return followRead(read, options, setState)
   }, [showing, request, attempt])
 
-  return state
+  return { value: state.value, loading: state.loading, error: liveError(state) }
 }
 
 /** Reads a wallet, and again on each new block. */
