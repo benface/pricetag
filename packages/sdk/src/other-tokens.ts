@@ -205,7 +205,7 @@ export function tuckedReason({ name, symbol, state }: Pick<OtherToken, "name" | 
 }
 
 /** What rows say about one token, all that's needed to know whether it's held and what to ask its contract. */
-type Moved = { token: string; lastBlock: number; net: bigint; unreadable: boolean; collectible: boolean; multiple: boolean; sentByThisWallet: boolean }
+type Moved = { token: string; lastBlock: number; net: bigint; someMoved: boolean; unreadable: boolean; collectible: boolean; multiple: boolean; sentByThisWallet: boolean }
 
 function movedTokens(rows: readonly LegRow[], account: string, gasUnknown: ReadonlyMap<string, number>): Moved[] {
   const sent = new Set(gasUnknown.keys())
@@ -213,14 +213,16 @@ function movedTokens(rows: readonly LegRow[], account: string, gasUnknown: Reado
   const tokens = new Map<string, Moved>()
   for (const row of rows) {
     if (row.account !== account || (row.kind !== "unlisted" && row.kind !== "unlisted_nft") || tokenByAddress(row.token)) continue
-    const moved = tokens.get(row.token) ?? { token: row.token, lastBlock: 0, net: 0n, unreadable: false, collectible: false, multiple: false, sentByThisWallet: false }
+    const moved = tokens.get(row.token) ?? { token: row.token, lastBlock: 0, net: 0n, someMoved: false, unreadable: false, collectible: false, multiple: false, sentByThisWallet: false }
     moved.lastBlock = Math.max(moved.lastBlock, row.block_num)
     if (sent.has(row.tx_hash)) moved.sentByThisWallet = true
     if (row.kind === "unlisted_nft") {
       moved.collectible = true
       moved.unreadable = true
-    } else if (/^\d+$/.test(row.amount)) moved.net += row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
-    else {
+    } else if (/^\d+$/.test(row.amount)) {
+      moved.net += row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
+      if (BigInt(row.amount) !== 0n) moved.someMoved = true
+    } else {
       // ERC-1155 logs have no amount the dataset can read, and its `balanceOf` takes an item as well.
       moved.collectible = true
       moved.multiple = true
@@ -279,22 +281,30 @@ export function createOtherTokens(read: ReadTokenFacts, logger: { warn(message: 
   function requestFor(account: string, moved: Moved, at: number): TokenRequest | null {
     const balance = balances.get(account)?.get(moved.token)
     const known = details.get(moved.token)
-    const wantsBalance = !moved.multiple && (!balance || balance.atBlock < moved.lastBlock || at - balance.readAt >= (balance.balance === null ? RETRY_BAD_ANSWER_MS : BALANCE_MAX_AGE_MS))
+    // A failed query that hasn't been narrowed down yet says nothing about this contract, so its retry doesn't wait.
+    const narrowing = balance?.balance === null && groupSize.has(moved.token)
+    const wantsBalance = !moved.multiple && (!balance || narrowing || balance.atBlock < moved.lastBlock || at - balance.readAt >= (balance.balance === null ? RETRY_BAD_ANSWER_MS : BALANCE_MAX_AGE_MS))
     const wantsDetails = !known || (!known.complete && at - known.readAt >= RETRY_BAD_ANSWER_MS)
     if (!wantsBalance && !wantsDetails) return null
     return { token: moved.token, balance: wantsBalance, details: wantsDetails, decimals: wantsDetails && !moved.collectible }
   }
 
+  function rememberBalance(account: string, token: string, block: number, balance: string | null, at: number) {
+    const own = balances.get(account) ?? new Map<string, Balance>()
+    balances.delete(account)
+    balances.set(account, own)
+    if (balances.size > MAX_ACCOUNTS_REMEMBERED) balances.delete(balances.keys().next().value as string)
+    own.set(token, { balance, atBlock: block, readAt: at, lastAnswer: balance ?? own.get(token)?.lastAnswer ?? null })
+  }
+
+  /** Its query failed and it'll be asked again on its own, so nothing's blamed yet, but the balance it had can't pass for current until then. */
+  function doubtBalance(account: string, block: number, { token, balance }: TokenRequest) {
+    if (balance && balances.get(account)?.get(token)?.balance != null) rememberBalance(account, token, block, null, now())
+  }
+
   function remember(account: string, block: number, moved: Moved, request: TokenRequest, answer: TokenAnswer | undefined) {
     const at = now()
-    if (request.balance) {
-      const own = balances.get(account) ?? new Map<string, Balance>()
-      balances.delete(account)
-      balances.set(account, own)
-      if (balances.size > MAX_ACCOUNTS_REMEMBERED) balances.delete(balances.keys().next().value as string)
-      const balance = answer?.balance ?? null
-      own.set(request.token, { balance, atBlock: block, readAt: at, lastAnswer: balance ?? own.get(request.token)?.lastAnswer ?? null })
-    }
+    if (request.balance) rememberBalance(account, request.token, block, answer?.balance ?? null, at)
     if (request.details) {
       const last = details.get(request.token)
       const decimals = moved.collectible ? 0 : (answer?.decimals ?? last?.decimals ?? null)
@@ -324,14 +334,19 @@ export function createOtherTokens(read: ReadTokenFacts, logger: { warn(message: 
       }
       if (started !== rewinds) return
       if (!answers && group.length > 1) {
-        for (const { token } of group) groupSize.set(token, Math.ceil(group.length / 2))
+        for (const request of group) {
+          groupSize.set(request.token, Math.ceil(group.length / 2))
+          doubtBalance(account, block, request)
+        }
       } else {
         for (const request of group) {
           const answer = answers?.get(request.token)
           const asked = (request.balance && answer?.balance == null) || (request.decimals && answer?.decimals == null)
           // Another contract in the group can have used up the gas this one needed, so it gets a query to itself before it's blamed.
-          if (answers && asked && group.length > 1) groupSize.set(request.token, 1)
-          else {
+          if (answers && asked && group.length > 1) {
+            groupSize.set(request.token, 1)
+            if (answer?.balance == null) doubtBalance(account, block, request)
+          } else {
             groupSize.delete(request.token)
             remember(account, block, movedOf.get(request.token) as Moved, request, answer)
           }
@@ -364,8 +379,8 @@ export function createOtherTokens(read: ReadTokenFacts, logger: { warn(message: 
     const about = details.get(moved.token)
     const balance = readBetween(account, moved, nextMove)
     const lastAnswer = balances.get(account)?.get(moved.token)?.lastAnswer ?? null
-    // Having held it is a reason to say so when its balance isn't known, whatever the rows add up to.
-    const held = moved.net > 0n || moved.unreadable || (lastAnswer !== null && lastAnswer !== "0")
+    // Rows only start at the dataset's first block, so what they add up to can't show it's gone. Only a balance can. A zero-value transfer proves nothing, as anyone can send one.
+    const held = moved.someMoved || moved.unreadable || (lastAnswer !== null && lastAnswer !== "0")
     if (balance?.balance === "0" || (!held && balance?.balance == null)) return null
     const state: OtherToken["state"] = moved.multiple ? "read" : !balance ? "reading" : balance.balance === null ? "unreadable" : "read"
     const decimals = about?.decimals ?? null

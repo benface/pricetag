@@ -184,6 +184,56 @@ describe("other tokens", () => {
     assert.equal(queries.length, 1, "and once it's read as empty, it's never asked about again")
   })
 
+  describe("a token whose rows don't add up to anything held", () => {
+    // It held 10 from before the first block and sent 2, so the rows say -2.
+    const spent = [row(JACK, "debit", "2", { tx_hash: "0xmine" }), gas("0xmine")]
+    const sentThrough = [row(JACK, "credit", "2", { block_num: 90 }), row(JACK, "debit", "2", { tx_hash: "0xmine" }), gas("0xmine")]
+    const noAnswer = { balance: null, name: null, symbol: null, decimals: null }
+
+    for (const [what, rows] of [["sent more than it received", spent], ["sent all it received", sentThrough]] as const) {
+      it(`stays listed with no amount while it has ${what} and its first read fails`, async () => {
+        const tokens = createOtherTokens(fakeChain({ [JACK]: noAnswer }).read, logger)
+        assert.deepEqual(tokens.view(ME, rows, none).otherTokens.map((t) => [t.state, t.balance]), [["reading", null]], "before it's read")
+        const { otherTokens } = await fill(tokens, rows)
+        assert.deepEqual(otherTokens.map((t) => [t.state, t.balance]), [["unreadable", null]])
+      })
+    }
+
+    it("goes by the balance once there is one", async () => {
+      const answers: Record<string, TokenAnswer> = { [JACK]: noAnswer }
+      let time = 1_000_000
+      const tokens = createOtherTokens(fakeChain(answers).read, logger, () => time)
+      await fill(tokens, spent, 200, 1)
+      answers[JACK] = good("JACK", "8")
+      time += 11 * 60_000
+      assert.deepEqual((await fill(tokens, spent, 300, 1)).otherTokens.map((t) => [t.state, t.balance]), [["read", "8"]])
+      answers[JACK] = good("JACK", "0")
+      time += 6 * 60_000
+      assert.deepEqual((await fill(tokens, spent, 400, 1)).otherTokens, [])
+    })
+
+    it("makes a sum across wallets unknown rather than leaving this wallet out", async () => {
+      const tokens = createOtherTokens(fakeChain({ [JACK]: noAnswer }).read, logger)
+      const elsewhere = { otherTokens: [{ token: JACK, kind: "token" as const, name: "JACK Token", symbol: "JACK", decimals: 18, balance: "5", state: "read" as const, note: null, tucked: null }], otherTokensLeftOut: 0 }
+      const [token] = combineOtherTokens([await fill(tokens, spent), elsewhere]).otherTokens
+      assert.deepEqual([token?.state, token?.balance], ["unreadable", null])
+    })
+
+    it("stays listed at an earlier block too", async () => {
+      const tokens = createOtherTokens(fakeChain({ [JACK]: noAnswer }).read, logger)
+      await fill(tokens, spent)
+      assert.deepEqual(tokens.viewAt(ME, spent, none, 150).otherTokens.map((t) => [t.state, t.balance]), [["unreadable", null]])
+      assert.deepEqual(createOtherTokens(fakeChain({}).read, logger).viewAt(ME, spent, none, 150).otherTokens.map((t) => [t.state, t.balance]), [["reading", null]])
+    })
+
+    it("still leaves out a zero-value transfer whose read fails, at any block", async () => {
+      const poison = [row(JACK, "credit", "0"), row(JACK, "debit", "0")]
+      const tokens = createOtherTokens(fakeChain({ [JACK]: noAnswer }).read, logger)
+      assert.deepEqual((await fill(tokens, poison)).otherTokens, [])
+      assert.deepEqual(tokens.viewAt(ME, poison, none, 150).otherTokens, [])
+    })
+  })
+
   it("is only reads: what's in `otherTokens` isn't in the fold", () => {
     const without = foldWallet({ ...DEMO_WALLET, otherTokens: [], otherTokensLeftOut: 0 }, "average")
     const huge: OtherToken = { token: JACK, kind: "token", name: "Rich", symbol: "RICH", decimals: 0, balance: (10n ** 40n).toString(), state: "read", note: null, tucked: null }
@@ -266,6 +316,57 @@ describe("other tokens", () => {
       const sentAll = [...rows, row(JACK, "debit", "7", { block_num: 250, tx_hash: "0xmine" })]
       const [token] = (await fill(tokens, sentAll, 300, 1)).otherTokens
       assert.deepEqual([token?.state, token?.balance], ["unreadable", null])
+    })
+
+    describe("when the query it shared with another token fails", () => {
+      const OTHER = "0x00000000000000000000000000000000000000f2"
+      const both = [...rows, row(OTHER, "credit", "7", { tx_hash: "0xmine" })]
+      const failing = async (failure: TokenAnswer | "hangs") => {
+        const clock = { time: 1_000_000 }
+        const answers: Record<string, TokenAnswer | "hangs"> = { [JACK]: good("JACK", "5"), [OTHER]: good("OTHER", "5") }
+        const { read, queries } = fakeChain(answers)
+        const tokens = createOtherTokens(read, logger, () => clock.time)
+        await fill(tokens, both, 200, 1)
+        queries.length = 0
+        answers[JACK] = failure
+        clock.time += 6 * 60_000
+        const failed = await fill(tokens, both, 300, 1)
+        return { clock, answers, queries, tokens, failed }
+      }
+      const jackIn = ({ otherTokens }: { otherTokens: OtherToken[] }) => otherTokens.find((t) => t.token === JACK)
+      const shown = (token: OtherToken | undefined) => [token?.state, token?.balance, token?.note]
+
+      it("doesn't show an old balance as current when one answer in it fails, and asks again on its own right away", async () => {
+        const { answers, queries, tokens, failed } = await failing({ balance: null })
+        assert.deepEqual(queries.map((q) => q.length), [2])
+        assert.deepEqual(shown(jackIn(failed)), ["unreadable", null, "Its contract answered before but not the last time it was asked, so this wallet's balance isn't known right now."])
+        assert.equal(jackIn(failed)?.tucked, null, "nothing's been blamed yet, so it doesn't look like spam")
+        answers[JACK] = good("JACK", "6")
+        const back = await fill(tokens, both, 301, 1)
+        assert.deepEqual(queries[1]?.map((q) => q.token), [JACK], "the retry doesn't wait for a bad answer's 10 minutes")
+        assert.deepEqual(shown(jackIn(back)), ["read", "6", null])
+      })
+
+      it("doesn't show an old balance as current when the query times out, and asks again in a smaller group after the backoff", async () => {
+        const { answers, queries, tokens, failed, clock } = await failing("hangs")
+        assert.deepEqual(failed.otherTokens.map(shown).map(([state, balance]) => [state, balance]), [["unreadable", null], ["unreadable", null]])
+        await fill(tokens, both, 301, 1)
+        assert.equal(queries.length, 1, "nothing during the backoff")
+        answers[JACK] = good("JACK", "6")
+        clock.time += 61_000
+        const back = await fill(tokens, both, 302, 1)
+        assert.deepEqual(queries.slice(1).map((q) => q.length), [1, 1], "well before a bad answer's 10 minutes")
+        assert.deepEqual(back.otherTokens.map(shown), [["read", "6", null], ["read", "5", null]])
+      })
+
+      it("stops asking every read once the contract has had a query to itself", async () => {
+        const { queries, tokens, failed } = await failing({ balance: null })
+        assert.equal(jackIn(failed)?.state, "unreadable")
+        await fill(tokens, both, 301, 1)
+        const asked = queries.length
+        assert.equal(jackIn(await fill(tokens, both, 302, 3))?.state, "unreadable")
+        assert.equal(queries.length, asked)
+      })
     })
 
     it("doesn't call a balance current past a move it hasn't read yet", async () => {
