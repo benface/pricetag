@@ -495,7 +495,7 @@ public final class PortfolioStore {
 
     /// Whether there's anything of the user's own to forget.
     public var hasAnswers: Bool {
-        !answers.isEmpty
+        !answerEntries.isEmpty
     }
 
     /// What the user has said, newest first. Accounts this Mac knows are theirs aren't answers, so they aren't here, even if something was said
@@ -727,8 +727,10 @@ public final class PortfolioStore {
     }
 
     /// A book built on `book` has the accounts in it, and they aren't answers. What was said about one before it was an account stays.
+    /// Purchases aren't answers either, and an order that's finished isn't read again, so only `recordPurchase` changes them.
     private func answers(in next: Book) -> Book {
         var kept = next.unlinking(linkedWallets)
+        kept.purchases = answers.purchases
         for account in linkedWallets where next.senders[account]?.kind == .mine { kept.senders[account] = answers.senders[account] }
         return kept
     }
