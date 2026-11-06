@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
-import { createServer } from "node:http2"
+import { createServer, type Http2ServerResponse } from "node:http2"
 import { createServer as createNetServer, type AddressInfo, type Socket } from "node:net"
 import { describe, it } from "node:test"
 import { createPricetag } from "@pricetag/sdk"
@@ -863,12 +863,12 @@ describe("reading through aliases", () => {
   })
 
   it("reads prices from the price dataset, and what happened on the chain from the other", async () => {
-    const { query, queries } = fakeAmp({ legs: [], unlisted_legs: [], priced_legs: [], reference_prices: [] })
+    const { query, queries } = fakeAmp({ legs: [leg("aa", USDC, ME, "credit", "7", "erc20")], unlisted_legs: [], priced_legs: [], reference_prices: [] })
     const reader = datasetReader(query, { baseDataset: "base", dataset: "pricetag", priceDataset: "pricing" })
-    await reader.readWindow("0x" + ME, 1, 2)
+    await reader.readWindow("0x" + ME, 1, 200)
     await reader.readReferences([1])
     await reader.processedThrough(1, 200)
-    const from = (table: string) => [...new Set(queries.filter((sql) => sql.includes(`.${table} `)).map((sql) => /FROM "(\w+)"/.exec(sql)![1]))]
+    const from = (table: string) => [...new Set(queries.flatMap((sql) => [...sql.matchAll(/FROM "(\w+)"\.(\w+)/g)]).filter((match) => match[2] === table).map((match) => match[1]))]
     assert.deepEqual(from("legs"), ["pricetag"])
     assert.deepEqual(from("unlisted_legs"), ["pricetag"])
     assert.deepEqual(from("priced_legs"), ["pricing"])
@@ -880,4 +880,46 @@ describe("reading through aliases", () => {
     await datasetReader(query, { baseDataset: "base", dataset: "pricetag" }).readWindow("0x" + ME, 1, 2)
     for (const sql of queries) assert.match(sql, /FROM "pricetag"\./)
   })
+})
+
+describe("how many queries run at once", () => {
+  /** A server that holds each query until it's let go, and says how many it's holding. */
+  async function holdingServer() {
+    const held: Http2ServerResponse[] = []
+    const server = createServer((req, res) => {
+      req.resume()
+      held.push(res)
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const release = () => {
+      for (const res of held.splice(0)) {
+        res.writeHead(200, { "content-type": "application/grpc", "grpc-status": "14", "grpc-message": "not a real Amp" })
+        res.end()
+      }
+    }
+    return { held, release, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close: () => server.close() }
+  }
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  async function untilHolding(held: readonly unknown[], count: number) {
+    for (let i = 0; i < 200 && held.length < count; i++) await wait(10)
+  }
+
+  for (const [options, atOnce] of [[{}, 1], [{ maxConcurrent: 3 }, 3]] as const) {
+    it(`runs ${atOnce} with ${JSON.stringify(options)}, and the rest once those are done`, async () => {
+      const { held, release, url, close } = await holdingServer()
+      const query = createQuery(url, undefined, options)
+      const all = Promise.allSettled([1, 2, 3, 4, 5].map((n) => query(`SELECT ${n}`)))
+      await untilHolding(held, atOnce)
+      await wait(50)
+      assert.equal(held.length, atOnce, "no more than that")
+      release()
+      await untilHolding(held, 1)
+      assert.ok(held.length > 0, "the next ones started")
+      const letGo = setInterval(release, 10)
+      const results = await all
+      clearInterval(letGo)
+      close()
+      assert.ok(results.every(({ status }) => status === "rejected"), "a failed query still ends its turn")
+    })
+  }
 })
