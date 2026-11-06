@@ -94,7 +94,7 @@ actor BookSource: PortfolioSource {
     @Test func saysWhatHasNoMarket() throws {
         let text = try #require(Wording.noMarket(try demoPortfolio()))
         #expect(text.contains("DEGEN"))
-        #expect(text.contains("2 tokens"))
+        #expect(text.contains("3 tokens"))
     }
 
     @Test func answersAreSentAlongAndKeptOnThisDevice() async throws {

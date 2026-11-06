@@ -8,7 +8,7 @@
 
 import { CHECK_LABELS } from "./wording.ts"
 import { NO_FACTS, combinedFacts, type TransactionFacts } from "./activity.ts"
-import { compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
+import { combineOtherTokens, compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
 import type { BookPoint, BookPreview, ExplanationLeg, ExplanationResponse, PortfolioPosition, PortfolioResponse, WalletResponse } from "./api.ts"
 import type { Book } from "./book.ts"
 import { explainHold, explainPoint, explainTarget, explainTotal, type ExplainTarget, type Explanation, type Metric } from "./explain.ts"
@@ -267,6 +267,7 @@ export function combinedPortfolioOf(read: readonly WalletResponse[], method: Met
     gasUnknownTxs,
     outgoingTxs: unique(responses.flatMap((r) => r.outgoingTxs)),
     unlisted: [...unlisted].map(([token, transfers]) => ({ token, transfers })),
+    ...combineOtherTokens(responses),
     l1FeeUnknownTxs: unique(responses.flatMap((r) => r.l1FeeUnknownTxs)),
     openingUnread: unique(responses.flatMap((r) => r.openingUnread)),
     unreadAssets: unique(responses.flatMap((r) => r.unreadAssets)),

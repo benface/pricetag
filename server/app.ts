@@ -3,7 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createRates, createRowStream, createWallets, describeError, feedRounds, followChain, followRawSql, followSql, followedWallets, followedWindowSql, readBlockHashes, readHeadMark, sharedMarket, updateRounds, type AmpQuery, type FollowConfig, type ReadRates, type Source } from "@pricetag/sdk/internal"
+import { DEFAULT_RPC_URL, createL1FeeReader, createOtherTokens, createQuery, createRangeStream, createRates, createRowStream, createWallets, describeError, feedRounds, followChain, followRawSql, followSql, followedWallets, followedWindowSql, readBlockHashes, readHeadMark, sharedMarket, updateRounds, type AmpQuery, type FollowConfig, type ReadRates, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -300,9 +300,11 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL, fetch, undefined, console, Number(env.BASE_RPC_RATE_LIMIT) || undefined), () => head?.blockNum ?? null)
-  const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) : null
+  // Shared by the rules, since no rule changes what a token says about itself or what a wallet holds of it.
+  const otherTokens = source?.readTokenFacts && createOtherTokens(source.readTokenFacts)
+  const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true, otherTokens }) : null
   // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
-  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) }))
+  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true, otherTokens }) }))
 
   /**
    * Reads a wallet, or answers the request with why it can't.

@@ -280,6 +280,102 @@ private struct BroadcastsForReal: ChainClient {
         #expect(asked.allSatisfy { $0.count <= 5 })
     }
 
+    /// A node that says this one thing and is otherwise fine. `method` is the call, or `balance` and `l1Fee` for those reads.
+    private func lyingNode(_ what: String, _ value: Any) {
+        StubNode.script { calls, _ in
+            json(calls.map { call in
+                var answer = result(of: call)
+                let to = ((call["params"] as? [Any])?.first as? [String: Any])?["to"] as? String
+                let isL1Fee = to == Base.gasPriceOracle.lowercased
+                let isBalance = call["method"] as? String == "eth_getBalance" || (call["method"] as? String == "eth_call" && Base.tokens.contains { $0.contract?.lowercased == to })
+                if call["method"] as? String == what || (what == "balance" && isBalance) || (what == "l1Fee" && isL1Fee) { answer["result"] = value }
+                return answer
+            })
+        }
+    }
+
+    private func isUnreadable(_ body: () async throws -> Void) async -> Bool {
+        do {
+            try await body()
+            return false
+        } catch {
+            return error as? ChainError == .unreadable
+        }
+    }
+
+    @Test func absurdNumbersFromANodeAreUnreadableRatherThanACrash() async throws {
+        let tooBigForAUInt64 = "0x10000000000000000"
+        let mostAUInt128Holds = "0x" + String(repeating: "f", count: 32)
+        let cases: [(String, Any)] = [
+            ("eth_chainId", tooBigForAUInt64),
+            ("eth_chainId", "0xffffffffffffffff"),
+            ("eth_getTransactionCount", tooBigForAUInt64),
+            ("eth_getTransactionCount", "0xffffffffffffffff"),
+            ("eth_maxPriorityFeePerGas", mostAUInt128Holds),
+            ("eth_getBlockByNumber", ["number": "0x64", "timestamp": "0x64", "baseFeePerGas": mostAUInt128Holds] as [String: Any]),
+            // Doubling this one is what used to overflow.
+            ("eth_getBlockByNumber", ["number": "0x64", "timestamp": "0x64", "baseFeePerGas": "0x80000000000000000000000000000000"] as [String: Any]),
+            ("eth_getBlockByNumber", ["number": tooBigForAUInt64, "timestamp": "0x64", "baseFeePerGas": "0x5"] as [String: Any]),
+            ("eth_getBlockByNumber", ["number": "0xffffffffffffffff", "timestamp": "0x64", "baseFeePerGas": "0x5"] as [String: Any]),
+            ("balance", mostAUInt128Holds),
+            ("l1Fee", mostAUInt128Holds),
+        ]
+        for (what, value) in cases {
+            lyingNode(what, value)
+            let unreadable = await isUnreadable { _ = try await client().snapshot(of: wallet) }
+            #expect(unreadable, "\(what): \(value)")
+        }
+
+        for gas in [tooBigForAUInt64, "0xffffffffffffffff", mostAUInt128Holds] {
+            lyingNode("eth_estimateGas", gas)
+            let unreadable = await isUnreadable { _ = try await client().estimateGas(from: wallet, to: wallet, value: 0, data: []) }
+            #expect(unreadable, "gas \(gas)")
+        }
+
+        lyingNode("l1Fee", mostAUInt128Holds)
+        let unreadableFee = await isUnreadable { _ = try await client().l1Fee(ofPayload: [1]) }
+        #expect(unreadableFee)
+
+        for block in [tooBigForAUInt64, "0xffffffffffffffff"] {
+            lyingNode("eth_getTransactionReceipt", ["status": "0x1", "blockNumber": block])
+            let unreadable = await isUnreadable { _ = try await client().receipt(of: "0x1") }
+            #expect(unreadable, "block \(block)")
+        }
+    }
+
+    @Test func bigButRealNumbersStillRead() async throws {
+        // More than DEGEN's whole supply, which is the most of anything on the allowlist.
+        let balance: UInt128 = 100_000_000_000 * 1_000_000_000_000_000_000
+        lyingNode("balance", "0x" + String(balance, radix: 16))
+        let snapshot = try await client().snapshot(of: wallet)
+        #expect(snapshot.balances[Base.eth] == balance)
+    }
+
+    /// The worst a node can get past the checks above, through everything that does math with it.
+    @Test func theLargestReadableNumbersDontOverflowFurtherOn() {
+        let highest = RPCChainClient.highestReadableAmount
+        let fees = FeeQuote(maxFeePerGas: 2 * RPCChainClient.highestReadableFeePerGas + RPCChainClient.highestReadableFeePerGas, maxPriorityFeePerGas: RPCChainClient.highestReadableFeePerGas, l1FeeWei: highest)
+        #expect(!fees.isPlausible)
+        let holdings = Base.tokens.map { Holding(token: $0, balance: highest, priceUsdMicros: 100_000 * Money.dollar) }
+        _ = SweepPlanner.automatic(holdings: holdings, capUsdMicros: 0, fees: fees, destination: wallet, pendingGainUsdMicros: 0)
+        _ = SweepPlanner.automatic(holdings: holdings, capUsdMicros: 0, fees: FeeQuote(maxFeePerGas: 1, maxPriorityFeePerGas: 1, l1FeeWei: 0), destination: wallet, pendingGainUsdMicros: UInt128(1) << 110)
+        _ = SweepPlanner.everything(holdings: holdings, fees: fees, destination: wallet)
+        _ = fees.costWei(gas: UInt128(FeeQuote.gasLimit(estimate: UInt64(RPCChainClient.highestReadableCount), isPlainSend: false)))
+    }
+
+    @Test func gasRoomStopsAtWhatAUInt64Holds() {
+        #expect(FeeQuote.gasLimit(estimate: .max, isPlainSend: false) == .max)
+        #expect(FeeQuote.gasLimit(estimate: 21000, isPlainSend: true) == 21000)
+        #expect(FeeQuote.gasLimit(estimate: 21000, isPlainSend: false) == 26250)
+        #expect(FeeQuote.gasLimit(estimate: 40000, isPlainSend: true) == 50000)
+    }
+
+    @Test func anAbsurdL1FeeIsNotPlausible() {
+        #expect(cheapFees.isPlausible)
+        #expect(!FeeQuote(maxFeePerGas: 1, maxPriorityFeePerGas: 1, l1FeeWei: FeeQuote.highestPlausibleL1FeeWei + 1).isPlausible)
+        #expect(FeeQuote(maxFeePerGas: 1, maxPriorityFeePerGas: 1, l1FeeWei: FeeQuote.highestPlausibleL1FeeWei).isPlausible)
+    }
+
     @Test func aRateLimitIsRecognized() {
         #expect(RPCChainClient.isRateLimit(code: -32007, message: nil))
         #expect(RPCChainClient.isRateLimit(code: nil, message: "25/second request limit reached"))

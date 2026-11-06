@@ -125,6 +125,9 @@ public struct DeviceWalletState: Codable, Equatable, Sendable {
     public init() {}
 }
 
+/// The real failure can name a local file, so nothing past here gets to repeat it.
+struct RecordsNotSaved: Error {}
+
 public protocol DeviceStateStore: Sendable {
     func load() throws -> DeviceWalletState
     func save(_ state: DeviceWalletState) throws

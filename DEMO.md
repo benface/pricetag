@@ -10,7 +10,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 
 **The problem.** A chain records what moved, not what it was worth. So wallets show a balance, and nobody can say what you paid or whether you're up.
 
-**What we built.** Pricetag is one Amp derived dataset on Base, with no fork, validators or contracts. It reads Chainlink's own logs and each swap's implied rate, then puts a USD price on transfers of ETH and 9 other listed tokens. A token off the list shows up with no price, and it's never guessed. Patina is a self-custody Mac wallet built on those prices.
+**What we built.** Pricetag is one Amp derived dataset on Base, with no fork, validators or contracts. It reads Chainlink's own logs and each swap's implied rate, then puts a USD price on transfers of ETH and 9 other listed tokens. A token off the list shows up with its balance and no price, and it's never guessed. Patina is a self-custody Mac wallet built on those prices.
 
 **Why it needs Amp.** Three things this made easy:
 1. **The dataset is SQL over Base's raw data,** so there's no indexer of ours to run. It's 16 tables, about 5 GB, seconds behind the chain. If asked: "Transfers about 3 seconds, prices about 7." And: "We also run a small script through the demo that restarts a job if it dies."
@@ -22,7 +22,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 **It's not a trading app.** Patina helps you invest, and sometimes trade when the timing is right. Nothing in it rewards trading more.
 
 **Don't claim:**
-- "Every token." It's 10 assets. The rest are listed with no price.
+- "Every token is priced." It's 10 assets. Any other token that's moved since the dataset's start shows its balance with no price, and likely spam is tucked away.
 - "Verify proves the SQL or the chain." It doesn't show that the header is on Base's real chain, that the SQL ran correctly, or that Chainlink's number is right. Say so, because it's more convincing.
 - "Audited." The hot wallet is an unreviewed build, for small funds only.
 - "Tested on a real Ledger or Keystone," until it has been.
