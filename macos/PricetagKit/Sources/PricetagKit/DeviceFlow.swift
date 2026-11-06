@@ -29,7 +29,7 @@ public enum DeviceFlow {
 
     /// A server on this Mac serves these pages itself, and any other only answers the API, so the app has to.
     public static func needsItsOwnPage(_ link: URL) -> Bool {
-        !FeedState.isOnThisMac(link)
+        !link.isOnThisMac
     }
 
     /// The same request, on the page at `page`.

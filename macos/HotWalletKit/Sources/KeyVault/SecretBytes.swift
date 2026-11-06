@@ -1,3 +1,5 @@
+// Key material only, so a watch-only build has none of it. See macos/watch-only.sh.
+#if !PATINA_WATCH_ONLY
 import Foundation
 
 /// Key bytes in memory, for as short a time as possible. The page is kept out of swap, and the bytes are wiped when this
@@ -27,3 +29,4 @@ struct SecretBytes: ~Copyable {
         try body(buffer)
     }
 }
+#endif

@@ -8,7 +8,7 @@
 
 import { CHECK_LABELS } from "./wording.ts"
 import { NO_FACTS, combinedFacts, type TransactionFacts } from "./activity.ts"
-import { compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
+import { assertFoldsFit, combineOtherTokens, compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
 import type { BookPoint, BookPreview, ExplanationLeg, ExplanationResponse, PortfolioPosition, PortfolioResponse, WalletResponse } from "./api.ts"
 import type { Book } from "./book.ts"
 import { explainHold, explainPoint, explainTarget, explainTotal, type ExplainTarget, type Explanation, type Metric } from "./explain.ts"
@@ -52,6 +52,8 @@ function linkingAll(book: Book, addresses: readonly string[]): Book {
 }
 
 function foldAll(read: readonly WalletResponse[], method: Method, book: Book): Folded[] {
+  // Every fold stays in memory until they've all been added up, so each fitting isn't enough.
+  assertFoldsFit(read.map(({ address, legs }) => ({ address: address.toLowerCase(), legs })), method)
   return read.map((wallet) => {
     const others = read.filter((other) => other !== wallet)
     return { address: wallet.address.toLowerCase(), wallet, others, fold: foldBook(wallet, others, method, book) }
@@ -92,6 +94,7 @@ function combinedCheck(checks: readonly (Reconciliation | null)[]): Reconciliati
     computedQty: sum(counted.map((check) => check.computedQty)),
     actualQty: sum(counted.map((check) => check.actualQty)),
     differenceQty: sum(counted.map((check) => check.differenceQty)),
+    ...(counted.some((check) => check.unrecordedQty) ? { unrecordedQty: sum(counted.map((check) => check.unrecordedQty ?? "0")) } : {}),
     ...(counted.some((check) => check.unseenEth) ? { unseenEth: counted.flatMap((check) => check.unseenEth ?? []) } : {}),
   }
 }
@@ -267,6 +270,7 @@ export function combinedPortfolioOf(read: readonly WalletResponse[], method: Met
     gasUnknownTxs,
     outgoingTxs: unique(responses.flatMap((r) => r.outgoingTxs)),
     unlisted: [...unlisted].map(([token, transfers]) => ({ token, transfers })),
+    ...combineOtherTokens(responses),
     l1FeeUnknownTxs: unique(responses.flatMap((r) => r.l1FeeUnknownTxs)),
     openingUnread: unique(responses.flatMap((r) => r.openingUnread)),
     unreadAssets: unique(responses.flatMap((r) => r.unreadAssets)),
@@ -276,7 +280,7 @@ export function combinedPortfolioOf(read: readonly WalletResponse[], method: Met
     points,
     holdComparison,
     questions,
-    meter: { ...meterOf(questions, linking, (folded[0] as Folded).wallet, waiting), waiting },
+    meter: { ...meterOf(questions, linking, (folded[0] as Folded).wallet, read, waiting), waiting },
     linkedReading: [...unread.reading],
     linkedFailed: [...unread.failed],
     withheld: [...withheld.values()],

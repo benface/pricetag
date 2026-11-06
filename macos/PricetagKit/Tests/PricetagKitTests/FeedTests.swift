@@ -569,7 +569,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 
     @Test func onlyShowsANumberWhileLive() throws {
         let portfolio = try demoPortfolio()
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("x"), .noAmpConfigured("x"), .rejected("x"), .rateLimited("x")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("x"), .noAmpConfigured("x"), .rejected("x"), .tooBig("x"), .rateLimited("x")]
         for state in states {
             for shows in MenuBarShows.allCases {
                 let summary = FeedSummary(feed: state, portfolio: portfolio, shows: shows)
@@ -604,7 +604,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 
     @Test func aProblemFitsInAFewWords() throws {
         let portfolio = try demoPortfolio()
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x"), .rateLimited("x")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x"), .tooBig("x"), .rateLimited("x")]
         for state in states {
             let problem = try #require(state.shortProblem(portfolio: portfolio))
             #expect(problem.count <= 26, "\(state)")
@@ -621,7 +621,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 
     @Test func aProblemSaysWhatHappenedThatMoneyIsFineAndWhatToDoWithoutTheServersAddress() throws {
         let portfolio = try realPortfolio(at: Date())
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("Couldn't read from Amp."), .noAmpConfigured("No Amp."), .rejected("Nope."), .rateLimited("Slow down.")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("Couldn't read from Amp."), .noAmpConfigured("No Amp."), .rejected("Nope."), .tooBig("Too much history."), .rateLimited("Slow down.")]
         for state in states {
             for shown in [portfolio, nil] {
                 let problem = try #require(state.problem(serverURL: server, portfolio: shown))
@@ -644,6 +644,10 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(down.detail?.contains("pnpm start") == true)
         #expect(FeedState.ampUnavailable("Couldn't read from Amp.").problem(serverURL: server, portfolio: nil)?.detail?.contains("Couldn't read from Amp.") == true)
         #expect(FeedState.rejected("Nope.").problem(serverURL: server, portfolio: nil)?.detail?.contains("Nope.") == true)
+        let tooBig = try #require(FeedState.tooBig("Too much history.").problem(serverURL: server, portfolio: nil))
+        #expect(tooBig.title == "Too Much History to Read")
+        #expect(tooBig.message.contains("Trying again won't change this."))
+        #expect(tooBig.detail?.contains("Too much history.") == true)
     }
 
     @Test func aServerElsewhereIsntOneToStart() throws {
@@ -651,6 +655,26 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(!remote.message.contains("this Mac"))
         #expect(!remote.message.contains("Start it"))
         #expect(remote.detail == "Nothing answered at https://prices.example.com.")
+    }
+
+    @Test func aServerElsewhereIsntOneToRestart() throws {
+        let elsewhere = URL(string: "https://prices.example.com")!
+        for state in [FeedState.noAmpConfigured("None."), .rejected("Nope.")] {
+            let hosted = try #require(state.problem(serverURL: elsewhere, portfolio: nil))
+            #expect(!hosted.message.contains("restart"))
+            #expect(hosted.detail?.contains(".env.local") == false)
+            let local = try #require(state.problem(serverURL: server, portfolio: nil))
+            #expect(local.message.contains("restart the price service"))
+        }
+    }
+
+    @Test func localhostInAnyCaseIsOnThisMac() throws {
+        let shouted = URL(string: "http://LOCALHOST:8787")!
+        for state in [FeedState.noAmpConfigured("None."), .rejected("Nope.")] {
+            #expect(state.problem(serverURL: shouted, portfolio: nil) == state.problem(serverURL: server, portfolio: nil))
+        }
+        let unreachable = try #require(FeedState.serverUnreachable.problem(serverURL: shouted, portfolio: nil))
+        #expect(unreachable.title == "The Price Service Isn't Running")
     }
 
     @Test func theGlanceListsWhatsHeldLargestFirst() throws {

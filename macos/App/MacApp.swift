@@ -22,12 +22,16 @@ struct MacApp: App {
     @State private var purchases: PurchaseTracker
     @State private var notifications: MoneyNotifications
     @State private var bridgeServer: BridgeServer?
+    @State private var firstRun: FirstRun
 
     init() {
         #if DEBUG
         TestMode.runIfAsked()
         HotWalletDebug.runSelfTestIfAsked()
         #endif
+        // Before anything's had a chance to save a setting.
+        let firstRun = FirstRun(isExistingInstall: PortfolioStore.hasBeenUsed())
+        _firstRun = State(initialValue: firstRun)
         let store = PortfolioStore(cacheDirectory: .portfolioCache)
         let hotWallet = HotWalletFactory.make(store: store)
         let navigation = Navigation(store: store, hotWallet: hotWallet)
@@ -35,8 +39,11 @@ struct MacApp: App {
         siteBridge.onTopUp = { navigation.wantsTopUp = true }
         siteBridge.onReceive = { navigation.wantsReceive = true }
         navigation.onSwitcherClosed = { store.save(navigation.pendingWalletName, hotWallet: hotWallet) }
-        AppLinks.onOpen = { url in
-            if let link = AddSavingsLink(url: url) { navigation.addingSavings = link }
+        // A watch-only build has no scheme of its own, and no savings to add.
+        if !Build.isWatchOnly {
+            AppLinks.onOpen = { url in
+                if let link = AddSavingsLink(url: url) { navigation.addingSavings = link }
+            }
         }
         hotWallet.onLinkedWalletsChange = {
             store.setLinkedWallets($0)
@@ -51,6 +58,8 @@ struct MacApp: App {
         _bridgeServer = State(initialValue: Self.startBridge(siteBridge))
         // Here and not in a view: the menu bar shows the total, and sweeps run, whether or not anything is open.
         hotWallet.start()
+        // A key from before any of this is someone who's been here, whatever else they have.
+        if hotWallet.address != nil, firstRun.isWelcoming { firstRun.skip() }
         store.start()
         TypingHistory.shared.start()
         // So an order still going when this last quit gets its cost.
@@ -70,6 +79,7 @@ struct MacApp: App {
 
     /// Only a provisioned build can open this, and only a provisioned build has a wallet to offer. The extension says the app isn't open otherwise.
     private static func startBridge(_ bridge: SiteBridge) -> BridgeServer? {
+        guard !Build.isWatchOnly else { return nil }
         guard let path = Bundle.main.bundleIdentifier.flatMap(BridgeEndpoint.socketPath) else { return nil }
         let server = BridgeServer(bridge: bridge, path: path)
         do {
@@ -84,15 +94,18 @@ struct MacApp: App {
     /// A scripted run never shows anything outside its own windows, or asks the system for anything.
     private static var postsNotifications: Bool {
         #if DEBUG
-        !HotWalletDebug.isQuiet
+        !HotWalletDebug.isQuiet && !Build.isWatchOnly
         #else
-        true
+        !Build.isWatchOnly
         #endif
     }
 
     private var opensAtLaunch: Bool {
         #if DEBUG
         !HotWalletDebug.isQuiet
+        #elseif PATINA_WATCH_ONLY
+        // So macos/watch-only-test.sh can launch the built app without taking anyone's focus. There's no key in this build to protect from it.
+        !UserDefaults.standard.bool(forKey: "launchesQuietly")
         #else
         true
         #endif
@@ -107,7 +120,7 @@ struct MacApp: App {
         .menuBarExtraStyle(.window)
 
         Window(AppName.current, id: WindowID.main) {
-            MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: siteBridge, purchases: purchases)
+            MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: siteBridge, purchases: purchases, firstRun: firstRun)
                 .holdsDockPresence()
         }
         .defaultSize(width: 1120, height: 760)
@@ -123,7 +136,7 @@ struct MacApp: App {
             SidebarCommands()
             CommandGroup(after: .toolbar) {
                 Divider()
-                ForEach(AppSection.allCases) { section in
+                ForEach(AppSection.shown) { section in
                     OpenSectionCommand(section: section, navigation: navigation)
                         .keyboardShortcut(section.shortcut, modifiers: .command)
                 }
@@ -152,8 +165,12 @@ struct MacApp: App {
                     .disabled(store.portfolio == nil)
                 YourAnswersCommand(navigation: navigation)
             }
-            // Nothing to offer yet, and an item that opens nothing would be worse. The menu's search still finds any command.
-            CommandGroup(replacing: .help) {}
+            // The menu's search still finds any command.
+            CommandGroup(replacing: .help) {
+                MainWindowCommand("Welcome to \(AppName.current)") {
+                    navigation.showWelcome(firstRun)
+                }
+            }
         }
 
         Window(SiteApprovalWindow.title, id: WindowID.siteApproval) {
@@ -208,28 +225,30 @@ private struct WalletCommands: View {
         Button("View on Basescan") { if let url = address.flatMap(Basescan.address) { NSWorkspace.shared.open(url) } }
             .disabled(address == nil)
         Divider()
-        Button("Receive…") {
-            openMainWindow()
-            navigation.isReceiving = true
+        if !Build.isWatchOnly {
+            Button("Receive…") {
+                openMainWindow()
+                navigation.isReceiving = true
+            }
+            .disabled(!hotWallet.canSend)
+            Button("Buy…") {
+                openMainWindow()
+                navigation.isBuying = true
+            }
+            .disabled(hotWallet.availability != .ready)
+            Button(HotWalletWording.title) {
+                openMainWindow()
+                navigation.showSpendingMoney()
+            }
+            .keyboardShortcut("4", modifiers: .command)
+            .disabled(hotWallet.availability == .notProvisioned)
+            Button("Send…") {
+                openMainWindow()
+                navigation.send()
+            }
+            .disabled(!hotWallet.canSend)
+            Divider()
         }
-        .disabled(!hotWallet.canSend)
-        Button("Buy…") {
-            openMainWindow()
-            navigation.isBuying = true
-        }
-        .disabled(hotWallet.availability != .ready)
-        Button(HotWalletWording.title) {
-            openMainWindow()
-            navigation.showSpendingMoney()
-        }
-        .keyboardShortcut("4", modifiers: .command)
-        .disabled(hotWallet.availability == .notProvisioned)
-        Button("Send…") {
-            openMainWindow()
-            navigation.send()
-        }
-        .disabled(!hotWallet.canSend)
-        Divider()
         WalletPicker(store: store, list: store.walletList(hotWallet: hotWallet), onChoose: openMainWindow)
     }
 

@@ -28,6 +28,8 @@ struct MainWindow: View {
     let hotWallet: HotWallet
     let siteBridge: SiteBridge
     let purchases: PurchaseTracker
+    /// What someone new is still to see. Nothing, for anything that doesn't say otherwise.
+    var firstRun: FirstRun = .finished
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var width: CGFloat = 1120
     @State private var exporting = false
@@ -46,6 +48,10 @@ struct MainWindow: View {
     private var portfolio: Portfolio? { store.portfolio }
     private var isLive: Bool { store.feed.isLive }
     private var usesSheetForDetails: Bool { width < Self.inspectorWidth }
+    /// On the way to a first wallet, the sections and the wallet menu have nothing to offer yet. A wallet that's turned out to be empty is
+    /// on the page with its way onward, so they come back for it.
+    private var isOnWayToWallet: Bool { firstRun.isWelcoming && portfolio == nil }
+    private var hasNumbers: Bool { portfolio.map { $0.progress.started && !$0.isEmpty } ?? false }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
@@ -56,9 +62,12 @@ struct MainWindow: View {
                 .frame(minWidth: 320, minHeight: 320)
                 .navigationTitle(navigation.section.title)
                 // The wallet comes first when there's only room for one of them.
-                .toolbar(removing: width < Self.titleWidth ? .title : nil)
+                .toolbar(removing: width < Self.titleWidth || isOnWayToWallet ? .title : nil)
                 .toolbar { toolbar }
                 .inspector(isPresented: inspectorBinding) { inspector }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if Build.isWatchOnly { WatchOnlyNotice() }
+                }
         }
         .frame(minWidth: Self.minimumSize.width, minHeight: Self.minimumSize.height)
         // What each wallet is called, wherever All Yours says which wallet something is in.
@@ -69,7 +78,31 @@ struct MainWindow: View {
             let wasWide = width >= Self.sidebarWidth
             let isWide = newWidth >= Self.sidebarWidth
             width = newWidth
-            if wasWide != isWide { columns = isWide ? .all : .detailOnly }
+            if wasWide != isWide, !isOnWayToWallet { columns = isWide ? .all : .detailOnly }
+        }
+        .onAppear { if isOnWayToWallet { columns = .detailOnly } }
+        .onChange(of: isOnWayToWallet) { _, isOnWay in
+            columns = !isOnWay && width >= Self.sidebarWidth ? .all : .detailOnly
+        }
+        // A first wallet's numbers are the end of the welcome, and so is going anywhere else in the app. Overview is where it lives, so going there isn't leaving it.
+        .onChange(of: hasNumbers, initial: true) { _, hasNumbers in
+            if hasNumbers { firstRun.finishWelcome() }
+        }
+        .onChange(of: isShowingSpendingMoney, initial: true) { _, isShowing in
+            if isShowing { firstRun.finishWelcome() }
+        }
+        .onChange(of: navigation.section) { _, section in
+            if section != .overview { firstRun.finishWelcome() }
+        }
+        .onChange(of: navigation.isSwitchingWallet) { _, isSwitching in
+            if isSwitching { firstRun.finishWelcome() }
+        }
+        // Whatever's on the page, so it's known however fast or slow the numbers are. Help can ask again for the wallet that's showing.
+        .onChange(of: store.address, initial: true) { checkContract() }
+        .onChange(of: firstRun.explainsContract) { checkContract() }
+        // The note's said what it had to once they've found the numbers click through.
+        .onChange(of: navigation.target != nil) { _, isOpen in
+            if isOpen { firstRun.finishNumbers() }
         }
         .sheet(isPresented: detailsSheetBinding, onDismiss: {
             if let asset = resolvingAfterDetails {
@@ -88,7 +121,24 @@ struct MainWindow: View {
             ReceiveSheet(wallet: hotWallet) { navigation.showSpendingMoney() }
         }
         .sheet(isPresented: $navigation.isResolving) {
-            ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet) { AnyView(PublishFromDeviceButton(link: $0, browsers: .real)) }
+            // Publishing what you paid signs a transaction, here or on a device, so a watch-only build only keeps it on this Mac.
+            if Build.isWatchOnly {
+                ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, firstRun: firstRun)
+            } else {
+                ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet, firstRun: firstRun) { AnyView(PublishFromDeviceButton(link: $0, browsers: .real)) }
+            }
+        }
+        // On the way to a first wallet, the welcome asks for it itself.
+        .sheet(isPresented: Binding(get: { Build.isWatchOnly && store.asksForInvite && !isOnWayToWallet }, set: { if !$0 { store.declineInvite() } })) {
+            // The store closes this when an invite's given, and opens it again if the server refuses that one.
+            InvitePrompt(store: store, decline: store.declineInvite)
+        }
+        .sheet(isPresented: $navigation.isShowingWelcomeAgain) {
+            WelcomeAgain()
+        }
+        // Whatever was going to follow making one is off, if it wasn't made.
+        .onChange(of: navigation.isSettingUpSpendingMoney) { _, isOpen in
+            if !isOpen, hotWallet.address == nil { navigation.wantsAddSavings = false }
         }
         .sheet(isPresented: $navigation.isSettingUpSpendingMoney) {
             SpendingMoneySetup(wallet: hotWallet, store: store) { navigation.isSettingUpSpendingMoney = false }
@@ -140,10 +190,12 @@ struct MainWindow: View {
 
     private var sidebar: some View {
         List(selection: Binding(get: { navigation.section }, set: { if let section = $0 { navigation.section = section } })) {
-            ForEach(AppSection.allCases) { section in
+            ForEach(AppSection.shown) { section in
                 Label(section.title, systemImage: section.symbol).tag(section)
             }
         }
+        // Before the width, which it would otherwise hide from the split view.
+        .toolbar(removing: isOnWayToWallet ? .sidebarToggle : nil)
         .navigationSplitViewColumnWidth(min: 150, ideal: 190, max: 260)
         // A status, so it looks like one: it's text, and it's down here with nothing around it that suggests a click.
         .safeAreaInset(edge: .bottom) {
@@ -177,12 +229,24 @@ struct MainWindow: View {
     /// Only what does something in this section. The leading slot is the wallet's.
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            WalletButton(store: store, hotWallet: hotWallet, navigation: navigation, maxWidth: width < Self.sidebarWidth ? 230 : 300)
+        if !isOnWayToWallet {
+            ToolbarItem(placement: .navigation) {
+                WalletButton(store: store, hotWallet: hotWallet, navigation: navigation, maxWidth: width < Self.sidebarWidth ? 230 : 300)
+            }
         }
         // With no title in a small window, nothing else would hold the rest at the far end.
         ToolbarSpacer(.flexible)
-        if hotWallet.availability == .ready {
+        if firstRun.isWelcoming, store.feed == .noWallet {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Skip") {
+                    // There's still the invite to give, but this has said to leave it for now.
+                    store.declineInvite()
+                    firstRun.skip()
+                }
+                .keyboardShortcut(.cancelAction)
+                .help("Skip this introduction. You can see it again from the Help menu.")
+            }
+        } else if hotWallet.availability == .ready, !isOnWayToWallet {
             ToolbarItem(placement: .primaryAction) {
                 Button("Buy", systemImage: "plus") { navigation.isBuying = true }
                     // A plus on its own could mean adding anything.
@@ -285,7 +349,9 @@ struct MainWindow: View {
     @ViewBuilder
     private func walletPageContent(_ content: @escaping (Portfolio) -> some View) -> some View {
         if store.feed == .noWallet {
-            if navigation.section == .overview {
+            if firstRun.isWelcoming {
+                FirstRunWelcome(store: store, hotWallet: hotWallet, navigation: navigation)
+            } else if navigation.section == .overview {
                 Welcome(store: store, hotWallet: hotWallet, navigation: navigation)
             } else {
                 NoWalletYet(navigation: navigation)
@@ -294,11 +360,11 @@ struct MainWindow: View {
             Group {
                 // A failure says what's wrong even before there's anything to show, rather than only that the data hasn't reached this wallet.
                 if !portfolio.progress.started, store.feed.isStale {
-                    Unavailable(store: store)
+                    Unavailable(store: store, firstRun: firstRun)
                 } else if !portfolio.progress.started {
                     ContentUnavailableView("Almost There", systemImage: "hourglass", description: Text(Wording.notStarted))
                 } else if portfolio.isEmpty {
-                    NoActivity(portfolio: portfolio, entry: store.walletList(hotWallet: hotWallet).entry(for: store.address), hotWallet: hotWallet, navigation: navigation, notices: notices(portfolio))
+                    NoActivity(portfolio: portfolio, entry: store.walletList(hotWallet: hotWallet).entry(for: store.address), hotWallet: hotWallet, navigation: navigation, notices: notices(portfolio), firstRun: firstRun, store: store)
                 } else {
                     content(portfolio)
                 }
@@ -306,6 +372,9 @@ struct MainWindow: View {
             // Another wallet starts from the top with nothing selected, and its numbers appear rather than rolling from these.
             .id(store.address)
             .transition(.opacity)
+        } else if firstRun.isWelcoming, store.feed == .reading || store.feed == .tooSlow {
+            FirstRead(store: store, firstRun: firstRun)
+                .transition(.opacity)
         } else if store.feed == .reading {
             ContentUnavailableView {
                 ProgressView().controlSize(.large)
@@ -318,8 +387,12 @@ struct MainWindow: View {
             }
             .transition(.opacity)
         } else {
-            Unavailable(store: store)
+            Unavailable(store: store, firstRun: firstRun)
         }
+    }
+
+    private func checkContract() {
+        firstRun.checkContract(of: store.address) { [store] in store.currentSource }
     }
 
     private var isShowingSpendingMoney: Bool {
@@ -357,8 +430,24 @@ struct MainWindow: View {
     }
 
     /// Fills the window: the chart takes the height the rest doesn't use, within reason, and the page scrolls once it needs more than there is.
+    @ViewBuilder
     private func overview(_ portfolio: Portfolio, pageHeight: CGFloat) -> some View {
+        if portfolio.holdsOnlyOtherTokens {
+            VStack(alignment: .leading, spacing: 18) {
+                notices(portfolio)
+                OtherTokensSection(portfolio: portfolio)
+            }
+        } else {
+            pricedOverview(portfolio, pageHeight: pageHeight)
+        }
+    }
+
+    private func pricedOverview(_ portfolio: Portfolio, pageHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 18) {
+            if firstRun.explainsNumbers {
+                Notice(.info, Wording.firstNumbers(portfolio), actionTitle: "Got It", action: firstRun.finishNumbers)
+                    .arrives()
+            }
             notices(portfolio)
             PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 40) { navigation.target = .total($0) }
                 // Short of height, its amounts would shrink and cut off instead of the page scrolling.
@@ -368,6 +457,7 @@ struct MainWindow: View {
             PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange, metric: $navigation.chartMetric) { navigation.target = .transaction($0) }
                 .frame(height: portfolio.canChart(navigation.chartMetric) ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
             HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, navigation: navigation)
+            if portfolio.hasOtherTokens { OtherTokensSection(portfolio: portfolio) }
             HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
         }
         // A notice, the attention box or the chart coming or going, without the page below it jumping.
@@ -376,7 +466,7 @@ struct MainWindow: View {
 
     /// What can add or remove a whole block of the page.
     private func pageShape(_ portfolio: Portfolio) -> [Bool] {
-        [portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
+        [firstRun.explainsNumbers, firstRun.warnsOfContract(store.address), portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
     }
 
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
@@ -390,6 +480,10 @@ struct MainWindow: View {
 
     @ViewBuilder
     private func notices(_ portfolio: Portfolio) -> some View {
+        if firstRun.warnsOfContract(store.address) {
+            Notice(.warning, Wording.contractNotice, actionTitle: "Got It", action: firstRun.finishContract)
+                .arrives()
+        }
         if let problem = store.feed.problem(serverURL: store.serverURL, portfolio: portfolio) {
             Notice(.warning, problem.message, detail: problem.detail, actionTitle: "Try Again", action: store.refresh)
         } else if let notice = store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) {
@@ -962,6 +1056,8 @@ private struct NoActivity<Notices: View>: View {
     let hotWallet: HotWallet
     let navigation: Navigation
     let notices: Notices
+    let firstRun: FirstRun
+    let store: PortfolioStore
 
     /// This Mac's wallet, while it can still take money.
     private var isSpendingMoney: Bool { entry?.kind == .spendingMoney && hotWallet.canSend }
@@ -989,7 +1085,14 @@ private struct NoActivity<Notices: View>: View {
                 if canBuy {
                     Button("Buy…") { navigation.isBuying = true }
                 }
-                if !isSpendingMoney, !canBuy {
+                if firstRun.isWelcoming, !isSpendingMoney, !canBuy {
+                    Button("Try Another Address") { store.setWallet(nil) }
+                        .buttonStyle(.borderedProminent)
+                    if WalletList.offersDemo, store.address != WalletAddress.demo {
+                        Button("Try the Demo Wallet") { store.setWallet(WalletAddress.demo) }
+                            .buttonStyle(.link)
+                    }
+                } else if !isSpendingMoney, !canBuy {
                     Button("Switch Wallet") { navigation.switchWallet() }
                 }
             }
@@ -1008,6 +1111,9 @@ private struct NoActivity<Notices: View>: View {
         } else {
             Text("Nothing has moved \(portfolio.isAllYours ? "in any of your wallets" : "for this wallet") in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
                 .help(Wording.coverage(portfolio))
+            if firstRun.isWelcoming {
+                Text(Wording.emptyOnFirstRead)
+            }
         }
     }
 }
@@ -1062,13 +1168,17 @@ private struct Welcome: View {
 
 private struct Unavailable: View {
     let store: PortfolioStore
+    let firstRun: FirstRun
+
+    /// A server that wants an invite isn't something to try again or restart: only a watch-only build's invite answers it.
+    private var wantsInvite: Bool { Build.isWatchOnly && store.needsInvite }
 
     var body: some View {
         let problem = store.feed.problem(serverURL: store.serverURL, portfolio: nil)
         ContentUnavailableView {
-            Label(problem?.title ?? "Can't Show This Wallet", systemImage: "exclamationmark.triangle")
+            Label(wantsInvite ? "This Needs Your Invite" : problem?.title ?? "Can't Show This Wallet", systemImage: wantsInvite ? "envelope" : "exclamationmark.triangle")
         } description: {
-            Text(problem?.message ?? "")
+            Text(wantsInvite ? InvitePrompt.explanation : problem?.message ?? "")
             if let since = store.readingSince {
                 ReadingClock(since: since) { seconds in
                     if seconds >= FeedState.longReadSeconds {
@@ -1078,10 +1188,27 @@ private struct Unavailable: View {
                 }
             }
         } actions: {
-            Button("Try Again") { store.refresh() }
+            if wantsInvite {
+                Button("Enter Invite…") {
+                    if firstRun.isWelcoming { store.setWallet(nil) } else { store.askForInvite() }
+                }
                 .buttonStyle(.borderedProminent)
-            if let detail = problem?.detail {
-                DetailsButton(detail: detail)
+            } else if firstRun.isWelcoming {
+                // Three would spread out across the page.
+                HStack(spacing: 12) {
+                    Button("Try Again") { store.refresh() }
+                        .buttonStyle(.borderedProminent)
+                    Button("Choose Another Wallet") { store.setWallet(nil) }
+                    if let detail = problem?.detail {
+                        DetailsButton(detail: detail)
+                    }
+                }
+            } else {
+                Button("Try Again") { store.refresh() }
+                    .buttonStyle(.borderedProminent)
+                if let detail = problem?.detail {
+                    DetailsButton(detail: detail)
+                }
             }
         }
     }

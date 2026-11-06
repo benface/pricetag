@@ -15,4 +15,6 @@ COPY src/core src/core
 
 USER node
 EXPOSE 8080
-CMD ["node", "server/index.ts"]
+# Set rather than left to Node's guess from the machine's memory, because how much wallet history the server takes on comes from it.
+# Memory outside the heap adds about 320 MB at the worst measured, so this keeps it under fly.toml's 1 GB (WORK-570).
+CMD ["node", "--max-old-space-size=512", "server/index.ts"]
