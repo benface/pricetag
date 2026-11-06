@@ -14,6 +14,8 @@
 #
 # Cleanup that can't be verified leaves the stuck file, and the folder stays as the record of what's still the job's. That run doesn't count
 # as a pass, and each later run tries again and refuses to start until the job's verifiably gone, so nothing overlaps or gets forgotten.
+#
+# SWIFT_QUEUE_ON_PASS is a command to run once a run really has passed, cleanup included. Nothing the command does in its turn can know that.
 set -u
 
 # A check's own builds are already part of its turn.
@@ -339,7 +341,12 @@ took=$(elapsed $((now - started)))
 waited=
 [ $((started - queued_at)) -lt 2 ] || waited=", after waiting $(elapsed $((started - queued_at)))"
 case $status in
-  0) [ -e "$run/stuck" ] || say "$label passed in $took$waited." ;;
+  0)
+    if [ ! -e "$run/stuck" ]; then
+      say "$label passed in $took$waited."
+      [ -z "${SWIFT_QUEUE_ON_PASS:-}" ] || sh -c "$SWIFT_QUEUE_ON_PASS"
+    fi
+    ;;
   70 | 129 | 130 | 137 | 143) say "$(no_result)" ;;
   *) say "$label failed with exit $status in $took$waited." ;;
 esac

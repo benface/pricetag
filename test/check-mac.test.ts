@@ -37,35 +37,36 @@ function check(args: string[] = [], extra: Record<string, string> = {}) {
 
 const passes = () => readdirSync(join(root, "passes"))
 
-beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "check-mac-"))
-  repo = join(root, "repo")
-  mkdirSync(join(repo, "macos/Config"), { recursive: true })
-  for (const file of ["check-mac.sh", "swift-queue.sh", "run.sh", "Config/App.xcconfig"]) cpSync(join("macos", file), join(repo, "macos", file))
-  writeFileSync(join(repo, "macos/Code.swift"), "let a = 1\n")
-  for (const name of ["PricetagKit", "HotWalletKit"]) {
-    mkdirSync(join(repo, "macos", name))
-    writeFileSync(join(repo, "macos", name, "Package.swift"), "\n")
-  }
-  writeFileSync(join(repo, ".gitignore"), ".build/\nmacos/build/\n")
-  git("init", "-q")
-  git("add", "-A")
-  git("commit", "-qm", "start")
+// Only on macOS, the one place this runs: the real queue needs its lockf, ps and sw_vers.
+describe("check:mac", { skip: process.platform !== "darwin" }, () => {
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "check-mac-"))
+    repo = join(root, "repo")
+    mkdirSync(join(repo, "macos/Config"), { recursive: true })
+    for (const file of ["check-mac.sh", "swift-queue.sh", "run.sh", "Config/App.xcconfig"]) cpSync(join("macos", file), join(repo, "macos", file))
+    writeFileSync(join(repo, "macos/Code.swift"), "let a = 1\n")
+    for (const name of ["PricetagKit", "HotWalletKit"]) {
+      mkdirSync(join(repo, "macos", name))
+      writeFileSync(join(repo, "macos", name, "Package.swift"), "\n")
+    }
+    writeFileSync(join(repo, ".gitignore"), ".build/\nmacos/build/\n")
+    git("init", "-q")
+    git("add", "-A")
+    git("commit", "-qm", "start")
 
-  const bin = join(root, "bin")
-  mkdirSync(bin)
-  for (const tool of ["swift", "xcodebuild"]) {
-    writeFileSync(join(bin, tool), fakeTool(tool))
-    chmodSync(join(bin, tool), 0o755)
-  }
-  calls = join(root, "calls")
-  env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_CALLS: calls, SWIFT_QUEUE_DIR: join(root, "queue"), CHECK_MAC_PASSES: join(root, "passes") }
-  for (const name of ["SWIFT_QUEUE_TURN", "ANVIL_RPC_URL", "BASE_READ_RPC_URL", "CONFIGURATION", "npm_lifecycle_event", "GIT_DIR", "GIT_INDEX_FILE"]) delete env[name]
-})
+    const bin = join(root, "bin")
+    mkdirSync(bin)
+    for (const tool of ["swift", "xcodebuild"]) {
+      writeFileSync(join(bin, tool), fakeTool(tool))
+      chmodSync(join(bin, tool), 0o755)
+    }
+    calls = join(root, "calls")
+    env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_CALLS: calls, SWIFT_QUEUE_DIR: join(root, "queue"), CHECK_MAC_PASSES: join(root, "passes") }
+    for (const name of ["SWIFT_QUEUE_TURN", "ANVIL_RPC_URL", "BASE_READ_RPC_URL", "CONFIGURATION", "npm_lifecycle_event", "CHECK_MAC_PASSED", "SWIFT_QUEUE_ON_PASS", "GIT_DIR", "GIT_INDEX_FILE"]) delete env[name]
+  })
 
-afterEach(() => rmSync(root, { recursive: true, force: true }))
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
 
-describe("check:mac", () => {
   test("a full run does every step", () => {
     const { status, ran } = check()
     assert.equal(status, 0)
@@ -136,6 +137,59 @@ describe("check:mac", () => {
       assert.notEqual(failed.status, 0)
       assert.match(failed.output, /failed/)
       assert.ok(!existsSync(join(root, "passes")) || passes().length === 0)
+      assert.equal(check().ran.length, 5)
+    })
+  }
+
+  test("a forced run that fails forgets the earlier pass, so the next run doesn't call it passed", () => {
+    check()
+    assert.equal(check(["--force"], { FAKE_FAIL: "HotWalletKit" }).status, 3)
+    const next = check([], { FAKE_FAIL: "HotWalletKit" })
+    assert.equal(next.status, 3)
+    assert.doesNotMatch(next.output, /Nothing ran/)
+  })
+
+  test("a forced run that passes is remembered again", () => {
+    check()
+    assert.equal(check(["--force"]).status, 0)
+    assert.deepEqual(check().ran, [])
+  })
+
+  test("--quick failing forgets the earlier pass, and passing leaves it", () => {
+    check()
+    assert.equal(check(["--quick"]).status, 0)
+    assert.deepEqual(check().ran, [])
+    assert.equal(check(["--quick"], { FAKE_FAIL: "HotWalletKit" }).status, 3)
+    assert.equal(check().ran.length, 5)
+  })
+
+  test("a run the queue can't verify as clean isn't remembered, even with every step passing", () => {
+    const flag = join(root, "ps-fails")
+    const ps = join(root, "bin/ps")
+    writeFileSync(ps, `#!/bin/sh\nif [ -e '${flag}' ] && [ "$1" = -axo ]; then exit 1; fi\nexec /bin/ps "$@"\n`)
+    chmodSync(ps, 0o755)
+    try {
+      const failed = check([], { FAKE_ON_CALL: `touch '${flag}'` })
+      assert.equal(failed.status, 69)
+      assert.match(failed.output, /isn't a pass/)
+      assert.equal(check().status, 69)
+    } finally {
+      rmSync(flag, { force: true })
+    }
+    const next = check()
+    assert.equal(next.status, 0)
+    assert.equal(next.ran.length, 5)
+  })
+
+  for (const [what, args] of [["a run", []], ["a forced run", ["--force"]]] as const) {
+    test(`${what} stopped after its last step leaves no pass`, () => {
+      if (args.length) check()
+      // The last step's stand-in stops the queue's script, after the turn's done everything it does.
+      const pid = join(root, "pid")
+      const stop = `grep -q 'scheme HotWalletKit' "$FAKE_CALLS" && kill -TERM "$(cat '${pid}')"`
+      writeFileSync(calls, "")
+      const { status } = spawnSync("sh", ["-c", `"$0" "$@" & echo $! >'${pid}'; wait $!`, join(repo, "macos/check-mac.sh"), ...args], { env: { ...env, FAKE_ON_CALL: stop }, encoding: "utf8" })
+      assert.notEqual(status, 0)
       assert.equal(check().ran.length, 5)
     })
   }

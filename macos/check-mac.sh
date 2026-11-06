@@ -2,6 +2,7 @@
 # `pnpm check:mac`: the Swift tests, the app's build, and the shared packages' builds for iOS, as one turn in the Swift queue.
 # It runs nothing if this exact code already passed on this Mac with these tools, unless it's given --force.
 # `pnpm check:mac:quick` (--quick) is only the tests, always run, for while you're working. It never counts as a pass. See TESTING.md.
+# A pass is only remembered once the queue has verified that the whole turn is over, and any run that fails forgets one for its code.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -9,6 +10,17 @@ repo=$(dirname "$here")
 passes=${CHECK_MAC_PASSES:-$HOME/Library/Caches/patina-check-mac}
 quick=
 force=
+
+# What the queue runs after a turn passes and everything it started is verified gone: records what that turn says passed, if anything.
+if [ "${1:-}" = --remember ]; then
+  key=$(cat "${CHECK_MAC_PASSED:-/nonexistent}" 2>/dev/null) || exit 0
+  rm -f "$CHECK_MAC_PASSED"
+  find "$passes" -type f -mtime +30 -delete || true
+  echo "$(date '+%Y-%m-%d %H:%M'), $repo" >"$passes/$key.new"
+  mv "$passes/$key.new" "$passes/$key"
+  exit 0
+fi
+
 for arg in "$@"; do
   case $arg in
     --quick) quick=1 ;;
@@ -49,12 +61,30 @@ already_passed() {
   say "Nothing ran: this exact code already passed on this Mac with these tools ($(cat "$passes/$key")). To run it again anyway, add --force."
 }
 
-if [ -z "$quick" ]; then
+forget() {
+  [ -z "$key" ] || rm -f "$passes/$key"
+}
+
+if [ -z "${SWIFT_QUEUE_TURN:-}" ]; then
+  [ -z "$quick" ] || exec "$here/swift-queue.sh" "$0" "$@"
   key=$(fingerprint) || key=
   already_passed && exit 0
+  # Where the turn says what passed, named for this run alone. It's only there if the turn got to the end.
+  if [ -n "$key" ]; then
+    CHECK_MAC_PASSED="$passes/running.$$.$(date +%s)"
+    SWIFT_QUEUE_ON_PASS="\"$here/check-mac.sh\" --remember"
+    export CHECK_MAC_PASSED SWIFT_QUEUE_ON_PASS
+  fi
+  exec "$here/swift-queue.sh" "$0" "$@"
 fi
 
-[ -n "${SWIFT_QUEUE_TURN:-}" ] || exec "$here/swift-queue.sh" "$0" "$@"
+# Its turn may have come after another worktree passed this same code. If not, this run is what says whether it passes now, so an
+# earlier pass doesn't outlive a run that's stopped partway. --quick can't pass it again, so it only forgets one when it fails.
+key=$(fingerprint) || key=
+if [ -z "$quick" ]; then
+  already_passed && exit 0
+  forget
+fi
 
 step() { # name, command
   name=$1
@@ -65,6 +95,7 @@ step() { # name, command
   else
     status=$?
     say "$name failed after $(elapsed $(($(date +%s) - started)))."
+    forget
     exit "$status"
   fi
 }
@@ -89,10 +120,10 @@ step "HotWalletKit's iOS build" ios HotWalletKit
 # Only remembered if what passed is still what's there.
 [ -n "$key" ] || exit 0
 if [ "$(fingerprint || true)" = "$key" ]; then
-  mkdir -p "$passes"
-  find "$passes" -type f -mtime +30 -delete
-  echo "$(date '+%Y-%m-%d %H:%M'), $repo" >"$passes/$key.new"
-  mv "$passes/$key.new" "$passes/$key"
+  if [ -n "${CHECK_MAC_PASSED:-}" ]; then
+    mkdir -p "$passes"
+    echo "$key" >"$CHECK_MAC_PASSED"
+  fi
 else
   say "macos/ changed during this run, so this pass won't be remembered."
 fi
