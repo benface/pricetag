@@ -2,7 +2,7 @@
   "blockNum": 9200017,
   "blockHash": "0x0dcc158ae036da166cbc5b240ba8e307b6709912475bb99e06c74c04b83e5c69",
   "status": "passed",
-  "summary": "The data Amp stored for this block matches its header.",
+  "summary": "The data Amp stored for this block matches its header, and Base's node reports the same block.",
   "checks": [
     {
       "title": "Block fingerprint",
@@ -18,6 +18,16 @@
       "title": "Results and logs",
       "status": "passed",
       "detail": "2 stored results and 3 logs rebuild the summary of them in the block's header."
+    },
+    {
+      "title": "Base's node",
+      "status": "passed",
+      "detail": "It reports the same fingerprint for this block. That's one node's word, not proof that this block is on Base's real chain."
+    },
+    {
+      "title": "Who sent it",
+      "status": "passed",
+      "detail": "The transaction's signature works out to its stored sender, 0x52b4012c7e9ceeeb7bcd44e06833ea43bf199b40."
     },
     {
       "title": "This activity",

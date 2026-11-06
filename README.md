@@ -20,7 +20,7 @@ Patina is a native menu bar app: live total PnL in the bar, holdings, cost and P
 ```sh
 pnpm mac         # builds the app, opens it, and runs the server until you press Ctrl-C
 pnpm mac:build   # only builds it, to macos/build/
-pnpm check:mac   # the Swift tests, the app's build, and the shared packages' builds for iOS. It takes turns with other worktrees, and skips code that's already passed: see macos/TESTING.md
+pnpm check:mac   # the Swift queue's tests, the Swift tests, the app's build, and the shared packages' builds for iOS. It takes turns with other worktrees, and skips code that's already passed: see macos/TESTING.md
 pnpm check:mac:quick   # only the Swift tests, for while you're working
 pnpm check:keychain  # the real Secure Enclave and Keychain, with a throwaway key, from a signed debug build
 pnpm check:anvil     # real signing and sweeps against a local fork of Base, with no real funds. It needs Foundry
@@ -55,6 +55,7 @@ The Mac app has a capped hot wallet, this Mac's "spending money", for everyday u
 - **Sweeps** send whatever is above the cap, and realized gains unless you turn that off, to your chosen savings wallet. They only move tokens with a trusted price, they keep enough ETH for gas, and they skip dust. Costs carry over as `inherited`, because the app tells the server which wallets are yours: `GET /api/portfolio/<address>?linked=<addresses>`.
 - **Topping up** comes from a savings wallet, through the [hardware wallet flow](HARDWARE-WALLETS.md) in your browser, which this opens with the amount and address filled in. The steps to do it by hand on the device are still there.
 - **Buying** starts from Buy, in the toolbar, the Wallet menu or the menu bar, and opens the provider's page, Coinbase for now, for this wallet's own address. Everything lands here, and what's above the cap sweeps to your savings, so the amount can be anything the provider allows. The sheet says how much ends up where. It asks for a savings wallet first, because the provider's page can raise the amount, so nothing here could keep a purchase under the cap. It won't buy a token it couldn't sweep for lack of ETH, and the page can only sell the token chosen here. The order is followed from there, across restarts: however long it's been, whatever's unresolved is read again when the app starts or comes back, so a purchase paid for while it was closed still gets its cost. When it's delivered, what you paid, fees included, becomes the cost of what arrived, as "Bought on Coinbase", with nothing asked, and it follows the sweep. That takes a purchase made with money, so an order paid from crypto you already held has no cost here, and an exact match of transaction, token and amount. Anything else stays unknown and asks as usual. ETH in a batched payout has no row to match, so it's found by the block its transaction landed in. You type the amount in the main currency, and the page starts from that number when Coinbase can (`presetFiatAmount`, which its docs limit to USD, CAD, GBP and EUR). In any other currency, it starts from about that much of the token, and the sheet says so. Coinbase's own price and its fees decide what's charged, and that's what's recorded, in what it was charged in. Without a current rate, you type in US dollars, as the sheet says, and the page starts from a token amount. It needs a key in the server's environment (`.env.example`), which never leaves the server, and nothing here signs. Only `server/coinbase.ts` knows the provider's API, behind the interface in `server/onramp.ts`.
+- **Buying on the web** starts from Buy, in the header, and only ever lands in a wallet connected in this browser: its address comes from the wallet's answer, nothing typed or looked up can take its place, and it's asked again just before the page opens. Hardware wallets never connect to a site, so this isn't for them. Purchases are kept in this browser and followed across reloads, the way the Mac follows them, and what an order says goes in the book here. Its cost then reads the same in the explanations, the CSV and the proof, which says where it came from. The book isn't sent with a wallet's read, so the currencies it holds go along as `paid=`, which is how a purchase paid in EUR reads in CAD.
 - **Sending** goes to any address, with Touch ID asking as soon as you press Send, for ETH and the tokens the app tracks. A new address asks "Is this yours?", and the answer stays on this Mac with the rest. The hot wallet and your savings wallets never ask: they're always linked, for any wallet that's yours, whatever you've answered. A wallet you're only watching doesn't take costs from them, or from a wallet you've answered is yours.
 - **Publishing a cost** writes what you paid onchain, as a zero-value send to itself that the server reads as `self-reported`. Answering a question offers it when the answer covers everything of one token that arrived in one transaction in this wallet, and warns first, because it publicly ties the amount to the wallet for good. It's always in USD. For a savings wallet, it opens the [hardware wallet flow](HARDWARE-WALLETS.md) in your browser, because that takes its device.
 - **The alarm** compares what Amp and the chain say this wallet did with what the app signed. If they differ, it alerts loudly, stops top-ups, and offers to sweep what's left and replace the key.
@@ -100,7 +101,7 @@ It adds a marked block to the end of `.env.local` that points the app at the loc
 
 | Start | Time to chain head | After that |
 | --- | --- | --- |
-| Default, 1,800 blocks | About 7 minutes for the raw dataset, `legs` and `reference_prices`. About 11 until the script said so, waiting on `priced_legs`, which has few rows there | 3–11 blocks behind (about 2 s at most) for 6 minutes, with no job errors |
+| Default, 1,800 blocks | About 7 minutes for the raw dataset, `legs` and `reference_prices` | 3–11 blocks behind (about 2 s at most) for 6 minutes, with no job errors |
 | `PRICETAG_HISTORY_BLOCKS=300` | About 2 minutes | 5 blocks behind |
 
 Mainnet's RPC and blocks may differ. The previous dataset, which read prices with `eth_call`, couldn't follow these blocks: its `reference_prices` kept falling behind, or held hundreds of blocks behind, at 20, 25 and 35 requests a second.
@@ -116,10 +117,10 @@ The relay now gets 15 a second by default, so L1 fees fit under the public RPC's
 A pricing rule is a dataset version, and the server picks one per request with Amp's `amp-alias` header. The SQL never changes, and the app has no code for any rule. Set these and both apps show a switch, in the Mac app's Settings and above the web app's numbers, with each rule's dataset and manifest hash, and a side-by-side comparison of a wallet. The comparison uses one set of facts at one block for both rules: the same transactions, balances, fees and exchange rates, with only prices from each. If it can't establish that, it says so and shows no numbers. Each rule's market prices are read at that block, and a token only one rule has a market price for is left out on both sides, so the two totals still add up the same things.
 
 ```sh
-PRICETAG_DATASET=benface/pricetag@0.2.0
-PRICETAG_DATASET_HASH=0aecd2c74b1d6d031f255c0048774a1b2d1911e8cc4d7e21ec2d3134469c0f1f
-PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.2.0
-PRICETAG_FORK_HASH=aff88c5c18750e7fee2471ba5a4b551b3cccd771f80a7af7a72af2843d5df812
+PRICETAG_DATASET=benface/pricetag@0.3.0
+PRICETAG_DATASET_HASH=72a4cadfeaf0631b368a5b686c1b4883a71a0a40297a43675dfb81bd2863f30f
+PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.3.0
+PRICETAG_FORK_HASH=639edea8dbc2b9a51f633af97a408c25f51a87a4e0a124065fcb46a56441d763
 ```
 
 Queries are pinned to those hashes, Proof's included, so a hash on screen is what was read, and a wrong one fails instead of showing other numbers. With no fork set, nothing changes: there's no switch and no header, and `PRICETAG_DATASET_HASH` isn't used.
@@ -129,15 +130,17 @@ The fork here is `dataset/cautious-eth.json`, from `cautiousEthTablesSql` in `da
 To change the rule, edit that function, then build, register and deploy it under a new tag, and update the hash:
 
 ```sh
-FORK_OF=benface/pricetag@0.2.0 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
-ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.2.1
+FORK_OF=benface/pricetag@0.3.0 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
+ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.3.1
 ```
 
-Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.2.1` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging. List the versions first and use a free tag, because registering a tag that exists moves it without saying so.
+Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.3.1` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging. List the versions first and use a free tag, because registering a tag that exists moves it without saying so.
 
 **Replacing the dataset it forks means replacing the fork too.** The fork reads the job of the version it names, so stopping that job stops the fork. Deploy a fork of the new version before stopping the old one, then change all four lines together.
 
 **Check the serving jobs right after stopping one.** Stopping a job with JS on a worker can panic the other jobs there and leave them `FATAL` (WORK-574), so a replacement can kill what's still serving. `scripts/job-watch.ts` restarts the versions `.env.local` names within about 15 s, but not a new version until it's named there.
+
+**The server needs a `legs` with `counterparty`,** which `benface/pricetag@0.3.0` is the first to have. An older version fails every wallet read.
 
 **A new dataset name needs a new manifest hash.** Amp finds a dataset's active tables by hash and table name, not by dataset name, so one manifest under two names can read and write the same tables. That's why staging's `benface/pricetag@0.0.1` was `dataset/pricetag.json` at this start block plus a one-line SQL comment. A manifest with new SQL already has its own hash.
 
@@ -152,6 +155,7 @@ The Mac app reads from a server because the server holds what the app can't ship
 - **Logs** are one JSON object a line, with addresses and transaction hashes (as `0x…`, as SQL's `X'…'`, or as any long run of hex), URLs, bearer tokens and the env's secrets taken out. It replaces `console` itself, so the SDK's lines go through it too. It logs no requests.
 - **`GET /healthz`** answers without an invite, with whether Amp and buying are set up and nothing else. It says 503 once a shutdown starts.
 - **SIGTERM** stops taking requests, ends the live streams so clients reconnect, and waits up to `PRICETAG_DRAIN_MS` for the rest.
+- **The client's address** goes to Coinbase only from the header in `PRICETAG_CLIENT_IP_HEADER`, which has to be one the host overwrites, like `fly-client-ip`. Without one it's the socket's. `x-forwarded-for` and the like stop the server from starting, because a client can write them. A private address, or a list, sends nothing, which beats a wrong address.
 - **API only.** It doesn't serve the web app, so Top Up and Publish from a device still need one on the Mac. `PRICETAG_SERVE_APP=1` serves it anyway.
 
 `Dockerfile` builds it, and `fly.toml` runs it on Fly.io, on **one machine**: the wallet reads, the limits and the day's checkouts are counted in its memory, so a second one would split them. Fly starts two on a first deploy unless told otherwise, so deploy with `fly deploy --ha=false`, then check that `fly machine list` shows one. The app reads it when its build names it: `PATINA_SERVER_HOST` in `macos/Config/App.xcconfig`, which is empty, so builds read the Mac's own server. Its invite goes in Settings. It's saved for that server alone, so it never goes to another one, and it's only sent over HTTPS. See `.env.example` for the rest.
@@ -189,6 +193,14 @@ The dataset reads Chainlink's prices from the `AnswerUpdated` logs its contracts
 - **ETH/USD leads what its proxy returns.** A log comes 15 or 16 blocks before the proxy shows the new round (once in a while, just 1). The price is the newer published value, so it isn't delayed to match. Compared block by block with `eth_call`, that's the only difference.
 
 The raw mode and balances still use `eth_call`: there's no dataset table to read them from, or they aren't prices at all. Exchange rates to other currencies come from logs too when the server has a rates dataset (see [Main currency](#main-currency)), and from `eth_call` without one. Verify doesn't cover them either way yet.
+
+**The other 8 tokens' feeds** (`TOKEN_FEEDS`, like AERO/USD) have their own small dataset, `dataset/feeds.json`, set with `PRICETAG_FEEDS_DATASET`. Its one table, `feed_updates`, holds every `AnswerUpdated` from their aggregators, about 330 rows a day, and starts 26 hours before the Pricetag dataset, so a price at its first block had its update inside it. It isn't in `price_updates` because that's what `carried` copies forward to every block, and nothing joins on these: they'd add about 164 rows per block, 70.8M a day on 200 ms blocks, to the 4.6M `carried` writes today.
+
+- **A chart's older points** come from the table: an asset's latest update at or before the block, which is what its contract answers there. That was the same in 240 of 240 comparisons with `eth_call` (8 feeds at 30 blocks, including each side of real updates). It isn't faster, about 0.7 s a read against 0.6 s. What it saves is RPC calls.
+- **What's held now** still reads each contract with `eth_call`, because the table's newest row is the only sign of how far it's reached, and an update could still be on its way. An old answer would quietly be wrong, so a block past that row goes to the contract, and so does everything if the table fails.
+- **Each current price has a proof and a Verify,** whichever way it was read, from "Proof of this price" under the number. ETH's and USDC's come from `reference_prices`. The others take the latest update in `feed_updates` at the price's block, and it has to work out to the price shown. If it doesn't and the table hasn't reached that block, it says to try again. If it has, the check fails. wstETH's price is in ETH, so it has two updates to check. Without `PRICETAG_FEEDS_DATASET`, those 8 prices say plainly that no log backs them.
+
+To change it, add the aggregator to `TOKEN_FEED_AGGREGATORS` in `packages/sdk/src/tokens.ts`, then build, register and deploy a new tag with `node dataset/build.ts --feeds <the Pricetag dataset's start block>`. The server warns when it starts if a proxy reads from an aggregator it doesn't list. Replacing `benface/pricetag` doesn't touch this dataset.
 
 ## Main currency
 
@@ -274,7 +286,7 @@ A transaction with a WETH unwrap the chain hasn't confirmed yet stays unknown, a
 
 A token's price goes oracle, swap, then `market`: the median of its last few trades at or before that block, from `priced_legs`. It needs 3 transactions of at least $100, $1,000 in all, within 30 minutes, each one plausible at its own block. Only rows of about $100 or more are read, so small trades can't fill the read and hide real ones, and they don't count toward a transaction's price. `priced_legs` doesn't say how deep a pool is, so that's the stand-in for liquidity. A dataset without the `unlisted_moves` table has the wrong rows WORK-346 removed, so it's never read for this. The chart marks what's held at each transaction by its feed, then by the same price, and leaves a token out of any point it has neither for. Those reads come after the ones that price the wallet and share their limit, so a busy wallet's chart fills in over a few refreshes, newest first.
 
-What's held now is valued at its Chainlink feed first, then at `market`. The dataset only has ETH and USDC's feeds, so the server reads the rest (`TOKEN_FEEDS`) directly, for what a wallet holds. They only set current prices and the chart's marks, read at each point's 5-minute bucket, not what a past transaction was worth. An answer that's too old or outside the token's bounds is no price, and no price from a feed doesn't make it "no market". A feed that gives no answer for a chart point is asked again over about half an hour, and the market prices that point in the meantime.
+What's held now is valued at its Chainlink feed first, then at `market`. The dataset only has ETH and USDC's feeds, so the SDK reads the rest (`TOKEN_FEEDS`) directly, for what a wallet holds. They only set current prices and the chart's marks, read at each point's 5-minute bucket, not what a past transaction was worth. An answer that's too old or outside the token's bounds is no price, and no price from a feed doesn't make it "no market". A feed that gives no answer for a chart point is asked again over about half an hour, and the market prices that point in the meantime.
 
 **Answers stay on the device.** The Mac app and the browser keep them, and send them with each request (`POST /api/portfolio/<address>`, with `/explain`, `/preview`, `/export`, `/compare` and `/last`, which folds what was last read without waiting on a new read, and the pricing rule when one is chosen). The server folds with them and keeps nothing. Costs are kept in the currency they were entered in, and converted at the rate when they arrived. Without that rate, they stay unknown.
 
@@ -289,20 +301,22 @@ Click a price, or Proof, on any row of an explanation. It shows where that price
 - **Block fingerprint:** the header's fields hash to the block's hash.
 - **Transactions:** every transaction rebuilds the header's `transactions_root`, and each one hashes to its stored `tx_hash`.
 - **Results and logs:** every receipt and log rebuilds the header's `receipts_root`.
+- **Base's node:** `BASE_RPC_URL` reports the same hash at that block's number. A different hash fails the check, and no answer says it's not checked.
+- **Who sent it:** the row's transaction's signature recovers to its stored `from`. A deposit isn't signed, and its hash covers its sender.
 - **This activity:** the row's transaction is in that data, and its Transfer logs or ETH value match its amounts. A network fee's L2 part is worked out again from its gas, the block's base fee, and only the fee fields its transaction type hashes. For a swap price, that includes the other side of the exchange. Unwrapped ETH is checked against its `Withdrawal` logs as recorded, whatever the balance then says arrived.
-- **Chainlink's update:** the block with the update behind the price, which can be a different one, passes the same three checks. Its log has to be an `AnswerUpdated` from that feed's aggregator, in the transaction `reference_prices` names, with the answer `price_updates` stored. That answer then has to work out to the row's price, directly or, for a swap price, through what was paid. Reading the raw dataset, there's no update to check, so this check doesn't appear.
+- **Chainlink's update:** the block with the update behind the price, which can be a different one, passes the same three checks, and the same comparison with Base's node. Its log has to be an `AnswerUpdated` from that feed's aggregator, in the transaction `reference_prices` names, with the answer `price_updates` stored. That answer then has to work out to the row's price, directly or, for a swap price, through what was paid. Reading the raw dataset, there's no update to check, so this check doesn't appear.
 
 It's done here and not with `ampctl verify` because that can't check Base: every Base block starts with an OP Stack deposit (type `0x7e`), which it doesn't support. It fails v0.0.42 and nightly `47b6fa2` alike, and today's source still rejects the type. Amp doesn't store what a deposit's hash also covers (`sourceHash`, `mint`, `isSystemTx`), so those three come from `BASE_RPC_URL`. A wrong answer fails the check, because the result has to hash to the block's commitment. Every log and transaction it counts has to be in what's hashed, at the number it's stored with, or the check fails. If the RPC doesn't answer, Transactions says it's not checked. The fingerprints come from Amp's admin API at `AMP_ADMIN_URL`, with the server's token.
 
 What a pass doesn't show, which the interface also says:
 
-- That the header is on Base's real chain. A consistent fake block would pass.
+- That the header is on Base's real chain. A consistent fake block would only pass if the node agreed too, but that's one node's word, and a local Amp reads its blocks through that same `BASE_RPC_URL`, so there it isn't a second source at all.
 - That the derived SQL ran correctly. Only the raw dataset's rows are checked, plus the row's amounts against them.
 - That Chainlink's number is right. It only shows that Chainlink published it.
 - That the update was still the latest at the row's block. That comes from `carried` and `reference_prices`, so it's the derived SQL again.
 - An `oracle` price, or the oracle side of a `swap` price, when reading the raw dataset or a local Amp before its first real update, because `eth_call` results aren't in a block's commitments. The same goes for exchange rates and L1 fees, which aren't in the commitments either, so an L1 fee's amount is never compared.
 - How much ETH reached a wallet from unwrapping. A `Withdrawal` log only records what was unwrapped, and a contract can keep a cut or send the ETH elsewhere, so the logs are checked as recorded, and what arrived is listed apart: worked out from the wallet's balance across the block when `settleUnwraps` could, and otherwise not confirmed. A swap price uses that amount, so it rests on the balance too.
-- That a transaction's `from` is right. Signatures are in the commitment, but aren't recovered to compare them with the stored sender, so a row that takes its account from the sender (fees, ETH sent, unwrapped ETH received) says so.
+- That the other transactions' `from` is right. Only the row's own transaction has its signature recovered, since that's the one it takes its account from.
 
 `server/verify.ts` is the pure part, tested on real rows and on tampered ones. Keccak comes from `@noble/hashes`, since whether Node has it depends on its build. `server/block.ts` reads a block and `server/proof.ts` puts it into words. It's valid for blocks since Canyon (January 2024), because older deposits' receipts are encoded differently.
 

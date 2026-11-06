@@ -18,6 +18,7 @@
     "mac:shot": "macos/shot.sh",
     "check:mac": "macos/check-mac.sh",
     "check:mac:quick": "macos/check-mac.sh --quick",
+    "check:swift-queue": "node macos/swift-queue.test.ts",
     "check:anvil": "macos/anvil-test.sh",
     "check:keychain": "macos/keychain-test.sh",
     "check:extension": "macos/extension-test.sh",

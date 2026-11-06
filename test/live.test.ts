@@ -6,9 +6,8 @@ import { after, before, describe, it, type TestContext } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
 import { createPricetag, type WalletUpdate } from "@pricetag/sdk"
 import type { CostNote, RateRound } from "@pricetag/sdk/core"
-import { createRangeStream, createWallets, datasetSource, followChain, parseStreamRange, pricetagClient, type BlockMark, type ChainTick, type FollowConfig, type Query, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
+import { createQuery, createRangeStream, createRates, createWallets, datasetSource, followChain, parseSnapshotEnd, parseStreamRange, pricetagClient, type BlockMark, type ChainTick, type FollowConfig, type Query, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
-import { createRates } from "../server/rates.ts"
 import { fakeAmp, type Tables } from "./support/fake-amp.ts"
 
 const ME = "00000000000000000000000000000000000000aa"
@@ -477,7 +476,7 @@ describe("Amp's stream on the wire", FOLLOWING, () => {
       req.resume()
       res.writeHead(200, { "content-type": "application/grpc+proto" })
       if (req.url.endsWith("/GetFlightInfo")) {
-        seen.push({ stream: req.headers["amp-stream"] as string, resume: req.headers["amp-resume"] as string, auth: req.headers.authorization })
+        seen.push({ stream: req.headers["amp-stream"] as string, resume: req.headers["amp-resume"] as string, auth: req.headers.authorization, alias: req.headers["amp-alias"] as string })
         res.write(grpcFrame(flightInfo()))
       } else {
         // What Amp sends: the schema, a batch of rows, its watermark, then the empty keepalive, which isn't Arrow.
@@ -501,7 +500,21 @@ describe("Amp's stream on the wire", FOLLOWING, () => {
     const ranges: StreamRange[] = []
     for await (const range of stream("SELECT 1", { blockNum: 100, hash: "0x100" }, t.signal)) ranges.push(range)
     assert.deepEqual(ranges, [{ start: 101, end: 101, hash: "0x101", complete: false }, { start: 101, end: 101, hash: "0x101", complete: true }, { start: 102, end: 102, hash: "0x102", complete: true }])
-    assert.deepEqual(seen.at(-1), { stream: "true", resume: JSON.stringify({ "base-mainnet": { number: 100, hash: "0x100" } }), auth: "Bearer secret" })
+    assert.deepEqual(seen.at(-1), { stream: "true", resume: JSON.stringify({ "base-mainnet": { number: 100, hash: "0x100" } }), auth: "Bearer secret", alias: undefined })
+  })
+
+  it("reads how far a query's tables have got from an empty answer, with the token and any aliases", async () => {
+    const query = createQuery(`http://127.0.0.1:${port}`, "secret")
+    assert.equal(await query.snapshotEnd!("SELECT 1"), 102)
+    assert.equal(seen.at(-1)!.auth, "Bearer secret")
+    assert.equal(await query.aliased({ pricetag: "benface/pricetag@aa" }).snapshotEnd!("SELECT 1"), 102)
+    assert.equal(seen.at(-1)!.alias, JSON.stringify({ pricetag: "benface/pricetag@aa" }))
+  })
+
+  it("has no snapshot end for a message with no ranges, which is what Amp's newer backend sends so far", () => {
+    assert.equal(parseSnapshotEnd(new Uint8Array()), null)
+    assert.equal(parseSnapshotEnd(new TextEncoder().encode(JSON.stringify({ ranges: [], ranges_complete: true }))), null)
+    assert.equal(parseSnapshotEnd(metadata(5, 9, true)), 9)
   })
 
   it("fails on another network's ranges, since its resume wouldn't have counted", async () => {
@@ -525,6 +538,7 @@ function chainAt(block: number, tables: Tables, onQuery: (sql: string) => void =
   const hashOf = (n: number) => `${n >= chain.forkedFrom ? "b" : ""}${n}`.padStart(64, "0")
   const query: Query = async <T,>(sql: string) => {
     onQuery(sql)
+    if (sql.includes("AS round")) return fakeAmp(chain.tables).query<T>(sql)
     // A test's stream says hashes of its own, so only a test with no stream can check them.
     const asked = /\.blocks WHERE .*block_num IN \(([^)]*)\)/.exec(sql)
     if (asked) return (follow.stream === null ? asked[1]!.split(", ").filter((n) => Number(n) <= chain.block).map((n) => ({ block_num: n, hash: hashOf(Number(n)) })) : []) as T[]
@@ -583,7 +597,24 @@ describe("watchWallet", FOLLOWING, () => {
     assert.equal(update.positions.find((p) => p.asset === "ETH")?.values.qty, "7")
   })
 
-  it("replaces a reorg deeper than the blocks it would re-read anyway", async (t) => {
+  it("converts in the currency it's asked for, and reads again the rates a reorg replaced", async () => {
+    const rateAt100 = (update: WalletUpdate) => update.legs.find((leg) => leg.blockNum === 100)?.conversion?.rateMicros
+    const { chain, hand, client } = chainAt(1000, { legs: [creditAt(100, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "100" }, { ...REFERENCE, block_num: "1000" }], balances: balancesThrough(1100, "5"), rates: { 100: 80_000_000n, 1000: 80_000_000n } })
+    const updates = client.watchWallet(ADDRESS, { currency: "CAD" })
+    const first = (await updates.next()).value as WalletUpdate
+    assert.equal(first.currency, "CAD")
+    assert.equal(rateAt100(first), "1250000")
+
+    // Block 100 is long settled, so nothing but the reorg would read its rate again.
+    chain.tables = { ...chain.tables, rates: { 100: 50_000_000n, 1000: 80_000_000n } }
+    hand.send(blockOf(1000, 100, "0xnew"))
+    const update = (await updates.next()).value as WalletUpdate
+    assert.equal(update.reorgFrom, 100)
+    assert.equal(rateAt100(update), "2000000")
+    await updates.return()
+  })
+
+    it("replaces a reorg deeper than the blocks it would re-read anyway", async (t) => {
     const { chain, hand, client } = chainAt(150, { legs: [creditAt(100, "aa", "5"), creditAt(149, "dd", "1")], reference_prices: [{ ...REFERENCE, block_num: "100" }, { ...REFERENCE, block_num: "149" }], balances: balancesThrough(200, "6") })
     const updates = client.watchWallet(ADDRESS, { signal: t.signal })
     assert.deepEqual(legsOf((await updates.next()).value as WalletUpdate), ["100:0xaa:5", "149:0xdd:1"])
@@ -1065,7 +1096,7 @@ describe("the server's live events while the dataset catches up", FOLLOWING, () 
     const api = createApi({}, {
       source,
       readRates: async () => ({ byBlock: {}, latest: null }),
-      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+      proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
       follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET, tickMs: 0 },
     })
     server = createServer((req, res) => void api(req, res))
@@ -1112,7 +1143,7 @@ describe("the head a wallet read starts from", () => {
     const api = createApi({}, {
       source,
       readRates: async () => ({ byBlock: {}, latest: null }),
-      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+      proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
       follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET, tickMs: 0 },
     })
     const server = createServer((req, res) => void api(req, res))
@@ -1288,7 +1319,7 @@ describe("the server after a reorg the tables haven't rewritten yet", FOLLOWING,
     const api = createApi({}, {
       source,
       readRates: async () => ({ byBlock: {}, latest: null }),
-      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+      proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
       follow: { stream: hand.stream, sql: "SELECT 1", readMark, logger: QUIET, pollMs: 1, retryMs: 60_000, tickMs: 0 },
     })
     server = createServer((req, res) => void api(req, res))
@@ -1334,7 +1365,7 @@ describe("the server's live events", FOLLOWING, () => {
     const api = createApi({}, {
       source: headAt100,
       readRates: async () => ({ byBlock: {}, latest: null }),
-      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+      proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
       follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET, tickMs: 0 },
     })
     server = createServer((req, res) => void api(req, res))

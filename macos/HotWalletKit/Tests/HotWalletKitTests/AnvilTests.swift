@@ -120,8 +120,8 @@ struct AnvilTests {
         state.active = hot
         try stateStore.save(state)
         let running = HotWallet(signer: vault, settingsStore: settingsStore, stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { unreachable }, makeChain: { _ in client })
-        try running.addColdWallet(address: cold.lowercased, name: "Fork")
-        running.setCap(dollars: 50)
+        try await running.addColdWallet(address: cold.lowercased, name: "Fork")
+        await running.setCap(dollars: 50)
 
         // An exchange withdrawal lands: $500 of USDC, on top of a little ETH. Far over the cap, for a moment.
         _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth / 1000)])
@@ -314,8 +314,8 @@ struct AnvilTests {
         try stateStore.save(state)
         let unreachable = ScriptedPortfolios(.failure(.unreachable))
         let wallet = HotWallet(signer: vault, settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { unreachable }, makeChain: { _ in client })
-        try wallet.addColdWallet(address: cold.lowercased, name: "Fork")
-        wallet.setCap(dollars: 50)
+        try await wallet.addColdWallet(address: cold.lowercased, name: "Fork")
+        await wallet.setCap(dollars: 50)
 
         _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth / 100)])
         // Nothing else is held yet, so no other feed gets read.
@@ -353,8 +353,8 @@ struct AnvilTests {
         try stateStore.save(state)
         let unreachable = ScriptedPortfolios(.failure(.unreachable))
         let wallet = HotWallet(signer: vault, settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { unreachable }, makeChain: { _ in client }, tickDelay: .seconds(3600))
-        try wallet.addColdWallet(address: cold.lowercased, name: "Fork")
-        wallet.setCap(dollars: 50)
+        try await wallet.addColdWallet(address: cold.lowercased, name: "Fork")
+        await wallet.setCap(dollars: 50)
         _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth / 1000)])
         _ = try await anvil("anvil_dealERC20", [hot.lowercased, usdc.contract!.lowercased, hex(usdcUnits(500))])
 
@@ -418,7 +418,7 @@ struct AnvilTests {
         try stateStore.save(state)
         let unreachable = ScriptedPortfolios(.failure(.unreachable))
         let wallet = HotWallet(signer: vault, settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { unreachable }, makeChain: { _ in client })
-        try wallet.addColdWallet(address: cold.lowercased, name: "Fork")
+        try await wallet.addColdWallet(address: cold.lowercased, name: "Fork")
 
         _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth)])
         _ = try await anvil("anvil_dealERC20", [hot.lowercased, usdc.contract!.lowercased, hex(usdcUnits(5))])

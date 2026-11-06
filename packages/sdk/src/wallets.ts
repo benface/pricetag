@@ -43,8 +43,8 @@ export type Source = {
   marketReady?(): Promise<boolean>
   /** An asset's latest trades in a block range, newest first. Only a dataset's `priced_legs` has them. */
   readMarketTrades?(asset: string, from: number, to: number): Promise<MarketTrade[]>
-  /** What these assets' `TOKEN_FEEDS` answer at `block`. A feed whose read failed isn't in it. */
-  readFeedRounds?(assets: readonly string[], block: number): Promise<Record<string, FeedRound>>
+  /** What these assets' `TOKEN_FEEDS` answer at each of these blocks. A feed whose read failed isn't in it, and neither is a block with no row. */
+  readFeedRounds?(assets: readonly string[], blocks: readonly number[]): Promise<Map<number, Record<string, FeedRound>>>
 }
 
 /** Blocks to read, inclusive, where the source's defaults aren't wanted. `to` reads the wallet as of that block. */
@@ -193,7 +193,10 @@ export function marketNeeds(rows: readonly LegRow[], priced: readonly PricedRow[
 const MARKET_BUCKET_BLOCKS = 150
 /** A current price moves on faster. */
 const MARKET_HEAD_BUCKET_BLOCKS = 30
-/** Each read is a query, and they run one at a time. What's left waits for the next refresh, and has no price until then. */
+/**
+ * Each read asks about one bucket. A market read is a query, and buckets wanting the same feeds share one, though each still
+ * costs the RPC its own calls. They run one at a time. What's left waits for the next refresh, and has no price until then.
+ */
 const MARKET_READS_PER_REFRESH = 20
 function bucketOf(block: number, slowSize = MARKET_BUCKET_BLOCKS): number {
   const size = block > LAST_2S_BLOCK ? slowSize * 10 : slowSize
@@ -209,10 +212,10 @@ const chartReads = (address: string, rows: readonly LegRow[], opening: BalanceSn
 /** By `<asset>:<bucket>`. */
 type MarkRounds = ReadonlyMap<string, FeedRound>
 
-/** Grouped by bucket, because one query covers every feed in one. */
+/** Grouped by bucket, because one query covers every feed in one. Sorted, so buckets wanting the same feeds can tell. */
 function assetsByBucket(reads: readonly MarketRead[]): Map<number, string[]> {
   const buckets = new Map<number, string[]>()
-  for (const read of new Map(reads.map((read) => [marketKey(read), read])).values()) buckets.set(read.bucket, [...(buckets.get(read.bucket) ?? []), read.asset])
+  for (const read of new Map(reads.map((read) => [marketKey(read), read])).values()) buckets.set(read.bucket, [...(buckets.get(read.bucket) ?? []), read.asset].sort())
   return buckets
 }
 
@@ -243,7 +246,7 @@ function marketWanted(wallet: Pick<Cached, "rows" | "opening" | "closing" | "las
 }
 
 /** The feeds' prices, given what ETH's worth. Each rule has its own ETH price, so this isn't part of a wallet's facts. */
-function feedPrices(rounds: Record<string, FeedRound>, prices: LatestPrices): LatestPrices {
+export function feedPrices(rounds: Record<string, FeedRound>, prices: LatestPrices): LatestPrices {
   return Object.fromEntries(Object.entries(rounds).flatMap(([asset, round]) => {
     const micros = feedPrice(asset, round, prices.ETH?.micros ?? null)
     return micros ? [[asset, { micros, source: "oracle" as const, blockNum: round.blockNum }]] : []
@@ -358,7 +361,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     if (missing.length > 0) {
       try {
         const startedAt = rewinds
-        const rounds = await source.readFeedRounds(missing, block)
+        const rounds = (await source.readFeedRounds(missing, [block])).get(block) ?? {}
         if (startedAt === rewinds) for (const [asset, round] of Object.entries(rounds)) latestRounds.set(asset, round)
       } catch (error) {
         logger.warn(`Feed read failed: ${describeError(error)}`)
@@ -398,17 +401,17 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     }
   }
 
-  /** One query however many feeds. False when what's next has to wait: the read failed, or a reorg happened during it. */
-  async function readMarkRounds(assets: readonly string[], bucket: number, head: number): Promise<boolean> {
+  /** One query however many feeds and buckets. False when what's next has to wait: the read failed, or a reorg happened during it. */
+  async function readMarkRounds(assets: readonly string[], buckets: readonly number[], head: number): Promise<boolean> {
     if (!source.readFeedRounds) return false
     try {
       const startedAt = rewinds
-      const rounds = await source.readFeedRounds(assets, bucket)
+      const rounds = await source.readFeedRounds(assets, buckets)
       if (startedAt !== rewinds) return false
       priceRevision += 1
-      for (const asset of assets) {
+      for (const bucket of buckets) for (const asset of assets) {
         const key = marketKey({ asset, bucket })
-        const round = rounds[asset]
+        const round = rounds.get(bucket)?.[asset]
         if (round) {
           markRounds.set(key, round)
           noAnswers.delete(key)
@@ -450,22 +453,23 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     for (const read of wanted) await readMissingMarket(read)
     if (chart) {
       const { reads, references, head } = chart
-      const readFeeds = async (assets: readonly string[], bucket: number) => {
-        left -= 1
-        feedsUp = await readMarkRounds(assets, bucket, head)
+      /** These feeds at every waiting bucket that wants the same ones, newest first, as far as the limit goes. */
+      const readFeeds = async (waiting: Map<number, string[]>, assets: readonly string[]) => {
+        if (left === 0 || !feedsUp) return
+        const buckets = [...waiting].filter(([, wants]) => wants.join() === assets.join()).slice(0, left).map(([bucket]) => bucket)
+        for (const bucket of buckets) waiting.delete(bucket)
+        left -= buckets.length
+        feedsUp = await readMarkRounds(assets, buckets, head)
       }
       const due = reads.filter((read) => isFeedDue(read, head))
       const unasked = assetsByBucket(due.filter((read) => !noAnswers.has(marketKey(read))))
       const askAgain = assetsByBucket(due.filter((read) => noAnswers.has(marketKey(read))))
       for (const read of reads) {
         const feeds = unasked.get(read.bucket)
-        if (feeds && left > 0 && feedsUp) {
-          await readFeeds(feeds, read.bucket)
-          unasked.delete(read.bucket)
-        }
+        if (feeds) await readFeeds(unasked, feeds)
         if (!feedMark(read, markRounds, references)) await readMissingMarket(read)
       }
-      for (const [bucket, assets] of askAgain) if (left > 0 && feedsUp) await readFeeds(assets, bucket)
+      for (const assets of askAgain.values()) await readFeeds(askAgain, assets)
     }
     return usable && startedAt === rewinds && wanted.every((w) => market.has(marketKey(w)))
   }

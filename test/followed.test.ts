@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
 import { tableFromArrays, tableToIPC } from "apache-arrow"
-import { FollowedTable, createRowStream, createWallets, followedWallets, type BlockMark, type FollowedConfig, type Query, type StreamBatch } from "@pricetag/sdk/internal"
+import { FollowedTable, createRowStream, createWallets, followedWallets, followedWindowSql, type BlockMark, type FollowedConfig, type Query, type StreamBatch } from "@pricetag/sdk/internal"
 import { resolvingSource, sharedReads } from "../server/source.ts"
 import { fakeAmp } from "./support/fake-amp.ts"
 
@@ -218,7 +218,7 @@ describe("following wallets", () => {
     assert.equal(started.length, 2, "not straight away")
     await sleep(50)
     await followed.read(ME, "a", HEAD, HEAD)
-    await going(started, 4)
+    await going(started, 3)
     followed.rewind()
   })
 
@@ -340,15 +340,14 @@ describe("following wallets", () => {
 
 describe("a wallet's window, read through a stream", () => {
   const me = ME.slice(2)
-  const leg = (block: number, kind = "erc20") => ({ block_num: block, timestamp: 1_700_000_000_000, tx_hash: `${block}`.padStart(64, "0"), tx_index: 0, log_index: 1, token: "aa".repeat(20), account: me, side: "credit", amount: "5", kind })
+  const leg = (block: number, kind = "erc20") => ({ block_num: block, timestamp: 1_700_000_000_000, tx_hash: `${block}`.padStart(64, "0"), tx_index: 0, log_index: 1, token: "aa".repeat(20), account: me, side: "credit", amount: "5", kind, counterparty: "cc".repeat(20) })
   const priced = (block: number) => ({ block_num: block, tx_hash: `${block}`.padStart(64, "0"), account: me, sold_token: "aa".repeat(20), sold_amount: "1", bought_token: "bb".repeat(20), bought_amount: "2", priced: { source: "swap" } })
-  const log = (block: number) => ({ block_num: block, tx_hash: `${block}`.padStart(64, "0"), log_index: 1, topic1: `${"0".repeat(24)}${"cc".repeat(20)}`, topic2: `${"0".repeat(24)}${me}` })
 
   const setup = (answers: (table: string, from: number, to: number) => unknown[] | null) => {
     const queries: string[] = []
     const query = (async <T>(sql: string) => {
       queries.push(sql)
-      return (sql.includes(".legs") ? [leg(5)] : sql.includes("priced_legs") ? [priced(5)] : sql.includes(".logs") ? [log(5)] : []) as T[]
+      return (sql.includes(".legs") ? [leg(5)] : sql.includes("priced_legs") ? [priced(5)] : []) as T[]
     }) as Query
     const followed = { read: async (_address: string, table: string, from: number, to: number) => answers(table, from, to) as never, rewind() {} }
     const source = resolvingSource(query, { baseDataset: "base", dataset: "ds", startBlock: 1, network: "base_mainnet", followed })
@@ -356,17 +355,17 @@ describe("a wallet's window, read through a stream", () => {
   }
 
   it("asks no query for what the stream has, and comes out the same", async () => {
-    const streamed = setup((table) => ({ legs: [leg(5)], unlisted_legs: [], priced_legs: [priced(5)], counterparty_logs: [log(5)] })[table]!)
+    const streamed = setup((table) => ({ legs: [leg(5)], unlisted_legs: [], priced_legs: [priced(5)] })[table]!)
     const queried = setup(() => null)
     const [viaStream, viaQuery] = [await streamed.source.readWindow(ME, 1, 10), await queried.source.readWindow(ME, 1, 10)]
     assert.deepEqual(streamed.queries, [])
-    assert.ok(queried.queries.length >= 3)
+    assert.equal(queried.queries.length, 2)
     assert.deepEqual(viaStream, viaQuery)
     assert.equal(viaStream.rows[0]?.counterparty, `0x${"cc".repeat(20)}`)
   })
 
   it("queries each table the stream can't answer for, on its own", async () => {
-    const { queries, source } = setup((table) => (table === "priced_legs" ? null : { legs: [leg(5)], unlisted_legs: [], counterparty_logs: [log(5)] }[table]!))
+    const { queries, source } = setup((table) => (table === "priced_legs" ? null : { legs: [leg(5)], unlisted_legs: [] }[table]!))
     const { priced: rows } = await source.readWindow(ME, 1, 10)
     assert.equal(queries.length, 1)
     assert.match(queries[0]!, /priced_legs/)
@@ -383,24 +382,11 @@ describe("a wallet's window, read through a stream", () => {
     assert.match(queries[0]!, /\.legs .*UNION ALL .*unlisted_legs/)
   })
 
-  it("asks for logs only over the blocks with a token transfer", async () => {
-    const asked: unknown[] = []
-    const { source } = setup((table, from, to) => {
-      if (table === "counterparty_logs") asked.push([from, to])
-      return table === "legs" ? [leg(5), leg(7), leg(9, "gas")] : []
-    })
-    await source.readWindow(ME, 1, 10)
-    assert.deepEqual(asked, [[5, 7]])
-  })
-
-  it("doesn't ask for logs when no token moved", async () => {
-    const asked: string[] = []
-    const { source } = setup((table) => {
-      asked.push(table)
-      return table === "legs" ? [leg(9, "gas")] : []
-    })
-    await source.readWindow(ME, 1, 10)
-    assert.ok(!asked.includes("counterparty_logs"))
+  it("follows a leg's counterparty when the reader asks for it, which only `legs` has", () => {
+    const sql = followedWindowSql(ME, "ds", { counterparties: true })
+    assert.match(sql.legs, /, counterparty FROM "ds"\.legs/)
+    assert.doesNotMatch(sql.unlisted_legs, /counterparty/)
+    assert.doesNotMatch(followedWindowSql(ME, "ds").legs, /counterparty/)
   })
 
   it("tells the streams about a reorg", async () => {
@@ -421,7 +407,7 @@ describe("a wallet's updates through a reorg, with its rows from streams", () =>
     const tables = { legs: [leg(HEAD - 10, "aaa")], unlisted_legs: [], priced_legs: [], reference_prices: [] }
     const through = { legs: HEAD, unlisted_legs: HEAD, priced_legs: HEAD, reference_prices: HEAD }
     const { query, queries } = fakeAmp(tables, through)
-    const { started, config } = fakeStreams(["legs", "unlisted_legs", "priced_legs", "counterparty_logs"])
+    const { started, config } = fakeStreams(["legs", "unlisted_legs", "priced_legs"])
     const followed = followedWallets(config)
     const shared = sharedReads(query, { baseDataset: "base", dataset: "ds", network: "base_mainnet", followed })
     const source = resolvingSource(query, { baseDataset: "base", dataset: "ds", startBlock: HEAD - 1000, network: "base_mainnet", followed }, shared)
@@ -431,7 +417,7 @@ describe("a wallet's updates through a reorg, with its rows from streams", () =>
       head = block
       for (const table of Object.keys(through) as (keyof typeof through)[]) through[table] = block
     }
-    const sendAll = (make: (table: string, i: number) => StreamBatch) => started.slice(-4).forEach((stream, i) => stream.send(make(stream.sql.split(" ")[0]!, i)))
+    const sendAll = (make: (table: string, i: number) => StreamBatch) => started.slice(-3).forEach((stream, i) => stream.send(make(stream.sql.split(" ")[0]!, i)))
     return { tables, queries, started, wallets, shared, toBlock, sendAll }
   }
   const windowQueries = (queries: string[]) => queries.filter((sql) => /\.(legs|unlisted_legs) WHERE block_num BETWEEN/.test(sql)).length
@@ -439,7 +425,7 @@ describe("a wallet's updates through a reorg, with its rows from streams", () =>
   it("takes the new rows from the stream, and stays on the query's when it's told first", async () => {
     const { tables, queries, started, wallets, shared, toBlock, sendAll } = await setup()
     assert.deepEqual(legsOf(await wallets.get(ME)), ["aaa"])
-    const resume = await going(started, 4)
+    const resume = await going(started, 3)
     sendAll((table) => batch(resume + 1, HEAD, table === "legs" ? [leg(HEAD - 10, "aaa")] : []))
     await settle()
 
@@ -473,7 +459,7 @@ describe("a wallet's updates through a reorg, with its rows from streams", () =>
   it("carries on with queries when the stream dies, without losing a row", async () => {
     const { tables, queries, started, wallets, shared, toBlock, sendAll } = await setup()
     await wallets.get(ME)
-    const resume = await going(started, 4)
+    const resume = await going(started, 3)
     sendAll(() => batch(resume + 1, HEAD))
     await settle()
     started[0]!.fail(new Error("gone"))

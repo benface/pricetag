@@ -142,6 +142,7 @@ struct HotWalletDetails<Overview: View>: View {
     /// What's typed for the network, and what's wrong with it. A test scene starts them off.
     @State var rpc = ""
     @State var rpcError: String?
+    @State private var isApplyingRPC = false
     @State private var isAddingCold = false
     @State private var isToppingUp = false
     @State private var isSending = false
@@ -323,26 +324,14 @@ struct HotWalletDetails<Overview: View>: View {
 
     private var capEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
-            capSlider
+            CapSlider(wallet: wallet)
             Text(capFooter)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
         .frame(width: 320)
-    }
-
-    private var capSlider: some View {
-        LabeledContent("Cap") {
-            HStack {
-                Slider(value: Binding(get: { Double(wallet.settings.capInDollars) }, set: { wallet.setCap(dollars: Int($0)) }), in: 1...Double(wallet.settings.capCeiling / Money.dollar))
-                    .frame(maxWidth: 240)
-                Text(wallet.money(dollars: wallet.settings.capInDollars))
-                    .monospacedDigit()
-                    .frame(width: 56, alignment: .trailing)
-            }
-        }
     }
 
     private var capFooter: String {
@@ -445,7 +434,7 @@ struct HotWalletDetails<Overview: View>: View {
                 }
             }
             if !wallet.settings.coldWallets.isEmpty {
-                Picker("Sweeps go to", selection: Binding(get: { wallet.settings.sweepDestination }, set: { if let address = $0 { wallet.setSweepDestination(address) } })) {
+                Picker("Sweeps go to", selection: Binding(get: { wallet.settings.sweepDestination }, set: { address in if let address { Task { await wallet.setSweepDestination(address) } } })) {
                     ForEach(wallet.settings.coldWallets) { cold in
                         // Two can have the same name, and this decides where money goes.
                         Text("\(cold.name) (\(Format.shortHash(cold.address.checksummed)))").tag(Optional(cold.address))
@@ -453,6 +442,7 @@ struct HotWalletDetails<Overview: View>: View {
                 }
                 .pickerStyle(.radioGroup)
                 .accessibilityLabel("Sweeps go to")
+                .disabled(wallet.isWorking)
             }
             Button(HotWalletWording.addSavingsButton, systemImage: "plus") { isAddingCold = true }
         }
@@ -537,7 +527,7 @@ struct HotWalletDetails<Overview: View>: View {
                 .font(.title3.weight(.semibold))
                 .padding(.top, 10)
             DetailsSection("Cap and Sweeps", footer: capFooter) {
-                capSlider
+                CapSlider(wallet: wallet)
                 LabeledContent("Sweep realized gains to savings") {
                     Toggle("Sweep realized gains to savings", isOn: Binding(get: { wallet.settings.sweepsRealizedGains }, set: { wallet.setSweepsRealizedGains($0) }))
                         .labelsHidden()
@@ -601,7 +591,14 @@ struct HotWalletDetails<Overview: View>: View {
             return
         }
         rpcError = nil
-        wallet.setRPC(url)
+        guard url != wallet.settings.rpcURL, !isApplyingRPC else { return }
+        isApplyingRPC = true
+        Task {
+            await wallet.setRPC(url)
+            isApplyingRPC = false
+            // If they said no, it's still the old one, and leaving the page shouldn't ask again.
+            rpc = wallet.settings.rpcURL.absoluteString
+        }
     }
 
     private var abandonMessage: String {
@@ -735,7 +732,7 @@ private struct DetailsSection<Content: View>: View {
             if let footer {
                 Text(footer)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -757,7 +754,7 @@ private struct SettingLabel: View {
             Text(title)
             Text(detail)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -806,6 +803,8 @@ struct TopUpSheet: View {
     }
 
     private var room: Int { Int(wallet.topUpRoom / Money.dollar) }
+    /// Until then the room left is unknown, and would read as the whole cap.
+    private var hasRead: Bool { wallet.plan != nil }
     private var hasDestination: Bool { wallet.settings.sweepDestination != nil }
 
     private var deviceLink: URL? {
@@ -816,25 +815,25 @@ struct TopUpSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(HotWalletWording.topUpTitle(hasDestination: hasDestination))
                 .font(.sheetTitle)
-            if room < 1 {
+            if hasRead, room < 1 {
                 Notice(.info, HotWalletWording.topUpAtCap(wallet.capText, hasDestination: hasDestination))
             } else {
                 LabeledContent("Amount") {
                     HStack {
                         // A slider needs two ends, and with room for one dollar, the other end is too much.
                         Slider(value: $dollars, in: 1...Double(max(room, 2)), step: 1)
-                            .disabled(room < 2)
+                            .disabled(!hasRead || room < 2)
                         Text(amountText)
                             .monospacedDigit()
                             .frame(width: 56, alignment: .trailing)
                     }
                 }
-                Text(HotWalletWording.topUpRoom(wallet.money(wallet.topUpRoom), hasDestination: hasDestination))
+                Text(hasRead ? HotWalletWording.topUpRoom(wallet.money(wallet.topUpRoom), hasDestination: hasDestination) : "Reading this wallet…")
                     .font(.caption)
                     .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
                 if let deviceLink {
-                    DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.") { open(deviceLink, in: nil) }
+                    DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.", canUseDefault: hasRead) { open(deviceLink, in: nil) }
                 }
                 DisclosureGroup("Or do it by hand on the device") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -869,6 +868,7 @@ struct TopUpSheet: View {
                 if room >= 1, let deviceLink {
                     Button(found.continueTitle) { open(deviceLink, in: found.browser) }
                         .keyboardShortcut(.defaultAction)
+                        .disabled(!hasRead)
                 }
             }
         }
@@ -881,6 +881,8 @@ struct TopUpSheet: View {
     }
 
     private func open(_ link: URL, in browser: InstalledBrowser?) {
+        // The amount in the link is only worth sending once the room's known.
+        guard hasRead else { return }
         browsers.open(link, browser)
         dismiss()
     }
@@ -912,6 +914,46 @@ private extension View {
                     .padding(.horizontal, -6)
                     .padding(.vertical, -4)
             }
+        }
+    }
+}
+
+/// Lowering the cap asks for Touch ID, so a drag only counts where it ends, and a refusal puts it back. Keys and VoiceOver move it
+/// with no end to wait for, so a short pause counts as one.
+private struct CapSlider: View {
+    let wallet: HotWallet
+    @State private var draft: Int?
+    @State private var isDragging = false
+    @State private var isApplying = false
+
+    var body: some View {
+        let shown = draft ?? wallet.settings.capInDollars
+        LabeledContent("Cap") {
+            HStack {
+                Slider(value: Binding(get: { Double(shown) }, set: { draft = Int($0) }), in: 1...Double(wallet.settings.capCeiling / Money.dollar)) { isEditing in
+                    isDragging = isEditing
+                    if !isEditing { apply() }
+                }
+                .frame(maxWidth: 240)
+                .disabled(wallet.isWorking)
+                Text(wallet.money(dollars: shown))
+                    .monospacedDigit()
+                    .frame(width: 56, alignment: .trailing)
+            }
+        }
+        .task(id: draft) {
+            guard draft != nil, (try? await Task.sleep(for: .seconds(0.6))) != nil, !isDragging else { return }
+            apply()
+        }
+    }
+
+    private func apply() {
+        guard let dollars = draft, !isApplying else { return }
+        isApplying = true
+        Task {
+            await wallet.setCap(dollars: dollars)
+            draft = nil
+            isApplying = false
         }
     }
 }

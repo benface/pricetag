@@ -13,9 +13,9 @@ public final class ProofModel {
     public private(set) var isVerifying = false
 
     @ObservationIgnored private let fetch: @MainActor () async throws -> Proof
-    @ObservationIgnored private let verifyBlock: @MainActor () async throws -> Verification
+    @ObservationIgnored private let verifyBlock: @MainActor (Proof?) async throws -> Verification
 
-    public init(fetch: @escaping @MainActor () async throws -> Proof, verify: @escaping @MainActor () async throws -> Verification) {
+    public init(fetch: @escaping @MainActor () async throws -> Proof, verify: @escaping @MainActor (Proof?) async throws -> Verification) {
         self.fetch = fetch
         verifyBlock = verify
     }
@@ -38,11 +38,17 @@ public final class ProofModel {
         isVerifying = true
         defer { isVerifying = false }
         do {
-            let answer = try await verifyBlock()
+            let answer = try await verifyBlock(proof)
             verification = answer
             verificationFailure = nil
         } catch is CancellationError {
             return
+        } catch FetchError.priceChanged(let message) {
+            // What's on screen is about something else now, so it goes, and the new proof takes its place.
+            verification = nil
+            verificationFailure = message
+            proof = nil
+            await load()
         } catch {
             verification = nil
             verificationFailure = failureMessage(for: error)
