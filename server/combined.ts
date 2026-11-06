@@ -7,6 +7,7 @@
 // holding ETH, has to leave moves out by name.
 
 import { CHECK_LABELS } from "../src/core/wording.ts"
+import { NO_FACTS, combinedFacts, type TransactionFacts } from "../src/core/activity.ts"
 import { compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
 import type { BookPoint, BookPreview, ExplanationLeg, ExplanationResponse, PortfolioPosition, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import type { Book } from "../src/core/book.ts"
@@ -209,9 +210,18 @@ function combine(read: readonly WalletResponse[], method: Method, book: Book, { 
     }
   }
   const currency = (folded[0] as Folded).fold.view.currency
+  const factsIn = new Map<string, TransactionFacts[]>()
+  for (const { fold } of started) {
+    for (const { txHash, assets, counterparty, amount, gain, unknownCost } of fold.points) {
+      if (txHash) factsIn.set(txHash, [...(factsIn.get(txHash) ?? []), { assets, counterparty, amount, gain, unknownCost }])
+    }
+  }
+  const everyWallet = new Set(started.map(({ address }) => address))
   const points = combinedPoints(started, mark, latest, method).map((point): CombinedPoint => {
     const entries = point.txHash ? (byTx.get(point.txHash) ?? []) : []
-    return { ...point, summary: point.txHash ? summaryOf(entries.map(({ leg }) => leg), moves, currency) : null, wallets: unique(entries.map(({ wallet }) => wallet)) }
+    const legs = entries.map(({ leg }) => leg)
+    const facts = point.txHash ? combinedFacts(legs, factsIn.get(point.txHash) ?? [], everyWallet) : NO_FACTS
+    return { ...point, summary: point.txHash ? summaryOf(legs, moves, currency) : null, ...facts, wallets: unique(entries.map(({ wallet }) => wallet)) }
   })
 
   const holdPositions = walletPositions.map((position) => ({ ...position, effects: position.effects.filter(({ leg }) => !isMove(leg, moves)) }))

@@ -67,6 +67,13 @@ export const emptyBook = (): Book => ({ senders: {}, costs: {}, withdrawals: [] 
 
 export const costKey = (wallet: string, legId: string) => `${normalizeAddress(wallet)}:${legId}`
 
+/** Every currency an amount in this book is in, whichever way it got there. */
+export function currenciesIn(book: Book): CurrencyCode[] {
+  const exchangeCosts = Object.values(book.senders).flatMap((answer) => (answer.kind === "my-exchange" ? (answer.costs ?? []) : []))
+  const amounts: Money[] = [...Object.values(book.costs), ...exchangeCosts, ...book.withdrawals.map(({ cost }) => cost), ...(book.purchases ?? []).map(({ cost }) => cost)]
+  return [...new Set(amounts.map(({ currency }) => currency))].sort()
+}
+
 /**
  * Answering for a sender. Saying it's yours says the wallet you're looking at is yours too. Saying someone else sent what
  * arrived from a wallet that's already yours is about the wallet you're looking at, and yours stays yours. With no `focus`,

@@ -31,6 +31,14 @@ private actor AllYoursSource: PortfolioSource {
 struct AllYoursTests {
     private func date(_ seconds: TimeInterval) -> Date { Date(timeIntervalSince1970: seconds) }
 
+    @Test func transactionsSayWhichWalletAndCanBeFoundByIt() throws {
+        let portfolio = try resource("all-yours-portfolio", as: Portfolio.self)
+        let log = TransactionLog(points: portfolio.points, names: [b: "Savings"])
+        #expect(log.items.first { $0.txHash == "0x2" }?.wallets == [a, b])
+        #expect(log.filtered(query: "savings", asset: nil).map(\.txHash).contains("0x2"))
+        #expect(!log.filtered(query: "savings", asset: nil).map(\.txHash).contains("0x1"))
+    }
+
     @Test func readsWhatTheServerSends() throws {
         let portfolio = try resource("all-yours-portfolio", as: Portfolio.self)
         #expect(portfolio.isAllYours)
@@ -38,6 +46,7 @@ struct AllYoursTests {
         let eth = try #require(portfolio.positions.first { $0.asset == "ETH" })
         #expect(eth.wallets?.filter(\.hasUnknownCost).map(\.wallet) == [c])
         #expect(portfolio.totals.excluded.map(\.wallet) == [c])
+        #expect(portfolio.transactions.first { $0.txHash == "0x2" }?.amount == TransactionAmount(direction: .trade, micros: "3000000000"))
         #expect(portfolio.transactions.first { $0.txHash == "0x2" }?.wallets == [a, b])
         #expect(portfolio.transactions.first { $0.txHash == "0x2" }?.summary == "Moved 1 ETH between your wallets")
 

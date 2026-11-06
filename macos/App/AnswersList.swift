@@ -14,7 +14,7 @@ struct AnswersList: View {
         Section {
             if entries.isEmpty {
                 Text("Nothing yet. When the app can't tell what you paid for something, it asks, and what you say is listed here.")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(entries) { entry in
@@ -33,7 +33,7 @@ struct AnswersList: View {
                 .confirmationDialog("Forget all your answers?", isPresented: $isConfirmingForget) {
                     Button("Forget All", role: .destructive) { store.setBook(Book(), action: "Forget All Answers") }
                 } message: {
-                    Text("Every question comes back, and what you paid is unknown again until you answer. Edit > Undo brings them back.")
+                    Text("Every question comes back, and what you said you paid is unknown again until you answer. What your purchases cost stays. Edit > Undo brings your answers back.")
                 }
         }
     }
@@ -115,7 +115,7 @@ private struct AnswerRow: View {
             if costs.isEmpty {
                 Text("What you paid isn't said yet, so it's asked next time.")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
             ForEach(costs) { cost in
                 if case .exchangeCost(_, _, let paid) = cost.said {
@@ -204,7 +204,8 @@ private struct CostField: View {
                 .onSubmit(commit)
                 .onChange(of: isFocused) { _, focused in if !focused { commit() } }
                 .accessibilityLabel("What you paid, in \(money.currency.rawValue)")
-            Text(money.currency.rawValue).foregroundStyle(.secondary)
+            // The field's label already says the currency.
+            Text(money.currency.rawValue).secondaryText().accessibilityHidden(true)
         }
         .onAppear { text = Format.typed(money.micros) }
         .onChange(of: money) { text = Format.typed(money.micros) }

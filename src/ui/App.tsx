@@ -50,7 +50,7 @@ import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
-import { walletsBehind, walletsToRead } from "../core/book.ts"
+import { currenciesIn, walletsBehind, walletsToRead } from "../core/book.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
 import { foldBook } from "../core/resolve.ts"
@@ -266,8 +266,9 @@ export function App() {
   const [taxYear, setTaxYear] = useState<TaxYear>("latest")
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
-  const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule)
   const { book, change, undo, canUndo, linkAccounts } = useBook()
+  const paidIn = currenciesIn(book).join(",")
+  const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule, paidIn)
   const [device, setDevice] = useState<{ link: DeviceLink | null } | null>(() => {
     const link = parseDeviceLink(window.location.search)
     return link ? { link } : null
@@ -279,7 +280,7 @@ export function App() {
   const [returnTo, setReturnTo] = useState<string | null>(null)
   const [cardSender, setCardSender] = useState<string | null>(null)
   const wanted = useMemo(() => walletsToRead(book, wallet?.address ?? null, cardSender), [book, cardSender, wallet?.address])
-  const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, wallet?.latest.blockNum ?? null, wallet)
+  const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, paidIn, wallet?.latest.blockNum ?? null, wallet)
   const linkedFailed = useMemo(() => (wallet ? failed.filter((address) => walletsBehind(book, wallet).includes(address)) : []), [failed, book, wallet])
 
   useEffect(() => {
