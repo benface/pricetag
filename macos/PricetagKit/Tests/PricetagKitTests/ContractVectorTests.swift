@@ -40,6 +40,7 @@ import Testing
     @Test func anExchangeHistory() throws {
         let imported = try expectSame(json("exchange-import-vectors"), as: ExchangeImport.self)
         #expect(imported.withdrawals.first?.toAddress != nil)
+        #expect(imported.withdrawals.first?.fifoCostMicros == "1010000000")
         #expect(imported.needsALook)
     }
 
