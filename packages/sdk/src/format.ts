@@ -5,7 +5,7 @@ import { CURRENCIES, atCurrentRate, type CurrencyCode } from "./currency.ts"
 
 const UNKNOWN = "unknown"
 
-const whole = new Map(Object.values(CURRENCIES).map((c) => [c.code, new Intl.NumberFormat(c.locale, { style: "currency", currency: c.code })]))
+const whole = new Map(Object.values(CURRENCIES).map((c) => [c.code, new Intl.NumberFormat(c.locale, { style: "currency", currency: c.code, ...(c.narrow ? { currencyDisplay: "narrowSymbol" } : {}) })]))
 
 const twoDecimals = (value: number, currency: CurrencyCode) => (whole.get(currency) as Intl.NumberFormat).format(value)
 
@@ -55,9 +55,22 @@ export function plainAmount(text: string): string | null {
   return clean.replaceAll(",", "")
 }
 
-/** What was paid, beside amounts in another currency, so no kind of dollar is left bare. This locale says US$, CA$, €, £ and CHF. */
+/** What was paid, beside amounts in another currency, so no kind of dollar is left bare. */
 export function formatPaid(micros: string, currency: CurrencyCode): string {
-  return new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(Number(micros) / 1e6)
+  const { symbol, label } = CURRENCIES[currency]
+  return formatMoney(micros, currency).replace(symbol, label)
+}
+
+/** A cost as someone typed it, without the main currency's own symbol or code, before or after. Any other symbol stays, so it isn't read as an amount in this currency. */
+export function withoutCurrency(text: string, currency: CurrencyCode): string {
+  const { code, symbol, label } = CURRENCIES[currency]
+  const clean = text.trim()
+  // Longest first, so "46 ZAR" isn't read as "46 ZA" and an R.
+  for (const mark of [label.trim(), symbol.trim(), code].sort((a, b) => b.length - a.length)) {
+    if (clean.startsWith(mark)) return clean.slice(mark.length)
+    if (clean.endsWith(mark)) return clean.slice(0, -mark.length)
+  }
+  return clean
 }
 
 /** What one USD buys, to four decimals, which is how far exchange rates are usually quoted. */
@@ -81,6 +94,18 @@ export function formatAmount(units: string | bigint, decimals: number): string {
 
 export function formatSignedAmount(units: string, decimals: number): string {
   return BigInt(units) > 0n ? `+${formatAmount(units, decimals)}` : formatAmount(units, decimals)
+}
+
+/** A return in basis points as a signed percentage, to a tenth, or whole once it's 1,000% or more. A return that rounds to nothing has no sign. */
+export function formatReturn(bps: string): string {
+  const value = BigInt(bps)
+  const size = value < 0n ? -value : value
+  const big = size >= 100_000n
+  const step = big ? 100n : 10n
+  const rounded = (size + step / 2n) / step
+  if (rounded === 0n) return big ? "0%" : "0.0%"
+  const sign = value < 0n ? "-" : "+"
+  return big ? `${sign}${rounded.toLocaleString("en-US")}%` : `${sign}${(rounded / 10n).toLocaleString("en-US")}.${rounded % 10n}%`
 }
 
 export function shortHash(hash: string): string {

@@ -20,6 +20,7 @@ struct MacApp: App {
     @State private var navigation: Navigation
     @State private var siteBridge: SiteBridge
     @State private var purchases: PurchaseTracker
+    @State private var notifications: MoneyNotifications
     @State private var bridgeServer: BridgeServer?
 
     init() {
@@ -51,10 +52,16 @@ struct MacApp: App {
         // Here and not in a view: the menu bar shows the total, and sweeps run, whether or not anything is open.
         hotWallet.start()
         store.start()
+        TypingHistory.shared.start()
         // So an order still going when this last quit gets its cost.
         let purchases = PurchaseTracker(store: store)
         purchases.start()
         _purchases = State(initialValue: purchases)
+        let notifications = MoneyNotifications(center: Self.postsNotifications ? .current() : nil)
+        notifications.isLookingAtSpendingMoney = { NSApp.isActive && navigation.isShowingSpendingMoney && MainWindowState.isOnScreen }
+        notifications.onOpen = { navigation.show(row: $0) }
+        notifications.start(hotWallet: hotWallet, purchases: purchases)
+        _notifications = State(initialValue: notifications)
         _store = State(initialValue: store)
         _hotWallet = State(initialValue: hotWallet)
         _navigation = State(initialValue: navigation)
@@ -74,6 +81,15 @@ struct MacApp: App {
         }
     }
 
+    /// A scripted run never shows anything outside its own windows, or asks the system for anything.
+    private static var postsNotifications: Bool {
+        #if DEBUG
+        !HotWalletDebug.isQuiet
+        #else
+        true
+        #endif
+    }
+
     private var opensAtLaunch: Bool {
         #if DEBUG
         !HotWalletDebug.isQuiet
@@ -86,7 +102,7 @@ struct MacApp: App {
         MenuBarExtra {
             PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)
         } label: {
-            MenuBarLabel(summary: FeedSummary(feed: store.feed, portfolio: store.portfolio), alarm: hotWallet.alarm, siteBridge: siteBridge, navigation: navigation)
+            MenuBarLabel(store: store, alarm: hotWallet.alarm, siteBridge: siteBridge, navigation: navigation)
         }
         .menuBarExtraStyle(.window)
 
@@ -101,12 +117,20 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .undoRedo) {
+                UndoCommands(store: store)
+            }
+            SidebarCommands()
             CommandGroup(after: .toolbar) {
                 Divider()
-                ForEach(Array(AppSection.allCases.enumerated()), id: \.element) { index, section in
+                ForEach(AppSection.allCases) { section in
                     OpenSectionCommand(section: section, navigation: navigation)
-                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                        .keyboardShortcut(section.shortcut, modifiers: .command)
                 }
+                Divider()
+                Button(navigation.target == nil ? "Show Details" : "Hide Details") { navigation.toggleDetails() }
+                    .keyboardShortcut("i", modifiers: [.command, .control])
+                    .disabled(!navigation.canShowDetails || store.portfolio == nil)
                 Divider()
                 Picker("Cost", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
                     ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
@@ -114,20 +138,24 @@ struct MacApp: App {
                 Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
             }
+            CommandGroup(after: .textEditing) {
+                Button("Find Transactions…") { navigation.findTransactions() }
+                    .keyboardShortcut("f", modifiers: .command)
+            }
             CommandMenu("Wallet") {
                 WalletCommands(store: store, hotWallet: hotWallet, navigation: navigation)
             }
             CommandGroup(after: .newItem) {
-                Button("Answer Questions…") { navigation.resolve() }
+                Button("\(Wording.answerQuestions)…") { navigation.resolve() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(store.portfolio?.questions.isEmpty != false)
                 Button("Export as CSV…") { navigation.isExporting = true }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(store.portfolio == nil)
-                Button("Undo Last Answer") { store.undo() }
-                    .keyboardShortcut("z", modifiers: [.command, .option])
-                    .disabled(store.undoStack.isEmpty)
+                YourAnswersCommand(navigation: navigation)
             }
+            // Nothing to offer yet, and an item that opens nothing would be worse. The menu's search still finds any command.
+            CommandGroup(replacing: .help) {}
         }
 
         Window(SiteApprovalWindow.title, id: WindowID.siteApproval) {
@@ -144,7 +172,7 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
 
         Settings {
-            SettingsView(store: store, hotWallet: hotWallet, tab: Bindable(navigation).settingsPane)
+            SettingsView(store: store, hotWallet: hotWallet, notifications: notifications, tab: Bindable(navigation).settingsPane)
                 .holdsDockPresence()
         }
     }
@@ -153,6 +181,13 @@ struct MacApp: App {
 enum WindowID {
     static let main = "main"
     static let siteApproval = "site-approval"
+}
+
+enum MainWindowState {
+    /// Open, and not in the Dock. SwiftUI names the window after its id.
+    static var isOnScreen: Bool {
+        NSApp.windows.contains { $0.identifier?.rawValue.hasPrefix(WindowID.main) == true && $0.isVisible && !$0.isMiniaturized }
+    }
 }
 
 /// The window may be closed, so this opens it too.
@@ -168,6 +203,13 @@ private struct WalletCommands: View {
             navigation.switchWallet()
         }
         .keyboardShortcut("l", modifiers: .command)
+        let address = store.walletList(hotWallet: hotWallet).entry(for: store.address)?.checksummedAddress
+        Button("Copy Address") { address.map(Clipboard.copy) }
+            .keyboardShortcut("c", modifiers: [.command, .shift])
+            .disabled(address == nil)
+        Button("View on Basescan") { if let url = address.flatMap(Basescan.address) { NSWorkspace.shared.open(url) } }
+            .disabled(address == nil)
+        Divider()
         Button("Receive…") {
             openMainWindow()
             navigation.isReceiving = true
@@ -199,6 +241,72 @@ private struct WalletCommands: View {
     }
 }
 
+/// Answers have their own history, and typing has its own. While a field has something to take back, that comes first, as anywhere on a Mac.
+private struct UndoCommands: View {
+    let store: PortfolioStore
+    private let typing = TypingHistory.shared
+
+    var body: some View {
+        Button(typing.undoTitle ?? store.undoNames.last.map { "Undo \($0)" } ?? "Undo") {
+            if typing.undoTitle != nil { typing.undo() } else { store.undo() }
+        }
+        .keyboardShortcut("z", modifiers: .command)
+        .disabled(typing.undoTitle == nil && store.undoStack.isEmpty)
+        Button(typing.redoTitle ?? store.redoNames.last.map { "Redo \($0)" } ?? "Redo") {
+            if typing.redoTitle != nil { typing.redo() } else { store.redo() }
+        }
+        .keyboardShortcut("z", modifiers: [.command, .shift])
+        .disabled(typing.redoTitle == nil && store.redoStack.isEmpty)
+    }
+}
+
+/// What can be taken back in the field being typed in. The menu reads it, so it's kept up to date after every event, when focus or typing can change.
+@MainActor @Observable
+final class TypingHistory {
+    static let shared = TypingHistory()
+    private(set) var undoTitle: String?
+    private(set) var redoTitle: String?
+    @ObservationIgnored private var observer: NSObjectProtocol?
+
+    func start() {
+        guard observer == nil else { return }
+        observer = NotificationCenter.default.addObserver(forName: NSApplication.didUpdateNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { TypingHistory.shared.update() }
+        }
+    }
+
+    /// A text field being edited has a text view in front of it, which keeps the window's history of typing.
+    private var manager: UndoManager? {
+        (NSApp.keyWindow?.firstResponder as? NSTextView)?.undoManager
+    }
+
+    /// Only what changed is set, since this runs after every event.
+    private func update() {
+        let manager = manager
+        let undo = manager?.canUndo == true ? manager?.undoMenuItemTitle : nil
+        let redo = manager?.canRedo == true ? manager?.redoMenuItemTitle : nil
+        if undo != undoTitle { undoTitle = undo }
+        if redo != redoTitle { redoTitle = redo }
+    }
+
+    func undo() { manager?.undo() }
+    func redo() { manager?.redo() }
+}
+
+/// Opens Settings on the list of answers.
+private struct YourAnswersCommand: View {
+    let navigation: Navigation
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        Button("Your Answers…") {
+            navigation.settingsPane = .answers
+            openSettings()
+            DockPresence.bringForward()
+        }
+    }
+}
+
 /// The window may be closed, so this opens it too.
 private struct OpenSectionCommand: View {
     let section: AppSection
@@ -215,7 +323,7 @@ private struct OpenSectionCommand: View {
 }
 
 struct MenuBarLabel: View {
-    let summary: FeedSummary
+    let store: PortfolioStore
     let alarm: StolenKeyAlarm?
     let siteBridge: SiteBridge
     let navigation: Navigation
@@ -224,9 +332,11 @@ struct MenuBarLabel: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        MenuBarLabelContent(summary: summary, isAlarm: alarm != nil)
+        MenuBarLabelContent(summary: FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: store.menuBarShows), isAlarm: alarm != nil)
             .onAppear {
                 StatusItemMenu.shared.start(
+                    shows: { store.menuBarShows },
+                    setShows: { store.setMenuBarShows($0) },
                     openApp: {
                         openWindow(id: WindowID.main)
                         DockPresence.bringForward()
@@ -290,6 +400,12 @@ struct MenuBarLabel: View {
             .onChange(of: navigation.addingSavings) { _, link in
                 guard link != nil else { return }
                 navigation.showSpendingMoney()
+                openWindow(id: WindowID.main)
+                DockPresence.bringForward()
+            }
+            // A notification was clicked, so the person wants to see it, wherever the window is.
+            .onChange(of: navigation.shownRow) { _, row in
+                guard row != nil else { return }
                 openWindow(id: WindowID.main)
                 DockPresence.bringForward()
             }

@@ -37,9 +37,10 @@ struct WordingVectors: Decodable {
         let help: String?
     }
     struct Sentences: Decodable {
-        let methodName, methodHelp, averagePricePaid, networkFees, balanceCheck, startingBalance, pnlHelp, realizedHelp, unrealizedHelp: String
+        let methodName, methodHelp, averagePricePaid, networkFees, balanceCheck, startingBalance, pnlHelp, realizedHelp, unrealizedHelp, returnHelp: String
         let notStarted, unpricedFees, demo, pnlUnavailable, nothingToChart, reading, notAnAddress, rulesTitle, rulesHelp: String
         let holdTitle, holdWallet, holdEth, holdPast: String
+        let answerQuestions, showMissing, senderQuestion, senderWhy, costQuestion, costWhy, exchangeCostWhy, allAnswered, nothingLeft: String
     }
     let manifestHash: String
     let methods: [String: String]
@@ -60,6 +61,7 @@ struct WordingVectors: Decodable {
     let pnlHelp: [PnlHelp]
     let linkedFailed: [FeesUnknown]
     let withheld: String
+    let answerQuestions: [FeesUnknown]
     let sentences: Sentences
 }
 
@@ -112,6 +114,7 @@ struct WordingVectors: Decodable {
         #expect(Wording.pnlHelp == sentences.pnlHelp)
         #expect(Wording.realizedHelp == sentences.realizedHelp)
         #expect(Wording.unrealizedHelp == sentences.unrealizedHelp)
+        #expect(Wording.returnHelp == sentences.returnHelp)
         #expect(Wording.notStarted == sentences.notStarted)
         #expect(Wording.unpricedFees == sentences.unpricedFees)
         #expect(Wording.demo == sentences.demo)
@@ -119,6 +122,21 @@ struct WordingVectors: Decodable {
         #expect(Wording.nothingToChart == sentences.nothingToChart)
         #expect(Wording.reading == sentences.reading)
         #expect(Wording.notAnAddress == sentences.notAnAddress)
+    }
+
+    /// Answering has one name, and the questions say why they're asked, the same on the web.
+    @Test func answeringSaysTheSameOnTheWeb() {
+        for vector in vectors.answerQuestions { #expect(Wording.answerQuestions(vector.count) == vector.text) }
+        let sentences = vectors.sentences
+        #expect(sentences.answerQuestions == Wording.answerQuestions)
+        #expect(sentences.showMissing == Wording.showMissing)
+        #expect(sentences.senderQuestion == Wording.senderQuestion)
+        #expect(sentences.senderWhy == Wording.senderWhy)
+        #expect(sentences.costQuestion == Wording.costQuestion)
+        #expect(sentences.costWhy == Wording.costWhy)
+        #expect(sentences.exchangeCostWhy == Wording.exchangeCostWhy)
+        #expect(sentences.allAnswered == Wording.allAnswered)
+        #expect(sentences.nothingLeft == Wording.nothingLeft)
     }
 }
 
@@ -202,7 +220,8 @@ struct HoldComparisonTests {
         #expect(attention.title.hasPrefix("$3,603.42 has an unknown cost, so it isn't in the PnL."))
         #expect(attention.title.hasSuffix("$899.98 is estimated."))
         #expect(attention.fullList == Wording.excluded(portfolio.totals.excluded))
-        #expect(attention.details.isEmpty)
+        // What "has an unknown cost" doesn't cover, said where it's seen rather than only in a tooltip.
+        #expect(attention.details == ["PnL also leaves out USDC, ETH, and cbBTC."])
     }
 
     @Test func seeWhyOpensTheBalanceThatDoesntMatch() throws {
@@ -213,6 +232,7 @@ struct HoldComparisonTests {
         #expect(Wording.answerQuestions(1) == "Answer 1 Question")
         #expect(Wording.answerQuestions(5) == "Answer 5 Questions")
     }
+
 
     private func changing(_ change: (inout [String: Any]) -> Void) throws -> Portfolio {
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]

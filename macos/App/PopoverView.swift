@@ -40,6 +40,7 @@ struct PopoverView: View {
             footer
         }
         .environment(\.updatingNote, store.updatingNote)
+        .environment(\.walletNames, store.walletList(hotWallet: hotWallet).names)
         .frame(width: 320)
         .background(.regularMaterial)
         .focusable()
@@ -83,44 +84,54 @@ struct PopoverView: View {
                 walletHeader
                 Spacer(minLength: 8)
                 if showsBadge {
-                    FeedBadge(feed: store.feed, portfolio: portfolio)
+                    FeedBadge(feed: store.feed, portfolio: portfolio, readingSince: store.readingSince)
                         .fixedSize()
                 }
             }
             switch (store.feed, portfolio) {
             case (.noWallet, _):
                 HStack {
-                    Text("No wallet yet").foregroundStyle(.secondary)
+                    Text("No wallet yet").secondaryText()
                     Spacer()
                     Button("Add Wallet…") { openOverview() }
                         .controlSize(.small)
                 }
             case (_, let portfolio?) where !portfolio.progress.started:
                 Text("No data for this wallet yet")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .help(Wording.notStarted)
             case (_, let portfolio?) where portfolio.isEmpty:
-                Text("No activity so far").foregroundStyle(.secondary)
+                Text("No activity so far").secondaryText()
             case (_, let portfolio?):
                 headline(portfolio)
             case (.reading, nil):
-                HStack(spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Reading this wallet…").foregroundStyle(.secondary)
+                    ReadingClock(since: store.readingSince ?? .now) { seconds in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Reading this wallet…")
+                            // Once it's taking a while, it says how long so far, without promising when it ends.
+                            if seconds >= FeedState.longReadSeconds {
+                                Text("\(Format.elapsed(seconds: seconds)) so far")
+                                    .font(.caption)
+                                    .monospacedDigit()
+                                    .contentTransition(.numericText())
+                            }
+                        }
+                        .secondaryText()
+                        .help(Wording.stillReading(seconds: seconds))
+                    }
                 }
-                .help("The first read can take a minute.")
             default:
                 EmptyView()
             }
             if let problem = store.feed.shortProblem(portfolio: portfolio) {
-                ProblemRow(
-                    problem,
-                    detail: portfolio.flatMap(lastUpdate),
-                    help: store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) ?? problem,
-                    // Catching up is still updating, so there's nothing to retry.
-                    actionTitle: isCatchingUp ? nil : "Retry",
-                    action: store.refresh
-                )
+                // A retry that's taking a while says so in place of the second line, which comes back if it fails again.
+                if store.feed.isStale, let since = store.readingSince {
+                    ReadingClock(since: since) { problemRow(problem, retrying: $0 >= FeedState.longReadSeconds ? $0 : nil) }
+                } else {
+                    problemRow(problem, retrying: nil)
+                }
             }
             if let portfolio, portfolio.progress.started, !portfolio.isEmpty, let attention = portfolio.shortAttention {
                 attentionRow(attention, portfolio)
@@ -187,12 +198,29 @@ struct PopoverView: View {
         if case .catchingUp = store.feed { true } else { false }
     }
 
+    private func problemRow(_ problem: String, retrying seconds: Int?) -> some View {
+        let full = store.feed.problem(serverURL: store.serverURL, portfolio: portfolio)
+        // With no numbers here, nothing says how old they are, so it says what matters most instead.
+        // A retry keeps how old the numbers are, and the badge above has its count.
+        let last = portfolio.flatMap(lastUpdate)
+        let detail = seconds.map { seconds in last.map { "\($0) · trying again" } ?? "Trying again · \(Format.elapsed(seconds: seconds))" } ?? last ?? (full == nil ? nil : Wording.moneyUnaffected)
+        return ProblemRow(
+            problem,
+            detail: detail,
+            help: full.map { [$0.message, $0.detail].compactMap { $0 }.joined(separator: "\n\n") } ?? store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) ?? problem,
+            // Catching up is still updating, so there's nothing to retry.
+            actionTitle: isCatchingUp ? nil : "Retry",
+            action: store.refresh
+        )
+    }
+
     private func lastUpdate(_ portfolio: Portfolio) -> String? {
         guard !isCatchingUp, portfolio.progress.started else { return nil }
         return "Last update \(portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp)"
     }
 
     /// The value, with its currency because a bare "$" doesn't say which, and how it's done right under it.
+    /// What they leave out is said once, in the attention row below, the same as in the window.
     private func headline(_ portfolio: Portfolio) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Button { open(.total(.value)) } label: {
@@ -203,48 +231,36 @@ struct PopoverView: View {
                             .minimumScaleFactor(0.5)
                         Text(portfolio.currency.rawValue)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
-                        // As readable as what it qualifies, because it changes what the number means.
-                        if portfolio.isValuePartial {
-                            Text("partial")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.secondary)
-                                .transition(.opacity)
-                        }
+                            .secondaryText()
                     } else {
                         Text("Value unavailable")
                             .font(.title3.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                            .secondaryText()
                     }
                 }
                 .updatingMark(.trailing)
             }
             .buttonStyle(NumberButtonStyle())
             .help(portfolio.partialValueReason ?? "")
-            .accessibilityLabel("Value, \(portfolio.totalValueText ?? "unavailable")\(portfolio.isValuePartial ? ", partial" : "")")
+            .accessibilityLabel(Spoken.number("Value", portfolio.spokenValueText, isPartial: portfolio.isValuePartial, isLive: isLive))
             .accessibilityHint("Shows the activity behind this number")
             Button { open(.total(.pnl)) } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     if let pnl = portfolio.totalPnlText {
                         LiveNumber(pnl, tone: isLive ? portfolio.totalPnlTone : .neutral)
                             .fontWeight(.medium)
-                        Text("PnL").foregroundStyle(.secondary)
-                        // As readable as what it qualifies, because it changes what the number means.
-                        if portfolio.pnlStatus == .partial {
-                            Text("partial").fontWeight(.medium).foregroundStyle(.secondary).transition(.opacity)
-                        }
+                        Text("PnL").secondaryText()
                     } else {
-                        Text(Wording.pnlUnavailable).foregroundStyle(.secondary)
+                        Text(Wording.pnlUnavailable).secondaryText()
                     }
                 }
             }
             .buttonStyle(NumberButtonStyle())
             .help(Wording.pnlHelp)
-            .accessibilityLabel("Total PnL, \(portfolio.totalPnlText ?? Wording.pnlUnavailable)\(portfolio.pnlStatus == .partial ? ", partial" : "")")
+            .accessibilityLabel(Spoken.number("Total PnL", portfolio.spokenPnlText, isPartial: portfolio.pnlStatus == .partial, isLive: isLive))
             .accessibilityHint("Shows the activity behind this number")
         }
-        .opacity(isLive ? 1 : 0.55)
-        .animation(Motion.state, value: isLive)
+        .stale(!isLive)
         .motion(Motion.state, value: portfolio.pnlStatus == .partial)
     }
 
@@ -253,7 +269,7 @@ struct PopoverView: View {
         return ProblemRow(
             text,
             help: portfolio.attention.map { ([$0.title] + $0.details).joined(separator: "\n") } ?? text,
-            actionTitle: count > 0 ? "Answer \(count)" : "See Why"
+            actionTitle: count > 0 ? Wording.answerQuestions(count) : Wording.showMissing
         ) {
             if count > 0 {
                 navigation.resolve()
@@ -361,12 +377,12 @@ struct PopoverView: View {
         } else if let plan = hotWallet.plan {
             Text("\(hotWallet.money(plan.valueUsdMicros)) of \(hotWallet.capText)")
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .contentTransition(.numericText(value: Double(plan.valueUsdMicros)))
                 .motion(Motion.number, value: plan.valueUsdMicros)
                 .help(plan.gasKeptWei > 0 ? HotWalletWording.keptOutOfCap(plan.gasKeptWei) : "")
         } else {
-            Text("Reading…").foregroundStyle(.secondary)
+            Text("Reading…").secondaryText()
         }
     }
 
@@ -440,31 +456,55 @@ private struct ProblemRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(Tone.warning.style)
-                .accessibilityLabel("Warning")
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                if let detail {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
+        // Beside the words when both fit, and under them when they don't, so a button's whole name never costs the warning its own.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                icon
+                words
+                Spacer(minLength: 0)
+                button
             }
-            Spacer(minLength: 0)
-            if let actionTitle {
-                Button(actionTitle, action: action)
-                    .controlSize(.small)
-                    .fixedSize()
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    icon
+                    words
+                    Spacer(minLength: 0)
+                }
+                button.padding(.leading, 24)
             }
         }
         .font(.callout)
         .help(help)
+    }
+
+    private var icon: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .foregroundStyle(Tone.warning.style)
+            .accessibilityLabel("Warning")
+    }
+
+    private var words: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            if let detail {
+                Text(detail)
+                    .font(.caption)
+                    .secondaryText()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var button: some View {
+        if let actionTitle {
+            Button(actionTitle, action: action)
+                .controlSize(.small)
+                .fixedSize()
+        }
     }
 }

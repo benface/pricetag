@@ -1,7 +1,8 @@
 import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isMainCurrency, msBetweenBlocks, sumTotals, type Coverage, type CurrencyCode, type HoldComparison, type Method, type Position } from "@pricetag/sdk/core"
+import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isMainCurrency, msBetweenBlocks, returnBps, sumTotals, type Coverage, type CurrencyCode, type HoldComparison, type Method, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
+import { firstSort, formatHoldingsSort, parseHoldingsSort, sortHoldings, type HoldingsColumn, type HoldingsSort } from "../core/holdings.ts"
 import { explainTarget, missingRatesLine, mismatchCause, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
 import {
   AVERAGE_PRICE_PAID,
@@ -22,9 +23,12 @@ import {
   PNL_HELP,
   PNL_UNAVAILABLE,
   READING,
+  ANSWER_QUESTIONS,
   REALIZED_HELP,
+  RETURN_HELP,
   UNPRICED_FEES,
   UNREALIZED_HELP,
+  answerQuestionsLabel,
   behindSentence,
   coverageSentence,
   excludedSentence,
@@ -43,9 +47,10 @@ import { ResolvePanel } from "./ResolvePanel.tsx"
 import { useBook, useOtherWallets } from "./useBook.ts"
 import { RulesPanel } from "./RulesPanel.tsx"
 import { useRules } from "./useRules.ts"
+import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
-import { linkedWallets, walletsBehind } from "../core/book.ts"
+import { currenciesIn, linkedWallets, walletsBehind } from "../core/book.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
 import { foldBook } from "../core/resolve.ts"
@@ -59,6 +64,7 @@ function readAddress(): string | null {
 }
 
 const CURRENCY_KEY = "pricetag.currency"
+const HOLDINGS_SORT_KEY = "pricetag.holdingsSort"
 
 /** Remembered in this browser, since there are no accounts. USD until it's changed. */
 function readCurrency(): CurrencyCode {
@@ -85,10 +91,43 @@ function OnchainCheck({ position, onClick }: { position: Position; onClick: () =
 
 const est = (text: string, isEstimate: boolean) => (isEstimate ? `≈${text}` : text)
 
+/** A header that sorts by its column. Clicking it again turns the order around. */
+function SortHeader({ column, sort, onSort, numeric = true, title, children }: { column: HoldingsColumn; sort: HoldingsSort; onSort: (column: HoldingsColumn) => void; numeric?: boolean; title?: string; children: ReactNode }) {
+  const active = sort.column === column
+  return (
+    <th className={numeric ? "num" : ""} title={title} aria-sort={active ? (sort.descending ? "descending" : "ascending") : "none"}>
+      <button type="button" className="sort-button" onClick={() => onSort(column)}>
+        {children}
+        <span className="sort-mark" aria-hidden="true">
+          {active ? (sort.descending ? " ↓" : " ↑") : ""}
+        </span>
+      </button>
+    </th>
+  )
+}
+
+/** Unknown whenever its cost is, never 0%. With a known cost of nothing, there's no share to show. */
+function ReturnCell({ position, onClick }: { position: Position; onClick: () => void }) {
+  const { asset, values, estimates } = position
+  const bps = returnBps(values)
+  const text = bps !== null ? est(formatReturn(bps), estimates.unrealized) : values.costMicros === null ? "⚠ Unknown" : values.valueMicros === null ? "⚠ No price" : "—"
+  return (
+    <Num label={`${asset} return`} onClick={onClick} tone={bps === null ? (text === "—" ? null : "warn") : BigInt(bps) > 0n ? "gain" : BigInt(bps) < 0n ? "loss" : null}>
+      {text}
+    </Num>
+  )
+}
+
 function Holdings({ positions, currency, resolvable, explain, onResolve }: { positions: Position[]; currency: CurrencyCode; resolvable: ReadonlySet<string>; explain: (target: ExplainTarget) => void; onResolve: (asset: string) => void }) {
   const open = ({ asset }: Position, metric: Metric) => () => explain({ kind: "asset", asset, metric })
   const money = (micros: string) => formatMoney(micros, currency)
   const signed = (micros: string) => formatSignedMoney(micros, currency)
+  const [sort, setSort] = useState<HoldingsSort>(() => parseHoldingsSort(localStorage.getItem(HOLDINGS_SORT_KEY)))
+  const changeSort = (column: HoldingsColumn) => {
+    const next = sort.column === column ? { column, descending: !sort.descending } : firstSort(column)
+    localStorage.setItem(HOLDINGS_SORT_KEY, formatHoldingsSort(next))
+    setSort(next)
+  }
   return (
     <section className="card">
       <h2>Holdings</h2>
@@ -96,21 +135,35 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
         <table className="table">
           <thead>
             <tr>
-              <th>Asset</th>
+              <SortHeader column="asset" sort={sort} onSort={changeSort} numeric={false}>
+                Asset
+              </SortHeader>
               <th>{BALANCE_CHECK}</th>
-              <th className="num">Amount</th>
-              <th className="num">{AVERAGE_PRICE_PAID}</th>
-              <th className="num">Value</th>
-              <th className="num" title={REALIZED_HELP}>
+              <SortHeader column="amount" sort={sort} onSort={changeSort}>
+                Amount
+              </SortHeader>
+              <SortHeader column="price" sort={sort} onSort={changeSort}>
+                Price
+              </SortHeader>
+              <SortHeader column="average" sort={sort} onSort={changeSort}>
+                {AVERAGE_PRICE_PAID}
+              </SortHeader>
+              <SortHeader column="value" sort={sort} onSort={changeSort}>
+                Value
+              </SortHeader>
+              <SortHeader column="realized" sort={sort} onSort={changeSort} title={REALIZED_HELP}>
                 Realized
-              </th>
-              <th className="num" title={UNREALIZED_HELP}>
+              </SortHeader>
+              <SortHeader column="unrealized" sort={sort} onSort={changeSort} title={UNREALIZED_HELP}>
                 Unrealized
-              </th>
+              </SortHeader>
+              <SortHeader column="return" sort={sort} onSort={changeSort} title={RETURN_HELP}>
+                Return
+              </SortHeader>
             </tr>
           </thead>
           <tbody>
-            {positions.map((position) => {
+            {sortHoldings(positions, sort).map((position) => {
               const { asset, decimals, values, state } = position
               const held = BigInt(values.qty) > 0n
               const unknown = BigInt(values.unknownCostQty) > 0n
@@ -131,6 +184,15 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
                         {flagged ? "⚠ " : ""}
                         {formatAmount(values.qty, decimals)}
                       </Num>
+                    </td>
+                    <td className="num">
+                      {position.price ? (
+                        <Num label={`${asset} price`} onClick={open(position, "price")}>
+                          {est(formatPrice(position.price.micros, currency), position.estimates.value)}
+                        </Num>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
                     </td>
                     <td className="num">
                       {held ? (
@@ -162,8 +224,8 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
                             {values.unrealizedMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : est(signed(values.unrealizedMicros), position.estimates.unrealized)}
                           </Num>
                           {unknown && resolvable.has(asset) ? (
-                            <button type="button" className="resolve-button" aria-label={`Resolve ${asset}`} onClick={() => onResolve(asset)}>
-                              Resolve
+                            <button type="button" className="resolve-button" aria-label={`Answer questions about ${asset}`} onClick={() => onResolve(asset)}>
+                              {ANSWER_QUESTIONS}
                             </button>
                           ) : null}
                         </>
@@ -171,10 +233,13 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
                         <span className="muted">—</span>
                       )}
                     </td>
+                    <td className="num" title={RETURN_HELP}>
+                      {held ? <ReturnCell position={position} onClick={open(position, "return")} /> : <span className="muted">—</span>}
+                    </td>
                   </tr>
                   {mismatch ? (
                     <tr className="mismatch">
-                      <td colSpan={7}>
+                      <td colSpan={9}>
                         Worked out {formatAmount(mismatch.computedQty, decimals)} · Actual {formatAmount(mismatch.actualQty, decimals)} · Difference {formatSignedAmount(mismatch.differenceQty, decimals)} {asset}. {mismatchCause(asset, mismatch.differenceQty)}
                         {mismatch.unseenEth ? ` ${unseenEthCause(mismatch.unseenEth)}` : null}
                       </td>
@@ -197,22 +262,31 @@ export function App() {
   const [method, setMethod] = useState<Method>("average")
   const [target, setTarget] = useState<ExplainTarget | null>(null)
   const [taxOpen, setTaxOpen] = useState(false)
+  // Not remembered: opening the report starts on the newest year. Coming back from answering keeps the one it was on.
+  const [taxYear, setTaxYear] = useState<TaxYear>("latest")
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
-  const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule)
   const { book, change, undo, canUndo, linkAccounts } = useBook()
+  const paidIn = currenciesIn(book).filter((code) => code !== "USD").join(",")
+  const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule, paidIn)
   const [device, setDevice] = useState<{ link: DeviceLink | null } | null>(() => {
     const link = parseDeviceLink(window.location.search)
     return link ? { link } : null
   })
   const [resolving, setResolving] = useState<{ asset: string | null } | null>(null)
+  // Another wallet's questions, asked for from a tax report that includes it: they open once it's read, and closing them
+  // goes back to the report on the wallet that was showing.
+  const [pendingResolve, setPendingResolve] = useState<{ wallet: string; returnTo: string } | null>(null)
+  const [returnTo, setReturnTo] = useState<string | null>(null)
   const [cardSender, setCardSender] = useState<string | null>(null)
   const wanted = useMemo(() => [...new Set([...linkedWallets(book), ...(cardSender ? [cardSender] : [])])].filter((a) => a !== wallet?.address), [book, cardSender, wallet?.address])
-  const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, wallet?.latest.blockNum ?? null, wallet)
+  const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, paidIn, wallet?.latest.blockNum ?? null, wallet)
   const linkedFailed = useMemo(() => (wallet ? failed.filter((address) => walletsBehind(book, wallet).includes(address)) : []), [failed, book, wallet])
 
   useEffect(() => {
     const onPop = () => {
+      setPendingResolve(null)
+      setReturnTo(null)
       setAddress(readAddress())
       setTarget(null)
       setTaxOpen(false)
@@ -241,6 +315,30 @@ export function App() {
   const chooseCurrency = (next: CurrencyCode) => {
     localStorage.setItem(CURRENCY_KEY, next)
     setChosenCurrency(next)
+  }
+
+  useEffect(() => {
+    if (!pendingResolve || wallet?.address.toLowerCase() !== pendingResolve.wallet) return
+    setReturnTo(pendingResolve.returnTo)
+    setPendingResolve(null)
+    setResolving({ asset: null })
+  }, [pendingResolve, wallet])
+
+  const resolveFromTax = (next: string) => {
+    if (next === wallet?.address.toLowerCase()) {
+      setTaxOpen(false)
+      setResolving({ asset: null })
+    } else if (address) {
+      setPendingResolve({ wallet: next, returnTo: address })
+      go(next)
+    }
+  }
+  const closeResolve = () => {
+    setResolving(null)
+    if (returnTo === null) return
+    setReturnTo(null)
+    go(returnTo)
+    setTaxOpen(true)
   }
 
   const fold = useMemo(() => (wallet ? foldBook(wallet, others, method, book) : null), [wallet, others, method, book])
@@ -366,7 +464,7 @@ export function App() {
                   {caveat ? <p className="caveat">{caveat}</p> : null}
                   {questions.length > 0 ? (
                     <button type="button" className="resolve-button big" onClick={() => setResolving({ asset: null })}>
-                      Resolve {questions.length}
+                      {answerQuestionsLabel(questions.length)}
                     </button>
                   ) : null}
                   {totals.excluded.length > 0 ? (
@@ -391,7 +489,14 @@ export function App() {
                 </div>
               </section>
               <p className="tax-link">
-                <button type="button" className="link" onClick={() => setTaxOpen(true)}>
+                <button
+                  type="button"
+                  className="link"
+                  onClick={() => {
+                    setTaxYear("latest")
+                    setTaxOpen(true)
+                  }}
+                >
                   Export a tax report…
                 </button>
               </p>
@@ -415,7 +520,7 @@ export function App() {
       ) : null}
 
       {explanation && wallet ? <ExplainPanel explanation={explanation} address={wallet.address} rule={wallet.rule ?? null} onClose={close} /> : null}
-      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={() => setResolving(null)} /> : null}
+      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
       {device ? (
         <Suspense fallback={null}>
           <DevicePanel
@@ -435,7 +540,17 @@ export function App() {
           />
         </Suspense>
       ) : null}
-      {taxOpen && address ? <TaxPanel address={address} currency={chosenCurrency} book={book} onClose={() => setTaxOpen(false)} /> : null}
+      {taxOpen && address ? <TaxPanel
+          address={address}
+          currency={chosenCurrency}
+          book={book}
+          year={taxYear}
+          onYear={setTaxYear}
+          overviewMethod={method}
+          questionCount={questions.length}
+          onResolve={resolveFromTax}
+          onClose={() => setTaxOpen(false)}
+        /> : null}
     </div>
   )
 }

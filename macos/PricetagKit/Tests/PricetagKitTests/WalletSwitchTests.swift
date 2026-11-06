@@ -47,6 +47,12 @@ actor HeldSource: PortfolioSource {
     }
 }
 
+/// A clock a test moves by hand.
+final class TestClock: @unchecked Sendable {
+    var date: Date
+    init(_ date: Date) { self.date = date }
+}
+
 @MainActor
 @Suite struct WalletSwitchTests {
     /// The real time, because a file's age is measured against it.
@@ -127,7 +133,7 @@ actor HeldSource: PortfolioSource {
         #expect(store.feed == .reading)
         #expect(!store.feed.isLive)
         #expect(store.updatingNote?.hasPrefix("Updating.") == true)
-        #expect(FeedSummary(feed: store.feed, portfolio: store.portfolio).text == "Updating…")
+        #expect(MenuBarShows.allCases.allSatisfy { FeedSummary(feed: store.feed, portfolio: store.portfolio, shows: $0).text == "Updating…" })
         let newer = try numbers(walletA, block: 53_505_500)
         await answer(store, source, walletA, with: newer)
         #expect(store.feed == .live)
@@ -205,7 +211,11 @@ actor HeldSource: PortfolioSource {
         await answer(store, source, walletA, with: average)
         store.setCurrency(.CAD)
         #expect(store.portfolio == average)
-        let cad = try numbers(walletA, currency: .CAD)
+        // The server's own CAD numbers, whose amounts differ from the USD ones under the same "$".
+        var cadObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(resource("demo-portfolio-cad", as: Portfolio.self))) as! [String: Any]
+        cadObject["address"] = walletA
+        cadObject["latest"] = (try JSONSerialization.jsonObject(with: JSONEncoder().encode(numbers(walletA))) as! [String: Any])["latest"]
+        let cad = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: cadObject))
         await answer(store, source, walletA, with: cad)
         store.setCurrency(.USD)
         #expect(store.portfolio == average)
@@ -264,6 +274,56 @@ actor HeldSource: PortfolioSource {
         #expect(store.feed == .reading)
         #expect(store.portfolio != nil)
         store.stop()
+        await source.finish()
+    }
+
+    enum Change: CaseIterable { case wallet, method, currency, server, refresh }
+
+    @Test(arguments: Change.allCases) func aChangeStartsTheReadsTimeOver(_ change: Change) async throws {
+        let source = HeldSource()
+        let clock = TestClock(now)
+        let defaults = UserDefaults(suiteName: "switch-tests-\(UUID().uuidString)")!
+        defaults.set(walletA, forKey: "wallet")
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { clock.date }, reachableDelay: .seconds(600), unreachableDelay: .seconds(600), pushedDelay: .seconds(600))
+        store.start()
+        await source.waitUntilAsked(about: walletA)
+        #expect(store.readingSince == now)
+        clock.date = now.addingTimeInterval(90)
+        switch change {
+        case .wallet: store.setWallet(walletB)
+        case .method: store.setMethod(.fifo)
+        case .currency: store.setCurrency(.CAD)
+        case .server: store.setServerURL(URL(string: "http://127.0.0.1:8788")!)
+        case .refresh: store.refresh()
+        }
+        #expect(store.feed == .reading)
+        #expect(store.readingSince == clock.date)
+        // The read it replaced ending late doesn't stop the new one's count.
+        clock.date = now.addingTimeInterval(95)
+        await source.answer(walletA, .failure(.unreachable))
+        await source.waitUntilAsked(about: change == .wallet ? walletB : walletA)
+        #expect(store.readingSince == now.addingTimeInterval(90) || store.readingSince == now.addingTimeInterval(95))
+        #expect(store.readingSince != nil)
+        store.stop()
+        await source.finish()
+    }
+
+    @Test func aRetryAfterAFailureCountsToo() async throws {
+        let source = HeldSource()
+        let clock = TestClock(now)
+        let defaults = UserDefaults(suiteName: "switch-tests-\(UUID().uuidString)")!
+        defaults.set(walletA, forKey: "wallet")
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { clock.date }, reachableDelay: .milliseconds(5), unreachableDelay: .milliseconds(5), pushedDelay: .seconds(600))
+        store.start()
+        await source.waitUntilAsked(about: walletA)
+        clock.date = now.addingTimeInterval(30)
+        await source.answer(walletA, .failure(.unreachable))
+        // The next read starts by itself, and the failure stands while it runs.
+        await source.waitUntilAsked(about: walletA)
+        #expect(store.feed == .serverUnreachable)
+        #expect(store.readingSince == now.addingTimeInterval(30))
+        store.stop()
+        #expect(store.readingSince == nil)
         await source.finish()
     }
 
@@ -355,5 +415,52 @@ actor HeldSource: PortfolioSource {
         _ = makeStore(HeldSource(), wallet: nil, directory: directory)
         try await waitForFile(in: directory)
         #expect(FileManager.default.fileExists(atPath: recent.path))
+    }
+
+    /// The transactions list rebuilds whenever this changes, so it has to change with every new portfolio, read fresh or not.
+    @Test func everyNewPortfolioHasItsOwnRevisionEvenWhenNoFreshReadArrives() async throws {
+        let source = HeldSource()
+        let store = makeStore(source, wallet: walletA)
+        store.start()
+        await answer(store, source, walletA, with: try numbers(walletA))
+        let read = store.updatedAt
+        let usd = store.portfolioRevision
+
+        // The server's last read in the new currency, at the same block and with the same transactions, then a fresh read that fails.
+        // The server's own CAD numbers, whose amounts differ from the USD ones under the same "$".
+        var cadObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(resource("demo-portfolio-cad", as: Portfolio.self))) as! [String: Any]
+        cadObject["address"] = walletA
+        cadObject["latest"] = (try JSONSerialization.jsonObject(with: JSONEncoder().encode(numbers(walletA))) as! [String: Any])["latest"]
+        let cad = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: cadObject))
+        await source.setLastRead(cad, for: walletA)
+        store.setCurrency(.CAD)
+        await until(store.portfolio?.currency == .CAD)
+        #expect(store.portfolioRevision != usd)
+        #expect(store.updatedAt == read, "nothing was read fresh, so this can't tell the lists apart")
+        #expect(store.portfolio?.points.map(\.id) == (try numbers(walletA)).points.map(\.id))
+        let cadRevision = store.portfolioRevision
+        await fail(store, source, walletA)
+        #expect(store.portfolio == cad)
+        #expect(store.portfolioRevision == cadRevision, "a failure leaves the CAD numbers, so the list built from them stands")
+        let log = TransactionLog(points: cad.points, currency: cad.currency)
+        #expect(log.currency == .CAD)
+        // The amounts are CAD's, which aren't USD's, even though both say "$".
+        let receipt = try #require(log.items.last?.amount?.micros)
+        #expect(receipt != (try numbers(walletA)).points.first?.amount?.micros)
+        #expect(log.items.last?.amountText(log.currency) == "+\(Format.money(receipt, .CAD))")
+
+        // Same currency, same block and transactions, but an answer changed what something cost.
+        var changed = try JSONSerialization.jsonObject(with: JSONEncoder().encode(cad)) as! [String: Any]
+        var points = changed["points"] as! [[String: Any]]
+        let sale = try #require(points.firstIndex { $0["summary"] as? String == "Sold 0.5 ETH for 1,300 USDC" })
+        points[sale]["gain"] = ["micros": "1000000", "estimated": false]
+        changed["points"] = points
+        let answered = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: changed))
+        await source.setLastRead(answered, for: walletA)
+        store.setBook(store.book.answering(walletB, .someoneElse, focus: nil))
+        await until(store.portfolio == answered)
+        #expect(store.portfolioRevision != cadRevision)
+        #expect(store.updatedAt == read)
+        await source.finish()
     }
 }

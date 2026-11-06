@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { cautiousEthTablesSql, ptCautiousSource, ptGasSource, ptNetSource, ptPriceSource, tablesSql } from "../dataset/build.ts"
+import { cautiousEthTablesSql, rateUpdatesSql, ptCautiousSource, ptGasSource, ptNetSource, ptPriceSource, tablesSql } from "../dataset/build.ts"
 import { gasPaid, type RawTx } from "../server/raw.ts"
-import { ETH_ADDRESS, PRICE_FEEDS, SEED_TX, TOKENS, USDC_ADDRESS, WETH_ADDRESS, blockBefore, ptNet, ptPrice } from "@pricetag/sdk/core"
+import { CURRENCIES, ETH_ADDRESS, MAX_ROUND_AGE_SECONDS, PRICE_FEEDS, SEED_TX, TOKENS, USDC_ADDRESS, WETH_ADDRESS, blockBefore, ptNet, ptPrice } from "@pricetag/sdk/core"
 import { LATEST_ROUND_SELECTOR, localManifest, readFeedSeeds } from "../dataset/local.ts"
 import { keccak } from "../server/verify.ts"
 
@@ -401,5 +401,29 @@ describe("the fork", () => {
 
   it("pt_cautious never returns null or throws, because that would stop the whole dataset", () => {
     for (const bad of [null, undefined, "", "-1", "1.5", "abc"]) assert.equal(cautious(bad), "")
+  })
+})
+
+describe("exchange rates from logs", () => {
+  const rates = JSON.parse(readFileSync(new URL("../dataset/rates.json", import.meta.url), "utf8")) as typeof manifest
+  const sql = rates.tables.rate_updates!.input.sql
+  // The start staging serves, which the fork was built at too. The committed pricetag.json is from an earlier start.
+  const fork = JSON.parse(readFileSync(new URL("../dataset/cautious-eth.json", import.meta.url), "utf8")) as typeof manifest
+  const start = Number(/block_num\(\) >= (\d+)/.exec(fork.tables.reference_prices!.input.sql)![1])
+
+  it("is what build.ts writes, for the Pricetag dataset's start, on the same Base dataset, with no RPC", () => {
+    assert.deepEqual(Object.keys(rates.tables), ["rate_updates"])
+    assert.equal(sql, rateUpdatesSql(start))
+    assert.deepEqual(rates.dependencies, manifest.dependencies)
+    assert.doesNotMatch(sql, /eth_call/)
+  })
+
+  it("names every currency's aggregator, so a new currency needs a new version", () => {
+    for (const { code, feed } of Object.values(CURRENCIES)) for (const address of feed?.aggregators ?? []) assert.ok(sql.includes(`WHEN address = X'${address.slice(2)}' THEN '${code}'`), code)
+    assert.match(sql, /topic0 = evm_topic\('AnswerUpdated\(int256 indexed current, uint256 indexed roundId, uint256 updatedAt\)'\) AND address IN/)
+  })
+
+  it("reaches back as far as a rate at the start can be from", () => {
+    assert.match(sql, new RegExp(`WHERE block_num\\(\\) >= ${blockBefore(start, MAX_ROUND_AGE_SECONDS * 1000)}$`))
   })
 })

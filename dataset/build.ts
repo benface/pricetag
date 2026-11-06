@@ -7,15 +7,22 @@
 //
 //   FORK_OF=benface/pricetag@0.1.0 AMP_ADMIN_URL=... node dataset/build.ts --fork [start block]
 //
+// Writes dataset/rates.json with --rates: exchange rates, as their own small dataset, so adding a currency doesn't replace the one
+// the app's prices come from. The start block is the Pricetag dataset's, and it reaches back from there. It defaults to the fork's,
+// which is the one staging serves.
+//
+//   AMP_ADMIN_URL=... node dataset/build.ts --rates [start block]
+//
 // It needs an Amp with edgeandnode/base_mainnet@0.0.2 registered, and only reads from it. What a table can look like
 // comes from WORK-319: every table needs its own top-level `block_num()` filter, at most one join, explicit columns,
 // and UDFs that never return null or throw, because one bad row stops the whole dataset.
 
 import { readFileSync, writeFileSync } from "node:fs"
-import { ERC20_ADDRESSES, ETH_ADDRESS, PRICE_FEEDS, SEED_TX, TOKENS, WETH_ADDRESS, blockBefore, type PriceFeed } from "@pricetag/sdk/core"
+import { APPROVAL_LOGS, CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, MAX_ROUND_AGE_SECONDS, PRICE_FEEDS, SEED_TX, TOKENS, WETH_ADDRESS, blockBefore, type PriceFeed } from "@pricetag/sdk/core"
 
 const MANIFEST = new URL("./pricetag.json", import.meta.url)
 const CAUTIOUS_MANIFEST = new URL("./cautious-eth.json", import.meta.url)
+const RATES_MANIFEST = new URL("./rates.json", import.meta.url)
 
 const hex = (address: string) => address.replace(/^0x/, "")
 
@@ -76,6 +83,20 @@ FROM base.blocks WHERE block_num = ${start}`,
   return `SELECT ${UPDATE_COLUMNS} FROM (
 ${[logs, ...rows].join("\nUNION ALL\n")}
 ) WHERE block_num() >= ${start}`
+}
+
+/**
+ * Every update of an exchange rate, with the currency it's for. It has no table carrying each one forward to every block, because
+ * nothing here joins on it: a reader takes the latest at or before the block it wants. It starts as far back as a rate at the
+ * Pricetag dataset's first block could have been set, so that block has one.
+ */
+export function rateUpdatesSql(start: number) {
+  const feeds = Object.values(CURRENCIES).flatMap(({ code, feed }) => (feed ? feed.aggregators.map((address) => ({ code, address })) : []))
+  return `SELECT block_num, timestamp, tx_hash, log_index, CASE ${feeds.map(({ code, address }) => `WHEN address = X'${hex(address)}' THEN '${code}'`).join(" ")} END AS currency,
+  get_field(t, 'current') AS answer, get_field(t, 'roundId') AS round_id, get_field(t, 'updatedAt') AS updated_at
+FROM (SELECT block_num, timestamp, tx_hash, log_index, address, evm_decode_log(topic1, topic2, topic3, data, '${ANSWER_UPDATED}') AS t
+  FROM base.logs WHERE topic0 = evm_topic('${ANSWER_UPDATED}') AND address IN (${addressList(feeds.map(({ address }) => address))}))
+WHERE block_num() >= ${blockBefore(start, MAX_ROUND_AGE_SECONDS * 1000)}`
 }
 
 function unlistedSelect(account: string, side: string, amount: string, kind: string, from: string) {
@@ -227,6 +248,11 @@ JOIN self.pair_counts c ON p._block_num = c._block_num AND p.tx_hash = c.tx_hash
 WHERE c.pair_count = 1 AND ${since}`,
 
     priced_legs: pricedLegsSql("self.single_pairs", since),
+
+    // Every approval event, as the logs have it, so a wallet's are one read by owner. What each still allows is read
+    // from its contract when it's asked for, because spending and revoking change it.
+    approvals: `SELECT block_num, timestamp, tx_hash, log_index, address, topic0, topic1, topic2, topic3 FROM base.logs
+WHERE ${APPROVAL_LOGS} AND ${since}`,
   }
 }
 
@@ -384,6 +410,10 @@ async function build() {
     const { pt_price } = functions()
     const pt_cautious = { inputTypes: ["Utf8"], outputType: "Utf8", source: { source: ptCautiousSource(), filename: "pt_cautious.js" } }
     await write(admin, CAUTIOUS_MANIFEST, { dependencies: { pricetag: forkOf }, tables: cautiousEthTablesSql(start), functions: { pt_price, pt_cautious } })
+    return
+  }
+  if (args[0] === "--rates") {
+    await write(admin, RATES_MANIFEST, { dependencies: DEPENDENCIES, tables: { rate_updates: rateUpdatesSql(Number(args[1] ?? startOf(CAUTIOUS_MANIFEST))) }, functions: {} })
     return
   }
   await write(admin, MANIFEST, { dependencies: DEPENDENCIES, tables: tablesSql(Number(args[0] ?? startOf(MANIFEST))), functions: functions() })

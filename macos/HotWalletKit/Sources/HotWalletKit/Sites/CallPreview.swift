@@ -31,6 +31,25 @@ public struct CallPreview: Equatable, Sendable {
     var movesUnknownToken: Bool {
         (gives + gets).contains { if case .unknown = $0 { true } else { false } }
     }
+
+    /// What this would do in words, when it's simple enough to say. It never goes further than the rows below it, and it says
+    /// "about" because it's an estimate. nil when it isn't clear, including when it would also let someone spend, which the rows and
+    /// warnings say on their own.
+    var title: String? {
+        guard allowances.isEmpty else { return nil }
+        func words(_ asset: Asset) -> String? {
+            if case .known(let amount) = asset { "\(amount.text) \(amount.symbol)" } else { nil }
+        }
+        guard gives.count <= 1, gets.count <= 1 else { return nil }
+        let given = gives.first.map(words)
+        let gotten = gets.first.map(words)
+        switch (given, gotten) {
+        case (.some(.some(let given)), .some(.some(let gotten))): return "Swap \(given) for about \(gotten)"
+        case (.some(.some(let given)), nil): return "Send about \(given)"
+        case (nil, .some(.some(let gotten))): return "Get about \(gotten)"
+        default: return nil
+        }
+    }
 }
 
 /// What a node's `eth_simulateV1` says happened to one wallet. Anything it can't read means no answer at all, because leaving out what

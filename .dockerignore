@@ -1,0 +1,9 @@
+# Only what the Dockerfile copies, so a secret or a build can't end up in the image.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!packages/sdk/package.json
+!packages/sdk/src
+!server
+!src/core

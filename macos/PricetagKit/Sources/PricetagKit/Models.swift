@@ -105,6 +105,8 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public let price: LatestPrice?
     public let values: PositionValues
     public let pnlMicros: String?
+    /// Unrealized over the cost of what's held, in basis points. nil when either is unknown, or it cost nothing. Never 0 for unknown.
+    public let returnBps: String?
     public let shortfallQty: String
     public let legCount: Int
     public let reconciliation: Reconciliation?
@@ -113,6 +115,8 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public let estimates: Estimates
     /// Its cost is unknown, and answering a question could change that.
     public let resolvable: Bool
+    /// Each wallet's share, when several are shown as one.
+    public var wallets: [PositionPart]? = nil
 
     public var id: String { asset }
     public var isHeld: Bool { isPositive(values.qty) }
@@ -123,8 +127,9 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public var explainableMetrics: [AssetMetric] {
         AssetMetric.tableOrder.filter { metric in
             switch metric {
-            case .amount, .realized: true
-            case .average, .value, .unrealized: isHeld
+            // A missing price has its reason in the details too.
+            case .amount, .realized, .price: true
+            case .average, .value, .unrealized, .return: isHeld
             case .onchain: reconciliation != nil || hasShortfall
             }
         }
@@ -133,9 +138,37 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public var isIncomplete: Bool { reconciliation?.status == .incomplete }
 }
 
+/// One wallet's share of a holding shown across several, so an unknown can say where it is.
+public struct PositionPart: Codable, Sendable, Equatable, Identifiable {
+    public let wallet: String
+    public let qty: String
+    public let unknownCostQty: String
+    public let costMicros: String?
+    public let valueMicros: String?
+    public let pnlMicros: String?
+    public let resolvable: Bool
+    public let reconciliation: Reconciliation.Status?
+
+    public var id: String { wallet }
+    public var isHeld: Bool { isPositive(qty) }
+    public var hasUnknownCost: Bool { isPositive(unknownCostQty) }
+}
+
+/// How far one wallet's read has got, when several are shown as one.
+public struct CombinedWallet: Codable, Sendable, Equatable {
+    public enum State: String, Codable, Sendable {
+        case read, reading, failed
+    }
+
+    public let address: String
+    public let state: State
+}
+
 public struct Exclusion: Codable, Sendable, Equatable {
     public let asset: String
     public let reason: String
+    /// Which of the user's wallets it's in, when several are shown as one.
+    public var wallet: String? = nil
 }
 
 public struct SumCoverage: Codable, Sendable, Equatable {
@@ -196,9 +229,76 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public let excludedCount: Int
     /// What its transaction did, in words. The last point has no transaction.
     public var summary: String? = nil
+    /// What moved, apart from network fees. The rest of these are empty or nil on the last point, which has no transaction.
+    public var assets: [String] = []
+    /// The one address on the other side, or nil when there's none or more than one.
+    public var counterparty: String? = nil
+    public var amount: TransactionAmount? = nil
+    /// nil when nothing was sold.
+    public var gain: TransactionGain? = nil
+    /// What arrived with a cost nobody can work out yet.
+    public var unknownCost: [String] = []
+    /// Which of the user's wallets its transaction is in, when several are shown as one.
+    public var wallets: [String]? = nil
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
     public var date: Date? { parseTimestamp(timestamp) }
+}
+
+extension PnlPoint {
+    private enum CodingKeys: String, CodingKey {
+        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, assets, counterparty, amount, gain, unknownCost, wallets
+    }
+
+    /// A server from before a transaction had facts still sends the rest.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        blockNum = try container.decode(Int.self, forKey: .blockNum)
+        timestamp = try container.decode(String.self, forKey: .timestamp)
+        txHash = try container.decodeIfPresent(String.self, forKey: .txHash)
+        pnlMicros = try container.decodeIfPresent(String.self, forKey: .pnlMicros)
+        excludedCount = try container.decode(Int.self, forKey: .excludedCount)
+        summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        assets = try container.decodeIfPresent([String].self, forKey: .assets) ?? []
+        counterparty = try container.decodeIfPresent(String.self, forKey: .counterparty)
+        amount = try container.decodeIfPresent(TransactionAmount.self, forKey: .amount)
+        gain = try container.decodeIfPresent(TransactionGain.self, forKey: .gain)
+        unknownCost = try container.decodeIfPresent([String].self, forKey: .unknownCost) ?? []
+        wallets = try container.decodeIfPresent([String].self, forKey: .wallets)
+    }
+}
+
+/// What a transaction moved, in the portfolio's currency.
+public struct TransactionAmount: Codable, Sendable, Equatable {
+    public enum Direction: String, Codable, Sendable {
+        /// Something only arrived, or only left.
+        case `in`, out
+        /// Things went both ways.
+        case trade
+        /// Only a network fee was paid.
+        case fee
+    }
+
+    public let direction: Direction
+    /// nil when part of it has no price, which isn't $0.
+    public let micros: String?
+
+    public init(direction: Direction, micros: String?) {
+        self.direction = direction
+        self.micros = micros
+    }
+}
+
+/// The gain or loss a sale in a transaction realized.
+public struct TransactionGain: Codable, Sendable, Equatable {
+    /// nil when what was sold has an unknown cost or price.
+    public let micros: String?
+    public let estimated: Bool
+
+    public init(micros: String?, estimated: Bool) {
+        self.micros = micros
+        self.estimated = estimated
+    }
 }
 
 public struct ReadProgress: Codable, Sendable, Equatable {
@@ -301,6 +401,11 @@ public struct Portfolio: Codable, Sendable, Equatable {
     /// What became of each purchase in the book, among the wallets read.
     public let purchases: [PurchaseMatch]?
     public let marketChecked: Bool
+    /// Every wallet in it and how far each one's read has got, when it's all of the user's wallets as one.
+    public var wallets: [CombinedWallet]? = nil
+
+    /// All of the user's wallets as one, rather than one wallet.
+    public var isAllYours: Bool { WalletAddress.isAllYours(address) }
 
     /// What the holdings table lists. Tokens with no market go in a group of their own, so real warnings stay noticeable.
     public var listedPositions: [Position] { positions.filter { !$0.noMarket } }
@@ -308,16 +413,7 @@ public struct Portfolio: Codable, Sendable, Equatable {
 
     /// What a glance lists: what's held, most valuable first. One with no price can't be ranked, so it goes last, and it isn't treated as worth nothing.
     public func largestHoldings(_ limit: Int) -> [Position] {
-        func value(_ position: Position) -> Decimal? { position.values.valueMicros.flatMap { Decimal(string: $0) } }
-        let sorted = listedPositions.filter(\.isHeld).sorted { a, b in
-            switch (value(a), value(b)) {
-            case let (a?, b?) where a != b: a > b
-            case (_?, nil): true
-            case (nil, _?): false
-            default: a.asset < b.asset
-            }
-        }
-        return Array(sorted.prefix(limit))
+        Array(listedPositions.filter(\.isHeld).sorted(using: HoldingsSort.largestFirst).prefix(limit))
     }
 
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
@@ -355,16 +451,27 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let txHash: String
     /// What the wallet already held before the first block read, which isn't a transaction.
     public let opening: Bool
+    /// What it did, in one plain sentence led by its amount in money.
+    public let summary: String
+    /// What about it isn't known, in words. nil when nothing is.
+    public let unknown: String?
+    /// Answering a question about this asset could fix what isn't known.
+    public let answerable: Bool
     public let effect: String
     public let netting: String?
     /// What this leg was in USD and the rate that converted it, in words. nil when it's in USD.
     public let conversion: String?
+    /// Which of the user's wallets it's in, when several are shown as one.
+    public var wallet: String? = nil
+
+    /// A move between two of the user's wallets is the same leg in each, so a list of both tells them apart by wallet.
+    public var rowID: String { wallet.map { "\($0):\(id)" } ?? id }
 
     public var isIncoming: Bool { !delta.hasPrefix("-") }
     public var date: Date? { parseTimestamp(timestamp) }
     /// What the wallet already held has no transaction behind it, and neither does ETH that arrived with none to name.
     public var hasTransaction: Bool { !opening && !txHash.isEmpty }
-    public var transactionURL: URL? { hasTransaction ? URL(string: "https://basescan.org/tx/\(txHash)") : nil }
+    public var transactionURL: URL? { hasTransaction ? Basescan.transaction(txHash) : nil }
 }
 
 public struct Explanation: Codable, Sendable, Equatable {
@@ -374,8 +481,19 @@ public struct Explanation: Codable, Sendable, Equatable {
     /// The same number in USD, when that isn't what `value` is in.
     public let sourceValue: String?
     public let lines: [String]
+    /// Each wallet's side of the number, when several are shown as one.
+    public var parts: [ExplanationPart]? = nil
     public let legCount: Int
     public let legs: [ExplanationLeg]
+}
+
+/// One wallet's side of a number shown across several.
+public struct ExplanationPart: Codable, Sendable, Equatable, Identifiable {
+    public let wallet: String
+    public let value: String?
+    public let lines: [String]
+
+    public var id: String { wallet }
 }
 
 /// A dataset behind a number. `hash` is nil when it couldn't be read, and it's never guessed.
@@ -435,9 +553,9 @@ public enum TotalMetric: String, Sendable, Hashable, CaseIterable {
 }
 
 public enum AssetMetric: String, Sendable, Hashable, CaseIterable {
-    case amount, average, value, realized, unrealized, onchain
+    case amount, average, price, value, realized, unrealized, `return`, onchain
 
-    static let tableOrder: [AssetMetric] = [.onchain, .amount, .average, .value, .realized, .unrealized]
+    static let tableOrder: [AssetMetric] = [.onchain, .amount, .price, .average, .value, .realized, .unrealized, .return]
 }
 
 /// A number someone clicked, to read what's behind it.
@@ -735,6 +853,12 @@ extension ExchangeWithdrawal: Hashable {}
 public enum WalletAddress {
     /// What the server accepts in place of an address, to read its fixtures.
     public static let demo = "demo"
+    /// What the server accepts in place of an address, for all of the user's wallets at once. It's never anyone's address.
+    public static let allYours = "all"
+
+    public static func isAllYours(_ value: String?) -> Bool {
+        value == allYours
+    }
 
     /// Whether the server reads this from its fixtures, which it also does for the fixtures' own addresses.
     public static func isDemo(_ value: String) -> Bool {

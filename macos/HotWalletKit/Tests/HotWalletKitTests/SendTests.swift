@@ -355,14 +355,14 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         await rig.chain.setSendFailure(.rejected("insufficient funds"))
         let phase = await approveSweep(on: rig.wallet)
         #expect(phase == .stopped(rig.wallet.sweepProblem))
-        #expect(rig.wallet.sweepProblem == "A sweep of USDC didn't go out: insufficient funds")
+        #expect(rig.wallet.sweepProblem == "A sweep of USDC didn't go out. There isn't enough ETH for this and its network fee. Add some ETH, then try again.")
         #expect(await rig.chain.sent.isEmpty)
     }
 
     @Test func aSweepWhoseEstimateFailsStaysOnTheSheet() async throws {
         let rig = await Rig(snapshot(tokens: [usdc: usdcUnits(10)]))
         await rig.chain.setEstimateFailure(.rejected("execution reverted"))
-        #expect(await approveSweep(on: rig.wallet) == .stopped("A sweep of USDC didn't go out: execution reverted"))
+        #expect(await approveSweep(on: rig.wallet) == .stopped("A sweep of USDC didn't go out. \(HotWalletWording.refusal("execution reverted"))"))
         #expect(await rig.signer.signed.isEmpty)
     }
 
@@ -388,7 +388,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
     @Test func aSweepThatStopsPartwaySaysWhatWentAndWhatDidnt() async throws {
         let rig = await Rig(funded)
         await rig.chain.setSendFailure(.rejected("nonce too low"), afterSends: 1)
-        #expect(await approveSweep(on: rig.wallet) == .stopped("USDC is on its way, but ETH isn't. A sweep of ETH didn't go out: nonce too low"))
+        #expect(await approveSweep(on: rig.wallet) == .stopped("USDC is on its way, but ETH isn't. A sweep of ETH didn't go out. Another transaction from this wallet went first. Try again in a moment."))
         #expect(await rig.chain.sent.count == 1)
         #expect(rig.wallet.records.map(\.status) == [.dropped, .pending])
 
@@ -583,7 +583,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         await rig.chain.setSendFailure(.rejected("nope"))
         #expect(await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: friend)) == false)
         #expect(rig.wallet.records.first?.status == .dropped)
-        #expect(rig.wallet.sweepProblem == "nope")
+        #expect(rig.wallet.sweepProblem == "Nothing was sent. The network refused it, saying \u{201C}nope\u{201D}. Try again in a moment.")
     }
 
     @Test func amountsAreReadExactly() {
@@ -602,6 +602,15 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         for (units, decimals, text) in [(UInt128(1_500_000), 6, "1.5"), (0, 6, "0"), (7, 18, "0.000000000000000007"), (2_000_000, 6, "2"), (5, 0, "5")] {
             #expect(Money.text(ofUnits: units, decimals: decimals) == text)
             #expect(Money.units(fromText: text, decimals: decimals) == units)
+        }
+    }
+
+    @Test func anAmountIsConfirmedTheWayItWasTyped() {
+        for (typed, decimals, shown) in [("12.50", 6, "12.50"), ("12,50", 6, "12.50"), ("12.5", 6, "12.5"), ("12", 6, "12"), ("12.", 6, "12"), ("0.10", 18, "0.10"), ("7", 0, "7"), ("1,000", 6, "1000")] {
+            let units = Money.units(fromText: typed, decimals: decimals)!
+            let text = Money.text(ofUnits: units, decimals: decimals, minimumFractionDigits: Money.fractionDigits(inText: typed))
+            #expect(text == shown, "\(typed)")
+            #expect(Money.units(fromText: text, decimals: decimals) == units, "it's still exactly the same amount")
         }
     }
 }
@@ -869,5 +878,237 @@ struct LandingTests {
         #expect(Landing([record(1, .confirmed), record(2, .confirmed)]) == .landed)
         #expect(Landing([record(1, .confirmed), record(2, .failed)]) == .didntLand)
         #expect(Landing([record(1, .pending), record(2, .dropped)]) == .didntLand)
+    }
+}
+
+/// A display that can change under a send, the way a rate does.
+@MainActor
+private final class Display {
+    var current = MoneyDisplay(main: .CAD, rateMicros: "1400000")
+}
+
+@MainActor
+@Suite struct TypingInMoneyTests {
+    private func model(_ display: Display = Display()) async -> (SendModel, PortfolioStore) {
+        let rig = await Rig(funded, moneyDisplay: { display.current })
+        await rig.wallet.tick()
+        let store = makeStore()
+        let model = SendModel(wallet: rig.wallet, store: store)
+        model.token = usdc
+        model.addressText = friend.lowercased
+        return (model, store)
+    }
+
+    @Test func moneyBecomesTheTokenAmountItBuys() async {
+        let (model, store) = await model()
+        defer { store.stop() }
+        #expect(model.canTypeMoney)
+        model.switchUnit()
+        model.amountText = "14"
+        #expect(model.amount == usdcUnits(10), "CA$14 at 1.4 is US$10, which is 10 USDC")
+        #expect(model.tokenAmountText == "10 USDC")
+        #expect(model.availableText == "$28.00")
+    }
+
+    @Test func switchingKeepsTheAmount() async {
+        let (model, store) = await model()
+        defer { store.stop() }
+        model.amountText = "5"
+        model.switchUnit()
+        #expect(model.unit == .money)
+        #expect(model.amountText == "7.00")
+        #expect(model.amount == usdcUnits(5))
+        model.switchUnit()
+        #expect(model.amountText == "5")
+    }
+
+    @Test func maxInMoneyIsExactlyTheMost() async {
+        let display = Display()
+        display.current = MoneyDisplay(main: .CAD, rateMicros: "1333333")
+        let (model, store) = await model(display)
+        defer { store.stop() }
+        model.switchUnit()
+        model.useMaximum()
+        #expect(model.amount == model.maximum, "not what the rounded money would buy")
+        model.amountText = "1"
+        #expect(model.amount != model.maximum)
+    }
+
+    /// What Touch ID is asked about is what's on the confirmation, whatever the rate does meanwhile.
+    @Test func aRateThatMovesAfterConfirmingChangesNothingSigned() async {
+        let display = Display()
+        let (model, store) = await model(display)
+        defer { store.stop() }
+        model.switchUnit()
+        model.amountText = "14"
+        model.confirm()
+        #expect(model.stage == .confirming)
+        display.current = MoneyDisplay(main: .CAD, rateMicros: "2000000")
+        #expect(model.amount == usdcUnits(10))
+        model.backToEditing()
+        #expect(model.amount == usdcUnits(7), "editing again uses the rate as it is now")
+    }
+
+    /// Max stands for what it showed. A deposit afterwards doesn't make it more, and an edit makes it ordinary money again.
+    @Test func maxStaysWhatItShowed() async {
+        let rig = await Rig(snapshot(tokens: [usdc: usdcUnits(20)]), withCold: false)
+        await rig.wallet.tick()
+        let store = makeStore()
+        defer { store.stop() }
+        let model = SendModel(wallet: rig.wallet, store: store)
+        model.token = usdc
+        model.addressText = coldAddress.lowercased
+        model.switchUnit()
+        model.useMaximum()
+        #expect(model.amountText == "20.00")
+        await rig.chain.set(snapshot(tokens: [usdc: usdcUnits(40)]))
+        await rig.wallet.tick()
+        #expect(model.amount == usdcUnits(20), "what $20.00 showed, not the new balance")
+        model.amountText = "1"
+        model.amountText = "20.00"
+        #expect(model.amount == usdcUnits(20), "typed again, it's $20 of USDC")
+    }
+
+    @Test func aMoneyAmountWithNoPriceLeftIsntReadAsTokens() async {
+        let aero = token("AERO")
+        let rig = await Rig(snapshot(tokens: [aero: oneEth * 20], prices: ["AERO": 2 * Money.dollar]), withCold: false)
+        await rig.wallet.tick()
+        let store = makeStore()
+        defer { store.stop() }
+        let model = SendModel(wallet: rig.wallet, store: store)
+        model.token = aero
+        model.addressText = coldAddress.lowercased
+        model.switchUnit()
+        model.amountText = "10"
+        #expect(model.amount == oneEth * 5)
+        await rig.chain.set(snapshot(tokens: [aero: oneEth * 20], prices: [:]))
+        await rig.wallet.tick()
+        #expect(model.amount == nil)
+        model.switchUnit()
+        #expect(model.unit == .token)
+        #expect(model.amountText.isEmpty, "$10 isn't 10 AERO")
+        #expect(!model.canSend)
+    }
+
+    @Test func maxWithNoPriceLeftShowsTokens() async {
+        let aero = token("AERO")
+        let rig = await Rig(snapshot(tokens: [aero: oneEth * 20], prices: ["AERO": 2 * Money.dollar]), withCold: false)
+        await rig.wallet.tick()
+        let store = makeStore()
+        defer { store.stop() }
+        let model = SendModel(wallet: rig.wallet, store: store)
+        model.token = aero
+        model.addressText = coldAddress.lowercased
+        model.switchUnit()
+        model.amountText = "10"
+        await rig.chain.set(snapshot(tokens: [aero: oneEth * 20], prices: [:]))
+        await rig.wallet.tick()
+        model.useMaximum()
+        #expect(model.unit == .token)
+        #expect(model.amountText == "20", "never an empty field standing for the whole balance")
+        #expect(model.amount == oneEth * 20)
+    }
+
+    @Test func aTokenWithNoPriceIsTypedInItself() async {
+        let rig = await Rig(snapshot(eth: oneEth / 200, tokens: [usdc: usdcUnits(20), dai: oneEth]))
+        await rig.wallet.tick()
+        let store = makeStore()
+        defer { store.stop() }
+        let model = SendModel(wallet: rig.wallet, store: store)
+        model.token = usdc
+        model.switchUnit()
+        model.amountText = "3"
+        model.token = dai
+        #expect(!model.canTypeMoney)
+        #expect(model.unit == .token)
+        #expect(model.amountText.isEmpty, "3 dollars isn't 3 DAI")
+    }
+}
+
+@MainActor
+@Suite struct LookalikeTests {
+    /// Starts with 123 and ends with 890, like the rig's Ledger.
+    private let poisoned = EthereumAddress("0x123aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa890")!
+
+    private func model() async -> (SendModel, PortfolioStore, Rig) {
+        let rig = await Rig(funded)
+        await rig.wallet.tick()
+        let store = makeStore()
+        let model = SendModel(wallet: rig.wallet, store: store)
+        model.token = usdc
+        model.amountText = "5"
+        return (model, store, rig)
+    }
+
+    @Test func anAddressThatOnlyLooksLikeASavingsWalletNeedsADeliberateStep() async {
+        let (model, store, _) = await model()
+        defer { store.stop() }
+        model.addressText = poisoned.lowercased
+        #expect(model.lookalike == LookalikeMatch(address: coldAddress, name: "Ledger"))
+        #expect(!model.canSend)
+        #expect(!model.asksIfItsYours, "\"My wallet\" is the wrong thing to offer here")
+        model.acceptsLookalike = true
+        #expect(model.canSend)
+        model.addressText = ""
+        model.addressText = poisoned.checksummed
+        #expect(!model.acceptsLookalike, "it's asked again for each address")
+    }
+
+    @Test func theRealOneIsntALookalike() async {
+        let (model, store, _) = await model()
+        defer { store.stop() }
+        model.addressText = coldAddress.lowercased
+        #expect(model.lookalike == nil)
+        #expect(model.canSend)
+    }
+
+    @Test func oneLikeThisWalletOrAPastRecipientCounts() async {
+        let (model, store, rig) = await model()
+        defer { store.stop() }
+        model.addressText = "0x111bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb111"
+        #expect(model.lookalike?.name == HotWalletWording.title)
+        #expect(await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(1), to: friend)))
+        model.addressText = "0x333ccccccccccccccccccccccccccccccccc3333"
+        #expect(model.lookalike == LookalikeMatch(address: friend, name: "an address you've sent to"))
+    }
+
+    @Test func aSavedNameComesFirst() async {
+        let (model, store, _) = await model()
+        defer { store.stop() }
+        store.renameWallet(friend.lowercased, to: "Treasury")
+        model.addressText = "0x333ccccccccccccccccccccccccccccccccc3333"
+        #expect(model.lookalike?.name == "Treasury")
+    }
+}
+
+@Suite struct SendFailureWordingTests {
+    @Test func whatANodeSaysBecomesWhatToDo() {
+        #expect(HotWalletWording.notSent("insufficient funds for gas * price + value") == "Nothing was sent. There isn't enough ETH for this and its network fee. Add some ETH, then try again.")
+        #expect(HotWalletWording.refusal("execution reverted: ERC20: transfer amount exceeds balance").hasPrefix("The token's contract refused it."))
+        #expect(HotWalletWording.refusal("nonce too low").hasPrefix("Another transaction"))
+        #expect(HotWalletWording.refusal("replacement transaction underpriced").hasPrefix("Another transaction"))
+        #expect(HotWalletWording.refusal("max fee per gas less than block base fee").hasPrefix("Network fees went up"))
+        #expect(HotWalletWording.refusal("something new").contains("\u{201C}something new\u{201D}"), "one it doesn't know keeps the node's words")
+    }
+
+    @Test func aWalletProblemIsSaidForASend() {
+        #expect(HotWalletWording.sendFailure(HotWalletWording.cantReachChain).hasPrefix("Nothing was sent"))
+        #expect(HotWalletWording.sendFailure(HotWalletWording.touchIDDidNotConfirm).hasPrefix("Nothing was sent"))
+        #expect(HotWalletWording.sendFailure(HotWalletWording.lastOneOnItsWay) == HotWalletWording.lastOneOnItsWay)
+    }
+
+    @MainActor
+    @Test func aSendTheNodeRefusesSaysSoPlainly() async {
+        let rig = await Rig(funded)
+        await rig.wallet.tick()
+        await rig.chain.setEstimateFailure(.rejected("execution reverted"))
+        let store = makeStore()
+        defer { store.stop() }
+        let model = SendModel(wallet: rig.wallet, store: store)
+        model.token = usdc
+        model.amountText = "5"
+        model.addressText = friend.lowercased
+        #expect(await model.send() == false)
+        #expect(model.failure == HotWalletWording.notSent("execution reverted"))
     }
 }

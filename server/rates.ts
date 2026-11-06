@@ -2,7 +2,8 @@
 // USD stays the data's base, so this adds nothing to what's read for a wallet shown in USD.
 
 import type { WalletResponse } from "../src/core/api.ts"
-import type { Book } from "../src/core/book.ts"
+import { costKey, type Book } from "../src/core/book.ts"
+import { fits } from "../src/core/exchange-import.ts"
 import { CURRENCIES, normalizeAddress, type CurrencyCode, type PaidRates, type Rates, type RateRound } from "@pricetag/sdk/core"
 import { settledThrough } from "@pricetag/sdk/internal"
 import type { RoundReader } from "./source.ts"
@@ -20,8 +21,7 @@ export function createRates(readRounds: RoundReader): RatesReader {
 
   /** A read that fails throws. A block the feed had no answer for is just left out, and isn't remembered, so it's tried again. */
   const ratesFor: ReadRates = async (currency, wallet) => {
-    const feed = CURRENCIES[currency].feed
-    if (!feed) return null
+    if (!CURRENCIES[currency].feed) return null
     const known = settled.get(currency) ?? new Map<number, RateRound>()
     settled.set(currency, known)
     const head = wallet.latest.blockNum
@@ -30,7 +30,7 @@ export function createRates(readRounds: RoundReader): RatesReader {
     const wanted = blocks.filter((block) => !known.has(block))
     if (current?.blockNum !== head) wanted.push(head)
     const startedAt = rewinds
-    const read = wanted.length > 0 ? await readRounds(feed.address, wanted) : new Map<number, RateRound>()
+    const read = wanted.length > 0 ? await readRounds(currency, wanted) : new Map<number, RateRound>()
     const isSameChain = startedAt === rewinds
     if (isSameChain) for (const [block, round] of read) if (block <= settledThrough(head)) known.set(block, round)
 
@@ -55,18 +55,39 @@ export function createRates(readRounds: RoundReader): RatesReader {
 }
 
 /**
- * The rates to read a wallet's purchases in `shown` when they were paid in something else. Only at the blocks they could have
- * arrived in, because that's all that's needed. Undefined when none need one, so a wallet with no such purchase reads nothing more.
+ * The rates to read what's stored in another currency in `shown`: purchases, entered costs, exchange answers and imported
+ * withdrawals. Only at the blocks they could have arrived in, because that's all that's needed. `paidIn` is for a client that
+ * folds its own answers and doesn't send them, and reads those currencies at everything that arrived. Undefined when none
+ * need one, so a wallet with nothing stored reads nothing more.
  */
-export async function readPaidRates(readRates: ReadRates, wallet: Pick<WalletResponse, "address" | "legs" | "latest">, shown: CurrencyCode, books: readonly Book[]): Promise<PaidRates | undefined> {
+export async function readPaidRates(readRates: ReadRates, wallet: Pick<WalletResponse, "address" | "legs" | "latest">, shown: CurrencyCode, books: readonly Book[], paidIn: readonly CurrencyCode[] = []): Promise<PaidRates | undefined> {
   const address = normalizeAddress(wallet.address)
-  const purchases = books.flatMap((book) => book.purchases ?? []).filter(({ wallet, cost }) => wallet === address && cost.currency !== shown && cost.currency !== "USD")
+  const arrivals = wallet.legs.filter((leg) => !leg.opening && BigInt(leg.delta) > 0n)
+  const wanted = new Map<CurrencyCode, Set<WalletResponse["legs"][number]>>()
+  const want = (currency: CurrencyCode, legs: WalletResponse["legs"]) => {
+    if (currency === shown || currency === "USD" || legs.length === 0) return
+    wanted.set(currency, new Set([...(wanted.get(currency) ?? []), ...legs]))
+  }
+  for (const currency of paidIn) want(currency, arrivals)
+  for (const book of books) {
+    for (const { wallet: to, cost, txHash, blockNum } of book.purchases ?? []) {
+      if (to === address) want(cost.currency, wallet.legs.filter((leg) => leg.txHash.toLowerCase() === txHash || leg.blockNum === blockNum))
+    }
+    for (const leg of arrivals) {
+      const cost = book.costs[costKey(address, leg.id)]
+      if (cost) want(cost.currency, [leg])
+    }
+    for (const answer of Object.values(book.senders)) {
+      if (answer.kind !== "my-exchange") continue
+      for (const { currency, receipts } of answer.costs ?? []) want(currency, arrivals.filter((leg) => receipts.some((r) => r.wallet === address && r.legId === leg.id)))
+    }
+    for (const withdrawal of book.withdrawals) {
+      want(withdrawal.cost.currency, arrivals.filter((leg) => fits(withdrawal, { wallet: address, asset: leg.asset, units: BigInt(leg.delta), timestamp: leg.timestamp })))
+    }
+  }
   const paidRates: PaidRates = {}
-  for (const currency of new Set(purchases.map(({ cost }) => cost.currency))) {
-    const mine = purchases.filter(({ cost }) => cost.currency === currency)
-    const legs = wallet.legs.filter((leg) => mine.some(({ txHash, blockNum }) => leg.txHash.toLowerCase() === txHash || leg.blockNum === blockNum))
-    if (legs.length === 0) continue
-    const rates = await readRates(currency, { legs, latest: wallet.latest })
+  for (const [currency, legs] of wanted) {
+    const rates = await readRates(currency, { legs: [...legs], latest: wallet.latest })
     if (rates) paidRates[currency] = rates.byBlock
   }
   return Object.keys(paidRates).length > 0 ? paidRates : undefined

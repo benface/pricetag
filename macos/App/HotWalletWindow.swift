@@ -74,8 +74,10 @@ private struct HotWalletSetup: View {
                 Image(systemName: "banknote")
                     .font(.system(size: 30))
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 Text("Spending Money")
                     .font(.sheetTitle)
+                    .accessibilityAddTraits(.isHeader)
                 Text("\(HotWalletWording.summary) Anything above your cap moves to your savings.")
                     .fixedSize(horizontal: false, vertical: true)
                 // What can't be undone stays in full, and on screen.
@@ -111,6 +113,7 @@ private struct HotWalletSetup: View {
                     }
                 }
                     .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                     .disabled(!understands || wallet.isWorking)
                 if let problem = wallet.sweepProblem {
                     WarningText(problem).font(.callout)
@@ -141,15 +144,24 @@ struct HotWalletDetails<Overview: View>: View {
     @State private var isSweeping = false
     @State private var isConfirmingRotation = false
     @State private var isConfirmingAbandon = false
+    /// The row a notification opened, lit up for a moment.
+    @State private var litRow: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isChangingCap = false
+    /// What this Mac signed while the page was open, marked for a moment once its sheet has closed, so it's found.
+    @State private var newRows = NewRowMarks()
 
     private var address: EthereumAddress? { wallet.address }
 
-    var body: some View {
+    /// The sheets here that can sign something.
+    private var isCoveredBySheet: Bool { isSending || isSweeping || isAddingCold || isToppingUp }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 18) {
             if let alarm = wallet.alarm { alarmBanner(alarm) }
             ForEach(wallet.notices) { notice in
                 Notice(notice.kind == .warning ? .warning : .info, notice.text, actionTitle: notice.asksForSavings ? HotWalletWording.addSavingsButton : nil) { isAddingCold = true }
+                    .id(notice.text == wallet.sweepProblem ? MoneyNotice.sweepProblemRow : notice.id)
             }
             card
             if !shownPurchases.isEmpty { bought }
@@ -161,6 +173,25 @@ struct HotWalletDetails<Overview: View>: View {
             if !wallet.records.isEmpty { activity }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    var body: some View {
+        // Inside the page's scroll view, whichever page it's on, which is the one it scrolls.
+        ScrollViewReader { proxy in
+            content.onChange(of: navigation.shownRow, initial: true) { _, row in reveal(row, with: proxy) }
+        }
+        .onChange(of: wallet.records.map(\.hash)) { old, new in
+            newRows.rowsChanged(from: old, to: new, isCovered: isCoveredBySheet)
+        }
+        // A send's sheet stays until its receipt arrives, and a moment more, so that's when its row is there to see.
+        .onChange(of: isCoveredBySheet) { _, covered in
+            if !covered { newRows.uncovered() }
+        }
+        .task(id: newRows.lit) {
+            guard !newRows.lit.isEmpty else { return }
+            try? await Task.sleep(for: Motion.highlight)
+            if !Task.isCancelled { newRows.fade() }
+        }
         .sheet(isPresented: $isAddingCold, onDismiss: { if testingSavings != nil { isSending = true } }) {
             AddColdWalletSheet(wallet: wallet, wallets: store.walletList(hotWallet: wallet).pickable, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
         }
@@ -230,9 +261,12 @@ struct HotWalletDetails<Overview: View>: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
                     DisplayNumber(wallet.plan.map { wallet.money($0.valueUsdMicros) } ?? "—", size: 20, tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
+                        .accessibilityLabel(Spoken.number("Balance", wallet.plan.map { wallet.money($0.valueUsdMicros) }) + (wallet.plan?.excessUsdMicros ?? 0 > 0 ? ", above the cap" : ""))
                     Button("of \(wallet.capText)") { isChangingCap.toggle() }
                         .buttonStyle(.link)
                         .help("Change the cap")
+                        .accessibilityLabel("Cap, \(wallet.capText)")
+                        .accessibilityHint("Change the cap")
                         .popover(isPresented: $isChangingCap, arrowEdge: .bottom) { capEditor }
                     Spacer()
                     Label(HotWalletWording.label, systemImage: "flask")
@@ -249,7 +283,7 @@ struct HotWalletDetails<Overview: View>: View {
                 if let plan = wallet.plan, plan.gasKeptWei > 0 {
                     Text(HotWalletWording.keptOutOfCap(plan.gasKeptWei))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
                 if let address {
                     HStack {
@@ -266,6 +300,8 @@ struct HotWalletDetails<Overview: View>: View {
                 }
                 actions
             }
+            .lit(litRow == MoneyNotice.balanceRow)
+            .id(MoneyNotice.balanceRow)
         }
     }
 
@@ -292,8 +328,10 @@ struct HotWalletDetails<Overview: View>: View {
         return min(1, Double(value) / Double(wallet.settings.capUsdMicros))
     }
 
+    /// This Mac's, including what was bought for a key that's since been replaced, which may still be arriving.
     private var shownPurchases: [TrackedPurchase] {
-        address.map { purchases.purchases(of: $0.lowercased) } ?? []
+        guard let address else { return [] }
+        return purchases.purchases(of: Set(([address] + wallet.state.retired).map(\.lowercased)))
     }
 
     private var bought: some View {
@@ -303,14 +341,19 @@ struct HotWalletDetails<Overview: View>: View {
             }
             ForEach(shownPurchases) { purchase in
                 PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), main: wallet.display.main) { purchases.dismiss(purchase) }
+                    .lit(litRow == MoneyNotice.purchaseRow(purchase.ref))
+                    .id(MoneyNotice.purchaseRow(purchase.ref))
+                    .arrives()
             }
         }
+        // One started or dismissed, without the rest jumping.
+        .motion(Motion.state, value: shownPurchases.map(\.id))
     }
 
     private var holdings: some View {
         DetailsSection("Holdings") {
             if wallet.holdings.isEmpty {
-                Text("Reading…").foregroundStyle(.secondary)
+                Text("Reading…").secondaryText()
             }
             ForEach(wallet.holdings) { holding in
                 LabeledContent(holding.token.symbol) {
@@ -320,7 +363,7 @@ struct HotWalletDetails<Overview: View>: View {
                         if let value = holding.valueUsdMicros {
                             Text(wallet.money(value))
                                 .monospacedDigit()
-                                .foregroundStyle(.secondary)
+                                .secondaryText()
                                 .frame(minWidth: 72, alignment: .trailing)
                         } else {
                             WarningText("No price")
@@ -329,6 +372,9 @@ struct HotWalletDetails<Overview: View>: View {
                         }
                     }
                 }
+                // "ETH, 0.005, $13.20" doesn't say which number is which.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(holding.token.symbol), \(Format.amount(String(holding.balance), decimals: holding.token.decimals)), \(holding.valueUsdMicros.map { "worth \(wallet.money($0))" } ?? "no price")")
             }
         }
     }
@@ -336,8 +382,8 @@ struct HotWalletDetails<Overview: View>: View {
     private var untouched: some View {
         DetailsSection("Other Tokens", footer: "Not tracked, and never touched. They can be malicious, so don't go looking for what they're worth.") {
             ForEach(wallet.unlisted) { token in
-                Text(token.token)
-                    .font(.caption.monospaced())
+                AddressLine(EthereumAddress(token.token)?.checksummed ?? token.token)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
@@ -348,7 +394,7 @@ struct HotWalletDetails<Overview: View>: View {
         DetailsSection("Savings", footer: wallet.settings.coldWallets.isEmpty ? nil : "Sweeps go to the checked one.") {
             if wallet.settings.coldWallets.isEmpty {
                 Text("No savings wallet yet.")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
             ForEach(wallet.settings.coldWallets) { cold in
                 HStack {
@@ -482,7 +528,7 @@ struct HotWalletDetails<Overview: View>: View {
             ForEach(wallet.records) { record in
                 HStack {
                     VStack(alignment: .leading) {
-                        Text(record.reason == .note ? "What you paid for \(record.symbol)" : "\(Format.amount(record.amount, decimals: record.decimals)) \(record.symbol)")
+                        Text(recordTitle(record))
                             .monospacedDigit()
                         Text("\(reasonText(record)) · \(Format.time(record.createdAt))")
                             .font(.caption)
@@ -490,13 +536,37 @@ struct HotWalletDetails<Overview: View>: View {
                     }
                     Spacer()
                     RecordStatus(status: record.status, text: statusText(record))
-                    if let url = URL(string: "https://basescan.org/tx/\(record.hash)") {
+                    if let url = Basescan.transaction(record.hash) {
                         Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                             .foregroundStyle(.secondary)
                             .help("Open this transaction")
+                            .accessibilityLabel("Open this transaction on Basescan")
                     }
                 }
+                .contentShape(Rectangle())
+                .contextMenu { TransactionActions(hash: record.hash) }
+                .justAdded(newRows.lit.contains(record.hash))
+                .lit(litRow == MoneyNotice.recordRow(record.hash))
+                .id(MoneyNotice.recordRow(record.hash))
+                .arrives()
             }
+        }
+        .motion(Motion.state, value: wallet.records.map(\.hash))
+    }
+
+    /// Scrolls to what a notification was about, and lights it up long enough to find it. It's taken, so the same click works twice.
+    private func reveal(_ wanted: String?, with proxy: ScrollViewProxy) {
+        guard let wanted else { return }
+        navigation.shownRow = nil
+        // A row from a key that's been replaced isn't here anymore, so it opens what the money's on now.
+        let shown = Set(wallet.records.map { MoneyNotice.recordRow($0.hash) } + shownPurchases.map { MoneyNotice.purchaseRow($0.ref) } + (wallet.sweepProblem == nil ? [] : [MoneyNotice.sweepProblemRow]))
+        let row = shown.contains(wanted) ? wanted : MoneyNotice.balanceRow
+        withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(row, anchor: .center) }
+        litRow = row
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard litRow == row else { return }
+            withAnimation(.easeOut(duration: 0.6)) { litRow = nil }
         }
     }
 
@@ -508,6 +578,15 @@ struct HotWalletDetails<Overview: View>: View {
         case .site: record.site.map(siteName) ?? "A site"
         case .sent: "Sent to \(Format.shortHash(record.to.checksummed))"
         case .note: "Published for anyone to read"
+        case .revoke: "Revoked, for \(Format.shortHash(record.to.checksummed))"
+        }
+    }
+
+    private func recordTitle(_ record: SignedRecord) -> String {
+        switch record.reason {
+        case .note: "What you paid for \(record.symbol)"
+        case .revoke: "Approval for \(record.symbol)"
+        default: "\(Format.amount(record.amount, decimals: record.decimals)) \(record.symbol)"
         }
     }
 
@@ -516,7 +595,8 @@ struct HotWalletDetails<Overview: View>: View {
         case .pending: "On its way"
         case .confirmed: "Done"
         case .failed: "Failed"
-        case .dropped: "Never landed"
+        // Given up on, it can still land, unless another transaction took its place.
+        case .dropped: wallet.records.contains { $0.nonce == record.nonce && ($0.status == .confirmed || $0.status == .failed) } ? "Never landed" : "Not confirmed"
         }
     }
 }
@@ -590,7 +670,7 @@ private struct RecordStatus: View {
             }
             Text(text)
                 .contentTransition(.opacity)
-                .foregroundStyle(status == .failed || status == .dropped ? Tone.warning.style : AnyShapeStyle(.secondary))
+                .foregroundStyle(status == .failed || status == .dropped ? Tone.warning.style : Tone.secondary.style)
         }
         .font(.caption)
         .animation(Motion.state, value: status)
@@ -638,7 +718,7 @@ struct TopUpSheet: View {
                 }
                 Text(HotWalletWording.topUpRoom(wallet.money(wallet.topUpRoom), hasDestination: hasDestination))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
                 if let deviceLink {
                     DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.") { open(deviceLink, in: nil) }
@@ -705,5 +785,19 @@ struct TopUpSheet: View {
         }
         if wallet.display.isConverted { tokens.append("\(Int(dollars)) USDC") }
         return tokens.isEmpty ? "" : " (about \(tokens.joined(separator: " or ")))"
+    }
+}
+
+private extension View {
+    /// The row a notification opened, in the system's selection color, so it's found at a glance. Behind the content, since a grouped form ignores a row's own background.
+    func lit(_ isLit: Bool) -> some View {
+        background {
+            if isLit {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.18))
+                    .padding(.horizontal, -6)
+                    .padding(.vertical, -4)
+            }
+        }
     }
 }

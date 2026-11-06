@@ -1,10 +1,11 @@
 import HotWalletKit
 import Observation
 import PricetagKit
+import SwiftUI
 
 /// The main window's sections.
 enum AppSection: String, CaseIterable, Identifiable {
-    case overview, transactions, taxReport
+    case overview, transactions, taxReport, security
 
     var id: Self { self }
 
@@ -13,6 +14,17 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .overview: "Overview"
         case .transactions: "Transactions"
         case .taxReport: "Tax Report"
+        case .security: "Security"
+        }
+    }
+
+    /// ⌘4 was Spending Money's before it was a wallet like any other, and it still is, so Security comes after it.
+    var shortcut: KeyEquivalent {
+        switch self {
+        case .overview: "1"
+        case .transactions: "2"
+        case .taxReport: "3"
+        case .security: "5"
         }
     }
 
@@ -21,6 +33,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .overview: "chart.line.uptrend.xyaxis"
         case .transactions: "list.bullet"
         case .taxReport: "doc.text"
+        case .security: "lock.shield"
         }
     }
 }
@@ -38,11 +51,15 @@ final class Navigation {
 
     /// Details belong to the section they were opened from, so set this first when opening both.
     var section: AppSection = .overview {
-        didSet { if section != oldValue { target = nil } }
+        didSet { if section != oldValue { forgetDetails() } }
     }
     var chartRange: ChartRange = .all
     /// The number being explained in the details.
-    var target: ExplainTarget?
+    var target: ExplainTarget? {
+        didSet { if target == nil, let oldValue { closedTarget = oldValue } }
+    }
+    /// What the details last showed, so Show Details opens them again on it.
+    @ObservationIgnored private var closedTarget: ExplainTarget?
     var isSwitchingWallet = false {
         // Here and not in a view, because the view that opened the list can be gone by the time it closes.
         didSet { if oldValue, !isSwitchingWallet { onSwitcherClosed?() } }
@@ -71,9 +88,17 @@ final class Navigation {
     /// Which pane Settings opens on, for what points there from elsewhere.
     var settingsPane = SettingsView.Pane.general
     var isResolving = false
-    /// Which holding Fill In was clicked on, so its questions come first.
+    /// Which holding's questions were asked for, so they come first.
     var resolvingAsset: String?
+    /// Another wallet whose questions open once it's showing, like one a tax report includes.
+    private(set) var resolvingWallet: String?
+    /// Where to go back to once those questions close.
+    private(set) var returnWallet: String?
     var isExporting = false
+    /// ⌘F was pressed. The transactions' search field takes it from here.
+    var wantsSearch = false
+    /// A notification was clicked. Spending Money scrolls to its row and lights it up, and the window opens if it's closed.
+    var shownRow: String?
 
     func switchWallet() {
         isSwitchingWallet = true
@@ -92,6 +117,22 @@ final class Navigation {
     /// What the wallet's page shows: its holdings, or where to enter a wallet when there isn't one.
     func showOverview() {
         section = .overview
+    }
+
+    /// Only where there's a wallet's numbers to explain.
+    var canShowDetails: Bool {
+        section == .overview || section == .transactions
+    }
+
+    /// The View menu's. With nothing opened yet, the details start on the total PnL, which everything else adds up to.
+    func toggleDetails() {
+        target = target == nil ? closedTarget ?? .total(.pnl) : nil
+    }
+
+    /// For another section or wallet, where the last details mean something else, or nothing.
+    func forgetDetails() {
+        target = nil
+        closedTarget = nil
     }
 
     /// Opens the details of a number, which belong to the overview.
@@ -118,8 +159,60 @@ final class Navigation {
         wantsAddSavings = true
     }
 
+    /// Goes to the transactions and puts the cursor in their search field.
+    func findTransactions() {
+        section = .transactions
+        wantsSearch = true
+    }
+
+    /// Goes to spending money and shows one of its rows, which it scrolls to once the page is on screen.
+    func show(row: String) {
+        showSpendingMoney()
+        shownRow = row
+    }
+
+    /// Spending Money's page is the one chosen, whether or not the window's open.
+    var isShowingSpendingMoney: Bool {
+        guard section == .overview, let address = hotWallet.address else { return false }
+        return store.address == address.lowercased
+    }
+
     func resolve(_ asset: String? = nil) {
         resolvingAsset = asset
         isResolving = true
+    }
+
+    /// A wallet's questions are about that wallet, so this shows it, opens them once its numbers are in, and comes back
+    /// to the wallet that was showing when they close. The section stays, so a tax report is still there with the answers.
+    func resolve(in wallet: String) {
+        guard wallet != store.address else { return resolve() }
+        returnWallet = store.address
+        resolvingWallet = wallet
+        store.setWallet(wallet)
+    }
+
+    /// Called whenever the wallet or its numbers change.
+    func openPendingQuestions() {
+        guard let resolvingWallet else { return }
+        if store.address != resolvingWallet {
+            // Another wallet was chosen in the meantime, so neither the questions nor the way back apply anymore.
+            if store.address != returnWallet { forgetPendingQuestions() }
+            return
+        }
+        guard store.portfolio?.address.lowercased() == resolvingWallet else { return }
+        self.resolvingWallet = nil
+        resolve()
+    }
+
+    /// Called when the questions close.
+    func returnFromQuestions() {
+        guard resolvingWallet == nil, let returnWallet else { return }
+        self.returnWallet = nil
+        store.setWallet(returnWallet)
+    }
+
+    private func forgetPendingQuestions() {
+        resolvingWallet = nil
+        returnWallet = nil
     }
 }

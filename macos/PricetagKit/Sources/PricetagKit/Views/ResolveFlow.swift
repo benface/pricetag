@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// "Who's this?": one card at a time, with swipes, keys or taps. Each answer shows what it does before you pick it, and Undo is
+/// Answering questions: one card at a time, with swipes, keys or taps. Each answer shows what it does before you pick it, and Undo is
 /// always there. Skipping is always allowed, and what's skipped stays flagged.
 public struct ResolveFlow: View {
     let store: PortfolioStore
@@ -12,6 +12,7 @@ public struct ResolveFlow: View {
     @State private var isImporting = false
     @State private var publishing: CostNoteDraft?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.walletNames) private var walletNames
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
     @FocusState private var focusedCost: String?
@@ -42,6 +43,8 @@ public struct ResolveFlow: View {
             .frame(maxWidth: .infinity, minHeight: 330, alignment: .top)
             footer
         }
+        // One question to the next, and the last to the finish, fade rather than swap.
+        .motion(Motion.state, value: model.current?.id)
         .padding(20)
         .frame(width: 520)
         .focusable()
@@ -105,27 +108,39 @@ public struct ResolveFlow: View {
                 Text(headline).font(.sheetTitle)
                 Spacer()
                 if let meter = model.meter, meter.open > 0 {
-                    Text("\(meter.open) left").font(.callout).foregroundStyle(.secondary).monospacedDigit().contentTransition(.numericText(value: Double(meter.open))).motion(Motion.number, value: meter.open)
+                    Text("\(meter.open) left").font(.callout).secondaryText().monospacedDigit().contentTransition(.numericText(value: Double(meter.open))).motion(Motion.number, value: meter.open)
                 }
+            }
+            if let why {
+                Text(why).font(.callout).secondaryText().fixedSize(horizontal: false, vertical: true)
             }
             ProgressView(value: model.meter?.progress ?? 0)
                 .tint(model.isBalanced ? Tone.gain.color : .accentColor)
                 .motion(Motion.state, value: model.meter)
                 .accessibilityLabel("Questions, \(model.meter?.open ?? 0) left")
-            HStack(spacing: 6) {
-                Text("Now").foregroundStyle(.secondary)
-                if let portfolio = store.portfolio {
-                    LiveNumber(nowText(portfolio))
+            // At the end, the number takes the middle of the sheet instead.
+            if model.current != nil {
+                HStack(spacing: 6) {
+                    Text("Now").foregroundStyle(.secondary)
+                    if let portfolio = store.portfolio {
+                        LiveNumber(nowText(portfolio))
+                    }
                 }
+                .font(.callout)
             }
-            .font(.callout)
         }
     }
 
     private var headline: String {
-        guard let question = model.current else { return model.isBalanced ? "All answered" : "That's all for now" }
-        if isTakingCost(question) { return "What did this cost?" }
-        return "Who's this?"
+        guard let question = model.current else { return model.isBalanced ? Wording.allAnswered : Wording.nothingLeft }
+        return isTakingCost(question) ? Wording.costQuestion : Wording.senderQuestion
+    }
+
+    /// Why it's asking, right under the question, so nobody has to guess what an answer is for.
+    private var why: String? {
+        guard let question = model.current else { return store.hasAnswers ? Wording.answersPlace : nil }
+        guard isTakingCost(question) else { return Wording.senderWhy }
+        return question.sender == nil ? Wording.costWhy : Wording.exchangeCostWhy
     }
 
     private func nowText(_ portfolio: Portfolio) -> String {
@@ -142,19 +157,24 @@ public struct ResolveFlow: View {
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
             }
-            Text(detail(question)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+            if let detail = detail(question) {
+                Text(detail).font(.callout).secondaryText().textSelection(.enabled)
+            }
             ForEach(question.evidence, id: \.self) { fact in
-                Label(fact, systemImage: "lightbulb").font(.callout).foregroundStyle(.secondary)
+                Label(fact, systemImage: "lightbulb").font(.callout).secondaryText()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func detail(_ question: Question) -> String {
+    /// What it can say about where this came from. With no sender, the line under the question already says why it's asked.
+    private func detail(_ question: Question) -> String? {
         let transfers = question.transfers == 1 ? "1 transfer" : "\(question.transfers) transfers"
-        let elsewhere = question.wallet != store.portfolio?.address.lowercased() ? " · arrived in your other wallet \(Format.shortHash(question.wallet))" : ""
-        guard let sender = question.sender else { return "We can't tell what you paid for this\(elsewhere)." }
-        return "From \(Format.shortHash(sender)) · \(transfers)\(elsewhere)"
+        let elsewhere = store.portfolio?.isAllYours == true
+            ? walletNames.walletName(question.wallet)
+            : question.wallet != store.portfolio?.address.lowercased() ? "your other wallet \(Format.shortHash(question.wallet))" : nil
+        guard let sender = question.sender else { return elsewhere.map { "Arrived in \($0)" } }
+        return "From \(Format.shortHash(sender)) · \(transfers)\(elsewhere.map { " · arrived in \($0)" } ?? "")"
     }
 
     private func senderCard(_ question: Question) -> some View {
@@ -218,7 +238,7 @@ public struct ResolveFlow: View {
                 Text(consequence(ownership))
                     .font(.callout)
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 Text("\(key)").font(.caption.monospaced()).foregroundStyle(.tertiary)
@@ -242,7 +262,7 @@ public struct ResolveFlow: View {
             arrived(question)
             ForEach(question.arrivals) { arrival in
                 LabeledContent("Paid for \(Format.amount(arrival.units, decimals: arrival.decimals)) \(arrival.asset), in \(store.currency.rawValue)") {
-                    TextField("$0.00", text: Binding(get: { costs[arrival.asset] ?? "" }, set: { costs[arrival.asset] = $0 }))
+                    TextField(Format.money("0", store.currency), text: Binding(get: { costs[arrival.asset] ?? "" }, set: { costs[arrival.asset] = $0 }))
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 140)
@@ -294,7 +314,7 @@ public struct ResolveFlow: View {
     }
 
     private func canSave(_ question: Question) -> Bool {
-        question.arrivals.allSatisfy { Format.micros(fromDollars: costs[$0.asset] ?? "") != nil }
+        question.arrivals.allSatisfy { Format.micros(fromDollars: costs[$0.asset] ?? "", in: store.currency) != nil }
     }
 
     private func save(_ question: Question) {
@@ -311,11 +331,11 @@ public struct ResolveFlow: View {
                 .foregroundStyle(model.isBalanced ? Tone.gain.style : AnyShapeStyle(.secondary))
                 .symbolEffect(.bounce, value: model.isBalanced)
             if let portfolio = store.portfolio {
-                Text(nowText(portfolio)).font(.title3.weight(.semibold)).monospacedDigit()
+                finalNumber(portfolio)
                 if let excluded = Wording.excluded(portfolio.totals.excluded) {
                     Text("Every question's answered.")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .help(excluded)
                 }
             }
@@ -327,16 +347,36 @@ public struct ResolveFlow: View {
                 let waiting = portfolio.linkedReading.count
                 Text("Still reading your other \(waiting == 1 ? "wallet" : "wallets").")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .multilineTextAlignment(.center)
             }
             if !model.skipped.isEmpty {
-                Text("\(model.skipped.count) skipped").font(.callout).foregroundStyle(.secondary)
+                Text("\(model.skipped.count) skipped").font(.callout).secondaryText()
                 Button("Go Back to Them") { model.revisitSkipped() }
                     .buttonStyle(.borderedProminent)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Set like the Overview's, because it's the same number, and now it's the one this was for. What it still leaves out is said under it.
+    @ViewBuilder
+    private func finalNumber(_ portfolio: Portfolio) -> some View {
+        VStack(spacing: 4) {
+            Text("Total PnL").font(.subheadline).secondaryText()
+            if portfolio.pnlStatus != .unavailable, let pnl = portfolio.totals.pnlMicros {
+                DisplayNumber(Format.estimate(Format.signedMoney(pnl, portfolio.currency), isPositive(portfolio.totals.estimatedMicros)), size: 40, tone: Tone(signed: pnl))
+                if let caveat = Wording.headlineCaveat(portfolio.totals, portfolio.currency) {
+                    Text(caveat)
+                        .font(.callout)
+                        .secondaryText()
+                        .monospacedDigit()
+                        .multilineTextAlignment(.center)
+                }
+            } else {
+                Text(Wording.pnlUnavailable).font(.displaySmall).secondaryText()
+            }
+        }
     }
 
     private var footer: some View {

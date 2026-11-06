@@ -427,8 +427,8 @@ describe("getPortfolio", () => {
 
     assert.deepEqual(sdk.totals, app.totals)
     assert.equal(sdk.pnlStatus, app.pnlStatus)
-    // The words are the app's, and the SDK leaves them out.
-    assert.deepEqual(sdk.points, app.points.map(({ summary: _, ...point }) => point))
+    // The words and each transaction's facts are the app's, and the SDK leaves them out.
+    assert.deepEqual(sdk.points, app.points.map(({ blockNum, timestamp, txHash, pnlMicros, excludedCount }) => ({ blockNum, timestamp, txHash, pnlMicros, excludedCount })))
     assert.deepEqual(sdk.blocks, app.coverage)
     assert.deepEqual(sdk.positions.map((p) => [p.asset, p.values, p.reconciliation, p.price]), app.positions.map((p) => [p.asset, p.values, p.reconciliation, p.price]))
     assert.deepEqual(sdk.positions.map((p) => [p.asset, p.reconciliation?.status]), [["ETH", "reconciled"], ["USDC", "reconciled"], ["AERO", "reconciled"]])
@@ -807,7 +807,7 @@ describe("the package boundary", () => {
       }
     }
     walk("core.ts")
-    assert.deepEqual([...seen].sort(), ["chain.ts", "core.ts", "currency.ts", "fold.ts", "format.ts", "hold.ts", "legs.ts", "market.ts", "notes.ts", "portfolio.ts", "reconcile.ts", "tokens.ts", "wallet.ts"])
+    assert.deepEqual([...seen].sort(), ["approvals.ts", "chain.ts", "core.ts", "currency.ts", "fold.ts", "format.ts", "hold.ts", "legs.ts", "market.ts", "notes.ts", "portfolio.ts", "reconcile.ts", "tokens.ts", "wallet.ts"])
   })
 
   it("has the app's browser code import only that part", () => {

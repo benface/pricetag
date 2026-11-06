@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, describe, it } from "node:test"
-import { ASSETS, PRICE_FEEDS, SEED_TX, type LegRow, type PricedLeg, type PriceFeed } from "@pricetag/sdk/core"
+import { ASSETS, CURRENCIES, PRICE_FEEDS, SEED_TX, type LegRow, type PricedLeg, type PriceFeed } from "@pricetag/sdk/core"
 import { datasetReader, type AmpQuery, type PriceUpdate, type Query, type Source } from "@pricetag/sdk/internal"
 import { createApi, createSource } from "../server/app.ts"
-import { AGGREGATOR_SELECTOR, warnOfNewAggregators } from "../server/feeds.ts"
+import { AGGREGATOR_SELECTOR, warnOfNewAggregators, warnOfNewRateAggregators } from "../server/feeds.ts"
 import { createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type PriceBehind } from "../server/proof.ts"
 import { ANSWER_UPDATED_TOPIC } from "../server/raw.ts"
 import { keccak, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "../server/verify.ts"
@@ -579,6 +579,22 @@ describe("a version tag that moves after the wallet was pinned", () => {
         assert.match((await get<ProofResponse>("proof", rule)).source[0] as string, /couldn't be found/)
       }
     })
+  })
+})
+
+describe("the startup check of the exchange rates' feeds", () => {
+  it("only warns about a feed whose aggregator isn't listed, and says the rates dataset needs a new version", async () => {
+    const current = Object.fromEntries(Object.values(CURRENCIES).flatMap(({ feed }) => (feed ? [[feed.address, feed.aggregators[0] as string]] : [])))
+    const moved = { ...current, [CURRENCIES.EUR.feed!.address]: "0x00000000000000000000000000000000000000e5" }
+    const send = (async (_url: string, init: RequestInit) => {
+      const { params } = JSON.parse(init.body as string) as { params: [{ to: string; data: string }, string] }
+      assert.equal(params[0].data, AGGREGATOR_SELECTOR)
+      return new Response(JSON.stringify({ result: `0x${(moved[params[0].to] as string).slice(2).toLowerCase().padStart(64, "0")}` }))
+    }) as typeof fetch
+    const messages: string[] = []
+    await warnOfNewRateAggregators("https://rpc.example/secret-key", send, (message) => messages.push(message))
+    assert.equal(messages.length, 1)
+    assert.match(messages[0] as string, /^Chainlink's EUR \/ USD feed now reads from 0x0+e5, which isn't in CURRENCIES\..*new version of the rates dataset/)
   })
 })
 
