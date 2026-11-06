@@ -164,9 +164,11 @@ extension View {
 private struct SecondaryText: ViewModifier {
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.isStale) private var isStale
+    /// On a selected row's accent color, like `LiveNumber`.
+    @Environment(\.backgroundProminence) private var prominence
 
     func body(content: Content) -> some View {
-        content.foregroundStyle(isStale ? Tone.neutral.style : AnyShapeStyle(Tone.readableSecondary(contrast)))
+        content.foregroundStyle(prominence == .increased || isStale ? Tone.neutral.style : AnyShapeStyle(Tone.readableSecondary(contrast)))
     }
 }
 

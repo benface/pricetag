@@ -119,7 +119,7 @@ struct SettingsView: View {
                 } footer: {
                     Text(Wording.watchOnlyNotice)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
             } else {
                 Section {
@@ -137,7 +137,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("Sweeps, purchases, and sends that didn't go through. Never prices.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
             }
         }
@@ -160,7 +160,7 @@ struct SettingsView: View {
             } footer: {
                 Text("Where \(AppName.current) gets prices and history. It runs on this Mac unless you change this.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
         }
     }
