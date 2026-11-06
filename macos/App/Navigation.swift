@@ -96,8 +96,10 @@ final class Navigation {
     /// Where to go back to once those questions close.
     private(set) var returnWallet: String?
     var isExporting = false
-    /// ⌘F was pressed. The transactions' search field takes it from here.
+    /// ⌘F was pressed. The search field of the section showing takes it from here.
     var wantsSearch = false
+    /// What's being searched for in the holdings, until they're left. It's here so a test scene can set it.
+    var holdingsQuery = ""
     /// A notification was clicked. Spending Money scrolls to its row and lights it up, and the window opens if it's closed.
     var shownRow: String?
 
@@ -160,9 +162,20 @@ final class Navigation {
         wantsAddSavings = true
     }
 
-    /// Goes to the transactions and puts the cursor in their search field.
-    func findTransactions() {
-        section = .transactions
+    /// What ⌘F searches: the holdings on the overview. The other sections have no search of their own, so it goes to the transactions.
+    var findTitle: String {
+        section == .overview ? "Find Holdings…" : "Find Transactions…"
+    }
+
+    /// A wallet with nothing to show has neither, and no field to take it.
+    var canFind: Bool {
+        guard let portfolio = store.portfolio else { return false }
+        return portfolio.progress.started && !portfolio.isEmpty
+    }
+
+    /// Puts the cursor in the holdings' search field on the overview. From anywhere else, goes to the transactions and puts it in theirs.
+    func find() {
+        if section != .overview { section = .transactions }
         wantsSearch = true
     }
 

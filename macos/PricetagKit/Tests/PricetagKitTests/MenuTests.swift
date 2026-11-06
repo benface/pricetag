@@ -7,11 +7,47 @@ import Testing
         let portfolio = try demoPortfolio()
         let usdc = try #require(portfolio.positions.first { $0.asset == "USDC" })
         let cells = usdc.copyText(currency: portfolio.currency).components(separatedBy: "\t")
-        #expect(cells.count == 4)
+        #expect(cells.count == 6)
         #expect(cells[0] == "USDC")
         #expect(cells[1] == Format.amount(usdc.values.qty, decimals: usdc.decimals))
-        // Unknown stays unknown, and never reads as $0.
-        #expect(cells[3] == Wording.pnlUnavailable)
+        #expect(cells[2] == usdc.price.map { Format.estimate(Format.price($0.micros, portfolio.currency), usdc.estimates.value) })
+        // Unknown stays unknown, and never reads as $0 or 0%.
+        #expect(cells[4] == Wording.pnlUnavailable)
+        #expect(cells[5] == Wording.unknown)
+    }
+
+    @Test func copiesAHoldingsReturn() throws {
+        let portfolio = try demoPortfolio()
+        let known = try #require(portfolio.positions.first { $0.isHeld && $0.returnBps != nil })
+        let cells = known.copyText(currency: portfolio.currency).components(separatedBy: "\t")
+        #expect(cells[5] == known.returnText)
+        #expect(cells[5].contains("%"))
+    }
+
+    @Test func aHoldingNoLongerHeldHasNoValueOrReturn() throws {
+        let portfolio = try demoPortfolio()
+        let aero = try #require(portfolio.positions.first { $0.asset == "AERO" })
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(aero)) as? [String: Any])
+        var values = try #require(json["values"] as? [String: Any])
+        values["qty"] = "0"
+        json["values"] = values
+        let sold = try JSONDecoder().decode(Position.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(!sold.isHeld)
+        let cells = sold.copyText(currency: portfolio.currency).components(separatedBy: "\t")
+        #expect(cells[3] == "—")
+        #expect(cells[5] == "—")
+    }
+
+    @Test func findsAHoldingByItsTokenOrNote() throws {
+        let portfolio = try demoPortfolio()
+        let usdc = try #require(portfolio.positions.first { $0.asset == "USDC" })
+        #expect(usdc.matches(""))
+        #expect(usdc.matches("  "))
+        #expect(usdc.matches("usd"))
+        #expect(!usdc.matches("aero"))
+        #expect(!usdc.matches("usd aero"))
+        let noted = try #require(portfolio.positions.first { $0.note != nil })
+        #expect(noted.matches("wrapped"))
     }
 
     @Test func linksOnlyToPagesThatExist() {

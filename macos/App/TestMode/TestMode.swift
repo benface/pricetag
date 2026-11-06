@@ -266,6 +266,11 @@ private nonisolated final class SceneDefaults: UserDefaults, @unchecked Sendable
 
 enum TestScene: String, CaseIterable {
     case main
+    /// ⌘F on the overview, with what was typed, below the chart in a small window.
+    case mainHoldingsSearch = "main-holdings-search"
+    case mainHoldingsSearchSmall = "main-holdings-search-small"
+    case mainHoldingsSearchNarrow = "main-holdings-search-narrow"
+    case mainHoldingsSearchNone = "main-holdings-search-none"
     case mainTransactions = "main-transactions"
     case mainAllYours = "main-all-yours"
     case mainAllYoursTransactions = "main-all-yours-transactions"
@@ -896,6 +901,8 @@ enum TestScene: String, CaseIterable {
         if self == .walletSwitcherNewKey || self == .mainNoWalletAfterDeleting || isAllYours { store.setLinkedWallets(hotWallet.linkedWallets) }
         let navigation = Navigation(store: store, hotWallet: hotWallet)
         if self == .mainChartWeek { navigation.chartRange = .week }
+        if [.mainHoldingsSearch, .mainHoldingsSearchSmall, .mainHoldingsSearchNarrow].contains(self) { navigation.holdingsQuery = "e" }
+        if self == .mainHoldingsSearchNone { navigation.holdingsQuery = "nothing like this" }
         navigation.chartMetric = TestMode.chartMetric
         if [.mainTransactions, .mainTransactionsCAD, .mainTransactionsSmall, .mainTransactionsUpdating, .mainTransactionsSending, .mainTransactionsBusy, .mainAllYoursTransactions].contains(self) { navigation.section = .transactions }
         if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
@@ -1005,7 +1012,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: MainWindow.minimumSize, isReady: isReady)
         case .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .mainNoWalletAfterDeleting, .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainTransactions, .mainTransactionsSending, .mainTransactionsBusy, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainReadingStart, .mainUpdating, .mainUpdatingCAD, .mainTransactionsUpdating, .mainServerDown, .mainPricesDown, .mainPricesStop, .mainTooSlow, .mainRetrying, .mainRetryingNumbers, .mainNotStartedFailing, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainChartGaps, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .mainNoWalletAfterDeleting, .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainHoldingsSearch, .mainHoldingsSearchNone, .mainTransactions, .mainTransactionsSending, .mainTransactionsBusy, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainReadingStart, .mainUpdating, .mainUpdatingCAD, .mainTransactionsUpdating, .mainServerDown, .mainPricesDown, .mainPricesStop, .mainTooSlow, .mainRetrying, .mainRetryingNumbers, .mainNotStartedFailing, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainChartGaps, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainDetailsProof:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases).environment(\.opensFirstProof, true)), size: CGSize(width: 1120, height: 760), isReady: isReady)
@@ -1014,9 +1021,9 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .mainEmptySmallest, .mainSmallest, .mainFirstRunSmallest, .mainEmptySpendingMoneySmallest:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 780, height: 560), isReady: isReady)
-        case .mainNarrow, .mainChartGapsNarrow, .mainSmallAmountsNarrow, .mainUpdatingNarrow:
+        case .mainNarrow, .mainHoldingsSearchNarrow, .mainChartGapsNarrow, .mainSmallAmountsNarrow, .mainUpdatingNarrow:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 780, height: 760), isReady: isReady)
-        case .mainSmall, .mainChartGapsSmall, .mainUpdatingSmall, .mainNotUpdatingSmall, .mainFirstRunSmall, .mainTransactionsSmall, .mainSpendingMoneySmall, .mainTaxReportSmall, .mainNoWalletSmall, .mainNoWalletSavedSmall:
+        case .mainSmall, .mainHoldingsSearchSmall, .mainChartGapsSmall, .mainUpdatingSmall, .mainNotUpdatingSmall, .mainFirstRunSmall, .mainTransactionsSmall, .mainSpendingMoneySmall, .mainTaxReportSmall, .mainNoWalletSmall, .mainNoWalletSavedSmall:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: MainWindow.minimumSize, isReady: isReady)
         case .mainMedium, .mainSpendingMoney, .mainSpendingMoneyServerDown, .mainTaxReport:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 900, height: 640), isReady: isReady)
