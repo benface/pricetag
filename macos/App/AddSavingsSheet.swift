@@ -69,7 +69,7 @@ struct AddColdWalletSheet: View {
         case .ledgerPlugIn: StepPage(page: page, picture: .ledger(screen: "Enter PIN"), model: model, showsTrouble: showsTrouble)
         case .ledgerApp: StepPage(page: page, picture: .ledger(screen: "Ethereum\napp is ready"), model: model, showsTrouble: showsTrouble)
         case .ledgerQuit: LedgerQuitStep(page: page, model: model, isOpen: mac.ledgerWalletIsOpen)
-        case .ledgerBrowser: LedgerBrowserStep(page: page, model: model, showsTrouble: showsTrouble, browsers: mac.browsers, open: { browser in
+        case .ledgerBrowser: LedgerBrowserStep(page: page, model: model, server: server, showsTrouble: showsTrouble, browsers: mac.browsers, open: { browser in
             if let link = DeviceFlow.addSavingsFromLedger(server: server) { mac.browsers.open(link, browser) }
         })
         case .keystoneUnlock: StepPage(page: page, picture: .keystone(showsCode: false), model: model, showsTrouble: showsTrouble)
@@ -297,6 +297,7 @@ private struct LedgerQuitStep: View {
 private struct LedgerBrowserStep: View {
     let page: AddSavingsWording.Page
     let model: AddSavingsModel
+    let server: URL
     let showsTrouble: Bool
     let browsers: DeviceBrowsers
     let open: (InstalledBrowser?) -> Void
@@ -364,7 +365,7 @@ private struct LedgerBrowserStep: View {
                 .font(.callout)
                 .secondaryText()
             Button("Open \(browser.name) Again") { open(browser) }
-            TroubleList(troubles: AddSavingsWording.browserTroubles, isExpanded: showsTrouble)
+            TroubleList(troubles: AddSavingsWording.browserTroubles(server: server), isExpanded: showsTrouble)
         }
     }
 }

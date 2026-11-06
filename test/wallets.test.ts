@@ -668,6 +668,58 @@ describe("reconciling", () => {
   })
 })
 
+describe("how far a first read has got", () => {
+  it("goes through each stage, counting transfers but not gas", async () => {
+    const seen: unknown[] = []
+    const { source } = fake(new Map([[950, [row(950), { ...row(950), kind: "gas" }]]]), () => reference(1000))
+    let wallets: ReturnType<typeof createWallets>
+    const readWindow = source.readWindow.bind(source)
+    const readReferences = source.readReferences.bind(source)
+    const readBalances = source.readBalances.bind(source)
+    const withWatch: Source = {
+      ...source,
+      readWindow: async (...args) => {
+        seen.push(wallets.progress(ME))
+        return readWindow(...args)
+      },
+      readReferences: async (blocks) => {
+        if (blocks.length > 0) seen.push(wallets.progress(ME))
+        return readReferences(blocks)
+      },
+      marketReady: async () => {
+        seen.push(wallets.progress(ME))
+        return false
+      },
+      readMarketTrades: async () => [],
+      readBalances,
+    }
+    wallets = createWallets(withWatch, headAt(1000), noFees)
+    assert.deepEqual(wallets.progress(ME), { stage: "waiting", transfers: null })
+    await wallets.get(ME)
+    assert.deepEqual(seen[0], { stage: "transfers", transfers: null })
+    assert.deepEqual(seen[1], { stage: "prices", transfers: 1 })
+    assert.deepEqual(seen.at(-1), { stage: "checking", transfers: 1 })
+    assert.deepEqual(wallets.progress(ME), { stage: "costs", transfers: 1 })
+  })
+
+  it("says nothing new about a wallet that's already been read", async () => {
+    let head = 1000
+    const seen: unknown[] = []
+    const { source } = fake(new Map([[950, [row(950)]], [1001, [row(1001)]]]), () => reference(1000))
+    let wallets: ReturnType<typeof createWallets>
+    const readWindow = source.readWindow.bind(source)
+    wallets = createWallets({ ...source, readWindow: async (...args) => {
+      seen.push(wallets.progress(ME))
+      return readWindow(...args)
+    } }, async () => headAt(head)(), noFees)
+    await wallets.get(ME)
+    seen.length = 0
+    head = 1001
+    await wallets.get(ME)
+    assert.deepEqual(seen, [{ stage: "costs", transfers: 1 }])
+  })
+})
+
 describe("working out a wallet's response", () => {
   it("does it once until there's a new block", async () => {
     let head = 1000
@@ -1007,6 +1059,18 @@ describe("marking the chart from the token feeds", () => {
     assert.equal(marketMarks[750]?.wstETH, "2500000000")
     assert.equal(marketMarks[850], undefined, "no ETH price at that point, so no price for this")
     assert.equal(marketMarks[950]?.wstETH, "3000000000")
+  })
+
+  it("says which of a chart's prices came from a feed", async () => {
+    const { source } = thin([holding(750), holding(950)], {
+      readMarketTrades: async (asset, _, to) => [1, 2, 3].map((n) => ({ blockNum: to - n, txHash: `0x${n}`, asset, usdMicros: "1300000", notionalUsdMicros: "500000000" })),
+      readFeedRounds: async (_, block): Promise<Record<string, FeedRound>> => (block === 900 ? { AERO: round("63000000", block) } : {}),
+    })
+    const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.deepEqual([wallet.marketMarks[750]?.AERO, wallet.marketMarks[950]?.AERO], ["1300000", "630000"])
+    assert.deepEqual(wallet.feedMarks, { 950: ["AERO"] })
+    const { markEstimated } = usdView(wallet)
+    assert.deepEqual([markEstimated(750, "AERO"), markEstimated(950, "AERO")], [true, false])
   })
 
   it("asks once per bucket, however many tokens are held", async () => {

@@ -52,6 +52,10 @@ public enum FeedState: Equatable, Sendable {
     case ampUnavailable(String)
     case noAmpConfigured(String)
     case rejected(String)
+    /// The server refused this wallet as having more history than it can hold, so there are no numbers for it.
+    case tooBig(String)
+    /// The server is holding this client back for now, which clears by itself.
+    case rateLimited(String)
 
     /// Only this state may show a number as current.
     public var isLive: Bool { self == .live }
@@ -60,7 +64,7 @@ public enum FeedState: Equatable, Sendable {
     public var isStale: Bool {
         switch self {
         case .noWallet, .reading, .live, .catchingUp: false
-        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected: true
+        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .tooBig, .rateLimited: true
         }
     }
 }
@@ -75,6 +79,11 @@ public struct ExplanationRequest: Hashable, Sendable {
     public let linked: [String]
     public let serverURL: URL
     public let book: Book
+}
+
+/// Whether anything answers at the server's address, whichever wallet is showing, and even with none.
+public enum ServerCheck: Equatable, Sendable {
+    case checking, answers, unreachable
 }
 
 @MainActor
@@ -125,6 +134,14 @@ public final class PortfolioStore {
     /// What the server at `serverURL` knows this person by, or nil. Each invite belongs to the server it was given for, so it never
     /// follows the user to another one, and it's only sent over HTTPS.
     public private(set) var invite: String?
+    /// The server at `serverURL` answered that it needs an invite, and hasn't taken one since.
+    public private(set) var needsInvite = false
+    /// What the last question to the server found, for when there's no wallet being read to say so.
+    public private(set) var serverCheck = ServerCheck.checking
+    /// They said not now, so nothing asks again until they give an invite or move to another server.
+    private var isInviteDeclined = false
+    /// Whether to ask for an invite now. Giving one stops asking until the server answers, and if it's refused, this asks again.
+    public var asksForInvite: Bool { needsInvite && !isInviteDeclined }
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
     /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
@@ -151,7 +168,21 @@ public final class PortfolioStore {
     /// Taken off the list, but still the user's, so costs keep following their money.
     public private(set) var hiddenWallets: [String]
 
-    @ObservationIgnored private(set) var source: any PortfolioSource
+    @ObservationIgnored private(set) var source: any PortfolioSource {
+        didSet {
+            sourceChanges += 1
+            rulesRetry?.cancel()
+            rulesRetry = nil
+            rulesRead = nil
+            rateHeldUntil = nil
+        }
+    }
+    /// How many times `source` has been replaced, so an answer from an earlier one can tell.
+    @ObservationIgnored private var sourceChanges = 0
+    /// Asks for the rules again once the server has room. While it's there, nobody else asks.
+    @ObservationIgnored private var rulesRetry: Task<Void, Never>?
+    /// The read of the rules that's under way, which anyone else asking joins, so one answer settles it.
+    @ObservationIgnored private var rulesRead: Task<Void, Never>?
     @ObservationIgnored private var cache: PortfolioCache
     /// Something changed, so the server can answer from what it last read while the real read runs.
     @ObservationIgnored private var wantsLastRead = true
@@ -162,6 +193,8 @@ public final class PortfolioStore {
     @ObservationIgnored private let reachableDelay: Duration
     @ObservationIgnored private let unreachableDelay: Duration
     @ObservationIgnored private let pushedDelay: Duration
+    /// When the server said it'd have room again, after holding this client back.
+    @ObservationIgnored private var heldUntil: Date?
     @ObservationIgnored private let liveFor: Duration
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var eventsTask: Task<Void, Never>?
@@ -172,6 +205,10 @@ public final class PortfolioStore {
     @ObservationIgnored private var sleeper: Task<Void, Never>?
     @ObservationIgnored private var rateTask: Task<Void, Never>?
     @ObservationIgnored private let rateRetryDelay: Duration
+    /// When the server said it'd have room for a rate read again. Starting over doesn't change that, but another server or invite does.
+    @ObservationIgnored private var rateHeldUntil: Date?
+    /// Lets a rate go at the end of its time, when the server said to wait past that.
+    @ObservationIgnored private var rateExpiry: Task<Void, Never>?
     private static let rateDelay: Duration = .seconds(300)
     private static let rateLasts: TimeInterval = 60 * 60
     /// A block arrived during a read, which may have missed it.
@@ -241,7 +278,7 @@ public final class PortfolioStore {
         Task { await refreshRules() }
         rateTask = Task { [weak self] in
             while !Task.isCancelled {
-                guard let hasRead = await self?.readRate(), let delay = self?.rateRetryDelay else { return }
+                guard let hasRead = await self?.readRate(), let delay = self?.rateHoldLeft ?? self?.rateRetryDelay else { return }
                 try? await Task.sleep(for: hasRead ? Self.rateDelay : delay)
             }
         }
@@ -260,6 +297,8 @@ public final class PortfolioStore {
     public func stop() {
         rateTask?.cancel()
         rateTask = nil
+        rateExpiry?.cancel()
+        rateExpiry = nil
         pollTask?.cancel()
         pollTask = nil
         readCount += 1
@@ -274,22 +313,27 @@ public final class PortfolioStore {
     private func followEvents() async {
         while !Task.isCancelled {
             guard let events = source.headEvents() else { return }
+            var again = unreachableDelay
             do {
                 for try await _ in events {
                     guard !Task.isCancelled else { return }
                     isPushed = true
                     wake()
                 }
+            } catch FetchError.rateLimited(_, let retryAfter) {
+                again = .seconds(retryAfter)
             } catch {}
             guard !Task.isCancelled else { return }
             // Back to polling straight away, not after the long wait that being told about blocks allowed.
             isPushed = false
             wake()
-            try? await Task.sleep(for: unreachableDelay)
+            try? await Task.sleep(for: again)
         }
     }
 
     private func wake() {
+        // A new block isn't a reason to ask a server that's said to wait.
+        if let heldUntil, now() < heldUntil { return }
         if let sleeper { sleeper.cancel() } else { wakePending = true }
     }
 
@@ -581,7 +625,9 @@ public final class PortfolioStore {
             currentRate = nil
             return true
         }
+        guard rateHoldLeft == nil else { return rateNotRead() }
         let source = self.source
+        let asked = sourceChanges
         let server = serverURL
         do {
             let micros = try await source.currentRate(currency: currency)
@@ -589,9 +635,39 @@ public final class PortfolioStore {
             currentRate = micros.map { CurrentRate(currency: currency, micros: $0, readAt: now()) }
             return true
         } catch {
+            // The server said it whether or not anyone's still waiting on this read, and the longest wait it's given is the one that counts.
+            if case FetchError.rateLimited(_, let retryAfter) = error, asked == sourceChanges {
+                let until = now().addingTimeInterval(TimeInterval(retryAfter))
+                rateHeldUntil = max(rateHeldUntil ?? until, until)
+            }
             if Task.isCancelled { return true }
-            if let currentRate, now().timeIntervalSince(currentRate.readAt) > Self.rateLasts { self.currentRate = nil }
-            return false
+            return rateNotRead()
+        }
+    }
+
+    /// How much of the server's wait is left, if any.
+    private var rateHoldLeft: Duration? {
+        guard let left = rateHeldUntil?.timeIntervalSince(now()), left > 0 else { return nil }
+        return .seconds(left)
+    }
+
+    /// There's no new rate, so the last one only stays while it's new enough.
+    private func rateNotRead() -> Bool {
+        if let currentRate, now().timeIntervalSince(currentRate.readAt) > Self.rateLasts { self.currentRate = nil }
+        if let rateHoldLeft { expireRate(within: rateHoldLeft) }
+        return false
+    }
+
+    /// The next read is too late to notice a rate getting too old if it runs out within this time, and a server that said to wait isn't asked any sooner.
+    private func expireRate(within wait: Duration) {
+        guard let currentRate else { return }
+        let left = Self.rateLasts - now().timeIntervalSince(currentRate.readAt)
+        guard .seconds(left) < wait else { return }
+        rateExpiry?.cancel()
+        rateExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(left))
+            guard !Task.isCancelled, let self, self.currentRate == currentRate else { return }
+            self.currentRate = nil
         }
     }
 
@@ -660,10 +736,45 @@ public final class PortfolioStore {
         return rules.first { $0.id == id }?.name
     }
 
-    /// Asks the server what rules it has. A rule it doesn't have would fail every read, so that choice goes.
+    /// Asks the server what rules it has, and again when it says to wait. A rule it doesn't have would fail every read, so that choice goes.
     public func refreshRules() async {
-        let asked = serverURL
-        guard let next = try? await source.rules(), asked == serverURL else { return }
+        guard rulesRetry == nil else {
+            // A retry only waits on a server that answered, and a new source cancels it.
+            serverCheck = .answers
+            return
+        }
+        if let rulesRead { return await rulesRead.value }
+        let source = self.source
+        let asked = sourceChanges
+        let read = Task<Void, Never> { [weak self] in await self?.readRules(from: source, asked: asked) }
+        rulesRead = read
+        await read.value
+    }
+
+    private func readRules(from source: any PortfolioSource, asked: Int) async {
+        defer { if asked == sourceChanges { rulesRead = nil } }
+        let next: [PricingRule]
+        do {
+            next = try await source.rules()
+        } catch {
+            // An answer to an invite that's since been replaced says nothing about the new one.
+            guard asked == sourceChanges else { return }
+            serverCheck = error as? FetchError == .unreachable || error as? FetchError == .timedOut ? .unreachable : .answers
+            if case .needsInvite = error as? FetchError { needsInvite = true }
+            if case .rateLimited(_, let retryAfter) = error as? FetchError {
+                // Owned by the store, so closing Settings doesn't leave the list out of date.
+                rulesRetry = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(retryAfter))
+                    guard !Task.isCancelled, let self else { return }
+                    self.rulesRetry = nil
+                    await self.refreshRules()
+                }
+            }
+            return
+        }
+        guard asked == sourceChanges else { return }
+        serverCheck = .answers
+        needsInvite = false
         rules = next
         if let chosen = selectedRule, !next.contains(where: { $0.id == chosen }) {
             selectedRule = nil
@@ -678,11 +789,20 @@ public final class PortfolioStore {
         return try await source.comparison(address: address, method: method, currency: currency, linked: linked(for: address), book: bookToSend(book, for: address))
     }
 
+    /// Asks again, saying so until there's an answer.
+    public func checkServer() {
+        serverCheck = .checking
+        Task { await refreshRules() }
+    }
+
     public func setServerURL(_ url: URL) {
         guard url != serverURL else { return }
         serverURL = url
         defaults.set(url.absoluteString, forKey: Keys.server)
         invite = Self.invites(in: defaults)[Self.origin(of: url)]
+        needsInvite = false
+        serverCheck = .checking
+        isInviteDeclined = false
         source = makeSource(url)
         rules = []
         // Another server's numbers can be different facts, so these aren't kept even for a moment. What's known is this server's own.
@@ -696,14 +816,27 @@ public final class PortfolioStore {
     public func setInvite(_ value: String?) {
         let value = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         let next = value?.isEmpty == false ? value : nil
+        isInviteDeclined = false
         guard next != invite else { return }
         invite = next
+        needsInvite = false
+        serverCheck = .checking
         var invites = Self.invites(in: defaults)
         invites[Self.origin(of: serverURL)] = next
         defaults.set(invites, forKey: Keys.invites)
         source = makeSource(serverURL)
         rules = []
         answersChanged()
+    }
+
+    /// They've changed their mind about Not Now.
+    public func askForInvite() {
+        isInviteDeclined = false
+    }
+
+    /// Not now. It only answers the question being asked, so it can't silence one the server hasn't raised yet.
+    public func declineInvite() {
+        if needsInvite { isInviteDeclined = true }
     }
 
     /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced,
@@ -807,12 +940,10 @@ public final class PortfolioStore {
         return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), book: bookToSend(book, for: address))
     }
 
-    /// Reads an exchange's history, and keeps what it found on this device. Says how many withdrawals had no usable cost.
+    /// Reads an exchange's history, and adds what it found to what's on this device. Says how many withdrawals had no usable cost.
     public func importCoinbase(csv: String) async throws -> ExchangeImport {
         let imported = try await source.importCoinbase(csv: csv)
-        var next = book
-        next.withdrawals = imported.withdrawals
-        setBook(next, action: "Import")
+        setBook(book.importing(imported.withdrawals), action: "Import")
         return imported
     }
 
@@ -915,8 +1046,10 @@ public final class PortfolioStore {
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
+            needsInvite = false
             cache.remember(next, of: address, on: serverURL, at: now())
             feed = state(of: next)
+            heldUntil = nil
             expireLive()
             return reachableDelay
         } catch {
@@ -924,6 +1057,12 @@ public final class PortfolioStore {
             // Numbers by another method or rule, or in another currency, are wrong now, not just old, and there's no way to get the right ones.
             if let portfolio, !isForCurrentSettings(portfolio) { self.portfolio = nil }
             feed = state(of: error)
+            if case .needsInvite = error as? FetchError { needsInvite = true }
+            if case FetchError.rateLimited(_, let retryAfter) = error {
+                heldUntil = now().addingTimeInterval(TimeInterval(retryAfter))
+                wakePending = false
+                return .seconds(retryAfter)
+            }
             return feed == .serverUnreachable ? unreachableDelay : reachableDelay
         }
     }
@@ -984,9 +1123,16 @@ public final class PortfolioStore {
         return switch error as? FetchError {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
-        case .rejected(let message), .priceChanged(let message): .rejected(message)
+        case .rejected(let message), .needsInvite(let message), .priceChanged(let message): .rejected(message)
+        case .tooBig(let message): .tooBig(message)
+        case .rateLimited(let message, _): .rateLimited(message)
         case .unreachable, .timedOut, nil: .serverUnreachable
         }
+    }
+
+    /// Whether this Mac has used the app before, from anything it would have saved by now.
+    public nonisolated static func hasBeenUsed(defaults: UserDefaults = .standard) -> Bool {
+        [Keys.wallet, Keys.method, Keys.currency, Keys.menuBar, Keys.server, Keys.invites, Keys.book, Keys.answerDetails, Keys.rule, Keys.savedWallets, Keys.walletOrder, Keys.hiddenWallets, Keys.holdingsSort].contains { defaults.object(forKey: $0) != nil }
     }
 
     private enum Keys {
@@ -1008,7 +1154,7 @@ public final class PortfolioStore {
 
 private struct ReadTooSlow: Error {}
 
-private struct CurrentRate {
+private struct CurrentRate: Equatable {
     let currency: CurrencyCode
     let micros: String
     let readAt: Date

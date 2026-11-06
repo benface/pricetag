@@ -85,25 +85,18 @@ private struct HotWalletSetup: View {
                     .fixedSize(horizontal: false, vertical: true)
                 // What can't be undone stays in full, and on screen.
                 Notice(.warning, HotWalletWording.cannotBeRestored)
-                HStack {
-                    Label(HotWalletWording.label, systemImage: "flask")
-                        .font(.caption)
-                        .secondaryText()
-                    Button("How It Works", systemImage: "info.circle") { showsHowItWorks.toggle() }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
-                        .help("How it works")
-                        .popover(isPresented: $showsHowItWorks, arrowEdge: .bottom) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(HotWalletWording.sweepsOnlyWhileOpen)
-                                Text(HotWalletWording.newDevice)
-                            }
-                            .font(.callout)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(14)
-                            .frame(width: 300)
+                Button("How It Works", systemImage: "info.circle") { showsHowItWorks.toggle() }
+                    .buttonStyle(.borderless)
+                    .popover(isPresented: $showsHowItWorks, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(HotWalletWording.sweepsOnlyWhileOpen)
+                            Text(HotWalletWording.newDevice)
                         }
-                }
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(14)
+                        .frame(width: 300)
+                    }
                 Toggle("I understand this money can't be restored if this Mac is lost", isOn: $understands)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Create Spending Money") {
@@ -176,7 +169,8 @@ struct HotWalletDetails<Overview: View>: View {
             overview
             if showsHoldings { holdings }
             if !wallet.records.isEmpty { activity }
-            if !wallet.unlisted.isEmpty { untouched }
+            // Otherwise they're on the overview, with its holdings.
+            if showsHoldings, let portfolio = wallet.portfolio, portfolio.hasOtherTokens { OtherTokensSection(portfolio: portfolio) }
             if !wallet.connectedSites.isEmpty { sites }
             settings
         }
@@ -285,10 +279,6 @@ struct HotWalletDetails<Overview: View>: View {
                         .accessibilityLabel("Cap, \(wallet.capText)")
                         .accessibilityHint("Change the cap")
                         .popover(isPresented: $isChangingCap, arrowEdge: .bottom) { capEditor }
-                    Spacer()
-                    Label(HotWalletWording.label, systemImage: "flask")
-                        .font(.caption)
-                        .secondaryText()
                 }
                 // Only a picture of the numbers above, which are what's real.
                 Gauge(value: gaugeValue, in: 0...1) {}
@@ -391,17 +381,6 @@ struct HotWalletDetails<Overview: View>: View {
                 // "ETH, 0.005, $13.20" doesn't say which number is which.
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(holding.token.symbol), \(Format.amount(String(holding.balance), decimals: holding.token.decimals)), \(holding.valueUsdMicros.map { "worth \(wallet.money($0))" } ?? "no price")")
-            }
-        }
-    }
-
-    private var untouched: some View {
-        DetailsSection("Other Tokens", footer: "Anyone can send a token to any address, so these may not be worth anything. This app doesn't track them or count them in your numbers, and it never moves them.") {
-            ForEach(wallet.unlisted) { token in
-                AddressLine(EthereumAddress(token.token)?.checksummed ?? token.token)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
             }
         }
     }

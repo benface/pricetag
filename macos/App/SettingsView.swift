@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State var serverError: String?
     @State var invite = ""
     @State private var isComparing = false
+    @State private var isChangingInvite = false
     /// How tall what's in each tab wants to be. A tab has no answer until it's first shown.
     @State private var contentHeights: [Pane: CGFloat] = [:]
     /// How tall the tab is right now, which is what moves the window. It's one number for all the tabs, so it can animate from one to the next.
@@ -36,7 +37,10 @@ struct SettingsView: View {
         TabView(selection: $tab) {
             Tab("General", systemImage: "gearshape", value: Pane.general) { general }
             Tab("Answers", systemImage: "checklist", value: Pane.answers) { pane(.answers) { AnswersList(store: store) } }
-            Tab("Price Service", systemImage: "server.rack", value: Pane.server) { connection }
+            // A watch-only build reads the server it was built for, and its invite is under General.
+            if !Build.isWatchOnly {
+                Tab("Price Service", systemImage: "server.rack", value: Pane.server) { connection }
+            }
         }
         .onAppear {
             // What didn't save stays, next to what's wrong with it.
@@ -48,6 +52,7 @@ struct SettingsView: View {
         .task { await notifications.refreshAuthorization() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await notifications.refreshAuthorization() } }
         .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
+        .sheet(isPresented: $isChangingInvite) { InvitePrompt(store: store, decline: { isChangingInvite = false }, submitted: { isChangingInvite = false }) }
         // It read one wallet's numbers once, and replacing a key can change the wallet behind it.
         .onChange(of: store.address) { isComparing = false }
         // Opens at its size, and only moves after that.
@@ -101,22 +106,39 @@ struct SettingsView: View {
                         .disabled(store.address == nil || store.address == WalletAddress.demo || WalletAddress.isAllYours(store.address))
                 }
             }
-            Section {
-                Toggle("Notify me when money moves", isOn: Binding(get: { notifications.isOn }, set: { notifications.setOn($0) }))
-                if notifications.isOn, notifications.authorization == .denied {
-                    LabeledContent {
-                        Button("Open System Settings…") { notifications.openSystemSettings() }
-                            .controlSize(.small)
-                    } label: {
-                        WarningText("They're turned off for \(AppName.current) in System Settings.")
+            if Build.isWatchOnly {
+                Section {
+                    LabeledContent("Invite") {
+                        Button(store.invite == nil ? "Enter Invite…" : "Change Invite…") { isChangingInvite = true }
                     }
+                    // The main window asks again, but it may not be open.
+                    if store.needsInvite, store.invite != nil {
+                        WarningText("The server didn't accept that invite.")
+                            .font(.callout)
+                    }
+                } footer: {
+                    Text(Wording.watchOnlyNotice)
+                        .font(.caption)
+                        .secondaryText()
                 }
-            } header: {
-                Text("Notifications")
-            } footer: {
-                Text("Sweeps, purchases, and sends that didn't go through. Never prices.")
-                    .font(.caption)
-                    .secondaryText()
+            } else {
+                Section {
+                    Toggle("Notify me when money moves", isOn: Binding(get: { notifications.isOn }, set: { notifications.setOn($0) }))
+                    if notifications.isOn, notifications.authorization == .denied {
+                        LabeledContent {
+                            Button("Open System Settings…") { notifications.openSystemSettings() }
+                                .controlSize(.small)
+                        } label: {
+                            WarningText("They're turned off for \(AppName.current) in System Settings.")
+                        }
+                    }
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text("Sweeps, purchases, and sends that didn't go through. Never prices.")
+                        .font(.caption)
+                        .secondaryText()
+                }
             }
         }
     }

@@ -20,14 +20,9 @@ struct ReceiveSheet: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Receive")
-                    .font(.sheetTitle)
-                Spacer()
-                Label(HotWalletWording.label, systemImage: "flask")
-                    .font(.caption)
-                    .secondaryText()
-            }
+            Text("Receive")
+                .font(.sheetTitle)
+                .frame(maxWidth: .infinity, alignment: .leading)
             if let problem {
                 Notice(wallet.address == nil ? .info : .warning, problem)
             } else if let address = wallet.address {

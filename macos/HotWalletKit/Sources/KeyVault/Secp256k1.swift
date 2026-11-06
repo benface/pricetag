@@ -1,3 +1,5 @@
+// Key material only, so a watch-only build has none of it. See macos/watch-only.sh.
+#if !PATINA_WATCH_ONLY
 import Foundation
 import libsecp256k1
 import Security
@@ -90,3 +92,4 @@ enum SecureRandom {
         guard status == errSecSuccess else { throw Failure.unavailable(status) }
     }
 }
+#endif

@@ -569,7 +569,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 
     @Test func onlyShowsANumberWhileLive() throws {
         let portfolio = try demoPortfolio()
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("x"), .noAmpConfigured("x"), .rejected("x")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("x"), .noAmpConfigured("x"), .rejected("x"), .tooBig("x"), .rateLimited("x")]
         for state in states {
             for shows in MenuBarShows.allCases {
                 let summary = FeedSummary(feed: state, portfolio: portfolio, shows: shows)
@@ -604,7 +604,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 
     @Test func aProblemFitsInAFewWords() throws {
         let portfolio = try demoPortfolio()
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x"), .tooBig("x"), .rateLimited("x")]
         for state in states {
             let problem = try #require(state.shortProblem(portfolio: portfolio))
             #expect(problem.count <= 26, "\(state)")
@@ -621,7 +621,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 
     @Test func aProblemSaysWhatHappenedThatMoneyIsFineAndWhatToDoWithoutTheServersAddress() throws {
         let portfolio = try realPortfolio(at: Date())
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("Couldn't read from Amp."), .noAmpConfigured("No Amp."), .rejected("Nope.")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("Couldn't read from Amp."), .noAmpConfigured("No Amp."), .rejected("Nope."), .tooBig("Too much history."), .rateLimited("Slow down.")]
         for state in states {
             for shown in [portfolio, nil] {
                 let problem = try #require(state.problem(serverURL: server, portfolio: shown))
@@ -644,6 +644,10 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(down.detail?.contains("pnpm start") == true)
         #expect(FeedState.ampUnavailable("Couldn't read from Amp.").problem(serverURL: server, portfolio: nil)?.detail?.contains("Couldn't read from Amp.") == true)
         #expect(FeedState.rejected("Nope.").problem(serverURL: server, portfolio: nil)?.detail?.contains("Nope.") == true)
+        let tooBig = try #require(FeedState.tooBig("Too much history.").problem(serverURL: server, portfolio: nil))
+        #expect(tooBig.title == "Too Much History to Read")
+        #expect(tooBig.message.contains("Trying again won't change this."))
+        #expect(tooBig.detail?.contains("Too much history.") == true)
     }
 
     @Test func aServerElsewhereIsntOneToStart() throws {
@@ -651,6 +655,26 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(!remote.message.contains("this Mac"))
         #expect(!remote.message.contains("Start it"))
         #expect(remote.detail == "Nothing answered at https://prices.example.com.")
+    }
+
+    @Test func aServerElsewhereIsntOneToRestart() throws {
+        let elsewhere = URL(string: "https://prices.example.com")!
+        for state in [FeedState.noAmpConfigured("None."), .rejected("Nope.")] {
+            let hosted = try #require(state.problem(serverURL: elsewhere, portfolio: nil))
+            #expect(!hosted.message.contains("restart"))
+            #expect(hosted.detail?.contains(".env.local") == false)
+            let local = try #require(state.problem(serverURL: server, portfolio: nil))
+            #expect(local.message.contains("restart the price service"))
+        }
+    }
+
+    @Test func localhostInAnyCaseIsOnThisMac() throws {
+        let shouted = URL(string: "http://LOCALHOST:8787")!
+        for state in [FeedState.noAmpConfigured("None."), .rejected("Nope.")] {
+            #expect(state.problem(serverURL: shouted, portfolio: nil) == state.problem(serverURL: server, portfolio: nil))
+        }
+        let unreachable = try #require(FeedState.serverUnreachable.problem(serverURL: shouted, portfolio: nil))
+        #expect(unreachable.title == "The Price Service Isn't Running")
     }
 
     @Test func theGlanceListsWhatsHeldLargestFirst() throws {
@@ -808,6 +832,16 @@ actor RuledSource: PortfolioSource {
     private(set) var asked: [String?] = []
     private(set) var askedAboutProof: [String?] = []
     var failing = false
+    /// The waits it'll answer `rules()` with before it gives the list.
+    private var rulesRefusals: [Int]
+    private let rulesTake: Duration?
+    private(set) var rulesAskedAt: [ContinuousClock.Instant] = []
+    var rulesAsked: Int { rulesAskedAt.count }
+
+    init(rulesRefusals: [Int] = [], rulesTake: Duration? = nil) {
+        self.rulesRefusals = rulesRefusals
+        self.rulesTake = rulesTake
+    }
 
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
         asked.append(rule)
@@ -836,18 +870,37 @@ actor RuledSource: PortfolioSource {
         return try resource("verification", as: Verification.self)
     }
 
-    func rules() async throws -> [PricingRule] { [Self.market, Self.cautious] }
+    func rules() async throws -> [PricingRule] {
+        rulesAskedAt.append(.now)
+        let refusal = rulesRefusals.isEmpty ? nil : rulesRefusals.removeFirst()
+        if let rulesTake { try await Task.sleep(for: rulesTake) }
+        if let refusal { throw FetchError.rateLimited("Too many requests.", retryAfter: refusal) }
+        return [Self.market, Self.cautious]
+    }
 
     func setFailing() { failing = true }
+}
+
+/// A new source each time the store makes one, staying on the last.
+final class Sources: @unchecked Sendable {
+    private var left: [RuledSource]
+
+    init(_ sources: [RuledSource]) { left = sources }
+
+    func next() -> RuledSource { left.count > 1 ? left.removeFirst() : left[0] }
 }
 
 @MainActor
 @Suite struct RuleTests {
     func makeStore(_ source: RuledSource, stored: String? = nil) -> PortfolioStore {
+        makeStore(Sources([source]), stored: stored)
+    }
+
+    func makeStore(_ sources: Sources, stored: String? = nil) -> PortfolioStore {
         let defaults = UserDefaults(suiteName: "rules-\(UUID().uuidString)")!
         defaults.set("demo", forKey: "wallet")
         if let stored { defaults.set(stored, forKey: "pricingRule") }
-        return PortfolioStore(defaults: defaults, makeSource: { _ in source }, reachableDelay: .seconds(60))
+        return PortfolioStore(defaults: defaults, makeSource: { _ in sources.next() }, reachableDelay: .seconds(60))
     }
 
     @Test func asksForTheServersDefaultUntilARuleIsChosen() async {
@@ -914,6 +967,172 @@ actor RuledSource: PortfolioSource {
         _ = try await store.verification(leg: "x", address: "demo")
         #expect(await source.askedAboutProof == [nil, RuledSource.cautious.id, RuledSource.cautious.id])
     }
+
+    private func waitForRules(_ store: PortfolioStore) async throws {
+        for _ in 0..<2000 where store.rules.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(!store.rules.isEmpty)
+    }
+
+    @Test func aServerThatSaysToWaitIsAskedForRulesOnceThen() async throws {
+        let source = RuledSource(rulesRefusals: [1])
+        let store = makeStore(source)
+        await store.refreshRules()
+        #expect(store.rules.isEmpty)
+        // Nobody else asks during the wait, like Settings opening.
+        await store.refreshRules()
+        await store.refreshRules()
+        #expect(await source.rulesAsked == 1)
+        try await waitForRules(store)
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 2)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+    }
+
+    @Test func checkingAServerThatSaidToWaitAnswersWithoutAskingEarly() async throws {
+        let source = RuledSource(rulesRefusals: [1])
+        let store = makeStore(source)
+        await store.refreshRules()
+        #expect(store.serverCheck == .answers)
+        store.checkServer()
+        #expect(store.serverCheck == .checking)
+        for _ in 0..<100 where store.serverCheck == .checking { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(store.serverCheck == .answers)
+        #expect(await source.rulesAsked == 1)
+    }
+
+    @Test func aServerThatKeepsSayingToWaitKeepsBeingWaitedFor() async throws {
+        let source = RuledSource(rulesRefusals: [1, 1])
+        let store = makeStore(source)
+        await store.refreshRules()
+        try await waitForRules(store)
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 3)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+        #expect(askedAt[2] - askedAt[1] >= .seconds(1))
+    }
+
+    @Test func twoReadsAtOnceAskOnceAndWaitAsLongAsTheyreTold() async throws {
+        let source = RuledSource(rulesRefusals: [1, 1], rulesTake: .milliseconds(50))
+        let store = makeStore(source)
+        async let first: Void = store.refreshRules()
+        async let second: Void = store.refreshRules()
+        _ = await (first, second)
+        #expect(await source.rulesAsked == 1)
+        try await waitForRules(store)
+        try await Task.sleep(for: .milliseconds(100))
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 3)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+        #expect(askedAt[2] - askedAt[1] >= .seconds(1))
+    }
+
+    @Test func twoReadsAtOnceHonorADifferentWaitNext() async throws {
+        let source = RuledSource(rulesRefusals: [1, 2], rulesTake: .milliseconds(100))
+        let store = makeStore(source)
+        async let first: Void = store.refreshRules()
+        async let second: Void = store.refreshRules()
+        _ = await (first, second)
+        try await waitForRules(store)
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 3)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+        #expect(askedAt[2] - askedAt[1] >= .seconds(2))
+    }
+
+    @Test func aReadThatStartsDuringAnotherJoinsIt() async throws {
+        let source = RuledSource(rulesRefusals: [1, 1], rulesTake: .milliseconds(200))
+        let store = makeStore(source)
+        async let first: Void = store.refreshRules()
+        try await Task.sleep(for: .milliseconds(100))
+        // Partway through the first read, and then partway through the one after the wait.
+        await store.refreshRules()
+        #expect(await source.rulesAsked == 1)
+        await first
+        try await Task.sleep(for: .milliseconds(1100))
+        await store.refreshRules()
+        try await waitForRules(store)
+        let askedAt = await source.rulesAskedAt
+        #expect(askedAt.count == 3)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+        #expect(askedAt[2] - askedAt[1] >= .seconds(1))
+    }
+
+    @Test func aWaitEndsWithTheInviteItWasFor() async throws {
+        let refused = RuledSource(rulesRefusals: [1])
+        let next = RuledSource()
+        let store = makeStore(Sources([refused, next]))
+        await store.refreshRules()
+        store.setInvite("another")
+        store.stop()
+        try await waitForRules(store)
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(await refused.rulesAsked == 1)
+        #expect(await next.rulesAsked == 1)
+    }
+
+    @Test func aWaitEndsWithTheServerItWasFor() async throws {
+        let refused = RuledSource(rulesRefusals: [1])
+        let next = RuledSource()
+        let store = makeStore(Sources([refused, next]))
+        await store.refreshRules()
+        store.setServerURL(URL(string: "http://127.0.0.1:1")!)
+        store.stop()
+        try await waitForRules(store)
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(await refused.rulesAsked == 1)
+        #expect(await next.rulesAsked == 1)
+    }
+
+    @Test func anAnswerFromBeforeAnInviteChangeDoesntCount() async throws {
+        let slow = RuledSource(rulesTake: .milliseconds(100))
+        let next = RuledSource(rulesRefusals: [60])
+        let store = makeStore(Sources([slow, next]))
+        async let asked: Void = store.refreshRules()
+        try await Task.sleep(for: .milliseconds(20))
+        store.setInvite("another")
+        store.stop()
+        await asked
+        #expect(store.rules.isEmpty)
+    }
+
+    @Test func aWaitFromBeforeAnInviteChangeDoesntCount() async throws {
+        let slow = RuledSource(rulesRefusals: [1], rulesTake: .milliseconds(100))
+        let next = RuledSource()
+        let store = makeStore(Sources([slow, next]))
+        async let asked: Void = store.refreshRules()
+        try await Task.sleep(for: .milliseconds(20))
+        store.setInvite("another")
+        store.stop()
+        await asked
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(await slow.rulesAsked == 1)
+        #expect(!store.rules.isEmpty)
+    }
+}
+
+/// Says to wait, once, then answers.
+actor HeldBackSource: PortfolioSource {
+    nonisolated let events: AsyncThrowingStream<Void, any Error>
+    nonisolated let push: AsyncThrowingStream<Void, any Error>.Continuation
+    private let answer: Portfolio
+    private let retryAfter: Int
+    private(set) var reads = 0
+
+    init(answer: Portfolio, retryAfter: Int) {
+        self.answer = answer
+        self.retryAfter = retryAfter
+        (events, push) = AsyncThrowingStream.makeStream(of: Void.self, throwing: (any Error).self)
+    }
+
+    nonisolated func headEvents() -> AsyncThrowingStream<Void, any Error>? { events }
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+        reads += 1
+        if reads == 1 { throw FetchError.rateLimited("Too many requests.", retryAfter: retryAfter) }
+        return answer
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
 }
 
 /// Answers every read the same way, counts them, and reports new blocks when a test says so.
@@ -949,11 +1168,16 @@ actor PushedSource: PortfolioSource {
 @Suite struct PushedFeedTests {
     let now = Date(timeIntervalSince1970: 1_800_000_100)
 
-    func makeStore(_ source: PushedSource, reachableDelay: Duration, pushedDelay: Duration) -> PortfolioStore {
+    func makeStore(_ source: any PortfolioSource, reachableDelay: Duration, pushedDelay: Duration) -> PortfolioStore {
         let defaults = UserDefaults(suiteName: "pushed-tests-\(UUID().uuidString)")!
         defaults.set("0xabc", forKey: "wallet")
         let now = now
         return PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now }, reachableDelay: reachableDelay, unreachableDelay: .milliseconds(5), pushedDelay: pushedDelay)
+    }
+
+    @MainActor private func waitForFeed(_ store: PortfolioStore, _ matches: (FeedState) -> Bool) async throws {
+        for _ in 0..<600 where !matches(store.feed) { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(matches(store.feed))
     }
 
     private func waitForReads(_ source: PushedSource, _ count: Int) async throws {
@@ -991,6 +1215,38 @@ actor PushedSource: PortfolioSource {
         #expect(await source.reads == settled)
     }
 
+    @Test func aServerThatSaysToWaitIsLeftAloneUntilThen() async throws {
+        let source = HeldBackSource(answer: try realPortfolio(at: now), retryAfter: 1)
+        let store = makeStore(source, reachableDelay: .milliseconds(5), pushedDelay: .seconds(600))
+        store.start()
+        defer { store.stop() }
+        try await waitForFeed(store) { $0 == .rateLimited("Too many requests.") }
+        #expect(store.feed.isStale)
+        // New blocks say nothing about when there's room.
+        source.push.yield()
+        source.push.yield()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await source.reads == 1)
+        // Then it comes back by itself.
+        try await waitForFeed(store) { $0 == .live }
+        #expect(await source.reads == 2)
+    }
+
+    @Test func oneReadABlockIsWellUnderTheLimit() async throws {
+        let source = PushedSource(answer: try realPortfolio(at: now), pushes: true)
+        let store = makeStore(source, reachableDelay: .seconds(600), pushedDelay: .seconds(600))
+        store.start()
+        defer { store.stop() }
+        try await waitForReads(source, 1)
+        // A minute's blocks at one every 2 s, with the reads faster than the blocks, as they are for an ordinary wallet.
+        for count in 2...31 {
+            source.push?.yield()
+            try await waitForReads(source, count)
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await source.reads == 31, "Hosted servers allow 120 requests a minute")
+    }
+
     @Test func goesBackToPollingStraightAwayWhenTheEventsStop() async throws {
         let source = PushedSource(answer: try realPortfolio(at: now), pushes: true)
         let store = makeStore(source, reachableDelay: .milliseconds(5), pushedDelay: .seconds(600))
@@ -1018,13 +1274,14 @@ actor PushedSource: PortfolioSource {
 final class EventsProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var body = ""
     nonisolated(unsafe) static var status = 200
+    nonisolated(unsafe) static var retryAfter: String?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func stopLoading() {}
 
     override func startLoading() {
-        let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: ["content-type": "text/event-stream"])!
+        let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: ["content-type": "text/event-stream"].merging(Self.retryAfter.map { ["Retry-After": $0] } ?? [:]) { $1 })!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(Self.body.utf8))
         client?.urlProtocolDidFinishLoading(self)
@@ -1069,6 +1326,26 @@ final class FailingProtocol: URLProtocol, @unchecked Sendable {
         var heads = 0
         for try await _ in try #require(client().headEvents()) { heads += 1 }
         #expect(heads == 2)
+    }
+
+    @Test func saysHowLongToWaitWhenItsHeldBack() async throws {
+        EventsProtocol.status = 429
+        EventsProtocol.body = ""
+        EventsProtocol.retryAfter = "17"
+        defer { EventsProtocol.retryAfter = nil }
+        await #expect(throws: FetchError.rateLimited("Too many requests.", retryAfter: 17)) {
+            for try await _ in try #require(client().headEvents()) {}
+        }
+    }
+
+    @Test func aReadSaysWhatTheServerSaidAndHowLongToWait() async throws {
+        EventsProtocol.status = 429
+        EventsProtocol.body = #"{"error":"Too many requests from this invite."}"#
+        EventsProtocol.retryAfter = "17"
+        defer { EventsProtocol.retryAfter = nil }
+        await #expect(throws: FetchError.rateLimited("Too many requests from this invite.", retryAfter: 17)) { try await client().rules() }
+        EventsProtocol.retryAfter = nil
+        await #expect(throws: FetchError.rateLimited("Too many requests from this invite.", retryAfter: 60)) { try await client().rules() }
     }
 
     @Test func failsOnAnErrorResponse() async throws {

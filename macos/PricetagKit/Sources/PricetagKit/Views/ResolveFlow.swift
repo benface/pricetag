@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 public struct ResolveFlow: View {
     let store: PortfolioStore
     let publishFromDevice: ((URL) -> AnyView)?
+    private let firstRun: FirstRun
+    /// The question that says why it's asking. The next one gets on with it.
+    @State private var firstQuestion: String?
     @State private var model: ResolveModel
     @State private var drag: CGSize = .zero
     @State private var costs: [String: String] = [:]
@@ -18,15 +21,17 @@ public struct ResolveFlow: View {
     @FocusState private var focusedCost: String?
 
     /// `publishFromDevice` is what opens that page, which takes knowing the browsers on this computer.
-    public init(store: PortfolioStore, firstAsset: String? = nil, noteWriter: (any CostNoteWriter)? = nil, publishFromDevice: ((URL) -> AnyView)? = nil) {
+    public init(store: PortfolioStore, firstAsset: String? = nil, noteWriter: (any CostNoteWriter)? = nil, firstRun: FirstRun = .finished, publishFromDevice: ((URL) -> AnyView)? = nil) {
         self.store = store
+        self.firstRun = firstRun
         self.publishFromDevice = publishFromDevice
         _model = State(initialValue: ResolveModel(store: store, firstAsset: firstAsset, noteWriter: noteWriter))
     }
 
     /// With questions already dealt with, to show where that leads.
-    public init(store: PortfolioStore, model: ResolveModel) {
+    public init(store: PortfolioStore, model: ResolveModel, firstRun: FirstRun = .finished) {
         self.store = store
+        self.firstRun = firstRun
         publishFromDevice = nil
         _model = State(initialValue: model)
     }
@@ -48,6 +53,14 @@ public struct ResolveFlow: View {
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 330, alignment: .top)
+            if let imported = model.lastImport {
+                let sentence = Wording.imported(found: imported.withdrawals.count, skipped: imported.skipped)
+                if imported.needsALook {
+                    WarningText(sentence).font(.callout).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(sentence).font(.callout).secondaryText()
+                }
+            }
             footer
         }
         // One question to the next, and the last to the finish, fade rather than swap.
@@ -57,7 +70,11 @@ public struct ResolveFlow: View {
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
-        .onAppear { isFocused = true }
+        .onAppear {
+            isFocused = true
+            firstQuestion = model.current?.id
+        }
+        .onDisappear { firstRun.finishQuestions() }
         .onKeyPress(keys: ["1", "2", "3"]) { press in
             guard let question = model.current, question.kind == .sender, !isTakingCost(question) else { return .ignored }
             let options = model.options
@@ -117,6 +134,9 @@ public struct ResolveFlow: View {
                 if let meter = model.meter, meter.open > 0 {
                     Text("\(meter.open) left").font(.callout).secondaryText().monospacedDigit().contentTransition(.numericText(value: Double(meter.open))).motion(Motion.number, value: meter.open)
                 }
+            }
+            if firstRun.explainsQuestions, let firstQuestion, firstQuestion == model.current?.id {
+                Text(Wording.firstQuestion).font(.callout).fixedSize(horizontal: false, vertical: true)
             }
             if let why {
                 Text(why).font(.callout).secondaryText().fixedSize(horizontal: false, vertical: true)
@@ -192,6 +212,7 @@ public struct ResolveFlow: View {
                     answerButton(ownership, key: index + 1)
                 }
             }
+            if model.previewsAreHeldBack { WarningText(Wording.previewHeldBack).font(.callout).fixedSize(horizontal: false, vertical: true) }
             if let failure = model.failure { WarningText(failure).font(.callout) }
         }
         .padding(16)
@@ -283,6 +304,7 @@ public struct ResolveFlow: View {
                 }
                 .font(.callout)
             }
+            if model.costPreviewIsHeldBack { WarningText(Wording.previewHeldBack).font(.callout).fixedSize(horizontal: false, vertical: true) }
             if let warning = model.costWarning(costs, for: question) {
                 WarningText(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
             }
