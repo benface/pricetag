@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../core/api.ts"
-import { applyChange, changeStoredBook, isBookKey, linkDeviceAccounts, readStoredBook, recordPurchase, same, storedBook, undoAnswer, type Book, type BookChange, type Purchase } from "../core/book.ts"
+import { applyChange, changeStoredBook, isBookKey, linkDeviceAccounts, readStoredBook, recordPurchase, same, storedBook, storedBookHasNoCopy, undoAnswer, type Book, type BookChange, type Purchase } from "../core/book.ts"
 import { readKey, readsMatching } from "../core/resolve.ts"
-import { readStoredPurchases, isPurchasesKey } from "../core/purchases.ts"
-import { browserShelf, hasUnseenSetAside, isSetAsideKey, markSetAsideSeen } from "../core/shelf.ts"
+import { readStoredPurchases, isPurchasesKey, storedPurchasesHaveNoCopy } from "../core/purchases.ts"
+import { browserShelf, hasUnseenSetAside, isSetAsideKey, markSetAsideSeen, plainShelf, type Shelf } from "../core/shelf.ts"
 import { walletUrl } from "./useWallet.ts"
 
 /** What the stored book said just before and just after an answer was saved, so only saved answers are ever in the history. */
@@ -121,26 +121,51 @@ export function useBook() {
   return { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase }
 }
 
-/** Tells the person once when something saved couldn't be read. Reading is what sets it aside, so that comes first. */
+/** Reading is what sets something aside, so that comes first. */
+async function unreadableIn(from: Shelf) {
+  await Promise.all([readStoredBook(from), readStoredPurchases(from)])
+  const [book, purchases, unseen] = await Promise.all([storedBookHasNoCopy(from), storedPurchasesHaveNoCopy(from), hasUnseenSetAside(from)])
+  return { copyFailed: book || purchases, unseen }
+}
+
+const COPY_RETRY_MS = 5_000
+
+/** Tells the person once when something saved couldn't be read. If no copy could be kept, it says that instead, for as long as that's so, and keeps trying. */
 export function useUnreadableSaved() {
-  const [unreadable, setUnreadable] = useState(false)
+  const [unseen, setUnseen] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
+
+  // What's on screen is the copy in localStorage when the shelf can't be read, so that's what this is about then.
+  const read = useCallback(() => {
+    void unreadableIn(shelf)
+      .catch(() => unreadableIn(plainShelf(localStorage)))
+      .then((found) => {
+        setUnseen(found.unseen)
+        setCopyFailed(found.copyFailed)
+      }, console.error)
+  }, [])
 
   useEffect(() => {
-    const read = () => void Promise.all([readStoredBook(shelf), readStoredPurchases(shelf)]).then(() => hasUnseenSetAside(shelf)).then(setUnreadable, console.error)
     const onStorage = (event: StorageEvent) => {
       if (isBookKey(event.key) || isPurchasesKey(event.key) || isSetAsideKey(event.key)) read()
     }
     read()
     window.addEventListener("storage", onStorage)
     return () => window.removeEventListener("storage", onStorage)
-  }, [])
+  }, [read])
+
+  useEffect(() => {
+    if (!copyFailed) return
+    const timer = setInterval(read, COPY_RETRY_MS)
+    return () => clearInterval(timer)
+  }, [copyFailed, read])
 
   const dismiss = useCallback(() => {
-    setUnreadable(false)
+    setUnseen(false)
     markSetAsideSeen(shelf).catch(console.error)
   }, [])
 
-  return { unreadable, dismiss }
+  return { unreadable: unseen || copyFailed, copyFailed, dismiss }
 }
 
 /**

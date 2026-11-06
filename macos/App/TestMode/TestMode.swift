@@ -270,6 +270,8 @@ enum TestScene: String, CaseIterable {
     case main
     /// Answers from a version that knows a currency this one doesn't.
     case mainUnreadableSaved = "main-unreadable-saved"
+    case mainUnreadableSavedNoWallet = "main-unreadable-saved-no-wallet"
+    case mainUnreadableSavedServerDown = "main-unreadable-saved-server-down"
     /// What a watch-only build asks when its server wants an invite.
     case invitePrompt = "invite-prompt"
     case invitePromptRefused = "invite-prompt-refused"
@@ -695,7 +697,7 @@ enum TestScene: String, CaseIterable {
         case .mainTooSlow: .tooSlow
         case .mainRetrying: .retrying
         case .mainRetryingNumbers, .popoverRetrying: .retryingWithNumbers
-        case .mainNotStartedFailing: .notStartedFails
+        case .mainNotStartedFailing, .mainUnreadableSavedServerDown: .notStartedFails
         case .mainNotUpdating, .mainNotUpdatingSmall, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
         case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours: .allYours
@@ -740,7 +742,7 @@ enum TestScene: String, CaseIterable {
 
     private var hasWallet: Bool {
         switch self {
-        case .mainWelcome, .mainWelcomeSmallest, .mainWelcomeChecking, .mainWelcomeInvite, .mainWelcomeInviteRefused, .mainWelcomeServerDown, .mainWelcomeHelpFromTransactions, .mainWelcomeHelpFromTaxReport, .mainNoWalletAfterDeleting, .mainNoWallet, .mainNoWalletSaved, .mainNoWalletSavedSmall, .mainNoWalletSmall, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .popoverNoWallet, .routeAddWallet, .routeAddWalletOpen, .walletSwitcherFirstRun: false
+        case .mainUnreadableSavedNoWallet, .mainWelcome, .mainWelcomeSmallest, .mainWelcomeChecking, .mainWelcomeInvite, .mainWelcomeInviteRefused, .mainWelcomeServerDown, .mainWelcomeHelpFromTransactions, .mainWelcomeHelpFromTaxReport, .mainNoWalletAfterDeleting, .mainNoWallet, .mainNoWalletSaved, .mainNoWalletSavedSmall, .mainNoWalletSmall, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .popoverNoWallet, .routeAddWallet, .routeAddWalletOpen, .walletSwitcherFirstRun: false
         default: true
         }
     }
@@ -944,7 +946,7 @@ enum TestScene: String, CaseIterable {
         // Treasury is the user's too, and it's the wallet All Yours is still reading.
         if isAllYours, let book = try? JSONEncoder().encode(Book().answering(TestScene.namedWallet, .mine, focus: nil)) { registered["answers"] = book }
         if self == .hotWalletPurchases || self == .hotWalletPurchaseShown || self == .hotWalletReplacedKeyShown || self == .hotWalletPurchasesCAD || self == .hotWalletPurchasesCantCheck, let saved = try? JSONEncoder().encode(self != .hotWalletPurchasesCantCheck ? TestScene.purchases(inCAD: self == .hotWalletPurchasesCAD) : Array(TestScene.purchases().suffix(3))) { registered["purchases"] = saved }
-        if self == .mainUnreadableSaved || self == .popoverUnreadableSaved { registered["answers"] = Data(#"{"senders":{},"costs":{"a:b":{"micros":"1","currency":"NEW"}},"withdrawals":[]}"#.utf8) }
+        if self == .mainUnreadableSaved || self == .mainUnreadableSavedNoWallet || self == .mainUnreadableSavedServerDown || self == .popoverUnreadableSaved { registered["answers"] = Data(#"{"senders":{},"costs":{"a:b":{"micros":"1","currency":"NEW"}},"withdrawals":[]}"#.utf8) }
         defaults.register(defaults: registered)
         if self == .mainWelcomeInviteRefused { defaults.register(defaults: ["serverInvites": [PortfolioStore.origin(of: PortfolioStore.defaultServerURL): "not-this-one"]]) }
         let cue = MotionCue()
@@ -1115,7 +1117,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: MainWindow.minimumSize, isReady: isReady)
         case .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .mainUnreadableSaved, .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .mainNoWalletAfterDeleting, .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainHoldingsSearch, .mainHoldingsSearchNone, .mainTransactions, .mainTransactionsSending, .mainTransactionsBusy, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainReadingStart, .mainUpdating, .mainUpdatingCAD, .mainTransactionsUpdating, .mainServerDown, .mainPricesDown, .mainPricesStop, .mainTooSlow, .mainRetrying, .mainRetryingNumbers, .mainNotStartedFailing, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainChartGaps, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+        case .mainUnreadableSaved, .mainUnreadableSavedNoWallet, .mainUnreadableSavedServerDown, .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .mainNoWalletAfterDeleting, .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainHoldingsSearch, .mainHoldingsSearchNone, .mainTransactions, .mainTransactionsSending, .mainTransactionsBusy, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainReadingStart, .mainUpdating, .mainUpdatingCAD, .mainTransactionsUpdating, .mainServerDown, .mainPricesDown, .mainPricesStop, .mainTooSlow, .mainRetrying, .mainRetryingNumbers, .mainNotStartedFailing, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainChartGaps, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainDetailsProof:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases).environment(\.opensFirstProof, true)), size: CGSize(width: 1120, height: 760), isReady: isReady)

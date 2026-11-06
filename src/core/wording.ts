@@ -18,6 +18,8 @@ export const NETWORK_FEES = "Network fees"
 export const NOT_SAVED = "This browser couldn't save that, so it's back as it was. Try again."
 /** Saved answers or purchases this version can't read, which are kept rather than replaced. */
 export const UNREADABLE_SAVED = "Some of what you saved can't be read by this version, so costs that rely on it may show as unknown. A copy is kept on this device."
+/** The same, when this browser couldn't keep that copy. What's saved isn't replaced without one, so a change to it fails instead. */
+export const UNREADABLE_NOT_COPIED = "Some of what you saved can't be read by this version, so costs that rely on it may show as unknown. It hasn't been changed, but this browser couldn't keep a copy, so new changes may not save."
 export const BALANCE_CHECK = "Balance check"
 export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Doesn't match", unchecked: "Not checked" }
 export const STARTING_BALANCE = "Starting balance"

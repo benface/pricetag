@@ -6,7 +6,7 @@ import { TOKENS, formatAmount, formatMoney, formatPaid, isAddress, isCurrencyCod
 import type { OnrampOrder } from "./api.ts"
 import { parseBook, type Money, type Purchase } from "./book.ts"
 import type { PurchaseState } from "./resolve.ts"
-import { changeKept, readKept, type KeptIn, type Shelf } from "./shelf.ts"
+import { changeKept, hasNoCopy, readKept, type KeptIn, type Shelf } from "./shelf.ts"
 
 /** The one thing the flow says about who the provider is, along with where its page is. */
 export const PROVIDER = "Coinbase"
@@ -226,6 +226,8 @@ function readable(text: string) {
 export const storedPurchases = (storage: KeptIn): TrackedPurchase[] => purchasesFrom(storage.getItem(PURCHASES_KEY))
 
 export const readStoredPurchases = async (shelf: Shelf): Promise<TrackedPurchase[]> => purchasesFrom(await readKept(shelf, PURCHASES_KEY, readable))
+
+export const storedPurchasesHaveNoCopy = (shelf: Shelf) => hasNoCopy(shelf, PURCHASES_KEY, readable)
 
 export async function changeStoredPurchases(shelf: Shelf, change: (latest: TrackedPurchase[]) => TrackedPurchase[]): Promise<TrackedPurchase[]> {
   const text = await changeKept(shelf, PURCHASES_KEY, readable, (text) => {

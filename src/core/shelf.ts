@@ -122,6 +122,13 @@ export async function readKept(shelf: Shelf, key: string, readable: (text: strin
   return text
 }
 
+/** Whether `readable` turns down what's under `key` and no copy of it has been kept, so the original is all there is. */
+export async function hasNoCopy(shelf: Shelf, key: string, readable: (text: string) => boolean): Promise<boolean> {
+  const text = await shelf.read(key)
+  if (text === null || readable(text)) return false
+  return !setAsideFrom(await shelf.read(SET_ASIDE_KEY)).entries.some((entry) => entry.key === key && entry.text === text)
+}
+
 /** `shelf.change`, but what `readable` turns down is only replaced once a copy has been kept. `update` can't wait on that, so the copy comes first, and then it's tried again. */
 export async function changeKept(shelf: Shelf, key: string, readable: (text: string) => boolean, update: (latest: string | null) => string | null): Promise<string | null> {
   let copied: string | null = null

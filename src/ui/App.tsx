@@ -46,6 +46,7 @@ import {
   inWallets,
   linkedFailedSentence,
   NOT_SAVED,
+  UNREADABLE_NOT_COPIED,
   UNREADABLE_SAVED,
   noMarketSentence,
   otherTokenAmount,
@@ -581,7 +582,9 @@ export function App() {
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
       {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
-      {unreadableSaved.unreadable ? (
+      {unreadableSaved.copyFailed ? (
+        <p className="notice warn" role="alert">⚠ {UNREADABLE_NOT_COPIED}</p>
+      ) : unreadableSaved.unreadable ? (
         <p className="notice warn" role="alert">
           ⚠ {UNREADABLE_SAVED}{" "}
           <button type="button" onClick={unreadableSaved.dismiss}>

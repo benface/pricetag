@@ -57,7 +57,7 @@ struct MainWindow: View {
         NavigationSplitView(columnVisibility: $columns) {
             sidebar
         } detail: {
-            page
+            pageWithDeviceNotice
                 .environment(\.updatingNote, store.updatingNote)
                 .frame(minWidth: 320, minHeight: 320)
                 .navigationTitle(navigation.section.title)
@@ -315,6 +315,20 @@ struct MainWindow: View {
         }
     }
 
+    /// About this Mac rather than the wallet showing, so it's above every section, with or without numbers to show.
+    private var pageWithDeviceNotice: some View {
+        VStack(spacing: 0) {
+            if store.hasUnreadableSaved {
+                Notice(.warning, Wording.unreadableSaved, actionTitle: "OK", action: store.dismissUnreadableSaved)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                Divider()
+            }
+            // Some pages are only as tall as what they say, which would leave the notice halfway down.
+            page.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
     @ViewBuilder
     private var page: some View {
         switch navigation.section {
@@ -466,7 +480,7 @@ struct MainWindow: View {
 
     /// What can add or remove a whole block of the page.
     private func pageShape(_ portfolio: Portfolio) -> [Bool] {
-        [firstRun.explainsNumbers, firstRun.warnsOfContract(store.address), portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty, store.hasUnreadableSaved]
+        [firstRun.explainsNumbers, firstRun.warnsOfContract(store.address), portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
     }
 
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
@@ -480,9 +494,6 @@ struct MainWindow: View {
 
     @ViewBuilder
     private func notices(_ portfolio: Portfolio) -> some View {
-        if store.hasUnreadableSaved {
-            Notice(.warning, Wording.unreadableSaved, actionTitle: "OK", action: store.dismissUnreadableSaved)
-        }
         if firstRun.warnsOfContract(store.address) {
             Notice(.warning, Wording.contractNotice, actionTitle: "Got It", action: firstRun.finishContract)
                 .arrives()

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { answerSender, applyAnswer, changeStoredBook, readStoredBook, costKey, emptyBook, enterExchangeCosts, linkDeviceAccounts, parseBook, recordPurchase, storedBook, undoAnswer, type Book, type Purchase } from "../src/core/book.ts"
+import { answerSender, applyAnswer, changeStoredBook, readStoredBook, storedBookHasNoCopy, costKey, emptyBook, enterExchangeCosts, linkDeviceAccounts, parseBook, recordPurchase, storedBook, undoAnswer, type Book, type Purchase } from "../src/core/book.ts"
 import { hasUnseenSetAside, markSetAsideSeen, plainShelf, type KeptIn } from "../src/core/shelf.ts"
 
 const ME = "0x3762620fbcb400b0f98365da4aad7d2a250e5d89"
@@ -298,6 +298,28 @@ describe("answers this version can't read", () => {
     await readStoredBook(plain)
     assert.equal(kept(storage).entries.length, 2)
     assert.equal(await hasUnseenSetAside(plain), true)
+  })
+
+  it("says so when no copy could be kept, and doesn't let a change replace it", async () => {
+    const storage = stored(unreadable)
+    const setItem = storage.setItem.bind(storage)
+    storage.setItem = (key: string, value: string) => {
+      if (key === "patina.unreadable") throw new Error("full")
+      setItem(key, value)
+    }
+    const plain = plainShelf(storage)
+    assert.deepEqual(await readStoredBook(plain), emptyBook())
+    assert.equal(await storedBookHasNoCopy(plain), true)
+    await assert.rejects(changeStoredBook(plain, (latest) => answerSender(latest, null, OTHER, { kind: "mine" })))
+    assert.equal(storage.getItem("patina.book"), unreadable)
+    storage.setItem = setItem
+    await readStoredBook(plain)
+    assert.equal(await storedBookHasNoCopy(plain), false)
+  })
+
+  it("has nothing to copy when the book can be read, or there's none", async () => {
+    assert.equal(await storedBookHasNoCopy(plainShelf(shelf())), false)
+    assert.equal(await storedBookHasNoCopy(plainShelf(stored(JSON.stringify(emptyBook())))), false)
   })
 
   it("leaves a book that can be read alone, and writes nothing to read it", async () => {
