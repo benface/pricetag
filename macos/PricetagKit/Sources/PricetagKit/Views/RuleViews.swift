@@ -13,7 +13,7 @@ public struct RulePicker: View {
             ForEach(store.rules) { rule in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(rule.name)
-                    Text(rule.summary).font(.caption).foregroundStyle(.secondary)
+                    Text(rule.summary).font(.caption).secondaryText()
                     Text("\(rule.dataset) · \(Wording.shortManifestHash(rule.hash))")
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
@@ -153,7 +153,7 @@ public struct RuleComparisonSheet: View {
             failure = nil
         } catch is CancellationError {
             return
-        } catch FetchError.ampUnavailable(let message), FetchError.noAmpConfigured(let message), FetchError.rejected(let message), FetchError.rateLimited(let message, _) {
+        } catch FetchError.ampUnavailable(let message), FetchError.notCaughtUp(let message), FetchError.noAmpConfigured(let message), FetchError.rejected(let message), FetchError.rateLimited(let message, _) {
             // Numbers from another moment aren't kept next to a failure.
             comparison = nil
             failure = message

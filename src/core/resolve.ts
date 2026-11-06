@@ -4,7 +4,7 @@
 // or from a provider's order that matches a movement exactly. The rest come from here, and the fold then runs on the result.
 // An unanswered sender stays unknown: it could be the user's own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, assertFoldFits, emptyPosition, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, assertFoldFits, emptyPosition, firstMarks, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
 import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
@@ -409,6 +409,17 @@ export type Question = {
   valueMicros: string | null
 }
 
+/**
+ * The answers a card offers, in order. An address with a name is an exchange's or a contract's, so nobody's wallet, and saying it's
+ * one would try to carry costs over from it. An answer that already says so stays as it is: that card is about the wallet it reached,
+ * so it still needs My wallet, and on the Mac the answer can be changed in Settings > Answers.
+ */
+export function answersOffered({ sender, known }: Pick<Question, "sender" | "known">, book: Book): SenderAnswer["kind"][] {
+  // What's already said to be a wallet can't also be an exchange account.
+  if (sender && book.senders[sender]?.kind === "mine") return ["mine", "someone-else"]
+  return known ? ["my-exchange", "someone-else"] : ["mine", "my-exchange", "someone-else"]
+}
+
 export type Meter = {
   open: number
   answered: number
@@ -550,8 +561,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
   const { legs: resolved, open, purchases } = resolveLegs(sides, method, book)
   const legs = resolved.get(address) as PricedLeg[]
   // What came from a linked wallet was first paid for in its blocks, which only its oracle reads have.
-  const markPrice: MarkPrice = (blockNum, asset) => sides.map((side) => side.view.markPrice(blockNum, asset)).find((price) => price !== null) ?? null
-  const { positions, unreadAssets: unread, totals, pnlStatus, points, holdComparison } = foldWallet(focus, method, { ...view, legs, markPrice })
+  const { positions, unreadAssets: unread, totals, pnlStatus, points, holdComparison } = foldWallet(focus, method, { ...view, legs, ...firstMarks(sides.map((side) => side.view)) })
   const questions = questionsOf(open, sides, book)
   const legsByTx = legsByTransaction(legs)
   const facts = transactionFacts(legsByTx, positions, method, address, unconfirmedAssets(positions, unread))

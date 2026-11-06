@@ -600,7 +600,7 @@ struct HotWalletDetails<Overview: View>: View {
                             .monospacedDigit()
                         Text("\(reasonText(record)) · \(Format.time(record.createdAt))")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .secondaryText()
                     }
                     Spacer()
                     RecordStatus(status: record.status, text: statusText(record))

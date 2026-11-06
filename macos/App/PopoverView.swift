@@ -139,11 +139,28 @@ struct PopoverView: View {
                     problemRow(problem, retrying: nil)
                 }
             }
+            if let portfolio, portfolio.isAllYours {
+                allYoursProblems(portfolio)
+            }
             if let portfolio, portfolio.progress.started, !portfolio.isEmpty, let attention = portfolio.shortAttention {
                 attentionRow(attention, portfolio)
             }
         }
         .padding(14)
+    }
+
+    /// Wallets whose read failed, by name, since the total here doesn't say it's missing them or using an old read of them.
+    @ViewBuilder
+    private func allYoursProblems(_ portfolio: Portfolio) -> some View {
+        let names = store.walletList(hotWallet: hotWallet).names
+        if !portfolio.linkedFailed.isEmpty {
+            let wallets = portfolio.linkedFailed.map(names.walletName)
+            ProblemRow("Couldn't read \(wallets.formatted(.list(type: .and)))", detail: "Not in these numbers", help: Wording.allYoursFailed(wallets), actionTitle: "Retry", action: store.refresh)
+        }
+        if let outdated = portfolio.linkedOutdated, !outdated.isEmpty {
+            let wallets = outdated.map(names.walletName)
+            ProblemRow("Couldn't update \(wallets.formatted(.list(type: .and)))", detail: "Using the last read", help: Wording.allYoursOutdated(wallets), actionTitle: "Retry", action: store.refresh)
+        }
     }
 
     /// The same wallets as the window's toolbar, as a menu. Adding or naming one happens there, with room to do it.
@@ -303,7 +320,7 @@ struct PopoverView: View {
                 Button { openOverview() } label: {
                     Text("\(more) more")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
                 .buttonStyle(NumberButtonStyle())
                 .accessibilityHint("Shows every token in the window")

@@ -302,6 +302,7 @@ enum TestScene: String, CaseIterable {
     case mainHoldingsSearchNone = "main-holdings-search-none"
     case mainTransactions = "main-transactions"
     case mainAllYours = "main-all-yours"
+    case mainAllYoursBehind = "main-all-yours-behind"
     case mainAllYoursTransactions = "main-all-yours-transactions"
     case mainAllYoursDetails = "main-all-yours-details"
     case mainDetails = "main-details"
@@ -365,6 +366,16 @@ enum TestScene: String, CaseIterable {
     case mainRetryingNumbers = "main-retrying-numbers"
     case mainNotStartedFailing = "main-not-started-failing"
     case mainReadingStart = "main-reading-start"
+    /// Another wallet's first read, long after the welcome. The demo wallet in the scenes above has no steps to show.
+    case mainLaterRead = "main-later-read"
+    case mainLaterReadSmallest = "main-later-read-smallest"
+    case mainLaterReadNoSteps = "main-later-read-no-steps"
+    case mainLaterReadContract = "main-later-read-contract"
+    case mainLaterReadTooSlow = "main-later-read-too-slow"
+    case mainLaterReadTransactions = "main-later-read-transactions"
+    /// Inside a page that already scrolls, under what only Spending Money can do.
+    case mainLaterReadSpendingMoney = "main-later-read-spending-money"
+    case mainLaterReadAllYours = "main-later-read-all-yours"
     case mainNotUpdating = "main-not-updating"
     case mainNotUpdatingSmall = "main-not-updating-small"
     case mainLinkedFailed = "main-linked-failed"
@@ -400,12 +411,16 @@ enum TestScene: String, CaseIterable {
     case resolveAnsweredWallet = "resolve-answered-wallet"
     /// Past the last card with every question skipped.
     case resolveAllSkipped = "resolve-all-skipped"
+    /// The card for an address known to be an exchange's, which has no My wallet.
+    case resolveKnownExchange = "resolve-known-exchange"
     case walletSwitcher = "wallet-switcher"
     case walletSwitcherAllYours = "wallet-switcher-all-yours"
     case walletSwitcherFirstRun = "wallet-switcher-first-run"
     case walletSwitcherRenaming = "wallet-switcher-renaming"
     case walletSwitcherProblem = "wallet-switcher-problem"
     case walletSwitcherLong = "wallet-switcher-long"
+    case walletSwitcherLongSmallDisplay = "wallet-switcher-long-small-display"
+    case walletSwitcherAllYoursTwoWallets = "wallet-switcher-all-yours-two-wallets"
     case walletSwitcherNote = "wallet-switcher-note"
     case walletSwitcherNewKey = "wallet-switcher-new-key"
     case spendingMoneySetupSheet = "spending-money-setup-sheet"
@@ -424,6 +439,7 @@ enum TestScene: String, CaseIterable {
     case popoverFirstRun = "popover-first-run"
     case popoverLongName = "popover-long-name"
     case popoverLongNameReading = "popover-long-name-reading"
+    case popoverAllYoursBehind = "popover-all-yours-behind"
     case popoverCAD = "popover-cad"
     case popoverHotWallet = "popover-hot-wallet"
     case popoverHotWalletOverCap = "popover-hot-wallet-over-cap"
@@ -666,7 +682,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .motionChartDraw, .motionChartRange, .motionChartMetric, .motionChartScrub, .motionSend, .motionPurchase, .chartHover, .chartGapsHover:
             .none
-        case .motionWalletUndo, .invitePrompt, .invitePromptRefused, .welcomeAgain, .resolveFirstQuestion, .walletSwitcherNote, .walletSwitcherNewKey, .walletSwitcherAllYours, .spendingMoneySetupSheet, .taxReport, .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverPricesDown, .popoverRetrying, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
+        case .motionWalletUndo, .invitePrompt, .invitePromptRefused, .welcomeAgain, .resolveFirstQuestion, .walletSwitcherNote, .walletSwitcherNewKey, .walletSwitcherAllYours, .walletSwitcherAllYoursTwoWallets, .spendingMoneySetupSheet, .taxReport, .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .walletSwitcherLongSmallDisplay, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverPricesDown, .popoverRetrying, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .receive, .receiveNoSavings, .receiveCAD, .receiveNotSetUp, .receiveAlarm, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNoSavingsAboveRoom, .buyNoSavingsAtCap, .buyNoSavingsCAD, .buyFirstRead, .buyReading, .buyNoSavingsFirstRead, .buyNoSavingsAtCapFirstRead, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
              .publishFromDevice, .publishFromDeviceSafari, .publishFromDeviceNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendReviewing, .sendGoing, .sendSent, .sendStopped, .sendMoney, .sendMoneyCAD, .sendLookalike, .sendLookalikeChecked, .sendRefused, .sweep, .sweepCAD, .sweepStopped, .revoke, .revokeOne, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
@@ -680,8 +696,8 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .popoverMissingPrice, .mainMissingPrice: .missingPrice
         case .popoverUnreadBalance: .unreadBalance
-        case .mainReading, .mainReadingStart, .popoverReading, .popoverLongNameReading, .mainWelcomeFirstRead, .mainWelcomeFirstReadStart, .mainWelcomeFirstReadSmallest, .mainWelcomeFirstReadNoSteps, .mainWelcomeFirstReadContract: .neverAnswers
-        case .mainWelcomeFirstReadTooSlow: .tooSlow
+        case .mainLaterRead, .mainLaterReadSmallest, .mainLaterReadNoSteps, .mainLaterReadContract, .mainLaterReadTransactions, .mainLaterReadSpendingMoney, .mainLaterReadAllYours, .mainReading, .mainReadingStart, .popoverReading, .popoverLongNameReading, .mainWelcomeFirstRead, .mainWelcomeFirstReadStart, .mainWelcomeFirstReadSmallest, .mainWelcomeFirstReadNoSteps, .mainWelcomeFirstReadContract: .neverAnswers
+        case .mainWelcomeFirstReadTooSlow, .mainLaterReadTooSlow: .tooSlow
         case .mainWelcomeFirstReadDown: .serverDown
         case .mainWelcomeEmpty: .empty
         case .mainWelcomeNumbersContract: .firstRun
@@ -695,7 +711,8 @@ enum TestScene: String, CaseIterable {
         case .mainNotStartedFailing: .notStartedFails
         case .mainNotUpdating, .mainNotUpdatingSmall, .popoverNotUpdating: .stopsAnswering
         case .mainLinkedFailed: .linkedFails
-        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours: .allYours
+        case .mainAllYoursBehind, .popoverAllYoursBehind: .allYoursBehind
+        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .walletSwitcherAllYoursTwoWallets: .allYours
         case .mainCostWithheld, .resolveCostWithheld: .costWithheld
         case .resolvePublishFromDevice: .costOnSavings
         case .mainSmallAmounts, .mainSmallAmountsNarrow: .smallAmounts
@@ -727,10 +744,10 @@ enum TestScene: String, CaseIterable {
 
     private var readProgress: FirstReadProgress? {
         switch self {
-        case .mainWelcomeFirstRead, .mainWelcomeFirstReadSmallest: FirstReadProgress(stage: .prices, transfers: 1284, isContract: false)
+        case .mainWelcomeFirstRead, .mainWelcomeFirstReadSmallest, .mainLaterRead, .mainLaterReadSmallest, .mainLaterReadTransactions, .mainLaterReadSpendingMoney: FirstReadProgress(stage: .prices, transfers: 1284, isContract: false)
         case .mainWelcomeFirstReadStart: FirstReadProgress(stage: .transfers)
-        case .mainWelcomeFirstReadContract, .mainWelcomeNumbersContract: FirstReadProgress(stage: .transfers, isContract: true)
-        case .mainWelcomeFirstReadTooSlow: FirstReadProgress(stage: .checking, transfers: 48210, isContract: false)
+        case .mainWelcomeFirstReadContract, .mainWelcomeNumbersContract, .mainLaterReadContract: FirstReadProgress(stage: .transfers, isContract: true)
+        case .mainWelcomeFirstReadTooSlow, .mainLaterReadTooSlow: FirstReadProgress(stage: .checking, transfers: 48210, isContract: false)
         default: nil
         }
     }
@@ -751,12 +768,14 @@ enum TestScene: String, CaseIterable {
 
     private var shownWallet: String? {
         switch self {
-        case .motionWalletUndo, .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading: TestScene.namedWallet
+        case .mainLaterRead, .mainLaterReadSmallest, .mainLaterReadNoSteps, .mainLaterReadContract, .mainLaterReadTooSlow, .mainLaterReadTransactions, .motionWalletUndo, .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading: TestScene.namedWallet
         case .walletSwitcherLong: TestScene.manyWallets.last?.address
-        case .mainShowingSpendingMoney, .mainTransactionsSending, .mainSpendingMoney, .mainSpendingMoneySmall, .mainSpendingMoneyServerDown, .routeRemoveFromSavingsOpen, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest: HotWalletFixture.spending.lowercased
+        // In the middle, with more past both edges.
+        case .walletSwitcherLongSmallDisplay: TestScene.manyWallets[9].address
+        case .mainLaterReadSpendingMoney, .mainShowingSpendingMoney, .mainTransactionsSending, .mainSpendingMoney, .mainSpendingMoneySmall, .mainSpendingMoneyServerDown, .routeRemoveFromSavingsOpen, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest: HotWalletFixture.spending.lowercased
         case .mainSavings, .mainEmptySavings, .securitySavings: HotWalletFixture.savings.lowercased
         case .mainSecurity, .security, .securitySignedPermits, .securityReading, .securityStale: HotWalletFixture.spending.lowercased
-        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours: WalletAddress.allYours
+        case .mainLaterReadAllYours, .mainAllYours, .mainAllYoursBehind, .popoverAllYoursBehind, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .walletSwitcherAllYoursTwoWallets: WalletAddress.allYours
         case .mainWatching: TestScene.recentWallet
         default: nil
         }
@@ -764,7 +783,7 @@ enum TestScene: String, CaseIterable {
 
     private var listsWallets: Bool {
         switch self {
-        case .motionWalletUndo, .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .walletSwitcherNewKey, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendLookalike, .sendLookalikeChecked, .addSavingsOtherPaste, .addSavingsLedgerPaste, .addSavingsKeystoneType, .addSavingsPicked, .addSavingsPickedCheck, .mainNoWalletSaved, .mainNoWalletSavedSmall, .taxReportOtherWallets, .taxReportLeftOver, .settingsAnswers, .mainSecurity, .security, .securitySignedPermits, .securitySavings: true
+        case .mainLaterRead, .mainLaterReadSmallest, .mainLaterReadNoSteps, .mainLaterReadContract, .mainLaterReadTooSlow, .mainLaterReadTransactions, .mainLaterReadSpendingMoney, .mainLaterReadAllYours, .motionWalletUndo, .mainAllYours, .mainAllYoursBehind, .popoverAllYoursBehind, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .walletSwitcherNewKey, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .walletSwitcherLongSmallDisplay, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendLookalike, .sendLookalikeChecked, .addSavingsOtherPaste, .addSavingsLedgerPaste, .addSavingsKeystoneType, .addSavingsPicked, .addSavingsPickedCheck, .mainNoWalletSaved, .mainNoWalletSavedSmall, .taxReportOtherWallets, .taxReportLeftOver, .settingsAnswers, .mainSecurity, .security, .securitySignedPermits, .securitySavings: true
         default: false
         }
     }
@@ -784,7 +803,7 @@ enum TestScene: String, CaseIterable {
         case .securitySignedPermits: .signedPermits
         case .hotWalletNotProvisioned, .popoverNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .motionWalletUndo, .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .routeRemoveFromSavingsOpen, .mainSpendingMoneyServerDown, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainTransactionsSending, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .routeBuy, .routeBuyOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletRecordShown, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .hotWalletNoRate, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendReviewing, .sendGoing, .sendSent, .sendStopped, .sendMoney, .sendMoneyCAD, .sendLookalike, .sendLookalikeChecked, .sendRefused, .sweep, .sweepCAD, .sweepStopped, .mainSecurity, .security, .securitySavings, .securityDemo, .securityReading, .securityStale, .revoke, .revokeOne, .hotWalletNetworkProblem: .funded
+        case .mainLaterRead, .mainLaterReadSmallest, .mainLaterReadNoSteps, .mainLaterReadContract, .mainLaterReadTooSlow, .mainLaterReadTransactions, .mainLaterReadSpendingMoney, .mainLaterReadAllYours, .motionWalletUndo, .mainAllYours, .mainAllYoursBehind, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .walletSwitcherAllYoursTwoWallets, .routeRemoveFromSavingsOpen, .mainSpendingMoneyServerDown, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .walletSwitcherLongSmallDisplay, .mainShowingSpendingMoney, .mainTransactionsSending, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .routeBuy, .routeBuyOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletRecordShown, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .hotWalletNoRate, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendReviewing, .sendGoing, .sendSent, .sendStopped, .sendMoney, .sendMoneyCAD, .sendLookalike, .sendLookalikeChecked, .sendRefused, .sweep, .sweepCAD, .sweepStopped, .mainSecurity, .security, .securitySavings, .securityDemo, .securityReading, .securityStale, .revoke, .revokeOne, .hotWalletNetworkProblem: .funded
         case .siteConnect, .buy, .buyFirstRead, .buyReading, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .hotWalletPurchasesCAD, .buyAboveRoom, .buyLarge, .buyTooLittle, .buyNegative, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletPurchases, .hotWalletPurchaseShown, .hotWalletPurchasesCantCheck: .funded
         case .buyUSDCNoGas: .noGas
         case .buyNoSavings, .buyNoSavingsAboveRoom, .buyNoSavingsCAD, .buyNoSavingsFirstRead, .receiveNoSavings, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest: .noSavings
@@ -927,7 +946,7 @@ enum TestScene: String, CaseIterable {
         // The longest name anyone's likely to give, where there's the least room for it.
         let wallets = switch self {
         case .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading: [SavedWallet(address: TestScene.namedWallet, name: "The Long-Term Family Treasury Wallet on Base", lastSeen: .distantPast)]
-        case .walletSwitcherLong: TestScene.manyWallets
+        case .walletSwitcherLong, .walletSwitcherLongSmallDisplay: TestScene.manyWallets
         default: TestScene.savedWallets
         }
         if listsWallets, let saved = try? JSONEncoder().encode(wallets) { registered["savedWallets"] = saved }
@@ -939,7 +958,7 @@ enum TestScene: String, CaseIterable {
         }
         if self == .resolveAnsweredWallet, let book = try? JSONEncoder().encode(Book().answering(TestScene.answeredWallet, .mine, focus: nil)) { registered["answers"] = book }
         // Treasury is the user's too, and it's the wallet All Yours is still reading.
-        if isAllYours, let book = try? JSONEncoder().encode(Book().answering(TestScene.namedWallet, .mine, focus: nil)) { registered["answers"] = book }
+        if isAllYours, self != .walletSwitcherAllYoursTwoWallets, let book = try? JSONEncoder().encode(Book().answering(TestScene.namedWallet, .mine, focus: nil)) { registered["answers"] = book }
         if self == .hotWalletPurchases || self == .hotWalletPurchaseShown || self == .hotWalletReplacedKeyShown || self == .hotWalletPurchasesCAD || self == .hotWalletPurchasesCantCheck, let saved = try? JSONEncoder().encode(self != .hotWalletPurchasesCantCheck ? TestScene.purchases(inCAD: self == .hotWalletPurchasesCAD) : Array(TestScene.purchases().suffix(3))) { registered["purchases"] = saved }
         defaults.register(defaults: registered)
         if self == .mainWelcomeInviteRefused { defaults.register(defaults: ["serverInvites": [PortfolioStore.origin(of: PortfolioStore.defaultServerURL): "not-this-one"]]) }
@@ -947,7 +966,7 @@ enum TestScene: String, CaseIterable {
         let source: any PortfolioSource = TestMode.live.map { PricetagClient(serverURL: $0.server) } ?? FixtureSource(feed: feed, hasRate: !hasNoRate, rules: self == .settingsRules || self == .settingsSmallDisplay ? TestScene.twoRules : [], rulesAnswer: rulesAnswer, progress: readProgress, progressDelay: self == .mainWelcomeNumbersContract ? .seconds(1) : .zero)
         // A read that's been going a while, so these show how a long one looks. The store's clock is only behind for scenes that never finish a read.
         let readStarted: TimeInterval = TestMode.live == nil && [.neverAnswers, .updating, .retrying, .retryingWithNumbers].contains(feed) && self != .mainReadingStart && self != .mainWelcomeFirstReadStart ? 72 : 0
-        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { Date().addingTimeInterval(-readStarted) }, reachableDelay: TestMode.live == nil ? .milliseconds(50) : .seconds(30), unreachableDelay: .seconds(30))
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { Date().addingTimeInterval(-readStarted) }, reachableDelay: TestMode.live == nil ? .milliseconds(50) : .seconds(30), unreachableDelay: .seconds(30), longProblem: self == .mainRetryingNumbers ? .seconds(60) : .zero)
         store.start()
         let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method }, moneyDisplay: { store.moneyDisplay }, confirmsAddingSavings: [.addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere].contains(self))
         if !hasWallet, TestMode.live == nil, store.address != nil { TestMode.fail("This scene should start with no wallet, but it's showing \(store.address ?? "").") }
@@ -962,7 +981,7 @@ enum TestScene: String, CaseIterable {
             hotWalletHasRead.isDone = true
         }
         // Adding a wallet doesn't wait for this read, and neither does that scene.
-        if ![.hotWalletTopUpFirstRead, .hotWalletTopUpReading, .hotWalletTopUpReadingSafari, .addSavingsCheckBalanceUnread, .buyFirstRead, .buyReading, .buyNoSavingsFirstRead, .buyNoSavingsAtCapFirstRead].contains(self) {
+        if ![.mainLaterRead, .mainLaterReadSmallest, .mainLaterReadNoSteps, .mainLaterReadContract, .mainLaterReadTooSlow, .mainLaterReadTransactions, .mainLaterReadSpendingMoney, .mainLaterReadAllYours, .hotWalletTopUpFirstRead, .hotWalletTopUpReading, .hotWalletTopUpReadingSafari, .addSavingsCheckBalanceUnread, .buyFirstRead, .buyReading, .buyNoSavingsFirstRead, .buyNoSavingsAtCapFirstRead].contains(self) {
             Task { await readHotWallet() }
             let deadline = Date.now.addingTimeInterval(TestMode.readyTimeout)
             while !hotWalletHasRead.isDone {
@@ -977,7 +996,7 @@ enum TestScene: String, CaseIterable {
         if [.mainHoldingsSearch, .mainHoldingsSearchSmall, .mainHoldingsSearchNarrow].contains(self) { navigation.holdingsQuery = "e" }
         if self == .mainHoldingsSearchNone { navigation.holdingsQuery = "nothing like this" }
         navigation.chartMetric = TestMode.chartMetric
-        if [.mainTransactions, .mainTransactionsCAD, .mainTransactionsSmall, .mainTransactionsUpdating, .mainTransactionsSending, .mainTransactionsBusy, .mainAllYoursTransactions].contains(self) { navigation.section = .transactions }
+        if [.mainLaterReadTransactions, .mainTransactions, .mainTransactionsCAD, .mainTransactionsSmall, .mainTransactionsUpdating, .mainTransactionsSending, .mainTransactionsBusy, .mainAllYoursTransactions].contains(self) { navigation.section = .transactions }
         if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
         if self == .mainSecurity { navigation.section = .security }
         // Once the window has its size, as when someone clicks. Before that it's too small for the details to fit beside the section.
@@ -993,7 +1012,7 @@ enum TestScene: String, CaseIterable {
         let isReady: () -> Bool = { [feed] in
             if TestMode.live != nil { return store.feed == .noWallet || store.portfolio != nil }
             return switch feed {
-            case .demo, .allYours, .costBecomesKnown, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .costOnSavings, .smallAmounts, .longHistory, .chartGaps, .busy, .answeredWallet, .allAnswered, .nothingLeft, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
+            case .demo, .allYours, .allYoursBehind, .costBecomesKnown, .missingPrice, .unreadBalance, .linkedFails, .costWithheld, .costOnSavings, .smallAmounts, .longHistory, .chartGaps, .busy, .answeredWallet, .allAnswered, .nothingLeft, .empty, .emptyReadingLinked, .notStarted, .firstRun: store.feed == .noWallet || store.portfolio != nil
             case .updating: store.portfolio != nil
             case .neverAnswers: true
             case .serverDown: store.feed == .serverUnreachable
@@ -1094,6 +1113,13 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(ContrastScene(store: store)), isReady: isReady)
         case .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .resolveFinished, .resolveNothingLeft:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
+        case .resolveKnownExchange:
+            let model = ResolveModel(store: store)
+            return TestScreen(view: AnyView(ResolveFlow(store: store, model: model)), size: CGSize(width: 520, height: 560), isReady: {
+                guard isReady() else { return false }
+                while let question = model.current, question.known == nil { model.skip() }
+                return true
+            })
         case .resolveAllSkipped:
             let model = ResolveModel(store: store)
             return TestScreen(view: AnyView(ResolveFlow(store: store, model: model)), size: CGSize(width: 520, height: 560), isReady: {
@@ -1105,13 +1131,13 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(ResolveFlow(store: store, noteWriter: SavingsNoteWriter()) { AnyView(PublishFromDeviceButton(link: $0, browsers: deviceBrowsers)) }), size: CGSize(width: 520, height: 560), isReady: isReady)
         case .holdComparison:
             return TestScreen(view: AnyView(HoldComparisonScene()), isReady: { true })
-        case .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainEmptySpendingMoney, .mainEmptySavings:
+        case .mainLaterRead, .mainLaterReadNoSteps, .mainLaterReadContract, .mainLaterReadTooSlow, .mainLaterReadTransactions, .mainLaterReadSpendingMoney, .mainLaterReadAllYours, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainEmptySpendingMoney, .mainEmptySavings:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .mainWatchingNamedSmallest:
+        case .mainWatchingNamedSmallest, .mainLaterReadSmallest:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: MainWindow.minimumSize, isReady: isReady)
         case .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .mainNoWalletAfterDeleting, .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainHoldingsSearch, .mainHoldingsSearchNone, .mainTransactions, .mainTransactionsSending, .mainTransactionsBusy, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainReadingStart, .mainUpdating, .mainUpdatingCAD, .mainTransactionsUpdating, .mainServerDown, .mainPricesDown, .mainPricesStop, .mainTooSlow, .mainRetrying, .mainRetryingNumbers, .mainNotStartedFailing, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainChartGaps, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+        case .mainAllYours, .mainAllYoursBehind, .mainAllYoursTransactions, .mainAllYoursDetails, .mainNoWalletAfterDeleting, .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainHoldingsSearch, .mainHoldingsSearchNone, .mainTransactions, .mainTransactionsSending, .mainTransactionsBusy, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainReadingStart, .mainUpdating, .mainUpdatingCAD, .mainTransactionsUpdating, .mainServerDown, .mainPricesDown, .mainPricesStop, .mainTooSlow, .mainRetrying, .mainRetryingNumbers, .mainNotStartedFailing, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainChartGaps, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainDetailsProof:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases).environment(\.opensFirstProof, true)), size: CGSize(width: 1120, height: 760), isReady: isReady)
@@ -1212,8 +1238,8 @@ enum TestScene: String, CaseIterable {
                 // Long enough for whatever reacts to the change to have run, because arriving doesn't count if something then undoes it.
                 return Date.now.timeIntervalSince(pressedAt ?? .now) > 0.5 && hasArrived()
             })
-        case .walletSwitcherNote, .walletSwitcherNewKey, .walletSwitcherAllYours, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong:
-            let switcher = WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: self == .walletSwitcherRenaming ? PendingWalletName(address: TestScene.namedWallet, text: "Treasury") : PendingWalletName(), onOpenSpendingMoney: {}, onRemoveFromSavings: { _ in }, onDeleteSpendingMoney: {}, onDone: {}, input: self == .walletSwitcherProblem ? "0x1234…abcd" : "", note: self == .walletSwitcherNote ? WalletListNote(text: Wording.movedToYours, undo: {}) : nil)
+        case .walletSwitcherNote, .walletSwitcherNewKey, .walletSwitcherAllYours, .walletSwitcherAllYoursTwoWallets, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .walletSwitcherLongSmallDisplay:
+            let switcher = WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: self == .walletSwitcherRenaming ? PendingWalletName(address: TestScene.namedWallet, text: "Treasury") : PendingWalletName(), onOpenSpendingMoney: {}, onRemoveFromSavings: { _ in }, onDeleteSpendingMoney: {}, onDone: {}, input: self == .walletSwitcherProblem ? "0x1234…abcd" : "", note: self == .walletSwitcherNote ? WalletListNote(text: Wording.movedToYours, undo: {}) : nil, displayRoom: self == .walletSwitcherLongSmallDisplay ? 240 : nil)
             return TestScreen(view: AnyView(switcher.background(.background)), isReady: isReady)
         case .taxReport, .taxReportAddedWallet:
             let view = TaxReportView(store: store, model: TaxReportModel(defaults: defaults, currency: store.currency, fetch: { try await store.taxReport($0) }), onResolve: { _ in }, onOpen: { _ in })
@@ -1223,7 +1249,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(view.frame(width: 640, height: 640).background(.background)), isReady: isReady)
         case .spendingMoneySetupSheet:
             return TestScreen(view: AnyView(SpendingMoneySetup(wallet: hotWallet, store: store, onDone: {}).frame(width: 480, height: 400)), isReady: isReady)
-        case .popoverLongName, .popoverLongNameReading, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverPricesDown, .popoverRetrying, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance:
+        case .popoverAllYoursBehind, .popoverLongName, .popoverLongNameReading, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverPricesDown, .popoverRetrying, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
         case .invitePrompt, .invitePromptRefused:
             return TestScreen(view: AnyView(InvitePrompt(store: store, decline: {}, isRefused: self == .invitePromptRefused)), isReady: isReady)
@@ -1584,7 +1610,7 @@ private final class ReadOnce {
 
 /// Stands in for the server, with the same demo wallet the tests read.
 final class FixtureSource: PortfolioSource {
-    enum Feed { case demo, allYours, costBecomesKnown, missingPrice, unreadBalance, neverAnswers, updating, serverDown, stopsAnswering, pricesDown, pricesStop, tooSlow, retrying, retryingWithNumbers, notStartedFails, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, chartGaps, busy, answeredWallet, allAnswered, nothingLeft, empty, emptyReadingLinked, notStarted, firstRun }
+    enum Feed { case demo, allYours, allYoursBehind, costBecomesKnown, missingPrice, unreadBalance, neverAnswers, updating, serverDown, stopsAnswering, pricesDown, pricesStop, tooSlow, retrying, retryingWithNumbers, notStartedFails, linkedFails, costWithheld, costOnSavings, smallAmounts, longHistory, chartGaps, busy, answeredWallet, allAnswered, nothingLeft, empty, emptyReadingLinked, notStarted, firstRun }
 
     private let feed: Feed
     private let hasRate: Bool
@@ -1633,6 +1659,7 @@ final class FixtureSource: PortfolioSource {
         switch feed {
         case .demo: break
         case .allYours: return try allYours("all-yours-demo-portfolio")
+        case .allYoursBehind: return try allYours("all-yours-demo-portfolio", behind: true)
         case .costBecomesKnown:
             guard Self.costIsKnown.withLock({ $0 }) else { break }
             return try demo(Self.knowEveryCost)
@@ -1840,7 +1867,7 @@ final class FixtureSource: PortfolioSource {
     }
 
     /// The demo's two wallets as one, as this scene's Savings and Spending Money, with Treasury still being read.
-    private func allYours<T: Decodable>(_ name: String) throws -> T {
+    private func allYours<T: Decodable>(_ name: String, behind: Bool = false) throws -> T {
         guard let url = Bundle.main.url(forResource: name, withExtension: "json") else { throw FetchError.rejected("There's no fixture called \(name).") }
         // The demo's first wallet stands in for savings. Its second is already this scene's Spending Money.
         // `HotWalletFixture.savings`, which is the main actor's.
@@ -1852,6 +1879,14 @@ final class FixtureSource: PortfolioSource {
             object["latest"] = ["blockNum": 53505400, "timestamp": Date.now.formatted(.iso8601)]
             object["linkedReading"] = [treasury]
             object["wallets"] = (object["wallets"] as? [Any] ?? []) + [["address": treasury, "state": "reading"]]
+            // Savings can't be updated and spending money is taking its time, so both are in the numbers as they were last read.
+            if behind {
+                let wallets = (object["wallets"] as? [[String: Any]] ?? []).compactMap { $0["address"] as? String }
+                object["linkedReading"] = [String]()
+                object["wallets"] = wallets.enumerated().map { ["address": $1, "state": $0 == 0 ? "updating" : "outdated"] }
+                object["linkedUpdating"] = Array(wallets.prefix(1))
+                object["linkedOutdated"] = Array(wallets.dropFirst().prefix(1))
+            }
         }
         return try JSONDecoder().decode(T.self, from: JSONSerialization.data(withJSONObject: object))
     }
@@ -1924,7 +1959,7 @@ final class FixtureSource: PortfolioSource {
         }
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
         if feed == .firstRun {
             // In the words `onchainLines` in `src/core/explain.ts` uses for this balance.
             let object: [String: Any] = ["currency": currency.rawValue, "title": "ETH: Balance check", "value": NSNull(), "sourceValue": NSNull(), "legCount": 0, "legs": [Any](), "lines": [

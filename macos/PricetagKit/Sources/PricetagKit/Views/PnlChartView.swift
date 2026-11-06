@@ -359,6 +359,9 @@ public struct PnlHistorySection: View {
                 .monospacedDigit()
                 .contentTransition(.opacity)
                 .motion(Motion.state, value: shown)
+                .lineLimit(1)
+                // A set width, so what it says can't change whether the controls fit beside it, and move the chart.
+                .frame(width: 260, alignment: .leading)
                 .help(subtitleHelp)
         }
     }
@@ -393,9 +396,11 @@ public struct PnlHistorySection: View {
     }
 
     /// What the shaded stretches are, while one's in view. Too narrow a stretch has no room to say it inside.
+    /// Its room stays when there are none, so scrolling through history doesn't move the controls.
     @ViewBuilder
     private var unknownKey: some View {
-        if portfolio.canChart(metric), window.hasUnknown(metric) {
+        if portfolio.canChart(metric) {
+            let hasUnknown = window.hasUnknown(metric)
             HStack(spacing: 5) {
                 // Upright like the band, and a little darker, since it's so much smaller. A square would look like a checkbox.
                 Rectangle()
@@ -407,7 +412,10 @@ public struct PnlHistorySection: View {
             .secondaryText()
             .fixedSize()
             .help(metric == .value ? Wording.valueChartGap : Wording.chartGap)
-            .transition(.opacity)
+            .opacity(hasUnknown ? 1 : 0)
+            .allowsHitTesting(hasUnknown)
+            .accessibilityHidden(!hasUnknown)
+            .motion(Motion.state, value: hasUnknown)
         }
     }
 

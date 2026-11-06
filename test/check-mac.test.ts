@@ -83,7 +83,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     root = mkdtempSync(join(tmpdir(), "check-mac-"))
     repo = join(root, "repo")
     mkdirSync(join(repo, "macos/Config"), { recursive: true })
-    for (const file of ["check-mac.sh", "swift-queue.sh", "run.sh", "watch-only.sh", "Config/App.xcconfig", "Config/WatchOnly.xcconfig"]) cpSync(join("macos", file), join(repo, "macos", file))
+    for (const file of ["check-mac.sh", "swift-queue.sh", "run.sh", "watch-only.sh", "hosted.sh", "Config/App.xcconfig", "Config/WatchOnly.xcconfig", "Config/Hosted.xcconfig"]) cpSync(join("macos", file), join(repo, "macos", file))
     writeFileSync(join(repo, "macos/Code.swift"), "let a = 1\n")
     for (const name of ["PricetagKit", "HotWalletKit"]) {
       mkdirSync(join(repo, "macos", name))
@@ -118,6 +118,8 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     assert.ok(ran.some((call) => call.includes("-scheme App") && call.includes("-configuration Release") && call.includes("APP_SIGN_IDENTITY=Apple Development")))
     assert.ok(ran.some((call) => call.includes("watch-only/build.xcconfig") && call.includes("CODE_SIGNING_ALLOWED=NO")))
     assert.match(readFileSync(join(repo, "macos/build/watch-only/build.xcconfig"), "utf8"), /^#include ".*WatchOnly\.xcconfig"\nPATINA_SERVER_HOST = \S+\n$/)
+    assert.ok(ran.some((call) => call.includes("hosted/build.xcconfig") && call.includes("CODE_SIGNING_ALLOWED=NO")))
+    assert.match(readFileSync(join(repo, "macos/build/hosted/build.xcconfig"), "utf8"), /^#include ".*Hosted\.xcconfig"\nPATINA_SERVER_HOST = \S+\n$/)
     assert.ok(ran.some((call) => call.includes("-scheme PricetagKit") && call.includes("generic/platform=iOS")))
     assert.ok(ran.some((call) => call.includes("-scheme HotWalletKit") && call.includes("generic/platform=iOS")))
   })
@@ -141,7 +143,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     assert.equal(status, 1)
     assert.deepEqual(ran, [])
     assert.match(output, /so nothing was built/)
-    assert.equal(check().ran.length, 6)
+    assert.equal(check().ran.length, 7)
   })
 
   test("the same code runs nothing the second time, and says so", () => {
@@ -154,7 +156,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
 
   test("--force runs it again", () => {
     check()
-    assert.equal(check(["--force"]).ran.length, 6)
+    assert.equal(check(["--force"]).ran.length, 7)
   })
 
   for (const [what, change] of [
@@ -166,7 +168,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     test(`${what} runs everything again`, () => {
       check()
       change()
-      assert.equal(check().ran.length, 6)
+      assert.equal(check().ran.length, 7)
     })
   }
 
@@ -180,7 +182,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
 
   test("other tools run everything again", () => {
     check()
-    assert.equal(check([], { FAKE_TOOLS: "2" }).ran.length, 6)
+    assert.equal(check([], { FAKE_TOOLS: "2" }).ran.length, 7)
   })
 
   test("a pass carries over to another worktree of the same code", () => {
@@ -203,7 +205,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
       assert.notEqual(failed.status, 0)
       assert.match(failed.output, /failed/)
       assert.ok(!existsSync(join(root, "passes")) || passes().length === 0)
-      assert.equal(check().ran.length, 6)
+      assert.equal(check().ran.length, 7)
     })
   }
 
@@ -226,7 +228,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     assert.equal(check(["--quick"]).status, 0)
     assert.deepEqual(check().ran, [])
     assert.equal(check(["--quick"], { FAKE_FAIL: "HotWalletKit" }).status, 3)
-    assert.equal(check().ran.length, 6)
+    assert.equal(check().ran.length, 7)
   })
 
   test("a run the queue can't verify as clean isn't remembered, even with every step passing", () => {
@@ -244,7 +246,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     }
     const next = check()
     assert.equal(next.status, 0)
-    assert.equal(next.ran.length, 6)
+    assert.equal(next.ran.length, 7)
   })
 
   for (const [what, args] of [["a run", []], ["a forced run", ["--force"]]] as const) {
@@ -256,7 +258,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
       writeFileSync(calls, "")
       const { status } = spawnSync("sh", ["-c", `"$0" "$@" & echo $! >'${pid}'; wait $!`, join(repo, "macos/check-mac.sh"), ...args], { env: { ...env, FAKE_ON_CALL: stop }, encoding: "utf8" })
       assert.notEqual(status, 0)
-      assert.equal(check().ran.length, 6)
+      assert.equal(check().ran.length, 7)
     })
   }
 
@@ -275,7 +277,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     const stop = `kill -TERM "$(cat '${pid}')"`
     spawnSync("sh", ["-c", `"$0" "$@" & echo $! >'${pid}'; wait $!`, join(repo, "macos/check-mac.sh"), "--force"], { env: { ...env, FAKE_ON_CALL: stop }, encoding: "utf8" })
     assert.equal(await older.release(), 0)
-    assert.equal(check().ran.length, 6)
+    assert.equal(check().ran.length, 7)
   })
 
   for (const [signal, code] of [["SIGTERM", 143], ["SIGINT", 130], ["SIGHUP", 129], ["SIGKILL", null]] as const) {
@@ -283,7 +285,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
       const run = await publishing()
       run.child.kill(signal)
       assert.equal(await run.release(), code)
-      assert.equal(check().ran.length, 6)
+      assert.equal(check().ran.length, 7)
     })
   }
 
@@ -299,7 +301,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
       check([], { [setting]: "http://127.0.0.1:1" })
       assert.ok(!existsSync(join(root, "passes")) || passes().length === 0)
       check()
-      assert.equal(check([], { [setting]: "http://127.0.0.1:1" }).ran.length, 6)
+      assert.equal(check([], { [setting]: "http://127.0.0.1:1" }).ran.length, 7)
     })
   }
 
@@ -313,7 +315,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     assert.equal(quick.status, 0)
     assert.deepEqual(quick.ran.map((call) => call.split(" ")[1]), ["test", "test"])
     assert.ok(!existsSync(join(root, "passes")) || passes().length === 0)
-    assert.equal(check().ran.length, 6)
+    assert.equal(check().ran.length, 7)
     assert.equal(check(["--quick"]).ran.length, 2)
   })
 

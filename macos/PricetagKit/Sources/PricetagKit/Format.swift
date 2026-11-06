@@ -6,8 +6,9 @@ import Foundation
 public enum Format {
     private static let locale = Locale(identifier: "en_US")
 
-    private static func whole(_ micros: String) -> Decimal {
-        (Decimal(string: micros) ?? 0) / 1_000_000
+    /// nil for what isn't a number, which is never read as zero.
+    private static func whole(_ micros: String) -> Decimal? {
+        Decimal(string: micros).map { $0 / 1_000_000 }
     }
 
     private static func twoDecimals(_ value: Decimal, _ currency: CurrencyCode) -> String {
@@ -20,7 +21,7 @@ public enum Format {
     }
 
     public static func money(_ micros: String, _ currency: CurrencyCode) -> String {
-        let value = whole(micros)
+        guard let value = whole(micros) else { return Wording.unknown }
         let size = abs(value)
         if size == 0 { return twoDecimals(0, currency) }
         // Small amounts matter here: gas is often a fraction of a cent, and "$0.00" would read as nothing.
@@ -29,12 +30,12 @@ public enum Format {
     }
 
     public static func price(_ micros: String, _ currency: CurrencyCode) -> String {
-        let value = whole(micros)
+        guard let value = whole(micros) else { return Wording.unknown }
         return value >= 1 ? twoDecimals(value, currency) : "\(currency.symbol)\(significant(value, 4, currency))"
     }
 
     public static func signedMoney(_ micros: String, _ currency: CurrencyCode) -> String {
-        isPositive(micros) ? "+\(money(micros, currency))" : money(micros, currency)
+        isPositive(micros) && whole(micros) != nil ? "+\(money(micros, currency))" : money(micros, currency)
     }
 
     /// USD beside amounts in the main currency. If that's another kind of dollar, a bare "$" doesn't say which. Takes what's already formatted, sign and all.
@@ -55,8 +56,8 @@ public enum Format {
     }
 
     /// In plain digits for a provider, with no symbol or grouping.
-    static func plainAmount(_ micros: String) -> String {
-        "\(whole(micros))"
+    static func plainMoney(_ micros: String) -> String? {
+        whole(micros).map { "\($0)" }
     }
 
     /// One side of a comparison. A nil is unavailable, not zero.
@@ -72,7 +73,8 @@ public enum Format {
     /// Always signed, so which way it went can be read at a glance. A price's is small, so it keeps its digits.
     public static func ruleDifference(_ micros: String?, format: String, currency: CurrencyCode, isEstimate: Bool = false) -> String {
         guard let micros else { return "—" }
-        if whole(micros) == 0 { return "Same" }
+        guard let value = whole(micros) else { return Wording.unknown }
+        if value == 0 { return "Same" }
         guard format == "usdPrice" else { return estimate(signedMoney(micros, currency), isEstimate) }
         let isNegative = micros.hasPrefix("-")
         return estimate(usd("\(isNegative ? "-" : "+")\(price(isNegative ? String(micros.dropFirst()) : micros, .USD))", beside: currency), isEstimate)
@@ -99,7 +101,7 @@ public enum Format {
     /// An estimate has to look different from an exact value, wherever it's shown.
     /// A return in basis points as a signed percentage, to a tenth, or whole once it's 1,000% or more. A return that rounds to nothing has no sign.
     public static func percent(bps: String) -> String {
-        let value = Decimal(string: bps) ?? 0
+        guard let value = Decimal(string: bps) else { return Wording.unknown }
         let size = abs(value)
         let big = size >= 100_000
         var steps = size / (big ? 100 : 10)
@@ -227,8 +229,8 @@ public enum Format {
     }
 
     /// For charts, which need a position and not a value to show. Never used to compute anything.
-    static func chartValue(_ micros: String) -> Double {
-        (Double(micros) ?? 0) / 1_000_000
+    static func chartValue(_ micros: String) -> Double? {
+        Double(micros).map { $0 / 1_000_000 }
     }
 
     private static func grouped(_ whole: String) -> String {

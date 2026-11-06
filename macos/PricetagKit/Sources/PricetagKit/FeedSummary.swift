@@ -37,6 +37,7 @@ public struct FeedSummary: Equatable, Sendable {
         case .rejected: (text, isWarning) = ("Can't read", true)
         case .tooBig: (text, isWarning) = ("Too much history", true)
         case .rateLimited: (text, isWarning) = ("Slowed down", true)
+        case .walletsOutdated: (text, isWarning) = ("Can't update", true)
         case .live:
             guard let portfolio else {
                 (text, isWarning) = ("Reading…", false)
@@ -97,7 +98,8 @@ extension FeedState {
     public func problem(serverURL: URL, portfolio: Portfolio?) -> FeedProblem? {
         let title: String, what: String, next: String, detail: String?
         switch self {
-        case .noWallet, .reading, .live, .catchingUp: return nil
+        // Each wallet's notice says this, by name.
+        case .noWallet, .reading, .live, .catchingUp, .walletsOutdated: return nil
         case .behind(let seconds):
             title = "Prices Are Running Behind"
             what = "Prices are \(Self.age(seconds)) behind the network, so the newest transactions may be missing."
@@ -158,7 +160,7 @@ extension FeedState {
     /// `problem` in a few words, for the menu bar's view. nil when nothing is wrong.
     public func shortProblem(portfolio: Portfolio?) -> String? {
         switch self {
-        case .noWallet, .reading, .live: nil
+        case .noWallet, .reading, .live, .walletsOutdated: nil
         case .catchingUp: portfolio.flatMap(Wording.shortCatchingUp)
         case .behind(let seconds): "Prices are \(Self.age(seconds)) behind"
         case .serverUnreachable: "Price service is down"

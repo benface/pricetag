@@ -1,5 +1,6 @@
 // The book and the purchases it's told about, in tabs of a real browser, through the real hooks. A shared Map can't show what
 // this is for: each tab has its own process and its own copy of localStorage, so two of them can act at the same moment.
+// Importing a file is here too, in the real panel, since what's saved can change while the file waits for an answer.
 
 import assert from "node:assert/strict"
 import { spawn, type ChildProcess } from "node:child_process"
@@ -24,6 +25,9 @@ import { createElement, useEffect } from "react"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { answerSender, changeStoredBook, linkDeviceAccounts } from "/src/core/book.ts"
+import { DEMO_WALLET } from "/src/core/fixtures.ts"
+import { ResolvePanel } from "/src/ui/ResolvePanel.tsx"
+import "/src/ui/styles.css"
 import { shelf, useBook } from "/src/ui/useBook.ts"
 import { usePurchases } from "/src/ui/usePurchases.ts"
 function Harness() {
@@ -39,12 +43,28 @@ function Harness() {
   useEffect(() => void (window.ready = true), [])
   return null
 }
+function Panel() {
+  const book = useBook()
+  window.hook = book
+  useEffect(() => void (window.ready = true), [])
+  const nothing = () => {}
+  return createElement(ResolvePanel, { wallet: DEMO_WALLET, others: [], failed: [], onRetry: nothing, method: "average", book: book.book, firstAsset: null, onChange: book.change, onUndo: book.undo, canUndo: book.canUndo, notSaved: book.notSaved, onPublish: nothing, onCurrentSender: nothing, onClose: nothing })
+}
+window.pick = (name) => [...document.querySelectorAll("button")].find((button) => button.textContent.includes(name)).click()
+window.importFile = (text) => {
+  const input = document.querySelector("input[type=file]")
+  const files = new DataTransfer()
+  files.items.add(new File([text], "coinbase.csv", { type: "text/csv" }))
+  input.files = files.files
+  input.dispatchEvent(new Event("change", { bubbles: true }))
+}
+window.saveUnheard = (withdrawals) => changeStoredBook(shelf, (latest) => ({ ...latest, withdrawals }))
 window.count = async (times) => {
   for (let i = 0; i < times; i++) await shelf.change("count", (latest) => String(Number(latest ?? 0) + 1))
 }
 window.counted = () => shelf.read("count")
 window.linkUnheard = (addresses) => changeStoredBook(shelf, (latest) => linkDeviceAccounts(latest, addresses))
-createRoot(document.getElementById("root")).render(createElement(Harness))
+createRoot(document.getElementById("root")).render(createElement(location.search === "?panel" ? Panel : Harness))
 `
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -90,12 +110,12 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
   }
 
   /** Tabs sharing one browser's storage, and nothing with any other test. */
-  async function tabs(count: number, first?: (browserContextId: string) => Promise<unknown>): Promise<string[]> {
+  async function tabs(count: number, page = url, first?: (browserContextId: string) => Promise<unknown>): Promise<string[]> {
     const { browserContextId } = await send("Target.createBrowserContext")
     await first?.(browserContextId)
     return Promise.all(
       Array.from({ length: count }, async () => {
-        const sessionId = await openTab(url, browserContextId)
+        const sessionId = await openTab(page, browserContextId)
         await until(() => evaluate(sessionId, "Boolean(window.ready)"), "a tab to start")
         return sessionId
       }),
@@ -437,7 +457,7 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
 
   it("shows what's saved once a database that wouldn't open does", async () => {
     let holder = ""
-    const [a] = (await tabs(1, async (context) => {
+    const [a] = (await tabs(1, url, async (context) => {
       holder = await openTab(`${url}?blank`, context)
       await until(() => evaluate(holder, `document.readyState === "complete"`), "the other tab to load")
       await evaluate(holder, `new Promise((resolve) => {
@@ -493,7 +513,7 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
 
   it("says so when the database won't open, and saves once it does", async () => {
     let holder = ""
-    const [a] = (await tabs(1, async (context) => {
+    const [a] = (await tabs(1, url, async (context) => {
       holder = await openTab(`${url}?blank`, context)
       await until(() => evaluate(holder, `document.readyState === "complete"`), "the other tab to load")
       // Creating the database, which is what any open has to wait for.
@@ -701,5 +721,64 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
     await reload(a)
     assert.ok((await bookIn(a)).purchases.some(({ order }: { order: string }) => order === "older"))
     assert.ok(await evaluate<boolean>(a, `JSON.parse(localStorage.getItem("patina.book")).purchases.length > 0`), "and the copy's put right")
+  })
+
+  describe("a file waiting for an answer", () => {
+    const FILE = `Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes
+2026-01-01T00:00:00Z,Buy,ETH,1,USD,$0,$0,$6000,$0,x
+2026-02-01T00:00:00Z,Send,ETH,1,USD,$0,$0,$0,$0,x`
+    const withdrawal = (at: string, micros: string) => ({ exchange: "Coinbase", asset: "ETH", units: (10n ** 18n).toString(), at, cost: { micros, currency: "USD" }, toAddress: null })
+    const SAME_DAY = "2026-02-01T00:00:00.000Z"
+    /** Whether all of it is inside what the panel shows, without scrolling. */
+    const inSight = (session: string, selector: string) =>
+      evaluate<boolean>(session, `(() => {
+        const box = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect()
+        const frame = document.querySelector("dialog.resolve").getBoundingClientRect()
+        return box.top >= frame.top && box.bottom <= frame.bottom
+      })()`)
+    const shortTab = async () => {
+      const [tab] = (await tabs(1, `${url}?panel`)) as [string]
+      await send("Emulation.setDeviceMetricsOverride", { width: 756, height: 413, deviceScaleFactor: 1, mobile: false }, tab)
+      await delay(100)
+      return tab
+    }
+    const asked = async (tab: string) => {
+      await evaluate(tab, `pick("My exchange account")`)
+      await until(() => evaluate(tab, `Boolean(document.querySelector("input[type=file]"))`), "the file button")
+      await evaluate(tab, `importFile(${JSON.stringify(FILE)})`)
+      await until(() => evaluate(tab, `document.body.textContent.includes("Yes, use it")`), "the question")
+    }
+
+    it("is refused if what's saved has come to prove it partial, and the saved cost stays", async () => {
+      const tab = await shortTab()
+      await asked(tab)
+      const saved = [withdrawal("2025-06-01T00:00:00.000Z", "1000000000"), withdrawal(SAME_DAY, "4500000000")]
+      await evaluate(tab, `saveUnheard(${JSON.stringify(saved)})`)
+      await evaluate(tab, `pick("Yes, use it")`)
+      await until(() => evaluate(tab, `document.body.textContent.includes("starts after a withdrawal you've already imported")`), "the refusal")
+      await delay(100)
+      assert.ok(await inSight(tab, "dialog.resolve p[role=status]"), "the refusal is in sight")
+      assert.deepEqual((await bookIn(tab)).withdrawals, saved)
+      await reload(tab)
+      assert.deepEqual((await bookIn(tab)).withdrawals, saved)
+    })
+
+    it("is saved when nothing's come to prove it partial", async () => {
+      const tab = await shortTab()
+      await asked(tab)
+      await evaluate(tab, `pick("Yes, use it")`)
+      await until(() => evaluate(tab, `hook.book.withdrawals.length === 1 && !document.body.textContent.includes("Yes, use it")`), "the file to be saved")
+      assert.equal((await bookIn(tab)).withdrawals[0].cost.micros, "6000000000")
+      await until(() => evaluate(tab, `document.body.textContent.includes("Found 1 withdrawal.")`), "what it found")
+    })
+
+    it("doesn't scroll the panel until there's something to show, and then shows it", async () => {
+      const tab = await shortTab()
+      assert.equal(await evaluate(tab, `document.querySelector("dialog.resolve").scrollTop`), 0)
+      assert.ok(await inSight(tab, "dialog.resolve h2"), "the heading isn't cut off")
+      await asked(tab)
+      await delay(100)
+      assert.ok(await inSight(tab, "[aria-label='Importing a file']"), "the question is in sight")
+    })
   })
 })

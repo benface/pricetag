@@ -62,7 +62,7 @@ public struct TaxReportView: View {
                 } else {
                     Text("Not tax advice.")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .help(report?.disclaimer ?? "Check this with an accountant before relying on it.")
                 }
                 Spacer()
@@ -107,7 +107,7 @@ public struct TaxReportView: View {
             if let methodNote {
                 Text(methodNote)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -202,14 +202,14 @@ public struct TaxReportView: View {
                 countRow("Sent to other addresses", report.sentCount)
             }
             LabeledContent("Total gain") {
-                if let gain = report.gainMicros {
-                    LiveNumber(Format.signedMoney(gain, report.currency), tone: Tone(signed: gain))
+                if let gain = report.gainMicros, let text = report.gainText {
+                    LiveNumber(text, tone: Tone(signed: gain))
                 } else {
                     WarningText("Unknown")
                 }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Spoken.number("Total gain", report.gainMicros.map { Format.signedMoney($0, report.currency) }))
+            .accessibilityLabel(Spoken.number("Total gain", report.gainText))
             if report.unresolvedCount > 0 { unknownRow(report) }
         } header: {
             Text(report.year.map { "In \(String($0))" } ?? "In all years")
@@ -299,7 +299,7 @@ public struct TaxReportView: View {
             if report.rowCount > report.preview.count {
                 Text("And \(Format.block(report.rowCount - report.preview.count)) more in the file.")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
         }
     }
@@ -309,8 +309,8 @@ public struct TaxReportView: View {
         let title = row.type == "Network fee" ? "Network fee, \(amount)" : "\(row.type) \(amount)"
         let date = parseTimestamp(row.timestamp).map { Format.utcDateTime($0) }
         return LabeledContent {
-            if let gain = row.gainMicros {
-                Text(Format.signedMoney(gain, currency))
+            if let gain = row.gainMicros, let text = row.gainText(currency) {
+                Text(text)
                     .monospacedDigit()
                     .foregroundStyle(Tone(signed: gain).style)
             } else {
@@ -323,7 +323,7 @@ public struct TaxReportView: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Spoken.number([title, date, "gain"].compactMap(\.self).joined(separator: ", "), row.gainMicros.map { Format.signedMoney($0, currency) }))
+        .accessibilityLabel(Spoken.number([title, date, "gain"].compactMap(\.self).joined(separator: ", "), row.gainText(currency)))
     }
 }
 

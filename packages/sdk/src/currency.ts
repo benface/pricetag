@@ -6,7 +6,7 @@
 
 import { timestampOfBlock } from "./chain.ts"
 import type { PricedLeg } from "./legs.ts"
-import { referenceMarks, type LatestPrices, type MarkPrice } from "./portfolio.ts"
+import { marketMarked, referenceMarks, type LatestPrices, type MarkEstimated, type MarkPrice } from "./portfolio.ts"
 import type { WalletData } from "./wallet.ts"
 
 export type CurrencyCode = "USD" | "CAD" | "EUR" | "GBP" | "CHF" | "AUD" | "NZD" | "SGD" | "MXN" | "BRL" | "TRY" | "ZAR"
@@ -116,10 +116,20 @@ export type WalletView = {
   legs: PricedLeg[]
   prices: LatestPrices
   markPrice: MarkPrice
+  markEstimated: MarkEstimated
   /** What one USD buys now, or null when USD is the currency, or there's no current rate. */
   latestRate: { rateMicros: string; blockNum: number } | null
   /** Transactions with an amount that couldn't be converted, so it's unavailable here. */
   missingRateTxs: string[]
+}
+
+/** Marks from the first view that has a price, since each wallet's reads only have the blocks it was read at. */
+export function firstMarks(views: readonly Pick<WalletView, "markPrice" | "markEstimated">[]): Pick<WalletView, "markPrice" | "markEstimated"> {
+  const having = (blockNum: number, asset: string) => views.find((view) => view.markPrice(blockNum, asset) !== null)
+  return {
+    markPrice: (blockNum, asset) => having(blockNum, asset)?.markPrice(blockNum, asset) ?? null,
+    markEstimated: (blockNum, asset) => having(blockNum, asset)?.markEstimated(blockNum, asset) ?? false,
+  }
 }
 
 /** Every oracle read a chart can mark to. A sample can be empty, so where a transaction has its own read at that block, that one wins. */
@@ -127,7 +137,7 @@ const readsOf = ({ references, priceSamples = [] }: Pick<WalletData, "references
 
 /** The wallet as its own USD facts, whatever its currency. */
 export function usdView(wallet: WalletData): WalletView {
-  return { currency: "USD", legs: wallet.legs, prices: wallet.prices, markPrice: referenceMarks(readsOf(wallet), wallet.marketMarks), latestRate: null, missingRateTxs: [] }
+  return { currency: "USD", legs: wallet.legs, prices: wallet.prices, markPrice: referenceMarks(readsOf(wallet), wallet.marketMarks), markEstimated: marketMarked(wallet.marketMarks, wallet.feedMarks), latestRate: null, missingRateTxs: [] }
 }
 
 export function viewWallet(wallet: WalletData): WalletView {
@@ -177,6 +187,7 @@ export function viewWallet(wallet: WalletData): WalletView {
       const answer = answers.get(blockNum)
       return answer ? convert(usdMark(blockNum, asset), answer) : null
     },
+    markEstimated: marketMarked(wallet.marketMarks, wallet.feedMarks),
     latestRate: latest !== null && rates.latest ? { rateMicros: rateOf(latest), blockNum: rates.latest.blockNum } : null,
     missingRateTxs: [...missingRateTxs],
   }

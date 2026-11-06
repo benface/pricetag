@@ -59,7 +59,20 @@ struct MainWindow: View {
         } detail: {
             page
                 .environment(\.updatingNote, store.updatingNote)
+                .environment(\.staleNote, store.staleNote)
                 .frame(minWidth: 320, minHeight: 320)
+                // With the sidebar closed, the status has nowhere else to be, and it only has to be seen when there's something to say. Over the page, so nothing moves, and a toolbar short of room can't fold it away.
+                .overlay(alignment: .bottomLeading) {
+                    if columns == .detailOnly, !isOnWayToWallet, store.feed != .noWallet, store.hasStatusDetails {
+                        FeedStatus(store: store)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .padding(12)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(Motion.state, value: store.hasStatusDetails)
                 .navigationTitle(navigation.section.title)
                 // The wallet comes first when there's only room for one of them.
                 .toolbar(removing: width < Self.titleWidth || isOnWayToWallet ? .title : nil)
@@ -129,7 +142,7 @@ struct MainWindow: View {
             }
         }
         // On the way to a first wallet, the welcome asks for it itself.
-        .sheet(isPresented: Binding(get: { Build.isWatchOnly && store.asksForInvite && !isOnWayToWallet }, set: { if !$0 { store.declineInvite() } })) {
+        .sheet(isPresented: Binding(get: { Build.isForOtherPeople && store.asksForInvite && !isOnWayToWallet }, set: { if !$0 { store.declineInvite() } })) {
             // The store closes this when an invite's given, and opens it again if the server refuses that one.
             InvitePrompt(store: store, decline: store.declineInvite)
         }
@@ -166,6 +179,8 @@ struct MainWindow: View {
                 do {
                     exportDocument = CSVDocument(text: try await store.exportCSV())
                     exporting = true
+                } catch FetchError.notCaughtUp(let message) {
+                    exportError = message
                 } catch {
                     exportError = "The price service couldn't make this file."
                 }
@@ -197,10 +212,10 @@ struct MainWindow: View {
         // Before the width, which it would otherwise hide from the split view.
         .toolbar(removing: isOnWayToWallet ? .sidebarToggle : nil)
         .navigationSplitViewColumnWidth(min: 150, ideal: 190, max: 260)
-        // A status, so it looks like one: it's text, and it's down here with nothing around it that suggests a click.
+        // A status, so it looks like one: it's text, and it's down here. It only clicks when there's more to say about what's wrong.
         .safeAreaInset(edge: .bottom) {
             if store.feed != .noWallet {
-                FeedBadge(feed: store.feed, portfolio: portfolio, readingSince: store.readingSince)
+                FeedStatus(store: store)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
@@ -341,13 +356,13 @@ struct MainWindow: View {
     }
 
     /// A section that shows a wallet, or says why there's nothing to show. The first numbers fade in over the spinner rather than replacing it at once.
-    private func walletPage(_ content: @escaping (Portfolio) -> some View) -> some View {
-        walletPageContent(content)
+    private func walletPage(isInsidePage: Bool = false, _ content: @escaping (Portfolio) -> some View) -> some View {
+        walletPageContent(isInsidePage: isInsidePage, content)
             .motion(Motion.state, value: portfolio == nil)
     }
 
     @ViewBuilder
-    private func walletPageContent(_ content: @escaping (Portfolio) -> some View) -> some View {
+    private func walletPageContent(isInsidePage: Bool, _ content: @escaping (Portfolio) -> some View) -> some View {
         if store.feed == .noWallet {
             if firstRun.isWelcoming {
                 FirstRunWelcome(store: store, hotWallet: hotWallet, navigation: navigation)
@@ -372,8 +387,8 @@ struct MainWindow: View {
             // Another wallet starts from the top with nothing selected, and its numbers appear rather than rolling from these.
             .id(store.address)
             .transition(.opacity)
-        } else if firstRun.isWelcoming, store.feed == .reading || store.feed == .tooSlow {
-            FirstRead(store: store, firstRun: firstRun)
+        } else if hasReadSteps, store.feed == .reading || store.feed == .tooSlow {
+            FirstRead(store: store, firstRun: firstRun, isInsidePage: isInsidePage)
                 .transition(.opacity)
         } else if store.feed == .reading {
             ContentUnavailableView {
@@ -391,6 +406,11 @@ struct MainWindow: View {
         }
     }
 
+    /// The server only reports on an address, which neither All Yours nor the demo wallet is. On the way to a first wallet, the demo wallet still has this page's way back.
+    private var hasReadSteps: Bool {
+        firstRun.isWelcoming || store.address.map(WalletAddress.isValid) == true
+    }
+
     private func checkContract() {
         firstRun.checkContract(of: store.address) { [store] in store.currentSource }
     }
@@ -406,7 +426,7 @@ struct MainWindow: View {
         GeometryReader { window in
             overviewPage(pageWidth: window.size.width) {
                 HotWalletDetails(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases, showsHoldings: !hasHoldingsInOverview) {
-                    walletPage { overview($0, pageHeight: window.size.height) }
+                    walletPage(isInsidePage: true) { overview($0, pageHeight: window.size.height) }
                         .frame(minHeight: hasHoldingsInOverview ? nil : 260)
                 }
             }
@@ -452,25 +472,30 @@ struct MainWindow: View {
             PortfolioSummary(portfolio: portfolio, isLive: isLive, size: 40) { navigation.target = .total($0) }
                 // Short of height, its amounts would shrink and cut off instead of the page scrolling.
                 .fixedSize(horizontal: false, vertical: true)
+            // Its one line of room stays when there's nothing to say, so it can come and go without moving the chart.
             PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
                 .arrives()
+                .frame(minHeight: Self.attentionHeight, alignment: .top)
             PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange, metric: $navigation.chartMetric) { navigation.target = .transaction($0) }
                 .frame(height: portfolio.canChart(navigation.chartMetric) ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
             HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, navigation: navigation)
-            if portfolio.hasOtherTokens { OtherTokensSection(portfolio: portfolio) }
             HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
+            // Last, because they're read after everything else, and can arrive without moving anything above them.
+            if portfolio.hasOtherTokens { OtherTokensSection(portfolio: portfolio) }
         }
-        // A notice, the attention box or the chart coming or going, without the page below it jumping.
+        // What's left that can change a block's height, which glides rather than jumps. The connection isn't one: it's in the status.
         .motion(Motion.state, value: pageShape(portfolio))
     }
 
     /// What can add or remove a whole block of the page.
-    private func pageShape(_ portfolio: Portfolio) -> [Bool] {
-        [firstRun.explainsNumbers, firstRun.warnsOfContract(store.address), portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
+    private func pageShape(_ portfolio: Portfolio) -> [Int] {
+        [firstRun.explainsNumbers ? 1 : 0, firstRun.warnsOfContract(store.address) ? 1 : 0, portfolio.attention == nil ? 1 : 0, portfolio.canChart(navigation.chartMetric) ? 1 : 0, portfolio.listedPositions.count]
     }
 
+    private static let attentionHeight: CGFloat = 38
+
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
-        let rest = 430 + CGFloat(rows) * HoldingsTable.rowHeight
+        let rest = 430 + Self.attentionHeight + CGFloat(rows) * HoldingsTable.rowHeight
         return min(max(pageHeight - rest, 200), 460)
     }
 
@@ -484,60 +509,9 @@ struct MainWindow: View {
             Notice(.warning, Wording.contractNotice, actionTitle: "Got It", action: firstRun.finishContract)
                 .arrives()
         }
-        if let problem = store.feed.problem(serverURL: store.serverURL, portfolio: portfolio) {
-            Notice(.warning, problem.message, detail: problem.detail, actionTitle: "Try Again", action: store.refresh)
-        } else if let notice = store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) {
-            Notice(.warning, notice)
-                .arrives()
-        }
-        // Each number that may change has a spinner by it. This says how long it's been, once that's worth saying. After a failure, the
-        // retry says so too, while the warning above still says how old these numbers are.
-        if store.feed == .reading || store.feed.isStale, let since = store.readingSince {
-            ReadingClock(since: since) { seconds in
-                if seconds >= FeedState.longReadSeconds {
-                    Notice(.info, store.feed == .reading ? Wording.stillUpdating(seconds: seconds, lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp) : Wording.tryingAgain(seconds: seconds))
-                }
-            }
-        }
+        // What's wrong with the connection, and wallets that aren't in yet, are in the status, so they can't move the page.
         if portfolio.mode == .demo {
             Notice(.info, Wording.demo)
-        }
-        if portfolio.isAllYours {
-            allYoursNotices(portfolio)
-        } else {
-            linkedNotices(portfolio)
-        }
-    }
-
-    /// Wallets that aren't in All Yours' numbers yet, by name, since the numbers are only theirs once they are.
-    @ViewBuilder
-    private func allYoursNotices(_ portfolio: Portfolio) -> some View {
-        let names = store.walletList(hotWallet: hotWallet).names
-        if !portfolio.linkedFailed.isEmpty {
-            HStack(spacing: 8) {
-                Notice(.warning, Wording.allYoursFailed(portfolio.linkedFailed.map(names.walletName)))
-                Button("Try Again") { store.refresh() }
-            }
-            .arrives()
-        }
-        if !portfolio.linkedReading.isEmpty {
-            Notice(.info, Wording.allYoursReading(portfolio.linkedReading.map(names.walletName)))
-                .arrives()
-        }
-    }
-
-    @ViewBuilder
-    private func linkedNotices(_ portfolio: Portfolio) -> some View {
-        if !portfolio.linkedFailed.isEmpty {
-            HStack(spacing: 8) {
-                Notice(.warning, Wording.linkedFailed(portfolio.linkedFailed.count))
-                Button("Try Again") { store.refresh() }
-            }
-            .arrives()
-        }
-        if !portfolio.linkedReading.isEmpty {
-            Notice(.info, "Reading your other \(portfolio.linkedReading.count == 1 ? "wallet" : "wallets"). Until then, what came from \(portfolio.linkedReading.count == 1 ? "it" : "them") has an unknown cost.")
-                .arrives()
         }
     }
 }
@@ -558,7 +532,7 @@ struct CostMethodMenu: View {
         .menuStyle(.borderlessButton)
         .controlSize(.small)
         .fixedSize()
-        .foregroundStyle(.secondary)
+        .secondaryText()
         .help(Wording.methodHelp)
     }
 }
@@ -630,7 +604,7 @@ private struct HoldingsSection: View {
                 if let rule = store.activeRuleName {
                     Text("\(Wording.rulesTitle): \(rule)")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .lineLimit(1)
                 }
                 CostMethodMenu(store: store)
@@ -1159,7 +1133,7 @@ private struct Welcome: View {
             }
             HStack {
                 VStack { Divider() }
-                Text("or").font(.callout).foregroundStyle(.secondary)
+                Text("or").font(.callout).secondaryText()
                 VStack { Divider() }
             }
         }
@@ -1170,8 +1144,8 @@ private struct Unavailable: View {
     let store: PortfolioStore
     let firstRun: FirstRun
 
-    /// A server that wants an invite isn't something to try again or restart: only a watch-only build's invite answers it.
-    private var wantsInvite: Bool { Build.isWatchOnly && store.needsInvite }
+    /// A server that wants an invite isn't something to try again or restart: only a build with its own server's invite answers it.
+    private var wantsInvite: Bool { Build.isForOtherPeople && store.needsInvite }
 
     var body: some View {
         let problem = store.feed.problem(serverURL: store.serverURL, portfolio: nil)

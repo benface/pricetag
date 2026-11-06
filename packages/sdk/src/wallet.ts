@@ -5,7 +5,7 @@ import { viewWallet, type CurrencyCode, type PaidRates, type Rates, type WalletV
 import type { Method } from "./fold.ts"
 import { compareWithHoldingEth, type HoldComparison } from "./hold.ts"
 import type { PricedLeg, Reference, UnseenEth } from "./legs.ts"
-import type { MarketMarks } from "./market.ts"
+import type { FeedMarks, MarketMarks } from "./market.ts"
 import type { OtherToken } from "./other-tokens.ts"
 import type { CostNote } from "./notes.ts"
 import { foldPositions, pnlOverTime, pnlStatus, sumTotals, unconfirmedAssets, unreadAssets, type Head, type LatestPrices, type PnlPoint, type PnlStatus, type Position, type Totals } from "./portfolio.ts"
@@ -68,6 +68,8 @@ export type WalletData = {
   marketChecked: boolean
   /** What this wallet's tokens the dataset has no oracle reads for were worth at the blocks of its transactions, by their feed or else their market, for a chart. Some can still be unread. */
   marketMarks: MarketMarks
+  /** Which of `marketMarks` came from a feed. Left out when none did. */
+  feedMarks?: FeedMarks
   /**
    * Oracle reads at evenly spread blocks with no transaction in them, for a chart. A block whose read hasn't worked yet has
    * empty answers, because it's still somewhere a chart needs a price. Left out when nobody asked for them.
@@ -107,7 +109,7 @@ export function foldWallet(wallet: WalletData, method: Method, view: WalletView 
     unreadAssets: unread,
     totals,
     pnlStatus: status,
-    points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket), wallet.priceSamples?.map((sample) => sample.blockNum)),
+    points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket), wallet.priceSamples?.map((sample) => sample.blockNum), view.markEstimated),
     holdComparison: compareWithHoldingEth(positions, totals, status, view.prices, view.markPrice),
   }
 }
