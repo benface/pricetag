@@ -211,7 +211,7 @@ struct FirstRead: View {
     let firstRun: FirstRun
     @State private var progress: FirstReadProgress?
 
-    private var isContract: Bool { firstRun.contractWallet != nil && firstRun.contractWallet == store.address }
+    private var isContract: Bool { firstRun.warnsOfContract(store.address) }
 
     var body: some View {
         WelcomePage {
@@ -257,7 +257,6 @@ struct FirstRead: View {
                 // Fine to miss one: the next is a moment away, and a server that can't say just leaves the clock.
                 if let next = try? await store.currentSource.readProgress(address: address), !Task.isCancelled {
                     progress = next
-                    if next.isContract == true { firstRun.contractWallet = address }
                 }
                 try? await Task.sleep(for: .seconds(2))
             }

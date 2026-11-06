@@ -16,6 +16,31 @@ private final class AnsweringSource: PortfolioSource, @unchecked Sendable {
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
 }
 
+/// Says what it's told about a contract, when it's told to. Its numbers never come, like a first read that's still going.
+final class ContractSource: PortfolioSource, @unchecked Sendable {
+    nonisolated(unsafe) var answer: Bool?
+    nonisolated(unsafe) var isHeld = false
+    nonisolated(unsafe) var asked: [String] = []
+
+    init(answer: Bool?, isHeld: Bool = false) {
+        self.answer = answer
+        self.isHeld = isHeld
+    }
+
+    func readProgress(address: String) async throws -> FirstReadProgress? {
+        asked.append(address)
+        while isHeld { try await Task.sleep(for: .milliseconds(2)) }
+        return FirstReadProgress(stage: .transfers, isContract: answer)
+    }
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+        try await Task.sleep(for: .seconds(600))
+        throw FetchError.unreachable
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
+}
+
 @MainActor struct FirstRunTests {
     private func defaults() throws -> UserDefaults {
         try #require(UserDefaults(suiteName: "FirstRunTests-\(UUID())"))
@@ -103,6 +128,125 @@ private final class AnsweringSource: PortfolioSource, @unchecked Sendable {
         FirstRun.finished.showAgain(hasWallet: false)
         #expect(!FirstRun.finished.isWelcoming)
         #expect(!FirstRun.finished.explainsNumbers)
+    }
+
+    private let contract = "0x4200000000000000000000000000000000000006"
+    private let person = "0x00000000000000000000000000000000000000aa"
+
+    /// A failure rather than a test that never ends.
+    private func until(_ condition: @autoclosure () -> Bool) async throws {
+        let deadline = Date.now.addingTimeInterval(10)
+        while !condition(), Date.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(condition())
+    }
+
+    @Test func aContractIsFoundWithoutAnythingOnScreenAskingAndWithoutStoppingAnything() async throws {
+        let firstRun = FirstRun(defaults: try defaults(), isExistingInstall: false)
+        let source = ContractSource(answer: true)
+        firstRun.checkContract(of: contract) { source }
+        try await until(firstRun.warnsOfContract(contract))
+        #expect(!firstRun.warnsOfContract(person), "Only for the wallet it's about")
+    }
+
+    @Test func aReplyAfterTheNumbersStillCounts() async throws {
+        let firstRun = FirstRun(defaults: try defaults(), isExistingInstall: false)
+        let source = ContractSource(answer: true, isHeld: true)
+        firstRun.checkContract(of: contract) { source }
+        try await until(source.asked == [contract])
+        // Numbers arriving end the welcome, and the note can be dismissed, before the node has said.
+        firstRun.finishWelcome()
+        firstRun.finishNumbers()
+        #expect(!firstRun.warnsOfContract(contract))
+        source.isHeld = false
+        try await until(firstRun.warnsOfContract(contract))
+    }
+
+    @Test func aPersonsWalletSaysNothing() async throws {
+        let firstRun = FirstRun(defaults: try defaults(), isExistingInstall: false)
+        let source = ContractSource(answer: false)
+        firstRun.checkContract(of: person) { source }
+        try await until(source.asked == [person])
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(!firstRun.warnsOfContract(person))
+    }
+
+    @Test func aNodeThatDidntSayGetsAskedAgain() async throws {
+        let firstRun = FirstRun(defaults: try defaults(), isExistingInstall: false)
+        let source = ContractSource(answer: nil)
+        firstRun.checkContract(of: contract, retryDelay: .milliseconds(2)) { source }
+        try await until(source.asked.count >= 2)
+        #expect(!firstRun.warnsOfContract(contract))
+        source.answer = true
+        try await until(firstRun.warnsOfContract(contract))
+    }
+
+    @Test func anotherWalletReplacesTheQuestion() async throws {
+        let firstRun = FirstRun(defaults: try defaults(), isExistingInstall: false)
+        let slow = ContractSource(answer: true, isHeld: true)
+        firstRun.checkContract(of: contract) { slow }
+        try await until(slow.asked == [contract])
+        firstRun.checkContract(of: person) { ContractSource(answer: false) }
+        slow.isHeld = false
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(!firstRun.warnsOfContract(contract))
+        #expect(!firstRun.warnsOfContract(person))
+    }
+
+    @Test func askingAgainAboutTheSameWalletDoesNothing() async throws {
+        let firstRun = FirstRun(defaults: try defaults(), isExistingInstall: false)
+        let source = ContractSource(answer: true)
+        firstRun.checkContract(of: contract) { source }
+        try await until(firstRun.warnsOfContract(contract))
+        firstRun.checkContract(of: contract) { source }
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(source.asked == [contract])
+    }
+
+    @Test func onlyRealAddressesGetAsked() async throws {
+        let firstRun = FirstRun(defaults: try defaults(), isExistingInstall: false)
+        let source = ContractSource(answer: true)
+        for address in [WalletAddress.demo, WalletAddress.allYours, nil] { firstRun.checkContract(of: address) { source } }
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(source.asked.isEmpty)
+    }
+
+    @Test func anExistingInstallIsNeverAskedAboutOrToldOfAContract() async throws {
+        let firstRun = FirstRun(defaults: try defaults(), isExistingInstall: true)
+        let source = ContractSource(answer: true)
+        firstRun.checkContract(of: contract) { source }
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(source.asked.isEmpty)
+        #expect(!firstRun.warnsOfContract(contract))
+    }
+
+    @Test func skippingCoversContractsToo() async throws {
+        let defaults = try defaults()
+        let firstRun = FirstRun(defaults: defaults, isExistingInstall: false)
+        firstRun.skip()
+        #expect(!firstRun.explainsContract)
+        #expect(!FirstRun(defaults: defaults, isExistingInstall: false).explainsContract)
+    }
+
+    @Test func aContractIsExplainedOnceAndHelpBringsItBack() async throws {
+        let defaults = try defaults()
+        let firstRun = FirstRun(defaults: defaults, isExistingInstall: false)
+        let source = ContractSource(answer: true)
+        firstRun.checkContract(of: contract) { source }
+        try await until(firstRun.warnsOfContract(contract))
+        firstRun.finishContract()
+        #expect(!firstRun.warnsOfContract(contract))
+        #expect(!FirstRun(defaults: defaults, isExistingInstall: false).explainsContract)
+        firstRun.showAgain(hasWallet: true)
+        #expect(firstRun.warnsOfContract(contract), "It's still known, so it doesn't need asking again")
+    }
+
+    @Test func helpAsksAboutTheWalletThatsShowing() async throws {
+        let firstRun = FirstRun(defaults: try defaults(), isExistingInstall: true)
+        let source = ContractSource(answer: true)
+        firstRun.checkContract(of: contract) { source }
+        firstRun.showAgain(hasWallet: true)
+        firstRun.checkContract(of: contract) { source }
+        try await until(firstRun.warnsOfContract(contract))
     }
 
     @Test func stepsFollowTheServer() {

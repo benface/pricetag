@@ -119,6 +119,17 @@ final class Navigation {
         isSwitchingWallet = true
     }
 
+    /// Asked for from the Help menu, from whichever section this is on.
+    func showWelcome(_ firstRun: FirstRun) {
+        let hasWallet = store.address != nil
+        firstRun.showAgain(hasWallet: hasWallet)
+        if hasWallet {
+            isShowingWelcomeAgain = true
+        } else {
+            section = .overview
+        }
+    }
+
     /// Spending Money is a wallet like any other, so this chooses it and goes to its page, or offers to make one.
     func showSpendingMoney() {
         section = .overview

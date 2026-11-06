@@ -84,17 +84,22 @@ struct MainWindow: View {
         .onChange(of: isOnWayToWallet) { _, isOnWay in
             columns = !isOnWay && width >= Self.sidebarWidth ? .all : .detailOnly
         }
-        // A first wallet's numbers are the end of the welcome, and so is going anywhere else in the app.
+        // A first wallet's numbers are the end of the welcome, and so is going anywhere else in the app. Overview is where it lives, so going there isn't leaving it.
         .onChange(of: hasNumbers, initial: true) { _, hasNumbers in
             if hasNumbers { firstRun.finishWelcome() }
         }
         .onChange(of: isShowingSpendingMoney, initial: true) { _, isShowing in
             if isShowing { firstRun.finishWelcome() }
         }
-        .onChange(of: navigation.section) { firstRun.finishWelcome() }
+        .onChange(of: navigation.section) { _, section in
+            if section != .overview { firstRun.finishWelcome() }
+        }
         .onChange(of: navigation.isSwitchingWallet) { _, isSwitching in
             if isSwitching { firstRun.finishWelcome() }
         }
+        // Whatever's on the page, so it's known however fast or slow the numbers are. Help can ask again for the wallet that's showing.
+        .onChange(of: store.address, initial: true) { checkContract() }
+        .onChange(of: firstRun.explainsContract) { checkContract() }
         // The note's said what it had to once they've found the numbers click through.
         .onChange(of: navigation.target != nil) { _, isOpen in
             if isOpen { firstRun.finishNumbers() }
@@ -386,6 +391,10 @@ struct MainWindow: View {
         }
     }
 
+    private func checkContract() {
+        firstRun.checkContract(of: store.address) { [store] in store.currentSource }
+    }
+
     private var isShowingSpendingMoney: Bool {
         // With no wallet showing and no key yet, there's nothing here for these to be equal about.
         guard hotWallet.availability == .ready, let address = hotWallet.address else { return false }
@@ -444,7 +453,7 @@ struct MainWindow: View {
 
     /// What can add or remove a whole block of the page.
     private func pageShape(_ portfolio: Portfolio) -> [Bool] {
-        [firstRun.explainsNumbers, portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
+        [firstRun.explainsNumbers, firstRun.warnsOfContract(store.address), portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
     }
 
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
@@ -458,6 +467,10 @@ struct MainWindow: View {
 
     @ViewBuilder
     private func notices(_ portfolio: Portfolio) -> some View {
+        if firstRun.warnsOfContract(store.address) {
+            Notice(.warning, Wording.contractNotice, actionTitle: "Got It", action: firstRun.finishContract)
+                .arrives()
+        }
         if let problem = store.feed.problem(serverURL: store.serverURL, portfolio: portfolio) {
             Notice(.warning, problem.message, detail: problem.detail, actionTitle: "Try Again", action: store.refresh)
         } else if let notice = store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) {
@@ -1087,9 +1100,6 @@ private struct NoActivity<Notices: View>: View {
                 .help(Wording.coverage(portfolio))
             if firstRun.isWelcoming {
                 Text(Wording.emptyOnFirstRead)
-                if firstRun.contractWallet == store.address {
-                    Text(Wording.contractNotice)
-                }
             }
         }
     }

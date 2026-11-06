@@ -12,9 +12,15 @@ public final class FirstRun {
     public private(set) var explainsNumbers: Bool
     /// The first question hasn't said why it's asking yet.
     public private(set) var explainsQuestions: Bool
-    /// The address a first read found to be a contract, so what's shown for it can say so. Only for the wallet that's showing.
-    public var contractWallet: String?
+    /// Finding a contract hasn't been explained yet.
+    public private(set) var explainsContract: Bool
+    /// The wallet showing, if it's turned out to be a contract.
+    private var contractWallet: String?
     @ObservationIgnored private let defaults: UserDefaults?
+    @ObservationIgnored private var contractCheck: (address: String, task: Task<Void, Never>)?
+
+    /// How many times to ask about a contract. A node that doesn't say can be back in a moment, and giving up only means saying nothing.
+    private static let contractAttempts = 40
 
     /// For anything with nothing to show someone new, like a wallet that's already set up.
     public static let finished = FirstRun()
@@ -24,6 +30,7 @@ public final class FirstRun {
         isWelcoming = false
         explainsNumbers = false
         explainsQuestions = false
+        explainsContract = false
     }
 
     /// `isExistingInstall` only counts the first time this runs. After that, what's been seen is what's saved.
@@ -32,12 +39,13 @@ public final class FirstRun {
         if defaults.object(forKey: Keys.started) == nil {
             defaults.set(true, forKey: Keys.started)
             if isExistingInstall {
-                for key in [Keys.welcomed, Keys.explainedNumbers, Keys.explainedQuestions] { defaults.set(true, forKey: key) }
+                for key in [Keys.welcomed, Keys.explainedNumbers, Keys.explainedQuestions, Keys.explainedContract] { defaults.set(true, forKey: key) }
             }
         }
         isWelcoming = !defaults.bool(forKey: Keys.welcomed)
         explainsNumbers = !defaults.bool(forKey: Keys.explainedNumbers)
         explainsQuestions = !defaults.bool(forKey: Keys.explainedQuestions)
+        explainsContract = !defaults.bool(forKey: Keys.explainedContract)
     }
 
     public func finishWelcome() {
@@ -58,19 +66,57 @@ public final class FirstRun {
         defaults?.set(true, forKey: Keys.explainedQuestions)
     }
 
+    public func finishContract() {
+        guard explainsContract else { return }
+        explainsContract = false
+        defaults?.set(true, forKey: Keys.explainedContract)
+    }
+
+    /// Whether to say that this wallet is a contract. A smart wallet is one too, so this is only ever something to mention, and nothing waits on it.
+    public func warnsOfContract(_ address: String?) -> Bool {
+        explainsContract && address != nil && contractWallet == address
+    }
+
+    /// Finds out whether a wallet is a contract, however long that takes. It's the same fact whether the numbers came first or were saved
+    /// from last time, so it doesn't belong to whatever's on screen while they load. Another wallet replaces this, and calling again for the same one does nothing.
+    public func checkContract(of address: String?, retryDelay: Duration = .seconds(3), source: @escaping @MainActor () -> any PortfolioSource) {
+        if address != contractCheck?.address {
+            contractCheck?.task.cancel()
+            contractCheck = nil
+            contractWallet = nil
+        }
+        // Neither the demo wallet nor All Yours has an address to ask about.
+        guard explainsContract, contractCheck == nil, let address, WalletAddress.isValid(address) else { return }
+        let task = Task { [weak self] in
+            for _ in 0..<Self.contractAttempts {
+                let answer = try? await source().readProgress(address: address)?.isContract
+                guard !Task.isCancelled else { return }
+                if let answer {
+                    if answer { self?.contractWallet = address }
+                    return
+                }
+                try? await Task.sleep(for: retryDelay)
+                guard !Task.isCancelled else { return }
+            }
+        }
+        contractCheck = (address, task)
+    }
+
     /// All of it, for good.
     public func skip() {
         finishWelcome()
         finishNumbers()
         finishQuestions()
+        finishContract()
     }
 
     /// Asked for from the Help menu. With a wallet already showing, there's nothing to get to, so only the explanations come back.
     public func showAgain(hasWallet: Bool) {
         guard defaults != nil else { return }
-        for key in [Keys.explainedNumbers, Keys.explainedQuestions] { defaults?.set(false, forKey: key) }
+        for key in [Keys.explainedNumbers, Keys.explainedQuestions, Keys.explainedContract] { defaults?.set(false, forKey: key) }
         explainsNumbers = true
         explainsQuestions = true
+        explainsContract = true
         if !hasWallet {
             defaults?.set(false, forKey: Keys.welcomed)
             isWelcoming = true
@@ -82,6 +128,7 @@ public final class FirstRun {
         static let welcomed = "firstRun.welcomed"
         static let explainedNumbers = "firstRun.explainedNumbers"
         static let explainedQuestions = "firstRun.explainedQuestions"
+        static let explainedContract = "firstRun.explainedContract"
     }
 }
 

@@ -168,13 +168,7 @@ struct MacApp: App {
             // The menu's search still finds any command.
             CommandGroup(replacing: .help) {
                 MainWindowCommand("Welcome to \(AppName.current)") {
-                    let hasWallet = store.address != nil
-                    firstRun.showAgain(hasWallet: hasWallet)
-                    if hasWallet {
-                        navigation.isShowingWelcomeAgain = true
-                    } else {
-                        navigation.section = .overview
-                    }
+                    navigation.showWelcome(firstRun)
                 }
             }
         }
