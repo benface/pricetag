@@ -14,7 +14,6 @@ export type ScannedCode = { type: string; cbor: string }
 /** The code to show, and what the device shows back. The panel does the showing and the scanning. */
 export type ExchangeCodes = (code: ScannedCode, expected: string) => Promise<ScannedCode>
 
-export const CONNECT_TYPES = [URType.CryptoHDKey, URType.CryptoMultiAccounts]
 
 const toUR = ({ type, cbor }: ScannedCode) => new UR(Buffer.from(cbor, "hex"), type)
 

@@ -8,7 +8,7 @@ import type { PricingRule } from "../src/core/rules.ts"
 import { tokenLabel } from "../src/core/wording.ts"
 import { depositHashes, readBlock, type BlockData, type ReadBlockHash, type ReadDeposits } from "./block.ts"
 import { latestFeedUpdates, readFeedUpdates } from "./source.ts"
-import { ANSWER_UPDATED_TOPIC, DEPOSIT_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, gasPaid } from "./raw.ts"
+import { ANSWER_UPDATED_TOPIC, DEPOSIT_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, gasPaid, loggedAmount } from "./raw.ts"
 import { DEPOSIT_TX_TYPE, checkHeader, checkReceipts, checkSender, checkTransactions, type BlockRow, type Commitment, type DepositDetails, type LogRow, type TxRow } from "./verify.ts"
 
 const BASESCAN = "https://basescan.org"
@@ -215,8 +215,6 @@ function gasFrom(tx: TxRow, { block, txs }: BlockData): bigint | null {
 }
 
 const logOf = (logIndex: number, tx: TxRow, { logs }: BlockData) => logs.find((candidate) => candidate.log_index === logIndex && candidate.tx_index === tx.tx_index)
-
-const loggedAmount = (log: LogRow) => BigInt(`0x${log.data.slice(0, 64) || "0"}`)
 
 const isWithdrawal = (log: LogRow) => hexOf(log.address) === hexOf(WETH_ADDRESS) && log.topics[0] === WITHDRAWAL_TOPIC
 

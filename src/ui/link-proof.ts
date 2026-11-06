@@ -2,13 +2,14 @@
 
 import { shortHash } from "@pricetag/sdk/core"
 import { answerSender, linkMessage, proofOwner, type Book, type BookChange } from "../core/book.ts"
+import { jsonPost } from "../core/read-failure.ts"
 
 export type Ethereum = { request(args: { method: string; params?: unknown[] }): Promise<unknown> }
 
 type Verify = (proof: { owner: string; address: string; signature: unknown }) => Promise<boolean>
 
 const verifyOnServer: Verify = async (proof) => {
-  const response = await fetch("/api/links/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(proof) })
+  const response = await fetch("/api/links/verify", jsonPost(proof))
   return ((await response.json()) as { verified?: boolean }).verified === true
 }
 

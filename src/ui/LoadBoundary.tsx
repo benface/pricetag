@@ -1,5 +1,6 @@
-import { Component, Suspense, useLayoutEffect, useRef, type ReactNode } from "react"
+import { Component, Suspense, useRef, type ReactNode } from "react"
 import { LOADING, LOAD_FAILED } from "../core/wording.ts"
+import { useModal } from "./useModal.ts"
 
 function LoadFailed() {
   return (
@@ -31,17 +32,7 @@ function PanelStandIn({ label, onClose, children }: { label: string; onClose: ()
   const dialog = useRef<HTMLDialogElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
 
-  useLayoutEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const element = dialog.current
-    if (!element) return
-    if (!element.open) element.showModal()
-    closeButton.current?.focus()
-    return () => {
-      element.close()
-      opener?.focus()
-    }
-  }, [])
+  useModal(dialog, closeButton)
 
   return (
     <dialog ref={dialog} className="panel" aria-label={label} onCancel={(e) => (e.preventDefault(), onClose())}>

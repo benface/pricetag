@@ -1,11 +1,13 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useId, useMemo, useRef, useState } from "react"
 import { formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
-import { failureOf, readResponse, type ReadFailure } from "../core/read-failure.ts"
+import { failureOf, jsonPost, readResponse, type ReadFailure } from "../core/read-failure.ts"
 import type { Book } from "../core/book.ts"
 import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, savedOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME, answerQuestionsLabel, est, panelProblem } from "../core/wording.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
+import { downloadCsv } from "./download.ts"
+import { useModal } from "./useModal.ts"
 
 const COUNTRY_KEY = "pricetag.taxCountry"
 const METHOD_KEY = "pricetag.taxMethod"
@@ -34,25 +36,11 @@ function remember(key: string, value: string | null) {
   else localStorage.setItem(key, value)
 }
 
-/** Also clears anything else an earlier version saved here. */
-function readOthers(): string {
-  const saved = savedOtherWallets(localStorage.getItem(OTHERS_KEY) ?? "")
-  remember(OTHERS_KEY, saved || null)
-  return saved
-}
+const readOthers = () => localStorage.getItem(OTHERS_KEY) ?? ""
 
 /** A post, because answers don't belong in a URL, where they'd end up in logs. */
 async function fetchReport(address: string, request: object, signal: AbortSignal): Promise<TaxReportResponse> {
-  return readResponse<TaxReportResponse>(await fetch(`/api/tax-report/${address}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request), signal }))
-}
-
-function download({ csv, filename }: TaxReportResponse) {
-  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }))
-  const link = document.createElement("a")
-  link.href = url
-  link.download = filename
-  link.click()
-  URL.revokeObjectURL(url)
+  return readResponse<TaxReportResponse>(await fetch(`/api/tax-report/${address}`, jsonPost(request, signal)))
 }
 
 const RULES: Record<TaxCountryCode, string> = { CA: "Canada's rules", US: "US rules" }
@@ -108,18 +96,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   const { others, bad: badOther } = useMemo(() => readOtherWallets(othersText, address), [othersText, address])
   const isDemo = address === "demo"
 
-  // As in `ExplainPanel`: a native modal keeps focus inside, and closing by unmounting doesn't restore it.
-  useLayoutEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const element = dialog.current
-    if (!element) return
-    if (!element.open) element.showModal()
-    close.current?.focus()
-    return () => {
-      element.close()
-      opener?.focus()
-    }
-  }, [])
+  useModal(dialog, close)
 
   useEffect(() => {
     if (badOther) return
@@ -316,7 +293,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
         ) : null}
 
         <p className="visually-hidden" role="status">{loading && !badOther ? "Working it out…" : ready ? "The report is ready." : ""}</p>
-        <button type="button" className="primary" disabled={!ready} onClick={() => report && download(report)}>
+        <button type="button" className="primary" disabled={!ready} onClick={() => report && downloadCsv(report.csv, report.filename)}>
           {loading && !badOther ? "Working it out…" : "Download CSV"}
         </button>
 

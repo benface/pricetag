@@ -3,7 +3,7 @@
 import { createReadStream, existsSync, statSync } from "node:fs"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { extname, join, resolve, sep } from "node:path"
-import { pathOf } from "./app.ts"
+import { pathOf } from "./shared.ts"
 
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
