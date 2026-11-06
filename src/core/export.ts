@@ -1,6 +1,7 @@
 // Every movement as a spreadsheet row, marked so an estimate or an unknown can't pass for an exact number.
 
 import type { CurrencyCode, LegEffect, Position } from "@pricetag/sdk/core"
+import { COST_WORDS, actionLabel, priceSourceLabel } from "./wording.ts"
 
 const HEADER = ["time", "block", "transaction", "asset", "amount", "kind", "currency", "price", "price_source", "cost", "cost_source", "proceeds", "status"]
 
@@ -45,12 +46,12 @@ export function exportCsv(positions: readonly Position[], currency: CurrencyCode
         leg.txHash,
         leg.asset,
         amount(leg.delta, leg.decimals),
-        leg.opening ? "starting balance" : leg.kind,
+        leg.opening ? "starting balance" : actionLabel(leg.kind, incoming).toLowerCase(),
         currency,
         money(leg.priceMicros),
-        leg.priceSource ?? "",
+        leg.priceSource ? priceSourceLabel(leg.priceSource) : "",
         incoming ? money(leg.costMicros) : "",
-        incoming ? (leg.purchaseSource ? (leg.costLabel === "inherited" ? `inherited: ${leg.purchaseSource}` : leg.purchaseSource) : leg.costLabel) : "",
+        incoming ? (leg.purchaseSource ? (leg.costLabel === "inherited" ? `${leg.purchaseSource}, from your other wallet` : leg.purchaseSource) : COST_WORDS[leg.costLabel]) : "",
         money(leg.proceedsMicros),
         statusOf(effect, noMarket),
         ...(walletOf ? [walletOf(leg)] : []),

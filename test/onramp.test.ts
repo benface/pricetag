@@ -328,7 +328,7 @@ describe("a purchase's cost", () => {
       const bought = explainPortfolio(hot, "average", { kind: "asset", asset: "USDC", metric: "amount" }, [savings], linkedBook(purchase()))!.legs.find((l) => l.txHash === TX)!
       assert.equal(bought.summary, "Bought $25.80 of USDC, fees included.", "where it was bought, it's still a purchase")
       assert.equal(costTag(leg.costLabel, leg.purchaseSource), "Cost: Bought on Coinbase, from your other wallet")
-      assert.ok(exportCsv(fold.positions, "USD").includes("inherited: Bought on Coinbase"))
+      assert.ok(exportCsv(fold.positions, "USD").includes("Bought on Coinbase, from your other wallet"))
     })
 
     it("splits it when only what's above the cap moves, and the two parts add up to what was paid", () => {

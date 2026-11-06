@@ -77,6 +77,11 @@ export const READING = "Reading this wallet. The first read can take a minute."
 export const READING_ALL = "Reading your wallets. The first read can take a minute."
 export const ALL_YOURS_TITLE = "All Yours"
 export const IN_EACH_WALLET = "In Each Wallet"
+/** A piece of the page that couldn't load or crashed. The likeliest reason is a new version replacing the old one's files. */
+export const LOAD_FAILED = "This part of the page didn't load, which can happen right after an update. Reloading usually fixes it."
+export const LOADING = "Loading…"
+/** Where answers go. They only leave this browser for a moment, for the sums that run on the server. */
+export const ANSWERS_STAY = "Your answers are saved in this browser. A tax report or a comparison sends them to the server to work out its numbers, and the server doesn't keep them. Publishing a cost onchain would tie your wallets together in public, so that's never done without asking."
 export const NOT_AN_ADDRESS = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 
 export const RULES_TITLE = "Pricing rule"
@@ -334,6 +339,9 @@ export const allYoursReadingSentence = (wallets: readonly string[]) => `Still re
 
 /** Wallets in All Yours whose read failed, which aren't in its numbers. */
 export const allYoursFailedSentence = (wallets: readonly string[]) => `Couldn't read ${walletList(wallets)}, so ${wallets.length === 1 ? "it isn't" : "they aren't"} in these numbers.`
+
+/** Wallets in All Yours that an export can't include, because they aren't read. */
+export const exportLeavesOutSentence = (wallets: readonly string[]) => `This export leaves out ${walletList(wallets)}, because ${wallets.length === 1 ? "it isn't" : "they aren't"} read yet.`
 
 /** Wallets in All Yours being read again, whose last read is what these numbers use. */
 export const allYoursUpdatingSentence = (wallets: readonly string[]) => `Updating ${walletList(wallets)}. These numbers use ${wallets.length === 1 ? "its" : "their"} last read until then.`

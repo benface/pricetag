@@ -757,7 +757,7 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
       await evaluate(tab, `pick("Yes, use it")`)
       await until(() => evaluate(tab, `document.body.textContent.includes("starts after a withdrawal you've already imported")`), "the refusal")
       await delay(100)
-      assert.ok(await inSight(tab, "dialog.resolve p[role=status]"), "the refusal is in sight")
+      assert.ok(await inSight(tab, "dialog.resolve p.warn-text[role=status]"), "the refusal is in sight")
       assert.deepEqual((await bookIn(tab)).withdrawals, saved)
       await reload(tab)
       assert.deepEqual((await bookIn(tab)).withdrawals, saved)
